@@ -1,0 +1,16 @@
+[project]
+name = "story-writing-agents"
+version = "0.1.0"
+description = "A provider-neutral multi-agent runtime for long-form story writing"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+story-writing-agents = "story_writing_agents.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
