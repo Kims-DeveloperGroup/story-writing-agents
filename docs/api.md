@@ -438,6 +438,12 @@ inspection statuses include `not_found`, `active`, `consensus`, `deadlock`,
 
 ## CLI
 
+The package installs two console scripts with the identical target
+`story_writing_agents.cli:main`: canonical `story-writing-agents` and short
+`story`. They are exact aliases, not separate CLIs. Every syntax block below
+uses the canonical name; replace only its first token with `story` to invoke
+the same parser and behavior.
+
 Installed command syntax:
 
 ```text

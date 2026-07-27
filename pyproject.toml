@@ -8,6 +8,7 @@ dependencies = []
 
 [project.scripts]
 story-writing-agents = "story_writing_agents.cli:main"
+story = "story_writing_agents.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

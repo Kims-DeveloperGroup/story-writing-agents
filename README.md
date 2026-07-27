@@ -51,10 +51,14 @@ conda activate story-writing-agents
 python -m pip install --editable .
 ```
 
+The installation provides two names for the exact same CLI:
+`story-writing-agents` and the shorter `story`. Both invoke
+`story_writing_agents.cli:main` and accept identical commands and options.
+
 After either setup, run the built-in provider-free check:
 
 ```bash
-story-writing-agents smoke
+story smoke
 ```
 
 The command exercises the full deterministic revision workflow in a temporary
@@ -66,7 +70,7 @@ provider, model, credentials, or real story quality; its compact JSON reports
 Then initialize a normal workspace:
 
 ```bash
-story-writing-agents init ./quickstart-workspace
+story init ./quickstart-workspace
 ```
 
 No provider is bundled. To write real story content, supply a trusted provider

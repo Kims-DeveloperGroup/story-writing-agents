@@ -12,6 +12,11 @@ commands:
 - `inspect` reads durable session or debate state;
 - `smoke` runs the built-in provider-free deterministic runtime check.
 
+Installation exposes `story-writing-agents` and the shorter `story` as exact
+aliases for the same CLI entry point. Every documented
+`story-writing-agents ...` command can be replaced exactly with `story ...`;
+the alias does not select a separate parser, runtime, or behavior.
+
 The runtime is provider-neutral and uses only the Python standard library. It
 does not bundle an LLM, provider SDK, network client, or provider credentials.
 Every `run` command therefore needs an importable, trusted asynchronous backend
@@ -614,14 +619,20 @@ name makes the recovery lineage explicit.
 
 ## Troubleshooting
 
-### `story-writing-agents: command not found`
+### `story-writing-agents` or `story` is not found
 
 Activate the virtual environment and repeat the editable installation:
 
 ```bash
 source .venv/bin/activate
 python -m pip install --editable .
+story-writing-agents --help
+story --help
 ```
+
+The editable install creates both executables. Either help command reaches the
+same parser; checking both also confirms that the active environment exposes
+both console-script names.
 
 ### `smoke` exits with code `1` or `2`
 

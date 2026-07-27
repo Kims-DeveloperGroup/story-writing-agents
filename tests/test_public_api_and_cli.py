@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -18,6 +19,26 @@ from story_writing_agents.cli import main
 from story_writing_agents.errors import WorkspaceFormatError
 
 from tests.helpers import initialized_workspace
+
+
+class PackagingTests(unittest.TestCase):
+    def test_console_script_aliases_map_to_the_same_exact_main_function(
+        self,
+    ) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        with (repository_root / "pyproject.toml").open("rb") as handle:
+            project = tomllib.load(handle)["project"]
+
+        scripts = project["scripts"]
+        expected_target = "story_writing_agents.cli:main"
+        self.assertIn("story-writing-agents", scripts)
+        self.assertIn("story", scripts)
+        self.assertEqual(scripts["story-writing-agents"], expected_target)
+        self.assertEqual(scripts["story"], expected_target)
+        self.assertEqual(
+            scripts["story"],
+            scripts["story-writing-agents"],
+        )
 
 
 class PublicApiTests(unittest.TestCase):
