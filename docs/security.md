@@ -99,6 +99,29 @@ backend that places hidden reasoning or secrets in an ordinary `content` field
 causes that text to be treated as visible output and potentially written to
 the blackboard or agent state.
 
+## Built-In Smoke Command
+
+`story-writing-agents smoke` uses fixed synthetic content and an internal
+deterministic backend. It never invokes the external backend loader, makes no
+provider or network call, and requires no credentials. Its
+`provider_tested: false` report field is an explicit warning that a passing
+check says nothing about an LLM, model, provider integration, connectivity, or
+real story content.
+
+With no workspace argument, the command creates a temporary workspace and
+removes it before normal return, including after a reported invariant failure.
+An abrupt process or system termination can still interrupt ordinary temporary
+directory cleanup.
+
+With `--workspace PATH`, the command initializes any missing scaffold in that
+directory and preserves existing files. It retains uniquely named synthetic
+session overrides, agent-state JSONL, full blackboard logs, lifecycle/result
+JSON, and a manuscript. These diagnostics are plaintext and have the same
+permissions, retention, and sensitivity considerations as normal runtime
+artifacts. The smoke workflow verifies that pre-existing core-document bytes
+remain unchanged, but it is intentionally not read-only elsewhere in the
+workspace.
+
 ## Backend Plugin Trust
 
 No model, provider SDK, network transport, or LLM backend is bundled.

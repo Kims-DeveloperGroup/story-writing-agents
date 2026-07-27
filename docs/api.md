@@ -60,7 +60,7 @@ module and constructing its value executes Python code with the CLI process's
 permissions. The syntax restriction is not a sandbox; provider plugins are
 trusted code.
 
-This deterministic adapter is sufficient for a protocol smoke test:
+This deterministic adapter is a minimal backend example:
 
 ```python
 from story_writing_agents import AgentReply, AgentRequest, Phase
@@ -461,21 +461,51 @@ story-writing-agents inspect
   [--workspace WORKSPACE]
   --session SESSION
   [--debate DEBATE]
+
+story-writing-agents smoke
+  [--workspace WORKSPACE]
 ```
 
-The default workspace is `.`. `run` prints the complete
-`DebateResult.to_dict()` JSON, including messages. Other successful commands
-print their JSON result. Errors are written to standard error as
+The default workspace is `.` for `directive`, `run`, and `inspect`; the
+optional positional `init` workspace also defaults to `.`. `run` prints the
+complete `DebateResult.to_dict()` JSON, including messages. Initialization,
+directives, and inspection print formatted JSON.
+
+`smoke` is different: without `--workspace`, it creates and removes a
+temporary workspace; with an explicit path, it initializes or reuses that
+workspace and retains uniquely named synthetic session, debate, state, log,
+result, and manuscript artifacts. It never loads an external backend or makes
+a network call. Its ordinary runtime path deterministically drafts `r0`, runs
+three audits with one plot conflict, records a plot proposal, synthesizes
+`r1`, runs three unanimous audits, finalizes and commits the manuscript,
+re-inspects persisted consensus, and verifies that all four core documents are
+unchanged.
+
+A successful smoke report is one line of compact JSON with:
+
+- `"command": "smoke"`, `"status": "passed"`, and
+  `"provider_tested": false`;
+- `workspace.mode`, resolved `workspace.path`, and `workspace.retained`;
+- unique `session_id` and `debate_id`;
+- `debate_status: "consensus"`, `revision_id: "r1"`, and
+  `rounds_completed: 1`;
+- the six checks `workspace_initialized`, `directive_persisted`,
+  `revision_workflow`, `consensus_persisted`, `manuscript_committed`, and
+  `core_documents_unchanged`;
+- a disclaimer that no LLM or external provider was called.
+
+Errors handled by the normal CLI contract are written to standard error as
 `ExceptionType: message`.
 
 Exit codes are:
 
 | Code | Meaning |
 | --- | --- |
-| `0` | Initialization, directive, or inspection succeeded; or a debate reached consensus. |
-| `2` | CLI usage failed or a caught exception occurred, including preflight and plugin-loading errors. |
-| `3` | The debate returned `deadlock`. |
-| `4` | The debate returned `failed`. |
+| `0` | Initialization, directive, or inspection succeeded; a debate reached consensus; or all smoke invariants passed. |
+| `1` | Smoke completed but an invariant failed; compact failed JSON includes `failed_check`. |
+| `2` | CLI usage or a caught exception occurred, including `run` preflight/plugin errors and smoke workspace setup, configuration, or unexpected errors. |
+| `3` | `run` returned `deadlock` (unchanged by the smoke command). |
+| `4` | `run` returned `failed` (unchanged by the smoke command). |
 
 See [Configuration](configuration.md) for persisted schemas and
 [Security, Privacy, and Limitations](security.md) before exposing a workspace

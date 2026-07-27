@@ -103,7 +103,7 @@ class CliTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("story-writing-agents", completed.stdout)
-        for command in ("init", "directive", "run", "inspect"):
+        for command in ("init", "directive", "run", "inspect", "smoke"):
             with self.subTest(command=command):
                 self.assertIn(command, completed.stdout)
 

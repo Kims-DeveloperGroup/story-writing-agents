@@ -30,9 +30,12 @@ and
 The detailed documentation describes the implemented behavior where it differs
 from or narrows those design proposals.
 
-## Installation
+## Quick Start
 
-From the repository root:
+From the repository root, choose one environment setup. Do not create a
+standard-library virtual environment inside an active Conda environment.
+
+Standard-library `venv`:
 
 ```bash
 python3 -m venv .venv
@@ -40,52 +43,40 @@ source .venv/bin/activate
 python -m pip install --editable .
 ```
 
-Initialize the current directory as a workspace. Initialization is idempotent:
-it creates missing scaffold files and preserves existing content.
+Or Conda:
 
 ```bash
-story-writing-agents init .
+conda create --name story-writing-agents python=3.11
+conda activate story-writing-agents
+python -m pip install --editable .
 ```
 
-## Command-Line Usage
-
-Directives must be the entire positional argument, with no leading, trailing,
-or embedded text:
+After either setup, run the built-in provider-free check:
 
 ```bash
-story-writing-agents directive --workspace . --session demo '[SYS: LANG=EN]'
-story-writing-agents directive --workspace . --session demo \
-  '[OVERRIDE: plot_architect Persona=default_kim_eun_hee]'
-story-writing-agents directive --workspace . --session demo '[RESET: ALL]'
+story-writing-agents smoke
 ```
 
-Run either a prompt or an existing draft through an importable trusted backend.
-Replace `provider_module:backend` with the backend module and attribute you
-installed or wrote:
+The command exercises the full deterministic revision workflow in a temporary
+workspace and removes it afterward. It never loads an external backend or
+calls a network service. A passing result verifies this runtime, not an LLM,
+provider, model, credentials, or real story quality; its compact JSON reports
+`"provider_tested": false`.
+
+Then initialize a normal workspace:
 
 ```bash
-story-writing-agents run --workspace . --session demo \
-  --backend provider_module:backend \
-  --prompt 'Write a neutral test scene.' \
-  --output demo-prompt.md
-
-story-writing-agents run --workspace . --session demo \
-  --backend provider_module:backend \
-  --draft 'A neutral draft for domain review.' \
-  --output demo-draft.md
+story-writing-agents init ./quickstart-workspace
 ```
 
-The plugin value may be an `AgentBackend` instance, a class, or a zero-argument
-factory. The CLI accepts exactly one of `--prompt` and `--draft`. Inspect
-durable session or debate state without loading a provider:
-
-```bash
-story-writing-agents inspect --workspace . --session demo
-story-writing-agents inspect --workspace . --session demo --debate debate_01
-```
-
-See [Configuration](docs/configuration.md) for all flags, persisted settings,
-directive semantics, and identifier rules.
+No provider is bundled. To write real story content, supply a trusted provider
+adapter to `run`. The
+[CLI User Guide](UserGuide.md) covers prompt and draft workflows, every
+directive, inspection, generated files, retry rules, and troubleshooting. It
+also includes an original
+[end-to-end story-writing scenario](UserGuide.md#end-to-end-story-writing-scenario).
+See
+[Configuration](docs/configuration.md) for the complete setting schemas.
 
 ## Minimal Python API
 
@@ -145,6 +136,7 @@ See [COMMIT_POLICY.md](COMMIT_POLICY.md) for commit rules.
 ## Project Structure
 
 - `README.md` contains the project description and contribution guidelines.
+- `UserGuide.md` is the complete CLI workflow and troubleshooting guide.
 - `docs/` contains project-related and product documentation.
 - Root-level documents contain project-management, work-rule, and policy
   documents such as `COMMIT_POLICY.md` and `DEPENDENCY_POLICY.md`.

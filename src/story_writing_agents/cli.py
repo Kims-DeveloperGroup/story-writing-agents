@@ -59,6 +59,21 @@ def build_parser() -> argparse.ArgumentParser:
     inspect.add_argument("--workspace", default=".")
     inspect.add_argument("--session", required=True)
     inspect.add_argument("--debate")
+
+    smoke = subcommands.add_parser(
+        "smoke",
+        help="run a provider-free deterministic runtime smoke check",
+        description=(
+            "Run a deterministic provider-free runtime check. When --workspace "
+            "is omitted, a temporary workspace is created and removed."
+        ),
+    )
+    smoke.add_argument(
+        "--workspace",
+        help=(
+            "use an explicit workspace path and retain diagnostic artifacts"
+        ),
+    )
     return parser
 
 
@@ -70,6 +85,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             workspace = initialize_workspace(arguments.workspace)
             print(json.dumps({"workspace": str(workspace.root)}, indent=2))
             return 0
+
+        if arguments.command == "smoke":
+            from .smoke import run_smoke
+
+            report, exit_code = run_smoke(arguments.workspace)
+            print(
+                json.dumps(
+                    report,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+            )
+            return exit_code
 
         workspace = Workspace(Path(arguments.workspace))
         runtime = StoryRuntime(workspace)

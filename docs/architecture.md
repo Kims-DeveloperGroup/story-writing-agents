@@ -72,6 +72,36 @@ keeps the provider-facing data in separate fields:
 The public blackboard and private-by-owner outcome history are separate
 channels. Agent state never grants an agent another agent's persisted outcomes.
 
+## Built-In Smoke Workflow
+
+The CLI `smoke` command supplies a private deterministic backend to the same
+`StoryRuntime` path; it does not load a provider plugin or make a network call.
+It initializes a workspace, persists and rehydrates an `EN` session directive,
+and snapshots the four core documents before running one complete synthetic
+revision cycle:
+
+```text
+prompt → execution draft r0
+       → three parallel audits (one plot conflict)
+       → plot proposal
+       → lead synthesis r1
+       → three parallel unanimous audits
+       → lead finalization
+       → manuscript commit and persisted inspection
+```
+
+The command verifies workspace initialization, directive persistence, exact
+phase counts and owner-isolated state, persisted consensus, the committed
+synthetic `r1` manuscript, and byte-for-byte unchanged core documents. With no
+workspace argument, all of this occurs under a temporary directory removed
+when the command completes. An explicit workspace initializes or reuses that
+directory and retains uniquely identified synthetic sessions, debates, logs,
+states, results, and manuscripts for diagnosis.
+
+This checks orchestration and persistence invariants only. It does not test an
+LLM, external provider adapter, model, network, credentials, or writing
+quality.
+
 ## Debate Workflow
 
 ### 1. Reservation and initiation
