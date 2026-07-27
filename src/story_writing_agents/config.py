@@ -12,6 +12,7 @@ from .workspace import Workspace
 
 
 _LANGUAGE = re.compile(r"[A-Za-z][A-Za-z0-9-]{0,15}")
+KNOWN_AGENT_BACKENDS: tuple[str, ...] = ("codex", "gemini")
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,6 +24,7 @@ class SystemDefaults:
 
 @dataclass(frozen=True, slots=True)
 class AgentConfig:
+    backend: str | None = None
     language: str | None = None
     persona: str | None = None
 
@@ -30,9 +32,9 @@ class AgentConfig:
 @dataclass(frozen=True, slots=True)
 class ResolvedAgentConfig:
     agent_id: str
+    backend: str
     language: str
     persona: str
-    domain_rules: str
 
 
 class ConfigManager:
@@ -49,6 +51,15 @@ class ConfigManager:
             raise ConfigurationError(
                 "language must match [A-Za-z][A-Za-z0-9-]{0,15}"
             )
+        return value
+
+    @staticmethod
+    def validate_backend(value: Any, *, allow_none: bool = False) -> str | None:
+        if value is None and allow_none:
+            return None
+        if not isinstance(value, str) or value not in KNOWN_AGENT_BACKENDS:
+            expected = ", ".join(KNOWN_AGENT_BACKENDS)
+            raise ConfigurationError(f"backend must be one of: {expected}")
         return value
 
     def load_system_defaults(self) -> SystemDefaults:
@@ -86,11 +97,16 @@ class ConfigManager:
             raw = value.get(agent_id, {})
             if not isinstance(raw, dict):
                 raise ConfigurationError(f"{agent_id} config must contain an object")
-            unknown_fields = set(raw).difference({"language", "persona"})
+            unknown_fields = set(raw).difference(
+                {"backend", "language", "persona"}
+            )
             if unknown_fields:
                 raise ConfigurationError(
                     f"unknown {agent_id} config: {sorted(unknown_fields)[0]}"
                 )
+            backend = self.validate_backend(
+                raw.get("backend"), allow_none=True
+            )
             language = self.validate_language(
                 raw.get("language"), allow_none=True
             )
@@ -100,7 +116,11 @@ class ConfigManager:
                 if persona_value is None
                 else self._validate_persona(persona_value)
             )
-            configs[agent_id] = AgentConfig(language=language, persona=persona)
+            configs[agent_id] = AgentConfig(
+                backend=backend,
+                language=language,
+                persona=persona,
+            )
         return configs
 
     def validate_runtime_overrides(
@@ -159,6 +179,7 @@ class ConfigManager:
         self,
         agent_id: str,
         runtime_overrides: Mapping[str, Any] | None = None,
+        backend_overrides: Mapping[str, str] | None = None,
     ) -> ResolvedAgentConfig:
         if agent_id not in AGENT_SPECS:
             raise ConfigurationError(f"unknown agent: {agent_id}")
@@ -166,6 +187,10 @@ class ConfigManager:
         agent = self.load_agent_configs()[agent_id]
         runtime = self.validate_runtime_overrides(runtime_overrides or {})
         runtime_agent = runtime["agents"].get(agent_id, {})
+        backend_override = (backend_overrides or {}).get(agent_id)
+        backend = self.validate_backend(
+            backend_override or agent.backend or "codex"
+        )
 
         language = (
             runtime_agent.get("language")
@@ -181,9 +206,9 @@ class ConfigManager:
         )
         return ResolvedAgentConfig(
             agent_id=agent_id,
+            backend=backend,
             language=language,
             persona=persona,
-            domain_rules=AGENT_SPECS[agent_id].domain_rules,
         )
 
     def _validate_persona(self, value: Any) -> str:

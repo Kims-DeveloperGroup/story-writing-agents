@@ -7,9 +7,10 @@ The following names are exported from `story_writing_agents`:
 - roster metadata: `AGENT_SPECS`, `ROSTER`, `SPECIALIST_IDS`,
   `LEAD_ORCHESTRATOR`, `PLOT_ARCHITECT`, `CHARACTER_CUSTODIAN`,
   `EXECUTION_SPECIALIST`;
-- backend API: `AgentBackend`, `load_backend`;
-- request and result models: `AgentRequest`, `AgentReply`,
-  `AgentStateEntry`, `DebateMessage`, `DebateResult`;
+- backend API: `AgentBackend`, `BoundAgent`;
+- definition, request, and result models: `PromptFileReference`,
+  `AgentDefinition`, `AgentRequest`, `AgentReply`, `AgentStateEntry`,
+  `DebateMessage`, `DebateResult`;
 - enums: `InputKind`, `Phase`, `Verdict`, `DebateStatus`, `DirectiveKind`;
 - runtime API: `StoryRuntime`, `RuntimeSession`, `Runtime`, `Session`;
 - directive API: `RuntimeDirective`, `parse_directive`, `apply_directive`;
@@ -32,42 +33,73 @@ Enum values are:
 | `DebateStatus` | `consensus`, `deadlock`, `failed` |
 | `DirectiveKind` | `language`, `persona`, `reset` |
 
-## Backend Protocol and Plugin Loading
+## Concrete Backend
 
 ```python
-class AgentBackend(Protocol):
-    async def invoke(self, request: AgentRequest) -> AgentReply: ...
+AgentBackend(
+    workspace: Workspace | str | pathlib.Path,
+    *,
+    executable: str = "codex",
+    model: str | None = None,
+    timeout_seconds: float = 300,
+    backend_overrides: Mapping[str, str] | None = None,
+)
 
+await AgentBackend.bind(definition: AgentDefinition) -> BoundAgent
+AgentBackend.prepare_session(session_id: str) -> None
+AgentBackend.start_session(session_id: str) -> dict[str, Any]
+AgentBackend.end_session(session_id: str) -> dict[str, Any]
+AgentBackend.close() -> None
 
-def load_backend(spec: str) -> AgentBackend: ...
+BoundAgent.backend: AgentBackend
+BoundAgent.definition: AgentDefinition
+BoundAgent.vendor: str
+BoundAgent.staging_directory: pathlib.Path
+await BoundAgent.invoke(request: AgentRequest) -> AgentReply
 ```
 
-`invoke` must be an asynchronous method and must return an `AgentReply`, not a
-provider-native object or raw string. The runtime validates the reply's general
-field types and then its phase-specific contract.
+`AgentBackend` is a concrete coordinator. It validates per-agent vendor
+routes, owns the provider-session lease and thread store, and returns a
+concrete `BoundAgent` containing the vendor-specific invocation path. Codex is
+implemented. `gemini` is recognized by configuration but rejected as not
+implemented.
 
-`load_backend` accepts only `module:attribute`, where both components are
-Python identifiers and the module may contain dotted package components.
-Nested attribute traversal, expressions, and shell syntax are rejected. The
-attribute may be:
+`model=None` uses the Codex CLI's built-in default while user configuration is
+ignored. `timeout_seconds` is a positive per-call limit. `backend_overrides`
+maps canonical agent IDs to vendor names for this backend instance.
 
-- an already-created backend instance;
-- a class that can be instantiated with no arguments; or
-- a zero-argument factory returning a backend.
+`start_session()` creates or reactivates a provider-session manifest.
+`end_session()` marks it inactive without deleting resumable thread IDs.
+`prepare_session()` checks all routes, verifies the Codex executable, and
+claims the team lease. `close()` releases owned leases and deletes temporary
+prompt staging; call it in `finally`. A closed backend cannot be reused.
 
-The final value must expose an async `invoke` method. Importing the selected
-module and constructing its value executes Python code with the CLI process's
-permissions. The syntax restriction is not a sandbox; provider plugins are
-trusted code.
+There is no runtime-imported backend plugin loader.
 
-This deterministic adapter is a minimal backend example:
+This deterministic adapter demonstrates the complete binding shape:
 
 ```python
-from story_writing_agents import AgentReply, AgentRequest, Phase
+from story_writing_agents import (
+    AgentDefinition,
+    AgentReply,
+    AgentRequest,
+    Phase,
+)
 
 
-class ApprovingBackend:
+class BoundApprover:
+    def __init__(
+        self,
+        definition: AgentDefinition,
+        prompt_parts: tuple[str, ...],
+    ) -> None:
+        self.agent_id = definition.agent_id
+        self.language = definition.language
+        self.prompt_parts = prompt_parts
+
     async def invoke(self, request: AgentRequest) -> AgentReply:
+        if request.agent_id != self.agent_id:
+            raise RuntimeError("request crossed a bound-agent boundary")
         if request.phase is Phase.DRAFT:
             return AgentReply.candidate(
                 request.revision_id,
@@ -80,12 +112,84 @@ class ApprovingBackend:
         raise RuntimeError(f"unexpected phase: {request.phase.value}")
 
 
+class ApprovingBackend:
+    async def bind(self, definition: AgentDefinition) -> BoundApprover:
+        prompt_parts = tuple(
+            reference.read_text()
+            for reference in definition.file_references()
+        )
+        return BoundApprover(definition, prompt_parts)
+
+
 backend = ApprovingBackend()
 ```
 
-If saved as an importable `example_backend.py`, its CLI spec is
-`example_backend:backend`. A real adapter is responsible for translating every
-possible phase to and from its provider.
+The deterministic classes above remain useful as a testing illustration
+because `StoryRuntime` accepts compatible duck-typed objects in Python. They
+are not discoverable from the CLI and are not a public plugin mechanism.
+
+## Agent Definition and Prompt References
+
+```python
+PromptFileReference(
+    path: pathlib.Path,
+    sha256: str,
+)
+
+PromptFileReference.from_path(
+    path: pathlib.Path,
+) -> PromptFileReference
+
+PromptFileReference.read_text() -> str
+
+AgentDefinition(
+    agent_id: str,
+    backend: str,
+    fingerprint: str,
+    system_prompt_file: PromptFileReference,
+    persona_file: PromptFileReference,
+    language: str,
+    context_document_files: tuple[PromptFileReference, ...],
+)
+
+AgentDefinition.file_references() -> tuple[PromptFileReference, ...]
+```
+
+`PromptFileReference.from_path()` reads a file as strict UTF-8 and
+records the lowercase SHA-256 of its exact bytes. `read_text()` reads it again
+only if the current bytes still match that digest; missing, unreadable,
+invalid-UTF-8, or changed files raise `WorkspaceFormatError`.
+
+An `AgentDefinition` contains its resolved backend, references, and language,
+never full role prompt, persona, or core-document text. `file_references()` returns the
+system-prompt file, persona file, then context-document files in binding order.
+Paths are absolute workspace paths in definitions built by `StoryRuntime`.
+
+Each canonical role uses its own static file:
+
+| Agent | `system_prompt_file` |
+| --- | --- |
+| `lead_orchestrator` | `config/agents/lead_orchestrator/AGENTS.md` |
+| `plot_architect` | `config/agents/plot_architect/AGENTS.md` |
+| `character_custodian` | `config/agents/character_custodian/AGENTS.md` |
+| `execution_specialist` | `config/agents/execution_specialist/AGENTS.md` |
+
+The runtime builds a current definition before every phase invocation. Its
+64-character fingerprint tracks the agent ID, resolved backend and language,
+component identities, and component hashes. It caches bindings by
+`(agent_id, fingerprint)` for the lifetime of that `StoryRuntime`; identical
+concurrent binding requests share one in-flight bind. A role-prompt, selected
+persona, language, or allowlisted core-document change therefore causes a new
+binding on the next phase. Failed bindings are not cached. The runtime cache
+is memory-only. Codex thread IDs are persisted separately by provider session
+and agent.
+
+The runtime verifies every reference before and after a new `bind` call. A
+binding may be reused across sessions if its complete definition is
+identical. Codex conversation state is partitioned by `(session_id, agent_id)`
+and reused across debates; a changed fingerprint starts a fresh agent thread.
+Provider failures return `failed`, record the error, and do not commit
+manuscript or core-document content.
 
 ## Request Model
 
@@ -97,7 +201,6 @@ AgentRequest(
     phase: Phase,
     round_number: int,
     revision_id: str,
-    system_prompt: str,
     task: str,
     user_payload: str,
     candidate_payload: str | None = None,
@@ -115,13 +218,15 @@ The frozen request fields mean:
 | `phase` | `draft`, `audit`, `propose_revision`, `synthesize`, or `finalize`. |
 | `round_number` | Current audit round or synthesis-cycle number. |
 | `revision_id` | Revision the reply must target. |
-| `system_prompt` | Persona, domain rules, language, and least-context documents in the documented order. |
 | `task` | Phase-specific instruction, including the no-hidden-reasoning requirement. |
-| `user_payload` | Original user prompt or draft, kept separate from the system prompt. |
+| `user_payload` | Original user prompt or draft. |
 | `candidate_payload` | Current candidate when the phase operates on one. |
 | `messages` | Full visible blackboard history as of the call's phase snapshot. |
 | `agent_state` | Session-wide persisted outcomes belonging only to `agent_id`, including earlier debates and already-recorded current-debate outcomes. |
 
+The request is deliberately prompt-free: it contains no role prompt, persona,
+language directive, or core-document content. Those stable inputs belong to
+the bound `AgentDefinition`; request fields are scoped to the current turn.
 Parallel peers receive the same pre-phase `messages` snapshot. Their completed
 outputs are logged afterward in canonical roster order.
 
@@ -311,18 +416,23 @@ Example:
 ```python
 import asyncio
 
-from story_writing_agents import StoryRuntime
-from example_backend import backend
+from story_writing_agents import AgentBackend, StoryRuntime, initialize_workspace
 
 
 async def main() -> None:
-    session = StoryRuntime(".", backend).session("demo")
-    result = await session.run_draft(
-        "A neutral draft.",
-        debate_id="debate_01",
-        manuscript_name="demo.md",
-    )
-    print(result.to_dict(include_messages=False))
+    workspace = initialize_workspace("./api-workspace")
+    backend = AgentBackend(workspace)
+    backend.start_session("demo")
+    try:
+        session = StoryRuntime(workspace, backend).session("demo")
+        result = await session.run_draft(
+            "A neutral draft.",
+            debate_id="debate_01",
+            manuscript_name="demo.md",
+        )
+        print(result.to_dict(include_messages=False))
+    finally:
+        backend.close()
 
 
 asyncio.run(main())
@@ -332,7 +442,12 @@ asyncio.run(main())
 
 ```python
 Workspace(root: str | os.PathLike[str])
-initialize_workspace(root: str | os.PathLike[str]) -> Workspace
+Workspace.initialize(*, overwrite_prompts: bool = False) -> Workspace
+initialize_workspace(
+    root: str | os.PathLike[str],
+    *,
+    overwrite_prompts: bool = False,
+) -> Workspace
 
 RuntimeDirective(
     kind: DirectiveKind,
@@ -349,7 +464,10 @@ apply_directive(
 ```
 
 `Workspace.initialize()` creates missing scaffold content and returns the same
-workspace. Common direct methods include:
+workspace. By default, it preserves existing files. With
+`overwrite_prompts=True`, it replaces only the four canonical agent
+`AGENTS.md` files with their defaults and preserves all other workspace
+content. Common direct methods include:
 
 ```python
 Workspace.path(relative) -> pathlib.Path
@@ -440,47 +558,57 @@ inspection statuses include `not_found`, `active`, `consensus`, `deadlock`,
 
 The package installs two console scripts with the identical target
 `story_writing_agents.cli:main`: canonical `story-writing-agents` and short
-`story`. They are exact aliases, not separate CLIs. Every syntax block below
-uses the canonical name; replace only its first token with `story` to invoke
-the same parser and behavior.
+`story`. They are exact aliases, not separate CLIs. Examples use `story`.
 
 Installed command syntax:
 
 ```text
-story-writing-agents init [workspace]
+story init [workspace] [--overwrite-prompts]
 
-story-writing-agents directive
+story directive
   [--workspace WORKSPACE]
   --session SESSION
   TEXT
 
-story-writing-agents run
+story run
   [--workspace WORKSPACE]
   --session SESSION
-  --backend MODULE:ATTRIBUTE
+  [--backend AGENT=BACKEND]...
+  [--codex-model MODEL]
+  [--codex-timeout SECONDS]
   (--prompt PROMPT | --draft DRAFT)
   [--output MANUSCRIPT_PATH]
   [--debate-id DEBATE_ID]
   [--max-debate-rounds MAX_DEBATE_ROUNDS]
 
-story-writing-agents inspect
+story inspect
   [--workspace WORKSPACE]
   --session SESSION
   [--debate DEBATE]
 
-story-writing-agents smoke
+story session (start | end)
+  [--workspace WORKSPACE]
+  --session SESSION
+
+story smoke
   [--workspace WORKSPACE]
 ```
 
 The default workspace is `.` for `directive`, `run`, and `inspect`; the
-optional positional `init` workspace also defaults to `.`. `run` prints the
-complete `DebateResult.to_dict()` JSON, including messages. Initialization,
-directives, and inspection print formatted JSON.
+optional positional `init` workspace also defaults to `.`. Normal
+initialization creates missing agent prompts and preserves existing ones.
+`--overwrite-prompts` replaces only the four canonical
+`config/agents/<agent-id>/AGENTS.md` files. `run` prints the complete
+`DebateResult.to_dict()` JSON, including messages. `--backend` is a repeatable
+per-agent override such as `plot_architect=codex`. `--codex-model` overrides
+the Codex default, and `--codex-timeout` defaults to 300 seconds.
+Initialization, session lifecycle, directives, and inspection print formatted
+JSON.
 
 `smoke` is different: without `--workspace`, it creates and removes a
 temporary workspace; with an explicit path, it initializes or reuses that
 workspace and retains uniquely named synthetic session, debate, state, log,
-result, and manuscript artifacts. It never loads an external backend or makes
+result, and manuscript artifacts. It never constructs the Codex backend or makes
 a network call. Its ordinary runtime path deterministically drafts `r0`, runs
 three audits with one plot conflict, records a plot proposal, synthesizes
 `r1`, runs three unanimous audits, finalizes and commits the manuscript,
@@ -509,10 +637,10 @@ Exit codes are:
 | --- | --- |
 | `0` | Initialization, directive, or inspection succeeded; a debate reached consensus; or all smoke invariants passed. |
 | `1` | Smoke completed but an invariant failed; compact failed JSON includes `failed_check`. |
-| `2` | CLI usage or a caught exception occurred, including `run` preflight/plugin errors and smoke workspace setup, configuration, or unexpected errors. |
+| `2` | CLI usage or a caught exception occurred, including provider/session preflight errors and smoke workspace setup, configuration, or unexpected errors. |
 | `3` | `run` returned `deadlock` (unchanged by the smoke command). |
 | `4` | `run` returned `failed` (unchanged by the smoke command). |
 
 See [Configuration](configuration.md) for persisted schemas and
 [Security, Privacy, and Limitations](security.md) before exposing a workspace
-to sensitive content or loading a third-party backend.
+to sensitive content.

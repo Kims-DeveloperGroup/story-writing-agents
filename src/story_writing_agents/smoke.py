@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .agents import (
+    AGENT_SPECS,
     CHARACTER_CUSTODIAN,
     CORE_DOCUMENTS,
     EXECUTION_SPECIALIST,
@@ -18,7 +19,14 @@ from .agents import (
     ROSTER,
     SPECIALIST_IDS,
 )
-from .models import AgentReply, AgentRequest, DebateResult, DebateStatus, Phase
+from .models import (
+    AgentDefinition,
+    AgentReply,
+    AgentRequest,
+    DebateResult,
+    DebateStatus,
+    Phase,
+)
 from .orchestrator import StoryRuntime
 from .workspace import WORKSPACE_DIRECTORIES, Workspace, initialize_workspace
 
@@ -51,11 +59,25 @@ class _SmokeBackend:
     def __init__(self, session_id: str, debate_id: str) -> None:
         self.session_id = session_id
         self.debate_id = debate_id
+        self.definitions: list[AgentDefinition] = []
         self.requests: list[AgentRequest] = []
         self.audit_active = 0
         self.maximum_audit_active = 0
 
-    async def invoke(self, request: AgentRequest) -> AgentReply:
+    async def bind(self, definition: AgentDefinition) -> _SmokeBoundAgent:
+        for reference in definition.file_references():
+            reference.read_text()
+        self._expect(
+            definition.agent_id in ROSTER
+            and definition.language == "EN"
+            and definition.system_prompt_file.path.name == "AGENTS.md"
+            and definition.system_prompt_file.path.parent.name
+            == definition.agent_id
+        )
+        self.definitions.append(definition)
+        return _SmokeBoundAgent(self, definition)
+
+    async def _invoke(self, request: AgentRequest) -> AgentReply:
         self.requests.append(request)
         self._validate_common(request)
 
@@ -191,11 +213,6 @@ class _SmokeBackend:
             request.session_id == self.session_id
             and request.debate_id == self.debate_id
             and request.user_payload == _PROMPT
-            and (
-                "[Language Directive]\n"
-                "Use EN for all visible responses."
-            )
-            in request.system_prompt
             and all(
                 entry.agent_id == request.agent_id
                 and entry.session_id == self.session_id
@@ -216,6 +233,20 @@ class _SmokeBackend:
     def _expect(condition: bool) -> None:
         if not condition:
             raise _SmokeInvariantError("revision_workflow")
+
+
+class _SmokeBoundAgent:
+    def __init__(
+        self,
+        backend: _SmokeBackend,
+        definition: AgentDefinition,
+    ) -> None:
+        self.backend = backend
+        self.definition = definition
+
+    async def invoke(self, request: AgentRequest) -> AgentReply:
+        self.backend._expect(request.agent_id == self.definition.agent_id)
+        return await self.backend._invoke(request)
 
 
 def run_smoke(workspace_path: str | Path | None = None) -> tuple[dict[str, Any], int]:
@@ -337,6 +368,9 @@ def _verify_workspace_initialized(workspace: Workspace) -> None:
     ) and all(
         workspace.path(f"core_documents/{filename}").is_file()
         for filename in CORE_DOCUMENTS
+    ) and all(
+        workspace.path(AGENT_SPECS[agent_id].system_prompt_file).is_file()
+        for agent_id in ROSTER
     )
     _require(ready, _CHECK_NAMES[0])
 
@@ -387,6 +421,10 @@ def _verify_revision_workflow(
     )
     _require(
         counts == expected
+        and Counter(
+            definition.agent_id for definition in backend.definitions
+        )
+        == Counter({agent_id: 1 for agent_id in ROSTER})
         and backend.maximum_audit_active == len(SPECIALIST_IDS)
         and states_are_exact,
         _CHECK_NAMES[2],

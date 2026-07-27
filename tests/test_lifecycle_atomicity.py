@@ -19,6 +19,7 @@ from story_writing_agents import (
 )
 
 from tests.helpers import (
+    BindingBackendMixin,
     ScriptedBackend,
     all_manuscripts,
     core_snapshot,
@@ -26,7 +27,7 @@ from tests.helpers import (
 )
 
 
-class _GatedApprovalBackend:
+class _GatedApprovalBackend(BindingBackendMixin):
     """Hold the winning runtime inside its backend until collision is observed."""
 
     def __init__(self, entered: asyncio.Event, release: asyncio.Event) -> None:
@@ -151,7 +152,7 @@ class DebateReservationTests(unittest.IsolatedAsyncioTestCase):
         )
 
 
-class _CancellableAuditBackend:
+class _CancellableAuditBackend(BindingBackendMixin):
     """Keep every audit child pending so external cancellation is observable."""
 
     def __init__(self) -> None:
@@ -174,7 +175,67 @@ class _CancellableAuditBackend:
         return AgentReply.approval(request.revision_id)
 
 
+class _BlockingAuditBindBackend:
+    """Keep every specialist bind pending until its only waiter is cancelled."""
+
+    def __init__(self) -> None:
+        self.started: set[str] = set()
+        self.cancelled: set[str] = set()
+        self.active: set[str] = set()
+        self.all_started = asyncio.Event()
+        self.blocker = asyncio.Event()
+
+    async def bind(self, definition):
+        agent_id = definition.agent_id
+        if agent_id not in SPECIALIST_IDS:
+            raise AssertionError(f"unexpected binding: {agent_id}")
+        self.started.add(agent_id)
+        self.active.add(agent_id)
+        if self.started == set(SPECIALIST_IDS):
+            self.all_started.set()
+        try:
+            await self.blocker.wait()
+        except asyncio.CancelledError:
+            self.cancelled.add(agent_id)
+            raise
+        finally:
+            self.active.discard(agent_id)
+        raise AssertionError("blocking bind unexpectedly released")
+
+
 class InterruptionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_run_cancellation_joins_all_parallel_audit_bindings(
+        self,
+    ) -> None:
+        workspace = initialized_workspace(self)
+        backend = _BlockingAuditBindBackend()
+        runtime = StoryRuntime(workspace, backend)
+        runtime_task = asyncio.create_task(
+            runtime.run_draft(
+                "bind_cancel_session",
+                "candidate",
+                debate_id="bind_cancel_debate",
+                manuscript_name="must-not-exist.md",
+            )
+        )
+        await asyncio.wait_for(backend.all_started.wait(), timeout=1)
+        binding_tasks = tuple(runtime._binding_tasks.values())
+        self.assertEqual(len(binding_tasks), len(SPECIALIST_IDS))
+
+        runtime_task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await asyncio.wait_for(runtime_task, timeout=1)
+        await asyncio.sleep(0)
+
+        self.assertEqual(backend.started, set(SPECIALIST_IDS))
+        self.assertEqual(backend.cancelled, set(SPECIALIST_IDS))
+        self.assertEqual(backend.active, set())
+        self.assertTrue(all(task.done() for task in binding_tasks))
+        self.assertTrue(all(task.cancelled() for task in binding_tasks))
+        self.assertEqual(runtime._binding_tasks, {})
+        self.assertEqual(runtime._binding_waiters, {})
+        self.assertEqual(runtime._bound_agents, {})
+
     async def test_external_cancellation_is_terminal_durable_and_non_reusable(
         self,
     ) -> None:

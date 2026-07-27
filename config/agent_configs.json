@@ -1,17 +1,21 @@
 {
   "character_custodian": {
+    "backend": "codex",
     "language": null,
     "persona": null
   },
   "execution_specialist": {
+    "backend": "codex",
     "language": null,
     "persona": null
   },
   "lead_orchestrator": {
+    "backend": "codex",
     "language": null,
     "persona": null
   },
   "plot_architect": {
+    "backend": "codex",
     "language": null,
     "persona": null
   }

@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
+from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping
+
+from .errors import WorkspaceFormatError
 
 
 class InputKind(StrEnum):
@@ -71,8 +76,85 @@ class AgentStateEntry:
 
 
 @dataclass(frozen=True, slots=True)
+class PromptFileReference:
+    """Content-addressed reference to a strict UTF-8 prompt component."""
+
+    path: Path
+    sha256: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "path", Path(self.path))
+        if (
+            not isinstance(self.sha256, str)
+            or len(self.sha256) != 64
+            or any(character not in "0123456789abcdef" for character in self.sha256)
+        ):
+            raise ValueError("sha256 must be a lowercase SHA-256 hexadecimal digest")
+
+    @classmethod
+    def from_path(cls, path: Path) -> PromptFileReference:
+        """Create a reference after validating the file as strict UTF-8."""
+
+        target = Path(path)
+        data = cls._read_bytes(target)
+        cls._decode_utf8(target, data)
+        return cls(path=target, sha256=hashlib.sha256(data).hexdigest())
+
+    def read_text(self) -> str:
+        """Read strict UTF-8 only when the current content matches ``sha256``."""
+
+        data = self._read_bytes(self.path)
+        actual = hashlib.sha256(data).hexdigest()
+        if not hmac.compare_digest(actual, self.sha256):
+            raise WorkspaceFormatError(
+                f"referenced prompt file changed after reference creation: {self.path}"
+            )
+        return self._decode_utf8(self.path, data)
+
+    @staticmethod
+    def _read_bytes(path: Path) -> bytes:
+        try:
+            return path.read_bytes()
+        except OSError as exc:
+            raise WorkspaceFormatError(
+                f"cannot read referenced prompt file: {path}"
+            ) from exc
+
+    @staticmethod
+    def _decode_utf8(path: Path, data: bytes) -> str:
+        try:
+            return data.decode("utf-8", errors="strict")
+        except UnicodeDecodeError as exc:
+            raise WorkspaceFormatError(
+                f"referenced prompt file is not valid UTF-8: {path}"
+            ) from exc
+
+
+@dataclass(frozen=True, slots=True)
+class AgentDefinition:
+    """File-referenced, content-addressed definition for one bound agent."""
+
+    agent_id: str
+    backend: str
+    fingerprint: str
+    system_prompt_file: PromptFileReference
+    persona_file: PromptFileReference
+    language: str
+    context_document_files: tuple[PromptFileReference, ...]
+
+    def file_references(self) -> tuple[PromptFileReference, ...]:
+        """Return prompt components in their binding order."""
+
+        return (
+            self.system_prompt_file,
+            self.persona_file,
+            *self.context_document_files,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class AgentRequest:
-    """Provider-neutral backend request with payloads kept out of the system prompt."""
+    """Provider-neutral request for an agent whose prompt is already bound."""
 
     session_id: str
     debate_id: str
@@ -80,7 +162,6 @@ class AgentRequest:
     phase: Phase
     round_number: int
     revision_id: str
-    system_prompt: str
     task: str
     user_payload: str
     candidate_payload: str | None = None

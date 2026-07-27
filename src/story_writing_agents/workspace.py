@@ -10,7 +10,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from .agents import AGENT_STATE_DIRECTORIES, CORE_DOCUMENTS, ROSTER
+from .agents import (
+    AGENT_SPECS,
+    AGENT_STATE_DIRECTORIES,
+    CHARACTER_CUSTODIAN,
+    CORE_DOCUMENTS,
+    EXECUTION_SPECIALIST,
+    LEAD_ORCHESTRATOR,
+    PLOT_ARCHITECT,
+    ROSTER,
+)
 from .errors import (
     DebateExistsError,
     ManuscriptExistsError,
@@ -30,8 +39,9 @@ DEFAULT_SYSTEM_CONFIG: dict[str, Any] = {
     "max_debate_rounds": 1,
 }
 
-DEFAULT_AGENT_CONFIGS: dict[str, dict[str, None]] = {
-    agent_id: {"language": None, "persona": None} for agent_id in ROSTER
+DEFAULT_AGENT_CONFIGS: dict[str, dict[str, str | None]] = {
+    agent_id: {"backend": "codex", "language": None, "persona": None}
+    for agent_id in ROSTER
 }
 
 DEFAULT_PERSONA = """# Default Kim Eun-hee Persona
@@ -41,6 +51,30 @@ Prioritize domain consistency over polite agreement. State only actionable
 conclusions and concise evidence; never provide hidden chain-of-thought.
 """
 
+DEFAULT_AGENT_PROMPTS: dict[str, str] = {
+    LEAD_ORCHESTRATOR: """# Lead Orchestrator
+
+Moderate the shared debate, preserve every specialist critique, synthesize
+revisions without discarding conflicts, and return only structured updates for
+the allowlisted core documents.
+""",
+    PLOT_ARCHITECT: """# Plot & Structure Architect
+
+Audit narrative flow, pacing, chapter progression, logical leaps, plot holes,
+and compliance with the global and part outlines.
+""",
+    CHARACTER_CUSTODIAN: """# Character & World Custodian
+
+Audit character behavior, relationships, world continuity, and
+secondary-character consistency against the character sheets.
+""",
+    EXECUTION_SPECIALIST: """# Tone & Execution Specialist
+
+Draft and audit prose, point of view, tone, grammar, formatting, and compliance
+with the narrative rules.
+""",
+}
+
 CORE_TEMPLATES: dict[str, str] = {
     "global_outline.md": "# Global Outline\n",
     "part_outlines.md": "# Part Outlines\n",
@@ -49,9 +83,14 @@ CORE_TEMPLATES: dict[str, str] = {
 }
 
 WORKSPACE_DIRECTORIES: tuple[str, ...] = (
+    "config/agents/lead_orchestrator",
+    "config/agents/plot_architect",
+    "config/agents/character_custodian",
+    "config/agents/execution_specialist",
     "config/persona_templates/alternative_templates",
     "core_documents",
     "agent_states/orchestrator_state/sessions",
+    "agent_states/orchestrator_state/provider_sessions",
     "agent_states/plot_architect_state",
     "agent_states/character_custodian_state",
     "agent_states/execution_specialist_state",
@@ -87,9 +126,11 @@ class Workspace:
             )
         return value
 
-    def initialize(self) -> Workspace:
-        """Create missing workspace entries without changing existing content."""
+    def initialize(self, *, overwrite_prompts: bool = False) -> Workspace:
+        """Create missing entries and optionally reset canonical agent prompts."""
 
+        if not isinstance(overwrite_prompts, bool):
+            raise TypeError("overwrite_prompts must be a boolean")
         self.root.mkdir(parents=True, exist_ok=True)
         for relative in WORKSPACE_DIRECTORIES:
             self._directory(relative).mkdir(parents=True, exist_ok=True)
@@ -103,6 +144,18 @@ class Workspace:
         self._ensure_text(
             "config/persona_templates/alternative_templates/.gitkeep", ""
         )
+        for agent_id in ROSTER:
+            prompt_file = AGENT_SPECS[agent_id].system_prompt_file
+            if overwrite_prompts:
+                self.write_text(
+                    prompt_file,
+                    DEFAULT_AGENT_PROMPTS[agent_id],
+                )
+            else:
+                self._ensure_text(
+                    prompt_file,
+                    DEFAULT_AGENT_PROMPTS[agent_id],
+                )
         for filename, content in CORE_TEMPLATES.items():
             self._ensure_text(f"core_documents/{filename}", content)
         for state_dir in (
@@ -186,6 +239,12 @@ class Workspace:
         return self.write_text(relative, content + "\n", overwrite=overwrite)
 
     def read_persona(self, template_name: str) -> str:
+        target = self.persona_path(template_name)
+        return self.read_text(target.relative_to(self.root))
+
+    def persona_path(self, template_name: str) -> Path:
+        """Resolve one safe, existing persona template file."""
+
         name = self.validate_template_name(template_name)
         candidates = (
             f"config/persona_templates/{name}.md",
@@ -194,7 +253,7 @@ class Workspace:
         for candidate in candidates:
             target = self.path(candidate)
             if target.is_file():
-                return self.read_text(candidate)
+                return target
         raise WorkspaceFormatError(f"persona template does not exist: {name}")
 
     def persona_exists(self, template_name: str) -> bool:
@@ -954,7 +1013,11 @@ class Workspace:
             os.close(descriptor)
 
 
-def initialize_workspace(root: str | os.PathLike[str]) -> Workspace:
+def initialize_workspace(
+    root: str | os.PathLike[str],
+    *,
+    overwrite_prompts: bool = False,
+) -> Workspace:
     """Public idempotent initializer."""
 
-    return Workspace(root).initialize()
+    return Workspace(root).initialize(overwrite_prompts=overwrite_prompts)

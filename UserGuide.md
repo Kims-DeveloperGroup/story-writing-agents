@@ -3,13 +3,14 @@
 ## What This Guide Covers
 
 `story-writing-agents` is a Python 3.11+ multi-agent runtime for reviewing and
-producing long-form story material. The command-line interface provides five
+producing long-form story material. The command-line interface provides six
 commands:
 
 - `init` creates a local workspace;
 - `directive` persists an exact session override;
 - `run` processes either a prompt or a supplied draft;
 - `inspect` reads durable session or debate state;
+- `session start` and `session end` control resumable provider sessions;
 - `smoke` runs the built-in provider-free deterministic runtime check.
 
 Installation exposes `story-writing-agents` and the shorter `story` as exact
@@ -17,10 +18,10 @@ aliases for the same CLI entry point. Command examples in this guide use
 `story ...`; it can be replaced exactly with `story-writing-agents ...`.
 The alias does not select a separate parser, runtime, or behavior.
 
-The runtime is provider-neutral and uses only the Python standard library. It
-does not bundle an LLM, provider SDK, network client, or provider credentials.
-Every `run` command therefore needs an importable, trusted asynchronous backend
-plugin.
+The runtime bundles a concrete Codex CLI backend and uses only the Python
+standard library. Codex is the default and only implemented provider. The
+runtime uses the Codex CLI's existing login or `CODEX_API_KEY`; it does not
+store provider credentials.
 
 Commands in this guide assume a POSIX shell, an active `venv` or Conda
 environment, and the repository root as the current directory. Run
@@ -28,7 +29,17 @@ environment, and the repository root as the current directory. Run
 
 ## Prerequisites and Installation
 
-Python 3.11 or later is required. Choose exactly one of the following
+Python 3.11 or later and the Codex CLI are required for real provider runs.
+Install Codex and authenticate it:
+
+```bash
+npm install -g @openai/codex
+rehash
+codex login
+```
+
+Alternatively, set `CODEX_API_KEY` in the environment used to launch `story`.
+Choose exactly one of the following
 environment methods; do not create or activate a standard-library `venv`
 inside an active Conda environment.
 
@@ -46,6 +57,7 @@ Create the environment and install the repository in editable mode:
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --editable .
+rehash
 ```
 
 The activation command above is for POSIX shells. On PowerShell, activate the
@@ -60,6 +72,7 @@ environment's Python to install the repository:
 conda create --name story-writing-agents python=3.11
 conda activate story-writing-agents
 python -m pip install --editable .
+rehash
 ```
 
 After either environment setup, confirm the CLI and initialize a dedicated
@@ -73,6 +86,38 @@ story init ./guide-workspace
 Initialization is idempotent. It creates missing scaffold files while
 preserving existing content; it does not repair or replace malformed existing
 configuration.
+
+It also creates one editable static role prompt for each canonical agent:
+
+```text
+guide-workspace/config/agents/
+├── lead_orchestrator/AGENTS.md
+├── plot_architect/AGENTS.md
+├── character_custodian/AGENTS.md
+└── execution_specialist/AGENTS.md
+```
+
+If the workspace predates these files, run `story init <workspace>` again.
+Missing prompts are added while existing prompt customizations and all other
+workspace content are preserved.
+
+To deliberately restore all four prompts to the runtime defaults, use:
+
+```bash
+story init ./guide-workspace --overwrite-prompts
+```
+
+This is the only initialization mode that replaces existing prompt content.
+The flag resets exactly the four canonical `AGENTS.md` files. It does not
+replace system or agent configuration, persona templates, core documents,
+session/debate state, discussion logs, or manuscripts. Back up customized
+prompts before using it.
+
+Edit an individual `AGENTS.md` directly to customize that role. The files are
+static Markdown and have no required placeholders. Make edits between runs;
+the runtime hashes current content before each phase and creates a new binding
+when the effective definition changes. Normal `story init` will continue to
+preserve the customization.
 
 ## Built-In Smoke Test
 
@@ -97,11 +142,12 @@ story smoke --workspace ./smoke-workspace
 Persistent mode initializes a missing scaffold or reuses an existing
 workspace. Every invocation chooses unique session, debate, and manuscript
 names, so repeated checks retain separate synthetic artifacts without
-overwriting earlier runs. Existing core documents are read for normal prompt
-assembly but remain byte-for-byte unchanged.
+overwriting earlier runs. Existing core documents are referenced and verified
+during deterministic agent binding but remain byte-for-byte unchanged.
 
 The built-in check uses a strict internal deterministic backend and the
-ordinary `StoryRuntime` path. It exercises:
+ordinary `StoryRuntime` path. It binds one file-referenced definition per
+canonical role, uses prompt-free requests, and exercises:
 
 1. workspace initialization and a persisted `EN` session directive;
 2. prompt drafting of synthetic candidate revision `r0`;
@@ -126,8 +172,8 @@ manuscript_committed
 core_documents_unchanged
 ```
 
-This command never invokes the external plugin loader and never makes a
-network call. It does not test an LLM, provider adapter, model, credentials,
+This command never constructs the Codex backend and never makes a network
+call. It does not test an LLM, provider integration, model, credentials,
 network access, or story quality.
 
 Smoke-specific exit behavior is:
@@ -142,30 +188,47 @@ Persistent mode retains synthetic plaintext session overrides, agent states,
 discussion logs, result state, and the manuscript. Use the returned
 `session_id` and `debate_id` with `inspect` when diagnostics are needed.
 
-## Using a Real Provider Adapter
+## Codex Backend and Provider Sessions
 
-A real adapter implements `async invoke(request)` and converts
-provider responses into phase-valid `AgentReply` values. Its plugin spec uses
-the strict form:
+`AgentBackend` and `BoundAgent` are concrete classes. `AgentBackend` resolves
+each agent's configured vendor, verifies its prompt references, stages the
+effective prompt, and manages provider session state. Each returned
+`BoundAgent` embeds the vendor-specific invocation path for one immutable
+definition.
 
-```text
-module:attribute
+Start a provider session before its first debate:
+
+```bash
+story session start \
+  --workspace ./guide-workspace \
+  --session writing_session
 ```
 
-The attribute may be a backend instance, a zero-argument class, or a
-zero-argument factory. The final object must have an async `invoke` method.
-For example, an installed module that exposes `backend` is selected with:
+One team-level lease prevents two local processes from using the same active
+session concurrently. The backend stores one resumable Codex thread per
+`(session_id, agent_id)` and reuses it across debates. `story run` releases the
+lease when it exits. A stale lease is reclaimed only when its recorded process
+is on the same host and demonstrably no longer exists.
 
-```text
-trusted_story_provider:backend
+End the provider session when the team is no longer in use:
+
+```bash
+story session end \
+  --workspace ./guide-workspace \
+  --session writing_session
 ```
 
-That name is a placeholder in this guide; it does not exist in the repository.
-Use the actual spec supplied by your trusted integration. Importing a backend
-executes its Python module with the current process's filesystem, environment,
-and network permissions. The runtime does not sandbox plugins.
+Ending marks the session inactive without deleting its thread IDs. Starting
+the same session later resumes compatible threads. Choose a new session ID
+when every agent should start with a fresh provider thread.
 
-The backend must support the phases it can receive:
+Each agent's effective role prompt, persona, language, and allowlisted core
+documents are combined into an isolated, temporary top-level `AGENTS.md`.
+Per-turn stdin contains only request-scoped JSON. The definition fingerprint
+changes when any stable input changes, so the next call starts a fresh thread
+for that agent. The staging directory is deleted when the backend closes.
+
+The bound agent supports these phases:
 
 - `draft`: create a complete `r0` candidate for prompt input;
 - `audit`: return `APPROVE` or an actionable `CONFLICT`;
@@ -174,7 +237,10 @@ The backend must support the phases it can receive:
 - `finalize`: preserve the approved candidate and optionally return full-text
   updates for allowlisted core documents.
 
-See the [API reference](docs/api.md) for the exact request and reply contracts.
+Codex output is constrained by a phase-specific JSON schema and validated
+again before becoming an `AgentReply`. The backend makes no automatic retry.
+See the [API reference](docs/api.md) for exact definition, request, reply, and
+backend contracts.
 
 ## Prompt and Draft Commands
 
@@ -184,7 +250,9 @@ The complete `run` shape is:
 story run
   [--workspace WORKSPACE]
   --session SESSION
-  --backend MODULE:ATTRIBUTE
+  [--backend AGENT=BACKEND]...
+  [--codex-model MODEL]
+  [--codex-timeout SECONDS]
   (--prompt PROMPT | --draft DRAFT)
   [--output MANUSCRIPT_PATH]
   [--debate-id DEBATE_ID]
@@ -197,7 +265,6 @@ Use a prompt when the provider should draft the initial candidate:
 story run \
   --workspace ./guide-workspace \
   --session writing_session \
-  --backend trusted_story_provider:backend \
   --prompt 'Draft an opening scene using the workspace core documents.' \
   --debate-id opening_01 \
   --output opening/chapter-01.md
@@ -209,7 +276,6 @@ Use a draft when you already have the complete candidate:
 story run \
   --workspace ./guide-workspace \
   --session writing_session \
-  --backend trusted_story_provider:backend \
   --draft 'Paste the complete draft text here.' \
   --debate-id opening_revision_01 \
   --output opening/chapter-01-revised.md
@@ -218,6 +284,27 @@ story run \
 Exactly one of `--prompt` and `--draft` is required. Both options accept
 content, not a filename. Because the CLI has no file-input flag, very large
 payloads can encounter the operating system's command-line length limit.
+
+The backend uses the Codex CLI's built-in default model while ignoring user
+configuration. Use `--codex-model MODEL` to override it for one run.
+`--codex-timeout SECONDS` sets the positive per-call timeout and defaults to
+`300`.
+
+`--backend CANONICAL_AGENT_ID=BACKEND` overrides one agent for the current
+run and may be repeated. For example:
+
+```bash
+story run \
+  --workspace ./guide-workspace \
+  --session writing_session \
+  --backend plot_architect=codex \
+  --backend character_custodian=codex \
+  --draft 'Paste the complete draft text here.'
+```
+
+Configured names are `codex` and `gemini`. Codex is implemented; selecting
+Gemini currently fails before the debate begins. Persistent routing belongs in
+`config/agent_configs.json`; command-line assignments do not rewrite it.
 
 If `--debate-id` is omitted, the runtime generates one. Explicit IDs make
 inspection and automation easier. Session and debate IDs must begin with an
@@ -310,7 +397,7 @@ CLI exit codes are:
 | --- | --- |
 | `0` | `init`, `directive`, or `inspect` succeeded; `run` reached consensus; or all `smoke` invariants passed. |
 | `1` | `smoke` completed but an invariant failed and identified `failed_check`. |
-| `2` | CLI usage, plugin loading, preflight validation, or another caught exception failed. |
+| `2` | CLI usage, provider/session preflight validation, or another caught exception failed. |
 | `3` | `run` returned deadlock. |
 | `4` | `run` returned a failed result. |
 
@@ -327,7 +414,14 @@ workspace/
 ├── config/
 │   ├── system_defaults.json
 │   ├── agent_configs.json
+│   ├── agents/
+│   │   ├── lead_orchestrator/AGENTS.md
+│   │   ├── plot_architect/AGENTS.md
+│   │   ├── character_custodian/AGENTS.md
+│   │   └── execution_specialist/AGENTS.md
 │   └── persona_templates/
+│       ├── default_kim_eun_hee.md
+│       └── alternative_templates/
 ├── core_documents/
 │   ├── global_outline.md
 │   ├── part_outlines.md
@@ -336,6 +430,8 @@ workspace/
 ├── agent_states/
 │   ├── orchestrator_state/
 │   │   ├── sessions/<session_id>.json
+│   │   ├── provider_sessions/<session_id>.json
+│   │   ├── provider_sessions/<session_id>.lease.json
 │   │   └── debates/<session_id>/<debate_id>.jsonl
 │   ├── plot_architect_state/debates/<session_id>/<debate_id>.jsonl
 │   ├── character_custodian_state/debates/<session_id>/<debate_id>.jsonl
@@ -383,17 +479,15 @@ heartbeat, or recovery command. Preserve it for inspection and start a new ID.
 
 This scenario uses original example material for a fictional project titled
 *The Bell Beneath Glasswater*. It demonstrates the intended workflow with a
-real provider adapter.
-
-The commands in this section deliberately use the placeholder
-`trusted_story_provider:backend`. They will not run until you install or create
-that trusted adapter. Do not substitute the deterministic demo backend and
-expect authored or critically reviewed story prose.
+team of Codex-backed agents.
 
 ### 1. Create a dedicated story workspace
 
 ```bash
 story init ./glasswater-workspace
+story session start \
+  --workspace ./glasswater-workspace \
+  --session glasswater_novel
 ```
 
 ### 2. Seed the four core documents
@@ -458,9 +552,10 @@ machines, evasive about the archive council, and never enters deep water.
 - End each chapter on a concrete discovery, not a rhetorical question.
 ```
 
-The runtime rereads these files before every applicable backend invocation.
-Each specialist receives only its allowlisted domain documents; later chapters
-do not automatically load earlier manuscript files.
+Before each applicable phase, the runtime hashes the current allowlisted files
+into that agent's definition. A changed file causes a new binding on the next
+phase. Each specialist's definition references only its domain documents;
+later chapters do not automatically reference earlier manuscript files.
 
 ### 3. Set the session language
 
@@ -479,7 +574,6 @@ The override persists for subsequent debates in `glasswater_novel`.
 story run \
   --workspace ./glasswater-workspace \
   --session glasswater_novel \
-  --backend trusted_story_provider:backend \
   --prompt 'Write Chapter 1. Mara discovers the sealed signal bell during an unauthorized inspection of the flooded archive. Follow all core documents and end with the first unexplained salt pattern.' \
   --debate-id glasswater_ch01_v1 \
   --output bell-beneath-glasswater/chapter-01.md
@@ -544,7 +638,6 @@ have a draft-file flag, so the quoted shell substitution supplies the text:
 story run \
   --workspace ./glasswater-workspace \
   --session glasswater_novel \
-  --backend trusted_story_provider:backend \
   --draft "$(cat ./glasswater-workspace/working/chapter-01-user-edit.md)" \
   --debate-id glasswater_ch01_user_edit \
   --output bell-beneath-glasswater/chapter-01-user-edit.md
@@ -555,16 +648,15 @@ ID and output preserve the original approved artifact and its provenance.
 
 ### 7. Continue a later chapter in the same session
 
-The same session restores language/persona overrides and each agent's concise
-owner-isolated outcomes. It does not rehydrate full prior candidates or
-automatically read manuscripts. Ensure important approved facts are present in
-the core documents, then include any needed chapter recap in the new prompt:
+The same session restores language/persona overrides, owner-isolated outcomes,
+and resumable per-agent Codex threads. It does not automatically read earlier
+manuscripts. Ensure important approved facts are present in the core documents,
+then include any needed chapter recap in the new prompt:
 
 ```bash
 story run \
   --workspace ./glasswater-workspace \
   --session glasswater_novel \
-  --backend trusted_story_provider:backend \
   --prompt 'Write Chapter 2. Recap: Chapter 1 ended when a fresh salt spiral formed around the council-vessel mark. Mara brings a rubbing, not the submerged bell, to Tovin. Follow the core documents and end when he recognizes the vibration interval.' \
   --debate-id glasswater_ch02_v1 \
   --output bell-beneath-glasswater/chapter-02.md
@@ -583,7 +675,6 @@ first unresolved audit terminal:
 story run \
   --workspace ./glasswater-workspace \
   --session glasswater_novel \
-  --backend trusted_story_provider:backend \
   --prompt 'Write Chapter 3 with the submerged bell speaking a warning aloud to Mara.' \
   --debate-id glasswater_ch03_conflict \
   --output bell-beneath-glasswater/chapter-03-conflict.md \
@@ -608,7 +699,6 @@ nonverbal, start a new debate and output:
 story run \
   --workspace ./glasswater-workspace \
   --session glasswater_novel \
-  --backend trusted_story_provider:backend \
   --prompt 'User ruling: preserve the rule that the bell never speaks. Write Chapter 3 so its warning appears as a broken salt lattice and a vibration in Mara's helmet clasp.' \
   --debate-id glasswater_ch03_ruling \
   --output bell-beneath-glasswater/chapter-03-ruling.md
@@ -616,6 +706,16 @@ story run \
 
 The deadlocked output path was not created and could be reused, but the new
 name makes the recovery lineage explicit.
+
+End the provider session when this writing session is finished:
+
+```bash
+story session end \
+  --workspace ./glasswater-workspace \
+  --session glasswater_novel
+```
+
+Its thread IDs remain available if the same session is started again.
 
 ## Troubleshooting
 
@@ -646,11 +746,19 @@ configuration before retrying.
 
 ### `BackendProtocolError`
 
-Confirm the plugin spec is exactly `module:attribute`, `invoke` is async, and
-each phase returns an `AgentReply` with the request's expected revision ID.
-Raw provider strings and raw string verdicts are invalid. If the real provider
-module cannot be imported, install it into the active environment or follow
-the integration's documented import setup.
+Confirm the Codex CLI is installed, `codex login` has succeeded or
+`CODEX_API_KEY` is present, and the provider session is active. Check the
+reported Codex exit status, selected model, and timeout. A timeout,
+cancellation, malformed response, or ambiguous failure can taint a saved
+thread; the next invocation starts a fresh compatible thread.
+
+### A prompt file is missing, invalid, or changed during binding
+
+Run `story init <workspace>` to add missing canonical `AGENTS.md` files without
+overwriting customized ones. Prompt, persona, and referenced core files must be
+readable strict-UTF-8 files inside the workspace and cannot use symlinks. If a
+file was edited while an adapter was binding it, retry with a new debate ID
+after the edit is complete.
 
 ### `DirectiveError`
 
@@ -680,16 +788,18 @@ Preserve the old state for diagnosis and use a new debate ID.
 
 ## Security and Privacy Checklist
 
-- Load only trusted provider modules; plugin syntax validation is not a
-  sandbox.
 - Keep provider credentials outside the workspace and outside prompts,
-  replies, filenames, logs, and manuscripts.
+  replies, filenames, logs, and manuscripts. Use `codex login` or
+  `CODEX_API_KEY`.
+- Treat agent `AGENTS.md`, persona templates, and core documents as sensitive
+  plaintext that the Codex backend stages and supplies to the provider.
 - Treat discussion logs as sensitive: they include user input, complete
   candidates, critiques, proposals, and visible errors.
 - Agent-state history has no current compaction or retention limit.
 - Workspace files are plaintext and rely on operating-system permissions.
-- Absolute paths, traversal, and all symlink components are rejected, but a
-  trusted plugin still runs with the process's own permissions.
+- Absolute paths, traversal, and all symlink components are rejected.
+- Review Codex account and transcript-retention settings. Ending a story
+  session does not delete Codex CLI transcripts.
 - Artifact writes are atomic per file with best-effort multi-file rollback,
   not a power-loss-safe transaction across the entire workspace.
 - The runtime has no hidden-reasoning field. A noncompliant provider that puts

@@ -7,6 +7,7 @@ import unittest
 from story_writing_agents import (
     AgentReply,
     DebateStatus,
+    EXECUTION_SPECIALIST,
     InputKind,
     LEAD_ORCHESTRATOR,
     Phase,
@@ -66,9 +67,21 @@ class InputPathTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNone(backend.requests[0].candidate_payload)
         audits = phase_requests(backend, Phase.AUDIT)
-        self.assertEqual(tuple(request.agent_id for request in audits), SPECIALIST_IDS)
+        self.assertEqual(
+            {request.agent_id for request in audits},
+            set(SPECIALIST_IDS),
+        )
         self.assertTrue(
             all(request.candidate_payload == "generated-r0" for request in audits)
+        )
+        self.assertEqual(
+            [
+                request.agent_id
+                for definition, request in backend.bound_invocations
+                if request.phase is Phase.DRAFT
+                and definition.agent_id == request.agent_id
+            ],
+            [EXECUTION_SPECIALIST],
         )
 
     async def test_supplied_draft_is_revision_zero_without_generation(self) -> None:
@@ -228,6 +241,30 @@ class RevisionWorkflowTests(unittest.IsolatedAsyncioTestCase):
             tuple(message.kind for message in finalization.messages),
             reaudit_prefix + ("approval", "approval", "approval"),
         )
+        expected_phase_agents = {
+            Phase.AUDIT: set(SPECIALIST_IDS),
+            Phase.PROPOSE_REVISION: {PLOT_ARCHITECT},
+            Phase.SYNTHESIZE: {LEAD_ORCHESTRATOR},
+            Phase.FINALIZE: {LEAD_ORCHESTRATOR},
+        }
+        for phase, expected_agents in expected_phase_agents.items():
+            with self.subTest(bound_phase=phase):
+                phase_bindings = [
+                    (definition.agent_id, request.agent_id)
+                    for definition, request in backend.bound_invocations
+                    if request.phase is phase
+                ]
+                self.assertTrue(phase_bindings)
+                self.assertTrue(
+                    all(
+                        definition_agent == request_agent
+                        for definition_agent, request_agent in phase_bindings
+                    )
+                )
+                self.assertEqual(
+                    {request_agent for _, request_agent in phase_bindings},
+                    expected_agents,
+                )
 
     async def test_default_allows_one_revision_then_escalates_deadlock(self) -> None:
         workspace = initialized_workspace(self)

@@ -2,10 +2,10 @@
 
 ## Implemented Scope
 
-`story-writing-agents` is a provider-neutral, asynchronous orchestration
-runtime. It coordinates four fixed agents around a shared, append-only public
-blackboard and persists all runtime state in a workspace directory. It does
-not bundle an LLM, provider SDK, or provider adapter.
+`story-writing-agents` is an asynchronous orchestration runtime with a
+concrete, vendor-aware backend. It coordinates four fixed agents around a
+shared, append-only public blackboard, persists runtime state in a workspace,
+and invokes Codex through the installed Codex CLI.
 
 This document describes the current implementation of
 [Issue #1](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1)
@@ -34,34 +34,61 @@ and skeptical writing-room behavior that prioritizes domain consistency over
 polite agreement; it is not biographical impersonation. The normal
 configuration cascade can replace the persona session-wide or per agent.
 
-## Provider and Prompt Boundary
+## Backend and Prompt Boundary
 
-A provider integration implements one method:
+Provider behavior is embedded in two concrete levels:
 
 ```python
-async def invoke(request: AgentRequest) -> AgentReply: ...
+AgentBackend(workspace, *, executable, model, timeout_seconds, backend_overrides)
+await AgentBackend.bind(definition) -> BoundAgent
+await BoundAgent.invoke(request) -> AgentReply
 ```
 
-The runtime owns orchestration, persistence, prompt assembly, concurrency, and
-protocol validation. The backend owns only the provider call and conversion to
-a structured `AgentReply`.
+The runtime owns orchestration, persistence, definition assembly, binding
+reuse, concurrency, and protocol validation. `AgentBackend` owns per-agent
+vendor routing, provider-session leases, prompt staging, and persistent thread
+metadata. `BoundAgent` owns one immutable definition and its vendor-specific
+invocation path. Codex is implemented; Gemini is recognized but unsupported.
 
-Configuration, persona text, targeted core documents, and owner-specific agent
-history are reread from disk for every invocation. The system prompt always
-contains exactly these four blocks in this order:
+Each role's static instructions are an editable workspace file:
 
-1. `[Persona]`
-2. `[Domain Rules]`
-3. `[Language Directive]`
-4. `[Context Documents]`
+```text
+config/agents/<agent-id>/AGENTS.md
+```
 
-Context hydration is least-privilege by role: the plot architect receives the
-two outline files, the character custodian receives the character sheet, the
-execution specialist receives the narrative rules, and the lead orchestrator
-receives all four allowlisted files.
+Before each phase invocation, the runtime resolves current configuration and
+builds an `AgentDefinition` containing:
 
-Content payloads are not interpolated into the system prompt. `AgentRequest`
-keeps the provider-facing data in separate fields:
+- the canonical agent ID;
+- the resolved backend name;
+- a `PromptFileReference` for that role's `AGENTS.md`;
+- a reference for the resolved persona;
+- the resolved language token;
+- references for only that role's allowlisted core documents; and
+- a fingerprint covering the agent ID, backend, language, reference
+  identities, and exact file hashes.
+
+Definitions contain file paths and SHA-256 digests, never full prompt,
+persona, or core-document text. Each reference provides a verified strict
+UTF-8 read that fails when its current bytes no longer match its digest.
+The Codex binding combines verified role, persona, language, and allowlisted
+context in an isolated temporary top-level `AGENTS.md`.
+
+Bindings are cached by `(agent_id, fingerprint)` for one `StoryRuntime`.
+Matching concurrent binds share a single in-flight operation, cancellation of
+one waiter does not cancel a bind still needed by another, and failed bindings
+are not cached. Editing an `AGENTS.md`, selected persona, resolved language,
+or allowlisted core document changes the next definition and causes a new
+binding on the next phase. A changed fingerprint starts a fresh Codex thread
+for that agent.
+
+Context references remain least-privilege by role: the plot architect receives
+the two outline files, the character custodian receives the character sheet,
+the execution specialist receives the narrative rules, and the lead
+orchestrator receives all four allowlisted files.
+
+`AgentRequest` is prompt-free and keeps request-scoped data in separate
+fields:
 
 - `task`: the phase instruction plus the no-hidden-reasoning instruction;
 - `user_payload`: the original prompt or draft;
@@ -70,12 +97,27 @@ keeps the provider-facing data in separate fields:
 - `agent_state`: only the receiving agent's validated history for this session.
 
 The public blackboard and private-by-owner outcome history are separate
-channels. Agent state never grants an agent another agent's persisted outcomes.
+channels. Agent state never grants an agent another agent's persisted
+outcomes. An identical immutable binding can serve multiple sessions, while
+the concrete `BoundAgent` partitions Codex conversation state by
+`(session_id, agent_id)`. Persisted `agent_state` remains the authoritative
+runtime memory channel, and a team session resumes each agent's thread across
+debates.
+
+`story session start` creates or reactivates a provider-session manifest.
+`story run` acquires one team-level local-process lease, preventing concurrent
+processes from using the same provider session. Within one backend, calls are
+also serialized by `(session_id, backend, agent_id)` so separate bindings
+cannot race one provider thread. `story session end` marks the session
+inactive but retains thread IDs. The Codex subprocess runs without shell
+evaluation, uses read-only sandboxing and no approvals, and receives dynamic
+request JSON over stdin. Phase-specific output schemas are validated before
+conversion to `AgentReply`; failed calls are not retried automatically.
 
 ## Built-In Smoke Workflow
 
 The CLI `smoke` command supplies a private deterministic backend to the same
-`StoryRuntime` path; it does not load a provider plugin or make a network call.
+`StoryRuntime` path; it does not construct `AgentBackend` or make a network call.
 It initializes a workspace, persists and rehydrates an `EN` session directive,
 and snapshots the four core documents before running one complete synthetic
 revision cycle:
@@ -99,7 +141,7 @@ directory and retains uniquely identified synthetic sessions, debates, logs,
 states, results, and manuscripts for diagnosis.
 
 This checks orchestration and persistence invariants only. It does not test an
-LLM, external provider adapter, model, network, credentials, or writing
+LLM, Codex provider, model, network, credentials, or writing
 quality.
 
 ## Debate Workflow
@@ -200,18 +242,27 @@ means inspecting the durable state and starting a new debate ID.
 
 ## Filesystem Topology
 
-`story-writing-agents init .` creates missing scaffold entries without
-modifying existing content. Debate and agent-history subdirectories are
-created lazily:
+`story init .` creates missing scaffold entries without modifying existing
+content. Existing workspaces can run the same command to add missing agent
+prompts. `story init . --overwrite-prompts` replaces only the four canonical
+`AGENTS.md` files with defaults, preserves every other existing workspace
+file, and still creates any missing scaffold entries. The initialized
+scaffold is:
 
 ```text
 workspace/
 ├── config/
 │   ├── system_defaults.json
 │   ├── agent_configs.json
+│   ├── agents/
+│   │   ├── lead_orchestrator/AGENTS.md
+│   │   ├── plot_architect/AGENTS.md
+│   │   ├── character_custodian/AGENTS.md
+│   │   └── execution_specialist/AGENTS.md
 │   └── persona_templates/
 │       ├── default_kim_eun_hee.md
-│       └── alternative_templates/<template>.md
+│       └── alternative_templates/
+│           └── .gitkeep
 ├── core_documents/
 │   ├── global_outline.md
 │   ├── part_outlines.md
@@ -219,17 +270,20 @@ workspace/
 │   └── narrative_rules.md
 ├── agent_states/
 │   ├── orchestrator_state/
-│   │   ├── sessions/<session_id>.json
-│   │   └── debates/<session_id>/<debate_id>.jsonl
-│   ├── plot_architect_state/debates/<session_id>/<debate_id>.jsonl
-│   ├── character_custodian_state/debates/<session_id>/<debate_id>.jsonl
-│   └── execution_specialist_state/debates/<session_id>/<debate_id>.jsonl
-├── discussion_logs/<session_id>/
-│   ├── <debate_id>.state.json
-│   ├── <debate_id>.jsonl
-│   └── <debate_id>.result.json
-└── manuscript/<relative_output_path>
+│   │   ├── .gitkeep
+│   │   ├── sessions/.gitkeep
+│   │   └── provider_sessions/
+│   ├── plot_architect_state/.gitkeep
+│   ├── character_custodian_state/.gitkeep
+│   └── execution_specialist_state/.gitkeep
+├── discussion_logs/.gitkeep
+└── manuscript/.gitkeep
 ```
+
+Persona templates added by the user may appear in either persona directory.
+Session overrides, per-agent debate histories, discussion lifecycle/log/result
+files, and manuscript output are created lazily in the paths shown in the
+[User Guide](../UserGuide.md#generated-files).
 
 Session override JSON survives new `StoryRuntime` instances. Each agent JSONL
 contains only concise outcomes owned by that agent. The discussion JSONL is the

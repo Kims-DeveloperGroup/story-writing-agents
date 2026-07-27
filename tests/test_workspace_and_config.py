@@ -31,7 +31,10 @@ from story_writing_agents.errors import (
     WorkspaceFormatError,
     WorkspaceSecurityError,
 )
-from story_writing_agents.workspace import WORKSPACE_DIRECTORIES
+from story_writing_agents.workspace import (
+    DEFAULT_AGENT_PROMPTS,
+    WORKSPACE_DIRECTORIES,
+)
 
 from tests.helpers import initialized_workspace
 
@@ -66,6 +69,17 @@ class AgentRosterTests(unittest.TestCase):
             CHARACTER_CUSTODIAN: ("character_sheets.md",),
             EXECUTION_SPECIALIST: ("narrative_rules.md",),
         }
+        expected_prompt_files = {
+            agent_id: f"config/agents/{agent_id}/AGENTS.md"
+            for agent_id in ROSTER
+        }
+        self.assertEqual(
+            {
+                agent_id: AGENT_SPECS[agent_id].system_prompt_file
+                for agent_id in ROSTER
+            },
+            expected_prompt_files,
+        )
         for agent_id in SPECIALIST_IDS:
             with self.subTest(agent_id=agent_id):
                 self.assertTrue(AGENT_SPECS[agent_id].votes)
@@ -73,7 +87,6 @@ class AgentRosterTests(unittest.TestCase):
                     AGENT_SPECS[agent_id].context_documents,
                     expected_context[agent_id],
                 )
-                self.assertTrue(AGENT_SPECS[agent_id].domain_rules)
 
 
 class WorkspaceTests(unittest.TestCase):
@@ -92,6 +105,12 @@ class WorkspaceTests(unittest.TestCase):
                 self.assertTrue(workspace.path(relative).is_dir())
         for filename in CORE_DOCUMENTS:
             self.assertTrue(workspace.path(f"core_documents/{filename}").is_file())
+        for agent_id in ROSTER:
+            self.assertTrue(
+                workspace.path(
+                    AGENT_SPECS[agent_id].system_prompt_file
+                ).is_file()
+            )
         self.assertTrue(
             workspace.path("config/system_defaults.json").is_file()
         )
@@ -101,6 +120,63 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(
             preserved.read_text(encoding="utf-8"),
             "preserve-existing-content",
+        )
+
+    def test_prompt_initialization_preserves_customizations_unless_overwritten(
+        self,
+    ) -> None:
+        workspace = initialized_workspace(self)
+        customized = {
+            agent_id: f"custom prompt for {agent_id}\n"
+            for agent_id in ROSTER
+        }
+        for agent_id, content in customized.items():
+            workspace.write_text(
+                AGENT_SPECS[agent_id].system_prompt_file,
+                content,
+            )
+
+        unrelated_contents = {
+            "config/system_defaults.json": '{"custom":"config"}\n',
+            "config/agent_configs.json": '{"custom":"agents"}\n',
+            "config/persona_templates/default_kim_eun_hee.md": "persona\n",
+            "core_documents/global_outline.md": "outline\n",
+            "agent_states/plot_architect_state/custom.jsonl": "state\n",
+            "discussion_logs/custom.jsonl": "log\n",
+            "manuscript/custom.md": "manuscript\n",
+        }
+        for relative, content in unrelated_contents.items():
+            workspace.write_text(relative, content)
+        unrelated_before = {
+            relative: workspace.path(relative).read_bytes()
+            for relative in unrelated_contents
+        }
+
+        workspace.initialize()
+        for agent_id, content in customized.items():
+            with self.subTest(preserved_agent=agent_id):
+                self.assertEqual(
+                    workspace.read_text(
+                        AGENT_SPECS[agent_id].system_prompt_file
+                    ),
+                    content,
+                )
+
+        workspace.initialize(overwrite_prompts=True)
+        for agent_id in ROSTER:
+            with self.subTest(reset_agent=agent_id):
+                self.assertEqual(
+                    workspace.read_text(
+                        AGENT_SPECS[agent_id].system_prompt_file
+                    ),
+                    DEFAULT_AGENT_PROMPTS[agent_id],
+                )
+        self.assertEqual(
+            {
+                relative: workspace.path(relative).read_bytes()
+                for relative in unrelated_contents
+            },
+            unrelated_before,
         )
 
     def test_utf8_json_and_semantic_config_errors_are_explicit(self) -> None:
@@ -289,10 +365,18 @@ class ConfigurationCascadeTests(unittest.TestCase):
 
     def test_language_and_persona_cascade_independently(self) -> None:
         defaults = self.manager.resolve(CHARACTER_CUSTODIAN)
+        self.assertEqual(defaults.backend, "codex")
         self.assertEqual((defaults.language, defaults.persona), ("KO", "global_persona"))
 
         agent = self.manager.resolve(PLOT_ARCHITECT)
+        self.assertEqual(agent.backend, "codex")
         self.assertEqual((agent.language, agent.persona), ("JA", "agent_persona"))
+
+        overridden_backend = self.manager.resolve(
+            PLOT_ARCHITECT,
+            backend_overrides={PLOT_ARCHITECT: "gemini"},
+        )
+        self.assertEqual(overridden_backend.backend, "gemini")
 
         runtime_language = self.manager.resolve(
             PLOT_ARCHITECT,

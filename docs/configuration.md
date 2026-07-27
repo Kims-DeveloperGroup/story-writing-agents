@@ -6,14 +6,65 @@ From the repository root, initialize the repository itself or another
 workspace directory:
 
 ```bash
-story-writing-agents init .
-story-writing-agents init ./example-workspace
+story init .
+story init ./example-workspace
 ```
 
 Initialization creates missing directories and default files. It is
-idempotent and never repairs, replaces, or validates existing file content.
-Configuration is read from disk on demand, including before every backend
-invocation, so valid edits are visible without recreating `StoryRuntime`.
+idempotent and normally never repairs, replaces, or validates existing file
+content. Existing workspaces should rerun `story init <workspace>` after
+upgrading so missing agent prompt files are added without disturbing
+customizations.
+
+The one opt-in replacement mode is:
+
+```bash
+story init ./example-workspace --overwrite-prompts
+```
+
+It resets exactly the four canonical agent `AGENTS.md` files described below.
+It preserves all JSON configuration, persona templates, core documents,
+session and debate state, logs, and manuscripts. Use it only when all four
+custom role prompts may be discarded.
+
+The equivalent public Python APIs are:
+
+```python
+workspace.initialize(overwrite_prompts=False)
+initialize_workspace(root, overwrite_prompts=False)
+```
+
+Configuration and referenced prompt inputs are resolved before every phase,
+so valid edits are visible without recreating `StoryRuntime`.
+
+## Agent Role Prompts
+
+Every canonical agent owns one static editable UTF-8 Markdown prompt:
+
+```text
+config/agents/lead_orchestrator/AGENTS.md
+config/agents/plot_architect/AGENTS.md
+config/agents/character_custodian/AGENTS.md
+config/agents/execution_specialist/AGENTS.md
+```
+
+These files contain each role's domain instructions. They are ordinary static
+documents with no required placeholders and are not interpolated into an
+`AgentRequest`. The runtime instead gives the concrete backend an
+`AgentDefinition` containing a content-addressed reference to the applicable
+`AGENTS.md`, plus separate references for the resolved persona and allowlisted
+core documents and a separate language value.
+
+Normal initialization creates a missing prompt from its default and preserves
+an existing prompt byte-for-byte. `--overwrite-prompts` replaces all four
+prompt files with their defaults, even when only one was customized; it never
+replaces another existing file. As in normal initialization, any other missing
+scaffold entries are still created.
+
+Before each phase the runtime hashes the current prompt, selected persona,
+allowlisted core documents, and resolved language. An effective change causes
+a new backend binding on that next phase; an unchanged definition reuses the
+existing binding in the current `StoryRuntime`.
 
 ## System Defaults
 
@@ -46,18 +97,22 @@ top-level keys:
 ```json
 {
   "character_custodian": {
+    "backend": "codex",
     "language": null,
     "persona": null
   },
   "execution_specialist": {
+    "backend": "codex",
     "language": null,
     "persona": null
   },
   "lead_orchestrator": {
+    "backend": "codex",
     "language": null,
     "persona": null
   },
   "plot_architect": {
+    "backend": "codex",
     "language": null,
     "persona": null
   }
@@ -65,8 +120,10 @@ top-level keys:
 ```
 
 An omitted canonical agent is equivalent to an empty object. Each agent object
-may contain only `language` and `persona`; either may be `null` to inherit.
-Unknown agent IDs and unknown fields are errors.
+may contain only `backend`, `language`, and `persona`; values may be `null` to
+inherit. An omitted backend resolves to `codex`. Allowed names are `codex` and
+`gemini`; only Codex is implemented, so selecting Gemini fails before provider
+invocation. Unknown agent IDs, fields, and backend names are errors.
 
 The canonical IDs are:
 
@@ -140,6 +197,33 @@ Language and persona resolve independently in this exact order:
 For example, a per-agent runtime persona can override an agent-config persona
 without changing the language resolved from another level.
 
+Backend routing resolves separately:
+
+1. the `AgentBackend` per-run override for that agent;
+2. the agent's `backend` in `config/agent_configs.json`;
+3. `codex`.
+
+The repeatable CLI form
+`--backend CANONICAL_AGENT_ID=BACKEND` supplies step 1 for one run and does not
+rewrite configuration.
+
+## Provider Session State
+
+Provider lifecycle metadata is stored beneath:
+
+```text
+agent_states/orchestrator_state/provider_sessions/
+├── <session_id>.json
+└── <session_id>.lease.json
+```
+
+The session manifest records its schema version, active state, timestamps, and
+current thread metadata keyed by backend and agent. `story session end`
+retains those thread references so a later `story session start` can resume
+compatible conversations. The lease file exists only while a process owns the
+team session and prevents concurrent processes from resuming the same threads.
+Both files are runtime-managed plaintext and must not be edited manually.
+
 ## Persona Templates
 
 A persona identifier is the filename without `.md`. It must match:
@@ -173,8 +257,8 @@ A language token must match:
 It is 1–16 ASCII characters, begins with a letter, and otherwise contains only
 letters, digits, or hyphens. Examples include `KO`, `EN`, and `en-US`. Tokens
 are case-preserving and are not checked against a fixed language registry.
-The resolved token becomes the visible-response instruction in every agent's
-system prompt.
+The resolved token becomes the `language` field of every agent definition.
+The concrete backend applies that value when staging the provider `AGENTS.md`.
 
 ## Debate Round Limit
 
@@ -191,8 +275,7 @@ The system default can be replaced for one call with
 `max_debate_rounds=` in the Python API or `--max-debate-rounds` in the CLI:
 
 ```bash
-story-writing-agents run --workspace . --session demo \
-  --backend provider_module:backend \
+story run --workspace . --session demo \
   --draft 'A neutral draft.' \
   --max-debate-rounds 2
 ```
@@ -213,10 +296,10 @@ Only these complete message forms are directives:
 For example:
 
 ```bash
-story-writing-agents directive --workspace . --session demo '[SYS: LANG=EN]'
-story-writing-agents directive --workspace . --session demo \
+story directive --workspace . --session demo '[SYS: LANG=EN]'
+story directive --workspace . --session demo \
   '[OVERRIDE: plot_architect Persona=default_kim_eun_hee]'
-story-writing-agents directive --workspace . --session demo '[RESET: ALL]'
+story directive --workspace . --session demo '[RESET: ALL]'
 ```
 
 Parsing does not trim whitespace. Leading or trailing whitespace, a trailing

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import uuid
 from datetime import UTC, datetime
@@ -14,11 +15,12 @@ from .agents import (
     LEAD_ORCHESTRATOR,
     SPECIALIST_IDS,
 )
-from .backend import AgentBackend
+from .backend import AgentBackend, BoundAgent
 from .config import ConfigManager
 from .directives import apply_directive as persist_directive
 from .errors import BackendProtocolError
 from .models import (
+    AgentDefinition,
     AgentReply,
     AgentRequest,
     AgentStateEntry,
@@ -45,8 +47,20 @@ class StoryRuntime:
             workspace if isinstance(workspace, Workspace) else Workspace(workspace)
         )
         self.backend = backend
-        self.prompts = PromptAssembler(self.workspace)
+        backend_overrides = (
+            getattr(backend, "backend_overrides", {}) if backend is not None else {}
+        )
+        self.prompts = PromptAssembler(
+            self.workspace,
+            backend_overrides=backend_overrides,
+        )
         self.config = ConfigManager(self.workspace)
+        self._bound_agents: dict[tuple[str, str], BoundAgent] = {}
+        self._binding_tasks: dict[
+            tuple[str, str], asyncio.Task[BoundAgent]
+        ] = {}
+        self._binding_waiters: dict[tuple[str, str], int] = {}
+        self._binding_lock = asyncio.Lock()
 
     def session(self, session_id: str) -> RuntimeSession:
         self.workspace.validate_identifier(session_id)
@@ -146,6 +160,13 @@ class StoryRuntime:
             raise ValueError("max_debate_rounds must be a non-negative integer")
 
         target_name = manuscript_name or f"{session}_{debate}.md"
+        prepare_session = getattr(self.backend, "prepare_session", None)
+        if prepare_session is not None:
+            if not callable(prepare_session):
+                raise BackendProtocolError(
+                    "backend prepare_session must be callable"
+                )
+            prepare_session(session)
         reservation_token = uuid.uuid4().hex
         self.workspace.reserve_debate(
             session,
@@ -826,8 +847,12 @@ class StoryRuntime:
         )
 
     async def _invoke(self, request: AgentRequest) -> AgentReply:
-        assert self.backend is not None
-        reply = await self.backend.invoke(request)
+        definition = self.prompts.build_definition(
+            session_id=request.session_id,
+            agent_id=request.agent_id,
+        )
+        bound_agent = await self._bound_agent(definition)
+        reply = await bound_agent.invoke(request)
         if not isinstance(reply, AgentReply):
             raise BackendProtocolError(
                 f"{request.agent_id} returned {type(reply).__name__}, "
@@ -835,6 +860,82 @@ class StoryRuntime:
             )
         self._validate_reply_fields(reply)
         return reply
+
+    async def _bound_agent(self, definition: AgentDefinition) -> BoundAgent:
+        """Reuse or single-flight one immutable provider-side binding."""
+
+        key = (definition.agent_id, definition.fingerprint)
+        async with self._binding_lock:
+            cached = self._bound_agents.get(key)
+            if cached is not None:
+                return cached
+            task = self._binding_tasks.get(key)
+            if task is None:
+                task = asyncio.create_task(
+                    self._bind_definition(definition),
+                    name=f"bind:{definition.agent_id}:{definition.fingerprint[:12]}",
+                )
+                self._binding_tasks[key] = task
+            self._binding_waiters[key] = self._binding_waiters.get(key, 0) + 1
+
+        try:
+            # A debate or peer invocation may be cancelled without cancelling
+            # a binding still awaited by another invocation.
+            bound_agent = await asyncio.shield(task)
+            async with self._binding_lock:
+                if (
+                    self._binding_tasks.get(key) is task
+                    and self._binding_waiters.get(key, 0) > 0
+                ):
+                    self._bound_agents[key] = bound_agent
+            return bound_agent
+        finally:
+            task_to_join: asyncio.Task[BoundAgent] | None = None
+            async with self._binding_lock:
+                remaining = self._binding_waiters.get(key, 0) - 1
+                if remaining > 0:
+                    self._binding_waiters[key] = remaining
+                else:
+                    self._binding_waiters.pop(key, None)
+                    if self._binding_tasks.get(key) is task:
+                        self._binding_tasks.pop(key, None)
+                        if not task.done():
+                            task.cancel()
+                        task_to_join = task
+            if task_to_join is not None:
+                await asyncio.gather(task_to_join, return_exceptions=True)
+
+    async def _bind_definition(
+        self,
+        definition: AgentDefinition,
+    ) -> BoundAgent:
+        assert self.backend is not None
+        bind = getattr(self.backend, "bind", None)
+        if bind is None or not callable(bind):
+            raise BackendProtocolError(
+                "backend does not provide bind()"
+            )
+        if not inspect.iscoroutinefunction(bind):
+            raise BackendProtocolError("backend bind() must be async")
+
+        self._verify_definition_files(definition)
+        bound_agent = await bind(definition)
+        invoke = getattr(bound_agent, "invoke", None)
+        if invoke is None or not callable(invoke):
+            raise BackendProtocolError(
+                f"{definition.agent_id} binding does not provide invoke()"
+            )
+        if not inspect.iscoroutinefunction(invoke):
+            raise BackendProtocolError(
+                f"{definition.agent_id} bound invoke() must be async"
+            )
+        self._verify_definition_files(definition)
+        return bound_agent
+
+    @staticmethod
+    def _verify_definition_files(definition: AgentDefinition) -> None:
+        for reference in definition.file_references():
+            reference.read_text()
 
     async def _invoke_parallel(
         self,

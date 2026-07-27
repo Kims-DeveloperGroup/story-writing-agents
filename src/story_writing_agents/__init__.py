@@ -9,7 +9,7 @@ from .agents import (
     ROSTER,
     SPECIALIST_IDS,
 )
-from .backend import AgentBackend, load_backend
+from .backend import AgentBackend, BoundAgent
 from .directives import (
     DirectiveKind,
     RuntimeDirective,
@@ -28,6 +28,7 @@ from .errors import (
     WorkspaceSecurityError,
 )
 from .models import (
+    AgentDefinition,
     AgentReply,
     AgentRequest,
     AgentStateEntry,
@@ -36,6 +37,7 @@ from .models import (
     DebateStatus,
     InputKind,
     Phase,
+    PromptFileReference,
     Verdict,
 )
 from .orchestrator import Runtime, RuntimeSession, Session, StoryRuntime
@@ -44,10 +46,12 @@ from .workspace import Workspace, initialize_workspace
 __all__ = [
     "AGENT_SPECS",
     "AgentBackend",
+    "AgentDefinition",
     "AgentReply",
     "AgentRequest",
     "AgentStateEntry",
     "BackendProtocolError",
+    "BoundAgent",
     "CHARACTER_CUSTODIAN",
     "ConfigurationError",
     "DebateMessage",
@@ -62,6 +66,7 @@ __all__ = [
     "ManuscriptExistsError",
     "PLOT_ARCHITECT",
     "Phase",
+    "PromptFileReference",
     "ROSTER",
     "Runtime",
     "RuntimeDirective",
@@ -77,6 +82,5 @@ __all__ = [
     "WorkspaceSecurityError",
     "apply_directive",
     "initialize_workspace",
-    "load_backend",
     "parse_directive",
 ]

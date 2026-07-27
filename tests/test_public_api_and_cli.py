@@ -14,9 +14,18 @@ import unittest
 from pathlib import Path
 
 import story_writing_agents
-from story_writing_agents import Runtime, RuntimeSession, Session, StoryRuntime
+from story_writing_agents import (
+    AGENT_SPECS,
+    PLOT_ARCHITECT,
+    Runtime,
+    RuntimeSession,
+    Session,
+    StoryRuntime,
+    Workspace,
+)
 from story_writing_agents.cli import main
 from story_writing_agents.errors import WorkspaceFormatError
+from story_writing_agents.workspace import DEFAULT_AGENT_PROMPTS
 
 from tests.helpers import initialized_workspace
 
@@ -55,8 +64,14 @@ class PublicApiTests(unittest.TestCase):
         self,
     ) -> None:
         required = {
+            "AgentBackend",
+            "AgentDefinition",
+            "AgentReply",
+            "AgentRequest",
             "AgentStateEntry",
+            "BoundAgent",
             "DirectiveKind",
+            "PromptFileReference",
             "StoryWritingAgentsError",
             "WorkspaceSecurityError",
             "WorkspaceFormatError",
@@ -73,7 +88,17 @@ class PublicApiTests(unittest.TestCase):
                 self.assertIsNotNone(getattr(story_writing_agents, name))
         base_error = story_writing_agents.StoryWritingAgentsError
         for name in required.difference(
-            {"AgentStateEntry", "DirectiveKind", "StoryWritingAgentsError"}
+            {
+                "AgentBackend",
+                "AgentDefinition",
+                "AgentReply",
+                "AgentRequest",
+                "AgentStateEntry",
+                "BoundAgent",
+                "DirectiveKind",
+                "PromptFileReference",
+                "StoryWritingAgentsError",
+            }
         ):
             with self.subTest(error=name):
                 self.assertTrue(
@@ -124,7 +149,7 @@ class CliTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("story-writing-agents", completed.stdout)
-        for command in ("init", "directive", "run", "inspect", "smoke"):
+        for command in ("init", "directive", "run", "inspect", "session", "smoke"):
             with self.subTest(command=command):
                 self.assertIn(command, completed.stdout)
 
@@ -140,6 +165,32 @@ class CliTests(unittest.TestCase):
         initialized = json.loads(stdout.getvalue())
         self.assertEqual(Path(initialized["workspace"]), workspace_path.resolve())
         self.assertTrue((workspace_path / "config" / "system_defaults.json").is_file())
+
+        workspace = Workspace(workspace_path)
+        prompt_path = AGENT_SPECS[PLOT_ARCHITECT].system_prompt_file
+        workspace.write_text(prompt_path, "custom prompt\n")
+        workspace.write_text(
+            "core_documents/global_outline.md",
+            "preserved outline\n",
+        )
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            exit_code = main(
+                [
+                    "init",
+                    str(workspace_path),
+                    "--overwrite-prompts",
+                ]
+            )
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            workspace.read_text(prompt_path),
+            DEFAULT_AGENT_PROMPTS[PLOT_ARCHITECT],
+        )
+        self.assertEqual(
+            workspace.read_text("core_documents/global_outline.md"),
+            "preserved outline\n",
+        )
 
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
@@ -188,7 +239,7 @@ class CliTests(unittest.TestCase):
                 ]
             )
         self.assertEqual(exit_code, 2)
-        self.assertIn("BackendProtocolError", stderr.getvalue())
+        self.assertIn("ConfigurationError", stderr.getvalue())
 
 
 if __name__ == "__main__":

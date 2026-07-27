@@ -53,9 +53,10 @@ starting replacement work.
 ## Local Plaintext Data
 
 There is no encryption, redaction, access-control manager, or automatic
-retention policy. Configuration, personas, core documents, agent outcomes,
-discussion logs, lifecycle state, results, and manuscripts are local plaintext
-files governed by the operating system's directory permissions.
+retention policy. Agent `AGENTS.md` prompts, configuration, personas, core
+documents, agent outcomes, discussion logs, lifecycle state, results, and
+manuscripts are local plaintext files governed by the operating system's
+directory permissions.
 
 The full blackboard JSONL deliberately contains the original user prompt or
 draft, complete generated candidates, approvals, critiques, proposals, visible
@@ -79,13 +80,13 @@ sessions therefore grow both on disk and in later provider requests.
 Never place passwords, API keys, access tokens, private keys, or other
 credentials in:
 
-- workspace configuration or persona files;
+- agent prompts, workspace configuration, or persona files;
 - user prompts, drafts, or core documents;
 - provider-visible reply content, critiques, or proposals;
 - logs, agent state, manuscript content, or output filenames.
 
-Pass provider credentials through a mechanism owned by the trusted adapter,
-outside the workspace and outside `AgentReply` content.
+Use `codex login` or `CODEX_API_KEY` for provider authentication, outside the
+workspace and outside `AgentReply` content.
 
 ## Hidden Reasoning
 
@@ -101,8 +102,8 @@ the blackboard or agent state.
 
 ## Built-In Smoke Command
 
-`story-writing-agents smoke` uses fixed synthetic content and an internal
-deterministic backend. It never invokes the external backend loader, makes no
+`story smoke` uses fixed synthetic content and an internal deterministic
+backend. It never constructs the Codex backend, makes no
 provider or network call, and requires no credentials. Its
 `provider_tested: false` report field is an explicit warning that a passing
 check says nothing about an LLM, model, provider integration, connectivity, or
@@ -122,17 +123,32 @@ artifacts. The smoke workflow verifies that pre-existing core-document bytes
 remain unchanged, but it is intentionally not read-only elsewhere in the
 workspace.
 
-## Backend Plugin Trust
+## Codex Provider Boundary
 
-No model, provider SDK, network transport, or LLM backend is bundled.
-`--backend module:attribute` avoids shell evaluation and disallows nested
-attribute expressions, but importing the module still executes it. A plugin,
-its class constructor, factory, and async `invoke` method run as trusted Python
-code with the current process's filesystem, environment, and network access.
+The concrete backend launches the installed Codex CLI without shell
+evaluation. It requests no approvals, a read-only sandbox, ignored user
+configuration and rules, and disabled shell, web-search, app, and multi-agent
+tools. These controls reduce exposure but do not make a remote model or the
+locally installed executable a security boundary.
 
-The runtime does not sandbox, permission-limit, audit, or authenticate provider
-plugins. Install and load only code you trust, and review a plugin's dependency
-and credential behavior separately.
+An `AgentDefinition` exposes absolute paths and SHA-256 digests for the role
+prompt, selected persona, and that role's allowlisted core documents. During
+binding, the backend verifies those bytes and assembles them into an isolated
+temporary top-level `AGENTS.md`. The per-turn subprocess input contains only
+dynamic request JSON. SHA-256 detects a mismatch; it does not encrypt, redact,
+authorize, or hide content.
+
+The isolated staging directory and `project_root_markers=[]` prevent normal
+repository-root project instruction discovery. Codex may still apply
+installation-level or vendor-global instructions outside the project
+discovery path; review the installed CLI and account configuration before
+processing sensitive material.
+
+Codex stores its own resumable conversations according to its CLI and account
+behavior. The runtime persists one thread ID per `(session_id, agent_id)` and
+reuses it across debates. `story session end` marks the team session inactive
+but deliberately retains these references and does not delete provider
+transcripts. A definition fingerprint change starts a new thread.
 
 ## Debate Ownership and Recovery
 
@@ -151,10 +167,17 @@ consensus, deadlock, failure, interruption, and abandoned active work all
 require a new debate ID for recovery. Inspect the old debate, resolve any
 user-level conflict, and start the replacement work under a new ID.
 
+Separately, one team-level provider lease prevents concurrent local processes
+from using the same active provider session. A lease is reclaimed only when it
+names the local host and its recorded process is demonstrably gone. Closing
+`AgentBackend` releases owned leases.
+
 ## Operational Limitations
 
-- The runtime has no bundled provider, provider retry policy, rate-limit
-  manager, timeout policy, interactive chat interface, or network service.
+- Codex is the only implemented provider. Gemini is a reserved configuration
+  name and currently fails preflight.
+- Provider calls have a configurable timeout but no automatic retry or
+  rate-limit manager.
 - A deadlock reports `action_required` but has no built-in continuation or
   user-ruling resume API.
 - Stable JSONL order is a roster-order record of outcomes, not provider

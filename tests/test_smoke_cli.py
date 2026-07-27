@@ -22,7 +22,7 @@ from story_writing_agents import (
 )
 from story_writing_agents import cli as cli_module
 from story_writing_agents import smoke as smoke_module
-from story_writing_agents.agents import CORE_DOCUMENTS, SPECIALIST_IDS
+from story_writing_agents.agents import CORE_DOCUMENTS, ROSTER, SPECIALIST_IDS
 
 from tests.helpers import ScriptedBackend, all_manuscripts
 
@@ -91,14 +91,14 @@ class SmokeTemporaryTests(unittest.TestCase):
     ) -> None:
         with mock.patch.object(
             cli_module,
-            "load_backend",
-            side_effect=AssertionError("smoke must not load a provider"),
-        ) as load_backend:
+            "AgentBackend",
+            side_effect=AssertionError("smoke must not construct a provider"),
+        ) as agent_backend:
             exit_code, stdout, stderr = invoke_cli(["smoke"])
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(stderr, "")
-        load_backend.assert_not_called()
+        agent_backend.assert_not_called()
         self.assertEqual(len(stdout.splitlines()), 1)
         report = json.loads(stdout)
         self.assertEqual(
@@ -150,7 +150,7 @@ class SmokePersistentTests(unittest.TestCase):
         for index, filename in enumerate(CORE_DOCUMENTS):
             workspace.write_text(
                 f"core_documents/{filename}",
-                f"neutral-core-{index}\n",
+                "" if index == 0 else f"neutral-core-{index}\n",
             )
         core_before = {
             filename: workspace.path(
@@ -158,6 +158,7 @@ class SmokePersistentTests(unittest.TestCase):
             ).read_bytes()
             for filename in CORE_DOCUMENTS
         }
+        self.assertEqual(core_before[CORE_DOCUMENTS[0]], b"")
 
         exit_code, stdout, stderr = invoke_cli(
             ["smoke", "--workspace", str(workspace.root)]
@@ -268,6 +269,19 @@ class SmokePersistentTests(unittest.TestCase):
             backend.maximum_audit_active,
             len(SPECIALIST_IDS),
         )
+        self.assertEqual(
+            Counter(
+                definition.agent_id
+                for definition in backend.definitions
+            ),
+            Counter({agent_id: 1 for agent_id in ROSTER}),
+        )
+        self.assertTrue(
+            all(
+                not hasattr(request, "system_prompt")
+                for request in backend.requests
+            )
+        )
 
 
 class SmokeFailureTests(unittest.TestCase):
@@ -360,7 +374,7 @@ class ExistingRunExitCodeTests(unittest.TestCase):
                 backend = ScriptedBackend(respond)
                 with mock.patch.object(
                     cli_module,
-                    "load_backend",
+                    "AgentBackend",
                     return_value=backend,
                 ):
                     exit_code, stdout, stderr = invoke_cli(
@@ -371,7 +385,7 @@ class ExistingRunExitCodeTests(unittest.TestCase):
                             "--session",
                             f"{outcome}_session",
                             "--backend",
-                            "test_backend:instance",
+                            "plot_architect=codex",
                             "--draft",
                             "neutral candidate",
                             "--debate-id",

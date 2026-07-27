@@ -44,7 +44,7 @@ class AgentSpec:
 
     agent_id: str
     display_name: str
-    domain_rules: str
+    system_prompt_file: str
     context_documents: tuple[str, ...]
     votes: bool
 
@@ -53,41 +53,28 @@ AGENT_SPECS: dict[str, AgentSpec] = {
     LEAD_ORCHESTRATOR: AgentSpec(
         agent_id=LEAD_ORCHESTRATOR,
         display_name="Lead Orchestrator",
-        domain_rules=(
-            "Moderate the shared debate, preserve every specialist critique, "
-            "synthesize revisions without discarding conflicts, and return only "
-            "structured updates for the allowlisted core documents."
-        ),
+        system_prompt_file="config/agents/lead_orchestrator/AGENTS.md",
         context_documents=CORE_DOCUMENTS,
         votes=False,
     ),
     PLOT_ARCHITECT: AgentSpec(
         agent_id=PLOT_ARCHITECT,
         display_name="Plot & Structure Architect",
-        domain_rules=(
-            "Audit narrative flow, pacing, chapter progression, logical leaps, "
-            "plot holes, and compliance with the global and part outlines."
-        ),
+        system_prompt_file="config/agents/plot_architect/AGENTS.md",
         context_documents=("global_outline.md", "part_outlines.md"),
         votes=True,
     ),
     CHARACTER_CUSTODIAN: AgentSpec(
         agent_id=CHARACTER_CUSTODIAN,
         display_name="Character & World Custodian",
-        domain_rules=(
-            "Audit character behavior, relationships, world continuity, and "
-            "secondary-character consistency against the character sheets."
-        ),
+        system_prompt_file="config/agents/character_custodian/AGENTS.md",
         context_documents=("character_sheets.md",),
         votes=True,
     ),
     EXECUTION_SPECIALIST: AgentSpec(
         agent_id=EXECUTION_SPECIALIST,
         display_name="Tone & Execution Specialist",
-        domain_rules=(
-            "Draft and audit prose, point of view, tone, grammar, formatting, "
-            "and compliance with the narrative rules."
-        ),
+        system_prompt_file="config/agents/execution_specialist/AGENTS.md",
         context_documents=("narrative_rules.md",),
         votes=True,
     ),
