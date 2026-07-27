@@ -621,16 +621,21 @@ name makes the recovery lineage explicit.
 
 ### `story-writing-agents` or `story` is not found
 
-Activate the virtual environment and repeat the editable installation:
+Activate the `venv` or Conda environment used for the installation, then
+repeat the editable installation. An existing editable installation exposes
+Python source changes immediately, but new console-script names such as
+`story` are created only when the package is installed again.
 
 ```bash
-source .venv/bin/activate
 python -m pip install --editable .
+rehash
 story --help
 ```
 
-The editable install creates both executables. The short command above reaches
-the same parser as `story-writing-agents --help`.
+In an existing zsh terminal session, execute `rehash` after reinstalling.
+
+The repeated editable install creates both executables. The short command
+above reaches the same parser as `story-writing-agents --help`.
 
 ### `smoke` exits with code `1` or `2`
 
