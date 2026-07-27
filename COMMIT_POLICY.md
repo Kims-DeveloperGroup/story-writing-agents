@@ -47,3 +47,24 @@ work local until it forms a complete unit, or squash it before sharing the
 branch. When correcting the immediately preceding commit, amend it when
 appropriate; otherwise create a new, complete commit that clearly describes
 the correction.
+
+### Amend Rules
+
+A commit may be amended only when all of these conditions apply:
+
+- It is the immediately preceding commit (`HEAD`).
+- It has not been pushed or shared with other contributors.
+- The amendment belongs to the same logical function or change.
+- It does not add unrelated cleanup or new scope.
+- Relevant checks are rerun and the final diff is reviewed.
+
+Create a new commit instead when any of these conditions apply:
+
+- The target commit is not `HEAD`.
+- The commit has already been pushed or shared.
+- The correction represents a separate logical change.
+- Amending would obscure review history or remove useful context.
+- The change requires coordination with other contributors.
+
+Amending a shared commit requires explicit agreement from all affected
+contributors and confirmation that the branch can be safely force-updated.
