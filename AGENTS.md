@@ -2,10 +2,14 @@
 
 ## Project Role
 
-This repository contains a multi-agent runtime that supports writing novels.
-Your role in this repository is to develop, maintain, test, and document the
-runtime. Do not write novel content unless the task explicitly requires it for
-an example, fixture, or test.
+Before beginning work, read `README.md` first. Treat it as the source of truth
+for the project objective, language, contribution guidelines, and folder
+structure.
+
+This repository contains a Python multi-agent runtime that supports writing
+novels. Your role in this repository is to develop, maintain, test, and
+document the runtime. Do not write novel content unless the task explicitly
+requires it for an example, fixture, or test.
 
 ## Working Method
 
@@ -61,7 +65,10 @@ Add or update tests when behavior changes. Update documentation when public
 behavior, setup, or workflow changes. Before finishing, check the diff for
 unintended changes and report what was verified.
 
-Keep product-related documents under `./docs`. The commit policy is a
-repository workflow document at [COMMIT_POLICY.md](COMMIT_POLICY.md). A commit
-is a unit of a complete function or logic; keep commits focused, complete,
-and reviewable.
+The commit policy is a repository workflow document at
+[COMMIT_POLICY.md](COMMIT_POLICY.md). A commit is a unit of a complete function
+or logic; keep commits focused, complete, and reviewable.
+
+Before adding, updating, or removing a Python package, read and follow
+[DEPENDENCY_POLICY.md](DEPENDENCY_POLICY.md). Dependency changes must comply
+with that policy and include the required verification.
