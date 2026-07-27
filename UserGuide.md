@@ -13,9 +13,9 @@ commands:
 - `smoke` runs the built-in provider-free deterministic runtime check.
 
 Installation exposes `story-writing-agents` and the shorter `story` as exact
-aliases for the same CLI entry point. Every documented
-`story-writing-agents ...` command can be replaced exactly with `story ...`;
-the alias does not select a separate parser, runtime, or behavior.
+aliases for the same CLI entry point. Command examples in this guide use
+`story ...`; it can be replaced exactly with `story-writing-agents ...`.
+The alias does not select a separate parser, runtime, or behavior.
 
 The runtime is provider-neutral and uses only the Python standard library. It
 does not bundle an LLM, provider SDK, network client, or provider credentials.
@@ -24,7 +24,7 @@ plugin.
 
 Commands in this guide assume a POSIX shell, an active `venv` or Conda
 environment, and the repository root as the current directory. Run
-`story-writing-agents <command> --help` for the live option summary.
+`story <command> --help` for the live option summary.
 
 ## Prerequisites and Installation
 
@@ -66,8 +66,8 @@ After either environment setup, confirm the CLI and initialize a dedicated
 workspace:
 
 ```bash
-story-writing-agents --help
-story-writing-agents init ./guide-workspace
+story --help
+story init ./guide-workspace
 ```
 
 Initialization is idempotent. It creates missing scaffold files while
@@ -80,7 +80,7 @@ Run the deterministic end-to-end runtime check without configuring a
 workspace:
 
 ```bash
-story-writing-agents smoke
+story smoke
 ```
 
 With no arguments, `smoke` creates a uniquely named temporary workspace, runs
@@ -91,7 +91,7 @@ longer exists after normal completion.
 To retain diagnostic artifacts, provide an explicit path:
 
 ```bash
-story-writing-agents smoke --workspace ./smoke-workspace
+story smoke --workspace ./smoke-workspace
 ```
 
 Persistent mode initializes a missing scaffold or reuses an existing
@@ -181,7 +181,7 @@ See the [API reference](docs/api.md) for the exact request and reply contracts.
 The complete `run` shape is:
 
 ```text
-story-writing-agents run
+story run
   [--workspace WORKSPACE]
   --session SESSION
   --backend MODULE:ATTRIBUTE
@@ -194,7 +194,7 @@ story-writing-agents run
 Use a prompt when the provider should draft the initial candidate:
 
 ```bash
-story-writing-agents run \
+story run \
   --workspace ./guide-workspace \
   --session writing_session \
   --backend trusted_story_provider:backend \
@@ -206,7 +206,7 @@ story-writing-agents run \
 Use a draft when you already have the complete candidate:
 
 ```bash
-story-writing-agents run \
+story run \
   --workspace ./guide-workspace \
   --session writing_session \
   --backend trusted_story_provider:backend \
@@ -241,7 +241,7 @@ They must be the entire positional argument—parsing does not trim whitespace.
 Set the session-wide language:
 
 ```bash
-story-writing-agents directive \
+story directive \
   --workspace ./guide-workspace \
   --session writing_session \
   '[SYS: LANG=EN]'
@@ -250,7 +250,7 @@ story-writing-agents directive \
 Override one canonical agent's persona:
 
 ```bash
-story-writing-agents directive \
+story directive \
   --workspace ./guide-workspace \
   --session writing_session \
   '[OVERRIDE: plot_architect Persona=default_kim_eun_hee]'
@@ -263,7 +263,7 @@ Custom persona identifiers require a corresponding UTF-8 Markdown file in
 Clear all runtime overrides for only that session:
 
 ```bash
-story-writing-agents directive \
+story directive \
   --workspace ./guide-workspace \
   --session writing_session \
   '[RESET: ALL]'
@@ -278,7 +278,7 @@ documents, debate history, agent history, or manuscripts. See
 Inspect all known debates and persisted overrides for a session:
 
 ```bash
-story-writing-agents inspect \
+story inspect \
   --workspace ./guide-workspace \
   --session writing_session
 ```
@@ -287,7 +287,7 @@ Inspect one debate, including lifecycle state, terminal result when available,
 and the full validated blackboard:
 
 ```bash
-story-writing-agents inspect \
+story inspect \
   --workspace ./guide-workspace \
   --session writing_session \
   --debate opening_01
@@ -393,7 +393,7 @@ expect authored or critically reviewed story prose.
 ### 1. Create a dedicated story workspace
 
 ```bash
-story-writing-agents init ./glasswater-workspace
+story init ./glasswater-workspace
 ```
 
 ### 2. Seed the four core documents
@@ -465,7 +465,7 @@ do not automatically load earlier manuscript files.
 ### 3. Set the session language
 
 ```bash
-story-writing-agents directive \
+story directive \
   --workspace ./glasswater-workspace \
   --session glasswater_novel \
   '[SYS: LANG=EN]'
@@ -476,7 +476,7 @@ The override persists for subsequent debates in `glasswater_novel`.
 ### 4. Request the opening chapter
 
 ```bash
-story-writing-agents run \
+story run \
   --workspace ./glasswater-workspace \
   --session glasswater_novel \
   --backend trusted_story_provider:backend \
@@ -500,7 +500,7 @@ The runtime coordinates four roles:
 ### 5. Inspect consensus, manuscript, and blackboard
 
 ```bash
-story-writing-agents inspect \
+story inspect \
   --workspace ./glasswater-workspace \
   --session glasswater_novel \
   --debate glasswater_ch01_v1
@@ -541,7 +541,7 @@ After editing, pass the complete file content to `--draft`. The CLI does not
 have a draft-file flag, so the quoted shell substitution supplies the text:
 
 ```bash
-story-writing-agents run \
+story run \
   --workspace ./glasswater-workspace \
   --session glasswater_novel \
   --backend trusted_story_provider:backend \
@@ -561,7 +561,7 @@ automatically read manuscripts. Ensure important approved facts are present in
 the core documents, then include any needed chapter recap in the new prompt:
 
 ```bash
-story-writing-agents run \
+story run \
   --workspace ./glasswater-workspace \
   --session glasswater_novel \
   --backend trusted_story_provider:backend \
@@ -580,7 +580,7 @@ plot specialist reports a conflict. Setting zero replacement rounds makes the
 first unresolved audit terminal:
 
 ```bash
-story-writing-agents run \
+story run \
   --workspace ./glasswater-workspace \
   --session glasswater_novel \
   --backend trusted_story_provider:backend \
@@ -595,7 +595,7 @@ returns exit code `3`, status `deadlock`, no manuscript, and an
 `action_required` value summarizing the unresolved critiques. Inspect it:
 
 ```bash
-story-writing-agents inspect \
+story inspect \
   --workspace ./glasswater-workspace \
   --session glasswater_novel \
   --debate glasswater_ch03_conflict
@@ -605,7 +605,7 @@ The old ID cannot resume. After the user rules that the bell must remain
 nonverbal, start a new debate and output:
 
 ```bash
-story-writing-agents run \
+story run \
   --workspace ./glasswater-workspace \
   --session glasswater_novel \
   --backend trusted_story_provider:backend \
@@ -626,13 +626,11 @@ Activate the virtual environment and repeat the editable installation:
 ```bash
 source .venv/bin/activate
 python -m pip install --editable .
-story-writing-agents --help
 story --help
 ```
 
-The editable install creates both executables. Either help command reaches the
-same parser; checking both also confirms that the active environment exposes
-both console-script names.
+The editable install creates both executables. The short command above reaches
+the same parser as `story-writing-agents --help`.
 
 ### `smoke` exits with code `1` or `2`
 
