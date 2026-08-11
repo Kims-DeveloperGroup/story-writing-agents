@@ -27,6 +27,12 @@ Commands in this guide assume a POSIX shell, an active `venv` or Conda
 environment, and the repository root as the current directory. Run
 `story <command> --help` for the live option summary.
 
+For interactive use, enter an initialized workspace once. Commands issued
+there or in a nested directory discover the nearest initialized workspace and
+reuse the session selected by a successful `story session start SESSION`.
+Explicit `--workspace` and `--session` always win and remain recommended for
+automation.
+
 ## Prerequisites and Installation
 
 Python 3.11 or later and the Codex CLI are required for real provider runs.
@@ -81,6 +87,10 @@ workspace:
 ```bash
 story --help
 story init ./guide-workspace
+cd ./guide-workspace
+story session start writing_session
+story run 'Draft an opening scene using the workspace core documents.'
+cd ..
 ```
 
 Initialization is idempotent. It creates missing scaffold files while
@@ -199,10 +209,13 @@ definition.
 Start a provider session before its first debate:
 
 ```bash
-story session start \
-  --workspace ./guide-workspace \
-  --session writing_session
+cd ./guide-workspace
+story session start writing_session
 ```
+
+This successful start also saves `writing_session` as the workspace's selected
+CLI session. `story session start` with no session later reactivates that
+selection. A failed start does not change the selection.
 
 One team-level lease prevents two local processes from using the same active
 session concurrently. The backend stores one resumable Codex thread per
@@ -213,14 +226,14 @@ is on the same host and demonstrably no longer exists.
 End the provider session when the team is no longer in use:
 
 ```bash
-story session end \
-  --workspace ./guide-workspace \
-  --session writing_session
+story session end
+cd ..
 ```
 
 Ending marks the session inactive without deleting its thread IDs. Starting
-the same session later resumes compatible threads. Choose a new session ID
-when every agent should start with a fresh provider thread.
+the selected session later resumes compatible threads, and ending does not
+clear the selection. Choose and start a new session ID when every agent should
+start with a fresh provider thread.
 
 Each agent's effective role prompt, persona, language, and allowlisted core
 documents are combined into an isolated, temporary top-level `AGENTS.md`.
@@ -249,17 +262,24 @@ The complete `run` shape is:
 ```text
 story run
   [--workspace WORKSPACE]
-  --session SESSION
+  [--session SESSION]
   [--backend AGENT=BACKEND]...
   [--codex-model MODEL]
   [--codex-timeout SECONDS]
-  (--prompt PROMPT | --draft DRAFT)
+  [POSITIONAL_PROMPT | --prompt PROMPT | --draft DRAFT | --draft-file PATH]
   [--output MANUSCRIPT_PATH]
   [--debate-id DEBATE_ID]
   [--max-debate-rounds MAX_DEBATE_ROUNDS]
 ```
 
-Use a prompt when the provider should draft the initial candidate:
+For normal interactive use inside the selected workspace, use a positional
+prompt:
+
+```bash
+story run 'Draft an opening scene using the workspace core documents.'
+```
+
+The explicit form remains useful for automation:
 
 ```bash
 story run \
@@ -281,9 +301,16 @@ story run \
   --output opening/chapter-01-revised.md
 ```
 
-Exactly one of `--prompt` and `--draft` is required. Both options accept
-content, not a filename. Because the CLI has no file-input flag, very large
-payloads can encounter the operating system's command-line length limit.
+Exactly one input is required: the positional prompt, `--prompt`, `--draft`,
+or `--draft-file`. `--draft-file PATH` reads the complete file as strict UTF-8
+and treats it as a draft; a relative path is resolved from the caller's current
+directory, not from the discovered workspace:
+
+```bash
+story run --draft-file ./working/chapter-01.md
+```
+
+The positional prompt and `--prompt`/`--draft` values are inline content.
 
 The backend uses the Codex CLI's built-in default model while ignoring user
 configuration. Use `--codex-model MODEL` to override it for one run.
@@ -429,6 +456,7 @@ workspace/
 │   └── narrative_rules.md
 ├── agent_states/
 │   ├── orchestrator_state/
+│   │   ├── cli_context.json
 │   │   ├── sessions/<session_id>.json
 │   │   ├── provider_sessions/<session_id>.json
 │   │   ├── provider_sessions/<session_id>.lease.json
@@ -443,7 +471,9 @@ workspace/
 └── manuscript/<output path>
 ```
 
-Session override and debate/history directories are created lazily. The
+CLI context, provider-session, session override, and debate/history files are
+created lazily. `cli_context.json` stores schema version `1` and the selected
+session ID. Ending a session preserves that selection. The
 discussion JSONL contains the full user input, candidates, visible verdicts,
 critiques, proposals, errors, and commit record. A cancellation may leave
 lifecycle state and messages without a result JSON.
@@ -480,6 +510,10 @@ heartbeat, or recovery command. Preserve it for inspection and start a new ID.
 This scenario uses original example material for a fictional project titled
 *The Bell Beneath Glasswater*. It demonstrates the intended workflow with a
 team of Codex-backed agents.
+
+The scenario keeps explicit workspace, session, debate, and output values to
+demonstrate reproducible automation. For interactive work, enter the workspace
+and omit those values after `story session start glasswater_novel`.
 
 ### 1. Create a dedicated story workspace
 
@@ -631,14 +665,13 @@ cp \
   ./glasswater-workspace/working/chapter-01-user-edit.md
 ```
 
-After editing, pass the complete file content to `--draft`. The CLI does not
-have a draft-file flag, so the quoted shell substitution supplies the text:
+After editing, pass the file as a strict-UTF-8 draft:
 
 ```bash
 story run \
   --workspace ./glasswater-workspace \
   --session glasswater_novel \
-  --draft "$(cat ./glasswater-workspace/working/chapter-01-user-edit.md)" \
+  --draft-file ./glasswater-workspace/working/chapter-01-user-edit.md \
   --debate-id glasswater_ch01_user_edit \
   --output bell-beneath-glasswater/chapter-01-user-edit.md
 ```
@@ -757,8 +790,22 @@ thread; the next invocation starts a fresh compatible thread.
 Run `story init <workspace>` to add missing canonical `AGENTS.md` files without
 overwriting customized ones. Prompt, persona, and referenced core files must be
 readable strict-UTF-8 files inside the workspace and cannot use symlinks. If a
-file was edited while an adapter was binding it, retry with a new debate ID
+file was edited while the backend was binding it, retry with a new debate ID
 after the edit is complete.
+
+### No workspace or session is selected
+
+Without `--workspace`, run the command from an initialized workspace or one of
+its descendants; discovery chooses the nearest initialized ancestor. Otherwise
+pass `--workspace PATH`. Run `story session start SESSION` to save a selection,
+or pass `--session SESSION` explicitly. Only a successful session start
+changes `cli_context.json`.
+
+### `--draft-file` cannot be read
+
+The file must exist, be readable, and contain strict UTF-8. Relative paths are
+resolved from the shell's current directory, even when `--workspace` points
+elsewhere.
 
 ### `DirectiveError`
 

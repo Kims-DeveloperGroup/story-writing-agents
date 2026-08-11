@@ -11,11 +11,23 @@ from typing import Sequence
 
 from .agents import ROSTER
 from .backend import AgentBackend
+from .cli_context import (
+    load_cli_context,
+    resolve_session,
+    resolve_workspace,
+    select_session,
+)
 from .config import ConfigManager
 from .errors import ConfigurationError
 from .models import DebateStatus
 from .orchestrator import StoryRuntime
-from .workspace import Workspace, initialize_workspace
+from .workspace import initialize_workspace
+
+
+_WORKSPACE_HELP = (
+    "explicit initialized workspace; omitted discovers the nearest ancestor"
+)
+_SESSION_HELP = "explicit session; omitted uses the workspace selection"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -37,16 +49,16 @@ def build_parser() -> argparse.ArgumentParser:
         "directive",
         help="apply one exact standalone runtime directive",
     )
-    directive.add_argument("--workspace", default=".")
-    directive.add_argument("--session", required=True)
+    directive.add_argument("--workspace", help=_WORKSPACE_HELP)
+    directive.add_argument("--session", help=_SESSION_HELP)
     directive.add_argument("text")
 
     run = subcommands.add_parser(
         "run",
         help="run a prompt or draft through the configured agent backends",
     )
-    run.add_argument("--workspace", default=".")
-    run.add_argument("--session", required=True)
+    run.add_argument("--workspace", help=_WORKSPACE_HELP)
+    run.add_argument("--session", help=_SESSION_HELP)
     run.add_argument(
         "--backend",
         action="append",
@@ -61,9 +73,20 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=300,
     )
-    payload = run.add_mutually_exclusive_group(required=True)
-    payload.add_argument("--prompt")
-    payload.add_argument("--draft")
+    run.add_argument(
+        "positional_prompt",
+        nargs="?",
+        metavar="PROMPT",
+        help="story prompt; mutually exclusive with the other input options",
+    )
+    payload = run.add_mutually_exclusive_group()
+    payload.add_argument("--prompt", help="inline story prompt")
+    payload.add_argument("--draft", help="inline complete draft")
+    payload.add_argument(
+        "--draft-file",
+        metavar="PATH",
+        help="strict-UTF-8 draft file relative to the current directory",
+    )
     run.add_argument("--output", metavar="MANUSCRIPT_PATH")
     run.add_argument("--debate-id")
     run.add_argument("--max-debate-rounds", type=int)
@@ -72,8 +95,8 @@ def build_parser() -> argparse.ArgumentParser:
         "inspect",
         help="inspect persisted session or debate state",
     )
-    inspect.add_argument("--workspace", default=".")
-    inspect.add_argument("--session", required=True)
+    inspect.add_argument("--workspace", help=_WORKSPACE_HELP)
+    inspect.add_argument("--session", help=_SESSION_HELP)
     inspect.add_argument("--debate")
 
     session = subcommands.add_parser(
@@ -83,8 +106,14 @@ def build_parser() -> argparse.ArgumentParser:
     session_actions = session.add_subparsers(dest="session_action", required=True)
     for action in ("start", "end"):
         action_parser = session_actions.add_parser(action)
-        action_parser.add_argument("--workspace", default=".")
-        action_parser.add_argument("--session", required=True)
+        action_parser.add_argument(
+            "session_name",
+            nargs="?",
+            metavar="SESSION",
+            help="session ID; omitted uses the workspace selection",
+        )
+        action_parser.add_argument("--workspace", help=_WORKSPACE_HELP)
+        action_parser.add_argument("--session", help=_SESSION_HELP)
 
     smoke = subcommands.add_parser(
         "smoke",
@@ -123,6 +152,39 @@ def _parse_backend_overrides(values: Sequence[str]) -> dict[str, str]:
     return result
 
 
+def _resolve_run_input(arguments: argparse.Namespace) -> tuple[str, str]:
+    sources = (
+        ("prompt", arguments.positional_prompt),
+        ("prompt", arguments.prompt),
+        ("draft", arguments.draft),
+        ("draft_file", arguments.draft_file),
+    )
+    supplied = [(kind, value) for kind, value in sources if value is not None]
+    if len(supplied) != 1:
+        raise ConfigurationError(
+            "exactly one run input is required: positional prompt, --prompt, "
+            "--draft, or --draft-file"
+        )
+    input_kind, value = supplied[0]
+    if not isinstance(value, str):
+        raise ConfigurationError("run input must be text")
+    if input_kind != "draft_file":
+        return input_kind, value
+
+    draft_path = Path(value).expanduser()
+    try:
+        content = draft_path.read_bytes().decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise ConfigurationError(
+            f"draft file is not valid UTF-8: {draft_path}"
+        ) from exc
+    except OSError as exc:
+        raise ConfigurationError(
+            f"cannot read draft file {draft_path}: {exc}"
+        ) from exc
+    return "draft", content
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     arguments = parser.parse_args(argv)
@@ -149,17 +211,26 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return exit_code
 
-        workspace = Workspace(Path(arguments.workspace))
+        workspace = resolve_workspace(arguments.workspace)
+        cli_context = load_cli_context(workspace)
         if arguments.command == "session":
+            session_id = resolve_session(
+                workspace=workspace,
+                context=cli_context,
+                option_session=arguments.session,
+                positional_session=arguments.session_name,
+            )
             backend = AgentBackend(workspace)
             try:
                 manifest = (
-                    backend.start_session(arguments.session)
+                    backend.start_session(session_id)
                     if arguments.session_action == "start"
-                    else backend.end_session(arguments.session)
+                    else backend.end_session(session_id)
                 )
             finally:
                 backend.close()
+            if arguments.session_action == "start":
+                select_session(workspace, session_id)
             print(
                 json.dumps(
                     {
@@ -174,20 +245,26 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
         runtime = StoryRuntime(workspace)
+        session_id = resolve_session(
+            workspace=workspace,
+            context=cli_context,
+            option_session=arguments.session,
+        )
         if arguments.command == "directive":
-            state = runtime.apply_directive(arguments.session, arguments.text)
+            state = runtime.apply_directive(session_id, arguments.text)
             print(json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True))
             return 0
 
         if arguments.command == "inspect":
             value = (
-                runtime.inspect_debate(arguments.session, arguments.debate)
+                runtime.inspect_debate(session_id, arguments.debate)
                 if arguments.debate
-                else runtime.inspect_session(arguments.session)
+                else runtime.inspect_session(session_id)
             )
             print(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True))
             return 0
 
+        input_kind, input_payload = _resolve_run_input(arguments)
         backend_overrides = _parse_backend_overrides(arguments.backend)
         backend = AgentBackend(
             workspace,
@@ -203,9 +280,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         }
         try:
             result = asyncio.run(
-                runtime.run_prompt(arguments.session, arguments.prompt, **options)
-                if arguments.prompt is not None
-                else runtime.run_draft(arguments.session, arguments.draft, **options)
+                runtime.run_prompt(session_id, input_payload, **options)
+                if input_kind == "prompt"
+                else runtime.run_draft(session_id, input_payload, **options)
             )
         finally:
             backend.close()

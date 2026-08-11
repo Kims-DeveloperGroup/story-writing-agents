@@ -18,6 +18,10 @@ post-consensus update into `config/`.
 
 Session and debate IDs and persona identifiers have separate conservative
 ASCII validation rules documented in [Configuration](configuration.md).
+When `--workspace` is omitted, CLI discovery selects the nearest fully
+initialized ancestor of the caller's current directory. Use an explicit
+`--workspace` in automation or whenever multiple nested workspaces could make
+that choice unclear.
 The orchestration core-document read and update paths are restricted to the
 four fixed filenames. A caller using generic `Workspace.write_text()` is a
 trusted direct workspace client and can alter any safely contained relative
@@ -57,6 +61,12 @@ retention policy. Agent `AGENTS.md` prompts, configuration, personas, core
 documents, agent outcomes, discussion logs, lifecycle state, results, and
 manuscripts are local plaintext files governed by the operating system's
 directory permissions.
+
+The workspace-local `cli_context.json` is also plaintext. It contains only its
+schema version and selected session ID, but the name itself may disclose
+project information. `--draft-file` reads strict UTF-8 from a caller-selected
+path; its content then follows the same provider, log, and manuscript paths as
+an inline draft.
 
 The full blackboard JSONL deliberately contains the original user prompt or
 draft, complete generated candidates, approvals, critiques, proposals, visible

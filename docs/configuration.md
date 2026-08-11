@@ -224,6 +224,45 @@ compatible conversations. The lease file exists only while a process owns the
 team session and prevents concurrent processes from resuming the same threads.
 Both files are runtime-managed plaintext and must not be edited manually.
 
+## CLI Context and Discovery
+
+Interactive CLI selection is stored at:
+
+```text
+agent_states/orchestrator_state/cli_context.json
+```
+
+Its strict schema is:
+
+```json
+{
+  "schema_version": 1,
+  "selected_session": "demo"
+}
+```
+
+The file is absent until a successful `story session start SESSION`. That
+command atomically replaces the selected session. A failed start and every
+`run`, `directive`, `inspect`, and `session end` command leave the selection
+unchanged. Ending the selected provider session preserves the selection, so a
+bare `story session start` can reactivate it later.
+
+Session resolution precedence is:
+
+1. `--session SESSION`;
+2. the positional session accepted by `story session start|end`;
+3. `selected_session` in CLI context.
+
+Supplying both session forms to a lifecycle command is an error. If no source
+resolves, the command fails and asks the user to start or explicitly name a
+session.
+
+For commands other than `init` and provider-free `smoke`, workspace resolution
+uses an explicit `--workspace PATH` when present. Otherwise it searches from
+the caller's current directory upward and chooses the nearest fully
+initialized workspace. It does not silently initialize an explicit or
+discovered path.
+
 ## Persona Templates
 
 A persona identifier is the filename without `.md`. It must match:

@@ -114,6 +114,21 @@ evaluation, uses read-only sandboxing and no approvals, and receives dynamic
 request JSON over stdin. Phase-specific output schemas are validated before
 conversion to `AgentReply`; failed calls are not retried automatically.
 
+The CLI adds a workspace-local navigation layer without changing the runtime
+API. When `--workspace` is absent, it walks from the caller's current
+directory toward the filesystem root and selects the nearest directory with
+the complete initialized-workspace sentinels. An explicit path bypasses
+discovery. A successful `session start` atomically writes the selected session
+to `agent_states/orchestrator_state/cli_context.json`; other commands read but
+never change it. Explicit `--session` values take precedence over this
+selection.
+
+For `run`, input resolution happens before provider construction and accepts
+exactly one of a positional prompt, `--prompt`, `--draft`, or `--draft-file`.
+Draft files are decoded as strict UTF-8 relative to the caller's current
+directory. Debate IDs, manuscript names, and runtime defaults continue to be
+resolved by the orchestration layer when omitted.
+
 ## Built-In Smoke Workflow
 
 The CLI `smoke` command supplies a private deterministic backend to the same
@@ -281,8 +296,9 @@ workspace/
 ```
 
 Persona templates added by the user may appear in either persona directory.
-Session overrides, per-agent debate histories, discussion lifecycle/log/result
-files, and manuscript output are created lazily in the paths shown in the
+CLI context at `agent_states/orchestrator_state/cli_context.json`, session
+overrides, per-agent debate histories, discussion lifecycle/log/result files,
+and manuscript output are created lazily in the paths shown in the
 [User Guide](../UserGuide.md#generated-files).
 
 Session override JSON survives new `StoryRuntime` instances. Each agent JSONL

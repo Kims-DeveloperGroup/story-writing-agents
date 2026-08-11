@@ -27,6 +27,8 @@ __main__ -> cli -> orchestrator -> prompts -> config -> workspace
                  |               |         -> workspace
                  |               -> workspace/models/agents
                  -> backend -> config/workspace/models/errors/agents
+                 -> cli_context -> workspace/errors/agents
+
 smoke -> orchestrator/workspace/models/agents
 directives -> config/workspace/errors/agents
 ```
@@ -106,13 +108,30 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Supported surface:** Script entry point `story_writing_agents.cli:main` for
   both `story` and `story-writing-agents`. `build_parser` and other helpers are
   not package-supported APIs.
-- **Direct internal dependencies:** `agents`, `backend`, `config`, `errors`,
-  `models`, `orchestrator`, and `workspace`; imports `smoke` lazily for the
-  diagnostic command.
-- **State, resources, and side effects:** Writes JSON or errors to standard
-  streams, creates and closes backends, and runs the async event loop.
+- **Direct internal dependencies:** `agents`, `backend`, `cli_context`, `config`,
+  `errors`, `models`, `orchestrator`, and `workspace`; imports `smoke` lazily for
+  the diagnostic command.
+- **State, resources, and side effects:** Reads draft files, writes JSON or
+  errors to standard streams, creates and closes backends, and runs the async
+  event loop.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
-  `tests/test_smoke_cli.py`, `UserGuide.md`, and `docs/api.md`.
+  `tests/test_cli_context.py`, `tests/test_smoke_cli.py`, `UserGuide.md`, and
+  `docs/api.md`.
+
+### `story_writing_agents.cli_context`
+
+- **Source:** `src/story_writing_agents/cli_context.py`
+- **Responsibility:** Discover initialized workspaces and manage workspace-local
+  CLI session selection.
+- **Supported surface:** Internal `CliContext`, `resolve_workspace`,
+  `load_cli_context`, `select_session`, and `resolve_session`.
+- **Direct internal dependencies:** `agents`, `errors`, and `workspace`.
+- **State, resources, and side effects:** Reads workspace sentinels and owns
+  `agent_states/orchestrator_state/cli_context.json`, written through
+  `Workspace`.
+- **Primary verification/documentation:** `tests/test_cli_context.py`,
+  `UserGuide.md`, `docs/architecture.md`, `docs/configuration.md`, and
+  `docs/security.md`.
 
 ### `story_writing_agents.config`
 

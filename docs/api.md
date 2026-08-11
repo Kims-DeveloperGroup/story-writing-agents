@@ -567,41 +567,48 @@ story init [workspace] [--overwrite-prompts]
 
 story directive
   [--workspace WORKSPACE]
-  --session SESSION
+  [--session SESSION]
   TEXT
 
 story run
   [--workspace WORKSPACE]
-  --session SESSION
+  [--session SESSION]
   [--backend AGENT=BACKEND]...
   [--codex-model MODEL]
   [--codex-timeout SECONDS]
-  (--prompt PROMPT | --draft DRAFT)
+  [POSITIONAL_PROMPT | --prompt PROMPT | --draft DRAFT | --draft-file PATH]
   [--output MANUSCRIPT_PATH]
   [--debate-id DEBATE_ID]
   [--max-debate-rounds MAX_DEBATE_ROUNDS]
 
 story inspect
   [--workspace WORKSPACE]
-  --session SESSION
+  [--session SESSION]
   [--debate DEBATE]
 
 story session (start | end)
+  [SESSION]
   [--workspace WORKSPACE]
-  --session SESSION
+  [--session SESSION]
 
 story smoke
   [--workspace WORKSPACE]
 ```
 
-The default workspace is `.` for `directive`, `run`, and `inspect`; the
-optional positional `init` workspace also defaults to `.`. Normal
+For `directive`, `run`, `inspect`, and `session`, omitted `--workspace`
+discovers the nearest initialized workspace from the current directory or its
+ancestors. An explicit workspace wins. Omitted sessions use the selection
+written by the last successful `session start`; lifecycle commands also accept
+a positional session. Normal
 initialization creates missing agent prompts and preserves existing ones.
 `--overwrite-prompts` replaces only the four canonical
 `config/agents/<agent-id>/AGENTS.md` files. `run` prints the complete
 `DebateResult.to_dict()` JSON, including messages. `--backend` is a repeatable
 per-agent override such as `plot_architect=codex`. `--codex-model` overrides
 the Codex default, and `--codex-timeout` defaults to 300 seconds.
+`run` requires exactly one input source. A positional value is a prompt;
+`--draft-file` reads a strict-UTF-8 file relative to the caller's current
+directory.
 Initialization, session lifecycle, directives, and inspection print formatted
 JSON.
 

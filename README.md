@@ -69,11 +69,12 @@ It exercises the complete deterministic revision workflow in a temporary
 workspace without invoking Codex, using credentials, or making a network call.
 A passing report contains `"provider_tested": false`.
 
-Initialize a workspace and start a persistent provider session:
+Initialize a workspace, enter it, and select a persistent provider session:
 
 ```bash
 story init ./quickstart-workspace
-story session start --workspace ./quickstart-workspace --session my_novel
+cd ./quickstart-workspace
+story session start my_novel
 ```
 
 Initialization creates one editable role prompt per agent at
@@ -81,7 +82,7 @@ Initialization creates one editable role prompt per agent at
 four role prompts to the packaged defaults:
 
 ```bash
-story init ./quickstart-workspace --overwrite-prompts
+story init . --overwrite-prompts
 ```
 
 That flag changes only the four canonical prompt files.
@@ -90,17 +91,19 @@ Run a story-writing debate using the default Codex backend:
 
 ```bash
 story run \
-  --workspace ./quickstart-workspace \
-  --session my_novel \
-  --prompt 'Write an opening scene using the workspace core documents.' \
-  --debate-id opening_01 \
-  --output chapters/opening.md
+  'Write an opening scene using the workspace core documents.'
 ```
+
+From an initialized workspace or any directory beneath it, the CLI discovers
+the nearest workspace and uses the session selected by the last successful
+`story session start`. Debate IDs and output names are generated when omitted.
+Explicit `--workspace`, `--session`, `--debate-id`, and `--output` options
+remain available for scripts and automation.
 
 When work on the provider session is complete:
 
 ```bash
-story session end --workspace ./quickstart-workspace --session my_novel
+story session end
 ```
 
 Ending a session prevents new provider calls but retains its per-agent Codex
