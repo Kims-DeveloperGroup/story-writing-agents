@@ -187,12 +187,17 @@ sensitive story material.
 
 ## Contribution Guidelines
 
-See [COMMIT_POLICY.md](COMMIT_POLICY.md) for commit rules.
+See [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md) for the Issues, Projects,
+milestones, sprints, branches, and pull-request workflow. Coding agents use
+[AGENT_TASK_RUNBOOK.md](AGENT_TASK_RUNBOOK.md) for the parent/child branch and
+worktree procedure. See [COMMIT_POLICY.md](COMMIT_POLICY.md) for commit rules.
 
 ## Project Structure
 
 - `README.md` contains the project overview and contribution entry point.
 - `PYTHON_MODULE_INDEX.md` records the current Python package and module map.
+- `GITHUB_WORKFLOW.md` defines the GitHub planning and delivery workflow.
+- `AGENT_TASK_RUNBOOK.md` defines the agent branch and worktree procedure.
 - `UserGuide.md` is the complete CLI workflow and troubleshooting guide.
 - `docs/` contains API, architecture, configuration, and security details.
 - `src/story_writing_agents/` contains the Python runtime and concrete backend.

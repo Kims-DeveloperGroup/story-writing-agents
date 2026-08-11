@@ -177,6 +177,13 @@ Add or update tests when behavior changes. Update documentation when public
 behavior, setup, or workflow changes. Before finishing, check the diff for
 unintended changes and report what was verified.
 
+For work tracked on GitHub, read and follow
+[GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md). It defines Issue readiness, Project
+status, milestones, iterations, labels, branch and pull-request traceability,
+and completion rules. Execute tracked tasks with
+[AGENT_TASK_RUNBOOK.md](AGENT_TASK_RUNBOOK.md), including its parent/child
+branch, squash-merge, and worktree procedure.
+
 The commit policy is a repository workflow document at
 [COMMIT_POLICY.md](COMMIT_POLICY.md). A commit is a unit of a complete function
 or logic; keep commits focused, complete, and reviewable.
