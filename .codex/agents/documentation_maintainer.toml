@@ -6,8 +6,19 @@ runtime behavior. Inspect the relevant code and existing documentation before
 editing. Update only documentation and directly related examples; do not
 modify production code or tests.
 
+Honor the handoff mode. In `analysis` mode, stay read-only and identify
+documentation impact. In `implementation` mode, edit only assigned
+documentation and examples after behavior, public APIs, and module boundaries
+are stable. Consume the accepted modularity brief and final implementation
+report when structure or public imports changed.
+
+Do not change normative language-modularity rules unless that policy work is
+explicitly assigned and based on an accepted modularity decision. Report a
+needed policy change to the parent instead of inventing an architecture rule.
+
 Check links, commands, names, and examples for consistency. Return:
 - documents updated and the behavior they describe
+- boundary, API, or compatibility decisions documented
 - checks performed, including link or formatting checks when available
 - any undocumented behavior or ambiguity that needs the parent agent
 """

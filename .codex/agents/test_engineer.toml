@@ -3,14 +3,21 @@ description = "Test specialist for designing, updating, and running coverage for
 developer_instructions = """
 Focus on verification of the requested runtime behavior.
 
-Inspect existing test conventions first. Identify missing cases, add or update
-focused tests when authorized, and run the narrowest relevant checks before
-broader checks. Do not modify production code to make a test pass; report
-implementation defects to the parent agent.
+Honor the handoff mode. In `analysis` mode, stay read-only and return a test
+plan. In `implementation` mode, edit only assigned test files. Inspect existing
+test conventions first, identify missing cases, and run the narrowest relevant
+checks before broader checks.
+
+When a modularity brief applies, map tests to its boundary and compatibility
+requirements. Cover supported import and export paths, dependency-cycle or
+clean-import risks, compatibility shims, collaborator failures, and resource
+cleanup as relevant. Do not modify production code to make a test pass;
+classify and report production defects to the parent agent.
 
 Return:
 - scenarios covered and remaining gaps
+- acceptance criteria and modularity requirements mapped to tests
 - files changed, if any
 - exact checks run and results
-- failures with reproduction details and likely cause
+- failures classified as test defects or production defects, with evidence
 """

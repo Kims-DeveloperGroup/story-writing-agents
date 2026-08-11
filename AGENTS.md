@@ -31,33 +31,122 @@ missing requirement would materially change the design or result.
 
 ## Subagent Delegation
 
-Use the project agents in `.codex/agents/` when their focused expertise will
-improve the result:
+The agents in `.codex/agents/` develop this repository. They are distinct from
+the four story-runtime agents under `config/agents/` and must not participate
+in novel-writing debates.
+
+Use the project agents when their focused expertise improves the result:
 
 - `requirements_analyst`: inspect the repository, clarify requirements, and
-  define acceptance criteria before substantial or ambiguous work.
+  define acceptance criteria before substantial or ambiguous work; report
+  whether the modularity gate is required.
+- `regression_diagnostician`: reproduce failures, trace regressions, and report
+  whether the cause crosses a package or module boundary.
+- `modularity_maintainer`: analyze, implement, or review cohesive package and
+  module boundaries under the applicable language policy.
 - `runtime_implementer`: implement approved production-code or configuration
-  changes.
+  changes within an accepted boundary design.
 - `test_engineer`: design, add, update, and run tests for the change.
 - `documentation_maintainer`: update README files, policies, guides, and
-  examples affected by the change.
-- `regression_diagnostician`: reproduce failures, trace regressions, and
-  identify their cause.
+  examples after behavior and boundaries stabilize.
 
-Delegate independent read-only investigations in parallel when useful. Keep
-write-capable work sequential: coordinate one owner at a time to avoid
-conflicting edits. The main agent remains responsible for requirements,
-decisions, integration, final verification, and the user-facing summary.
+### Modularity Gate
 
-Every subagent handoff should include:
+Call `modularity_maintainer` when a change does any of the following:
 
-- Objective and relevant context
-- Constraints and acceptance criteria
-- Files or behavior to inspect or change
-- Required output and verification evidence
+- adds, removes, renames, moves, splits, or merges an importable package or
+  module;
+- redistributes feature responsibility, state, resource, or lifecycle
+  ownership;
+- changes dependency direction, introduces or resolves a cycle, or replaces
+  private cross-boundary access;
+- adds or materially changes a shared abstraction, adapter, facade, protocol,
+  package export, or public import path;
+- extracts code for multiple consumers or requires a structural compatibility
+  or migration decision; or
+- fixes a regression whose diagnosed cause is architectural coupling or a
+  boundary-policy violation.
 
-Every subagent result should report findings, files inspected or changed,
-checks run, blockers, and the recommended next action.
+Do not call it for a localized change inside an established module
+responsibility; an internal function refactor with unchanged imports, exports,
+ownership, and contracts; tests-only or docs-only work; formatting, comments,
+or typing cleanup; ordinary configuration or data edits; dependency metadata
+alone; or story-runtime execution.
+
+When the gate applies, call the custom agent by the name
+`modularity_maintainer` and set `mode` in the handoff:
+
+- `analysis`: read-only boundary design before any writer starts;
+- `implementation`: exclusive ownership of an approved architecture-dominant
+  structural change; or
+- `review`: read-only compliance review after another agent implements a
+  boundary-affecting change.
+
+If a writer discovers an unapproved gate trigger, stop that writer and run
+modularity analysis before continuing. Do not allow an implementation agent to
+make an incidental architecture decision silently.
+
+### Orchestration Sequence
+
+1. The main agent classifies the request and makes a preliminary modularity-gate
+   decision.
+2. For substantial or ambiguous work, `requirements_analyst` runs read-only.
+   For reported or observed failures, `regression_diagnostician` runs
+   read-only. Independent investigations may run in parallel. The main agent
+   must resolve `modularity_gate = uncertain` to `required` or `not_required`
+   before any writer starts.
+3. When the gate applies, `modularity_maintainer` runs in `analysis` mode after
+   it receives relevant requirements and diagnosis results. The main agent
+   resolves user decisions and accepts the resulting boundary brief before
+   writing begins.
+4. Exactly one agent owns production writes at a time. Use
+   `modularity_maintainer` for architecture-dominant splits, moves, merges, and
+   extractions. Use `runtime_implementer` for behavior-dominant work constrained
+   by an accepted boundary brief.
+5. If both production specialists are necessary, assign explicit, nonoverlapping
+   files or symbols and run them sequentially. Prefer one owner when separate
+   passes would create an invalid intermediate state.
+6. When `runtime_implementer` implements a boundary brief,
+   `modularity_maintainer` reviews the completed production diff in `review`
+   mode before test or documentation edits. Return deviations to the same
+   production owner and repeat the fix/review loop until material violations
+   are resolved or an exception is explicitly accepted. A separate self-review
+   is not required when `modularity_maintainer` performed the implementation;
+   its implementation report and the main agent's review provide the gate.
+7. `test_engineer` performs test planning read-only when useful, then owns test
+   edits sequentially after production stabilizes. `documentation_maintainer`
+   follows after behavior, APIs, and boundaries are stable.
+8. The main agent integrates all results, reviews the complete diff, runs final
+   checks, and owns the user-facing summary.
+
+Reuse the same specialist thread for follow-up phases when practical. The main
+agent remains the hub: it passes concise upstream decisions to the next agent,
+and specialists do not delegate to or coordinate directly with peers.
+
+### Handoff and Result Contracts
+
+Every subagent handoff must include:
+
+- `mode`: `analysis`, `implementation`, or `review`;
+- objective and relevant evidence;
+- approved scope and explicit out-of-scope work;
+- acceptance criteria and compatibility constraints;
+- the `modularity_gate` decision and accepted brief, when applicable;
+- read-only targets or exclusively owned files and symbols;
+- upstream findings and accepted decisions;
+- required checks and output; and
+- stop conditions, including missing or conflicting policies, breaking API
+  decisions, scope deviation, and unexpected structural work.
+
+Every result must report findings, files inspected or changed, checks run,
+blockers, and the recommended next action. Pass distilled decisions and
+evidence between agents rather than raw logs.
+
+If a required language policy is missing, the modularity agent returns the
+exact language and expected path. The main agent asks the user whether to
+create the packaged policy, then resumes the same agent thread. If creation is
+declined, proceeding under general engineering judgment requires that user
+decision and the lack of a governing policy to be recorded in the result.
 
 ## Quality and Commits
 
@@ -69,6 +158,13 @@ The commit policy is a repository workflow document at
 [COMMIT_POLICY.md](COMMIT_POLICY.md). A commit is a unit of a complete function
 or logic; keep commits focused, complete, and reviewable.
 
-Before adding, updating, or removing a Python package, read and follow
-[DEPENDENCY_POLICY.md](DEPENDENCY_POLICY.md). Dependency changes must comply
-with that policy and include the required verification.
+Before adding, moving, splitting, merging, or materially changing an internal
+package or module, use `modularity_maintainer` and follow the language-policy
+selection process in
+[its agent definition](.codex/agents/modularity_maintainer.toml). Packaged
+language defaults live under `.codex/agents/modularity_maintainer/`.
+
+Before adding, updating, or removing a third-party Python dependency, or
+changing project packaging metadata, read and follow
+[DEPENDENCY_POLICY.md](DEPENDENCY_POLICY.md). Dependency and packaging changes
+must comply with that policy and include the required verification.
