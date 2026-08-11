@@ -2,12 +2,12 @@
 
 ## Authority and Scope
 
-This policy governs Python package and module boundaries for this repository.
-It applies when work adds, removes, moves, splits, or merges an importable unit;
-changes responsibility, dependency direction, public imports or exports,
-shared abstractions, or state and resource ownership; or makes a structural
-compatibility decision. It also applies to behavior-preserving refactors with
-those effects.
+This policy governs Python package and module boundaries in any project that
+selects it. It applies when work adds, removes, moves, splits, or merges an
+importable unit; changes responsibility, dependency direction, public imports
+or exports, shared abstractions, or state and resource ownership; or makes a
+structural compatibility decision. It also applies to behavior-preserving
+refactors with those effects.
 
 It does not require a modularity workflow for every Python edit. A localized
 change within an established module responsibility remains outside this policy
@@ -24,10 +24,10 @@ normative:
   concrete reason in the change description.
 - **MAY** identifies an allowed option, not a default requirement.
 
-This policy governs internal structure. The repository's
-[Python Dependency Policy](../../../DEPENDENCY_POLICY.md) separately governs
-third-party dependencies, packaging metadata, package-manager use, and lock
-files. Both policies apply when a change crosses those concerns.
+This policy governs internal structure. Apply any project dependency,
+packaging, security, or compatibility policies separately when a change crosses
+those concerns. Repository instructions take precedence when they impose a
+stricter compatible requirement.
 
 ## Terms
 
@@ -48,6 +48,59 @@ files. Both policies apply when a change crosses those concerns.
 - **Cohesion** is the degree to which a unit's contents serve the same
   responsibility. **Coupling** is the knowledge one unit requires about
   another unit's implementation or lifecycle.
+
+## Python Module Index
+
+The project inventory is `<PROJECT_ROOT>/PYTHON_MODULE_INDEX.md`. It is a
+project-owned descriptive navigation record for the current Python
+implementation; this packaged policy remains the normative source for boundary
+rules. Proposed or partially implemented structures belong in a modularity
+brief, not in the index. When the index is missing, the modularity maintainer
+MUST inventory the implementation and create it at the project root in its own
+write-enabled pass; separate user approval is not required.
+
+### Coverage and entry format
+
+- The index MUST name every production importable package and module beneath
+  each declared Python source root exactly once. Cache directories, generated
+  bytecode, and test modules are excluded unless they are intentionally shipped
+  as part of the installed package.
+- Each entry MUST record the import path, source path, one current
+  responsibility, supported public imports or entry points, direct internal
+  dependencies, owned state or external resources, material side effects, and
+  primary verification or documentation references.
+- Package entries MUST identify supported re-exports. Determine the supported
+  surface from package-level exports such as `__all__`, documented import paths,
+  and entry points in the active build or packaging manifests. A direct import
+  used only by tests does not by itself make a symbol public.
+- Dependencies MUST describe runtime direction between project modules. Type-
+  only imports MAY be noted when they materially constrain a boundary, but
+  standard-library and third-party import lists SHOULD NOT be duplicated.
+- An entry MUST describe observed behavior only. It MUST NOT present a proposed
+  move, split, export, dependency, or ownership transfer as already implemented.
+
+### Freshness and reconciliation
+
+- Modularity analysis MUST read the index as a starting map and verify all
+  affected entries against the source files, package exports, imports, tests,
+  and documentation before relying on them.
+- Adding, deleting, renaming, moving, splitting, or merging a module requires a
+  matching index change. So does a material change to responsibility, supported
+  imports, direct dependency direction, state or resource ownership, entry
+  points, or side effects.
+- The index MUST be reconciled after the final implementation is observable and
+  within the same complete change. Removed units and obsolete paths MUST be
+  deleted rather than retained as historical records.
+- When implementation and index disagree, the implementation is the observed
+  fact for diagnosis, but the change is incomplete. Either bring the code back
+  to the accepted boundary or update the index to the accepted implemented
+  state; do not silently choose a new design.
+- Review MUST verify source-path parity for the whole declared source root and
+  semantic parity for every affected entry. A missing index, an unlisted module,
+  a deleted-but-listed module, or stale responsibility, export, dependency, or
+  ownership information is a policy violation.
+- Index-only maintenance MUST NOT change production behavior. It requires a
+  repository-derived inventory and exclusive ownership of the index file.
 
 ## Responsibility and Ownership
 
@@ -172,14 +225,15 @@ public imports or include an authorized migration.
 
 ## Python Source and Import Conventions
 
-- Production packages and modules MUST follow the repository's `src/` layout.
-  This project's importable runtime remains under `src/story_writing_agents/`
-  unless a separately authorized packaging change establishes another root.
+- Production packages and modules MUST remain under the source roots declared
+  by the project's build configuration, packaging manifests, or repository
+  instructions. Introducing or moving a source root is a packaging and
+  modularity decision that requires explicit scope.
 - Importable package directories MUST contain `__init__.py` unless an explicit
   namespace-package design is authorized and documented.
-- In this repository, sibling imports within `story_writing_agents` SHOULD use
-  explicit relative imports consistently. A change MUST NOT mix import styles
-  without a documented interoperability reason.
+- Imports within a package MUST follow the project's established absolute or
+  explicit-relative style consistently. A change MUST NOT mix styles without a
+  documented interoperability reason.
 - Imports SHOULD be grouped as standard library, third-party, and local, with
   unused imports removed.
 - Modules MUST be directly importable in a clean interpreter after installation
@@ -194,9 +248,9 @@ public imports or include an authorized migration.
   coupling.
 - Package data MUST be declared through the packaging configuration rather than
   discovered from an assumed checkout layout.
-- `pyproject.toml` is the source of truth for project packaging metadata. Any
-  third-party dependency or packaging-metadata change also triggers
-  [DEPENDENCY_POLICY.md](../../../DEPENDENCY_POLICY.md).
+- The active build or packaging manifest MUST be treated as the source of truth
+  for package discovery, entry points, package data, and dependency metadata.
+  Any separate project dependency or packaging policy also applies.
 
 ## Readability and Documentation
 
@@ -237,13 +291,16 @@ public imports or include an authorized migration.
 
 Before editing:
 
-1. State the current and intended responsibility of every affected package or
+1. Read the root Python module index, or complete the required bootstrap when
+   it is missing. Check source-path parity and verify every affected entry
+   against the implementation.
+2. State the current and intended responsibility of every affected package or
    module.
-2. Inventory public import paths, consumers, imports, side effects, state
+3. Inventory public import paths, consumers, imports, side effects, state
    ownership, tests, and documentation.
-3. Draw or describe the intended dependency direction and identify any cycle,
+4. Draw or describe the intended dependency direction and identify any cycle,
    private reach-through, or compatibility constraint.
-4. Decide whether the work is a split, merge, move, extraction, adapter, or
+5. Decide whether the work is a split, merge, move, extraction, adapter, or
    interface change and explain why that operation improves the boundary.
 
 During implementation:
@@ -253,9 +310,12 @@ During implementation:
    updated within the same integrated change. Repository specialists MAY
    complete those portions sequentially under the main agent; this requirement
    does not authorize concurrent writers or overlapping file ownership.
-3. Preserve public behavior and import paths unless a breaking change is
+3. Reconcile affected module-index entries after the implemented structure is
+   stable. When another agent owns production code, perform index maintenance
+   as a sequential, index-only pass.
+4. Preserve public behavior and import paths unless a breaking change is
    explicitly authorized.
-4. Avoid unrelated cleanup and new abstractions outside the demonstrated
+5. Avoid unrelated cleanup and new abstractions outside the demonstrated
    boundary need.
 
 Before completion:
@@ -266,8 +326,11 @@ Before completion:
 3. Run focused tests followed by the relevant broader suite.
 4. Review the diff for unrelated movement, compatibility changes, and missing
    documentation.
-5. Report the resulting responsibility and dependency direction, API impact,
-   checks, and any remaining coupling.
+5. Compare discovered importable units with the module index and recheck every
+   affected entry for responsibility, exports, dependencies, ownership, and
+   side effects.
+6. Report the resulting responsibility and dependency direction, API impact,
+   module-index consistency, checks, and any remaining coupling.
 
 ## Policy Exceptions
 

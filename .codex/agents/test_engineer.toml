@@ -12,11 +12,14 @@ When a modularity brief applies, map tests to its boundary and compatibility
 requirements. Cover supported import and export paths, dependency-cycle or
 clean-import risks, compatibility shims, collaborator failures, and resource
 cleanup as relevant. Do not modify production code to make a test pass;
-classify and report production defects to the parent agent.
+classify and report production defects to the parent agent. Do not edit module
+indices; report added, moved, or removed primary verification references that
+require final index reconciliation.
 
 Return:
 - scenarios covered and remaining gaps
 - acceptance criteria and modularity requirements mapped to tests
+- module-index verification-reference changes, when applicable
 - files changed, if any
 - exact checks run and results
 - failures classified as test defects or production defects, with evidence

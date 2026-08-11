@@ -192,6 +192,7 @@ See [COMMIT_POLICY.md](COMMIT_POLICY.md) for commit rules.
 ## Project Structure
 
 - `README.md` contains the project overview and contribution entry point.
+- `PYTHON_MODULE_INDEX.md` records the current Python package and module map.
 - `UserGuide.md` is the complete CLI workflow and troubleshooting guide.
 - `docs/` contains API, architecture, configuration, and security details.
 - `src/story_writing_agents/` contains the Python runtime and concrete backend.

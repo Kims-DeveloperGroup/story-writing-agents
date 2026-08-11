@@ -12,7 +12,10 @@ Classify the modularity gate as `required`, `not_required`, or `uncertain`.
 Base the classification on whether the work changes package or module
 responsibilities, dependency direction, public imports or exports, shared
 abstractions, or state and resource ownership. Do not design the final module
-boundary; provide evidence for the parent and modularity specialist.
+boundary; provide evidence for the parent and modularity specialist. When the
+gate is `required` or `uncertain`, identify the expected per-language module
+index paths and the entries likely affected without treating the index as more
+authoritative than the implementation.
 
 Return a concise handoff with:
 - objective and assumptions
@@ -20,5 +23,6 @@ Return a concise handoff with:
 - proposed scope and acceptance criteria
 - `modularity_gate = required | not_required | uncertain`, with rationale,
   affected languages, and likely boundary scope
+- expected module-index paths, current availability, and likely affected entries
 - risks, open questions, and recommended next action
 """

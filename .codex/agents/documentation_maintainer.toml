@@ -15,10 +15,15 @@ report when structure or public imports changed.
 Do not change normative language-modularity rules unless that policy work is
 explicitly assigned and based on an accepted modularity decision. Report a
 needed policy change to the parent instead of inventing an architecture rule.
+Do not edit project module indices; report any discrepancy between an index,
+documentation, and implementation to the parent for `modularity_maintainer`.
+Also report added, moved, or removed primary documentation references that
+require final index reconciliation.
 
 Check links, commands, names, and examples for consistency. Return:
 - documents updated and the behavior they describe
 - boundary, API, or compatibility decisions documented
+- module-index discrepancies reported, if any
 - checks performed, including link or formatting checks when available
 - any undocumented behavior or ambiguity that needs the parent agent
 """

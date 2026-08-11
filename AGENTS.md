@@ -43,7 +43,8 @@ Use the project agents when their focused expertise improves the result:
 - `regression_diagnostician`: reproduce failures, trace regressions, and report
   whether the cause crosses a package or module boundary.
 - `modularity_maintainer`: analyze, implement, or review cohesive package and
-  module boundaries under the applicable language policy.
+  module boundaries under the applicable language policy, and keep the
+  project module indices synchronized with implementation.
 - `runtime_implementer`: implement approved production-code or configuration
   changes within an accepted boundary design.
 - `test_engineer`: design, add, update, and run tests for the change.
@@ -96,9 +97,10 @@ make an incidental architecture decision silently.
    must resolve `modularity_gate = uncertain` to `required` or `not_required`
    before any writer starts.
 3. When the gate applies, `modularity_maintainer` runs in `analysis` mode after
-   it receives relevant requirements and diagnosis results. The main agent
-   resolves user decisions and accepts the resulting boundary brief before
-   writing begins.
+   it receives relevant requirements and diagnosis results. It selects and
+   verifies the relevant root-level `<LANGUAGE>_MODULE_INDEX.md` files.
+   The main agent resolves user decisions and accepts the resulting boundary
+   brief, including its index delta, before writing begins.
 4. Exactly one agent owns production writes at a time. Use
    `modularity_maintainer` for architecture-dominant splits, moves, merges, and
    extractions. Use `runtime_implementer` for behavior-dominant work constrained
@@ -106,18 +108,30 @@ make an incidental architecture decision silently.
 5. If both production specialists are necessary, assign explicit, nonoverlapping
    files or symbols and run them sequentially. Prefer one owner when separate
    passes would create an invalid intermediate state.
-6. When `runtime_implementer` implements a boundary brief,
-   `modularity_maintainer` reviews the completed production diff in `review`
-   mode before test or documentation edits. Return deviations to the same
-   production owner and repeat the fix/review loop until material violations
-   are resolved or an exception is explicitly accepted. A separate self-review
-   is not required when `modularity_maintainer` performed the implementation;
-   its implementation report and the main agent's review provide the gate.
-7. `test_engineer` performs test planning read-only when useful, then owns test
+6. `modularity_maintainer` owns the semantic accuracy of module indices. When
+   it owns the structural implementation, it updates affected indices after the
+   code is stable. When `runtime_implementer` owns production code, run a
+   sequential `modularity_maintainer` implementation pass that owns only the
+   affected indices and reconciles them to the completed production diff.
+7. When `runtime_implementer` implements a boundary brief,
+   `modularity_maintainer` then reviews the completed production diff and
+   reconciled indices in `review` mode before test or documentation edits.
+   Return production deviations to the assigned production owner and index
+   drift to `modularity_maintainer`, then repeat the affected implementation,
+   index-reconciliation, and review passes until material violations are
+   resolved or an exception is explicitly accepted. A separate self-review is
+   not required when `modularity_maintainer` performed the implementation; its
+   implementation report and the main agent's review provide the gate.
+8. `test_engineer` performs test planning read-only when useful, then owns test
    edits sequentially after production stabilizes. `documentation_maintainer`
    follows after behavior, APIs, and boundaries are stable.
-8. The main agent integrates all results, reviews the complete diff, runs final
-   checks, and owns the user-facing summary.
+9. If test or documentation work changes an indexed verification or
+   documentation reference, or reveals any other drift, run a final sequential
+   `modularity_maintainer` index-only implementation pass followed by read-only
+   review.
+10. The main agent integrates all results, verifies module-index consistency,
+   reviews the complete diff, runs final checks, and owns the user-facing
+   summary.
 
 Reuse the same specialist thread for follow-up phases when practical. The main
 agent remains the hub: it passes concise upstream decisions to the next agent,
@@ -132,21 +146,30 @@ Every subagent handoff must include:
 - approved scope and explicit out-of-scope work;
 - acceptance criteria and compatibility constraints;
 - the `modularity_gate` decision and accepted brief, when applicable;
+- applicable module-index paths, status, and accepted index delta;
 - read-only targets or exclusively owned files and symbols;
 - upstream findings and accepted decisions;
 - required checks and output; and
 - stop conditions, including missing or conflicting policies, breaking API
   decisions, scope deviation, and unexpected structural work.
 
-Every result must report findings, files inspected or changed, checks run,
-blockers, and the recommended next action. Pass distilled decisions and
-evidence between agents rather than raw logs.
+Every result must report findings, files inspected or changed, module indices
+consulted or updated, implementation/index consistency, checks run, blockers,
+and the recommended next action. Pass distilled decisions and evidence between
+agents rather than raw logs.
 
 If a required language policy is missing, the modularity agent returns the
 exact language and expected path. The main agent asks the user whether to
 create the packaged policy, then resumes the same agent thread. If creation is
 declined, proceeding under general engineering judgment requires that user
 decision and the lack of a governing policy to be recorded in the result.
+
+A missing module index does not block read-only analysis or require separate
+user permission. The modularity agent derives the complete current inventory,
+records the root index path and contents in the brief, and the main agent then
+runs the same specialist in an index-only `implementation` pass to create it.
+Structural work is not complete while an affected module index is missing or
+stale.
 
 ## Quality and Commits
 
