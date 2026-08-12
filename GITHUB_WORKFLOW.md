@@ -15,9 +15,11 @@ conflicts. Planning data must not silently redefine an Issue.
 Relevant read-only inspection is allowed. An explicit implementation request
 also authorizes only the initial-planning mutations below: create or reuse
 in-scope Issues and a milestone, set native relationships, add items to the
-canonical Project, and set their planning metadata. Project-schema changes,
-unrelated Issue edits, staging, commits, pushes, PR actions, review, closure,
-merge, deletion, and cleanup still require explicit authorization.
+canonical Project, set their planning metadata, and create the in-scope task
+branch through the Issue's Development section after the gate passes.
+Project-schema changes, unrelated Issue edits, staging, commits, other pushes,
+PR actions, review, closure, merge, deletion, and cleanup still require explicit
+authorization.
 
 ## Initial Planning Gate
 
@@ -108,8 +110,8 @@ capacity and Estimate only with a defined unit.
 | --- | --- |
 | `Backlog` | New, incomplete, reprioritized, or pre-start blocked work. |
 | `Ready` | Accepted and unblocked, with required planning metadata assigned. |
-| `In progress` | Authorized work started; assignee and Issue branch exist. Draft PRs remain here. |
-| `In review` | A linked, non-draft PR is ready and includes verification evidence. |
+| `In progress` | Authorized work started; assignee and a Development-linked branch or PR exist. Draft PRs remain here. |
+| `In review` | A non-draft PR appears in Development and Project `Linked pull requests`, with verification evidence. |
 | `Done` | Completion gates passed, approved work merged or exception completed, and Issue closed. |
 
 Requested implementation changes return an item to `In progress`.
@@ -131,6 +133,19 @@ integration base for child Issue branches. Child PRs target the parent branch
 and use **Squash and merge**; the final parent PR targets `main` and uses a
 merge commit. Follow [AGENT_TASK_RUNBOOK.md](AGENT_TASK_RUNBOOK.md) for the
 branch and worktree procedure.
+
+Every Issue with implementation activity must have native GitHub Development
+traceability. Create its task branch from the Issue's Development section (or
+the equivalent `createLinkedBranch` API) before tracked edits. Link a parent
+integration branch to the parent Issue and each child branch to its child
+Issue. A matching branch name, URL, comment, or `Refs #N` text alone is not a
+link.
+
+Once a PR exists, verify that it appears in the Issue's Development section
+and the Project's built-in `Linked pull requests` field. If it does not, link
+the PR through Development before moving the item to `In review`. Keep at
+least one linked branch or PR throughout `In progress`; after branch cleanup,
+the merged PR is the durable link for `Done`.
 
 Follow [COMMIT_POLICY.md](COMMIT_POLICY.md). An Issue may span multiple commits,
 but each commit must remain coherent, functional, tested, and reviewable.
