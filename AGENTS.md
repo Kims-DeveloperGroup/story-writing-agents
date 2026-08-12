@@ -17,9 +17,10 @@ For every change:
 
 1. Inspect the repository and the relevant existing behavior.
 2. Clarify the requirement, affected components, constraints, and acceptance
-   criteria.
-3. Make the smallest complete change that satisfies the requirement.
-4. Run relevant tests or checks and review the final diff.
+   criteria, then classify the GitHub and modularity gates.
+3. Pass the GitHub planning gate when required.
+4. Make the smallest complete change that satisfies the requirement.
+5. Run relevant tests or checks and review the final diff.
 
 For requests to explain, review, diagnose, or plan, do not make changes unless
 the request also authorizes implementation. For requests to build, change, or
@@ -28,6 +29,30 @@ fix, make the requested in-scope local changes and verify them.
 Preserve unrelated user changes. Avoid speculative abstractions, unnecessary
 dependencies, and changes to behavior outside the requested scope. Ask when a
 missing requirement would materially change the design or result.
+
+## GitHub Planning Gate
+
+Before a task branch, worktree, write-capable agent, or tracked-file edit,
+record `github_planning_gate = not_required | pending | passed | blocked` with
+the classification reason. Read-only repository and GitHub inspection,
+requirements, diagnosis, test planning, and modularity analysis may run while
+the gate is pending.
+
+Classify work as large when any of these applies: estimated Size `L` or `XL`;
+two or more independently complete implementation slices or parent integration
+criteria; at least three production modules or two responsibility domains;
+modularity or migration coordination; dependency sequencing; multiple owners,
+worktrees, or delivery phases; or a parent integration branch. Companion tests
+and documentation do not count toward the thresholds. Treat uncertainty as
+large unless a maintainer records a smaller classification.
+
+Large work must pass the initial planning gate in
+[GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md). Do not dispatch a writer until the
+root Issue, all known descendants, native relationships, canonical Project
+items, and required metadata have been created or reused and verified. If a
+missing gate or new scope is discovered after writing starts, stop further
+writes, preserve and report the existing diff, and initialize that scope before
+continuing.
 
 ## Subagent Delegation
 
@@ -89,8 +114,8 @@ make an incidental architecture decision silently.
 
 ### Orchestration Sequence
 
-1. The main agent classifies the request and makes a preliminary modularity-gate
-   decision.
+1. The main agent classifies the request and records preliminary GitHub-planning
+   and modularity-gate decisions.
 2. For substantial or ambiguous work, `requirements_analyst` runs read-only.
    For reported or observed failures, `regression_diagnostician` runs
    read-only. Independent investigations may run in parallel. The main agent
@@ -101,19 +126,22 @@ make an incidental architecture decision silently.
    verifies the relevant root-level `<LANGUAGE>_MODULE_INDEX.md` files.
    The main agent resolves user decisions and accepts the resulting boundary
    brief, including its index delta, before writing begins.
-4. Exactly one agent owns production writes at a time. Use
+4. After requirements and any boundary brief are accepted, the main agent
+   passes the GitHub planning gate or records `not_required`. No writer starts
+   while the gate is `pending` or `blocked`.
+5. Exactly one agent owns production writes at a time. Use
    `modularity_maintainer` for architecture-dominant splits, moves, merges, and
    extractions. Use `runtime_implementer` for behavior-dominant work constrained
    by an accepted boundary brief.
-5. If both production specialists are necessary, assign explicit, nonoverlapping
+6. If both production specialists are necessary, assign explicit, nonoverlapping
    files or symbols and run them sequentially. Prefer one owner when separate
    passes would create an invalid intermediate state.
-6. `modularity_maintainer` owns the semantic accuracy of module indices. When
+7. `modularity_maintainer` owns the semantic accuracy of module indices. When
    it owns the structural implementation, it updates affected indices after the
    code is stable. When `runtime_implementer` owns production code, run a
    sequential `modularity_maintainer` implementation pass that owns only the
    affected indices and reconciles them to the completed production diff.
-7. When `runtime_implementer` implements a boundary brief,
+8. When `runtime_implementer` implements a boundary brief,
    `modularity_maintainer` then reviews the completed production diff and
    reconciled indices in `review` mode before test or documentation edits.
    Return production deviations to the assigned production owner and index
@@ -122,14 +150,14 @@ make an incidental architecture decision silently.
    resolved or an exception is explicitly accepted. A separate self-review is
    not required when `modularity_maintainer` performed the implementation; its
    implementation report and the main agent's review provide the gate.
-8. `test_engineer` performs test planning read-only when useful, then owns test
+9. `test_engineer` performs test planning read-only when useful, then owns test
    edits sequentially after production stabilizes. `documentation_maintainer`
    follows after behavior, APIs, and boundaries are stable.
-9. If test or documentation work changes an indexed verification or
+10. If test or documentation work changes an indexed verification or
    documentation reference, or reveals any other drift, run a final sequential
    `modularity_maintainer` index-only implementation pass followed by read-only
    review.
-10. The main agent integrates all results, verifies module-index consistency,
+11. The main agent integrates all results, verifies module-index consistency,
    reviews the complete diff, runs final checks, and owns the user-facing
    summary.
 
@@ -143,6 +171,8 @@ Every subagent handoff must include:
 
 - `mode`: `analysis`, `implementation`, or `review`;
 - objective and relevant evidence;
+- `github_planning_gate`, its rationale, and verified Issue, Project, and
+  Iteration evidence when applicable;
 - approved scope and explicit out-of-scope work;
 - acceptance criteria and compatibility constraints;
 - the `modularity_gate` decision and accepted brief, when applicable;

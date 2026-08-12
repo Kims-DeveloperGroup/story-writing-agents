@@ -2,9 +2,71 @@
 
 Use this runbook for GitHub-tracked implementation. The rules in
 [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md) and
-[COMMIT_POLICY.md](COMMIT_POLICY.md) remain authoritative. Obtain explicit
-authorization before any GitHub mutation, push, pull request, merge, Issue
-closure, Project update, staging, commit, or branch deletion.
+[COMMIT_POLICY.md](COMMIT_POLICY.md) remain authoritative. An explicit
+implementation request bundles only the initial-planning mutations defined by
+the workflow policy. Obtain explicit authorization for every other GitHub
+mutation, push, pull request, merge, Issue closure, staging, commit, or branch
+deletion.
+
+## Initialize GitHub Planning
+
+Before task branches, worktrees, writers, or tracked-file edits, read
+`README.md` and the policies, classify the planning gate, and search all Issue
+states for an existing matching scope. Preflight repository access, `gh` auth
+with `project` scope, the canonical Project, its fields, milestones, Iterations,
+dependencies, and current worktrees.
+
+For large work, draft the complete root and all known descendants, including
+nested parents and leaves, after read-only requirements and any modularity
+analysis. Create the root first, then each descendant; add every URL to Project
+#1 and establish native relationships. Execute and verify one mutation at a
+time; stop on the first failure. This abbreviated flow uses stable outputs:
+
+```bash
+set -euo pipefail
+
+repo=Kims-DeveloperGroup/story-writing-agents
+project_owner=Kims-DeveloperGroup
+project_number=1
+
+parent_url="$(gh issue create --repo "$repo" --title "<parent title>" \
+  --body-file "<parent body>" --label "<type>" --label "area:<name>")"
+parent_item_id="$(gh project item-add "$project_number" \
+  --owner "$project_owner" --url "$parent_url" --format json --jq .id)"
+
+child_url="$(gh issue create --repo "$repo" --title "<child title>" \
+  --body-file "<child body>" --label "<type>" --label "area:<name>" \
+  --milestone "<milestone>")"
+child_item_id="$(gh project item-add "$project_number" \
+  --owner "$project_owner" --url "$child_url" --format json --jq .id)"
+child_number="${child_url##*/}"
+child_id="$(gh api --method GET "repos/$repo/issues/$child_number" --jq .id)"
+parent_number="${parent_url##*/}"
+gh api --method POST "repos/$repo/issues/$parent_number/sub_issues" \
+  -F sub_issue_id="$child_id"
+```
+
+Use native `blocked by` relationships for dependencies. Resolve Project, item,
+field, option, and Iteration IDs at runtime. Set one logical Iteration on the
+root and every descendant:
+
+```bash
+gh project item-edit --id <item-id> --project-id <project-id> \
+  --field-id <iteration-field-id> --iteration-id <iteration-id>
+```
+
+Set all other required metadata from the policy. If no unused logical
+Iteration exists for a new root, stop for explicit Project-schema
+authorization. Set Priority through the organization Issue field, not the
+Project field with the same display name.
+
+Re-read Issue bodies, native hierarchy and dependencies, Project membership,
+fields, milestone, and the root-wide Iteration. Record stable URLs and IDs.
+Set `github_planning_gate = passed` only when the graph is complete and one
+unblocked leaf is `Ready`; otherwise set `blocked`, preserve successful
+mutations, and repair only verified missing state. A standalone task uses the
+same procedure without a parent. A later child must pass this check before its
+scope is written.
 
 ## Branch and Worktree Model
 
@@ -72,16 +134,17 @@ from a clean, current parent branch.
 
 ## Task Lifecycle
 
-1. **Qualify the work.** Read `README.md` and the governing policies. Inspect
-   the Issue, parent, Project, milestone, iteration, priority, acceptance
-   criteria, dependencies, and current worktrees. Resolve blockers and obtain
-   the required authorization.
+1. **Pass the planning gate.** Complete or verify the initialization above.
+   Record the gate state, Issue graph, Project metadata, logical Iteration,
+   dependencies, approved base, and authorization. Stop before writing unless
+   the gate is `passed` or `not_required`.
 2. **Prepare the parent.** Create or reuse its branch and worktree at the
    recorded base commit, assign the integration owner, and move the parent to
    the correct Project state. Publish only when authorized. After the first
    child lands, open the parent PR to `main` as a draft with `Refs #<parent>`.
-3. **Start one child.** Confirm that the child is `Ready`, scheduled, and
-   unblocked. Create its branch and worktree from the current parent commit,
+3. **Start one child.** Confirm that the child is `Ready`, assigned the root's
+   Iteration, and unblocked. Create its branch and worktree from the current
+   parent commit,
    assign its owner, and move it to `In progress`.
 4. **Implement and verify.** Change only the child scope. Follow the commit
    policy, update tests and documentation, run relevant checks, and review the
@@ -100,7 +163,7 @@ from a clean, current parent branch.
    verify `Done`. On failure, block sibling merges and keep the child open in
    `In progress`; require an authorized revert PR or follow-up child fix instead
    of editing the parent directly. If it was already closed, reopen it to
-   `Backlog` and reschedule it as required by the policy.
+   `Backlog` and replan it as required by the policy.
 7. **Complete the parent.** After all required children are `Done`, merge the
    exact approved `origin/main` tip into the parent after a fresh fetch, resolve
    conflicts there, and run the complete parent acceptance checks. Mark the
@@ -114,7 +177,7 @@ from a clean, current parent branch.
    mark a child branch as Git-merged, verify PR and commit recoverability before
    deleting it. Retain the parent worktree until the parent reaches `main`.
 
-The handoff must include Issue and PR links, base/head branches and SHAs,
-resulting squash SHAs, worktree paths, Project metadata, completed and remaining
-criteria, checks, blockers, cleanup, GitHub mutations, and the next owner or
-action.
+The handoff must include the planning-gate state and evidence, Issue and PR
+links, base/head branches and SHAs, resulting squash SHAs, worktree paths,
+Project metadata and Iteration, completed and remaining criteria, checks,
+blockers, cleanup, GitHub mutations, and the next owner or action.

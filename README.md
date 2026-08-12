@@ -191,9 +191,10 @@ sensitive story material.
 ## Contribution Guidelines
 
 See [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md) for the Issues, Projects,
-milestones, sprints, branches, and pull-request workflow. Coding agents use
-[AGENT_TASK_RUNBOOK.md](AGENT_TASK_RUNBOOK.md) for the parent/child branch and
-worktree procedure. See [COMMIT_POLICY.md](COMMIT_POLICY.md) for commit rules.
+milestones, logical iterations, branches, and pull-request workflow. Coding
+agents use [AGENT_TASK_RUNBOOK.md](AGENT_TASK_RUNBOOK.md) for the parent/child
+branch and worktree procedure. See [COMMIT_POLICY.md](COMMIT_POLICY.md) for
+commit rules.
 
 ## Project Structure
 
