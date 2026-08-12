@@ -7,17 +7,44 @@ supplements [AGENTS.md](AGENTS.md) and
 
 ## Authority and Authorization
 
-- Repository code, tests, and detailed documentation define current behavior.
-- An Issue defines approved scope, acceptance criteria, dependencies, and
-  completion evidence.
-- A Project holds planning metadata; a pull request holds the proposed diff,
-  review, and verification evidence.
-- Resolve material conflicts through a recorded maintainer decision. Project
-  metadata must not silently redefine an Issue.
+Code, tests, and detailed docs define behavior; an Issue defines scope and
+completion; Project and organization Issue fields hold planning metadata; and
+a PR holds the diff, review, and evidence. Record maintainer decisions for
+conflicts. Planning data must not silently redefine an Issue.
 
-Relevant read-only inspection is allowed. Implementation authorizes local
-changes only. GitHub mutations, staging, commits, pushes, PR actions, review,
-closure, and merge each require explicit authorization unless clearly bundled.
+Relevant read-only inspection is allowed. An explicit implementation request
+also authorizes only the initial-planning mutations below: create or reuse
+in-scope Issues and a milestone, set native relationships, add items to the
+canonical Project, and set their planning metadata. Project-schema changes,
+unrelated Issue edits, staging, commits, pushes, PR actions, review, closure,
+merge, deletion, and cleanup still require explicit authorization.
+
+## Initial Planning Gate
+
+Before task branches, worktrees, writers, or tracked edits, record
+`github_planning_gate = not_required | pending | passed | blocked`. Only
+read-only analysis may continue while it is pending.
+
+Work is large when any applies: estimated Size `L`/`XL`; two or more
+independently complete implementation slices or parent integration criteria;
+at least three production modules or two responsibility domains; modularity or
+migration coordination; dependency sequencing; multiple owners, worktrees, or
+delivery phases; or a parent integration branch. Companion tests/docs do not
+count; uncertainty is large.
+
+Large work needs one root and all known descendants, including nested parents
+and leaves, before implementation. Use native hierarchy and dependencies. Add
+every item to [Project #1](https://github.com/orgs/Kims-DeveloperGroup/projects/1),
+then set labels and organization Issue Priority plus Project Status and
+Iteration on all items, and milestone and Project Size on each leaf. Verify
+bodies, relationships, fields, approved base, and the first executable leaf
+with a fresh read.
+
+On partial failure, preserve IDs, repair only missing state, and set `blocked`;
+never create duplicates or implementation edits. Gate later scope too.
+`not_required` is limited to read-only work or an approved mechanical
+exception. A nontrivial standalone implementation passes with one Issue and
+Project item; it does not waive planning metadata.
 
 ## Issues
 
@@ -25,16 +52,11 @@ Nontrivial feature, bug, dependency, packaging, security, architecture,
 workflow, or public-documentation work requires an Issue. A maintainer may
 approve an exception for a mechanical correction.
 
-Use parent Issues for initiatives and leaf Issues for independently complete
-functions. A leaf Issue must define:
-
-- Parent and Project, when applicable
-- Objective and context
-- Scope and out of scope
-- Testable definition of complete
-- Verification and documentation requirements
-- Likely components
-- Dependencies, constraints, and risks
+Use parents for initiatives and leaves for independently complete functions. A
+root defines its objective, non-goals, integration criteria, child inventory
+and order, risks, evidence, and approved base. A leaf defines its root/parent,
+Project, objective, context, in/out scope, testable completion, verification,
+docs, components, dependencies, constraints, and risks.
 
 Use native parent/sub-issue relationships for hierarchy and `blocked by` for
 dependencies. Do not start with an unfinished prerequisite or expand scope
@@ -47,28 +69,24 @@ are complete. A child pull request must never close its parent.
 
 ### Milestone
 
-A milestone groups one release or deliverable. Every leaf Issue must have
-exactly one active milestone before entering `Ready`. Parent initiatives should
-link the milestone but normally remain outside it to avoid double-counting.
-
-Name a milestone for its outcome. Record its objective, owner, exit criteria,
-exclusions, and any approved due date. Close it only when all required leaf
-Issues complete; record deferrals to another milestone.
+A milestone groups a release or deliverable. Every leaf has one active
+milestone before `Ready`; a parent links it but normally remains outside it.
+Name the outcome and record owner, exit criteria, exclusions, and any due date.
+Close it after its required leaves complete and record deferrals.
 
 ### Iteration
 
-The Project `Iteration` field is the only sprint field. Use
-`Sprint NN - YYYY-MM-DD to YYYY-MM-DD`.
+Iteration is a logical initiative group, not a schedule. Use sequential,
+never-reused `Iteration NN`. GitHub's required internal dates/duration never
+control assignment, readiness, priority, or rollover.
 
-An unscheduled `Backlog` Issue may have no iteration. During planning, verify
-that the Issue is accepted, unblocked, and assigned to a milestone; then assign
-the current or next iteration and move it to `Ready` in the same action. Every
-`In progress` or `In review` Issue must have an iteration.
+Every Project item has one Iteration. The topmost root and all descendants
+share it; standalone Issues are roots; linked PRs and new children inherit it.
+`wave:NN` orders work inside it. Milestone remains the deliverable grouping.
 
-For rollover, retain the Issue, record completed and remaining scope, and move
-it to the next iteration. Keep `In progress` if work continues; otherwise
-return it to `Backlog`. Changing an iteration does not change the milestone.
-Mid-sprint additions require explicit reprioritization.
+Status never changes Iteration; there is no calendar rollover. Replanning moves
+the whole root tree. `Active work` contains `Ready`, `In progress`, and
+`In review`; `Missing iteration` must stay empty.
 
 ### Labels and Fields
 
@@ -79,23 +97,17 @@ Use labels only for durable classification:
 - Delivery sequence, when needed: `wave:NN`
 - Active blockage: `blocked`
 
-Do not create milestone, sprint, status, or priority labels. Use `wave:NN`, not
-`priority:NN`, for execution waves. Configure Project Priority as:
-
-- `P0 - Critical`
-- `P1 - High`
-- `P2 - Normal`
-- `P3 - Low`
-
-Set Priority during triage. Use Size for capacity planning. Use Estimate only
-when its unit is defined.
+Do not create milestone, iteration, status, or priority labels. Use `wave:NN`,
+not `priority:NN`. Use the organization Issue `Priority` field: `Urgent`,
+`High`, `Medium`, or `Low`, defaulting to `Medium`. Use Project Size for
+capacity and Estimate only with a defined unit.
 
 ## Project Status
 
 | Status | Rule |
 | --- | --- |
-| `Backlog` | New, unscheduled, incomplete, reprioritized, or pre-start blocked work. |
-| `Ready` | Accepted and unblocked, with milestone and current/next iteration assigned. |
+| `Backlog` | New, incomplete, reprioritized, or pre-start blocked work. |
+| `Ready` | Accepted and unblocked, with required planning metadata assigned. |
 | `In progress` | Authorized work started; assignee and Issue branch exist. Draft PRs remain here. |
 | `In review` | A linked, non-draft PR is ready and includes verification evidence. |
 | `Done` | Completion gates passed, approved work merged or exception completed, and Issue closed. |
@@ -150,10 +162,10 @@ complete, and the Issue is closed with the Project item at `Done`.
 
 Close duplicate, invalid, superseded, cancelled, or rejected work as
 `Not planned`. Explain the reason and link a replacement when applicable. When
-reopening an Issue, clear `Done`, return it to `Backlog`, and reschedule it
+reopening an Issue, clear `Done`, return it to `Backlog`, and replan it
 explicitly.
 
 ## Agent Handoff
 
-Follow the runbook handoff contract and report preserved unrelated worktree
-changes.
+Follow the runbook handoff contract. Report the planning-gate state and
+evidence, Issue and Project mutations, and preserved unrelated worktree changes.
