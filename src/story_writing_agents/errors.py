@@ -22,7 +22,15 @@ class DirectiveError(StoryWritingAgentsError):
 
 
 class SessionIdError(StoryWritingAgentsError):
-    """Raised when a session or debate identifier is unsafe."""
+    """Raised when a session, debate, or conversation identifier is unsafe."""
+
+
+class ConversationNotFoundError(StoryWritingAgentsError):
+    """Raised when a conversation is absent from its owning story session."""
+
+
+class ConversationExistsError(StoryWritingAgentsError):
+    """Raised rather than overwriting an existing conversation identity."""
 
 
 class ManuscriptExistsError(StoryWritingAgentsError):

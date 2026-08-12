@@ -9,6 +9,7 @@ import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping
+from uuid import uuid4
 
 from .agents import (
     AGENT_SPECS,
@@ -20,7 +21,14 @@ from .agents import (
     PLOT_ARCHITECT,
     ROSTER,
 )
+from .conversations import (
+    CONVERSATION_METADATA_SCHEMA_VERSION,
+    ConversationMetadata,
+    ConversationStatus,
+)
 from .errors import (
+    ConversationExistsError,
+    ConversationNotFoundError,
     DebateExistsError,
     ManuscriptExistsError,
     SessionIdError,
@@ -32,6 +40,17 @@ from .models import AgentStateEntry, DebateMessage, DebateResult
 
 _SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 _SAFE_TEMPLATE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
+_CONVERSATION_METADATA_FIELDS = frozenset({
+    "schema_version",
+    "session_id",
+    "conversation_id",
+    "subject",
+    "subject_revision",
+    "status",
+    "created_at",
+    "updated_at",
+})
+_CONVERSATION_ID_ALLOCATION_ATTEMPTS = 16
 
 DEFAULT_SYSTEM_CONFIG: dict[str, Any] = {
     "language": "KO",
@@ -1011,6 +1030,316 @@ class Workspace:
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
+
+
+class FilesystemConversationCatalog:
+    """Persist conversation metadata through one secure ``Workspace``."""
+
+    def __init__(
+        self,
+        workspace: Workspace | str | os.PathLike[str],
+    ) -> None:
+        self.workspace = (
+            workspace if isinstance(workspace, Workspace) else Workspace(workspace)
+        )
+
+    def create(self, session_id: str, subject: str) -> ConversationMetadata:
+        """Atomically create metadata under a new immutable identifier."""
+
+        session = self.workspace.validate_identifier(session_id)
+        for _ in range(_CONVERSATION_ID_ALLOCATION_ATTEMPTS):
+            conversation_id = f"c_{uuid4().hex}"
+            timestamp = self._timestamp()
+            metadata = ConversationMetadata(
+                schema_version=CONVERSATION_METADATA_SCHEMA_VERSION,
+                session_id=session,
+                conversation_id=conversation_id,
+                subject=subject,
+                subject_revision=1,
+                status=ConversationStatus.ACTIVE,
+                created_at=timestamp,
+                updated_at=timestamp,
+            )
+            relative = self._metadata_relative(session, conversation_id)
+            conversation_directory = self.workspace.path(relative.parent)
+            if conversation_directory.exists():
+                continue
+            try:
+                self.workspace.write_json(
+                    relative,
+                    metadata.to_dict(),
+                    overwrite=False,
+                )
+            except ManuscriptExistsError:
+                continue
+            except Exception:
+                self._remove_empty_directory(conversation_directory)
+                raise
+            return metadata
+        raise ConversationExistsError(
+            f"could not allocate a unique conversation ID in session {session!r}"
+        )
+
+    def get(
+        self,
+        session_id: str,
+        conversation_id: str,
+    ) -> ConversationMetadata:
+        """Read and strictly validate one session-owned metadata record."""
+
+        session = self.workspace.validate_identifier(session_id)
+        conversation = self.workspace.validate_identifier(
+            conversation_id,
+            label="conversation ID",
+        )
+        relative = self._metadata_relative(session, conversation)
+        target = self.workspace.path(relative)
+        if not target.exists():
+            conversation_directory = self.workspace.path(relative.parent)
+            if conversation_directory.exists():
+                if not conversation_directory.is_dir():
+                    raise WorkspaceFormatError(
+                        "conversation artifact is not a directory: "
+                        f"{session}/{conversation}"
+                    )
+                raise WorkspaceFormatError(
+                    f"conversation metadata is missing: {session}/{conversation}"
+                )
+            raise ConversationNotFoundError(
+                f"conversation does not exist: {session}/{conversation}"
+            )
+        if not target.is_file():
+            raise WorkspaceFormatError(
+                f"conversation metadata is not a file: {session}/{conversation}"
+            )
+        return self._read_metadata(relative, session, conversation)
+
+    def list(
+        self,
+        session_id: str,
+        *,
+        include_archived: bool = False,
+    ) -> tuple[ConversationMetadata, ...]:
+        """Return deterministic metadata without creating absent storage."""
+
+        session = self.workspace.validate_identifier(session_id)
+        if not isinstance(include_archived, bool):
+            raise TypeError("include_archived must be a boolean")
+        catalog_relative = self._catalog_relative(session)
+        catalog = self.workspace.path(catalog_relative)
+        if not catalog.exists():
+            return ()
+        if not catalog.is_dir():
+            raise WorkspaceFormatError(
+                f"conversation catalog is not a directory: {session}"
+            )
+        try:
+            entries = sorted(catalog.iterdir(), key=lambda entry: entry.name)
+        except OSError as exc:
+            raise WorkspaceFormatError(
+                f"cannot read conversation catalog: {session}"
+            ) from exc
+
+        metadata_entries: list[ConversationMetadata] = []
+        for entry in entries:
+            relative_entry = entry.relative_to(self.workspace.root)
+            safe_entry = self.workspace.path(relative_entry)
+            try:
+                conversation = self.workspace.validate_identifier(
+                    safe_entry.name,
+                    label="conversation ID",
+                )
+            except SessionIdError as exc:
+                raise WorkspaceFormatError(
+                    f"conversation catalog contains an unsafe ID: {session}"
+                ) from exc
+            if not safe_entry.is_dir():
+                raise WorkspaceFormatError(
+                    "conversation catalog entry is not a directory: "
+                    f"{session}/{conversation}"
+                )
+            relative = self._metadata_relative(session, conversation)
+            target = self.workspace.path(relative)
+            if not target.is_file():
+                raise WorkspaceFormatError(
+                    f"conversation metadata is missing: {session}/{conversation}"
+                )
+            metadata = self._read_metadata(relative, session, conversation)
+            if include_archived or metadata.status is ConversationStatus.ACTIVE:
+                metadata_entries.append(metadata)
+        return tuple(
+            sorted(
+                metadata_entries,
+                key=lambda metadata: (
+                    metadata.created_at,
+                    metadata.conversation_id,
+                ),
+            )
+        )
+
+    def rename(
+        self,
+        session_id: str,
+        conversation_id: str,
+        subject: str,
+    ) -> ConversationMetadata:
+        """Atomically replace the subject and increment its revision."""
+
+        current = self.get(session_id, conversation_id)
+        updated = ConversationMetadata(
+            schema_version=current.schema_version,
+            session_id=current.session_id,
+            conversation_id=current.conversation_id,
+            subject=subject,
+            subject_revision=current.subject_revision + 1,
+            status=current.status,
+            created_at=current.created_at,
+            updated_at=self._timestamp(),
+        )
+        self._write_metadata(updated)
+        return updated
+
+    def archive(
+        self,
+        session_id: str,
+        conversation_id: str,
+    ) -> ConversationMetadata:
+        """Atomically archive a conversation, or return it unchanged."""
+
+        return self._set_status(
+            session_id,
+            conversation_id,
+            ConversationStatus.ARCHIVED,
+        )
+
+    def unarchive(
+        self,
+        session_id: str,
+        conversation_id: str,
+    ) -> ConversationMetadata:
+        """Atomically reactivate a conversation, or return it unchanged."""
+
+        return self._set_status(
+            session_id,
+            conversation_id,
+            ConversationStatus.ACTIVE,
+        )
+
+    def _set_status(
+        self,
+        session_id: str,
+        conversation_id: str,
+        status: ConversationStatus,
+    ) -> ConversationMetadata:
+        current = self.get(session_id, conversation_id)
+        if current.status is status:
+            return current
+        updated = ConversationMetadata(
+            schema_version=current.schema_version,
+            session_id=current.session_id,
+            conversation_id=current.conversation_id,
+            subject=current.subject,
+            subject_revision=current.subject_revision,
+            status=status,
+            created_at=current.created_at,
+            updated_at=self._timestamp(),
+        )
+        self._write_metadata(updated)
+        return updated
+
+    def _write_metadata(self, metadata: ConversationMetadata) -> None:
+        relative = self._metadata_relative(
+            metadata.session_id,
+            metadata.conversation_id,
+        )
+        self.workspace.write_json(relative, metadata.to_dict())
+
+    def _read_metadata(
+        self,
+        relative: Path,
+        expected_session_id: str,
+        expected_conversation_id: str,
+    ) -> ConversationMetadata:
+        logical_artifact = (
+            f"{expected_session_id}/{expected_conversation_id}/metadata.json"
+        )
+        text = self.workspace.read_text(relative)
+
+        def reject_duplicate_fields(
+            pairs: list[tuple[str, Any]],
+        ) -> dict[str, Any]:
+            result: dict[str, Any] = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError(f"duplicate field: {key}")
+                result[key] = value
+            return result
+
+        try:
+            value = json.loads(text, object_pairs_hook=reject_duplicate_fields)
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise WorkspaceFormatError(
+                f"conversation metadata is not valid JSON: {logical_artifact}"
+            ) from exc
+        if not isinstance(value, dict) or set(value) != _CONVERSATION_METADATA_FIELDS:
+            raise WorkspaceFormatError(
+                f"conversation metadata has an invalid schema: {logical_artifact}"
+            )
+        try:
+            raw_status = value["status"]
+            if not isinstance(raw_status, str):
+                raise TypeError("status must be a string")
+            metadata = ConversationMetadata(
+                schema_version=value["schema_version"],
+                session_id=value["session_id"],
+                conversation_id=value["conversation_id"],
+                subject=value["subject"],
+                subject_revision=value["subject_revision"],
+                status=ConversationStatus(raw_status),
+                created_at=value["created_at"],
+                updated_at=value["updated_at"],
+            )
+        except (SessionIdError, TypeError, ValueError) as exc:
+            raise WorkspaceFormatError(
+                f"conversation metadata has an invalid value: {logical_artifact}"
+            ) from exc
+        if (
+            metadata.session_id != expected_session_id
+            or metadata.conversation_id != expected_conversation_id
+        ):
+            raise WorkspaceFormatError(
+                "conversation metadata does not match its owning path: "
+                f"{logical_artifact}"
+            )
+        return metadata
+
+    @staticmethod
+    def _catalog_relative(session_id: str) -> Path:
+        return (
+            Path("discussion_logs")
+            / session_id
+            / "interactive"
+            / "conversations"
+        )
+
+    @classmethod
+    def _metadata_relative(
+        cls,
+        session_id: str,
+        conversation_id: str,
+    ) -> Path:
+        return cls._catalog_relative(session_id) / conversation_id / "metadata.json"
+
+    @staticmethod
+    def _timestamp() -> str:
+        return datetime.now(UTC).isoformat()
+
+    @staticmethod
+    def _remove_empty_directory(directory: Path) -> None:
+        try:
+            directory.rmdir()
+        except OSError:
+            pass
 
 
 def initialize_workspace(

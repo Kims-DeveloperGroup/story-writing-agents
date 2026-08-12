@@ -10,7 +10,9 @@ and invokes Codex through the installed Codex CLI.
 This document describes the current implementation of
 [Issue #1](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1)
 and
-[Issue #2](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/2).
+[Issue #2](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/2),
+plus the provider-neutral conversation catalog from
+[Issue #19](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/19).
 In this repository, “commit” means committing approved text to filesystem
 artifacts. The runtime does not invoke Git.
 
@@ -33,6 +35,47 @@ The initialized configuration resolves every agent to
 and skeptical writing-room behavior that prioritizes domain consistency over
 polite agreement; it is not biographical impersonation. The normal
 configuration cascade can replace the persona session-wide or per agent.
+
+## Conversation Catalog Boundary
+
+The conversation catalog introduces a metadata-only hierarchy alongside the
+existing debate runtime:
+
+```text
+story session
+├── selected-conversation reference (Issue #22; not implemented here)
+└── conversation ID and metadata (Issue #19)
+    ├── events and transcript (Issue #4; not implemented here)
+    └── search and index (Issue #20; not implemented here)
+```
+
+`ConversationCatalog` is the storage-neutral contract. It accepts a story
+session ID and logical conversation ID and returns immutable
+`ConversationMetadata`; it never exposes filesystem paths. The public
+`FilesystemConversationCatalog` adapter owns the concrete metadata layout
+through the existing `Workspace` containment, encoding, and atomic-write
+boundary.
+
+Conversation IDs are immutable and scoped by story session. The same logical
+ID may exist independently in two sessions, while metadata whose embedded
+session or conversation ID disagrees with its owning path is rejected. Subject
+display values are not identities: duplicate subjects and duplicate normalized
+comparison keys remain separate conversations. Rename changes only the display
+subject, revision, and update timestamp; archive and unarchive change discovery
+status without deleting the identity.
+
+The catalog has no dependency on a provider and is not invoked by the CLI,
+`StoryRuntime`, or debate workflow. Catalog operations do not select the
+current conversation, create events or transcripts, build a search index,
+invoke a model, or mutate provider sessions, debate logs, manuscripts, core
+documents, or owner-isolated agent state.
+[Issue #22](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/22)
+owns selection, and
+[Issue #4](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/4)
+owns the complete `ConversationEventStore`, events, and transcripts.
+[Issue #20](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/20)
+owns the search/index boundary. No database or RAG boundary is implemented by
+this catalog.
 
 ## Backend and Prompt Boundary
 
@@ -300,6 +343,19 @@ CLI context at `agent_states/orchestrator_state/cli_context.json`, session
 overrides, per-agent debate histories, discussion lifecycle/log/result files,
 and manuscript output are created lazily in the paths shown in the
 [User Guide](../UserGuide.md#generated-files).
+
+Conversation catalog metadata is also lazy and uses this fixed path:
+
+```text
+discussion_logs/<session_id>/interactive/conversations/<conversation_id>/metadata.json
+```
+
+`create()` exclusively creates one versioned metadata file for a new identity;
+rename and status transitions atomically replace that file. Listing a session
+with no catalog returns empty, and missing-record reads do not create the
+catalog or rewrite existing discussion artifacts. The adapter performs no
+legacy migration. This path currently contains metadata only, not a
+conversation transcript or index.
 
 Session override JSON survives new `StoryRuntime` instances. Each agent JSONL
 contains only concise outcomes owned by that agent. The discussion JSONL is the
