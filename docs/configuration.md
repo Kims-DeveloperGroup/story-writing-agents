@@ -213,16 +213,97 @@ Provider lifecycle metadata is stored beneath:
 
 ```text
 agent_states/orchestrator_state/provider_sessions/
+├── .lease-claims.lock
 ├── <session_id>.json
 └── <session_id>.lease.json
 ```
 
-The session manifest records its schema version, active state, timestamps, and
-current thread metadata keyed by backend and agent. `story session end`
-retains those thread references so a later `story session start` can resume
-compatible conversations. The lease file exists only while a process owns the
-team session and prevents concurrent processes from resuming the same threads.
-Both files are runtime-managed plaintext and must not be edited manually.
+`.lease-claims.lock` is a persistent, workspace-global opaque internal
+coordination file, not JSON and not part of either schema below. Lease claims
+may create it lazily even when the requested claim later fails. Session listing
+ignores it. The runtime keeps it in place after releasing its short advisory
+lock; do not delete, replace, or edit it.
+
+The manifest has this exact schema-v1 field set:
+
+```json
+{
+  "active": true,
+  "created_at": "2026-01-01T00:00:00+00:00",
+  "schema_version": 1,
+  "session_id": "demo",
+  "threads": {
+    "codex:plot_architect": {
+      "agent_id": "plot_architect",
+      "backend": "codex",
+      "fingerprint": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "tainted": false,
+      "thread_id": "thread-demo-plot",
+      "updated_at": "2026-01-02T00:00:00+00:00"
+    }
+  },
+  "updated_at": "2026-01-02T00:00:00+00:00"
+}
+```
+
+No manifest keys may be missing or added. `schema_version` is the integer `1`,
+not a boolean. `session_id` must match the filename. `active` is the durable
+lifecycle flag; it does not mean the session is selected or currently leased.
+`created_at`, `updated_at`, and each thread `updated_at` are timezone-aware
+ISO-8601 strings, and the manifest update time cannot precede its creation
+time.
+
+`threads` is an object keyed by the exact `<backend>:<agent_id>` pair. Every
+thread object has exactly the six fields shown. Its backend, agent ID,
+fingerprint, thread ID, and update time are non-empty strings; `tainted` is a
+boolean. A thread ID begins with an ASCII letter or digit, contains only ASCII
+letters, digits, `_`, or `-`, and is at most 128 characters. Ending,
+detaching, or closing a session does not remove this metadata. Reactivating a
+session can therefore resume a compatible, untainted thread.
+
+The lease sidecar has this exact schema-v1 field set:
+
+```json
+{
+  "acquired_at": "2026-01-02T00:00:00+00:00",
+  "hostname": "writer-host",
+  "pid": 12345,
+  "schema_version": 1,
+  "session_id": "demo",
+  "token": "opaque-ownership-token"
+}
+```
+
+No lease keys may be missing or added. Its schema version is the integer `1`,
+its session ID must match the filename, `pid` is a positive non-boolean
+integer, and the other values are non-empty strings. `acquired_at` must include
+a UTC offset. The opaque token establishes backend-instance ownership and is
+not a user credential. Normal detach, end, or close removes an owned sidecar;
+a read may leave a demonstrably dead same-host sidecar in place for a later
+acquisition to reclaim.
+
+The public `SessionSummary` is a validated projection, not another persisted
+schema:
+
+| Field | Interpretation |
+| --- | --- |
+| `session_id` | Manifest identity. |
+| `active` | Durable manifest state. `false` can be reactivated by resume or the compatible start operation. |
+| `selected` | Whether the manifest ID equals the caller-supplied selection; the backend does not load CLI context. |
+| `lease_state` | Observed `available`, `owned`, `in_use`, or `unverified` attachment state. |
+| `lease_hostname`, `lease_pid` | `None` when no sidecar exists; otherwise the validated sidecar owner, including for a dead lease reported as available. |
+| `created_at`, `updated_at` | Validated manifest timestamps. |
+
+`available` means no lease sidecar exists or a same-host process is
+demonstrably gone. `owned` means the reading backend has the matching token.
+`in_use` means an unowned same-host PID is demonstrably alive. `unverified`
+means a lease is remote-host or its local liveness cannot be established; it
+blocks acquisition. Reads do not delete any sidecar or perform remote
+liveness checks.
+
+Both JSON files are runtime-managed plaintext and must not be edited manually.
+The guard adds no configuration key, persisted JSON schema field, or
+third-party dependency.
 
 ## CLI Context and Discovery
 
@@ -246,6 +327,14 @@ command atomically replaces the selected session. A failed start and every
 `run`, `directive`, `inspect`, and `session end` command leave the selection
 unchanged. Ending the selected provider session preserves the selection, so a
 bare `story session start` can reactivate it later.
+
+`AgentBackend` never reads or writes this file. Its status reads project
+selection only from an explicit `selected_session=` argument, while
+`create_session()`, `resume_session()`, `attach_session()`, and
+`detach_session()` return unselected summaries. A Python caller implementing a
+switch must persist a new selection only after destination attachment has
+fully succeeded; failure must preserve the prior selection and attachment.
+The installed CLI currently exposes only `story session start|end`.
 
 Session resolution precedence is:
 

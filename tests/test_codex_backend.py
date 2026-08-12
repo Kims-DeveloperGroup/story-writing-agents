@@ -327,6 +327,35 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("resume", self.invocations()[-1]["argv"])
 
+    async def test_resume_only_attachment_reuses_compatible_thread(self) -> None:
+        definition = self.definition()
+        first = AgentBackend(self.workspace, executable=str(self.executable))
+        first.start_session("resume_only_session")
+        await (await first.bind(definition)).invoke(
+            self.request(session_id="resume_only_session")
+        )
+        first.end_session("resume_only_session")
+        first.close()
+
+        resumed = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(resumed.close)
+        summary = resumed.resume_session("resume_only_session")
+        self.assertTrue(summary.active)
+        self.assertEqual(summary.lease_state.value, "owned")
+        await (await resumed.bind(definition)).invoke(
+            self.request(
+                session_id="resume_only_session",
+                debate_id="after_resume_only",
+            )
+        )
+
+        invocation = self.invocations()[-1]
+        self.assertIn("resume", invocation["argv"])
+        self.assertIn(
+            "thread-resume_only_session-plot_architect",
+            invocation["argv"],
+        )
+
     async def test_strict_phase_reply_mapping(self) -> None:
         candidate = AgentBackend._decode_reply(
             Phase.SYNTHESIZE,

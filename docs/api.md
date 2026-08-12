@@ -10,14 +10,16 @@ The following names are exported from `story_writing_agents`:
 - backend API: `AgentBackend`, `BoundAgent`;
 - definition, request, and result models: `PromptFileReference`,
   `AgentDefinition`, `AgentRequest`, `AgentReply`, `AgentStateEntry`,
-  `DebateMessage`, `DebateResult`;
-- enums: `InputKind`, `Phase`, `Verdict`, `DebateStatus`, `DirectiveKind`;
+  `DebateMessage`, `DebateResult`, `SessionSummary`;
+- enums: `InputKind`, `Phase`, `Verdict`, `DebateStatus`, `DirectiveKind`,
+  `SessionLeaseState`;
 - runtime API: `StoryRuntime`, `RuntimeSession`, `Runtime`, `Session`;
 - directive API: `RuntimeDirective`, `parse_directive`, `apply_directive`;
 - workspace API: `Workspace`, `initialize_workspace`;
 - errors: `StoryWritingAgentsError`, `WorkspaceSecurityError`,
   `WorkspaceFormatError`, `ConfigurationError`, `DirectiveError`,
-  `SessionIdError`, `ManuscriptExistsError`, `BackendProtocolError`, and
+  `SessionIdError`, `ManuscriptExistsError`, `BackendProtocolError`,
+  `SessionExistsError`, `SessionNotFoundError`, `SessionInUseError`, and
   `DebateExistsError`.
 
 `Runtime` is an alias of `StoryRuntime`; `Session` is an alias of
@@ -32,6 +34,7 @@ Enum values are:
 | `Verdict` | `approve`, `conflict` |
 | `DebateStatus` | `consensus`, `deadlock`, `failed` |
 | `DirectiveKind` | `language`, `persona`, `reset` |
+| `SessionLeaseState` | `available`, `owned`, `in_use`, `unverified` |
 
 ## Concrete Backend
 
@@ -47,6 +50,19 @@ AgentBackend(
 
 await AgentBackend.bind(definition: AgentDefinition) -> BoundAgent
 AgentBackend.prepare_session(session_id: str) -> None
+AgentBackend.get_session_summary(
+    session_id: str,
+    *,
+    selected_session: str | None = None,
+) -> SessionSummary
+AgentBackend.list_sessions(
+    *,
+    selected_session: str | None = None,
+) -> tuple[SessionSummary, ...]
+AgentBackend.create_session(session_id: str) -> SessionSummary
+AgentBackend.resume_session(session_id: str) -> SessionSummary
+AgentBackend.attach_session(session_id: str) -> SessionSummary
+AgentBackend.detach_session(session_id: str) -> SessionSummary
 AgentBackend.start_session(session_id: str) -> dict[str, Any]
 AgentBackend.end_session(session_id: str) -> dict[str, Any]
 AgentBackend.close() -> None
@@ -68,11 +84,110 @@ implemented.
 ignored. `timeout_seconds` is a positive per-call limit. `backend_overrides`
 maps canonical agent IDs to vendor names for this backend instance.
 
-`start_session()` creates or reactivates a provider-session manifest.
-`end_session()` marks it inactive without deleting resumable thread IDs.
-`prepare_session()` checks all routes, verifies the Codex executable, and
-claims the team lease. `close()` releases owned leases and deletes temporary
-prompt staging; call it in `finally`. A closed backend cannot be reused.
+Provider-session status has three independent dimensions. The manifest's
+`active` flag is durable lifecycle state. `selected` is only a comparison with
+the caller-supplied `selected_session`; `AgentBackend` never reads or writes
+CLI context. `lease_state` is an observation of the process attachment
+sidecar, not another active-state value.
+
+`SessionSummary` is a frozen, slotted value with this exact shape:
+
+```python
+SessionSummary(
+    session_id: str,
+    active: bool,
+    selected: bool,
+    lease_state: SessionLeaseState,
+    lease_hostname: str | None,
+    lease_pid: int | None,
+    created_at: str,
+    updated_at: str,
+)
+```
+
+Its lease states mean:
+
+| State | Meaning at the time of the read |
+| --- | --- |
+| `available` | No lease exists, or a same-host lease names a process that is demonstrably gone. A dead lease sidecar is not removed by a read. |
+| `owned` | This `AgentBackend` holds the matching lease token. |
+| `in_use` | An unowned same-host lease names a demonstrably live process. |
+| `unverified` | The lease is remote-host or local liveness is ambiguous, including a permission failure. Acquisition is blocked. |
+
+When a lease sidecar exists, `lease_hostname` and `lease_pid` report its
+validated values even when the state is `available`; both are `None` only when
+no sidecar exists. Timestamps are the validated manifest values.
+
+`get_session_summary()` and `list_sessions()` are strict, read-only, and
+provider-free. They never run provider preflight, acquire or reclaim a lease,
+create the lease-claim guard, or consult CLI context. A supplied selection is
+validated and projected onto the returned values; it need not name a persisted
+session. A missing manifest causes `get_session_summary()` to raise
+`SessionNotFoundError`. An absent provider-session directory produces an empty
+tuple. Lease sidecars, the claim guard, and unrelated files are not listed as
+sessions. `list_sessions()` orders manifests by `updated_at` newest first and
+then by ascending session ID for ties. A listed manifest or its corresponding
+lease with invalid JSON, schema, timestamps, path identity, or thread metadata
+raises its validation error instead of being skipped. Observing a dead
+same-host sidecar as `available` remains read-only and leaves it in place.
+
+The strict attachment operations all preflight configured provider routes and
+the Codex executable before changing a manifest or lease:
+
+- `create_session()` is create-only. An existing active or inactive manifest
+  raises `SessionExistsError`. Success creates an active schema-v1 manifest,
+  retains a process-owned lease, and returns an unselected summary.
+- `resume_session()` requires an existing manifest or raises
+  `SessionNotFoundError`. It attaches an active session without rewriting its
+  manifest, or atomically reactivates an inactive session while preserving
+  `created_at` and thread metadata and advancing `updated_at`. It retains the
+  lease and returns an unselected summary.
+- `attach_session()` requires an existing active manifest. It neither
+  reactivates nor rewrites it; an inactive session raises
+  `BackendProtocolError`. Success retains the lease and returns an unselected
+  summary.
+- `detach_session()` releases this backend's matching lease without changing
+  `active`, CLI selection, thread metadata, or other session data. After a
+  normal owned detach, its unselected return value reports `available`. A
+  missing manifest raises `SessionNotFoundError`; a changed ownership token
+  raises `BackendProtocolError` without deleting the foreign lease.
+
+`SessionInUseError` reports an attachment conflict for a demonstrably live
+same-host owner or an unverified owner. It does not disclose the lease token.
+`SessionExistsError`, `SessionNotFoundError`, and `SessionInUseError` are all
+subclasses of `BackendProtocolError`. Invalid persisted schema still raises
+`WorkspaceFormatError`, unsafe IDs raise `SessionIdError`, and an inactive
+session is rejected by `attach_session()` and `prepare_session()` with
+`BackendProtocolError`. Any lease-acquiring lifecycle operation can raise
+`SessionInUseError` when a live or unverified owner blocks it.
+
+Concurrent same-host reclamation of one demonstrably dead sidecar is
+serialized. Exactly one cooperating claimant can replace it and acquire the
+session lease; later claimants observe the replacement and receive the typed
+`SessionInUseError`. This coordination does not change the public methods,
+return values, exceptions, or lease states above.
+
+The older lifecycle methods retain their compatibility contracts.
+`prepare_session()` preflights provider routes and the executable, requires an
+active manifest, and holds its lease. `start_session()` transiently creates or
+reactivates a manifest and returns the schema-v1 manifest dictionary; it does
+not require provider-executable preflight and does not retain the lease.
+`end_session()` keeps its existing signature and manifest-dictionary return.
+It may reuse an already-owned lease, atomically writes the inactive manifest
+while preserving `created_at`, threads, and unrelated session data, advances
+`updated_at`, and then releases the lease. An owned read or write failure keeps
+the existing attachment; a transient control call releases its transient lease
+on failure. `close()` releases all owned leases without deactivating sessions
+and deletes temporary prompt staging; call it in `finally`. A closed backend
+cannot be reused.
+
+The installed CLI remains `story session start|end`. The additive strict
+methods are Python API foundations; no attach, detach, or resume CLI command is
+currently installed. A caller building session switching must persist its
+selection only after the destination attachment completes successfully. The
+existing lifecycle-command JSON and exit-code contracts documented below are
+unchanged. `detach_session()` enables a later quit-without-ending workflow, but
+no interactive TTY controller is included here.
 
 There is no runtime-imported backend plugin loader.
 

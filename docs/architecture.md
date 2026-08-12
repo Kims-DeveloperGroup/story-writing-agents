@@ -10,7 +10,9 @@ and invokes Codex through the installed Codex CLI.
 This document describes the current implementation of
 [Issue #1](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1)
 and
-[Issue #2](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/2).
+[Issue #2](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/2),
+plus the provider-session lifecycle foundation in
+[Issue #5](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/5).
 In this repository, “commit” means committing approved text to filesystem
 artifacts. The runtime does not invoke Git.
 
@@ -104,15 +106,80 @@ the concrete `BoundAgent` partitions Codex conversation state by
 runtime memory channel, and a team session resumes each agent's thread across
 debates.
 
-`story session start` creates or reactivates a provider-session manifest.
-`story run` acquires one team-level local-process lease, preventing concurrent
-processes from using the same provider session. Within one backend, calls are
-also serialized by `(session_id, backend, agent_id)` so separate bindings
-cannot race one provider thread. `story session end` marks the session
-inactive but retains thread IDs. The Codex subprocess runs without shell
-evaluation, uses read-only sandboxing and no approvals, and receives dynamic
-request JSON over stdin. Phase-specific output schemas are validated before
-conversion to `AgentReply`; failed calls are not retried automatically.
+### Provider Session Lifecycle and Attachment
+
+A provider session has three deliberately separate kinds of state:
+
+- its schema-v1 manifest durably records `active`, timestamps, and resumable
+  provider thread references;
+- its lease sidecar represents a process attachment and excludes conflicting
+  local use; and
+- `cli_context.json` records only the CLI-selected session.
+
+An active session need not be selected or attached, a selected session may be
+inactive, and an observed lease does not change either durable value. Backend
+summary reads accept an optional selected ID from the caller and compare it;
+the backend does not load or persist selection. Reads also do not acquire or
+reclaim a lease.
+
+Strict `create_session()`, `resume_session()`, and `attach_session()` calls
+preflight all configured provider routes and the executable before manifest or
+lease mutation. They check the requested manifest condition, acquire the lease
+atomically, and then recheck that condition before writing or returning. A
+failed recheck releases a lease newly acquired by that call. A demonstrably
+dead same-host sidecar can be reclaimed during acquisition, but live,
+remote-host, or ambiguous ownership blocks acquisition. Successful strict
+attachment retains the lease until `detach_session()`, `end_session()`, or
+`close()`.
+
+All cooperating processes serialize each short lease-claim transaction through
+the persistent workspace-global opaque file
+`provider_sessions/.lease-claims.lock`. While holding its OS advisory lock, a
+claimant attempts exclusive sidecar creation or reads and revalidates an
+existing dead sidecar, unlinks it, and completes replacement. The replacement
+sidecar is durable before the guard is released, so concurrent dead-sidecar
+reclamation has exactly one owner; the next claimant observes an in-use lease.
+The guard serializes claims across sessions, never represents session
+ownership or liveness, and is never unlinked by the runtime. Closing its file
+descriptor releases the advisory lock; process exit also releases it after a
+crash.
+
+The API permits one backend to hold more than one session lease so a caller can
+switch without dropping its working source first. The safe boundary ordering
+is:
+
+1. completely create, resume, or attach the destination;
+2. persist the destination as selected only after that succeeds; and
+3. detach the source last.
+
+If destination attachment fails, the caller must leave both its source
+attachment and existing selection unchanged. The backend operations satisfy
+their half of this invariant by never changing CLI context and by not
+implicitly detaching another session. This is an integration contract for the
+Python API; an interactive switch controller is not implemented in this
+release.
+
+`detach_session()` removes only this backend's matching lease. It does not end
+the durable session, remove provider threads or other data, or change
+selection. `end_session()` uses an already-owned lease when available;
+otherwise it claims a transient one. It atomically persists `active: false`
+while retaining `created_at`, thread references, and unrelated data, advances
+`updated_at`, and on success releases after the write. If an owned read or write
+fails, the existing attachment remains available for recovery. A failed
+transient control call instead releases its transient lease.
+
+The compatibility path remains intact: `story session start` uses transient
+create-or-reactivate behavior without provider-executable preflight, and
+`story run` uses `prepare_session()` to preflight and hold an active session
+lease. Within one backend, calls are also serialized by
+`(session_id, backend, agent_id)` so separate bindings cannot race one provider
+thread. `story session end` marks the session inactive but retains thread IDs.
+The installed lifecycle CLI still exposes only `start` and `end`.
+
+The Codex subprocess runs without shell evaluation, uses read-only sandboxing
+and no approvals, and receives dynamic request JSON over stdin. Phase-specific
+output schemas are validated before conversion to `AgentReply`; failed calls
+are not retried automatically.
 
 The CLI adds a workspace-local navigation layer without changing the runtime
 API. When `--workspace` is absent, it walks from the caller's current
@@ -120,8 +187,9 @@ directory toward the filesystem root and selects the nearest directory with
 the complete initialized-workspace sentinels. An explicit path bypasses
 discovery. A successful `session start` atomically writes the selected session
 to `agent_states/orchestrator_state/cli_context.json`; other commands read but
-never change it. Explicit `--session` values take precedence over this
-selection.
+never change it, and a failed start leaves it intact. `AgentBackend` itself
+never reads or writes this file. Explicit `--session` values take precedence
+over this selection.
 
 For `run`, input resolution happens before provider construction and accepts
 exactly one of a positional prompt, `--prompt`, `--draft`, or `--draft-file`.

@@ -37,6 +37,29 @@ class DebateStatus(StrEnum):
     FAILED = "failed"
 
 
+class SessionLeaseState(StrEnum):
+    """Observed ownership and liveness state for a provider-session lease."""
+
+    AVAILABLE = "available"
+    OWNED = "owned"
+    IN_USE = "in_use"
+    UNVERIFIED = "unverified"
+
+
+@dataclass(frozen=True, slots=True)
+class SessionSummary:
+    """Immutable provider-session lifecycle status."""
+
+    session_id: str
+    active: bool
+    selected: bool
+    lease_state: SessionLeaseState
+    lease_hostname: str | None
+    lease_pid: int | None
+    created_at: str
+    updated_at: str
+
+
 @dataclass(frozen=True, slots=True)
 class DebateMessage:
     """One public blackboard entry.
