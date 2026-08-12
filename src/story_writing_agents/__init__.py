@@ -27,6 +27,13 @@ from .errors import (
     WorkspaceFormatError,
     WorkspaceSecurityError,
 )
+from .interactive_commands import (
+    COMMANDS,
+    ActionKind,
+    CommandSpec,
+    InteractiveAction,
+    parse_interactive_line,
+)
 from .models import (
     AgentDefinition,
     AgentReply,
@@ -45,6 +52,8 @@ from .workspace import Workspace, initialize_workspace
 
 __all__ = [
     "AGENT_SPECS",
+    "COMMANDS",
+    "ActionKind",
     "AgentBackend",
     "AgentDefinition",
     "AgentReply",
@@ -54,6 +63,7 @@ __all__ = [
     "BoundAgent",
     "CHARACTER_CUSTODIAN",
     "ConfigurationError",
+    "CommandSpec",
     "DebateMessage",
     "DebateResult",
     "DebateStatus",
@@ -62,6 +72,7 @@ __all__ = [
     "DirectiveKind",
     "EXECUTION_SPECIALIST",
     "InputKind",
+    "InteractiveAction",
     "LEAD_ORCHESTRATOR",
     "ManuscriptExistsError",
     "PLOT_ARCHITECT",
@@ -83,4 +94,5 @@ __all__ = [
     "apply_directive",
     "initialize_workspace",
     "parse_directive",
+    "parse_interactive_line",
 ]

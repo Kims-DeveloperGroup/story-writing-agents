@@ -105,6 +105,26 @@ class PublicApiTests(unittest.TestCase):
                     issubclass(getattr(story_writing_agents, name), base_error)
                 )
 
+    def test_interactive_parser_exports_use_the_supported_package_facade(
+        self,
+    ) -> None:
+        from story_writing_agents import interactive_commands
+
+        required = {
+            "ActionKind",
+            "InteractiveAction",
+            "CommandSpec",
+            "COMMANDS",
+            "parse_interactive_line",
+        }
+        self.assertTrue(required.issubset(story_writing_agents.__all__))
+        for name in required:
+            with self.subTest(name=name):
+                self.assertIs(
+                    getattr(story_writing_agents, name),
+                    getattr(interactive_commands, name),
+                )
+
 
 class PersistenceValidationTests(unittest.TestCase):
     def test_persisted_debate_log_rejects_wrong_field_types(self) -> None:

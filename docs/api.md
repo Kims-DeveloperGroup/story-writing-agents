@@ -8,6 +8,8 @@ The following names are exported from `story_writing_agents`:
   `LEAD_ORCHESTRATOR`, `PLOT_ARCHITECT`, `CHARACTER_CUSTODIAN`,
   `EXECUTION_SPECIALIST`;
 - backend API: `AgentBackend`, `BoundAgent`;
+- interactive command API: `ActionKind`, `InteractiveAction`, `CommandSpec`,
+  `COMMANDS`, `parse_interactive_line`;
 - definition, request, and result models: `PromptFileReference`,
   `AgentDefinition`, `AgentRequest`, `AgentReply`, `AgentStateEntry`,
   `DebateMessage`, `DebateResult`;
@@ -23,7 +25,7 @@ The following names are exported from `story_writing_agents`:
 `Runtime` is an alias of `StoryRuntime`; `Session` is an alias of
 `RuntimeSession`.
 
-Enum values are:
+Runtime and directive enum values are:
 
 | Enum | Values |
 | --- | --- |
@@ -32,6 +34,166 @@ Enum values are:
 | `Verdict` | `approve`, `conflict` |
 | `DebateStatus` | `consensus`, `deadlock`, `failed` |
 | `DirectiveKind` | `language`, `persona`, `reset` |
+
+## Interactive Command Language
+
+The provider-free interactive command API is available from the package
+facade:
+
+```python
+from story_writing_agents import (
+    COMMANDS,
+    ActionKind,
+    CommandSpec,
+    InteractiveAction,
+    parse_interactive_line,
+)
+```
+
+Its public shapes are:
+
+```python
+InteractiveAction(
+    kind: ActionKind,
+    *,
+    text: str | None = None,
+    agent_id: str | None = None,
+    argument: str | None = None,
+    count: int | None = None,
+    error: str | None = None,
+    suggestion: str | None = None,
+)
+
+CommandSpec(
+    group: str,
+    syntax: str,
+    aliases: tuple[str, ...],
+    may_call_provider: bool,
+    may_write_artifacts: bool,
+    example: str,
+)
+
+COMMANDS: tuple[CommandSpec, ...]
+parse_interactive_line(line: str) -> InteractiveAction
+```
+
+`ActionKind` is a `StrEnum` with these exact values:
+
+```text
+ignored             message              routed_message
+set_target          list_agents          compose
+send                cancel               run
+run_fresh           draft_file           inspect
+history             status               set_language
+set_persona         reset                session_list
+session_new         session_resume       session_end
+help                quit                 parse_error
+```
+
+`InteractiveAction` and `CommandSpec` are frozen, slotted dataclasses.
+`InteractiveAction.kind` is positional; all payload fields are keyword-only.
+The valid payload shapes are:
+
+| Action value | Payload |
+| --- | --- |
+| `ignored`, `list_agents`, `compose`, `send`, `cancel`, `status`, `reset`, `session_list`, `session_end`, `quit` | None |
+| `message` | Required `text` that is not ASCII-space/tab-only |
+| `routed_message` | Required canonical `agent_id` and `text` that is not ASCII-space/tab-only |
+| `set_target` | Required canonical `agent_id` |
+| `run` | Optional `text` |
+| `run_fresh` | Required `text` that is not ASCII-space/tab-only |
+| `draft_file`, `set_language`, `session_new` | Required `argument` |
+| `inspect`, `session_resume`, `help` | Optional `argument` |
+| `history` | Optional positive integer `count` |
+| `set_persona` | Required canonical `agent_id` and `argument` |
+| `parse_error` | Required non-empty `error` and optional `suggestion` |
+
+`COMMANDS` is an immutable tuple, and every `CommandSpec.aliases` value is an
+immutable tuple. Its 17 ordered entries are:
+
+| Group | Canonical syntax | Aliases | May call provider | May write artifacts | Example |
+| --- | --- | --- | --- | --- | --- |
+| Conversation | `/compose` | — | No | No | `/compose` |
+| Conversation | `/send` | — | No | No | `/send` |
+| Conversation | `/cancel` | — | No | No | `/cancel` |
+| Conversation | `/say TEXT` | — | Yes | No | `/say /run is literal text` |
+| Agents | `/to NAME` | `/agent` | No | No | `/to plot` |
+| Agents | `/agents` | — | No | No | `/agents` |
+| Agents | `/language LANG` | — | No | No | `/language ko` |
+| Agents | `/persona AGENT NAME` | — | No | No | `/persona plot meticulous` |
+| Agents | `/reset` | — | No | No | `/reset` |
+| Consensus | `/run [--fresh] [PROMPT]` | — | Yes | Yes | `/run Outline chapter one` |
+| Consensus | `/draft-file PATH` | — | Yes | Yes | `/draft-file drafts/chapter-01.md` |
+| Sessions | `/session list \| new NAME \| resume [NAME] \| end` | — | No | No | `/session new chapter-01` |
+| Inspection | `/inspect [DEBATE\|last]` | — | No | No | `/inspect last` |
+| Inspection | `/history [COUNT]` | — | No | No | `/history 20` |
+| Inspection | `/status` | — | No | No | `/status` |
+| Inspection | `/help [COMMAND]` | `/?` | No | No | `/help run` |
+| Exit | `/quit` | `/exit` | No | No | `/quit` |
+
+The capability flags describe possible effects of a later dispatcher. The
+registry and parser themselves never call a provider, read or write the
+filesystem, perform process or network I/O, or own runtime state.
+
+### Parsing precedence and invariants
+
+`parse_interactive_line()` applies these rules deterministically:
+
+1. It removes one terminal `LF` or `CRLF` as input framing. Any `CR` or `LF`
+   that remains, including a terminal bare `CR` or a second line ending,
+   produces a `parse_error` action.
+2. Empty or whitespace-only input, including Unicode whitespace, produces
+   `ignored`.
+3. Classification uses character zero of the remaining untrimmed input. `/`
+   starts a slash command, `@` starts agent routing, and every other non-blank
+   line is a `message` preserved verbatim. Leading whitespace therefore makes
+   an otherwise command-looking line an ordinary message.
+
+Command names, subcommands, flags, and agent aliases are case-sensitive.
+ASCII space and tab are the only grammar delimiters; non-ASCII whitespace is
+not a substitute. Fixed commands reject arguments. Token commands enforce
+their documented arity, and each token must be non-empty and contain neither
+Unicode whitespace nor a Unicode `Cc` control character. `/history` accepts
+at most one count consisting only of ASCII digits and representing a positive
+integer.
+
+`/say`, `@` routing, ordinary `/run` prompts, and `/draft-file` treat their
+payloads as opaque remainders: exactly one separating ASCII space or tab is
+removed and all remaining characters are preserved. `/run` recognizes a flag
+only when the first non-delimiter prompt token begins with `--`; the only valid
+flag is exact `--fresh`, which requires a prompt and removes exactly one
+delimiter after the flag. No form performs quoting, escaping, shell parsing,
+path expansion, or nested command parsing. Thus `/say /quit` is literal
+message text, and a `/draft-file` argument is returned without opening it.
+
+The exact agent aliases are:
+
+| Accepted alias | Canonical `agent_id` |
+| --- | --- |
+| `lead`, `orchestrator`, `lead_orchestrator` | `lead_orchestrator` |
+| `plot`, `plot_architect` | `plot_architect` |
+| `character`, `character_custodian` | `character_custodian` |
+| `execution`, `prose`, `execution_specialist` | `execution_specialist` |
+
+`@ALIAS TEXT` produces `routed_message`; `/to ALIAS` and its `/agent` alias
+produce `set_target`; `/persona ALIAS NAME` also normalizes the alias to its
+canonical ID. `/help` accepts a command with or without its leading slash and
+normalizes command aliases to the canonical slash name, such as `/agent` to
+`/to`, `/?` to `/help`, and `/exit` to `/quit`.
+
+Invalid input does not raise a parse exception and never becomes provider
+input. It returns `InteractiveAction(ActionKind.PARSE_ERROR, error=...)`, with
+an optional `suggestion`. Suggestions use a case-sensitive Levenshtein
+distance within the applicable command, session-subcommand, or agent-alias
+namespace. A suggestion is returned only for one unique closest candidate at
+distance two or less; command and help suggestions are canonical slash names,
+and agent suggestions are canonical `@agent_id` values.
+
+This API defines parsing and metadata only; it does not promise dispatch, TTY,
+provider, session, or artifact behavior. `/conversation` and subject-memory
+conversation commands belong to Issue #22; `/search` and `/transcript` belong
+to Issue #23. They are unknown commands in this parser and return
+`parse_error`.
 
 ## Concrete Backend
 
