@@ -16,8 +16,9 @@ For example, a symlink beneath `manuscript/` cannot redirect a write into
 `core_documents/`, and a symlinked core document cannot redirect a
 post-consensus update into `config/`.
 
-Session and debate IDs and persona identifiers have separate conservative
-ASCII validation rules documented in [Configuration](configuration.md).
+Session, debate, and conversation IDs and persona identifiers have separate
+conservative ASCII validation rules documented in
+[Configuration](configuration.md).
 When `--workspace` is omitted, CLI discovery selects the nearest fully
 initialized ancestor of the caller's current directory. Use an explicit
 `--workspace` in automation or whenever multiple nested workspaces could make
@@ -27,6 +28,23 @@ four fixed filenames. A caller using generic `Workspace.write_text()` is a
 trusted direct workspace client and can alter any safely contained relative
 file. Manuscript names may contain safe relative subdirectories, but cannot be
 absolute, contain traversal, or pass through a symlink.
+
+`FilesystemConversationCatalog` binds validated session and conversation IDs
+to the fixed path
+`discussion_logs/<session_id>/interactive/conversations/<conversation_id>/metadata.json`.
+It applies the same containment and no-symlink rules to the catalog directory,
+conversation directory, and metadata file. It also rejects metadata whose
+embedded IDs do not match that path, so changing JSON fields cannot reassign a
+record across logical session boundaries. This is namespace integrity, not
+access control: a process with workspace access can still name any session.
+Unsafe call identifiers raise `SessionIdError`; a symlink or containment
+violation raises `WorkspaceSecurityError`.
+
+Metadata is decoded as strict UTF-8 and parsed as a JSON object with exactly
+the supported eight fields. Invalid encoding, malformed JSON, duplicate,
+missing, or extra fields, unsupported values, and path-owner mismatches raise
+`WorkspaceFormatError`. Reads fail closed rather than repairing or partially
+accepting the record.
 
 ## Artifact Mutation Guarantees
 
@@ -54,13 +72,32 @@ These operations are not a transactional filesystem or database:
 Inspect the workspace after an infrastructure-level interruption before
 starting replacement work.
 
+Conversation creation also uses exclusive per-file creation and never
+overwrites an allocated identity. Rename, archive, and unarchive stage and
+atomically replace only that conversation's complete metadata file. A failure
+before replacement preserves the old record; a failure reported after a
+successful replacement can leave the complete new record durable, but not
+partial JSON. These guarantees remain per file rather than a database
+transaction.
+
+Catalog mutations are isolated to conversation metadata. They do not invoke a
+provider or alter provider-session data, debate logs or results, manuscripts,
+core documents, CLI selection, or owner-isolated agent state.
+
 ## Local Plaintext Data
 
 There is no encryption, redaction, access-control manager, or automatic
 retention policy. Agent `AGENTS.md` prompts, configuration, personas, core
 documents, agent outcomes, discussion logs, lifecycle state, results, and
 manuscripts are local plaintext files governed by the operating system's
-directory permissions.
+directory permissions. Conversation metadata is also plaintext. In
+particular, its exact display subject can disclose story content even though
+the file contains no transcript.
+
+The catalog does not persist its normalized subject comparison key. It does
+persist the display subject until the workspace owner removes the artifact;
+archiving changes discovery status but does not delete or redact metadata.
+There is no catalog-specific retention or secure-erasure mechanism.
 
 The workspace-local `cli_context.json` is also plaintext. It contains only its
 schema version and selected session ID, but the name itself may disclose
@@ -192,6 +229,9 @@ names the local host and its recorded process is demonstrably gone. Closing
   user-ruling resume API.
 - Stable JSONL order is a roster-order record of outcomes, not provider
   completion order.
+- The conversation catalog stores metadata only. Current-conversation
+  selection, events, transcripts, and indexing are separate future work; it
+  provides no search, database, RAG, or legacy-migration facility.
 - Filesystem safety assumes the operating system and underlying filesystem
   correctly implement the atomic primitives used by Python.
 - Inspection reports persisted state; it does not establish process liveness
