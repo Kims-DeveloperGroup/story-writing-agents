@@ -151,76 +151,61 @@ debates.
 
 ### Provider Session Lifecycle and Attachment
 
-A provider session has three deliberately separate kinds of state:
+A session has three independent dimensions:
 
-- its schema-v1 manifest durably records `active`, timestamps, and resumable
-  provider thread references;
-- its lease sidecar represents a process attachment and excludes conflicting
-  local use; and
-- `cli_context.json` records only the CLI-selected session.
+| Dimension | Owner | Purpose |
+| --- | --- | --- |
+| `active` | Provider-session manifest | Durable permission for new provider work. |
+| selected session | CLI context | Workspace navigation; the backend never reads or writes it. |
+| lease | Attached backend process | Temporary exclusive use of the session's provider threads. |
 
-An active session need not be selected or attached, a selected session may be
-inactive, and an observed lease does not change either durable value. Backend
-summary reads accept an optional selected ID from the caller and compare it;
-the backend does not load or persist selection. Reads also do not acquire or
-reclaim a lease.
+Thus a session can be active but unattached, or selected but inactive. Status
+reads only observe these dimensions; they do not claim or reclaim a lease.
+Exact schemas are in [Configuration](configuration.md#provider-session-state),
+and method contracts are in [API](api.md#concrete-backend).
 
-Strict `create_session()`, `resume_session()`, and `attach_session()` calls
-preflight all configured provider routes and the executable before manifest or
-lease mutation. They check the requested manifest condition, acquire the lease
-atomically, and then recheck that condition before writing or returning. A
-failed recheck releases a lease newly acquired by that call. In particular,
-after preflight `attach_session()` rejects an already-inactive manifest before
-lease acquisition or claim-guard creation, then rechecks an initially active
-manifest after claiming to close races. On POSIX, a demonstrably dead same-host
-sidecar can be reclaimed during acquisition; live, remote-host, ambiguous, and
-all non-POSIX unowned sidecars block acquisition. Successful strict attachment
-retains the lease until `detach_session()`, `end_session()`, or `close()`.
+A normal `chapter_01` sequence makes the distinction concrete:
 
-All cooperating processes serialize each short lease-claim transaction through
-the persistent workspace-global opaque file
-`provider_sessions/.lease-claims.lock`. While holding its OS advisory lock, a
-claimant attempts exclusive sidecar creation or, on POSIX, reads and revalidates
-an existing dead same-host sidecar, unlinks it, and completes replacement. The
-replacement sidecar is durable before the guard is released, so concurrent
-POSIX dead-sidecar reclamation has exactly one owner; the next claimant observes
-an in-use lease.
-The guard serializes claims across sessions, never represents session
-ownership or liveness, and is never unlinked by the runtime. Closing its file
-descriptor releases the advisory lock; process exit also releases it after a
-crash.
+| Step | Action | `active` afterward | selected afterward | lease afterward |
+| --- | --- | --- | --- | --- |
+| 1 | `story session start chapter_01` | `true` | `chapter_01` | available |
+| 2 | `story run "Draft chapter one"` begins | `true` | `chapter_01` | owned by that run |
+| 3 | The run exits | `true` | `chapter_01` | available; thread IDs remain |
+| 4 | `story session end` | `false` | `chapter_01` | available; thread IDs remain |
+| 5 | `story session start` | `true` | `chapter_01` | available; the next run can resume compatible threads |
 
-The API permits one backend to hold more than one session lease so a caller can
-switch without dropping its working source first. The safe boundary ordering
-is:
+The per-session sidecar prevents two cooperating processes from using the same
+threads. A separate persistent workspace-global claim guard serializes the
+short create-or-reclaim transaction; it is not session ownership or liveness.
+On POSIX, a demonstrably dead same-host sidecar can be reclaimed by a later
+claim. Remote, ambiguous, and every non-POSIX unowned sidecar remains
+`unverified` and blocks acquisition. Concurrent POSIX reclamation therefore
+has one winner. The guard itself is never removed by the runtime.
 
-1. completely create, resume, or attach the destination;
-2. persist the destination as selected only after that succeeds; and
-3. detach the source last.
+Strict `create_session()`, `resume_session()`, and `attach_session()` preflight
+all provider routes and the executable, check their manifest precondition,
+claim the lease, then recheck before returning or writing. In particular,
+`attach_session()` rejects an already-inactive manifest before creating the
+guard or claiming a lease; if the manifest becomes inactive after the claim,
+the recheck fails and releases the newly acquired lease. `end_session()` writes
+`active: false` before releasing its owned or transient lease. An owned failure
+keeps the existing attachment for recovery; a failed transient operation
+releases its lease.
 
-If destination attachment fails, the caller must leave both its source
-attachment and existing selection unchanged. The backend operations satisfy
-their half of this invariant by never changing CLI context and by not
-implicitly detaching another session. This is an integration contract for the
-Python API; an interactive switch controller is not implemented in this
-release.
+Detach and close release attachment without ending the session or removing
+thread metadata. Within one backend, `(session_id, backend, agent_id)` locking
+also prevents two bindings from racing one provider thread.
 
-`detach_session()` removes only this backend's matching lease. It does not end
-the durable session, remove provider threads or other data, or change
-selection. `end_session()` uses an already-owned lease when available;
-otherwise it claims a transient one. It atomically persists `active: false`
-while retaining `created_at`, thread references, and unrelated data, advances
-`updated_at`, and on success releases after the write. If an owned read or write
-fails, the existing attachment remains available for recovery. A failed
-transient control call instead releases its transient lease.
+For a session switch, first attach the destination, then persist its selection,
+then detach the source. A failed destination attachment must leave the old
+selection and attachment unchanged. The backend supports holding both leases
+during this sequence but never changes CLI context itself.
 
-The compatibility path remains intact: `story session start` uses transient
-create-or-reactivate behavior without provider-executable preflight, and
-`story run` uses `prepare_session()` to preflight and hold an active session
-lease. Within one backend, calls are also serialized by
-`(session_id, backend, agent_id)` so separate bindings cannot race one provider
-thread. `story session end` marks the session inactive but retains thread IDs.
-The installed lifecycle CLI still exposes only `start` and `end`.
+Compatibility remains unchanged: `story session start` uses transient
+create-or-reactivate behavior without executable preflight, while `story run`
+uses `prepare_session()` to preflight and retain the lease. The installed CLI
+still exposes only `session start` and `session end`; there is no interactive
+switch controller.
 
 The Codex subprocess runs without shell evaluation, uses read-only sandboxing
 and no approvals, and receives dynamic request JSON over stdin. Phase-specific

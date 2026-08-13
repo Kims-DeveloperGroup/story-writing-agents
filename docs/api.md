@@ -198,15 +198,17 @@ implemented.
 ignored. `timeout_seconds` is a positive per-call limit. `backend_overrides`
 maps canonical agent IDs to vendor names for this backend instance.
 
-Provider-session status has three independent dimensions. The manifest's
-`active` flag is durable lifecycle state. `selected` is only a comparison with
-the caller-supplied `selected_session`; `AgentBackend` never reads or writes
-CLI context. A lease sidecar is the per-session `<session_id>.lease.json`
-companion file stored beside the durable manifest. It records temporary
-process ownership (hostname, PID, acquisition time, and an opaque token) so
-cooperating backends do not attach to the same provider session concurrently.
-`lease_state` is an observation of this sidecar, not another active-state
-value.
+Provider-session status has three independent dimensions:
+
+| Dimension | Meaning |
+| --- | --- |
+| `active` | Durable lifecycle state. |
+| `selected` | Whether the session matches the caller-supplied `selected_session`. `AgentBackend` never reads or writes CLI context. |
+| `lease_state` | Temporary process attachment, independent of `active` and `selected`. |
+
+See [Configuration](configuration.md#provider-session-state) for the persisted
+schemas and [Architecture](architecture.md#provider-session-lifecycle-and-attachment)
+for lifecycle ordering and race handling.
 
 `SessionSummary` is a frozen, slotted value with this exact shape:
 
@@ -223,6 +225,10 @@ SessionSummary(
 )
 ```
 
+A lease sidecar is the per-session `<session_id>.lease.json` companion beside
+the durable manifest; it records temporary process ownership to prevent
+concurrent attachment.
+
 Its lease states mean:
 
 | State | Meaning at the time of the read |
@@ -232,86 +238,42 @@ Its lease states mean:
 | `in_use` | On POSIX, an unowned same-host lease names a demonstrably live process. |
 | `unverified` | The lease is remote-host, its POSIX liveness probe is ambiguous (including a permission failure), or it is unowned on a non-POSIX platform. Acquisition is blocked. |
 
-When a lease sidecar exists, `lease_hostname` and `lease_pid` report its
-validated values even when the state is `available`; both are `None` only when
-no sidecar exists. Timestamps are the validated manifest values.
+When a sidecar exists, `lease_hostname` and `lease_pid` report its validated
+owner even when the state is `available`; both are `None` only when no sidecar
+exists. Reads never acquire, reclaim, or remove a lease. On non-POSIX systems,
+every unowned same-host sidecar is `unverified` and blocks acquisition.
 
-`get_session_summary()` and `list_sessions()` are strict, read-only, and
-provider-free. They never run provider preflight, acquire or reclaim a lease,
-create the lease-claim guard, or consult CLI context. A supplied selection is
-validated and projected onto the returned values; it need not name a persisted
-session. A missing manifest causes `get_session_summary()` to raise
-`SessionNotFoundError`. An absent provider-session directory produces an empty
-tuple. Lease sidecars, the claim guard, and unrelated files are not listed as
-sessions. `list_sessions()` orders manifests by `updated_at` newest first and
-then by ascending session ID for ties. A listed manifest or its corresponding
-lease with invalid JSON, schema, timestamps, path identity, or thread metadata
-raises its validation error instead of being skipped. On POSIX, observing a
-dead same-host sidecar as `available` remains read-only and leaves it in place.
-On non-POSIX platforms, including Windows, every unowned same-host lease is
-`unverified`, remains in place, and blocks acquisition until a non-destructive
-native liveness probe is implemented.
+Lifecycle methods differ as follows:
 
-The strict attachment operations all preflight configured provider routes and
-the Codex executable before changing a manifest or lease:
+| Method | Contract |
+| --- | --- |
+| `get_session_summary()` | Provider-free, nonmutating status read. Missing session: `SessionNotFoundError`. |
+| `list_sessions()` | Provider-free, nonmutating tuple ordered by newest `updated_at`, then session ID; an absent session directory yields `()`. |
+| `prepare_session()` | Preflights routes and the executable, requires an active session, retains its lease, and returns `None`. Missing session: `SessionNotFoundError`; inactive session: `BackendProtocolError`. |
+| `create_session()` | Preflights, creates a new active session, retains its lease, and returns an unselected `SessionSummary`. Any existing manifest raises `SessionExistsError`. |
+| `resume_session()` | Preflights and retains the lease of an existing session, reactivating it only when inactive; returns an unselected summary. Missing session: `SessionNotFoundError`. |
+| `attach_session()` | Preflights and retains the lease of an existing active session without rewriting its manifest; returns an unselected summary. Missing session: `SessionNotFoundError`; inactive session: `BackendProtocolError`. |
+| `detach_session()` | Releases this backend's matching lease without ending the session or changing threads or selection; returns an unselected summary. Missing session: `SessionNotFoundError`. |
+| `start_session()` | Compatibility operation: transiently creates or reactivates a session without executable preflight, preserves threads, releases its lease, and returns the manifest dictionary. |
+| `end_session()` | Uses an owned or transient lease, writes `active: false`, preserves thread metadata, releases on success, and returns the manifest dictionary. Missing session: `SessionNotFoundError`. |
+| `close()` | Releases owned leases without deactivating sessions, removes prompt staging, and returns `None`. A closed backend cannot be reused. |
 
-- `create_session()` is create-only. An existing active or inactive manifest
-  raises `SessionExistsError`. Success creates an active schema-v1 manifest,
-  retains a process-owned lease, and returns an unselected summary.
-- `resume_session()` requires an existing manifest or raises
-  `SessionNotFoundError`. It attaches an active session without rewriting its
-  manifest, or atomically reactivates an inactive session while preserving
-  `created_at` and thread metadata and advancing `updated_at`. It retains the
-  lease and returns an unselected summary.
-- `attach_session()` requires an existing active manifest. It neither
-  reactivates nor rewrites it; an inactive session raises
-  `BackendProtocolError`. After provider preflight, an already-inactive
-  manifest is rejected before lease acquisition or claim-guard creation. An
-  initially active manifest is rechecked after the lease claim to close races.
-  Success retains the lease and returns an unselected summary.
-- `detach_session()` releases this backend's matching lease without changing
-  `active`, CLI selection, thread metadata, or other session data. After a
-  normal owned detach, its unselected return value reports `available`. A
-  missing manifest raises `SessionNotFoundError`; a changed ownership token
-  raises `BackendProtocolError` without deleting the foreign lease.
+Both read methods validate all encountered manifest and lease data; malformed
+state raises `WorkspaceFormatError` rather than being skipped. A supplied
+selection is validated but need not identify a persisted session. Lease
+sidecars and the claim guard are never listed as sessions.
 
-`SessionInUseError` reports an attachment conflict for a POSIX-probed,
-demonstrably live same-host owner or an unverified owner. It does not disclose
-the lease token.
-`SessionExistsError`, `SessionNotFoundError`, and `SessionInUseError` are all
-subclasses of `BackendProtocolError`. Invalid persisted schema still raises
-`WorkspaceFormatError`, unsafe IDs raise `SessionIdError`, and an inactive
-session is rejected by `attach_session()` and `prepare_session()` with
-`BackendProtocolError`. Any lease-acquiring lifecycle operation can raise
-`SessionInUseError` when a live or unverified owner blocks it.
+Any lease claim blocked by a live or unverified owner raises
+`SessionInUseError` without exposing the token. Unsafe IDs raise
+`SessionIdError`. A changed ownership token raises `BackendProtocolError` and
+is never deleted. A call releases a lease it acquired when that call fails;
+an already-owned lease is retained after an owned read or write failure.
+Detach, end, and close preserve resumable thread metadata.
 
-On POSIX, concurrent same-host reclamation of one demonstrably dead sidecar is
-serialized. Exactly one cooperating claimant can replace it and acquire the
-session lease; later claimants observe the replacement and receive the typed
-`SessionInUseError`. This coordination does not change the public methods,
-return values, exceptions, or lease states above.
-
-The older lifecycle methods retain their compatibility contracts.
-`prepare_session()` preflights provider routes and the executable, requires an
-active manifest, and holds its lease. `start_session()` transiently creates or
-reactivates a manifest and returns the schema-v1 manifest dictionary; it does
-not require provider-executable preflight and does not retain the lease.
-`end_session()` keeps its existing signature and manifest-dictionary return.
-It may reuse an already-owned lease, atomically writes the inactive manifest
-while preserving `created_at`, threads, and unrelated session data, advances
-`updated_at`, and then releases the lease. An owned read or write failure keeps
-the existing attachment; a transient control call releases its transient lease
-on failure. `close()` releases all owned leases without deactivating sessions
-and deletes temporary prompt staging; call it in `finally`. A closed backend
-cannot be reused.
-
-The installed CLI remains `story session start|end`. The additive strict
-methods are Python API foundations; no attach, detach, or resume CLI command is
-currently installed. A caller building session switching must persist its
-selection only after the destination attachment completes successfully. The
-existing lifecycle-command JSON and exit-code contracts documented below are
-unchanged. `detach_session()` enables a later quit-without-ending workflow, but
-no interactive TTY controller is included here.
+The installed CLI remains `story session start|end`; the strict methods are
+Python foundations, not new CLI commands. Existing lifecycle-command JSON and
+exit-code contracts are unchanged. No interactive switch or quit controller is
+included.
 
 There is no runtime-imported backend plugin loader.
 

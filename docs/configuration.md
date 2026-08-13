@@ -218,11 +218,11 @@ agent_states/orchestrator_state/provider_sessions/
 └── <session_id>.lease.json
 ```
 
-`.lease-claims.lock` is a persistent, workspace-global opaque internal
-coordination file, not JSON and not part of either schema below. Lease claims
-may create it lazily even when the requested claim later fails. Session listing
-ignores it. The runtime keeps it in place after releasing its short advisory
-lock; do not delete, replace, or edit it.
+`.lease-claims.lock` is a persistent, workspace-global advisory-lock file, not
+JSON or either schema below. A claim may create it even if that claim fails;
+listing ignores it, and the runtime never removes it. Do not edit, replace, or
+delete it. Its POSIX or Windows advisory lock is separate from the lease
+sidecar's owner-liveness check.
 
 The manifest has this exact schema-v1 field set:
 
@@ -246,20 +246,20 @@ The manifest has this exact schema-v1 field set:
 }
 ```
 
-No manifest keys may be missing or added. `schema_version` is the integer `1`,
-not a boolean. `session_id` must match the filename. `active` is the durable
-lifecycle flag; it does not mean the session is selected or currently leased.
-`created_at`, `updated_at`, and each thread `updated_at` are timezone-aware
-ISO-8601 strings, and the manifest update time cannot precede its creation
-time.
+No manifest key may be missing or added:
 
-`threads` is an object keyed by the exact `<backend>:<agent_id>` pair. Every
-thread object has exactly the six fields shown. Its backend, agent ID,
-fingerprint, thread ID, and update time are non-empty strings; `tainted` is a
-boolean. A thread ID begins with an ASCII letter or digit, contains only ASCII
-letters, digits, `_`, or `-`, and is at most 128 characters. Ending,
-detaching, or closing a session does not remove this metadata. Reactivating a
-session can therefore resume a compatible, untainted thread.
+| Field | Required value |
+| --- | --- |
+| `schema_version` | Integer `1`, not a boolean. |
+| `session_id` | Safe ID matching the filename. |
+| `active` | Boolean durable lifecycle state; independent of selection and attachment. |
+| `created_at`, `updated_at` | Timezone-aware ISO-8601 strings; `updated_at` cannot precede `created_at`. |
+| `threads` | Object keyed by the exact `<backend>:<agent_id>` pair. |
+| thread record | Exactly the six shown fields; all except boolean `tainted` are non-empty strings, and `updated_at` is timezone-aware. |
+| `thread_id` | At most 128 ASCII letters, digits, `_`, or `-`, beginning with a letter or digit. |
+
+Thread metadata survives detach, end, and close so a compatible, untainted
+thread can resume later.
 
 The lease sidecar has this exact schema-v1 field set:
 
@@ -274,38 +274,29 @@ The lease sidecar has this exact schema-v1 field set:
 }
 ```
 
-No lease keys may be missing or added. Its schema version is the integer `1`,
-its session ID must match the filename, `pid` is a positive non-boolean
-integer, and the other values are non-empty strings. `acquired_at` must include
-a UTC offset. The opaque token establishes backend-instance ownership and is
-not a user credential. Normal detach, end, or close removes an owned sidecar;
-on POSIX, a read may leave a demonstrably dead same-host sidecar in place for
-a later acquisition to reclaim. On non-POSIX platforms, an unowned same-host
-sidecar remains `unverified` and blocks acquisition rather than being
-reclaimed.
+No lease key may be missing or added:
 
-The public `SessionSummary` is a validated projection, not another persisted
-schema:
-
-| Field | Interpretation |
+| Field | Required value |
 | --- | --- |
-| `session_id` | Manifest identity. |
-| `active` | Durable manifest state. `false` can be reactivated by resume or the compatible start operation. |
-| `selected` | Whether the manifest ID equals the caller-supplied selection; the backend does not load CLI context. |
-| `lease_state` | Observed `available`, `owned`, `in_use`, or `unverified` attachment state. |
-| `lease_hostname`, `lease_pid` | `None` when no sidecar exists; otherwise the validated sidecar owner, including for a POSIX dead lease reported as available. |
-| `created_at`, `updated_at` | Validated manifest timestamps. |
+| `schema_version` | Integer `1`, not a boolean. |
+| `session_id` | Safe ID matching the filename. |
+| `hostname`, `token` | Non-empty strings; the opaque token identifies backend-instance ownership, not a credential. |
+| `pid` | Positive non-boolean integer. |
+| `acquired_at` | Non-empty timezone-aware ISO-8601 string. |
 
-`available` means no lease sidecar exists or, on POSIX, a same-host process is
-demonstrably gone. `owned` means the reading backend has the matching token.
-On POSIX, `in_use` means an unowned same-host PID is demonstrably alive.
-`unverified` means a lease is remote-host, its POSIX liveness probe is
-ambiguous, or it is unowned on a non-POSIX platform; it blocks acquisition.
-Reads do not delete any sidecar or perform remote liveness checks.
+An owned sidecar is normally removed by detach, end, or close. On POSIX, a
+dead same-host sidecar can remain after a read and be reclaimed only by a later
+claim. On non-POSIX systems, every unowned same-host sidecar is `unverified`,
+is not reclaimed, and blocks acquisition.
 
 Both JSON files are runtime-managed plaintext and must not be edited manually.
-The guard adds no configuration key, persisted JSON schema field, or
-third-party dependency.
+The guard adds no schema field.
+
+`SessionSummary` is a validated, non-persisted projection; see the
+[API reference](api.md#concrete-backend) for its exact fields, lease states,
+and method contracts. See
+[Architecture](architecture.md#provider-session-lifecycle-and-attachment) for
+the lifecycle flow.
 
 ## Conversation Catalog Metadata
 
@@ -385,13 +376,10 @@ command atomically replaces the selected session. A failed start and every
 unchanged. Ending the selected provider session preserves the selection, so a
 bare `story session start` can reactivate it later.
 
-`AgentBackend` never reads or writes this file. Its status reads project
-selection only from an explicit `selected_session=` argument, while
-`create_session()`, `resume_session()`, `attach_session()`, and
-`detach_session()` return unselected summaries. A Python caller implementing a
-switch must persist a new selection only after destination attachment has
-fully succeeded; failure must preserve the prior selection and attachment.
-The installed CLI currently exposes only `story session start|end`.
+This file belongs to the CLI; `AgentBackend` never reads or writes it. See the
+[API](api.md#concrete-backend) for selection projection and
+[Architecture](architecture.md#provider-session-lifecycle-and-attachment) for
+safe switching order.
 
 Session resolution precedence is:
 
