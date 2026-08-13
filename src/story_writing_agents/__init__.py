@@ -38,6 +38,13 @@ from .errors import (
     WorkspaceFormatError,
     WorkspaceSecurityError,
 )
+from .interactive_commands import (
+    COMMANDS,
+    ActionKind,
+    CommandSpec,
+    InteractiveAction,
+    parse_interactive_line,
+)
 from .models import (
     AgentDefinition,
     AgentReply,
@@ -60,6 +67,8 @@ from .workspace import (
 
 __all__ = [
     "AGENT_SPECS",
+    "COMMANDS",
+    "ActionKind",
     "AgentBackend",
     "AgentDefinition",
     "AgentReply",
@@ -71,6 +80,7 @@ __all__ = [
     "CONVERSATION_METADATA_SCHEMA_VERSION",
     "CONVERSATION_SUBJECT_NORMALIZATION_VERSION",
     "ConfigurationError",
+    "CommandSpec",
     "ConversationCatalog",
     "ConversationExistsError",
     "ConversationMetadata",
@@ -85,6 +95,7 @@ __all__ = [
     "EXECUTION_SPECIALIST",
     "FilesystemConversationCatalog",
     "InputKind",
+    "InteractiveAction",
     "LEAD_ORCHESTRATOR",
     "MAX_CONVERSATION_SUBJECT_LENGTH",
     "ManuscriptExistsError",
@@ -108,4 +119,5 @@ __all__ = [
     "initialize_workspace",
     "normalize_conversation_subject",
     "parse_directive",
+    "parse_interactive_line",
 ]
