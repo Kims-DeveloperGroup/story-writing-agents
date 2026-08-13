@@ -224,6 +224,61 @@ compatible conversations. The lease file exists only while a process owns the
 team session and prevents concurrent processes from resuming the same threads.
 Both files are runtime-managed plaintext and must not be edited manually.
 
+## Conversation Catalog Metadata
+
+The provider-neutral conversation catalog stores one authoritative metadata
+record at this fixed, session-scoped path:
+
+```text
+discussion_logs/<session_id>/interactive/conversations/<conversation_id>/metadata.json
+```
+
+The JSON object has exactly eight fields; missing, extra, or duplicate fields
+are rejected:
+
+```json
+{
+  "schema_version": 1,
+  "session_id": "demo",
+  "conversation_id": "c_0123456789abcdef0123456789abcdef",
+  "subject": "Opening scene",
+  "subject_revision": 1,
+  "status": "active",
+  "created_at": "2026-08-12T01:02:03.456789+00:00",
+  "updated_at": "2026-08-12T01:02:03.456789+00:00"
+}
+```
+
+| Field | Required value |
+| --- | --- |
+| `schema_version` | Integer `1`; booleans and other versions are invalid. |
+| `session_id` | Safe story-session ID exactly matching the owning path. |
+| `conversation_id` | Safe immutable ID exactly matching the owning path. |
+| `subject` | Exact display subject; strict UTF-8, nonblank, at most 256 Unicode code points, and free of Unicode `Cc` control characters. |
+| `subject_revision` | Positive integer, initially `1`; every successful rename increments it, even when the display value is unchanged. |
+| `status` | Exactly `active` or `archived`. |
+| `created_at` | Canonical ISO-8601 UTC timestamp with an explicit `+00:00` offset; immutable after creation. |
+| `updated_at` | Canonical ISO-8601 UTC timestamp no earlier than `created_at`; refreshed by a rename or real status transition. |
+
+Leading, trailing, and repeated non-control whitespace in a nonblank subject is
+part of the display value and is preserved. The version-1 derived comparison
+key applies NFKC, then case folding, then trims and collapses runs of Unicode
+whitespace to one ASCII space. That key is computed by
+`normalize_conversation_subject()`; it is not a ninth metadata field and does
+not enforce uniqueness. Distinct conversations may have identical display
+subjects or identical derived keys.
+
+The metadata file is strict UTF-8 JSON and is managed by
+`FilesystemConversationCatalog`. Catalog reads validate the entire object,
+including field types, timestamps, status, identifiers, and agreement with the
+owning path. An absent catalog lists as empty, and an absent conversation is
+reported as not found; neither read creates storage, imports old artifacts, or
+rewrites a legacy workspace. There is no automatic metadata migration.
+
+The catalog stores metadata only. It does not store current-conversation
+selection, conversation events or transcripts, a search index, provider
+threads, debate state, manuscripts, core documents, or private agent state.
+
 ## CLI Context and Discovery
 
 Interactive CLI selection is stored at:
@@ -354,7 +409,7 @@ documents, debate logs, agent history, or manuscripts.
 
 ## Identifiers and Validation Errors
 
-Session and debate IDs must match:
+Session, debate, and conversation IDs must match:
 
 ```text
 [A-Za-z0-9][A-Za-z0-9_-]{0,63}
@@ -373,7 +428,10 @@ Validation is strict:
   as configuration, and unknown keys raise `ConfigurationError`;
 - invalid, non-standalone, unknown-agent, or otherwise unappliable directives
   raise `DirectiveError`;
-- unsafe session or debate IDs raise `SessionIdError`.
+- unsafe session, debate, or conversation IDs raise `SessionIdError`;
+- an unknown conversation raises `ConversationNotFoundError`, while exhausted
+  generated-ID allocation raises `ConversationExistsError` rather than
+  overwriting an existing identity.
 
 Directive state is fully validated before its session JSON is atomically
 replaced, so a rejected directive leaves the prior override file unchanged.

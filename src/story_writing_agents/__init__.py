@@ -10,6 +10,15 @@ from .agents import (
     SPECIALIST_IDS,
 )
 from .backend import AgentBackend, BoundAgent
+from .conversations import (
+    CONVERSATION_METADATA_SCHEMA_VERSION,
+    CONVERSATION_SUBJECT_NORMALIZATION_VERSION,
+    MAX_CONVERSATION_SUBJECT_LENGTH,
+    ConversationCatalog,
+    ConversationMetadata,
+    ConversationStatus,
+    normalize_conversation_subject,
+)
 from .directives import (
     DirectiveKind,
     RuntimeDirective,
@@ -19,6 +28,8 @@ from .directives import (
 from .errors import (
     BackendProtocolError,
     ConfigurationError,
+    ConversationExistsError,
+    ConversationNotFoundError,
     DebateExistsError,
     DirectiveError,
     ManuscriptExistsError,
@@ -41,7 +52,11 @@ from .models import (
     Verdict,
 )
 from .orchestrator import Runtime, RuntimeSession, Session, StoryRuntime
-from .workspace import Workspace, initialize_workspace
+from .workspace import (
+    FilesystemConversationCatalog,
+    Workspace,
+    initialize_workspace,
+)
 
 __all__ = [
     "AGENT_SPECS",
@@ -53,7 +68,14 @@ __all__ = [
     "BackendProtocolError",
     "BoundAgent",
     "CHARACTER_CUSTODIAN",
+    "CONVERSATION_METADATA_SCHEMA_VERSION",
+    "CONVERSATION_SUBJECT_NORMALIZATION_VERSION",
     "ConfigurationError",
+    "ConversationCatalog",
+    "ConversationExistsError",
+    "ConversationMetadata",
+    "ConversationNotFoundError",
+    "ConversationStatus",
     "DebateMessage",
     "DebateResult",
     "DebateStatus",
@@ -61,8 +83,10 @@ __all__ = [
     "DirectiveError",
     "DirectiveKind",
     "EXECUTION_SPECIALIST",
+    "FilesystemConversationCatalog",
     "InputKind",
     "LEAD_ORCHESTRATOR",
+    "MAX_CONVERSATION_SUBJECT_LENGTH",
     "ManuscriptExistsError",
     "PLOT_ARCHITECT",
     "Phase",
@@ -82,5 +106,6 @@ __all__ = [
     "WorkspaceSecurityError",
     "apply_directive",
     "initialize_workspace",
+    "normalize_conversation_subject",
     "parse_directive",
 ]
