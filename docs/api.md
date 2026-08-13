@@ -13,14 +13,20 @@ The following names are exported from `story_writing_agents`:
 - definition, request, and result models: `PromptFileReference`,
   `AgentDefinition`, `AgentRequest`, `AgentReply`, `AgentStateEntry`,
   `DebateMessage`, `DebateResult`;
-- enums: `InputKind`, `Phase`, `Verdict`, `DebateStatus`, `DirectiveKind`;
+- conversation catalog API: `ConversationCatalog`, `ConversationMetadata`,
+  `normalize_conversation_subject`, `CONVERSATION_METADATA_SCHEMA_VERSION`,
+  `CONVERSATION_SUBJECT_NORMALIZATION_VERSION`, and
+  `MAX_CONVERSATION_SUBJECT_LENGTH`;
+- enums: `InputKind`, `Phase`, `Verdict`, `DebateStatus`, `DirectiveKind`,
+  `ConversationStatus`;
 - runtime API: `StoryRuntime`, `RuntimeSession`, `Runtime`, `Session`;
 - directive API: `RuntimeDirective`, `parse_directive`, `apply_directive`;
-- workspace API: `Workspace`, `initialize_workspace`;
+- workspace API: `FilesystemConversationCatalog`, `Workspace`,
+  `initialize_workspace`;
 - errors: `StoryWritingAgentsError`, `WorkspaceSecurityError`,
   `WorkspaceFormatError`, `ConfigurationError`, `DirectiveError`,
-  `SessionIdError`, `ManuscriptExistsError`, `BackendProtocolError`, and
-  `DebateExistsError`.
+  `SessionIdError`, `ConversationNotFoundError`, `ConversationExistsError`,
+  `ManuscriptExistsError`, `BackendProtocolError`, and `DebateExistsError`.
 
 `Runtime` is an alias of `StoryRuntime`; `Session` is an alias of
 `RuntimeSession`.
@@ -34,6 +40,115 @@ Runtime and directive enum values are:
 | `Verdict` | `approve`, `conflict` |
 | `DebateStatus` | `consensus`, `deadlock`, `failed` |
 | `DirectiveKind` | `language`, `persona`, `reset` |
+| `ConversationStatus` | `active`, `archived` |
+
+## Conversation Catalog
+
+The provider-neutral catalog surface is:
+
+```python
+CONVERSATION_METADATA_SCHEMA_VERSION = 1
+CONVERSATION_SUBJECT_NORMALIZATION_VERSION = 1
+MAX_CONVERSATION_SUBJECT_LENGTH = 256
+
+ConversationMetadata(
+    schema_version: int,
+    session_id: str,
+    conversation_id: str,
+    subject: str,
+    subject_revision: int,
+    status: ConversationStatus,
+    created_at: str,
+    updated_at: str,
+)
+ConversationMetadata.to_dict() -> dict[str, Any]
+
+normalize_conversation_subject(subject: str) -> str
+
+FilesystemConversationCatalog(
+    workspace: Workspace | str | os.PathLike[str],
+)
+```
+
+`ConversationMetadata` is frozen and slot-backed. Its eight fields are the
+complete authoritative schema: version `1`, safe session and conversation
+IDs, the exact display subject, a positive subject revision, an `active` or
+`archived` status, and canonical ISO-8601 UTC creation and update timestamps.
+The timestamps use an explicit `+00:00` offset, and `updated_at` cannot precede
+`created_at`. `to_dict()` converts the status to its string value and returns
+exactly those eight JSON-compatible fields.
+
+Display subjects must be nonblank, strict-UTF-8-encodable strings of at most
+256 Unicode code points and cannot contain Unicode `Cc` control characters.
+Accepted leading, trailing, and repeated display whitespace is preserved.
+`normalize_conversation_subject()` derives a version-1 comparison key by
+applying NFKC normalization, case folding, then trimming and collapsing each
+run of Unicode whitespace to one ASCII space. The derived key is not stored,
+does not replace the display subject, and is not a uniqueness constraint.
+
+`ConversationCatalog` is a storage-neutral `Protocol` exposing only logical
+identifiers and immutable metadata:
+
+```python
+ConversationCatalog.create(
+    session_id: str,
+    subject: str,
+) -> ConversationMetadata
+ConversationCatalog.get(
+    session_id: str,
+    conversation_id: str,
+) -> ConversationMetadata
+ConversationCatalog.list(
+    session_id: str,
+    *,
+    include_archived: bool = False,
+) -> tuple[ConversationMetadata, ...]
+ConversationCatalog.rename(
+    session_id: str,
+    conversation_id: str,
+    subject: str,
+) -> ConversationMetadata
+ConversationCatalog.archive(
+    session_id: str,
+    conversation_id: str,
+) -> ConversationMetadata
+ConversationCatalog.unarchive(
+    session_id: str,
+    conversation_id: str,
+) -> ConversationMetadata
+```
+
+`create()` allocates an immutable conversation ID scoped to the supplied
+story session. It stores the display subject exactly, starts at revision `1`
+and status `active`, and sets equal creation and update timestamps. Duplicate
+display subjects and duplicate normalized keys create independent identities.
+
+`get()` resolves an active or archived conversation only within its owning
+session. `list()` returns active conversations by default as a tuple ordered by
+`created_at` then `conversation_id`; `include_archived=True` adds archived
+records. The flag must be a `bool`. `rename()` preserves identity, creation
+time, and status while incrementing the subject revision on every successful
+call, including a rename to the same display value. `archive()` and
+`unarchive()` preserve the subject revision. They return the record unchanged,
+including `updated_at`, when it already has the requested status; a real status
+transition refreshes `updated_at`.
+
+`FilesystemConversationCatalog` implements the protocol through `Workspace`.
+An absent catalog lists as an empty tuple without creating directories or
+rewriting legacy workspace data. A missing conversation raises
+`ConversationNotFoundError`; failure to allocate a new ID without overwriting
+an existing record raises `ConversationExistsError`. Unsafe logical IDs raise
+`SessionIdError`, malformed or path-mismatched persisted metadata raises
+`WorkspaceFormatError`, and a symlink or containment violation raises
+`WorkspaceSecurityError`.
+
+This surface manages conversation metadata only. Current-conversation
+selection belongs to
+[Issue #22](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/22),
+and the complete conversation event store, events, and transcripts belong to
+[Issue #4](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/4).
+The catalog is not wired into the CLI, `StoryRuntime`, provider sessions,
+debates, manuscript/core-document writes, or owner-isolated agent state.
 
 ## Interactive Command Language
 
@@ -122,7 +237,7 @@ immutable tuple. Its 17 ordered entries are:
 | Agents | `/language LANG` | — | No | No | `/language ko` |
 | Agents | `/persona AGENT NAME` | — | No | No | `/persona plot meticulous` |
 | Agents | `/reset` | — | No | No | `/reset` |
-| Consensus | `/run [--fresh] [PROMPT]` | — | Yes | Yes | `/run Outline chapter one` |
+| Consensus | `/run [PROMPT] \| /run --fresh PROMPT` | — | Yes | Yes | `/run Outline chapter one` |
 | Consensus | `/draft-file PATH` | — | Yes | Yes | `/draft-file drafts/chapter-01.md` |
 | Sessions | `/session list \| new NAME \| resume [NAME] \| end` | — | No | No | `/session new chapter-01` |
 | Inspection | `/inspect [DEBATE\|last]` | — | No | No | `/inspect last` |

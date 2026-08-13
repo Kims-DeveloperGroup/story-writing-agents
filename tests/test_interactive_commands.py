@@ -335,7 +335,7 @@ class CommandRegistryTests(unittest.TestCase):
             CommandSpec("Agents", "/reset", (), False, False, "/reset"),
             CommandSpec(
                 "Consensus",
-                "/run [--fresh] [PROMPT]",
+                "/run [PROMPT] | /run --fresh PROMPT",
                 (),
                 True,
                 True,
@@ -421,6 +421,30 @@ class CommandRegistryTests(unittest.TestCase):
         )
         self.assertNotIn("message", canonical)
         self.assertNotIn("routed_message", canonical)
+
+    def test_advertised_run_forms_match_parser_behavior(self) -> None:
+        run_spec = next(spec for spec in COMMANDS if spec.syntax.startswith("/run"))
+        self.assertEqual(
+            run_spec.syntax,
+            "/run [PROMPT] | /run --fresh PROMPT",
+        )
+
+        cases = (
+            ("/run", InteractiveAction(ActionKind.RUN)),
+            ("/run PROMPT", InteractiveAction(ActionKind.RUN, text="PROMPT")),
+            (
+                "/run --fresh PROMPT",
+                InteractiveAction(ActionKind.RUN_FRESH, text="PROMPT"),
+            ),
+        )
+        for line, expected in cases:
+            with self.subTest(line=line):
+                self.assertEqual(parse_interactive_line(line), expected)
+
+        incomplete_fresh = parse_interactive_line("/run --fresh")
+        self.assertEqual(incomplete_fresh.kind, ActionKind.PARSE_ERROR)
+        self.assertIsInstance(incomplete_fresh.error, str)
+        self.assertTrue(incomplete_fresh.error)
 
 
 class SuccessfulParsingTests(unittest.TestCase):

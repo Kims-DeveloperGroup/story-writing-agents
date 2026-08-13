@@ -208,7 +208,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
     CommandSpec("Agents", "/reset", (), False, False, "/reset"),
     CommandSpec(
         "Consensus",
-        "/run [--fresh] [PROMPT]",
+        "/run [PROMPT] | /run --fresh PROMPT",
         (),
         True,
         True,

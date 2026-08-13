@@ -23,7 +23,7 @@ configuration, prompt, persistence, and stable contract modules:
 
 ```text
 __main__ -> cli -> orchestrator -> prompts -> config -> workspace
-                 |               |         |         -> models/errors/agents
+                 |               |         |         -> conversations/models/errors/agents
                  |               |         -> workspace
                  |               -> workspace/models/agents
                  -> backend -> config/workspace/models/errors/agents
@@ -33,6 +33,7 @@ smoke -> orchestrator/workspace/models/agents
 directives -> config/workspace/errors/agents
 interactive_commands -> agents
 story_writing_agents facade -> interactive_commands
+workspace -> conversations -> errors
 ```
 
 Some modules directly consume lower-level contracts rather than following
@@ -51,20 +52,28 @@ every intermediate arrow. The current runtime graph is acyclic.
   `RuntimeDirective`, `apply_directive`, and `parse_directive` from `directives`;
   `StoryWritingAgentsError`, `WorkspaceSecurityError`, `WorkspaceFormatError`,
   `ConfigurationError`, `DirectiveError`, `SessionIdError`,
+  `ConversationNotFoundError`, `ConversationExistsError`,
   `ManuscriptExistsError`, `BackendProtocolError`, and `DebateExistsError` from
-  `errors`; `ActionKind`, `InteractiveAction`, `CommandSpec`, `COMMANDS`, and
+  `errors`; `CONVERSATION_METADATA_SCHEMA_VERSION`,
+  `CONVERSATION_SUBJECT_NORMALIZATION_VERSION`,
+  `MAX_CONVERSATION_SUBJECT_LENGTH`, `ConversationCatalog`,
+  `ConversationMetadata`, `ConversationStatus`, and
+  `normalize_conversation_subject` from `conversations`; `ActionKind`,
+  `InteractiveAction`, `CommandSpec`, `COMMANDS`, and
   `parse_interactive_line` from `interactive_commands`; `InputKind`, `Phase`,
   `Verdict`, `DebateStatus`, `DebateMessage`, `AgentStateEntry`,
   `PromptFileReference`, `AgentDefinition`, `AgentRequest`, `AgentReply`, and
-  `DebateResult` from `models`; `StoryRuntime`,
-  `RuntimeSession`, `Runtime`, and `Session` from `orchestrator`; and `Workspace`
-  plus `initialize_workspace` from `workspace`.
+  `DebateResult` from `models`; `StoryRuntime`, `RuntimeSession`, `Runtime`, and
+  `Session` from `orchestrator`; and `FilesystemConversationCatalog`,
+  `Workspace`, plus `initialize_workspace` from `workspace`.
 - **Direct internal dependencies:** `agents`, `backend`, `directives`, `errors`,
-  `interactive_commands`, `models`, `orchestrator`, and `workspace`.
+  `conversations`, `interactive_commands`, `models`, `orchestrator`, and
+  `workspace`.
 - **State, resources, and side effects:** Owns no state or external resource;
   importing the facade loads its exported modules.
-- **Primary verification/documentation:** `tests/test_interactive_commands.py`,
-  `tests/test_public_api_and_cli.py`, and `docs/api.md`.
+- **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
+  `tests/test_conversation_catalog.py`, `tests/test_interactive_commands.py`,
+  and `docs/api.md`.
 
 ### `story_writing_agents.__main__`
 
@@ -150,6 +159,23 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_prompts.py`, `tests/test_codex_backend.py`, and
   `docs/configuration.md`.
 
+### `story_writing_agents.conversations`
+
+- **Source:** `src/story_writing_agents/conversations.py`
+- **Responsibility:** Define and validate provider-neutral subject-conversation
+  catalog contracts.
+- **Supported surface:** Package-supported
+  `CONVERSATION_METADATA_SCHEMA_VERSION`,
+  `CONVERSATION_SUBJECT_NORMALIZATION_VERSION`,
+  `MAX_CONVERSATION_SUBJECT_LENGTH`, `ConversationCatalog`,
+  `ConversationMetadata`, `ConversationStatus`, and
+  `normalize_conversation_subject`.
+- **Direct internal dependencies:** `errors`.
+- **State, resources, and side effects:** Immutable value contracts and
+  deterministic normalization only; owns no state or external resource.
+- **Primary verification/documentation:** `tests/test_conversation_catalog.py`,
+  `docs/api.md`, `docs/architecture.md`, and `docs/configuration.md`.
+
 ### `story_writing_agents.directives`
 
 - **Source:** `src/story_writing_agents/directives.py`
@@ -170,12 +196,13 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Responsibility:** Define the expected public exception taxonomy.
 - **Supported surface:** Package-supported `StoryWritingAgentsError`,
   `WorkspaceSecurityError`, `WorkspaceFormatError`, `ConfigurationError`,
-  `DirectiveError`, `SessionIdError`, `ManuscriptExistsError`,
-  `BackendProtocolError`, and `DebateExistsError`.
+  `DirectiveError`, `SessionIdError`, `ConversationNotFoundError`,
+  `ConversationExistsError`, `ManuscriptExistsError`, `BackendProtocolError`,
+  and `DebateExistsError`.
 - **Direct internal dependencies:** None.
 - **State, resources, and side effects:** None.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
-  failure-path tests, and `docs/api.md`.
+  `tests/test_conversation_catalog.py`, failure-path tests, and `docs/api.md`.
 
 ### `story_writing_agents.interactive_commands`
 
@@ -252,15 +279,23 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:** `src/story_writing_agents/workspace.py`
 - **Responsibility:** Provide the secure workspace filesystem and persistence
   boundary.
-- **Supported surface:** Package-supported `Workspace` and
-  `initialize_workspace`; topology constants are internal.
-- **Direct internal dependencies:** `agents`, `errors`, and `models`.
+- **Supported surface:** Package-supported `FilesystemConversationCatalog`,
+  `Workspace`, and `initialize_workspace`; topology and serialization constants
+  are internal.
+- **Direct internal dependencies:** `agents`, `conversations`, `errors`, and
+  `models`.
 - **State, resources, and side effects:** Owns topology, path and symlink
   security, strict UTF-8 and JSON I/O, overrides, agent and debate state, logs,
-  results, manuscript/core-document commits, atomic replacement, and rollback.
+  results, per-conversation metadata under
+  `discussion_logs/<session_id>/interactive/conversations/<conversation_id>/metadata.json`,
+  manuscript/core-document commits, atomic replacement, and rollback. Catalog
+  reads do not create absent directories; catalog creation and lifecycle
+  mutations use the existing atomic filesystem boundary.
 - **Primary verification/documentation:** `tests/test_workspace_and_config.py`,
-  `tests/test_agent_state.py`, `tests/test_lifecycle_atomicity.py`, `docs/api.md`,
-  `docs/architecture.md`, `docs/configuration.md`, and `docs/security.md`.
+  `tests/test_agent_state.py`, `tests/test_lifecycle_atomicity.py`,
+  `tests/test_public_api_and_cli.py`, `tests/test_conversation_catalog.py`,
+  `docs/api.md`, `docs/architecture.md`, `docs/configuration.md`, and
+  `docs/security.md`.
 
 ## Consistency Notes
 
@@ -268,6 +303,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   as part of the debate workflow.
 - `AgentBackend` owns provider subprocess and thread lifecycle;
   `BoundAgent` is the immutable per-definition dispatch handle.
+- `ConversationCatalog` exposes logical identifiers and immutable metadata only;
+  `FilesystemConversationCatalog` owns the fixed metadata layout through
+  `Workspace` without exposing paths through that protocol.
+- Conversation selection and transcript events are not owned by the catalog
+  boundary.
 - Persisted provider-thread keys include the backend and agent ID. In-process
   serialization additionally includes the session ID.
 - Direct imports of internal configuration, prompt, workspace-constant, or CLI
