@@ -201,8 +201,12 @@ maps canonical agent IDs to vendor names for this backend instance.
 Provider-session status has three independent dimensions. The manifest's
 `active` flag is durable lifecycle state. `selected` is only a comparison with
 the caller-supplied `selected_session`; `AgentBackend` never reads or writes
-CLI context. `lease_state` is an observation of the process attachment
-sidecar, not another active-state value.
+CLI context. A lease sidecar is the per-session `<session_id>.lease.json`
+companion file stored beside the durable manifest. It records temporary
+process ownership (hostname, PID, acquisition time, and an opaque token) so
+cooperating backends do not attach to the same provider session concurrently.
+`lease_state` is an observation of this sidecar, not another active-state
+value.
 
 `SessionSummary` is a frozen, slotted value with this exact shape:
 
