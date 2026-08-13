@@ -31,6 +31,8 @@ __main__ -> cli -> orchestrator -> prompts -> config -> workspace
 
 smoke -> orchestrator/workspace/models/agents
 directives -> config/workspace/errors/agents
+interactive_commands -> agents
+story_writing_agents facade -> interactive_commands
 workspace -> conversations -> errors
 ```
 
@@ -57,7 +59,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   `CONVERSATION_SUBJECT_NORMALIZATION_VERSION`,
   `MAX_CONVERSATION_SUBJECT_LENGTH`, `ConversationCatalog`,
   `ConversationMetadata`, `ConversationStatus`, and
-  `normalize_conversation_subject` from `conversations`; `InputKind`, `Phase`,
+  `normalize_conversation_subject` from `conversations`; `ActionKind`,
+  `InteractiveAction`, `CommandSpec`, `COMMANDS`, and
+  `parse_interactive_line` from `interactive_commands`; `InputKind`, `Phase`,
   `Verdict`, `DebateStatus`, `SessionLeaseState`, `SessionSummary`,
   `DebateMessage`, `AgentStateEntry`, `PromptFileReference`, `AgentDefinition`,
   `AgentRequest`, `AgentReply`, and `DebateResult` from `models`; `StoryRuntime`,
@@ -65,12 +69,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   `FilesystemConversationCatalog`, `Workspace`, plus `initialize_workspace`
   from `workspace`.
 - **Direct internal dependencies:** `agents`, `backend`, `directives`, `errors`,
-  `conversations`, `models`, `orchestrator`, and `workspace`.
+  `conversations`, `interactive_commands`, `models`, `orchestrator`, and
+  `workspace`.
 - **State, resources, and side effects:** Owns no state or external resource;
   importing the facade loads its exported modules.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
-  `tests/test_conversation_catalog.py`, `tests/test_session_lifecycle.py`, and
-  `docs/api.md`.
+  `tests/test_conversation_catalog.py`, `tests/test_session_lifecycle.py`,
+  `tests/test_interactive_commands.py`, and `docs/api.md`.
 
 ### `story_writing_agents.__main__`
 
@@ -210,6 +215,21 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
   `tests/test_conversation_catalog.py`, `tests/test_session_lifecycle.py`,
   failure-path tests, and `docs/api.md`.
+
+### `story_writing_agents.interactive_commands`
+
+- **Source:** `src/story_writing_agents/interactive_commands.py`
+- **Responsibility:** Deterministically parse interactive lines into immutable
+  typed actions and publish canonical command metadata.
+- **Supported surface:** Package-supported `ActionKind`, `InteractiveAction`,
+  `CommandSpec`, `COMMANDS`, and `parse_interactive_line`; all parser helpers,
+  agent aliases, and command aliases are internal.
+- **Direct internal dependencies:** `agents`.
+- **State, resources, and side effects:** Immutable metadata only; owns no
+  process state and performs no provider, filesystem, persistence, environment,
+  or import-time operational side effects.
+- **Primary verification/documentation:** `tests/test_interactive_commands.py`,
+  `tests/test_public_api_and_cli.py`, and `docs/api.md`.
 
 ### `story_writing_agents.models`
 
