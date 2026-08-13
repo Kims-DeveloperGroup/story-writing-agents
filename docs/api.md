@@ -11,16 +11,21 @@ The following names are exported from `story_writing_agents`:
 - definition, request, and result models: `PromptFileReference`,
   `AgentDefinition`, `AgentRequest`, `AgentReply`, `AgentStateEntry`,
   `DebateMessage`, `DebateResult`, `SessionSummary`;
+- conversation catalog API: `ConversationCatalog`, `ConversationMetadata`,
+  `normalize_conversation_subject`, `CONVERSATION_METADATA_SCHEMA_VERSION`,
+  `CONVERSATION_SUBJECT_NORMALIZATION_VERSION`, and
+  `MAX_CONVERSATION_SUBJECT_LENGTH`;
 - enums: `InputKind`, `Phase`, `Verdict`, `DebateStatus`, `DirectiveKind`,
-  `SessionLeaseState`;
+  `ConversationStatus`, `SessionLeaseState`;
 - runtime API: `StoryRuntime`, `RuntimeSession`, `Runtime`, `Session`;
 - directive API: `RuntimeDirective`, `parse_directive`, `apply_directive`;
-- workspace API: `Workspace`, `initialize_workspace`;
+- workspace API: `FilesystemConversationCatalog`, `Workspace`,
+  `initialize_workspace`;
 - errors: `StoryWritingAgentsError`, `WorkspaceSecurityError`,
   `WorkspaceFormatError`, `ConfigurationError`, `DirectiveError`,
-  `SessionIdError`, `ManuscriptExistsError`, `BackendProtocolError`,
-  `SessionExistsError`, `SessionNotFoundError`, `SessionInUseError`, and
-  `DebateExistsError`.
+  `SessionIdError`, `ConversationNotFoundError`, `ConversationExistsError`,
+  `ManuscriptExistsError`, `BackendProtocolError`, `SessionExistsError`,
+  `SessionNotFoundError`, `SessionInUseError`, and `DebateExistsError`.
 
 `Runtime` is an alias of `StoryRuntime`; `Session` is an alias of
 `RuntimeSession`.
@@ -35,6 +40,115 @@ Enum values are:
 | `DebateStatus` | `consensus`, `deadlock`, `failed` |
 | `DirectiveKind` | `language`, `persona`, `reset` |
 | `SessionLeaseState` | `available`, `owned`, `in_use`, `unverified` |
+| `ConversationStatus` | `active`, `archived` |
+
+## Conversation Catalog
+
+The provider-neutral catalog surface is:
+
+```python
+CONVERSATION_METADATA_SCHEMA_VERSION = 1
+CONVERSATION_SUBJECT_NORMALIZATION_VERSION = 1
+MAX_CONVERSATION_SUBJECT_LENGTH = 256
+
+ConversationMetadata(
+    schema_version: int,
+    session_id: str,
+    conversation_id: str,
+    subject: str,
+    subject_revision: int,
+    status: ConversationStatus,
+    created_at: str,
+    updated_at: str,
+)
+ConversationMetadata.to_dict() -> dict[str, Any]
+
+normalize_conversation_subject(subject: str) -> str
+
+FilesystemConversationCatalog(
+    workspace: Workspace | str | os.PathLike[str],
+)
+```
+
+`ConversationMetadata` is frozen and slot-backed. Its eight fields are the
+complete authoritative schema: version `1`, safe session and conversation
+IDs, the exact display subject, a positive subject revision, an `active` or
+`archived` status, and canonical ISO-8601 UTC creation and update timestamps.
+The timestamps use an explicit `+00:00` offset, and `updated_at` cannot precede
+`created_at`. `to_dict()` converts the status to its string value and returns
+exactly those eight JSON-compatible fields.
+
+Display subjects must be nonblank, strict-UTF-8-encodable strings of at most
+256 Unicode code points and cannot contain Unicode `Cc` control characters.
+Accepted leading, trailing, and repeated display whitespace is preserved.
+`normalize_conversation_subject()` derives a version-1 comparison key by
+applying NFKC normalization, case folding, then trimming and collapsing each
+run of Unicode whitespace to one ASCII space. The derived key is not stored,
+does not replace the display subject, and is not a uniqueness constraint.
+
+`ConversationCatalog` is a storage-neutral `Protocol` exposing only logical
+identifiers and immutable metadata:
+
+```python
+ConversationCatalog.create(
+    session_id: str,
+    subject: str,
+) -> ConversationMetadata
+ConversationCatalog.get(
+    session_id: str,
+    conversation_id: str,
+) -> ConversationMetadata
+ConversationCatalog.list(
+    session_id: str,
+    *,
+    include_archived: bool = False,
+) -> tuple[ConversationMetadata, ...]
+ConversationCatalog.rename(
+    session_id: str,
+    conversation_id: str,
+    subject: str,
+) -> ConversationMetadata
+ConversationCatalog.archive(
+    session_id: str,
+    conversation_id: str,
+) -> ConversationMetadata
+ConversationCatalog.unarchive(
+    session_id: str,
+    conversation_id: str,
+) -> ConversationMetadata
+```
+
+`create()` allocates an immutable conversation ID scoped to the supplied
+story session. It stores the display subject exactly, starts at revision `1`
+and status `active`, and sets equal creation and update timestamps. Duplicate
+display subjects and duplicate normalized keys create independent identities.
+
+`get()` resolves an active or archived conversation only within its owning
+session. `list()` returns active conversations by default as a tuple ordered by
+`created_at` then `conversation_id`; `include_archived=True` adds archived
+records. The flag must be a `bool`. `rename()` preserves identity, creation
+time, and status while incrementing the subject revision on every successful
+call, including a rename to the same display value. `archive()` and
+`unarchive()` preserve the subject revision. They return the record unchanged,
+including `updated_at`, when it already has the requested status; a real status
+transition refreshes `updated_at`.
+
+`FilesystemConversationCatalog` implements the protocol through `Workspace`.
+An absent catalog lists as an empty tuple without creating directories or
+rewriting legacy workspace data. A missing conversation raises
+`ConversationNotFoundError`; failure to allocate a new ID without overwriting
+an existing record raises `ConversationExistsError`. Unsafe logical IDs raise
+`SessionIdError`, malformed or path-mismatched persisted metadata raises
+`WorkspaceFormatError`, and a symlink or containment violation raises
+`WorkspaceSecurityError`.
+
+This surface manages conversation metadata only. Current-conversation
+selection belongs to
+[Issue #22](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/22),
+and the complete conversation event store, events, and transcripts belong to
+[Issue #4](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/4).
+The catalog is not wired into the CLI, `StoryRuntime`, provider sessions,
+debates, manuscript/core-document writes, or owner-isolated agent state.
 
 ## Concrete Backend
 
@@ -109,10 +223,10 @@ Its lease states mean:
 
 | State | Meaning at the time of the read |
 | --- | --- |
-| `available` | No lease exists, or a same-host lease names a process that is demonstrably gone. A dead lease sidecar is not removed by a read. |
+| `available` | No lease exists, or on POSIX a same-host lease names a process that is demonstrably gone. A dead lease sidecar is not removed by a read. |
 | `owned` | This `AgentBackend` holds the matching lease token. |
-| `in_use` | An unowned same-host lease names a demonstrably live process. |
-| `unverified` | The lease is remote-host or local liveness is ambiguous, including a permission failure. Acquisition is blocked. |
+| `in_use` | On POSIX, an unowned same-host lease names a demonstrably live process. |
+| `unverified` | The lease is remote-host, its POSIX liveness probe is ambiguous (including a permission failure), or it is unowned on a non-POSIX platform. Acquisition is blocked. |
 
 When a lease sidecar exists, `lease_hostname` and `lease_pid` report its
 validated values even when the state is `available`; both are `None` only when
@@ -128,8 +242,11 @@ tuple. Lease sidecars, the claim guard, and unrelated files are not listed as
 sessions. `list_sessions()` orders manifests by `updated_at` newest first and
 then by ascending session ID for ties. A listed manifest or its corresponding
 lease with invalid JSON, schema, timestamps, path identity, or thread metadata
-raises its validation error instead of being skipped. Observing a dead
-same-host sidecar as `available` remains read-only and leaves it in place.
+raises its validation error instead of being skipped. On POSIX, observing a
+dead same-host sidecar as `available` remains read-only and leaves it in place.
+On non-POSIX platforms, including Windows, every unowned same-host lease is
+`unverified`, remains in place, and blocks acquisition until a non-destructive
+native liveness probe is implemented.
 
 The strict attachment operations all preflight configured provider routes and
 the Codex executable before changing a manifest or lease:
@@ -144,16 +261,19 @@ the Codex executable before changing a manifest or lease:
   lease and returns an unselected summary.
 - `attach_session()` requires an existing active manifest. It neither
   reactivates nor rewrites it; an inactive session raises
-  `BackendProtocolError`. Success retains the lease and returns an unselected
-  summary.
+  `BackendProtocolError`. After provider preflight, an already-inactive
+  manifest is rejected before lease acquisition or claim-guard creation. An
+  initially active manifest is rechecked after the lease claim to close races.
+  Success retains the lease and returns an unselected summary.
 - `detach_session()` releases this backend's matching lease without changing
   `active`, CLI selection, thread metadata, or other session data. After a
   normal owned detach, its unselected return value reports `available`. A
   missing manifest raises `SessionNotFoundError`; a changed ownership token
   raises `BackendProtocolError` without deleting the foreign lease.
 
-`SessionInUseError` reports an attachment conflict for a demonstrably live
-same-host owner or an unverified owner. It does not disclose the lease token.
+`SessionInUseError` reports an attachment conflict for a POSIX-probed,
+demonstrably live same-host owner or an unverified owner. It does not disclose
+the lease token.
 `SessionExistsError`, `SessionNotFoundError`, and `SessionInUseError` are all
 subclasses of `BackendProtocolError`. Invalid persisted schema still raises
 `WorkspaceFormatError`, unsafe IDs raise `SessionIdError`, and an inactive
@@ -161,7 +281,7 @@ session is rejected by `attach_session()` and `prepare_session()` with
 `BackendProtocolError`. Any lease-acquiring lifecycle operation can raise
 `SessionInUseError` when a live or unverified owner blocks it.
 
-Concurrent same-host reclamation of one demonstrably dead sidecar is
+On POSIX, concurrent same-host reclamation of one demonstrably dead sidecar is
 serialized. Exactly one cooperating claimant can replace it and acquire the
 session lease; later claimants observe the replacement and receive the typed
 `SessionInUseError`. This coordination does not change the public methods,

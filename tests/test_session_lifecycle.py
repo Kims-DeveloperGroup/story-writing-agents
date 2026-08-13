@@ -10,6 +10,7 @@ import socket
 import stat
 import sys
 import unittest
+from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import FrozenInstanceError, fields
 from datetime import datetime
@@ -625,6 +626,79 @@ class SessionLifecycleTests(unittest.TestCase):
         self.assert_no_lease("missing_resume")
         self.assert_no_lease("missing_attach")
 
+    def test_inactive_attach_rejects_every_lease_state_before_claim(self) -> None:
+        local_hostname = "local.test"
+        cases = (
+            ("inactive_absent", None, None),
+            (
+                "inactive_live",
+                _lease("inactive_live", hostname=local_hostname, pid=401),
+                SessionLeaseState.IN_USE,
+            ),
+            (
+                "inactive_remote",
+                _lease("inactive_remote", hostname="remote.test", pid=402),
+                SessionLeaseState.UNVERIFIED,
+            ),
+            (
+                "inactive_dead",
+                _lease("inactive_dead", hostname=local_hostname, pid=403),
+                SessionLeaseState.AVAILABLE,
+            ),
+        )
+        backend = self.backend()
+        guard = self.workspace.path(_LEASE_CLAIM_GUARD)
+
+        for session, lease, expected_state in cases:
+            with self.subTest(session=session):
+                self.write_manifest(session, active=False)
+                if lease is not None:
+                    self.write_lease(session, lease)
+                manifest_path = self.workspace.path(_manifest_relative(session))
+                lease_path = self.workspace.path(_lease_relative(session))
+                manifest_before = _artifact_snapshot(manifest_path)
+                lease_before = _artifact_snapshot(lease_path)
+                fake_os = mock.Mock(wraps=os)
+                fake_os.name = "posix"
+                fake_os.kill = mock.Mock(
+                    side_effect=(
+                        ProcessLookupError()
+                        if expected_state is SessionLeaseState.AVAILABLE
+                        else None
+                    )
+                )
+                fake_socket = mock.Mock(wraps=socket)
+                fake_socket.gethostname.return_value = local_hostname
+
+                with (
+                    mock.patch.object(backend_module, "os", fake_os),
+                    mock.patch.object(backend_module, "socket", fake_socket),
+                    mock.patch.object(
+                        backend,
+                        "_claim_lease",
+                        side_effect=AssertionError(
+                            "inactive attach attempted to claim a lease"
+                        ),
+                    ) as claim,
+                ):
+                    if lease is not None:
+                        self.assertEqual(
+                            backend._unowned_lease_state(lease),
+                            expected_state,
+                        )
+                    fake_os.kill.reset_mock()
+                    with self.assertRaisesRegex(
+                        BackendProtocolError,
+                        rf"^provider session is not active: {session}$",
+                    ):
+                        backend.attach_session(session)
+
+                claim.assert_not_called()
+                fake_os.kill.assert_not_called()
+                self.assertEqual(_artifact_snapshot(manifest_path), manifest_before)
+                self.assertEqual(_artifact_snapshot(lease_path), lease_before)
+                self.assertFalse(guard.exists())
+
     def test_inactive_resume_preserves_threads_created_data_and_selection(self) -> None:
         session = "inactive_resume"
         threads = {"codex:plot_architect": _thread()}
@@ -765,6 +839,47 @@ class SessionLifecycleTests(unittest.TestCase):
             {session: summary.lease_state for session, summary in listed.items()},
             {session: summary.lease_state for session, summary in summaries.items()},
         )
+
+    def test_non_posix_same_host_lease_is_unverified_and_never_reclaimed(
+        self,
+    ) -> None:
+        session = "non_posix_unverified"
+        local_hostname = "local.test"
+        self.write_manifest(session)
+        self.write_lease(session, hostname=local_hostname, pid=501)
+        manifest_path = self.workspace.path(_manifest_relative(session))
+        lease_path = self.workspace.path(_lease_relative(session))
+        manifest_before = _artifact_snapshot(manifest_path)
+        lease_before = _artifact_snapshot(lease_path)
+        guard = self.workspace.path(_LEASE_CLAIM_GUARD)
+        backend = self.backend()
+        fake_os = mock.Mock(wraps=os)
+        fake_os.name = "nt"
+        fake_os.kill = mock.Mock(
+            side_effect=AssertionError("non-POSIX liveness probe attempted")
+        )
+        fake_socket = mock.Mock(wraps=socket)
+        fake_socket.gethostname.return_value = local_hostname
+
+        with (
+            mock.patch.object(backend_module, "os", fake_os),
+            mock.patch.object(backend_module, "socket", fake_socket),
+            mock.patch.object(
+                backend,
+                "_lease_claim_guard",
+                return_value=nullcontext(),
+            ),
+        ):
+            summary = backend.get_session_summary(session)
+            self.assertEqual(summary.lease_state, SessionLeaseState.UNVERIFIED)
+            self.assertEqual(_artifact_snapshot(lease_path), lease_before)
+            with self.assertRaises(SessionInUseError):
+                backend.attach_session(session)
+
+        fake_os.kill.assert_not_called()
+        self.assertEqual(_artifact_snapshot(manifest_path), manifest_before)
+        self.assertEqual(_artifact_snapshot(lease_path), lease_before)
+        self.assertFalse(guard.exists())
 
     def test_contention_is_typed_actionable_token_safe_and_non_mutating(self) -> None:
         backend = self.backend()

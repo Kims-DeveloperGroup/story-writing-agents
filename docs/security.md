@@ -16,8 +16,9 @@ For example, a symlink beneath `manuscript/` cannot redirect a write into
 `core_documents/`, and a symlinked core document cannot redirect a
 post-consensus update into `config/`.
 
-Session and debate IDs and persona identifiers have separate conservative
-ASCII validation rules documented in [Configuration](configuration.md).
+Session, debate, and conversation IDs and persona identifiers have separate
+conservative ASCII validation rules documented in
+[Configuration](configuration.md).
 When `--workspace` is omitted, CLI discovery selects the nearest fully
 initialized ancestor of the caller's current directory. Use an explicit
 `--workspace` in automation or whenever multiple nested workspaces could make
@@ -27,6 +28,23 @@ four fixed filenames. A caller using generic `Workspace.write_text()` is a
 trusted direct workspace client and can alter any safely contained relative
 file. Manuscript names may contain safe relative subdirectories, but cannot be
 absolute, contain traversal, or pass through a symlink.
+
+`FilesystemConversationCatalog` binds validated session and conversation IDs
+to the fixed path
+`discussion_logs/<session_id>/interactive/conversations/<conversation_id>/metadata.json`.
+It applies the same containment and no-symlink rules to the catalog directory,
+conversation directory, and metadata file. It also rejects metadata whose
+embedded IDs do not match that path, so changing JSON fields cannot reassign a
+record across logical session boundaries. This is namespace integrity, not
+access control: a process with workspace access can still name any session.
+Unsafe call identifiers raise `SessionIdError`; a symlink or containment
+violation raises `WorkspaceSecurityError`.
+
+Metadata is decoded as strict UTF-8 and parsed as a JSON object with exactly
+the supported eight fields. Invalid encoding, malformed JSON, duplicate,
+missing, or extra fields, unsupported values, and path-owner mismatches raise
+`WorkspaceFormatError`. Reads fail closed rather than repairing or partially
+accepting the record.
 
 ## Artifact Mutation Guarantees
 
@@ -54,13 +72,32 @@ These operations are not a transactional filesystem or database:
 Inspect the workspace after an infrastructure-level interruption before
 starting replacement work.
 
+Conversation creation also uses exclusive per-file creation and never
+overwrites an allocated identity. Rename, archive, and unarchive stage and
+atomically replace only that conversation's complete metadata file. A failure
+before replacement preserves the old record; a failure reported after a
+successful replacement can leave the complete new record durable, but not
+partial JSON. These guarantees remain per file rather than a database
+transaction.
+
+Catalog mutations are isolated to conversation metadata. They do not invoke a
+provider or alter provider-session data, debate logs or results, manuscripts,
+core documents, CLI selection, or owner-isolated agent state.
+
 ## Local Plaintext Data
 
 There is no encryption, redaction, access-control manager, or automatic
 retention policy. Agent `AGENTS.md` prompts, configuration, personas, core
 documents, agent outcomes, discussion logs, lifecycle state, results, and
 manuscripts are local plaintext files governed by the operating system's
-directory permissions.
+directory permissions. Conversation metadata is also plaintext. In
+particular, its exact display subject can disclose story content even though
+the file contains no transcript.
+
+The catalog does not persist its normalized subject comparison key. It does
+persist the display subject until the workspace owner removes the artifact;
+archiving changes discovery status but does not delete or redact metadata.
+There is no catalog-specific retention or secure-erasure mechanism.
 
 The workspace-local `cli_context.json` is also plaintext. It contains only its
 schema version and selected session ID, but the name itself may disclose
@@ -181,29 +218,34 @@ Lease liveness is deliberately conservative:
 
 - no sidecar is `available`;
 - a matching token held by the current backend is `owned`;
-- only an unowned lease whose hostname exactly matches the local host and whose
-  PID is demonstrably alive is `in_use`;
-- a same-host PID that is demonstrably gone is `available`, but read APIs leave
-  its sidecar untouched; and
+- on POSIX, an unowned lease whose hostname exactly matches the local host and
+  whose PID is demonstrably alive is `in_use`;
+- on POSIX, a same-host PID that is demonstrably gone is `available`, but read
+  APIs leave its sidecar untouched;
+- on non-POSIX platforms, including Windows, every unowned same-host lease is
+  `unverified` until a non-destructive native liveness probe is implemented;
+  its sidecar is not reclaimed and acquisition remains blocked; and
 - a remote-host lease or any ambiguous local probe, including a permission
   failure, is `unverified` and blocks acquisition.
 
-Only a later acquisition may reclaim a demonstrably dead same-host sidecar.
-There is no remote liveness probe, heartbeat, lease timeout, age-based expiry,
-or stale-remote reclamation. PID probing cannot distinguish PID reuse, and
-hostname equality is not a distributed identity guarantee. Use lease state as
-local coordination evidence, not authentication or proof of a remote owner's
-health.
+Only a later POSIX acquisition may reclaim a demonstrably dead same-host
+sidecar. POSIX liveness uses the non-destructive `os.kill(pid, 0)` probe. There
+is no remote liveness probe, native non-POSIX owner probe, heartbeat, lease
+timeout, age-based expiry, or stale-remote reclamation. PID probing cannot
+distinguish PID reuse, and hostname equality is not a distributed identity
+guarantee. Use lease state as local coordination evidence, not authentication
+or proof of a remote owner's health.
 
 Cooperating local processes serialize lease claims with the persistent
 workspace-global `provider_sessions/.lease-claims.lock` advisory guard. POSIX
-uses an exclusive `flock`; Windows uses advisory one-byte file locking. The
-guard is opened without following symbolic links where the platform provides
-that flag, checked as a regular file, and verified so the opened descriptor and
-pathname retain the same file identity. Unsafe, replaced, unverifiable, or
-unsupported guard state fails closed instead of proceeding with a lease claim.
-Closing the descriptor, including at process exit after a crash, releases the
-OS lock.
+uses an exclusive `flock`; Windows uses advisory one-byte file locking. This
+Windows guard support is separate from owner liveness probing and therefore
+does not make an unowned same-host Windows sidecar reclaimable. The guard is
+opened without following symbolic links where the platform provides that flag,
+checked as a regular file, and verified so the opened descriptor and pathname
+retain the same file identity. Unsafe, replaced, unverifiable, or unsupported
+guard state fails closed instead of proceeding with a lease claim. Closing the
+descriptor, including at process exit after a crash, releases the OS lock.
 
 The guard file itself is persistent and must not be deleted or replaced while
 the workspace may be in use: a replacement pathname could split cooperating
@@ -253,6 +295,9 @@ user-level conflict, and start the replacement work under a new ID.
   user-ruling resume API.
 - Stable JSONL order is a roster-order record of outcomes, not provider
   completion order.
+- The conversation catalog stores metadata only. Current-conversation
+  selection, events, transcripts, and indexing are separate future work; it
+  provides no search, database, RAG, or legacy-migration facility.
 - Filesystem safety assumes the operating system and underlying filesystem
   correctly implement the atomic primitives used by Python.
 - Debate inspection reports persisted state and does not establish process

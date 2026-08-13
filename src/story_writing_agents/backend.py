@@ -315,7 +315,12 @@ class AgentBackend:
         self._ensure_open()
         session = self.workspace.validate_identifier(session_id)
         self._preflight_session(session)
-        self._read_manifest(session, missing_ok=False)
+        manifest = self._read_manifest(session, missing_ok=False)
+        assert manifest is not None
+        if not manifest["active"]:
+            raise BackendProtocolError(
+                f"provider session is not active: {session}"
+            )
 
         token, already_owned = self._lease_for_attachment(session)
         try:
@@ -1227,6 +1232,8 @@ class AgentBackend:
     @staticmethod
     def _unowned_lease_state(value: Mapping[str, Any]) -> SessionLeaseState:
         if value["hostname"] != socket.gethostname():
+            return SessionLeaseState.UNVERIFIED
+        if os.name != "posix":
             return SessionLeaseState.UNVERIFIED
         pid = value["pid"]
         try:
