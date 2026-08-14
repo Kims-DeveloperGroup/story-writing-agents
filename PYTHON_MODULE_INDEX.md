@@ -33,7 +33,7 @@ smoke -> orchestrator/workspace/models/agents
 directives -> config/workspace/errors/agents
 interactive_commands -> agents
 story_writing_agents facade -> interactive_commands
-workspace -> conversations -> errors
+workspace -> conversations -> agents/errors
 ```
 
 Some modules directly consume lower-level contracts rather than following
@@ -55,10 +55,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ConversationNotFoundError`, `ConversationExistsError`,
   `ManuscriptExistsError`, `BackendProtocolError`, `SessionExistsError`,
   `SessionNotFoundError`, `SessionInUseError`, and `DebateExistsError` from
-  `errors`; `CONVERSATION_METADATA_SCHEMA_VERSION`,
+  `errors`; `CONVERSATION_CONTEXT_POLICY`,
+  `CONVERSATION_EVENT_SCHEMA_VERSION`,
+  `CONVERSATION_METADATA_SCHEMA_VERSION`,
   `CONVERSATION_SUBJECT_NORMALIZATION_VERSION`,
   `MAX_CONVERSATION_SUBJECT_LENGTH`, `ConversationCatalog`,
-  `ConversationMetadata`, `ConversationStatus`, and
+  `ConversationContextPolicy`, `ConversationContextWindow`,
+  `ConversationEvent`, `ConversationEventAppend`, `ConversationEventKind`,
+  `ConversationEventStore`, `ConversationMetadata`, `ConversationStatus`, and
   `normalize_conversation_subject` from `conversations`; `ActionKind`,
   `InteractiveAction`, `CommandSpec`, `COMMANDS`, and
   `parse_interactive_line` from `interactive_commands`; `InputKind`, `Phase`,
@@ -66,8 +70,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `DebateMessage`, `AgentStateEntry`, `PromptFileReference`, `AgentDefinition`,
   `AgentRequest`, `AgentReply`, and `DebateResult` from `models`; `StoryRuntime`,
   `RuntimeSession`, `Runtime`, and `Session` from `orchestrator`; and
-  `FilesystemConversationCatalog`, `Workspace`, plus `initialize_workspace`
-  from `workspace`.
+  `FilesystemConversationCatalog`, `FilesystemConversationEventStore`,
+  `Workspace`, plus `initialize_workspace` from `workspace`.
 - **Direct internal dependencies:** `agents`, `backend`, `directives`, `errors`,
   `conversations`, `interactive_commands`, `models`, `orchestrator`, and
   `workspace`.
@@ -75,7 +79,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   importing the facade loads its exported modules.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
   `tests/test_conversation_catalog.py`, `tests/test_session_lifecycle.py`,
-  `tests/test_interactive_commands.py`, and `docs/reference/package-api.md`.
+  `tests/test_conversation_event_store.py`,
+  `tests/test_interactive_commands.py`, `docs/reference/package-api.md`, and
+  `docs/reference/conversation-transcripts.md`.
 
 ### `story_writing_agents.__main__`
 
@@ -176,18 +182,26 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 - **Source:** `src/story_writing_agents/conversations.py`
 - **Responsibility:** Define and validate provider-neutral subject-conversation
-  catalog contracts.
+  persistence contracts.
 - **Supported surface:** Package-supported
+  `CONVERSATION_CONTEXT_POLICY`, `CONVERSATION_EVENT_SCHEMA_VERSION`,
   `CONVERSATION_METADATA_SCHEMA_VERSION`,
   `CONVERSATION_SUBJECT_NORMALIZATION_VERSION`,
   `MAX_CONVERSATION_SUBJECT_LENGTH`, `ConversationCatalog`,
-  `ConversationMetadata`, `ConversationStatus`, and
+  `ConversationContextPolicy`, `ConversationContextWindow`,
+  `ConversationEvent`, `ConversationEventAppend`, `ConversationEventKind`,
+  `ConversationEventStore`, `ConversationMetadata`, `ConversationStatus`, and
   `normalize_conversation_subject`.
-- **Direct internal dependencies:** `errors`.
+- **Direct internal dependencies:** `agents` and `errors`.
 - **State, resources, and side effects:** Immutable value contracts and
-  deterministic normalization only; owns no state or external resource.
-- **Primary verification/documentation:** `tests/test_conversation_catalog.py`
-  and `docs/reference/conversation-catalog.md`.
+  deterministic normalization and validation only; owns no mutable state or
+  external resource.
+- **Primary verification/documentation:**
+  `tests/conversation_event_store_contract.py`,
+  `tests/test_conversation_catalog.py`,
+  `tests/test_conversation_event_store.py`,
+  `docs/reference/conversation-catalog.md`, and
+  `docs/reference/conversation-transcripts.md`.
 
 ### `story_writing_agents.directives`
 
@@ -302,7 +316,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Responsibility:** Provide the secure workspace filesystem and persistence
   boundary.
 - **Supported surface:** Package-supported `FilesystemConversationCatalog`,
-  `Workspace`, and `initialize_workspace`; topology and serialization constants
+  `FilesystemConversationEventStore`, `Workspace`, and
+  `initialize_workspace`; topology, serialization, and lock-registry details
   are internal.
 - **Direct internal dependencies:** `agents`, `conversations`, `errors`, and
   `models`.
@@ -310,16 +325,24 @@ every intermediate arrow. The current runtime graph is acyclic.
   security, strict UTF-8 and JSON I/O, overrides, agent and debate state, logs,
   results, per-conversation metadata under
   `discussion_logs/<session_id>/interactive/conversations/<conversation_id>/metadata.json`,
-  manuscript/core-document commits, atomic replacement, and rollback. Catalog
-  reads do not create absent directories; catalog creation and lifecycle
-  mutations use the existing atomic filesystem boundary.
+  authoritative visible events under
+  `discussion_logs/<session_id>/interactive/conversations/<conversation_id>/transcript.jsonl`,
+  manuscript/core-document commits, atomic replacement, and rollback. A
+  guarded process-wide weak lock registry serializes operations per
+  workspace/session/conversation;
+  the story-session lease remains the cross-process same-session write guard.
+  Catalog and absent-transcript reads do not create storage. Transcript access
+  validates catalog identity, and appends atomically replace the complete file.
 - **Primary verification/documentation:** `tests/test_workspace_and_config.py`,
   `tests/test_agent_state.py`, `tests/test_lifecycle_atomicity.py`,
   `tests/test_public_api_and_cli.py`, `tests/test_conversation_catalog.py`,
+  `tests/conversation_event_store_contract.py`,
+  `tests/test_conversation_event_store.py`,
   `docs/reference/workspace-api.md`,
   `docs/reference/configuration/session-storage.md`,
-  `docs/reference/conversation-catalog.md`, `docs/design/persistence.md`, and
-  `docs/operations/filesystem-safety.md`.
+  `docs/reference/conversation-catalog.md`,
+  `docs/reference/conversation-transcripts.md`, `docs/design/persistence.md`,
+  and `docs/operations/filesystem-safety.md`.
 
 ## Consistency Notes
 
@@ -330,9 +353,16 @@ every intermediate arrow. The current runtime graph is acyclic.
 - `ConversationCatalog` exposes logical identifiers and immutable metadata only;
   `FilesystemConversationCatalog` owns the fixed metadata layout through
   `Workspace` without exposing paths through that protocol.
-- Conversation selection and transcript events are not owned by the catalog
-  boundary.
+- `ConversationEventStore` owns visible event append, authoritative read, and
+  fixed-policy complete-turn context contracts;
+  `FilesystemConversationEventStore` owns the fixed JSONL layout through
+  `Workspace` without exposing paths through that protocol.
+- The filesystem event adapter's process-wide weak locks serialize one
+  conversation in process; the story-session lease remains responsible for
+  cross-process same-session write exclusion.
 - Persisted provider-thread keys include the backend and agent ID. In-process
   serialization additionally includes the session ID.
+- `tests/conversation_event_store_contract.py` is reusable test-only adapter
+  conformance support; it is not a production module or supported package API.
 - Direct imports of internal configuration, prompt, workspace-constant, or CLI
   helpers in tests do not add them to the supported package API.

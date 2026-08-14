@@ -4,9 +4,10 @@
 > implementation. They reduce exposure but do not make Codex, its executable,
 > or the local workspace a security boundary.
 
-Key terms: **plaintext**—unencrypted local content; **provider transcript**—a
-conversation retained outside this workspace; **visible output**—provider text
-the runtime may log; **credential**—a secret used to authenticate provider access.
+Key terms: **plaintext**—unencrypted local content; **local transcript**—visible
+events stored in the workspace; **provider transcript**—a conversation retained
+outside the workspace; **visible output**—provider text the runtime may log;
+**credential**—a secret used to authenticate provider access.
 
 ## Local data is plaintext
 
@@ -14,8 +15,8 @@ The runtime provides no encryption, redaction, access-control manager, secure
 erase, or automatic retention policy. Role prompts, configuration, persona
 templates, core documents, runtime overrides, CLI selection, provider metadata,
 agent outcomes, blackboard logs, lifecycle and result state, conversation
-subjects, and manuscripts are ordinary local files governed by operating-system
-permissions.
+subjects and transcript events, and manuscripts are ordinary local files
+governed by operating-system permissions.
 
 The public blackboard includes original user prompt or draft, complete
 candidates, approvals, critiques, proposals, visible errors, finalization
@@ -30,12 +31,24 @@ can echo sensitive source content into an outcome. Session-wide history has no
 compaction, count, expiry, or retention limit and is sent again in later calls
 to that owner.
 
-Conversation metadata contains no transcript, but the exact display subject
-can disclose content. Its normalized comparison key is not stored. Archiving
-changes discovery status; it does not delete or redact the record. CLI context
-contains only version and selected ID, but the ID itself may be sensitive.
+Conversation metadata and its sibling transcript are separate plaintext files.
+The subject can disclose content; the transcript preserves exact visible user
+messages, agent replies, and caller-supplied runtime errors. The caller must
+sanitize error text before append because the store does not redact it.
+Archiving changes discovery status; it does not delete or hide either file.
+
+The full local transcript has no compaction, expiry, deletion, or retention
+policy. `read_context()` returns a bounded complete-turn view but never rewrites
+the transcript. Exact bounds live in
+[Conversation transcripts](../reference/conversation-transcripts.md). CLI
+context contains only version and selected ID, but the ID itself may be
+sensitive.
 
 ## Provider boundary
+
+The conversation event store does not invoke a provider or send its context
+window anywhere. Interactive dispatch is not implemented; a future caller must
+make any provider transfer explicit.
 
 Codex is launched without shell evaluation. The runtime asks for a read-only
 sandbox, no approvals, ignored user configuration and project rules, and

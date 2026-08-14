@@ -1,12 +1,13 @@
 # Recovery and limitations
 
 > **Availability:** inspection and new-ID recovery are implemented. Automatic
-> retry, same-debate continuation, stale-owner cleanup, transcript deletion,
-> and search are not.
+> retry, same-debate continuation, stale-owner cleanup, conversation-event
+> deletion, and search are not.
 
 Key terms: **immutable reservation**—an ID that cannot be reused; **deadlock**—
 unresolved specialist conflict at the round limit; **liveness**—evidence about
-whether an owner still runs; **retention**—how long persisted data remains.
+whether an owner still runs; **retention**—how long persisted data remains;
+**unmatched turn**—a stored user event without an outcome.
 
 ## Debate recovery
 
@@ -44,6 +45,19 @@ external provider transcripts, CLI selection, runtime overrides, agent state,
 debates, manuscripts, and unrelated session files. Provider transcript
 retention and deletion remain governed by the provider.
 
+## Conversation recovery
+
+A caller must persist the visible user event before future provider work. If
+that work is interrupted before a reply or terminal error is appended, the
+user event remains in the authoritative transcript. Full reads expose it for
+diagnosis; bounded context excludes it because the turn is incomplete.
+
+The store does not automatically retry or complete that turn, and it does not
+delete, compact, or silently repair it. A later workflow must make recovery
+explicit. See
+[Conversation transcripts](../reference/conversation-transcripts.md) for the
+single-turn example and exact pairing rules.
+
 ## Current product limits
 
 - Codex is the only implemented provider; `gemini` is reserved and fails
@@ -57,9 +71,9 @@ retention and deletion remain governed by the provider.
   correctly implementing the atomic primitives used.
 - Debate inspection validates persisted state but cannot establish process
   liveness or validate provider-generated story content.
-- The conversation catalog stores metadata only. It does not provide current
-  selection, events, transcripts, legacy migration, a database, an index,
-  search, or RAG.
+- The conversation catalog and event store are Python foundations only. They do
+  not provide current selection, provider dispatch, legacy migration, a
+  database, an index, search, RAG, or transcript commands.
 - The interactive command registry and parser do not provide dispatch, a TTY,
   provider control, session switching, artifact actions, `/conversation`,
   `/search`, or `/transcript`.

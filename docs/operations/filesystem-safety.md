@@ -1,8 +1,8 @@
 # Filesystem safety
 
 > **Availability:** containment checks, no-symlink handling, exclusive
-> manuscript and identity creation, atomic per-file replacement, and best-effort
-> artifact rollback are implemented.
+> manuscript and identity creation, serialized transcript replacement, atomic
+> per-file replacement, and best-effort artifact rollback are implemented.
 
 Key terms: **containment**—keeping paths beneath the workspace root; **symlink**—
 a filesystem alias the runtime rejects; **exclusive creation**—failure instead
@@ -33,11 +33,11 @@ Manuscript names may use safe relative subdirectories beneath `manuscript/`.
 A direct client of generic `Workspace.write_text()` is trusted and can modify
 any safely contained relative file; containment is not authorization.
 
-The filesystem conversation adapter binds safe session and conversation IDs to
-one fixed metadata path. It applies no-symlink and containment checks to every
-directory and the file, then requires embedded IDs to match that path. This
-preserves namespace integrity but is not access control: any process with
-workspace access can still name another session.
+The filesystem conversation adapters bind safe session and conversation IDs to
+fixed metadata and transcript paths. They apply no-symlink and containment
+checks to every directory and file, then require embedded IDs to match the
+owning path. This preserves namespace integrity but is not access control: any
+process with workspace access can still name another session.
 
 The provider-session claim guard is opened without following symlinks where the
 platform provides that flag, checked as a regular file, and verified so the
@@ -47,6 +47,29 @@ unverifiable, or unsupported guard state fails closed. POSIX uses exclusive
 including at process exit, releases the operating-system lock. Replacing the
 guard pathname could split cooperating processes across different locks, so do
 not delete or replace it while a workspace may be used.
+
+## Conversation transcript safety
+
+Key terms: **in-process lock**—serialization inside one Python process;
+**session lease**—the cross-process same-session write guard; **fail closed**—
+rejecting suspicious persisted data instead of repairing or skipping it.
+
+Transcript reads and appends for the same workspace, session, and conversation
+share a weakly retained process-wide lock. Different conversations are not
+serialized together. An append validates the complete old transcript, then
+atomically replaces the complete file; readers observe the old or complete new
+version, not a partial appended line.
+
+The event-store adapter does not acquire or verify a session lease. A caller
+that permits multiple processes must use the story-session lease to exclude
+same-session writers. The lease is the cross-process guard; the in-process lock
+alone is insufficient.
+
+After catalog identity succeeds, a missing transcript is valid empty history.
+An existing empty file, malformed JSONL, invalid sequence or pairing, or
+path-mismatched record raises `WorkspaceFormatError`. Symlinks raise
+`WorkspaceSecurityError`. Exact event rules are in
+[Conversation transcripts](../reference/conversation-transcripts.md).
 
 ## Mutation guarantees
 

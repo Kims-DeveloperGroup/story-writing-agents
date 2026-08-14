@@ -1,7 +1,7 @@
 # Workspace API
 
 > **Availability:** workspace initialization, safe persistence primitives,
-> directives, inspection, and the filesystem conversation adapter are
+> directives, inspection, and the filesystem conversation adapters are
 > implemented Python APIs.
 
 Key terms: **relative path**—a location beneath the workspace root; **atomic
@@ -98,7 +98,14 @@ otherwise. Applying validates and atomically saves the resulting override or
 raises `DirectiveError`. Exact forms and precedence are in
 [Runtime overrides](configuration/runtime-overrides.md).
 
-`FilesystemConversationCatalog` is also backed by `Workspace`; its complete
-contract is in [Conversation catalog](conversation-catalog.md). See
+## Conversation adapters
+
+Key terms: **catalog**—conversation metadata and discovery; **event store**—the
+visible transcript and its bounded context view.
+
+`FilesystemConversationCatalog(workspace)` and
+`FilesystemConversationEventStore(workspace, *, catalog=None)` are backed by
+`Workspace`. Their contracts live in [Conversation catalog](conversation-catalog.md)
+and [Conversation transcripts](conversation-transcripts.md). See
 [Filesystem safety](../operations/filesystem-safety.md) for the security
 boundary and [Session storage](configuration/session-storage.md) for paths.

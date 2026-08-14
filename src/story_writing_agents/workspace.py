@@ -6,6 +6,8 @@ import json
 import os
 import re
 import tempfile
+import threading
+import weakref
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -22,7 +24,14 @@ from .agents import (
     ROSTER,
 )
 from .conversations import (
+    CONVERSATION_CONTEXT_POLICY,
+    CONVERSATION_EVENT_SCHEMA_VERSION,
     CONVERSATION_METADATA_SCHEMA_VERSION,
+    ConversationCatalog,
+    ConversationContextWindow,
+    ConversationEvent,
+    ConversationEventAppend,
+    ConversationEventKind,
     ConversationMetadata,
     ConversationStatus,
 )
@@ -51,6 +60,34 @@ _CONVERSATION_METADATA_FIELDS = frozenset({
     "updated_at",
 })
 _CONVERSATION_ID_ALLOCATION_ATTEMPTS = 16
+_CONVERSATION_EVENT_FIELDS = frozenset({
+    "schema_version",
+    "session_id",
+    "conversation_id",
+    "turn_id",
+    "sequence",
+    "timestamp",
+    "sender",
+    "recipient",
+    "kind",
+    "content",
+})
+
+
+class _ConversationEventLock:
+    """Weakly retained process-wide serialization for one transcript."""
+
+    __slots__ = ("lock", "__weakref__")
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+
+
+_CONVERSATION_EVENT_LOCK_REGISTRY_GUARD = threading.Lock()
+_CONVERSATION_EVENT_LOCKS: weakref.WeakValueDictionary[
+    tuple[str, str, str],
+    _ConversationEventLock,
+] = weakref.WeakValueDictionary()
 
 DEFAULT_SYSTEM_CONFIG: dict[str, Any] = {
     "language": "KO",
@@ -1340,6 +1377,399 @@ class FilesystemConversationCatalog:
             directory.rmdir()
         except OSError:
             pass
+
+
+class FilesystemConversationEventStore:
+    """Persist authoritative visible transcripts through one secure workspace."""
+
+    def __init__(
+        self,
+        workspace: Workspace | str | os.PathLike[str],
+        *,
+        catalog: ConversationCatalog | None = None,
+    ) -> None:
+        self.workspace = (
+            workspace if isinstance(workspace, Workspace) else Workspace(workspace)
+        )
+        self.catalog = (
+            catalog
+            if catalog is not None
+            else FilesystemConversationCatalog(self.workspace)
+        )
+
+    def append(self, event: ConversationEventAppend) -> ConversationEvent:
+        """Validate the complete transcript and durably append one event."""
+
+        if not isinstance(event, ConversationEventAppend):
+            raise TypeError("event must be a ConversationEventAppend")
+        event = ConversationEventAppend(
+            session_id=event.session_id,
+            conversation_id=event.conversation_id,
+            turn_id=event.turn_id,
+            sender=event.sender,
+            recipient=event.recipient,
+            kind=event.kind,
+            content=event.content,
+        )
+        event_lock = self._event_lock(event.session_id, event.conversation_id)
+        with event_lock.lock:
+            self._verify_catalog_identity(event.session_id, event.conversation_id)
+            events = self._read_events(event.session_id, event.conversation_id)
+            self._validate_append(events, event)
+            stored = ConversationEvent(
+                schema_version=CONVERSATION_EVENT_SCHEMA_VERSION,
+                session_id=event.session_id,
+                conversation_id=event.conversation_id,
+                turn_id=event.turn_id,
+                sequence=len(events) + 1,
+                timestamp=datetime.now(UTC).isoformat(),
+                sender=event.sender,
+                recipient=event.recipient,
+                kind=event.kind,
+                content=event.content,
+            )
+            self._write_events((*events, stored))
+            return stored
+
+    def read(
+        self,
+        session_id: str,
+        conversation_id: str,
+    ) -> tuple[ConversationEvent, ...]:
+        """Read and strictly validate the full authoritative transcript."""
+
+        session, conversation = self._validate_identity(
+            session_id,
+            conversation_id,
+        )
+        event_lock = self._event_lock(session, conversation)
+        with event_lock.lock:
+            self._verify_catalog_identity(session, conversation)
+            return self._read_events(session, conversation)
+
+    def read_context(
+        self,
+        session_id: str,
+        conversation_id: str,
+    ) -> ConversationContextWindow:
+        """Return the fixed-policy newest suffix of complete turns."""
+
+        session, conversation = self._validate_identity(
+            session_id,
+            conversation_id,
+        )
+        event_lock = self._event_lock(session, conversation)
+        with event_lock.lock:
+            self._verify_catalog_identity(session, conversation)
+            events = self._read_events(session, conversation)
+            return self._select_context(events)
+
+    def _verify_catalog_identity(
+        self,
+        session_id: str,
+        conversation_id: str,
+    ) -> None:
+        metadata = self.catalog.get(session_id, conversation_id)
+        try:
+            matches_path = (
+                metadata.session_id == session_id
+                and metadata.conversation_id == conversation_id
+            )
+        except AttributeError as exc:
+            raise WorkspaceFormatError(
+                "conversation catalog returned invalid metadata: "
+                f"{session_id}/{conversation_id}"
+            ) from exc
+        if not matches_path:
+            raise WorkspaceFormatError(
+                "conversation catalog identity does not match transcript path: "
+                f"{session_id}/{conversation_id}"
+            )
+
+    def _read_events(
+        self,
+        session_id: str,
+        conversation_id: str,
+    ) -> tuple[ConversationEvent, ...]:
+        relative = self._transcript_relative(session_id, conversation_id)
+        logical_artifact = self._logical_artifact(session_id, conversation_id)
+        target = self.workspace.path(relative)
+        if not target.exists():
+            return ()
+        if not target.is_file():
+            raise WorkspaceFormatError(
+                f"conversation transcript is not a file: {logical_artifact}"
+            )
+        try:
+            text = self.workspace.read_text(relative)
+        except WorkspaceFormatError as exc:
+            raise WorkspaceFormatError(
+                f"invalid conversation transcript {logical_artifact}: {exc}"
+            ) from exc
+        if not text:
+            raise WorkspaceFormatError(
+                f"conversation transcript is empty: {logical_artifact}"
+            )
+
+        events: list[ConversationEvent] = []
+        for line_number, line in enumerate(text.splitlines(), 1):
+            try:
+                value = json.loads(
+                    line,
+                    object_pairs_hook=self._reject_duplicate_fields,
+                )
+            except (json.JSONDecodeError, ValueError) as exc:
+                raise WorkspaceFormatError(
+                    "conversation transcript is not valid JSON: "
+                    f"{logical_artifact} at line {line_number}"
+                ) from exc
+            if (
+                not isinstance(value, dict)
+                or set(value) != _CONVERSATION_EVENT_FIELDS
+            ):
+                raise WorkspaceFormatError(
+                    "conversation event has an invalid schema: "
+                    f"{logical_artifact} at line {line_number}"
+                )
+            try:
+                raw_kind = value["kind"]
+                if not isinstance(raw_kind, str):
+                    raise TypeError("event kind must be a string")
+                event = ConversationEvent(
+                    schema_version=value["schema_version"],
+                    session_id=value["session_id"],
+                    conversation_id=value["conversation_id"],
+                    turn_id=value["turn_id"],
+                    sequence=value["sequence"],
+                    timestamp=value["timestamp"],
+                    sender=value["sender"],
+                    recipient=value["recipient"],
+                    kind=ConversationEventKind(raw_kind),
+                    content=value["content"],
+                )
+            except (SessionIdError, TypeError, ValueError) as exc:
+                raise WorkspaceFormatError(
+                    "conversation event has an invalid value: "
+                    f"{logical_artifact} at line {line_number}"
+                ) from exc
+            if (
+                event.session_id != session_id
+                or event.conversation_id != conversation_id
+            ):
+                raise WorkspaceFormatError(
+                    "conversation event does not match its owning path: "
+                    f"{logical_artifact} at line {line_number}"
+                )
+            if event.sequence != line_number:
+                raise WorkspaceFormatError(
+                    "conversation event sequence is not contiguous: "
+                    f"{logical_artifact} at line {line_number}"
+                )
+            events.append(event)
+        validated = tuple(events)
+        self._validate_pairs(validated, logical_artifact=logical_artifact)
+        return validated
+
+    def _write_events(self, events: tuple[ConversationEvent, ...]) -> None:
+        if not events:
+            raise ValueError("cannot write an empty conversation transcript")
+        relative = self._transcript_relative(
+            events[0].session_id,
+            events[0].conversation_id,
+        )
+        content = "".join(
+            json.dumps(
+                event.to_dict(),
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+            + "\n"
+            for event in events
+        )
+        self.workspace.write_text(relative, content)
+
+    @staticmethod
+    def _validate_append(
+        events: tuple[ConversationEvent, ...],
+        event: ConversationEventAppend,
+    ) -> None:
+        user_events = {
+            stored.turn_id: stored
+            for stored in events
+            if stored.kind is ConversationEventKind.USER_MESSAGE
+        }
+        completed_turn_ids = {
+            stored.turn_id
+            for stored in events
+            if stored.kind is not ConversationEventKind.USER_MESSAGE
+        }
+        if event.kind is ConversationEventKind.USER_MESSAGE:
+            if event.turn_id in user_events:
+                raise ValueError(
+                    f"conversation turn already has a user event: {event.turn_id}"
+                )
+            return
+        user_event = user_events.get(event.turn_id)
+        if user_event is None:
+            raise ValueError(
+                f"conversation outcome has no user event: {event.turn_id}"
+            )
+        if event.turn_id in completed_turn_ids:
+            raise ValueError(
+                f"conversation turn already has an outcome: {event.turn_id}"
+            )
+        if (
+            event.kind is ConversationEventKind.AGENT_REPLY
+            and event.sender != user_event.recipient
+        ):
+            raise ValueError(
+                "conversation reply sender does not match the addressed agent: "
+                f"{event.turn_id}"
+            )
+
+    @staticmethod
+    def _validate_pairs(
+        events: tuple[ConversationEvent, ...],
+        *,
+        logical_artifact: str,
+    ) -> None:
+        user_events: dict[str, ConversationEvent] = {}
+        completed_turn_ids: set[str] = set()
+        for event in events:
+            if event.kind is ConversationEventKind.USER_MESSAGE:
+                if event.turn_id in user_events:
+                    raise WorkspaceFormatError(
+                        "conversation turn has duplicate user events: "
+                        f"{logical_artifact} at sequence {event.sequence}"
+                    )
+                user_events[event.turn_id] = event
+                continue
+            user_event = user_events.get(event.turn_id)
+            if user_event is None:
+                raise WorkspaceFormatError(
+                    "conversation outcome precedes its user event: "
+                    f"{logical_artifact} at sequence {event.sequence}"
+                )
+            if event.turn_id in completed_turn_ids:
+                raise WorkspaceFormatError(
+                    "conversation turn has duplicate outcomes: "
+                    f"{logical_artifact} at sequence {event.sequence}"
+                )
+            if (
+                event.kind is ConversationEventKind.AGENT_REPLY
+                and event.sender != user_event.recipient
+            ):
+                raise WorkspaceFormatError(
+                    "conversation reply sender does not match the addressed agent: "
+                    f"{logical_artifact} at sequence {event.sequence}"
+                )
+            completed_turn_ids.add(event.turn_id)
+
+    @staticmethod
+    def _select_context(
+        events: tuple[ConversationEvent, ...],
+    ) -> ConversationContextWindow:
+        outcomes = {
+            event.turn_id: event
+            for event in events
+            if event.kind is not ConversationEventKind.USER_MESSAGE
+        }
+        complete_turns = [
+            (event, outcomes[event.turn_id])
+            for event in events
+            if event.kind is ConversationEventKind.USER_MESSAGE
+            and event.turn_id in outcomes
+        ]
+        retained_reversed: list[tuple[ConversationEvent, ConversationEvent]] = []
+        retained_utf8_bytes = 0
+        for turn in reversed(complete_turns):
+            turn_utf8_bytes = sum(
+                len(event.content.encode("utf-8", errors="strict"))
+                for event in turn
+            )
+            if (
+                len(retained_reversed)
+                >= CONVERSATION_CONTEXT_POLICY.max_complete_turns
+                or retained_utf8_bytes + turn_utf8_bytes
+                > CONVERSATION_CONTEXT_POLICY.max_utf8_bytes
+            ):
+                break
+            retained_reversed.append(turn)
+            retained_utf8_bytes += turn_utf8_bytes
+
+        retained = tuple(reversed(retained_reversed))
+        retained_events = tuple(
+            sorted(
+                (event for turn in retained for event in turn),
+                key=lambda event: event.sequence,
+            )
+        )
+        total_complete_turns = len(complete_turns)
+        retained_turns = len(retained)
+        omitted_turns = total_complete_turns - retained_turns
+        return ConversationContextWindow(
+            events=retained_events,
+            total_complete_turns=total_complete_turns,
+            retained_turns=retained_turns,
+            omitted_turns=omitted_turns,
+            retained_utf8_bytes=retained_utf8_bytes,
+            truncated=omitted_turns > 0,
+        )
+
+    def _event_lock(
+        self,
+        session_id: str,
+        conversation_id: str,
+    ) -> _ConversationEventLock:
+        key = (os.fspath(self.workspace.root), session_id, conversation_id)
+        with _CONVERSATION_EVENT_LOCK_REGISTRY_GUARD:
+            event_lock = _CONVERSATION_EVENT_LOCKS.get(key)
+            if event_lock is None:
+                event_lock = _ConversationEventLock()
+                _CONVERSATION_EVENT_LOCKS[key] = event_lock
+            return event_lock
+
+    def _validate_identity(
+        self,
+        session_id: str,
+        conversation_id: str,
+    ) -> tuple[str, str]:
+        session = self.workspace.validate_identifier(session_id)
+        conversation = self.workspace.validate_identifier(
+            conversation_id,
+            label="conversation ID",
+        )
+        return session, conversation
+
+    @staticmethod
+    def _reject_duplicate_fields(
+        pairs: list[tuple[str, Any]],
+    ) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate field: {key}")
+            result[key] = value
+        return result
+
+    @staticmethod
+    def _transcript_relative(
+        session_id: str,
+        conversation_id: str,
+    ) -> Path:
+        return (
+            Path("discussion_logs")
+            / session_id
+            / "interactive"
+            / "conversations"
+            / conversation_id
+            / "transcript.jsonl"
+        )
+
+    @staticmethod
+    def _logical_artifact(session_id: str, conversation_id: str) -> str:
+        return f"{session_id}/{conversation_id}/transcript.jsonl"
 
 
 def initialize_workspace(

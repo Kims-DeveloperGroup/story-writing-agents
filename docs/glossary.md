@@ -1,12 +1,13 @@
 # Glossary
 
 > **Availability:** most terms describe installed runtime behavior. Conversation
-> catalogs and strict session lifecycle are Python-only. Interactive selection,
-> dispatch, transcripts, and search are not implemented.
+> persistence and strict session lifecycle are Python-only. Interactive
+> selection, dispatch, transcript commands, and search are not implemented.
 
-Key terms: **story session**—durable related work; **conversation**—metadata
-identity; **debate**—one consensus attempt. They are different scopes; scan
-their entries below, then see [Core concepts](concepts.md) for the visual model.
+Key terms: **story session**—durable related work; **conversation**—a
+session-scoped subject and visible history; **turn**—one user event and its
+outcome; **debate**—one consensus attempt. They are different scopes; scan their
+entries below, then see [Core concepts](concepts.md) for the visual model.
 
 Use this page for lookup; follow its links for exact behavior and contracts.
 
@@ -42,9 +43,15 @@ Use this page for lookup; follow its links for exact behavior and contracts.
   conflicts remained at the round limit. See
   [Inspection and recovery](guides/inspection-and-recovery.md).
 
-- **Conversation.** A Python-only metadata identity within a story session. Its
-  catalog stores subject and archive status, but not selection or transcripts.
-  See [Conversation catalog](reference/conversation-catalog.md).
+- **Conversation.** One immutable identity within a story session. Its catalog
+  stores subject and archive status; its event store separately keeps the
+  visible transcript. Selection and dispatch are not implemented. See
+  [Conversation catalog](reference/conversation-catalog.md).
+
+- **Conversation catalog and event store.** The catalog owns identity and
+  discovery metadata. The event store owns append, full transcript reads, and
+  bounded context; archiving does not hide transcript data. See
+  [Conversation transcripts](reference/conversation-transcripts.md).
 
 - **Core documents.** Editable files containing durable outlines, character and
   world facts, and narrative rules. Each role receives only its allowed subset.
@@ -56,6 +63,11 @@ Use this page for lookup; follow its links for exact behavior and contracts.
 - **Directive.** An exact standalone message that changes language or persona
   overrides for one story session, or resets them. See
   [Runtime overrides](reference/configuration/runtime-overrides.md).
+
+- **Event, turn, and context window.** An event is one visible stored record. A
+  complete turn pairs one user event with one reply or runtime-error outcome. A
+  context window is a bounded view of complete turns, not a second transcript.
+  See [Conversation transcripts](reference/conversation-transcripts.md).
 
 - **Fingerprint and provider thread.** A fingerprint identifies an agent's
   resolved prompt context. A provider thread is the resumable conversation

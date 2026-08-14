@@ -2,12 +2,18 @@
 
 > **Availability:** the provider-neutral catalog and filesystem adapter are
 > implemented Python APIs. They are not wired to the CLI or `StoryRuntime`.
-> Current selection, events, transcripts, indexing, and search are not
+> Current selection, indexing, search, and interactive dispatch are not
 > implemented.
 
 Key terms: **conversation ID**—an immutable identity scoped to one session;
 **display subject**—the exact stored title; **normalized key**—a derived
-comparison form that is not identity; **archive**—a reversible status, not deletion.
+comparison form that is not identity; **archive**—a reversible status, not
+deletion; **transcript**—visible events stored separately from metadata.
+
+The catalog answers “which conversation is this?” and “how is it discovered?”
+The separate [conversation transcript](conversation-transcripts.md) answers
+“what visible events happened?” Archiving changes discovery only; it does not
+make the transcript unreadable.
 
 ```python
 CONVERSATION_METADATA_SCHEMA_VERSION = 1

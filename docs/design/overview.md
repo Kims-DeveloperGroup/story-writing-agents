@@ -1,11 +1,12 @@
 # System design overview
 
 > **Availability:** this page describes the implemented asynchronous runtime,
-> concrete Codex backend, and metadata-only conversation catalog.
+> concrete Codex backend, and Python-only conversation persistence foundation.
 
 Key terms: **orchestration**—coordination of the debate workflow; **backend**—
 the provider/session coordinator; **blackboard**—the team's public append-only
-history; **adapter**—a concrete implementation of a provider-neutral contract.
+history; **adapter**—a concrete implementation of a provider-neutral contract;
+**event store**—the adapter boundary for visible conversation events.
 
 `story-writing-agents` separates story workflow from provider invocation and
 filesystem persistence. In this project, “commit” means writing approved text
@@ -43,16 +44,17 @@ finish in another order.
 
 ## Separate conversation foundation
 
-The conversation catalog is alongside, not inside, debate orchestration. Its
-storage-neutral protocol handles logical session and conversation IDs plus
-immutable metadata values. The filesystem adapter uses `Workspace` for a
-fixed, safe metadata path.
+The conversation catalog and event store are alongside, not inside, debate
+orchestration. Their storage-neutral protocols separate identity and discovery
+metadata from visible transcript events. Filesystem adapters use `Workspace`
+for fixed, safe paths.
 
-It deliberately has no dependency on providers or the consensus runtime.
-Create, get, list, rename, archive, and unarchive affect metadata only.
-Current-conversation selection, event storage, transcripts, indexing, search,
-interactive dispatch, and RAG are not implemented. Subject text is a display
-label, not identity; duplicate display and normalized values are allowed.
+This foundation has no dependency on providers or the consensus runtime. The
+catalog owns create, get, list, rename, archive, and unarchive. The event store
+owns append, authoritative read, and bounded complete-turn context. Current
+selection, indexing, search, interactive dispatch, and RAG are not implemented.
+See [Conversation catalog](../reference/conversation-catalog.md) and
+[Conversation transcripts](../reference/conversation-transcripts.md).
 
 ## Dependency direction
 

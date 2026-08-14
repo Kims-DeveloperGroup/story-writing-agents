@@ -26,12 +26,16 @@ The exact export inventory is:
 - directives: `DirectiveKind`, `RuntimeDirective`, `parse_directive`,
   `apply_directive`;
 - workspace: `Workspace`, `initialize_workspace`,
-  `FilesystemConversationCatalog`;
+  `FilesystemConversationCatalog`, `FilesystemConversationEventStore`;
 - conversation catalog: `ConversationCatalog`, `ConversationMetadata`,
   `ConversationStatus`, `normalize_conversation_subject`,
   `CONVERSATION_METADATA_SCHEMA_VERSION`,
   `CONVERSATION_SUBJECT_NORMALIZATION_VERSION`, and
   `MAX_CONVERSATION_SUBJECT_LENGTH`;
+- conversation transcripts: `ConversationEventStore`, `ConversationEvent`,
+  `ConversationEventAppend`, `ConversationEventKind`,
+  `ConversationContextPolicy`, `ConversationContextWindow`,
+  `CONVERSATION_EVENT_SCHEMA_VERSION`, and `CONVERSATION_CONTEXT_POLICY`;
 - interactive parser: `ActionKind`, `InteractiveAction`, `CommandSpec`,
   `COMMANDS`, `parse_interactive_line`;
 - errors: `StoryWritingAgentsError`, `WorkspaceSecurityError`,
@@ -67,6 +71,7 @@ enum member.
 - [Runtime API](runtime-api.md)
 - [Workspace API](workspace-api.md)
 - [Conversation catalog](conversation-catalog.md)
+- [Conversation transcripts](conversation-transcripts.md)
 - [Interactive command parser](interactive-command-parser.md)
 - [Identifiers and errors](configuration/identifiers-and-errors.md)
 
