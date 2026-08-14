@@ -23,7 +23,8 @@ Use this index to find one canonical answer instead of searching a long manual.
 
 - [Project landing page](../README.md)
 - [Getting started](getting-started.md)
-- [Core concepts](concepts.md)
+- [Glossary for quick term lookup](glossary.md)
+- [Core concepts and relationships](concepts.md)
 - [Legacy task index](../UserGuide.md)
 
 ## Guides

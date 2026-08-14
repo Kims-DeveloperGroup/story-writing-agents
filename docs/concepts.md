@@ -1,43 +1,32 @@
 # Core concepts
 
-> **Availability:** these concepts describe the implemented runtime. Conversation
+> **Availability:** this model describes the implemented runtime. Conversation
 > metadata exists, but conversation selection, transcripts, and search do not.
 
-Key terms: **workspace**—the local project and persistence root; **story
-session**—a group of related runs and agent history; **debate**—one immutable
-attempt; **revision**—one candidate version; **consensus**—unanimous specialist
-approval followed by a successful artifact commit.
+Key terms: **scope**—what one persisted object groups; **ownership**—which
+component controls data or a transition; **flow**—how work moves from input to
+an approved artifact. For vocabulary lookup, use the [Glossary](glossary.md).
 
-A **workspace** is the local directory that holds configuration, editable role
-prompts, story facts, logs, state, and manuscripts. It is both the project input
-and the persistence boundary.
-
-A **story session** groups related work. It carries runtime overrides,
-owner-isolated agent history, and resumable provider thread references. A
-provider-session manifest says whether new provider work is active; CLI
-selection merely chooses a default session; a temporary lease prevents two
-cooperating processes from using the same threads at once.
-
-A **debate** is one immutable attempt to turn a prompt or complete draft into an
-approved manuscript. Its **revision** starts at `r0`. Conflicts can produce
-complete replacements `r1`, `r2`, and so on. **Consensus** means all three
-specialists approved the same current revision and final artifacts committed.
+The workspace is the outer project and persistence boundary. Within it, a story
+session groups related overrides, agent history, and provider thread references.
+A session can own many debates. Each debate is one immutable attempt and owns a
+sequence of complete candidate revisions.
 
 ```mermaid
 flowchart TD
     W[Workspace] --> S[Story session]
     S --> D1[Debate: immutable attempt]
     S --> D2[Another debate]
-    D1 --> R0[Revision r0]
-    D1 --> R1[Replacement r1]
-    R1 --> M[Consensus manuscript]
-    S -. metadata scope .-> C[Conversation identity]
+    D1 --> R[Current candidate revision]
+    R -->|conflict and replacement allowed| R
+    R -->|unanimous approval and commit| M[Consensus manuscript]
+    S -. separate metadata scope .-> C[Conversation identity]
 ```
 
-In words: a workspace contains sessions; a session can contain many debates;
-each debate owns a sequence of replacement revisions and at most one committed
-manuscript. Conversation identity is a separate metadata-only foundation and
-is not part of debate execution today.
+In words: work narrows from workspace to session to debate, then moves through
+candidate revisions toward at most one committed manuscript. Conversation
+identity is scoped by the same story session but belongs to a separate,
+metadata-only catalog. It is not connected to debate execution today.
 
 ## The four roles
 
@@ -48,30 +37,29 @@ is not part of debate execution today.
 | `character_custodian` | Character, relationships, world, and continuity | Yes |
 | `execution_specialist` | Drafting, prose, POV, tone, grammar, and format | Yes |
 
-The lead cannot erase a specialist conflict. All three specialists must approve
-the same revision. Each role receives only its allowlisted core documents: the
-plot specialist gets both outlines, the character specialist gets character
-sheets, the execution specialist gets narrative rules, and the lead gets all
-four.
+The runtime owns phase ordering and validation. The three specialists audit the
+same current revision; the lead cannot vote or erase a conflict. Consensus
+requires all three approvals before the lead can finalize artifacts. Role
+definitions limit each agent to the core documents needed for its responsibility.
 
 ## Public and owner-isolated memory
 
-The **blackboard** is the debate's public JSONL history: input, candidates,
-verdicts, critiques, proposals, visible errors, and commit metadata. Parallel
-specialists receive the same pre-phase snapshot, then their outcomes are logged
-in stable roster order.
+The public blackboard belongs to the debate. Every agent can receive its visible
+history, while parallel reviewers start from the same pre-phase snapshot. The
+runtime persists their completed outcomes in stable roster order.
 
-Each agent also receives only its own concise persisted outcomes for the whole
-story session. This history crosses debates but has no compaction or retention
-limit. Provider thread references are separate again and can resume when the
-same session and compatible agent definition are used.
+Owner-isolated state belongs to one agent across the whole story session. It can
+inform later debates, but it is never exposed as another agent's private history.
+Provider thread references are a third channel: the backend may resume them
+when session and agent definition remain compatible.
 
 ## Core documents and manuscripts
 
-The four core documents are durable story context: `global_outline.md`,
-`part_outlines.md`, `character_sheets.md`, and `narrative_rules.md`. The lead
-may propose full-text updates only after consensus. Manuscripts are immutable
-runtime outputs: an existing target is never overwritten.
+Core documents flow into agent definitions as durable project context. After
+unanimous approval, finalization may update only the allowed core documents and
+create the approved manuscript. The workspace owns safe persistence; the
+provider never writes these artifacts directly.
 
-Next, follow [Getting started](getting-started.md) or read the
-[system overview](design/overview.md).
+Continue with the [System overview](design/overview.md),
+[Consensus workflow](design/consensus-workflow.md), or
+[Persistence design](design/persistence.md).
