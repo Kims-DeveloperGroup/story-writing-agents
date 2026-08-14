@@ -33,6 +33,7 @@ smoke -> orchestrator/workspace/models/agents
 directives -> config/workspace/errors/agents
 interactive_commands -> agents
 story_writing_agents facade -> interactive_commands
+models -> conversations/agents/errors
 workspace -> conversations -> agents/errors
 ```
 
@@ -68,8 +69,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   `parse_interactive_line` from `interactive_commands`; `InputKind`, `Phase`,
   `Verdict`, `DebateStatus`, `SessionLeaseState`, `SessionSummary`,
   `DebateMessage`, `AgentStateEntry`, `PromptFileReference`, `AgentDefinition`,
-  `AgentRequest`, `AgentReply`, and `DebateResult` from `models`; `StoryRuntime`,
-  `RuntimeSession`, `Runtime`, and `Session` from `orchestrator`; and
+  `AgentRequest`, `AgentReply`, `ConversationRequest`, `ConversationReply`, and
+  `DebateResult` from `models`; `StoryRuntime`, `RuntimeSession`, `Runtime`, and
+  `Session` from `orchestrator`; and
   `FilesystemConversationCatalog`, `FilesystemConversationEventStore`,
   `Workspace`, plus `initialize_workspace` from `workspace`.
 - **Direct internal dependencies:** `agents`, `backend`, `directives`, `errors`,
@@ -78,8 +80,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **State, resources, and side effects:** Owns no state or external resource;
   importing the facade loads its exported modules.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
-  `tests/test_conversation_catalog.py`, `tests/test_session_lifecycle.py`,
-  `tests/test_conversation_event_store.py`,
+  `tests/test_codex_backend.py`, `tests/test_conversation_catalog.py`,
+  `tests/test_session_lifecycle.py`, `tests/test_conversation_event_store.py`,
   `tests/test_interactive_commands.py`, `docs/reference/package-api.md`, and
   `docs/reference/conversation-transcripts.md`.
 
@@ -114,18 +116,21 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Responsibility:** Adapt immutable agent definitions to provider invocation
   and own provider-session manifest, attachment, and lease lifecycles.
 - **Supported surface:** Package-supported `AgentBackend` and `BoundAgent`.
-  `AgentBackend` exposes validated `get_session_summary` and `list_sessions`
-  reads; strict `create_session`, `resume_session`, `attach_session`, and
-  `detach_session` attachment operations; and the compatible
-  `prepare_session`, `start_session`, and `end_session` lifecycle methods.
+  `BoundAgent` exposes structured debate `invoke` and one-turn conversation
+  `converse` operations. `AgentBackend` exposes validated `get_session_summary`
+  and `list_sessions` reads; strict `create_session`, `resume_session`,
+  `attach_session`, and `detach_session` attachment operations; and the
+  compatible `prepare_session`, `start_session`, and `end_session` lifecycle
+  methods.
 - **Direct internal dependencies:** `agents`, `config`, `errors`, `models`, and
   `workspace`.
 - **State, resources, and side effects:** Owns Codex subprocesses, temporary
   prompt/output staging, provider-session manifests and process attachment
   leases, the lazily created persistent workspace-global `.lease-claims.lock`
   OS advisory guard that serializes lease-claim and stale-reclaim transactions,
-  persisted thread metadata, per-thread locks, cleanup, and per-instance
-  `atexit` registration.
+  persisted thread metadata, shared debate/conversation per-thread locks,
+  structured Codex process validation, timeout/cancellation taint handling,
+  cleanup, and per-instance `atexit` registration.
 - **Primary verification/documentation:** `tests/test_codex_backend.py`,
   `tests/test_session_lifecycle.py`, `docs/reference/backend-and-sessions.md`,
   `docs/design/prompts-and-provider.md`, `docs/design/session-lifecycle.md`, and
@@ -258,12 +263,13 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Supported surface:** Package-supported `InputKind`, `Phase`, `Verdict`,
   `DebateStatus`, `SessionLeaseState`, `SessionSummary`, `DebateMessage`,
   `AgentStateEntry`, `PromptFileReference`, `AgentDefinition`, `AgentRequest`,
-  `AgentReply`, and `DebateResult`.
-- **Direct internal dependencies:** `errors`.
+  `AgentReply`, `ConversationRequest`, `ConversationReply`, and `DebateResult`.
+- **Direct internal dependencies:** `agents`, `conversations`, and `errors`.
 - **State, resources, and side effects:** Value contracts own no process state;
   `PromptFileReference` performs verified filesystem reads.
 - **Primary verification/documentation:** `tests/test_prompts.py`,
-  `tests/test_session_lifecycle.py`, orchestration and state tests,
+  `tests/test_codex_backend.py`, `tests/test_session_lifecycle.py`, orchestration
+  and state tests,
   `docs/reference/agent-contracts.md`, `docs/reference/runtime-api.md`, and
   `docs/reference/backend-and-sessions.md`.
 
@@ -348,8 +354,9 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 - `Workspace` owns persistence mechanics; `StoryRuntime` sequences persistence
   as part of the debate workflow.
-- `AgentBackend` owns provider subprocess and thread lifecycle;
-  `BoundAgent` is the immutable per-definition dispatch handle.
+- `AgentBackend` owns the shared structured Codex subprocess, thread,
+  timeout, cancellation, and taint lifecycle; `BoundAgent` is the immutable
+  per-definition dispatch handle for debate and one-turn conversation calls.
 - `ConversationCatalog` exposes logical identifiers and immutable metadata only;
   `FilesystemConversationCatalog` owns the fixed metadata layout through
   `Workspace` without exposing paths through that protocol.
@@ -361,7 +368,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   conversation in process; the story-session lease remains responsible for
   cross-process same-session write exclusion.
 - Persisted provider-thread keys include the backend and agent ID. In-process
-  serialization additionally includes the session ID.
+  serialization additionally includes the session ID, so `invoke` and
+  `converse` cannot race one session/backend/agent thread.
+- `ConversationRequest` restricts the explicit visible payload context to its
+  conversation identity. Provider-private thread history remains scoped by
+  session, backend, and agent and can therefore span conversations.
 - `tests/conversation_event_store_contract.py` is reusable test-only adapter
   conformance support; it is not a production module or supported package API.
 - Direct imports of internal configuration, prompt, workspace-constant, or CLI

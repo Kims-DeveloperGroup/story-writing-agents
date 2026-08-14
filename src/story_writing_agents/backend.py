@@ -14,12 +14,12 @@ import stat
 import tempfile
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Any, Mapping, TypeVar
 
 if os.name == "posix":
     try:
@@ -44,6 +44,7 @@ from .errors import (
     ConfigurationError,
     ManuscriptExistsError,
     SessionExistsError,
+    SessionIdError,
     SessionInUseError,
     SessionNotFoundError,
     WorkspaceFormatError,
@@ -53,6 +54,8 @@ from .models import (
     AgentDefinition,
     AgentReply,
     AgentRequest,
+    ConversationReply,
+    ConversationRequest,
     Phase,
     SessionLeaseState,
     SessionSummary,
@@ -70,6 +73,9 @@ _WINDOWS_LOCK_RETRY_SECONDS = 0.05
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _LEASE_DIAGNOSTIC_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
 _SAFE_THREAD_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
+_SAFE_FINGERPRINT = re.compile(r"[0-9a-f]{64}")
+
+_StructuredReply = TypeVar("_StructuredReply")
 
 
 class BoundAgent:
@@ -105,6 +111,60 @@ class BoundAgent:
             raise ConfigurationError(
                 f"agent backend is not implemented: {self.vendor}"
             )
+
+    async def converse(self, request: ConversationRequest) -> ConversationReply:
+        """Run one validated visible conversation turn on this agent thread."""
+
+        validated = self._validated_conversation_request(request)
+        lock = self.backend._thread_lock(
+            validated.session_id,
+            self.vendor,
+            self.definition.agent_id,
+        )
+        async with lock:
+            if self.vendor == "codex":
+                return await self.backend._converse_codex(self, validated)
+            raise ConfigurationError(
+                f"agent backend is not implemented: {self.vendor}"
+            )
+
+    def _validated_conversation_request(
+        self,
+        request: ConversationRequest,
+    ) -> ConversationRequest:
+        if type(request) is not ConversationRequest:
+            raise TypeError("request must be a ConversationRequest")
+        definition = self.definition
+        if (
+            type(definition) is not AgentDefinition
+            or not isinstance(definition.agent_id, str)
+            or definition.agent_id not in ROSTER
+            or not isinstance(definition.backend, str)
+            or not definition.backend
+            or self.vendor != definition.backend
+            or not isinstance(definition.fingerprint, str)
+            or _SAFE_FINGERPRINT.fullmatch(definition.fingerprint) is None
+        ):
+            raise BackendProtocolError(
+                "bound agent definition is invalid for conversation routing"
+            )
+        try:
+            validated = ConversationRequest(
+                session_id=request.session_id,
+                conversation_id=request.conversation_id,
+                turn_id=request.turn_id,
+                agent_id=request.agent_id,
+                content=request.content,
+                context=request.context,
+            )
+        except (AttributeError, SessionIdError, TypeError, ValueError) as exc:
+            raise BackendProtocolError("conversation request is invalid") from exc
+        if validated.agent_id != definition.agent_id:
+            raise BackendProtocolError(
+                "request was routed through the wrong bound agent: "
+                f"{validated.agent_id} != {definition.agent_id}"
+            )
+        return validated
 
 
 class AgentBackend:
@@ -430,23 +490,98 @@ class AgentBackend:
         request: AgentRequest,
     ) -> AgentReply:
         self._ensure_open()
-        session = request.session_id
+
+        def decode(response_text: str) -> AgentReply:
+            reply = self._decode_reply(request.phase, response_text)
+            if reply.revision_id != request.revision_id:
+                raise BackendProtocolError(
+                    f"Codex reply targets {reply.revision_id!r}, "
+                    f"expected {request.revision_id!r}"
+                )
+            if (
+                request.phase
+                in {
+                    Phase.DRAFT,
+                    Phase.PROPOSE_REVISION,
+                    Phase.SYNTHESIZE,
+                }
+                and not reply.content
+            ):
+                raise BackendProtocolError(
+                    "Codex candidate response must contain text"
+                )
+            if (
+                request.phase is Phase.AUDIT
+                and reply.verdict is Verdict.CONFLICT
+                and not reply.content
+            ):
+                raise BackendProtocolError(
+                    "Codex conflict response must contain a critique"
+                )
+            return reply
+
+        return await self._invoke_codex_structured(
+            bound_agent,
+            session_id=request.session_id,
+            schema=self._output_schema(request.phase),
+            payload=self._request_payload(request),
+            sensitive_values=(
+                request.task,
+                request.user_payload,
+                request.candidate_payload or "",
+                *(message.content for message in request.messages),
+                *(entry.content for entry in request.agent_state),
+            ),
+            decode=decode,
+        )
+
+    async def _converse_codex(
+        self,
+        bound_agent: BoundAgent,
+        request: ConversationRequest,
+    ) -> ConversationReply:
+        self._ensure_open()
+        return await self._invoke_codex_structured(
+            bound_agent,
+            session_id=request.session_id,
+            schema=self._conversation_output_schema(),
+            payload=self._conversation_request_payload(request),
+            sensitive_values=self._conversation_sensitive_values(
+                request,
+                bound_agent.staging_directory,
+            ),
+            decode=lambda response_text: self._decode_conversation_reply(
+                request,
+                response_text,
+            ),
+        )
+
+    async def _invoke_codex_structured(
+        self,
+        bound_agent: BoundAgent,
+        *,
+        session_id: str,
+        schema: Mapping[str, Any],
+        payload: Mapping[str, Any],
+        sensitive_values: tuple[str, ...],
+        decode: Callable[[str], _StructuredReply],
+    ) -> _StructuredReply:
+        self._ensure_open()
+        session = session_id
         self._ensure_session_lease(session)
         stored = self._load_thread(session, bound_agent.definition)
         thread_id = stored["thread_id"] if stored is not None else None
-        schema = self._output_schema(request.phase)
-        payload = self._request_payload(request)
 
         temporary_directory = Path(
             tempfile.mkdtemp(prefix="story-codex-output-")
         )
         schema_path = temporary_directory / "schema.json"
         output_path = temporary_directory / "response.json"
-        schema_path.write_text(
-            json.dumps(schema, ensure_ascii=False),
-            encoding="utf-8",
-        )
         try:
+            schema_path.write_text(
+                json.dumps(schema, ensure_ascii=False),
+                encoding="utf-8",
+            )
             command = self._codex_command(
                 bound_agent.staging_directory,
                 schema_path,
@@ -499,7 +634,7 @@ class AgentBackend:
                 diagnostic = self._diagnostic(
                     stderr.decode("utf-8", errors="replace"),
                     bound_agent.staging_directory,
-                    request,
+                    sensitive_values,
                 )
                 suffix = f": {diagnostic}" if diagnostic else ""
                 raise BackendProtocolError(
@@ -528,32 +663,7 @@ class AgentBackend:
                     "Codex CLI did not write its final response"
                 ) from exc
             try:
-                reply = self._decode_reply(request.phase, response_text)
-                if reply.revision_id != request.revision_id:
-                    raise BackendProtocolError(
-                        f"Codex reply targets {reply.revision_id!r}, "
-                        f"expected {request.revision_id!r}"
-                    )
-                if (
-                    request.phase
-                    in {
-                        Phase.DRAFT,
-                        Phase.PROPOSE_REVISION,
-                        Phase.SYNTHESIZE,
-                    }
-                    and not reply.content
-                ):
-                    raise BackendProtocolError(
-                        "Codex candidate response must contain text"
-                    )
-                if (
-                    request.phase is Phase.AUDIT
-                    and reply.verdict is Verdict.CONFLICT
-                    and not reply.content
-                ):
-                    raise BackendProtocolError(
-                        "Codex conflict response must contain a critique"
-                    )
+                reply = decode(response_text)
             except (BackendProtocolError, json.JSONDecodeError, UnicodeError):
                 if stored is not None:
                     self._taint_thread(session, bound_agent.definition)
@@ -733,6 +843,132 @@ class AgentBackend:
             "messages": [message.to_dict() for message in request.messages],
             "agent_state": [entry.to_dict() for entry in request.agent_state],
         }
+
+    @staticmethod
+    def _conversation_request_payload(
+        request: ConversationRequest,
+    ) -> dict[str, Any]:
+        return {
+            "session_id": request.session_id,
+            "conversation_id": request.conversation_id,
+            "turn_id": request.turn_id,
+            "agent_id": request.agent_id,
+            "content": request.content,
+            "context": [
+                {
+                    "turn_id": event.turn_id,
+                    "sender": event.sender,
+                    "recipient": event.recipient,
+                    "kind": event.kind.value,
+                    "content": event.content,
+                }
+                for event in request.context.events
+            ],
+        }
+
+    def _conversation_sensitive_values(
+        self,
+        request: ConversationRequest,
+        staging_directory: Path,
+    ) -> tuple[str, ...]:
+        values = (
+            request.content,
+            *(event.content for event in request.context.events),
+        )
+        variants: set[str] = set()
+        for value in values:
+            encoded_values = (
+                value,
+                json.dumps(value, ensure_ascii=False)[1:-1],
+                json.dumps(value, ensure_ascii=True)[1:-1],
+            )
+            for encoded in encoded_values:
+                sanitized = _CONTROL_CHARACTERS.sub("?", encoded)
+                variants.update((encoded, sanitized))
+                variants.add(
+                    sanitized.replace(
+                        str(staging_directory),
+                        "<agent-directory>",
+                    ).replace(str(self.workspace.root), "<workspace>")
+                )
+        return tuple(
+            sorted(variants, key=lambda variant: (-len(variant), variant))
+        )
+
+    @staticmethod
+    def _conversation_output_schema() -> dict[str, Any]:
+        properties = {
+            field: {"type": "string", "minLength": 1}
+            for field in (
+                "session_id",
+                "conversation_id",
+                "turn_id",
+                "content",
+            )
+        }
+        return {
+            "type": "object",
+            "properties": properties,
+            "required": [
+                "session_id",
+                "conversation_id",
+                "turn_id",
+                "content",
+            ],
+            "additionalProperties": False,
+        }
+
+    @staticmethod
+    def _decode_conversation_reply(
+        request: ConversationRequest,
+        text: str,
+    ) -> ConversationReply:
+        def reject_duplicate_fields(
+            pairs: list[tuple[str, Any]],
+        ) -> dict[str, Any]:
+            result: dict[str, Any] = {}
+            for key, value in pairs:
+                if key in result:
+                    raise BackendProtocolError(
+                        f"Codex conversation response duplicates field: {key}"
+                    )
+                result[key] = value
+            return result
+
+        value = json.loads(text, object_pairs_hook=reject_duplicate_fields)
+        expected_fields = {
+            "session_id",
+            "conversation_id",
+            "turn_id",
+            "content",
+        }
+        if not isinstance(value, dict):
+            raise BackendProtocolError(
+                "Codex conversation response must be a JSON object"
+            )
+        if set(value) != expected_fields:
+            raise BackendProtocolError(
+                "Codex conversation response has an invalid schema"
+            )
+        session_id = _strict_required_text(value, "session_id")
+        conversation_id = _strict_required_text(value, "conversation_id")
+        turn_id = _strict_required_text(value, "turn_id")
+        content = _strict_required_text(value, "content")
+        for field, actual, expected in (
+            ("session_id", session_id, request.session_id),
+            ("conversation_id", conversation_id, request.conversation_id),
+            ("turn_id", turn_id, request.turn_id),
+        ):
+            if actual != expected:
+                raise BackendProtocolError(
+                    f"Codex conversation reply {field} does not match its request"
+                )
+        return ConversationReply(
+            session_id=session_id,
+            conversation_id=conversation_id,
+            turn_id=turn_id,
+            content=content,
+        )
 
     @staticmethod
     def _output_schema(phase: Phase) -> dict[str, Any]:
@@ -1508,21 +1744,27 @@ class AgentBackend:
         self,
         value: str,
         staging_directory: Path,
-        request: AgentRequest,
+        sensitive_values: tuple[str, ...],
     ) -> str:
-        sanitized = _CONTROL_CHARACTERS.sub("?", value)
-        sanitized = sanitized.replace(str(staging_directory), "<agent-directory>")
-        sanitized = sanitized.replace(str(self.workspace.root), "<workspace>")
-        sensitive_values = [
-            request.task,
-            request.user_payload,
-            request.candidate_payload or "",
-            *(message.content for message in request.messages),
-            *(entry.content for entry in request.agent_state),
-        ]
-        for sensitive in sensitive_values:
-            if sensitive:
-                sanitized = sanitized.replace(sensitive, "<redacted>")
+        def sanitize(candidate: str) -> str:
+            candidate = _CONTROL_CHARACTERS.sub("?", candidate)
+            candidate = candidate.replace(
+                str(staging_directory),
+                "<agent-directory>",
+            )
+            return candidate.replace(str(self.workspace.root), "<workspace>")
+
+        sanitized = sanitize(value)
+        transformed_sensitive = {
+            sanitize(sensitive)
+            for sensitive in sensitive_values
+            if sensitive
+        }
+        for sensitive in sorted(
+            transformed_sensitive,
+            key=lambda item: (-len(item), item),
+        ):
+            sanitized = sanitized.replace(sensitive, "<redacted>")
         sanitized = sanitized.strip()
         if len(sanitized) > _MAX_DIAGNOSTIC_LENGTH:
             sanitized = (
@@ -1577,4 +1819,23 @@ def _text(value: Mapping[str, Any], field: str) -> str:
     result = value.get(field)
     if not isinstance(result, str):
         raise BackendProtocolError(f"Codex {field} must be text")
+    return result
+
+
+def _strict_required_text(value: Mapping[str, Any], field: str) -> str:
+    result = value.get(field)
+    if not isinstance(result, str):
+        raise BackendProtocolError(
+            f"Codex conversation {field} must be text"
+        )
+    if not result:
+        raise BackendProtocolError(
+            f"Codex conversation {field} must be non-empty text"
+        )
+    try:
+        result.encode("utf-8", errors="strict")
+    except UnicodeEncodeError as exc:
+        raise BackendProtocolError(
+            f"Codex conversation {field} must be valid UTF-8"
+        ) from exc
     return result
