@@ -11,7 +11,9 @@ This document describes the current implementation of
 [Issue #1](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1)
 and
 [Issue #2](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/2),
-plus the provider-neutral conversation catalog from
+plus the provider-session lifecycle foundation in
+[Issue #5](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/5)
+and the provider-neutral conversation catalog from
 [Issue #19](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/19).
 In this repository, “commit” means committing approved text to filesystem
 artifacts. The runtime does not invoke Git.
@@ -147,15 +149,68 @@ the concrete `BoundAgent` partitions Codex conversation state by
 runtime memory channel, and a team session resumes each agent's thread across
 debates.
 
-`story session start` creates or reactivates a provider-session manifest.
-`story run` acquires one team-level local-process lease, preventing concurrent
-processes from using the same provider session. Within one backend, calls are
-also serialized by `(session_id, backend, agent_id)` so separate bindings
-cannot race one provider thread. `story session end` marks the session
-inactive but retains thread IDs. The Codex subprocess runs without shell
-evaluation, uses read-only sandboxing and no approvals, and receives dynamic
-request JSON over stdin. Phase-specific output schemas are validated before
-conversion to `AgentReply`; failed calls are not retried automatically.
+### Provider Session Lifecycle and Attachment
+
+A session has three independent dimensions:
+
+| Dimension | Owner | Purpose |
+| --- | --- | --- |
+| `active` | Provider-session manifest | Durable permission for new provider work. |
+| selected session | CLI context | Workspace navigation; the backend never reads or writes it. |
+| lease | Attached backend process | Temporary exclusive use of the session's provider threads. |
+
+Thus a session can be active but unattached, or selected but inactive. Status
+reads only observe these dimensions; they do not claim or reclaim a lease.
+Exact schemas are in [Configuration](configuration.md#provider-session-state),
+and method contracts are in [API](api.md#concrete-backend).
+
+A normal `chapter_01` sequence makes the distinction concrete:
+
+| Step | Action | `active` afterward | selected afterward | lease afterward |
+| --- | --- | --- | --- | --- |
+| 1 | `story session start chapter_01` | `true` | `chapter_01` | available |
+| 2 | `story run "Draft chapter one"` begins | `true` | `chapter_01` | owned by that run |
+| 3 | The run exits | `true` | `chapter_01` | available; thread IDs remain |
+| 4 | `story session end` | `false` | `chapter_01` | available; thread IDs remain |
+| 5 | `story session start` | `true` | `chapter_01` | available; the next run can resume compatible threads |
+
+The per-session sidecar prevents two cooperating processes from using the same
+threads. A separate persistent workspace-global claim guard serializes the
+short create-or-reclaim transaction; it is not session ownership or liveness.
+On POSIX, a demonstrably dead same-host sidecar can be reclaimed by a later
+claim. Remote, ambiguous, and every non-POSIX unowned sidecar remains
+`unverified` and blocks acquisition. Concurrent POSIX reclamation therefore
+has one winner. The guard itself is never removed by the runtime.
+
+Strict `create_session()`, `resume_session()`, and `attach_session()` preflight
+all provider routes and the executable, check their manifest precondition,
+claim the lease, then recheck before returning or writing. In particular,
+`attach_session()` rejects an already-inactive manifest before creating the
+guard or claiming a lease; if the manifest becomes inactive after the claim,
+the recheck fails and releases the newly acquired lease. `end_session()` writes
+`active: false` before releasing its owned or transient lease. An owned failure
+keeps the existing attachment for recovery; a failed transient operation
+releases its lease.
+
+Detach and close release attachment without ending the session or removing
+thread metadata. Within one backend, `(session_id, backend, agent_id)` locking
+also prevents two bindings from racing one provider thread.
+
+For a session switch, first attach the destination, then persist its selection,
+then detach the source. A failed destination attachment must leave the old
+selection and attachment unchanged. The backend supports holding both leases
+during this sequence but never changes CLI context itself.
+
+Compatibility remains unchanged: `story session start` uses transient
+create-or-reactivate behavior without executable preflight, while `story run`
+uses `prepare_session()` to preflight and retain the lease. The installed CLI
+still exposes only `session start` and `session end`; there is no interactive
+switch controller.
+
+The Codex subprocess runs without shell evaluation, uses read-only sandboxing
+and no approvals, and receives dynamic request JSON over stdin. Phase-specific
+output schemas are validated before conversion to `AgentReply`; failed calls
+are not retried automatically.
 
 The CLI adds a workspace-local navigation layer without changing the runtime
 API. When `--workspace` is absent, it walks from the caller's current
@@ -163,8 +218,9 @@ directory toward the filesystem root and selects the nearest directory with
 the complete initialized-workspace sentinels. An explicit path bypasses
 discovery. A successful `session start` atomically writes the selected session
 to `agent_states/orchestrator_state/cli_context.json`; other commands read but
-never change it. Explicit `--session` values take precedence over this
-selection.
+never change it, and a failed start leaves it intact. `AgentBackend` itself
+never reads or writes this file. Explicit `--session` values take precedence
+over this selection.
 
 For `run`, input resolution happens before provider construction and accepts
 exactly one of a positional prompt, `--prompt`, `--draft`, or `--draft-file`.

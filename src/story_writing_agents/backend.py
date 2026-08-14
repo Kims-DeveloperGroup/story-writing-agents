@@ -4,17 +4,38 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import errno
 import json
 import os
 import re
 import shutil
 import socket
+import stat
 import tempfile
+import time
 import uuid
-from datetime import UTC, datetime
+from collections.abc import Iterator
+from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping
+
+if os.name == "posix":
+    try:
+        import fcntl as _fcntl
+    except ImportError:
+        _fcntl = None
+else:
+    _fcntl = None
+
+if os.name == "nt":
+    try:
+        import msvcrt as _msvcrt
+    except ImportError:
+        _msvcrt = None
+else:
+    _msvcrt = None
 
 from .agents import CORE_DOCUMENTS, ROSTER
 from .config import ConfigManager
@@ -22,13 +43,19 @@ from .errors import (
     BackendProtocolError,
     ConfigurationError,
     ManuscriptExistsError,
+    SessionExistsError,
+    SessionInUseError,
+    SessionNotFoundError,
     WorkspaceFormatError,
+    WorkspaceSecurityError,
 )
 from .models import (
     AgentDefinition,
     AgentReply,
     AgentRequest,
     Phase,
+    SessionLeaseState,
+    SessionSummary,
     Verdict,
 )
 from .workspace import Workspace
@@ -37,7 +64,11 @@ from .workspace import Workspace
 _MAX_DIAGNOSTIC_LENGTH = 4096
 _SESSION_SCHEMA_VERSION = 1
 _LEASE_SCHEMA_VERSION = 1
+_SESSION_DIRECTORY = "agent_states/orchestrator_state/provider_sessions"
+_LEASE_CLAIM_GUARD = f"{_SESSION_DIRECTORY}/.lease-claims.lock"
+_WINDOWS_LOCK_RETRY_SECONDS = 0.05
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_LEASE_DIAGNOSTIC_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
 _SAFE_THREAD_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 
 
@@ -151,25 +182,174 @@ class AgentBackend:
 
         self._ensure_open()
         session = self.workspace.validate_identifier(session_id)
-        runtime_overrides = self.workspace.load_session_overrides(session)
-        manager = ConfigManager(self.workspace)
-        resolved_backends: set[str] = set()
-        for agent_id in ROSTER:
-            resolved = manager.resolve(
-                agent_id,
-                runtime_overrides,
-                self.backend_overrides,
-            )
-            resolved_backends.add(resolved.backend)
-            if resolved.backend != "codex":
-                raise ConfigurationError(
-                    f"agent backend is not implemented: {resolved.backend}"
-                )
-        if "codex" in resolved_backends and shutil.which(self.executable) is None:
-            raise BackendProtocolError(
-                f"Codex CLI executable was not found: {self.executable}"
-            )
+        self._preflight_session(session)
         self._ensure_session_lease(session)
+
+    def get_session_summary(
+        self,
+        session_id: str,
+        *,
+        selected_session: str | None = None,
+    ) -> SessionSummary:
+        """Return validated provider-session status without changing its lease."""
+
+        self._ensure_open()
+        session = self.workspace.validate_identifier(session_id)
+        selected = self._validate_selected_session(selected_session)
+        manifest = self._read_manifest(session, missing_ok=False)
+        assert manifest is not None
+        return self._session_summary(manifest, selected_session=selected)
+
+    def list_sessions(
+        self,
+        *,
+        selected_session: str | None = None,
+    ) -> tuple[SessionSummary, ...]:
+        """List validated provider sessions in deterministic recency order."""
+
+        self._ensure_open()
+        selected = self._validate_selected_session(selected_session)
+        directory = self.workspace.path(_SESSION_DIRECTORY)
+        if not directory.exists():
+            return ()
+        if not directory.is_dir():
+            raise WorkspaceFormatError(
+                "provider session manifest path is not a directory"
+            )
+        try:
+            entries = sorted(directory.iterdir(), key=lambda entry: entry.name)
+        except OSError as exc:
+            raise WorkspaceFormatError(
+                "cannot enumerate provider session manifests"
+            ) from exc
+
+        summaries: list[SessionSummary] = []
+        for entry in entries:
+            name = entry.name
+            if (
+                name == ".gitkeep"
+                or name.endswith(".lease.json")
+                or not name.endswith(".json")
+            ):
+                continue
+            session = self.workspace.validate_identifier(name[:-5])
+            manifest = self._read_manifest(session, missing_ok=False)
+            assert manifest is not None
+            summaries.append(
+                self._session_summary(manifest, selected_session=selected)
+            )
+
+        summaries.sort(key=lambda summary: summary.session_id)
+        summaries.sort(
+            key=lambda summary: _parse_timestamp(
+                summary.updated_at,
+                label="provider session updated_at",
+            ),
+            reverse=True,
+        )
+        return tuple(summaries)
+
+    def create_session(self, session_id: str) -> SessionSummary:
+        """Create and attach a new active provider session."""
+
+        self._ensure_open()
+        session = self.workspace.validate_identifier(session_id)
+        self._preflight_session(session)
+        if self._manifest_exists(session):
+            raise SessionExistsError(f"provider session already exists: {session}")
+
+        token, already_owned = self._lease_for_attachment(session)
+        try:
+            if self._manifest_exists(session):
+                raise SessionExistsError(
+                    f"provider session already exists: {session}"
+                )
+            now = _now()
+            _parse_timestamp(now, label="provider session timestamp")
+            manifest = {
+                "schema_version": _SESSION_SCHEMA_VERSION,
+                "session_id": session,
+                "active": True,
+                "created_at": now,
+                "updated_at": now,
+                "threads": {},
+            }
+            self._write_manifest(session, manifest)
+        except Exception:
+            if not already_owned:
+                self._release_lease(session, token)
+            raise
+
+        self._lease_tokens[session] = token
+        return self._session_summary(manifest, selected_session=None)
+
+    def resume_session(self, session_id: str) -> SessionSummary:
+        """Attach an existing session, reactivating it only when inactive."""
+
+        self._ensure_open()
+        session = self.workspace.validate_identifier(session_id)
+        self._preflight_session(session)
+        self._read_manifest(session, missing_ok=False)
+
+        token, already_owned = self._lease_for_attachment(session)
+        try:
+            manifest = self._read_manifest(session, missing_ok=False)
+            assert manifest is not None
+            if not manifest["active"]:
+                manifest["active"] = True
+                manifest["updated_at"] = _advanced_timestamp(
+                    manifest["updated_at"]
+                )
+                self._write_manifest(session, manifest)
+        except Exception:
+            if not already_owned:
+                self._release_lease(session, token)
+            raise
+
+        self._lease_tokens[session] = token
+        return self._session_summary(manifest, selected_session=None)
+
+    def attach_session(self, session_id: str) -> SessionSummary:
+        """Attach an existing active session without rewriting its manifest."""
+
+        self._ensure_open()
+        session = self.workspace.validate_identifier(session_id)
+        self._preflight_session(session)
+        manifest = self._read_manifest(session, missing_ok=False)
+        assert manifest is not None
+        if not manifest["active"]:
+            raise BackendProtocolError(
+                f"provider session is not active: {session}"
+            )
+
+        token, already_owned = self._lease_for_attachment(session)
+        try:
+            manifest = self._read_manifest(session, missing_ok=False)
+            assert manifest is not None
+            if not manifest["active"]:
+                raise BackendProtocolError(
+                    f"provider session is not active: {session}"
+                )
+        except Exception:
+            if not already_owned:
+                self._release_lease(session, token)
+            raise
+
+        self._lease_tokens[session] = token
+        return self._session_summary(manifest, selected_session=None)
+
+    def detach_session(self, session_id: str) -> SessionSummary:
+        """Release this backend's attachment without mutating session state."""
+
+        self._ensure_open()
+        session = self.workspace.validate_identifier(session_id)
+        manifest = self._read_manifest(session, missing_ok=False)
+        assert manifest is not None
+        token = self._lease_tokens.get(session)
+        if token is not None:
+            self._assert_owned_lease(session)
+            self._release_lease(session, token)
+        return self._session_summary(manifest, selected_session=None)
 
     def start_session(self, session_id: str) -> dict[str, Any]:
         """Create or reactivate a story session while retaining vendor threads."""
@@ -181,6 +361,7 @@ class AgentBackend:
             manifest = self._read_manifest(session, missing_ok=True)
             now = _now()
             if manifest is None:
+                _parse_timestamp(now, label="provider session timestamp")
                 manifest = {
                     "schema_version": _SESSION_SCHEMA_VERSION,
                     "session_id": session,
@@ -191,7 +372,10 @@ class AgentBackend:
                 }
             else:
                 manifest["active"] = True
-                manifest["updated_at"] = now
+                manifest["updated_at"] = _advanced_timestamp(
+                    manifest["updated_at"],
+                    candidate=now,
+                )
             self._write_manifest(session, manifest)
             return manifest
         finally:
@@ -202,16 +386,26 @@ class AgentBackend:
 
         self._ensure_open()
         session = self.workspace.validate_identifier(session_id)
-        token = self._claim_lease(session)
+        token = self._lease_tokens.get(session)
+        transient = token is None
+        if token is None:
+            token = self._claim_lease(session)
+        else:
+            self._assert_owned_lease(session)
+        succeeded = False
         try:
             manifest = self._read_manifest(session, missing_ok=False)
             assert manifest is not None
             manifest["active"] = False
-            manifest["updated_at"] = _now()
+            manifest["updated_at"] = _advanced_timestamp(
+                manifest["updated_at"]
+            )
             self._write_manifest(session, manifest)
+            succeeded = True
             return manifest
         finally:
-            self._release_lease(session, token)
+            if transient or succeeded:
+                self._release_lease(session, token)
 
     def close(self) -> None:
         """Release owned session leases and remove ephemeral prompt staging."""
@@ -676,6 +870,67 @@ class AgentBackend:
             _text(value, "content"),
         )
 
+    def _preflight_session(self, session_id: str) -> None:
+        """Validate configured provider routes without acquiring a lease."""
+
+        runtime_overrides = self.workspace.load_session_overrides(session_id)
+        manager = ConfigManager(self.workspace)
+        resolved_backends: set[str] = set()
+        for agent_id in ROSTER:
+            resolved = manager.resolve(
+                agent_id,
+                runtime_overrides,
+                self.backend_overrides,
+            )
+            resolved_backends.add(resolved.backend)
+            if resolved.backend != "codex":
+                raise ConfigurationError(
+                    f"agent backend is not implemented: {resolved.backend}"
+                )
+        if "codex" in resolved_backends and shutil.which(self.executable) is None:
+            raise BackendProtocolError(
+                f"Codex CLI executable was not found: {self.executable}"
+            )
+
+    def _validate_selected_session(self, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return self.workspace.validate_identifier(value)
+
+    def _session_summary(
+        self,
+        manifest: Mapping[str, Any],
+        *,
+        selected_session: str | None,
+    ) -> SessionSummary:
+        session = manifest["session_id"]
+        lease = self._read_lease_if_present(session)
+        if lease is None:
+            lease_state = SessionLeaseState.AVAILABLE
+            lease_hostname = None
+            lease_pid = None
+        else:
+            lease_state = self._lease_state(session, lease)
+            lease_hostname = lease["hostname"]
+            lease_pid = lease["pid"]
+        return SessionSummary(
+            session_id=session,
+            active=manifest["active"],
+            selected=session == selected_session,
+            lease_state=lease_state,
+            lease_hostname=lease_hostname,
+            lease_pid=lease_pid,
+            created_at=manifest["created_at"],
+            updated_at=manifest["updated_at"],
+        )
+
+    def _lease_for_attachment(self, session_id: str) -> tuple[str, bool]:
+        token = self._lease_tokens.get(session_id)
+        if token is not None:
+            self._assert_owned_lease(session_id)
+            return token, True
+        return self._claim_lease(session_id), False
+
     def _ensure_session_lease(self, session_id: str) -> None:
         session = self.workspace.validate_identifier(session_id)
         manifest = self._read_manifest(session, missing_ok=False)
@@ -685,14 +940,20 @@ class AgentBackend:
                 f"provider session is not active: {session}; run 'story session start'"
             )
         if session in self._lease_tokens:
+            self._assert_owned_lease(session)
             return
         token = self._claim_lease(session)
-        # Re-check after the atomic claim so an end operation cannot race this run.
-        manifest = self._read_manifest(session, missing_ok=False)
-        assert manifest is not None
-        if not manifest["active"]:
+        try:
+            # Re-check after the atomic claim so an end cannot race this run.
+            manifest = self._read_manifest(session, missing_ok=False)
+            assert manifest is not None
+            if not manifest["active"]:
+                raise BackendProtocolError(
+                    f"provider session is not active: {session}"
+                )
+        except Exception:
             self._release_lease(session, token)
-            raise BackendProtocolError(f"provider session is not active: {session}")
+            raise
         self._lease_tokens[session] = token
 
     def _claim_lease(self, session_id: str) -> str:
@@ -707,25 +968,237 @@ class AgentBackend:
             "token": token,
             "acquired_at": _now(),
         }
-        for _ in range(2):
+        with self._lease_claim_guard():
             try:
                 self.workspace.write_json(relative, value, overwrite=False)
                 return token
             except ManuscriptExistsError:
                 existing = self._read_lease(session)
                 if not self._lease_is_stale(existing):
-                    raise BackendProtocolError(
+                    raise SessionInUseError(
                         f"provider session is in use by process "
-                        f"{existing['pid']} on {existing['hostname']}: {session}"
+                        f"{existing['pid']} on "
+                        f"{self._lease_hostname_diagnostic(existing['hostname'])}: "
+                        f"{session}"
                     )
-                target = self.workspace.path(relative)
+
+            current = self._read_lease(session)
+            if current != existing:
+                raise SessionInUseError(
+                    f"provider session lease changed while reclaiming: {session}"
+                )
+            target = self.workspace.path(relative)
+            try:
+                target.unlink()
+            except FileNotFoundError:
+                raise SessionInUseError(
+                    f"provider session lease changed while reclaiming: {session}"
+                ) from None
+            except OSError as exc:
+                raise BackendProtocolError(
+                    "provider session lease could not be reclaimed: "
+                    f"{type(exc).__name__}"
+                ) from None
+            try:
+                self.workspace.write_json(relative, value, overwrite=False)
+            except ManuscriptExistsError:
+                raise SessionInUseError(
+                    f"provider session lease changed while reclaiming: {session}"
+                ) from None
+            return token
+
+    @contextmanager
+    def _lease_claim_guard(self) -> Iterator[None]:
+        """Serialize one complete provider-session lease claim transaction."""
+
+        descriptor = self._open_lease_claim_guard()
+        locked = False
+        active_error: BaseException | None = None
+        try:
+            try:
+                self._lock_lease_claim_guard(descriptor)
+            except BackendProtocolError:
+                raise
+            except Exception as exc:
+                raise BackendProtocolError(
+                    "provider session lease claim guard could not be locked: "
+                    f"{type(exc).__name__}"
+                ) from None
+            locked = True
+            self._verify_lease_claim_guard(descriptor)
+            yield
+        except BaseException as exc:
+            active_error = exc
+            raise
+        finally:
+            unlock_error: BaseException | None = None
+            if locked:
                 try:
-                    target.unlink()
-                except FileNotFoundError:
-                    pass
-        raise BackendProtocolError(
-            f"could not acquire provider session lease: {session}"
-        )
+                    self._unlock_lease_claim_guard(descriptor)
+                except BaseException as exc:
+                    unlock_error = exc
+            close_error: BaseException | None = None
+            try:
+                os.close(descriptor)
+            except BaseException as exc:
+                close_error = exc
+            cleanup_error: BaseException | None = None
+            if unlock_error is not None:
+                cleanup_error = (
+                    unlock_error
+                    if not isinstance(unlock_error, Exception)
+                    else BackendProtocolError(
+                        "provider session lease claim guard could not be unlocked: "
+                        f"{type(unlock_error).__name__}"
+                    )
+                )
+            if close_error is not None:
+                translated_close_error = (
+                    close_error
+                    if not isinstance(close_error, Exception)
+                    else BackendProtocolError(
+                        "provider session lease claim guard could not be closed: "
+                        f"{type(close_error).__name__}"
+                    )
+                )
+                if cleanup_error is None:
+                    cleanup_error = translated_close_error
+                else:
+                    cleanup_error.add_note(str(translated_close_error))
+            # A normal body exit has committed the sidecar. Never turn that into
+            # a false claim failure: successful close releases the advisory lock,
+            # while an ambiguous close is not retried and the token returns so the
+            # caller can track and release the lease. Exceptional work keeps its
+            # original error and receives only bounded cleanup notes.
+            if cleanup_error is not None and active_error is not None:
+                active_error.add_note(str(cleanup_error))
+
+    def _open_lease_claim_guard(self) -> int:
+        _, target = self._lease_claim_guard_paths()
+        flags = os.O_CREAT | os.O_RDWR
+        for flag_name in (
+            "O_CLOEXEC",
+            "O_NOINHERIT",
+            "O_BINARY",
+            "O_NOFOLLOW",
+        ):
+            flags |= getattr(os, flag_name, 0)
+        try:
+            descriptor = os.open(target, flags, 0o600)
+        except OSError as exc:
+            raise BackendProtocolError(
+                "provider session lease claim guard could not be opened: "
+                f"{type(exc).__name__}"
+            ) from None
+
+        try:
+            try:
+                os.set_inheritable(descriptor, False)
+            except Exception as exc:
+                raise BackendProtocolError(
+                    "provider session lease claim guard could not be secured: "
+                    f"{type(exc).__name__}"
+                ) from None
+            self._verify_lease_claim_guard(descriptor)
+            if _fcntl is None and _msvcrt is not None:
+                self._initialize_windows_lease_claim_guard(descriptor)
+            return descriptor
+        except BaseException as exc:
+            try:
+                os.close(descriptor)
+            except OSError as close_error:
+                exc.add_note(
+                    "provider session lease claim guard close failed: "
+                    f"{type(close_error).__name__}"
+                )
+            raise
+
+    def _lease_claim_guard_paths(self) -> tuple[Path, Path]:
+        try:
+            parent = self.workspace.path(_SESSION_DIRECTORY)
+            target = self.workspace.path(_LEASE_CLAIM_GUARD)
+        except WorkspaceSecurityError:
+            raise WorkspaceFormatError(
+                "provider session lease claim guard path is unsafe"
+            ) from None
+        if not parent.is_dir():
+            raise WorkspaceFormatError(
+                "provider session lease claim guard parent is not a directory"
+            )
+        return parent, target
+
+    def _verify_lease_claim_guard(self, descriptor: int) -> None:
+        _, target = self._lease_claim_guard_paths()
+        try:
+            opened = os.fstat(descriptor)
+            pathname = os.stat(target, follow_symlinks=False)
+        except OSError as exc:
+            raise BackendProtocolError(
+                "provider session lease claim guard could not be inspected: "
+                f"{type(exc).__name__}"
+            ) from None
+        if not stat.S_ISREG(opened.st_mode) or not stat.S_ISREG(pathname.st_mode):
+            raise WorkspaceFormatError(
+                "provider session lease claim guard is not a regular file"
+            )
+        opened_identity = (opened.st_dev, opened.st_ino)
+        pathname_identity = (pathname.st_dev, pathname.st_ino)
+        identity_is_meaningful = any((*opened_identity, *pathname_identity))
+        if identity_is_meaningful and opened_identity != pathname_identity:
+            raise WorkspaceFormatError(
+                "provider session lease claim guard identity changed"
+            )
+
+    @staticmethod
+    def _initialize_windows_lease_claim_guard(descriptor: int) -> None:
+        try:
+            if os.fstat(descriptor).st_size == 0:
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                if os.write(descriptor, b"\0") != 1:
+                    raise OSError("short guard initialization write")
+            os.lseek(descriptor, 0, os.SEEK_SET)
+        except OSError as exc:
+            raise BackendProtocolError(
+                "provider session lease claim guard could not be initialized: "
+                f"{type(exc).__name__}"
+            ) from None
+
+    @staticmethod
+    def _lock_lease_claim_guard(descriptor: int) -> None:
+        if _fcntl is not None:
+            _fcntl.flock(descriptor, _fcntl.LOCK_EX)
+            return
+        if _msvcrt is None:
+            raise BackendProtocolError(
+                "provider session lease claim guard is unsupported "
+                "on this platform"
+            )
+        contention_errors = {
+            errno.EACCES,
+            getattr(errno, "EDEADLK", errno.EACCES),
+        }
+        while True:
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            try:
+                _msvcrt.locking(descriptor, _msvcrt.LK_NBLCK, 1)
+                return
+            except OSError as exc:
+                if exc.errno not in contention_errors:
+                    raise
+                time.sleep(_WINDOWS_LOCK_RETRY_SECONDS)
+
+    @staticmethod
+    def _unlock_lease_claim_guard(descriptor: int) -> None:
+        if _fcntl is not None:
+            _fcntl.flock(descriptor, _fcntl.LOCK_UN)
+            return
+        if _msvcrt is None:
+            raise BackendProtocolError(
+                "provider session lease claim guard is unsupported "
+                "on this platform"
+            )
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        _msvcrt.locking(descriptor, _msvcrt.LK_UNLCK, 1)
 
     def _release_lease(self, session_id: str, token: str) -> None:
         session = self.workspace.validate_identifier(session_id)
@@ -744,16 +1217,47 @@ class AgentBackend:
 
     @staticmethod
     def _lease_is_stale(value: Mapping[str, Any]) -> bool:
+        return AgentBackend._unowned_lease_state(value) is SessionLeaseState.AVAILABLE
+
+    def _lease_state(
+        self,
+        session_id: str,
+        value: Mapping[str, Any],
+    ) -> SessionLeaseState:
+        token = self._lease_tokens.get(session_id)
+        if token is not None and value["token"] == token:
+            return SessionLeaseState.OWNED
+        return self._unowned_lease_state(value)
+
+    @staticmethod
+    def _unowned_lease_state(value: Mapping[str, Any]) -> SessionLeaseState:
         if value["hostname"] != socket.gethostname():
-            return False
+            return SessionLeaseState.UNVERIFIED
+        if os.name != "posix":
+            return SessionLeaseState.UNVERIFIED
         pid = value["pid"]
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
-            return True
+            return SessionLeaseState.AVAILABLE
         except PermissionError:
-            return False
-        return False
+            return SessionLeaseState.UNVERIFIED
+        except (OSError, OverflowError, ValueError):
+            return SessionLeaseState.UNVERIFIED
+        return SessionLeaseState.IN_USE
+
+    @staticmethod
+    def _lease_hostname_diagnostic(hostname: str) -> str:
+        sanitized = _LEASE_DIAGNOSTIC_CHARACTERS.sub("?", hostname)
+        if len(sanitized) > 255:
+            sanitized = sanitized[:243] + " [truncated]"
+        return sanitized
+
+    def _read_lease_if_present(self, session_id: str) -> dict[str, Any] | None:
+        relative = self._lease_relative(session_id)
+        if not self.workspace.path(relative).exists():
+            return None
+        return self._read_lease(session_id)
 
     def _read_lease(self, session_id: str) -> dict[str, Any]:
         value = self.workspace.read_json(self._lease_relative(session_id))
@@ -767,7 +1271,12 @@ class AgentBackend:
         }
         if not isinstance(value, dict) or set(value) != expected:
             raise WorkspaceFormatError("provider session lease has an invalid schema")
-        if value["schema_version"] != _LEASE_SCHEMA_VERSION:
+        schema_version = value["schema_version"]
+        if (
+            isinstance(schema_version, bool)
+            or not isinstance(schema_version, int)
+            or schema_version != _LEASE_SCHEMA_VERSION
+        ):
             raise WorkspaceFormatError(
                 "unsupported provider session lease schema version"
             )
@@ -778,6 +1287,10 @@ class AgentBackend:
                 raise WorkspaceFormatError(
                     "provider session lease has an invalid string field"
                 )
+        _parse_timestamp(
+            value["acquired_at"],
+            label="provider session lease acquired_at",
+        )
         if (
             isinstance(value["pid"], bool)
             or not isinstance(value["pid"], int)
@@ -867,7 +1380,7 @@ class AgentBackend:
         if not target.exists():
             if missing_ok:
                 return None
-            raise BackendProtocolError(
+            raise SessionNotFoundError(
                 f"provider session does not exist: {session_id}; "
                 "run 'story session start'"
             )
@@ -884,7 +1397,12 @@ class AgentBackend:
             raise WorkspaceFormatError(
                 "provider session manifest has an invalid schema"
             )
-        if value["schema_version"] != _SESSION_SCHEMA_VERSION:
+        schema_version = value["schema_version"]
+        if (
+            isinstance(schema_version, bool)
+            or not isinstance(schema_version, int)
+            or schema_version != _SESSION_SCHEMA_VERSION
+        ):
             raise WorkspaceFormatError(
                 "unsupported provider session manifest schema version"
             )
@@ -900,6 +1418,18 @@ class AgentBackend:
         ):
             raise WorkspaceFormatError(
                 "provider session manifest has an invalid string field"
+            )
+        created_at = _parse_timestamp(
+            value["created_at"],
+            label="provider session created_at",
+        )
+        updated_at = _parse_timestamp(
+            value["updated_at"],
+            label="provider session updated_at",
+        )
+        if updated_at < created_at:
+            raise WorkspaceFormatError(
+                "provider session updated_at precedes created_at"
             )
         if not isinstance(value["threads"], dict):
             raise WorkspaceFormatError(
@@ -919,6 +1449,9 @@ class AgentBackend:
         result = dict(value)
         result["threads"] = dict(value["threads"])
         return result
+
+    def _manifest_exists(self, session_id: str) -> bool:
+        return self.workspace.path(self._manifest_relative(session_id)).exists()
 
     @staticmethod
     def _validate_thread(value: Any) -> dict[str, Any]:
@@ -947,6 +1480,10 @@ class AgentBackend:
             raise WorkspaceFormatError("provider thread tainted state is invalid")
         if _SAFE_THREAD_ID.fullmatch(value["thread_id"]) is None:
             raise WorkspaceFormatError("provider thread ID is invalid")
+        _parse_timestamp(
+            value["updated_at"],
+            label="provider thread updated_at",
+        )
         return dict(value)
 
     def _write_manifest(self, session_id: str, value: Mapping[str, Any]) -> None:
@@ -961,17 +1498,11 @@ class AgentBackend:
 
     @staticmethod
     def _manifest_relative(session_id: str) -> str:
-        return (
-            "agent_states/orchestrator_state/provider_sessions/"
-            f"{session_id}.json"
-        )
+        return f"{_SESSION_DIRECTORY}/{session_id}.json"
 
     @staticmethod
     def _lease_relative(session_id: str) -> str:
-        return (
-            "agent_states/orchestrator_state/provider_sessions/"
-            f"{session_id}.lease.json"
-        )
+        return f"{_SESSION_DIRECTORY}/{session_id}.lease.json"
 
     def _diagnostic(
         self,
@@ -999,6 +1530,36 @@ class AgentBackend:
                 + " [truncated]"
             )
         return sanitized
+
+
+def _parse_timestamp(value: Any, *, label: str) -> datetime:
+    if not isinstance(value, str) or not value:
+        raise WorkspaceFormatError(f"{label} must be a timestamp string")
+    try:
+        parsed = datetime.fromisoformat(value)
+        offset = parsed.utcoffset()
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise WorkspaceFormatError(f"{label} is invalid") from exc
+    if parsed.tzinfo is None or offset is None:
+        raise WorkspaceFormatError(f"{label} must include a UTC offset")
+    return parsed
+
+
+def _advanced_timestamp(previous: str, *, candidate: str | None = None) -> str:
+    prior = _parse_timestamp(previous, label="provider session updated_at")
+    proposed_text = _now() if candidate is None else candidate
+    proposed = _parse_timestamp(
+        proposed_text,
+        label="provider session timestamp",
+    )
+    if proposed > prior:
+        return proposed_text
+    try:
+        return (prior.astimezone(UTC) + timedelta(microseconds=1)).isoformat()
+    except OverflowError as exc:
+        raise WorkspaceFormatError(
+            "provider session updated_at cannot be advanced"
+        ) from exc
 
 
 def _now() -> str:

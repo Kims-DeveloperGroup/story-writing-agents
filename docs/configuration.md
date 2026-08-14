@@ -213,16 +213,90 @@ Provider lifecycle metadata is stored beneath:
 
 ```text
 agent_states/orchestrator_state/provider_sessions/
+├── .lease-claims.lock
 ├── <session_id>.json
 └── <session_id>.lease.json
 ```
 
-The session manifest records its schema version, active state, timestamps, and
-current thread metadata keyed by backend and agent. `story session end`
-retains those thread references so a later `story session start` can resume
-compatible conversations. The lease file exists only while a process owns the
-team session and prevents concurrent processes from resuming the same threads.
-Both files are runtime-managed plaintext and must not be edited manually.
+`.lease-claims.lock` is a persistent, workspace-global advisory-lock file, not
+JSON or either schema below. A claim may create it even if that claim fails;
+listing ignores it, and the runtime never removes it. Do not edit, replace, or
+delete it. Its POSIX or Windows advisory lock is separate from the lease
+sidecar's owner-liveness check.
+
+The manifest has this exact schema-v1 field set:
+
+```json
+{
+  "active": true,
+  "created_at": "2026-01-01T00:00:00+00:00",
+  "schema_version": 1,
+  "session_id": "demo",
+  "threads": {
+    "codex:plot_architect": {
+      "agent_id": "plot_architect",
+      "backend": "codex",
+      "fingerprint": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "tainted": false,
+      "thread_id": "thread-demo-plot",
+      "updated_at": "2026-01-02T00:00:00+00:00"
+    }
+  },
+  "updated_at": "2026-01-02T00:00:00+00:00"
+}
+```
+
+No manifest key may be missing or added:
+
+| Field | Required value |
+| --- | --- |
+| `schema_version` | Integer `1`, not a boolean. |
+| `session_id` | Safe ID matching the filename. |
+| `active` | Boolean durable lifecycle state; independent of selection and attachment. |
+| `created_at`, `updated_at` | Timezone-aware ISO-8601 strings; `updated_at` cannot precede `created_at`. |
+| `threads` | Object keyed by the exact `<backend>:<agent_id>` pair. |
+| thread record | Exactly the six shown fields; all except boolean `tainted` are non-empty strings, and `updated_at` is timezone-aware. |
+| `thread_id` | At most 128 ASCII letters, digits, `_`, or `-`, beginning with a letter or digit. |
+
+Thread metadata survives detach, end, and close so a compatible, untainted
+thread can resume later.
+
+The lease sidecar has this exact schema-v1 field set:
+
+```json
+{
+  "acquired_at": "2026-01-02T00:00:00+00:00",
+  "hostname": "writer-host",
+  "pid": 12345,
+  "schema_version": 1,
+  "session_id": "demo",
+  "token": "opaque-ownership-token"
+}
+```
+
+No lease key may be missing or added:
+
+| Field | Required value |
+| --- | --- |
+| `schema_version` | Integer `1`, not a boolean. |
+| `session_id` | Safe ID matching the filename. |
+| `hostname`, `token` | Non-empty strings; the opaque token identifies backend-instance ownership, not a credential. |
+| `pid` | Positive non-boolean integer. |
+| `acquired_at` | Non-empty timezone-aware ISO-8601 string. |
+
+An owned sidecar is normally removed by detach, end, or close. On POSIX, a
+dead same-host sidecar can remain after a read and be reclaimed only by a later
+claim. On non-POSIX systems, every unowned same-host sidecar is `unverified`,
+is not reclaimed, and blocks acquisition.
+
+Both JSON files are runtime-managed plaintext and must not be edited manually.
+The guard adds no schema field.
+
+`SessionSummary` is a validated, non-persisted projection; see the
+[API reference](api.md#concrete-backend) for its exact fields, lease states,
+and method contracts. See
+[Architecture](architecture.md#provider-session-lifecycle-and-attachment) for
+the lifecycle flow.
 
 ## Conversation Catalog Metadata
 
@@ -301,6 +375,11 @@ command atomically replaces the selected session. A failed start and every
 `run`, `directive`, `inspect`, and `session end` command leave the selection
 unchanged. Ending the selected provider session preserves the selection, so a
 bare `story session start` can reactivate it later.
+
+This file belongs to the CLI; `AgentBackend` never reads or writes it. See the
+[API](api.md#concrete-backend) for selection projection and
+[Architecture](architecture.md#provider-session-lifecycle-and-attachment) for
+safe switching order.
 
 Session resolution precedence is:
 

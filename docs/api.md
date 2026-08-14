@@ -12,13 +12,13 @@ The following names are exported from `story_writing_agents`:
   `COMMANDS`, `parse_interactive_line`;
 - definition, request, and result models: `PromptFileReference`,
   `AgentDefinition`, `AgentRequest`, `AgentReply`, `AgentStateEntry`,
-  `DebateMessage`, `DebateResult`;
+  `DebateMessage`, `DebateResult`, `SessionSummary`;
 - conversation catalog API: `ConversationCatalog`, `ConversationMetadata`,
   `normalize_conversation_subject`, `CONVERSATION_METADATA_SCHEMA_VERSION`,
   `CONVERSATION_SUBJECT_NORMALIZATION_VERSION`, and
   `MAX_CONVERSATION_SUBJECT_LENGTH`;
 - enums: `InputKind`, `Phase`, `Verdict`, `DebateStatus`, `DirectiveKind`,
-  `ConversationStatus`;
+  `ConversationStatus`, `SessionLeaseState`;
 - runtime API: `StoryRuntime`, `RuntimeSession`, `Runtime`, `Session`;
 - directive API: `RuntimeDirective`, `parse_directive`, `apply_directive`;
 - workspace API: `FilesystemConversationCatalog`, `Workspace`,
@@ -26,7 +26,8 @@ The following names are exported from `story_writing_agents`:
 - errors: `StoryWritingAgentsError`, `WorkspaceSecurityError`,
   `WorkspaceFormatError`, `ConfigurationError`, `DirectiveError`,
   `SessionIdError`, `ConversationNotFoundError`, `ConversationExistsError`,
-  `ManuscriptExistsError`, `BackendProtocolError`, and `DebateExistsError`.
+  `ManuscriptExistsError`, `BackendProtocolError`, `SessionExistsError`,
+  `SessionNotFoundError`, `SessionInUseError`, and `DebateExistsError`.
 
 `Runtime` is an alias of `StoryRuntime`; `Session` is an alias of
 `RuntimeSession`.
@@ -40,6 +41,7 @@ Runtime and directive enum values are:
 | `Verdict` | `approve`, `conflict` |
 | `DebateStatus` | `consensus`, `deadlock`, `failed` |
 | `DirectiveKind` | `language`, `persona`, `reset` |
+| `SessionLeaseState` | `available`, `owned`, `in_use`, `unverified` |
 | `ConversationStatus` | `active`, `archived` |
 
 ## Conversation Catalog
@@ -324,6 +326,19 @@ AgentBackend(
 
 await AgentBackend.bind(definition: AgentDefinition) -> BoundAgent
 AgentBackend.prepare_session(session_id: str) -> None
+AgentBackend.get_session_summary(
+    session_id: str,
+    *,
+    selected_session: str | None = None,
+) -> SessionSummary
+AgentBackend.list_sessions(
+    *,
+    selected_session: str | None = None,
+) -> tuple[SessionSummary, ...]
+AgentBackend.create_session(session_id: str) -> SessionSummary
+AgentBackend.resume_session(session_id: str) -> SessionSummary
+AgentBackend.attach_session(session_id: str) -> SessionSummary
+AgentBackend.detach_session(session_id: str) -> SessionSummary
 AgentBackend.start_session(session_id: str) -> dict[str, Any]
 AgentBackend.end_session(session_id: str) -> dict[str, Any]
 AgentBackend.close() -> None
@@ -345,11 +360,82 @@ implemented.
 ignored. `timeout_seconds` is a positive per-call limit. `backend_overrides`
 maps canonical agent IDs to vendor names for this backend instance.
 
-`start_session()` creates or reactivates a provider-session manifest.
-`end_session()` marks it inactive without deleting resumable thread IDs.
-`prepare_session()` checks all routes, verifies the Codex executable, and
-claims the team lease. `close()` releases owned leases and deletes temporary
-prompt staging; call it in `finally`. A closed backend cannot be reused.
+Provider-session status has three independent dimensions:
+
+| Dimension | Meaning |
+| --- | --- |
+| `active` | Durable lifecycle state. |
+| `selected` | Whether the session matches the caller-supplied `selected_session`. `AgentBackend` never reads or writes CLI context. |
+| `lease_state` | Temporary process attachment, independent of `active` and `selected`. |
+
+See [Configuration](configuration.md#provider-session-state) for the persisted
+schemas and [Architecture](architecture.md#provider-session-lifecycle-and-attachment)
+for lifecycle ordering and race handling.
+
+`SessionSummary` is a frozen, slotted value with this exact shape:
+
+```python
+SessionSummary(
+    session_id: str,
+    active: bool,
+    selected: bool,
+    lease_state: SessionLeaseState,
+    lease_hostname: str | None,
+    lease_pid: int | None,
+    created_at: str,
+    updated_at: str,
+)
+```
+
+A lease sidecar is the per-session `<session_id>.lease.json` companion beside
+the durable manifest; it records temporary process ownership to prevent
+concurrent attachment.
+
+Its lease states mean:
+
+| State | Meaning at the time of the read |
+| --- | --- |
+| `available` | No lease exists, or on POSIX a same-host lease names a process that is demonstrably gone. A dead lease sidecar is not removed by a read. |
+| `owned` | This `AgentBackend` holds the matching lease token. |
+| `in_use` | On POSIX, an unowned same-host lease names a demonstrably live process. |
+| `unverified` | The lease is remote-host, its POSIX liveness probe is ambiguous (including a permission failure), or it is unowned on a non-POSIX platform. Acquisition is blocked. |
+
+When a sidecar exists, `lease_hostname` and `lease_pid` report its validated
+owner even when the state is `available`; both are `None` only when no sidecar
+exists. Reads never acquire, reclaim, or remove a lease. On non-POSIX systems,
+every unowned same-host sidecar is `unverified` and blocks acquisition.
+
+Lifecycle methods differ as follows:
+
+| Method | Contract |
+| --- | --- |
+| `get_session_summary()` | Provider-free, nonmutating status read. Missing session: `SessionNotFoundError`. |
+| `list_sessions()` | Provider-free, nonmutating tuple ordered by newest `updated_at`, then session ID; an absent session directory yields `()`. |
+| `prepare_session()` | Preflights routes and the executable, requires an active session, retains its lease, and returns `None`. Missing session: `SessionNotFoundError`; inactive session: `BackendProtocolError`. |
+| `create_session()` | Preflights, creates a new active session, retains its lease, and returns an unselected `SessionSummary`. Any existing manifest raises `SessionExistsError`. |
+| `resume_session()` | Preflights and retains the lease of an existing session, reactivating it only when inactive; returns an unselected summary. Missing session: `SessionNotFoundError`. |
+| `attach_session()` | Preflights and retains the lease of an existing active session without rewriting its manifest; returns an unselected summary. Missing session: `SessionNotFoundError`; inactive session: `BackendProtocolError`. |
+| `detach_session()` | Releases this backend's matching lease without ending the session or changing threads or selection; returns an unselected summary. Missing session: `SessionNotFoundError`. |
+| `start_session()` | Compatibility operation: transiently creates or reactivates a session without executable preflight, preserves threads, releases its lease, and returns the manifest dictionary. |
+| `end_session()` | Uses an owned or transient lease, writes `active: false`, preserves thread metadata, releases on success, and returns the manifest dictionary. Missing session: `SessionNotFoundError`. |
+| `close()` | Releases owned leases without deactivating sessions, removes prompt staging, and returns `None`. A closed backend cannot be reused. |
+
+Both read methods validate all encountered manifest and lease data; malformed
+state raises `WorkspaceFormatError` rather than being skipped. A supplied
+selection is validated but need not identify a persisted session. Lease
+sidecars and the claim guard are never listed as sessions.
+
+Any lease claim blocked by a live or unverified owner raises
+`SessionInUseError` without exposing the token. Unsafe IDs raise
+`SessionIdError`. A changed ownership token raises `BackendProtocolError` and
+is never deleted. A call releases a lease it acquired when that call fails;
+an already-owned lease is retained after an owned read or write failure.
+Detach, end, and close preserve resumable thread metadata.
+
+The installed CLI remains `story session start|end`; the strict methods are
+Python foundations, not new CLI commands. Existing lifecycle-command JSON and
+exit-code contracts are unchanged. No interactive switch or quit controller is
+included.
 
 There is no runtime-imported backend plugin loader.
 

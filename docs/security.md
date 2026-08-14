@@ -195,7 +195,77 @@ Codex stores its own resumable conversations according to its CLI and account
 behavior. The runtime persists one thread ID per `(session_id, agent_id)` and
 reuses it across debates. `story session end` marks the team session inactive
 but deliberately retains these references and does not delete provider
-transcripts. A definition fingerprint change starts a new thread.
+transcripts. Detaching or closing a backend likewise releases only its lease;
+neither operation deletes provider references or transcripts. A definition
+fingerprint change starts a new thread.
+
+## Provider Session Attachment and Lease Liveness
+
+Provider-session manifests and leases use the same workspace containment and
+no-symlink checks as other runtime persistence. Manifest replacement is atomic
+per file, and lease acquisition uses exclusive creation rather than silently
+overwriting another claimant. These operations do not form a cross-file or
+distributed transaction.
+
+Every logical manifest and lease consumed by a status read or lifecycle
+operation is strictly validated. Validation covers the exact schema-v1 keys
+and types, path/session identity, timezone-aware timestamps, manifest
+timestamp ordering, thread records, and positive lease PIDs. Invalid or
+malformed state raises a validation error; it is not treated as stale and
+reclaimed.
+
+Lease liveness is deliberately conservative:
+
+- no sidecar is `available`;
+- a matching token held by the current backend is `owned`;
+- on POSIX, an unowned lease whose hostname exactly matches the local host and
+  whose PID is demonstrably alive is `in_use`;
+- on POSIX, a same-host PID that is demonstrably gone is `available`, but read
+  APIs leave its sidecar untouched;
+- on non-POSIX platforms, including Windows, every unowned same-host lease is
+  `unverified` until a non-destructive native liveness probe is implemented;
+  its sidecar is not reclaimed and acquisition remains blocked; and
+- a remote-host lease or any ambiguous local probe, including a permission
+  failure, is `unverified` and blocks acquisition.
+
+Only a later POSIX acquisition may reclaim a demonstrably dead same-host
+sidecar. POSIX liveness uses the non-destructive `os.kill(pid, 0)` probe. There
+is no remote liveness probe, native non-POSIX owner probe, heartbeat, lease
+timeout, age-based expiry, or stale-remote reclamation. PID probing cannot
+distinguish PID reuse, and hostname equality is not a distributed identity
+guarantee. Use lease state as local coordination evidence, not authentication
+or proof of a remote owner's health.
+
+Cooperating local processes serialize lease claims with the persistent
+workspace-global `provider_sessions/.lease-claims.lock` advisory guard. POSIX
+uses an exclusive `flock`; Windows uses advisory one-byte file locking. This
+Windows guard support is separate from owner liveness probing and therefore
+does not make an unowned same-host Windows sidecar reclaimable. The guard is
+opened without following symbolic links where the platform provides that flag,
+checked as a regular file, and verified so the opened descriptor and pathname
+retain the same file identity. Unsafe, replaced, unverifiable, or unsupported
+guard state fails closed instead of proceeding with a lease claim. Closing the
+descriptor, including at process exit after a crash, releases the OS lock.
+
+The guard file itself is persistent and must not be deleted or replaced while
+the workspace may be in use: a replacement pathname could split cooperating
+processes across different advisory locks. The mechanism coordinates only
+cooperating processes on the local filesystem. It is not authentication, a
+distributed lock, a network-filesystem guarantee, or evidence of session-owner
+liveness. The guard remains separate from the per-session lease sidecar that
+records ownership.
+
+Contention errors identify the safe session ID, PID, and a control-sanitized,
+length-limited hostname so an operator can diagnose the owner. They never
+include the opaque lease token. That token is a process-ownership value stored
+in the plaintext sidecar, not a credential or access-control mechanism.
+
+Ending a session atomically writes its inactive manifest before releasing its
+lease. Provider thread references, externally stored provider conversations or
+transcripts, CLI selection, session overrides, agent state, debate logs,
+manuscripts, and unrelated session-owned files are retained. Detach leaves the
+manifest active and retains the same data. Deletion and retention of external
+provider conversations remain governed by the provider, not this runtime.
 
 ## Debate Ownership and Recovery
 
@@ -204,20 +274,16 @@ so concurrent runtimes on the same filesystem cannot both own the same debate
 ID. The persisted `owner_token` coordinates state transitions and is omitted
 from normal inspection output. It is not a user authentication mechanism.
 
-An `active` state marker proves that an ID was reserved; it does not prove that
-the originating process is still alive. There is no heartbeat, lease timeout,
-automatic stale-owner cleanup, or same-ID resume operation.
+An `active` debate state marker proves that an ID was reserved; it does not
+prove that the originating process is still alive. There is no heartbeat,
+lease timeout, automatic stale-owner cleanup, or same-debate-ID resume
+operation.
 
 External coroutine cancellation is propagated to in-flight provider calls and
 best-effort persisted as terminal `interrupted`. Reserved IDs are immutable:
 consensus, deadlock, failure, interruption, and abandoned active work all
 require a new debate ID for recovery. Inspect the old debate, resolve any
 user-level conflict, and start the replacement work under a new ID.
-
-Separately, one team-level provider lease prevents concurrent local processes
-from using the same active provider session. A lease is reclaimed only when it
-names the local host and its recorded process is demonstrably gone. Closing
-`AgentBackend` releases owned leases.
 
 ## Operational Limitations
 
@@ -234,8 +300,9 @@ names the local host and its recorded process is demonstrably gone. Closing
   provides no search, database, RAG, or legacy-migration facility.
 - Filesystem safety assumes the operating system and underlying filesystem
   correctly implement the atomic primitives used by Python.
-- Inspection reports persisted state; it does not establish process liveness
-  or validate the truthfulness of provider-generated content.
+- Debate inspection reports persisted state and does not establish process
+  liveness. Provider-session summaries perform only the limited local lease
+  probe described above. Neither validates provider-generated content.
 
 For workflow details, see [Architecture](architecture.md). For provider and
 inspection contracts, see the [API reference](api.md).

@@ -220,8 +220,10 @@ selection. A failed start does not change the selection.
 One team-level lease prevents two local processes from using the same active
 session concurrently. The backend stores one resumable Codex thread per
 `(session_id, agent_id)` and reuses it across debates. `story run` releases the
-lease when it exits. A stale lease is reclaimed only when its recorded process
-is on the same host and demonstrably no longer exists.
+lease when it exits. On POSIX, a stale lease is reclaimed only when its
+recorded process is on the same host and demonstrably no longer exists. On
+non-POSIX platforms, an unowned same-host lease cannot yet be verified, so it
+blocks acquisition and is not reclaimed.
 
 End the provider session when the team is no longer in use:
 

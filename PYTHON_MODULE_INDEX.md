@@ -53,7 +53,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `StoryWritingAgentsError`, `WorkspaceSecurityError`, `WorkspaceFormatError`,
   `ConfigurationError`, `DirectiveError`, `SessionIdError`,
   `ConversationNotFoundError`, `ConversationExistsError`,
-  `ManuscriptExistsError`, `BackendProtocolError`, and `DebateExistsError` from
+  `ManuscriptExistsError`, `BackendProtocolError`, `SessionExistsError`,
+  `SessionNotFoundError`, `SessionInUseError`, and `DebateExistsError` from
   `errors`; `CONVERSATION_METADATA_SCHEMA_VERSION`,
   `CONVERSATION_SUBJECT_NORMALIZATION_VERSION`,
   `MAX_CONVERSATION_SUBJECT_LENGTH`, `ConversationCatalog`,
@@ -61,19 +62,20 @@ every intermediate arrow. The current runtime graph is acyclic.
   `normalize_conversation_subject` from `conversations`; `ActionKind`,
   `InteractiveAction`, `CommandSpec`, `COMMANDS`, and
   `parse_interactive_line` from `interactive_commands`; `InputKind`, `Phase`,
-  `Verdict`, `DebateStatus`, `DebateMessage`, `AgentStateEntry`,
-  `PromptFileReference`, `AgentDefinition`, `AgentRequest`, `AgentReply`, and
-  `DebateResult` from `models`; `StoryRuntime`, `RuntimeSession`, `Runtime`, and
-  `Session` from `orchestrator`; and `FilesystemConversationCatalog`,
-  `Workspace`, plus `initialize_workspace` from `workspace`.
+  `Verdict`, `DebateStatus`, `SessionLeaseState`, `SessionSummary`,
+  `DebateMessage`, `AgentStateEntry`, `PromptFileReference`, `AgentDefinition`,
+  `AgentRequest`, `AgentReply`, and `DebateResult` from `models`; `StoryRuntime`,
+  `RuntimeSession`, `Runtime`, and `Session` from `orchestrator`; and
+  `FilesystemConversationCatalog`, `Workspace`, plus `initialize_workspace`
+  from `workspace`.
 - **Direct internal dependencies:** `agents`, `backend`, `directives`, `errors`,
   `conversations`, `interactive_commands`, `models`, `orchestrator`, and
   `workspace`.
 - **State, resources, and side effects:** Owns no state or external resource;
   importing the facade loads its exported modules.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
-  `tests/test_conversation_catalog.py`, `tests/test_interactive_commands.py`,
-  and `docs/api.md`.
+  `tests/test_conversation_catalog.py`, `tests/test_session_lifecycle.py`,
+  `tests/test_interactive_commands.py`, and `docs/api.md`.
 
 ### `story_writing_agents.__main__`
 
@@ -104,15 +106,23 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 - **Source:** `src/story_writing_agents/backend.py`
 - **Responsibility:** Adapt immutable agent definitions to provider invocation
-  and own provider-session lifecycle mechanics.
+  and own provider-session manifest, attachment, and lease lifecycles.
 - **Supported surface:** Package-supported `AgentBackend` and `BoundAgent`.
+  `AgentBackend` exposes validated `get_session_summary` and `list_sessions`
+  reads; strict `create_session`, `resume_session`, `attach_session`, and
+  `detach_session` attachment operations; and the compatible
+  `prepare_session`, `start_session`, and `end_session` lifecycle methods.
 - **Direct internal dependencies:** `agents`, `config`, `errors`, `models`, and
   `workspace`.
 - **State, resources, and side effects:** Owns Codex subprocesses, temporary
-  prompt/output staging, provider-session leases, persisted thread metadata,
-  per-thread locks, cleanup, and per-instance `atexit` registration.
+  prompt/output staging, provider-session manifests and process attachment
+  leases, the lazily created persistent workspace-global `.lease-claims.lock`
+  OS advisory guard that serializes lease-claim and stale-reclaim transactions,
+  persisted thread metadata, per-thread locks, cleanup, and per-instance
+  `atexit` registration.
 - **Primary verification/documentation:** `tests/test_codex_backend.py`,
-  `docs/api.md`, `docs/architecture.md`, and `docs/security.md`.
+  `tests/test_session_lifecycle.py`, `docs/api.md`, `docs/architecture.md`, and
+  `docs/security.md`.
 
 ### `story_writing_agents.cli`
 
@@ -198,11 +208,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   `WorkspaceSecurityError`, `WorkspaceFormatError`, `ConfigurationError`,
   `DirectiveError`, `SessionIdError`, `ConversationNotFoundError`,
   `ConversationExistsError`, `ManuscriptExistsError`, `BackendProtocolError`,
-  and `DebateExistsError`.
+  `SessionExistsError`, `SessionNotFoundError`, `SessionInUseError`, and
+  `DebateExistsError`.
 - **Direct internal dependencies:** None.
 - **State, resources, and side effects:** None.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
-  `tests/test_conversation_catalog.py`, failure-path tests, and `docs/api.md`.
+  `tests/test_conversation_catalog.py`, `tests/test_session_lifecycle.py`,
+  `tests/test_interactive_commands.py`, failure-path tests, and `docs/api.md`.
 
 ### `story_writing_agents.interactive_commands`
 
@@ -225,13 +237,15 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Responsibility:** Define immutable cross-boundary request, reply, state, and
   result contracts.
 - **Supported surface:** Package-supported `InputKind`, `Phase`, `Verdict`,
-  `DebateStatus`, `DebateMessage`, `AgentStateEntry`, `PromptFileReference`,
-  `AgentDefinition`, `AgentRequest`, `AgentReply`, and `DebateResult`.
+  `DebateStatus`, `SessionLeaseState`, `SessionSummary`, `DebateMessage`,
+  `AgentStateEntry`, `PromptFileReference`, `AgentDefinition`, `AgentRequest`,
+  `AgentReply`, and `DebateResult`.
 - **Direct internal dependencies:** `errors`.
 - **State, resources, and side effects:** Value contracts own no process state;
   `PromptFileReference` performs verified filesystem reads.
-- **Primary verification/documentation:** `tests/test_prompts.py`, orchestration
-  and state tests, and `docs/api.md`.
+- **Primary verification/documentation:** `tests/test_prompts.py`,
+  `tests/test_session_lifecycle.py`, orchestration and state tests, and
+  `docs/api.md`.
 
 ### `story_writing_agents.orchestrator`
 

@@ -41,5 +41,17 @@ class BackendProtocolError(StoryWritingAgentsError):
     """Raised when a backend returns a reply that violates the public protocol."""
 
 
+class SessionExistsError(BackendProtocolError):
+    """Raised when creating an already persisted provider session."""
+
+
+class SessionNotFoundError(BackendProtocolError):
+    """Raised when a requested provider session does not exist."""
+
+
+class SessionInUseError(BackendProtocolError):
+    """Raised when another process may own a provider session lease."""
+
+
 class DebateExistsError(StoryWritingAgentsError):
     """Raised when a session/debate identifier has already been reserved."""
