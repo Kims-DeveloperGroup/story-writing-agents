@@ -37,6 +37,13 @@ The exact export inventory is:
   `ConversationEventAppend`, `ConversationEventKind`,
   `ConversationContextPolicy`, `ConversationContextWindow`,
   `CONVERSATION_EVENT_SCHEMA_VERSION`, and `CONVERSATION_CONTEXT_POLICY`;
+- conversation search and cited reads: `ConversationMemoryPolicy`,
+  `CONVERSATION_MEMORY_POLICY`, `ConversationSearchScope`,
+  `ConversationSearchQuery`, `ConversationSearchMatchKind`,
+  `ConversationCitation`, `ConversationSearchHit`, `ConversationSearchResult`,
+  `ConversationSearch`, `ReferenceConversationSearch`,
+  `ConversationMemoryService`, `ConversationTranscriptCursor`, and
+  `ConversationTranscriptPage`;
 - interactive parser: `ActionKind`, `InteractiveAction`, `CommandSpec`,
   `COMMANDS`, `parse_interactive_line`;
 - errors: `StoryWritingAgentsError`, `WorkspaceSecurityError`,
@@ -60,6 +67,7 @@ of `RuntimeSession`. They do not provide different behavior.
 | `DirectiveKind` | `language`, `persona`, `reset` |
 | `SessionLeaseState` | `available`, `owned`, `in_use`, `unverified` |
 | `ConversationStatus` | `active`, `archived` |
+| `ConversationSearchMatchKind` | `exact_subject`, `subject_prefix`, `subject_substring`, `transcript` |
 
 These are `StrEnum` values. Use members such as `Verdict.APPROVE`; a plain
 string like `"approve"` is not accepted where reply validation requires the
@@ -73,6 +81,7 @@ enum member.
 - [Workspace API](workspace-api.md)
 - [Conversation catalog](conversation-catalog.md)
 - [Conversation transcripts](conversation-transcripts.md)
+- [Conversation search and cited transcript pages](conversation-search.md)
 - [Interactive command parser](interactive-command-parser.md)
 - [Identifiers and errors](configuration/identifiers-and-errors.md)
 

@@ -86,6 +86,12 @@ conversation metadata transition is isolated to that identity. The event store
 owns transcript append, full read, and bounded context projection. Neither
 adapter performs migration, and absent reads create nothing.
 
+The conversation memory service is another projection, not a persistence
+owner. It reads the catalog and event-store contracts but stores no search
+index, result, citation, page, or cursor and changes no metadata or transcript.
+Its exact read contract lives in [Conversation search and cited transcript
+pages](../reference/conversation-search.md).
+
 Because these channels are separate files, persistence design does not imply a
 database transaction across them. The normative containment, exclusive-create,
 atomic-file, write-order, rollback, and interruption guarantees live in

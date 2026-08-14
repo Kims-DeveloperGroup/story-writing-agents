@@ -2,7 +2,7 @@
 
 > **Availability:** inspection and new-ID recovery are implemented. Automatic
 > retry, same-debate continuation, stale-owner cleanup, conversation-event
-> deletion, and search are not.
+> deletion, and interactive search/transcript commands are not.
 
 Key terms: **immutable reservation**—an ID that cannot be reused; **deadlock**—
 unresolved specialist conflict at the round limit; **liveness**—evidence about
@@ -58,6 +58,14 @@ explicit. See
 [Conversation transcripts](../reference/conversation-transcripts.md) for the
 single-turn example and exact pairing rules.
 
+A transcript cursor is valid only for the last-sequence snapshot from its first
+page. If any event is appended, discard the stale cursor and begin a new read.
+A citation remains valid across a subject rename because it uses immutable IDs;
+an exact event citation fails closed if its event identity no longer matches.
+Search callers must inspect `scan_truncated` before treating an empty or partial
+result as exhaustive. Exact recovery conditions are in [Conversation search and
+cited transcript pages](../reference/conversation-search.md).
+
 ## Current product limits
 
 - Codex is the only implemented provider; `gemini` is reserved and fails
@@ -71,9 +79,10 @@ single-turn example and exact pairing rules.
   correctly implementing the atomic primitives used.
 - Debate inspection validates persisted state but cannot establish process
   liveness or validate provider-generated story content.
-- The conversation catalog and event store are Python foundations only. They do
-  not provide current selection, provider dispatch, legacy migration, a
-  database, an index, search, RAG, or transcript commands.
+- The conversation catalog, event store, and read-only search/page service are
+  Python foundations only. They do not provide current selection, provider
+  dispatch, legacy migration, a database, a persistent index, RAG, or
+  conversation/search/transcript commands.
 - The interactive command registry and parser do not provide dispatch, a TTY,
   provider control, session switching, artifact actions, `/conversation`,
   `/search`, or `/transcript`.

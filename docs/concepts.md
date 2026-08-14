@@ -1,8 +1,8 @@
 # Core concepts
 
 > **Availability:** this model describes the implemented runtime. Conversation
-> metadata and transcripts are Python foundations; selection, dispatch, and
-> search are not implemented.
+> metadata, transcripts, bounded search, citations, and transcript pages are
+> Python foundations; selection and dispatch are not implemented.
 
 Key terms: **scope**—what one persisted object groups; **ownership**—which
 component controls data or a transition; **turn**—one user event and its
@@ -25,14 +25,19 @@ flowchart TD
     S -. separate conversation scope .-> C[Conversation identity]
     C --> CM[Catalog metadata]
     C --> CT[Visible event transcript]
+    CM --> Q[Read-only bounded search]
+    CT -->|user and reply text| Q
+    Q --> P[Citation and transcript page]
 ```
 
 In words: work narrows from workspace to session to debate, then moves through
 candidate revisions toward at most one committed manuscript. Conversation
 identity is scoped by the same story session but remains separate from debate
 execution. Its catalog owns subject and archive status; its event store owns
-the full visible transcript and a bounded complete-turn view. Neither is
-connected to interactive dispatch today.
+the full visible transcript and a bounded complete-turn view. A read-only
+memory service searches both and follows stable citations into bounded pages.
+None is connected to interactive dispatch today. See [Conversation search and
+cited transcript pages](reference/conversation-search.md).
 
 ## The four roles
 

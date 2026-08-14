@@ -1,7 +1,8 @@
 # System design overview
 
 > **Availability:** this page describes the implemented asynchronous runtime,
-> concrete Codex backend, and Python-only conversation persistence foundation.
+> concrete Codex backend, and Python-only conversation persistence and memory
+> foundations.
 
 Key terms: **orchestration**—coordination of the debate workflow; **backend**—
 the provider/session coordinator; **blackboard**—the team's public append-only
@@ -44,17 +45,20 @@ finish in another order.
 
 ## Separate conversation foundation
 
-The conversation catalog and event store are alongside, not inside, debate
-orchestration. Their storage-neutral protocols separate identity and discovery
-metadata from visible transcript events. Filesystem adapters use `Workspace`
-for fixed, safe paths.
+The conversation catalog, event store, and read-only memory service are
+alongside, not inside, debate orchestration. Storage-neutral protocols separate
+identity and discovery metadata from visible transcript events. Filesystem
+adapters use `Workspace` for fixed, safe paths.
 
 This foundation has no dependency on providers or the consensus runtime. The
 catalog owns create, get, list, rename, archive, and unarchive. The event store
-owns append, authoritative read, and bounded complete-turn context. Current
-selection, indexing, search, interactive dispatch, and RAG are not implemented.
-See [Conversation catalog](../reference/conversation-catalog.md) and
-[Conversation transcripts](../reference/conversation-transcripts.md).
+owns append, authoritative read, and bounded complete-turn context. The memory
+service depends only on those two contracts and common errors; it owns bounded
+literal search, stable citations, and event-atomic transcript pages. It creates
+no persistent index and does not provide current selection, interactive
+dispatch, or RAG. See [Conversation catalog](../reference/conversation-catalog.md),
+[Conversation transcripts](../reference/conversation-transcripts.md), and
+[Conversation search](../reference/conversation-search.md).
 
 ## Dependency direction
 

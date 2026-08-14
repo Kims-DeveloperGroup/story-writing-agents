@@ -1,8 +1,9 @@
 # Conversation transcripts
 
 > **Availability:** transcript persistence is an implemented, provider-neutral
-> Python API. It is not connected to interactive dispatch, conversation
-> selection, search, or a transcript CLI command.
+> Python API. A separate Python API now provides read-only search and transcript
+> pages. Neither is connected to interactive dispatch, conversation selection,
+> or a transcript CLI command.
 
 Key terms: **event**—one visible stored record; **complete turn**—one user
 event plus one outcome; **unmatched turn**—a user event with no outcome yet;
@@ -11,7 +12,9 @@ view containing only complete turns.
 
 The transcript is the authoritative visible history for one conversation.
 `read()` returns that full history; `read_context()` derives a smaller view for
-a future provider caller without changing the transcript.
+a future provider caller without changing the transcript. [Conversation search
+and cited transcript pages](conversation-search.md) defines a separate bounded
+read projection over this same authoritative history.
 
 ## Public contract
 
@@ -109,8 +112,9 @@ present empty, malformed, noncontiguous-sequence, invalidly paired, or
 path-mismatched transcript fails closed with `WorkspaceFormatError`.
 
 The adapter validates the complete stored history before every read, context
-selection, or append. It never invokes a provider, changes selection, searches,
-migrates legacy data, or deletes events. See
+selection, or append. It never invokes a provider, changes selection, performs
+search itself, migrates legacy data, or deletes events. See
 [Conversation catalog](conversation-catalog.md) for metadata,
+[Conversation search](conversation-search.md) for the read-only consumer,
 [Filesystem safety](../operations/filesystem-safety.md) for mutation and
 locking, and [Privacy](../operations/privacy-and-provider.md) for exposure.

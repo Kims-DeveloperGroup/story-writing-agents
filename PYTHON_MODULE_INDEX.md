@@ -16,6 +16,8 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
+Importable production units indexed: 17.
+
 ## Current Dependency Direction
 
 The current graph flows from entry points and orchestration toward provider,
@@ -33,6 +35,7 @@ smoke -> orchestrator/workspace/models/agents
 directives -> config/workspace/errors/agents
 interactive_commands -> agents
 story_writing_agents facade -> interactive_commands
+                            -> conversation_search -> conversations/errors
 models -> conversations/agents/errors
 workspace -> conversations -> agents/errors
 ```
@@ -64,7 +67,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ConversationContextPolicy`, `ConversationContextWindow`,
   `ConversationEvent`, `ConversationEventAppend`, `ConversationEventKind`,
   `ConversationEventStore`, `ConversationMetadata`, `ConversationStatus`, and
-  `normalize_conversation_subject` from `conversations`; `ActionKind`,
+  `normalize_conversation_subject` from `conversations`;
+  `CONVERSATION_MEMORY_POLICY`, `ConversationCitation`,
+  `ConversationMemoryPolicy`, `ConversationMemoryService`,
+  `ConversationSearch`, `ConversationSearchHit`,
+  `ConversationSearchMatchKind`, `ConversationSearchQuery`,
+  `ConversationSearchResult`, `ConversationSearchScope`,
+  `ConversationTranscriptCursor`, `ConversationTranscriptPage`, and
+  `ReferenceConversationSearch` from `conversation_search`; `ActionKind`,
   `InteractiveAction`, `CommandSpec`, `COMMANDS`, and
   `parse_interactive_line` from `interactive_commands`; `InputKind`, `Phase`,
   `Verdict`, `DebateStatus`, `SessionLeaseState`, `SessionSummary`,
@@ -74,15 +84,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   `Session` from `orchestrator`; and
   `FilesystemConversationCatalog`, `FilesystemConversationEventStore`,
   `Workspace`, plus `initialize_workspace` from `workspace`.
-- **Direct internal dependencies:** `agents`, `backend`, `directives`, `errors`,
-  `conversations`, `interactive_commands`, `models`, `orchestrator`, and
-  `workspace`.
+- **Direct internal dependencies:** `agents`, `backend`, `conversation_search`,
+  `conversations`, `directives`, `errors`, `interactive_commands`, `models`,
+  `orchestrator`, and `workspace`.
 - **State, resources, and side effects:** Owns no state or external resource;
   importing the facade loads its exported modules.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
   `tests/test_codex_backend.py`, `tests/test_conversation_catalog.py`,
   `tests/test_session_lifecycle.py`, `tests/test_conversation_event_store.py`,
-  `tests/test_interactive_commands.py`, `docs/reference/package-api.md`, and
+  `tests/test_interactive_commands.py`, `tests/test_conversation_search.py`,
+  `docs/reference/package-api.md`, `docs/reference/conversation-search.md`, and
   `docs/reference/conversation-transcripts.md`.
 
 ### `story_writing_agents.__main__`
@@ -182,6 +193,30 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_prompts.py`, `tests/test_codex_backend.py`,
   `docs/reference/configuration/agent-configuration.md`, and
   `docs/reference/configuration/runtime-overrides.md`.
+
+### `story_writing_agents.conversation_search`
+
+- **Source:** `src/story_writing_agents/conversation_search.py`
+- **Responsibility:** Provide provider-neutral deterministic read-only
+  conversation search and bounded cited transcript-read contracts.
+- **Supported surface:** Package-supported `CONVERSATION_MEMORY_POLICY`,
+  `ConversationCitation`, `ConversationMemoryPolicy`,
+  `ConversationMemoryService`, `ConversationSearch`, `ConversationSearchHit`,
+  `ConversationSearchMatchKind`, `ConversationSearchQuery`,
+  `ConversationSearchResult`, `ConversationSearchScope`,
+  `ConversationTranscriptCursor`, `ConversationTranscriptPage`, and
+  `ReferenceConversationSearch`.
+- **Direct internal dependencies:** `conversations` and `errors`.
+- **State, resources, and side effects:** Immutable value contracts and fixed
+  policy metadata own no mutable state or external resource. Service and
+  reference-search instances retain explicitly supplied `ConversationCatalog`
+  and `ConversationEventStore` collaborators, plus their validated scope and
+  optional search adapter; they perform reads only and have no import-time
+  operational side effects.
+- **Primary verification/documentation:**
+  `tests/conversation_search_contract.py`,
+  `tests/test_conversation_search.py`, and
+  `docs/reference/conversation-search.md`.
 
 ### `story_writing_agents.conversations`
 
@@ -364,6 +399,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   fixed-policy complete-turn context contracts;
   `FilesystemConversationEventStore` owns the fixed JSONL layout through
   `Workspace` without exposing paths through that protocol.
+- `ReferenceConversationSearch` may call the event-store port's full `read`
+  operation while enforcing deterministic logical scan and result bounds; it
+  owns neither the filesystem layout nor persistence resources.
 - The filesystem event adapter's process-wide weak locks serialize one
   conversation in process; the story-session lease remains responsible for
   cross-process same-session write exclusion.
