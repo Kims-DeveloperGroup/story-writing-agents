@@ -1410,6 +1410,33 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIn("[truncated]", diagnostic)
         self.assertLessEqual(len(diagnostic), 4_160)
 
+    async def test_debate_diagnostic_redacts_control_bearing_payload(self) -> None:
+        session_id = "debate_diagnostic_session"
+        secret = "DEBATE_SECRET\x00TAIL"
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        backend.start_session(session_id)
+        bound = await backend.bind(self.definition())
+        request = replace(
+            self.request(session_id=session_id),
+            user_payload=secret,
+        )
+        with mock.patch.dict(
+            os.environ,
+            {"STORY_FAKE_CODEX_MODE": "nonzero"},
+        ):
+            with self.assertRaisesRegex(
+                BackendProtocolError,
+                "status 7",
+            ) as caught:
+                await bound.invoke(request)
+
+        diagnostic = str(caught.exception)
+        for sensitive in (secret, secret.replace("\x00", "?"), "DEBATE_SECRET"):
+            self.assertNotIn(sensitive, diagnostic)
+        self.assertNotIn("\x00", diagnostic)
+        self.assertIn("<redacted>", diagnostic)
+
     async def test_missing_executable_nonzero_and_malformed_output_fail_cleanly(
         self,
     ) -> None:

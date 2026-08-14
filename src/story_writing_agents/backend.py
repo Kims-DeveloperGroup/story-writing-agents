@@ -1746,12 +1746,25 @@ class AgentBackend:
         staging_directory: Path,
         sensitive_values: tuple[str, ...],
     ) -> str:
-        sanitized = _CONTROL_CHARACTERS.sub("?", value)
-        sanitized = sanitized.replace(str(staging_directory), "<agent-directory>")
-        sanitized = sanitized.replace(str(self.workspace.root), "<workspace>")
-        for sensitive in sensitive_values:
-            if sensitive:
-                sanitized = sanitized.replace(sensitive, "<redacted>")
+        def sanitize(candidate: str) -> str:
+            candidate = _CONTROL_CHARACTERS.sub("?", candidate)
+            candidate = candidate.replace(
+                str(staging_directory),
+                "<agent-directory>",
+            )
+            return candidate.replace(str(self.workspace.root), "<workspace>")
+
+        sanitized = sanitize(value)
+        transformed_sensitive = {
+            sanitize(sensitive)
+            for sensitive in sensitive_values
+            if sensitive
+        }
+        for sensitive in sorted(
+            transformed_sensitive,
+            key=lambda item: (-len(item), item),
+        ):
+            sanitized = sanitized.replace(sensitive, "<redacted>")
         sanitized = sanitized.strip()
         if len(sanitized) > _MAX_DIAGNOSTIC_LENGTH:
             sanitized = (
