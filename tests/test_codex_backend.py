@@ -319,7 +319,7 @@ class ConversationModelContractTests(unittest.TestCase):
         for model, base, identifier_fields in cases:
             for field_name in identifier_fields:
                 for value, error in (
-                    (None, TypeError),
+                    (None, SessionIdError),
                     ("../escape", SessionIdError),
                     ("x" * 65, SessionIdError),
                 ):

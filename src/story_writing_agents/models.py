@@ -355,9 +355,7 @@ class DebateResult:
 
 
 def _validate_conversation_identifier(value: str, *, label: str) -> str:
-    if not isinstance(value, str):
-        raise TypeError(f"{label} must be a string")
-    if _SAFE_IDENTIFIER.fullmatch(value) is None:
+    if not isinstance(value, str) or _SAFE_IDENTIFIER.fullmatch(value) is None:
         raise SessionIdError(
             f"{label} must match [A-Za-z0-9][A-Za-z0-9_-]{{0,63}}"
         )
