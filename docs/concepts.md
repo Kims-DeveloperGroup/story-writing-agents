@@ -1,11 +1,13 @@
 # Core concepts
 
 > **Availability:** this model describes the implemented runtime. Conversation
-> metadata exists, but conversation selection, transcripts, and search do not.
+> metadata and transcripts are Python foundations; selection, dispatch, and
+> search are not implemented.
 
 Key terms: **scope**—what one persisted object groups; **ownership**—which
-component controls data or a transition; **flow**—how work moves from input to
-an approved artifact. For vocabulary lookup, use the [Glossary](glossary.md).
+component controls data or a transition; **turn**—one user event and its
+outcome; **flow**—how work moves from input to an approved artifact. For
+vocabulary lookup, use the [Glossary](glossary.md).
 
 The workspace is the outer project and persistence boundary. Within it, a story
 session groups related overrides, agent history, and provider thread references.
@@ -20,13 +22,17 @@ flowchart TD
     D1 --> R[Current candidate revision]
     R -->|conflict and replacement allowed| R
     R -->|unanimous approval and commit| M[Consensus manuscript]
-    S -. separate metadata scope .-> C[Conversation identity]
+    S -. separate conversation scope .-> C[Conversation identity]
+    C --> CM[Catalog metadata]
+    C --> CT[Visible event transcript]
 ```
 
 In words: work narrows from workspace to session to debate, then moves through
 candidate revisions toward at most one committed manuscript. Conversation
-identity is scoped by the same story session but belongs to a separate,
-metadata-only catalog. It is not connected to debate execution today.
+identity is scoped by the same story session but remains separate from debate
+execution. Its catalog owns subject and archive status; its event store owns
+the full visible transcript and a bounded complete-turn view. Neither is
+connected to interactive dispatch today.
 
 ## The four roles
 

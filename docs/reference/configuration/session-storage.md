@@ -1,12 +1,13 @@
 # Session and workspace storage
 
 > **Availability:** local workspace, CLI selection, provider session, debate,
-> agent-state, and conversation-metadata persistence described here is
-> implemented. All files are plaintext.
+> agent-state, conversation metadata, and conversation transcript persistence
+> described here is implemented. All files are plaintext.
 
 Key terms: **scaffold**—files and directories created by initialization;
 **manifest**—durable provider-session metadata; **lease**—temporary attachment
-metadata; **lifecycle state**—the persisted status of one debate.
+metadata; **lifecycle state**—the persisted status of one debate;
+**transcript**—the authoritative visible events for one conversation.
 
 ## Canonical workspace tree
 
@@ -40,7 +41,9 @@ workspace/
 │   ├── <debate_id>.state.json
 │   ├── <debate_id>.jsonl
 │   ├── <debate_id>.result.json
-│   └── interactive/conversations/<conversation_id>/metadata.json
+│   └── interactive/conversations/<conversation_id>/
+│       ├── metadata.json                                    [lazy identity]
+│       └── transcript.jsonl                                 [lazy events]
 └── manuscript/<safe-output-path>
 ```
 
@@ -124,7 +127,8 @@ JSONL is the full public blackboard. Lifecycle state contains an internal
 owner token; normal inspection omits it. Terminal results normally have result
 JSON, which omits duplicated messages; external cancellation may leave only
 state and blackboard. Conversation metadata has its own exact
-[catalog schema](../conversation-catalog.md).
+[catalog schema](../conversation-catalog.md); its sibling transcript has a
+separate [event schema](../conversation-transcripts.md).
 
 All reads validate strict UTF-8 and their exact schemas. Runtime-managed files
 must not be manually edited. Persistence flow and durability are explained in

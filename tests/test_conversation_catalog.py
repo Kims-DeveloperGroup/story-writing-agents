@@ -867,15 +867,24 @@ class FilesystemConversationCatalogPersistenceTests(unittest.TestCase):
 class ConversationPackageBoundaryTests(unittest.TestCase):
     def test_supported_package_exports_are_identity_stable(self) -> None:
         expected = {
+            "CONVERSATION_CONTEXT_POLICY",
+            "CONVERSATION_EVENT_SCHEMA_VERSION",
             "CONVERSATION_METADATA_SCHEMA_VERSION",
             "CONVERSATION_SUBJECT_NORMALIZATION_VERSION",
             "MAX_CONVERSATION_SUBJECT_LENGTH",
             "ConversationCatalog",
+            "ConversationContextPolicy",
+            "ConversationContextWindow",
+            "ConversationEvent",
+            "ConversationEventAppend",
+            "ConversationEventKind",
+            "ConversationEventStore",
             "ConversationExistsError",
             "ConversationMetadata",
             "ConversationNotFoundError",
             "ConversationStatus",
             "FilesystemConversationCatalog",
+            "FilesystemConversationEventStore",
             "normalize_conversation_subject",
         }
         self.assertTrue(expected.issubset(set(story_writing_agents.__all__)))
@@ -886,6 +895,7 @@ class ConversationPackageBoundaryTests(unittest.TestCase):
                     "ConversationExistsError",
                     "ConversationNotFoundError",
                     "FilesystemConversationCatalog",
+                    "FilesystemConversationEventStore",
                 }
             ),
         )
