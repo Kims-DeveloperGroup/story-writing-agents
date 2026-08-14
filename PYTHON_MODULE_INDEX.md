@@ -75,7 +75,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   importing the facade loads its exported modules.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
   `tests/test_conversation_catalog.py`, `tests/test_session_lifecycle.py`,
-  `tests/test_interactive_commands.py`, and `docs/api.md`.
+  `tests/test_interactive_commands.py`, and `docs/reference/package-api.md`.
 
 ### `story_writing_agents.__main__`
 
@@ -86,7 +86,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **State, resources, and side effects:** Calls `cli.main()` and raises
   `SystemExit` at module execution.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py` and
-  the CLI sections of `UserGuide.md`.
+  `docs/reference/cli.md`.
 
 ### `story_writing_agents.agents`
 
@@ -100,7 +100,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Direct internal dependencies:** None.
 - **State, resources, and side effects:** Immutable module metadata only.
 - **Primary verification/documentation:** `tests/test_workspace_and_config.py`,
-  `docs/architecture.md`, and `docs/configuration.md`.
+  `docs/concepts.md`, and `docs/reference/configuration/agent-configuration.md`.
 
 ### `story_writing_agents.backend`
 
@@ -121,8 +121,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   persisted thread metadata, per-thread locks, cleanup, and per-instance
   `atexit` registration.
 - **Primary verification/documentation:** `tests/test_codex_backend.py`,
-  `tests/test_session_lifecycle.py`, `docs/api.md`, `docs/architecture.md`, and
-  `docs/security.md`.
+  `tests/test_session_lifecycle.py`, `docs/reference/backend-and-sessions.md`,
+  `docs/design/prompts-and-provider.md`, `docs/design/session-lifecycle.md`, and
+  `docs/operations/privacy-and-provider.md`.
 
 ### `story_writing_agents.cli`
 
@@ -138,8 +139,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   errors to standard streams, creates and closes backends, and runs the async
   event loop.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
-  `tests/test_cli_context.py`, `tests/test_smoke_cli.py`, `UserGuide.md`, and
-  `docs/api.md`.
+  `tests/test_cli_context.py`, `tests/test_smoke_cli.py`,
+  `docs/reference/cli.md`, and `docs/getting-started.md`.
 
 ### `story_writing_agents.cli_context`
 
@@ -153,8 +154,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   `agent_states/orchestrator_state/cli_context.json`, written through
   `Workspace`.
 - **Primary verification/documentation:** `tests/test_cli_context.py`,
-  `UserGuide.md`, `docs/architecture.md`, `docs/configuration.md`, and
-  `docs/security.md`.
+  `docs/reference/cli.md`,
+  `docs/reference/configuration/session-storage.md`, and
+  `docs/design/session-lifecycle.md`.
 
 ### `story_writing_agents.config`
 
@@ -166,8 +168,9 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **State, resources, and side effects:** Reads workspace configuration and
   owns no persistence.
 - **Primary verification/documentation:** `tests/test_workspace_and_config.py`,
-  `tests/test_prompts.py`, `tests/test_codex_backend.py`, and
-  `docs/configuration.md`.
+  `tests/test_prompts.py`, `tests/test_codex_backend.py`,
+  `docs/reference/configuration/agent-configuration.md`, and
+  `docs/reference/configuration/runtime-overrides.md`.
 
 ### `story_writing_agents.conversations`
 
@@ -183,8 +186,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Direct internal dependencies:** `errors`.
 - **State, resources, and side effects:** Immutable value contracts and
   deterministic normalization only; owns no state or external resource.
-- **Primary verification/documentation:** `tests/test_conversation_catalog.py`,
-  `docs/api.md`, `docs/architecture.md`, and `docs/configuration.md`.
+- **Primary verification/documentation:** `tests/test_conversation_catalog.py`
+  and `docs/reference/conversation-catalog.md`.
 
 ### `story_writing_agents.directives`
 
@@ -197,8 +200,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `workspace`.
 - **State, resources, and side effects:** Persists session overrides through
   `Workspace`.
-- **Primary verification/documentation:** `tests/test_workspace_and_config.py`,
-  `docs/api.md`, and `docs/configuration.md`.
+- **Primary verification/documentation:** `tests/test_workspace_and_config.py`
+  and `docs/reference/configuration/runtime-overrides.md`.
 
 ### `story_writing_agents.errors`
 
@@ -214,7 +217,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **State, resources, and side effects:** None.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
   `tests/test_conversation_catalog.py`, `tests/test_session_lifecycle.py`,
-  `tests/test_interactive_commands.py`, failure-path tests, and `docs/api.md`.
+  `tests/test_interactive_commands.py`, failure-path tests, and
+  `docs/reference/configuration/identifiers-and-errors.md`.
 
 ### `story_writing_agents.interactive_commands`
 
@@ -229,7 +233,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   process state and performs no provider, filesystem, persistence, environment,
   or import-time operational side effects.
 - **Primary verification/documentation:** `tests/test_interactive_commands.py`,
-  `tests/test_public_api_and_cli.py`, and `docs/api.md`.
+  `tests/test_public_api_and_cli.py`, and
+  `docs/reference/interactive-command-parser.md`.
 
 ### `story_writing_agents.models`
 
@@ -244,8 +249,9 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **State, resources, and side effects:** Value contracts own no process state;
   `PromptFileReference` performs verified filesystem reads.
 - **Primary verification/documentation:** `tests/test_prompts.py`,
-  `tests/test_session_lifecycle.py`, orchestration and state tests, and
-  `docs/api.md`.
+  `tests/test_session_lifecycle.py`, orchestration and state tests,
+  `docs/reference/agent-contracts.md`, `docs/reference/runtime-api.md`, and
+  `docs/reference/backend-and-sessions.md`.
 
 ### `story_writing_agents.orchestrator`
 
@@ -261,7 +267,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `Workspace` owns filesystem mechanics.
 - **Primary verification/documentation:** `tests/test_orchestration_workflow.py`,
   `tests/test_orchestration_safety.py`, `tests/test_lifecycle_atomicity.py`,
-  `tests/test_agent_state.py`, `docs/api.md`, and `docs/architecture.md`.
+  `tests/test_agent_state.py`, `docs/reference/runtime-api.md`, and
+  `docs/design/consensus-workflow.md`.
 
 ### `story_writing_agents.prompts`
 
@@ -274,7 +281,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **State, resources, and side effects:** Reads configuration, verified prompt
   references, and owner-isolated agent history; performs no writes.
 - **Primary verification/documentation:** `tests/test_prompts.py`,
-  `tests/test_codex_backend.py`, `docs/api.md`, and `docs/architecture.md`.
+  `tests/test_codex_backend.py`, `docs/reference/agent-contracts.md`, and
+  `docs/design/prompts-and-provider.md`.
 
 ### `story_writing_agents.smoke`
 
@@ -285,8 +293,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `workspace`.
 - **State, resources, and side effects:** Creates a temporary or explicitly
   retained workspace and exercises normal runtime persistence.
-- **Primary verification/documentation:** `tests/test_smoke_cli.py`, `README.md`,
-  `UserGuide.md`, `docs/api.md`, `docs/architecture.md`, and `docs/security.md`.
+- **Primary verification/documentation:** `tests/test_smoke_cli.py`,
+  `docs/guides/smoke-test.md`, and `docs/reference/cli.md`.
 
 ### `story_writing_agents.workspace`
 
@@ -308,8 +316,10 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Primary verification/documentation:** `tests/test_workspace_and_config.py`,
   `tests/test_agent_state.py`, `tests/test_lifecycle_atomicity.py`,
   `tests/test_public_api_and_cli.py`, `tests/test_conversation_catalog.py`,
-  `docs/api.md`, `docs/architecture.md`, `docs/configuration.md`, and
-  `docs/security.md`.
+  `docs/reference/workspace-api.md`,
+  `docs/reference/configuration/session-storage.md`,
+  `docs/reference/conversation-catalog.md`, `docs/design/persistence.md`, and
+  `docs/operations/filesystem-safety.md`.
 
 ## Consistency Notes
 
