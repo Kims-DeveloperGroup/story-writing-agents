@@ -104,7 +104,8 @@ Agent aliases normalize as follows: `lead`, `orchestrator`, and
 `/help` accepts a leading slash and normalizes aliases.
 
 Invalid input never raises a parse exception or becomes provider input. It
-returns `parse_error`; a non-string input does the same. A suggestion appears only for one unique,
-case-sensitive Levenshtein-nearest command, session subcommand, or agent alias
-at distance two or less; command suggestions use canonical slash names and
-agent suggestions canonical `@agent_id` values.
+returns `parse_error`; a non-string input does the same. A suggestion appears
+only for a uniquely nearest candidate, measured case-sensitively by Levenshtein
+distance, when that distance is two or less. Candidates come from the applicable
+command, session-subcommand, or agent-alias namespace; command suggestions use
+canonical slash names and agent suggestions use canonical `@agent_id` values.
