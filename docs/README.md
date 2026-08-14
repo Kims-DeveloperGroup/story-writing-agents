@@ -25,7 +25,6 @@ Use this index to find one canonical answer instead of searching a long manual.
 - [Getting started](getting-started.md)
 - [Glossary for quick term lookup](glossary.md)
 - [Core concepts and relationships](concepts.md)
-- [Legacy task index](../UserGuide.md)
 
 ## Guides
 
@@ -61,10 +60,8 @@ Use this index to find one canonical answer instead of searching a long manual.
 - [Consensus workflow](design/consensus-workflow.md)
 - [Persistence](design/persistence.md)
 
-## Operations and compatibility
+## Operations
 
 - [Filesystem safety](operations/filesystem-safety.md)
 - [Privacy and provider exposure](operations/privacy-and-provider.md)
 - [Recovery and limitations](operations/recovery-and-limitations.md)
-- Legacy hubs: [API](api.md), [architecture](architecture.md),
-  [configuration](configuration.md), and [security](security.md)
