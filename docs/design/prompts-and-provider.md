@@ -1,31 +1,20 @@
 # Prompts and provider boundary
 
 > **Availability:** file-referenced definitions, Codex prompt staging,
-> phase-specific invocation, and persistent compatible threads are implemented.
+> phase-specific debate invocation, one-turn conversation calls, and persistent
+> compatible threads are implemented.
 
 Key terms: **agent definition**—stable context for one role; **fingerprint**—a
 hash-derived identity for that context; **binding**—the provider object created
-for a definition; **staging**—assembling verified context in a temporary area.
+for a definition; **staging**—assembling verified context in a temporary area;
+**visible context**—the prior events explicitly sent in a request;
+**provider-private history**—conversation state retained behind a thread ID.
 
 Stable prompt context and dynamic turn data travel through different channels.
-Before each phase, the runtime resolves the role prompt, persona, language, and
-allowlisted core documents into one immutable definition. Each file reference
-contains an absolute workspace path and SHA-256 digest, not the file text.
-
-```mermaid
-flowchart LR
-    F[Role prompt + persona + language + core files] --> D[Content-addressed definition]
-    D --> B[AgentBackend binding]
-    B --> G[Isolated temporary AGENTS.md]
-    Q[Dynamic AgentRequest JSON] --> C[Codex subprocess]
-    G --> C
-    C --> V[Schema and phase validation]
-    V --> R[AgentReply]
-```
-
-In words: stable files are verified and staged during binding; request-scoped
-JSON enters separately for each turn; provider output becomes a reply only
-after schema and phase validation.
+The runtime resolves the role prompt, persona, language, and allowlisted core
+documents into one immutable definition. Each file reference contains an
+absolute workspace path and SHA-256 digest, not the file text. Verified file
+content is staged during binding; request JSON enters separately for each call.
 
 ## Least-privilege context
 
@@ -47,6 +36,42 @@ binding and a changed fingerprint starts a fresh thread for that agent. An
 identical binding may serve multiple story sessions, while provider conversation
 state remains partitioned by session and agent.
 
+## Conversation turn flow
+
+Suppose a caller is sending `turn_2` in the `opening` conversation to the plot
+architect. It first records the user event, derives context from earlier
+complete `opening` turns, and calls the already-bound agent. The bound agent
+checks the correlated reply; the caller then records that reply itself:
+
+```mermaid
+sequenceDiagram
+    participant C as Caller
+    participant E as Event store
+    participant B as BoundAgent
+    participant P as Codex
+    C->>E: append user event
+    C->>E: read_context()
+    E-->>C: earlier complete turns
+    C->>B: converse(request)
+    B->>P: exact visible JSON
+    P-->>B: correlated reply JSON
+    B-->>C: ConversationReply
+    C->>E: append agent reply
+```
+
+The outer provider payload contains exactly `session_id`, `conversation_id`,
+`turn_id`, `agent_id`, `content`, and `context`. Each context item contains only
+`turn_id`, `sender`, `recipient`, `kind`, and `content`. Storage schema version,
+timestamps, sequence numbers, repeated session or conversation IDs, and window
+summary counters are not projected. `converse()` does not read or append the
+event store; the caller supplies the window and decides whether to persist the
+returned reply.
+
+If the same agent is next asked about an `ending` conversation, its explicit
+context contains only validated `ending` events while Codex still resumes the
+compatible session-and-agent thread that saw `opening`. Conversation IDs scope
+the visible request, not provider-private history.
+
 ## Codex process boundary
 
 The backend launches one constrained Codex subprocess from the isolated
@@ -56,11 +81,12 @@ through schema and phase validation. The exact sandbox, approval, tool,
 configuration, and instruction-discovery controls are documented once in
 [Privacy and provider exposure](../operations/privacy-and-provider.md).
 
-Dynamic request JSON contains task, original input, current candidate, public
-blackboard snapshot, and only the receiving agent's persisted outcomes. It does
-not repeat role prompts, persona text, language directives, or core-document
-text. Phase-specific output schemas and runtime checks constrain draft, audit,
-proposal, synthesis, and finalization replies.
+Debate request JSON contains task, original input, current candidate, public
+blackboard snapshot, and only the receiving agent's persisted outcomes.
+Conversation request JSON uses the exact projection above. Neither repeats role
+prompts, persona text, language directives, or core-document text. Provider
+output becomes a reply only after its schema and request correlation checks;
+debate replies also receive phase-specific validation.
 
 This boundary does not make the remote model or installed executable trusted.
 SHA-256 detects change but does not encrypt or authorize content. The provider

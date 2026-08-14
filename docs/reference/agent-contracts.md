@@ -1,11 +1,12 @@
 # Agent contracts
 
-> **Availability:** these provider-neutral request and reply models are
-> implemented and used by `StoryRuntime` and the Codex backend.
+> **Availability:** these provider-neutral models are implemented Python APIs.
+> `StoryRuntime` uses debate models; `BoundAgent.converse()` uses conversation models.
 
 Key terms: **definition**—stable context bound to one agent; **file reference**—
 a path plus content digest; **request**—dynamic data for one turn; **reply**—
-validated provider output; **phase**—the workflow step governing that exchange.
+validated provider output; **visible context**—prior transcript events the
+caller explicitly supplies; **phase**—the workflow step governing a debate.
 
 ## Bound definition
 
@@ -44,7 +45,7 @@ operation and failed binds are not cached.
 | `character_custodian` | `config/agents/character_custodian/AGENTS.md` | `character_sheets.md` |
 | `execution_specialist` | `config/agents/execution_specialist/AGENTS.md` | `narrative_rules.md` |
 
-## Per-turn request
+## Debate request
 
 ```python
 AgentRequest(
@@ -74,7 +75,28 @@ AgentStateEntry(agent_id: str, session_id: str, debate_id: str, phase: str,
 Both are frozen and provide `to_dict()`. Agent-state content is capped at 4096
 characters per entry.
 
-## Reply
+## One conversation turn
+
+```python
+ConversationRequest(session_id: str, conversation_id: str, turn_id: str,
+                    agent_id: str, content: str, context: ConversationContextWindow)
+ConversationReply(session_id: str, conversation_id: str, turn_id: str, content: str)
+```
+
+Both are frozen and slotted, with no defaults. IDs follow the common
+[safe-identifier contract](configuration/identifiers-and-errors.md); the request
+agent must be canonical. Content is nonempty strict UTF-8 and is not normalized.
+
+`context` must be an exact `ConversationContextWindow` of complete,
+increasing events from the same session and conversation, within fixed caps and
+without the current turn. Its metadata must match its events; sequence gaps and
+interleaved turns are allowed. See [Conversation transcripts](conversation-transcripts.md).
+
+The reply validates its own fields; `converse()` also correlates all three IDs.
+See [Backend and sessions](backend-and-sessions.md) and the
+[conversation turn flow](../design/prompts-and-provider.md#conversation-turn-flow).
+
+## Debate reply
 
 ```python
 AgentReply(revision_id: str, content: str = "",

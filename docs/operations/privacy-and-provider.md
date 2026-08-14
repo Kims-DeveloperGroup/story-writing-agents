@@ -7,6 +7,7 @@
 Key terms: **plaintext**—unencrypted local content; **local transcript**—visible
 events stored in the workspace; **provider transcript**—a conversation retained
 outside the workspace; **visible output**—provider text the runtime may log;
+**provider-private history**—vendor-retained context behind a resumable thread;
 **credential**—a secret used to authenticate provider access.
 
 ## Local data is plaintext
@@ -44,11 +45,35 @@ the transcript. Exact bounds live in
 context contains only version and selected ID, but the ID itself may be
 sensitive.
 
-## Provider boundary
+## Conversation call boundary
 
 The conversation event store does not invoke a provider or send its context
-window anywhere. Interactive dispatch is not implemented; a future caller must
-make any provider transfer explicit.
+window anywhere. `BoundAgent.converse()` is a separate Python API: its caller
+explicitly supplies the current content and a validated context window. There
+is no interactive controller that selects a conversation, calls the agent, or
+persists the result. The exact handoff is shown in the
+[conversation turn flow](../design/prompts-and-provider.md#conversation-turn-flow).
+
+The call sends the current content plus the visible fields of the supplied
+prior events to Codex. It may update provider-thread metadata and uses temporary
+prompt/output directories. It does not append the local transcript, discussion
+logs, core documents, or manuscripts. The caller must record the user event and
+returned reply if those events should become durable.
+
+Visible context is conversation-scoped, but provider-private history is not.
+One compatible thread can span conversation IDs and earlier debate turns. A
+provider may therefore remember material absent from the current visible
+payload. Do not treat separate conversation IDs as a provider-isolation
+boundary; exact thread scope is in
+[Backend and sessions](../reference/backend-and-sessions.md#conversation-calls).
+
+For a nonzero Codex exit, the backend redacts current request content, supplied
+context content, and workspace and staging paths from the diagnostic. It also
+replaces control characters and bounds the result. This protects the local
+exception message, not the provider transfer. Successful reply content is
+returned as visible text without semantic redaction.
+
+## Codex process boundary
 
 Codex is launched without shell evaluation. The runtime asks for a read-only
 sandbox, no approvals, ignored user configuration and project rules, and
@@ -63,10 +88,10 @@ instructions can still apply. Review the installed CLI and account before
 processing private material.
 
 Codex may store resumable conversations according to vendor and account
-behavior. The runtime persists one thread ID per session and agent. Session
-end, detach, and backend close retain those references and do not delete
-external transcripts. A changed agent-definition fingerprint starts a new
-thread; it does not erase the old provider conversation.
+behavior. The runtime persists one current thread record per session, backend,
+and agent. Session end, detach, and backend close retain those references and
+do not delete external transcripts. A changed agent-definition fingerprint
+starts a new thread; it does not erase the old provider conversation.
 
 ## Credentials and visible reasoning
 

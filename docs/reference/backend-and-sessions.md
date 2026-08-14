@@ -2,11 +2,13 @@
 
 > **Availability:** `AgentBackend` and `BoundAgent` are concrete implemented
 > classes. Codex is the only implemented provider. Strict lifecycle methods are
-> Python-only foundations; the CLI exposes only `session start|end`.
+> Python-only foundations; `BoundAgent.converse()` is also Python-only. The CLI
+> exposes only `session start|end`.
 
 Key terms: **binding**—one immutable agent/provider pairing; **manifest**—the
 durable session and thread record; **lease sidecar**—temporary process ownership
-metadata; **thread**—a resumable provider conversation reference.
+metadata; **thread**—a resumable provider conversation reference;
+**conversation turn**—one request and its correlated reply.
 
 ```python
 AgentBackend(
@@ -18,6 +20,7 @@ AgentBackend(
     backend_overrides: Mapping[str, str] | None = None,
 )
 await AgentBackend.bind(definition: AgentDefinition) -> BoundAgent
+await BoundAgent.converse(request: ConversationRequest) -> ConversationReply
 AgentBackend.prepare_session(session_id: str) -> None
 AgentBackend.get_session_summary(session_id: str, *, selected_session: str | None = None) -> SessionSummary
 AgentBackend.list_sessions(*, selected_session: str | None = None) -> tuple[SessionSummary, ...]
@@ -35,9 +38,20 @@ configuration. Timeout must be positive. Overrides map canonical agent IDs to
 configured vendor names for this backend instance. `gemini` is recognized but
 rejected as unimplemented; there is no runtime-imported plugin loader.
 
-`bind()` verifies the immutable definition and returns a concrete `BoundAgent`.
-Its public attributes are `backend`, `definition`, `vendor`, and
-`staging_directory`; `await invoke(request)` returns `AgentReply`.
+`bind()` verifies the definition and returns a `BoundAgent` with public
+`backend`, `definition`, `vendor`, and `staging_directory` attributes.
+`invoke()` runs a debate phase; `converse()` runs one visible conversation turn.
+
+## Conversation calls
+
+| Concern | Contract |
+| --- | --- |
+| Request | Requires an exact, revalidated `ConversationRequest` addressed to the bound agent before provider work. |
+| Reply | Requires exactly four nonempty UTF-8 fields and matching session, conversation, and turn IDs; invalid JSON, fields, or correlation raise `BackendProtocolError`. |
+| Provider | Codex is implemented; unsupported configured vendors raise `ConfigurationError`. |
+| Lifecycle | Shares `invoke()` lease, timeout, cancellation, taint, and `(session_id, backend, agent_id)` lock rules; changed fingerprints and tainted threads start fresh. |
+| Thread scope | `conversation_id` is not a thread key: visible context stays in one conversation while provider-private history can span conversations and debate calls. See the [flow](../design/prompts-and-provider.md#conversation-turn-flow). |
+| Persistence | May update provider-thread metadata, not conversation or story content; the caller owns transcript persistence. See [Privacy](../operations/privacy-and-provider.md#conversation-call-boundary). |
 
 ## Session status
 
@@ -105,8 +119,7 @@ An acquisition blocked by a live or unverifiable owner raises
 acquired before its failure; a previously owned lease stays attached after an
 owned read/write failure.
 
-Within one backend, locks prevent two bindings from racing the same
-`(session_id, backend, agent_id)` thread. Detach, end, and close retain
-resumable thread metadata. Exact manifest and sidecar schemas are in
+Detach, end, and close retain resumable thread metadata. Exact manifest and
+sidecar schemas are in
 [Session storage](configuration/session-storage.md); ordering and platform
 limits are in [Session lifecycle design](../design/session-lifecycle.md).

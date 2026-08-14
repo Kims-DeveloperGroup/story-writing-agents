@@ -70,6 +70,8 @@ class PublicApiTests(unittest.TestCase):
             "AgentRequest",
             "AgentStateEntry",
             "BoundAgent",
+            "ConversationReply",
+            "ConversationRequest",
             "DirectiveKind",
             "PromptFileReference",
             "StoryWritingAgentsError",
@@ -86,6 +88,13 @@ class PublicApiTests(unittest.TestCase):
         for name in required:
             with self.subTest(name=name):
                 self.assertIsNotNone(getattr(story_writing_agents, name))
+        from story_writing_agents import models
+
+        for name in ("ConversationRequest", "ConversationReply"):
+            self.assertIs(
+                getattr(story_writing_agents, name),
+                getattr(models, name),
+            )
         base_error = story_writing_agents.StoryWritingAgentsError
         for name in required.difference(
             {
@@ -95,6 +104,8 @@ class PublicApiTests(unittest.TestCase):
                 "AgentRequest",
                 "AgentStateEntry",
                 "BoundAgent",
+                "ConversationReply",
+                "ConversationRequest",
                 "DirectiveKind",
                 "PromptFileReference",
                 "StoryWritingAgentsError",

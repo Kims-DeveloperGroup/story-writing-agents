@@ -19,9 +19,10 @@ The exact export inventory is:
   `PLOT_ARCHITECT`, `CHARACTER_CUSTODIAN`, `EXECUTION_SPECIALIST`;
 - backend: `AgentBackend`, `BoundAgent`, `SessionSummary`,
   `SessionLeaseState`;
-- agent and debate models: `PromptFileReference`, `AgentDefinition`,
-  `AgentRequest`, `AgentReply`, `AgentStateEntry`, `DebateMessage`,
-  `DebateResult`, `InputKind`, `Phase`, `Verdict`, `DebateStatus`;
+- agent, conversation-turn, and debate models: `PromptFileReference`,
+  `AgentDefinition`, `AgentRequest`, `AgentReply`, `ConversationRequest`,
+  `ConversationReply`, `AgentStateEntry`, `DebateMessage`, `DebateResult`,
+  `InputKind`, `Phase`, `Verdict`, `DebateStatus`;
 - runtime: `StoryRuntime`, `RuntimeSession`, `Runtime`, `Session`;
 - directives: `DirectiveKind`, `RuntimeDirective`, `parse_directive`,
   `apply_directive`;

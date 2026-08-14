@@ -4,10 +4,10 @@ Use this index to find one canonical answer instead of searching a long manual.
 
 > **Availability:** the installed CLI currently exposes `init`, `directive`,
 > `run`, `inspect`, `session start|end`, and `smoke`. The interactive command
-> parser, conversation catalog, and transcript event store are implemented
-> Python foundations only. Interactive dispatch, current-conversation
-> selection, search, `/conversation`, `/search`, and `/transcript` are not
-> implemented.
+> parser, conversation catalog, transcript event store, and one-turn bound-agent
+> provider call are implemented Python APIs. Automatic interactive dispatch,
+> current-conversation selection, search, `/conversation`, `/search`, and
+> `/transcript` are not implemented.
 
 ## Availability matrix
 
@@ -19,6 +19,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 | Parse the future interactive command language | Python API only; no dispatcher or TTY |
 | Create, rename, archive, and list conversation metadata | Python API only; no selection or dispatch |
 | Append/read transcripts; derive bounded complete-turn context | Python API only; no dispatcher or viewing command |
+| Send one validated conversation turn to a bound agent | Python API only; caller supplies context and persistence |
 | Interactive chat, transcript command, and search | Not implemented |
 
 ## Start and concepts
