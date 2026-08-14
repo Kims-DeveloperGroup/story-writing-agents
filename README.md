@@ -55,7 +55,7 @@ successful `session start`. Scripts can pass `--workspace` and `--session`.
 
 - [Getting started](docs/getting-started.md) explains installation and the first
   run.
-- [Documentation index](docs/README.md) shows what is implemented and routes
+- [Documentation index](docs/INDEX.md) shows what is implemented and routes
   each task, exact contract, design topic, and operational concern.
 - [Workspace guide](docs/guides/workspaces.md) explains the editable project
   files.
