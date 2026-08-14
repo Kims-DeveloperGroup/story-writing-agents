@@ -1,0 +1,104 @@
+# Workspace API
+
+> **Availability:** workspace initialization, safe persistence primitives,
+> directives, inspection, and the filesystem conversation adapter are
+> implemented Python APIs.
+
+Key terms: **relative path**—a location beneath the workspace root; **atomic
+replacement**—one complete file replacing another; **reservation**—exclusive
+ownership of a debate ID; **allowlist**—the fixed permitted core filenames.
+
+## Construction and common methods
+
+```python
+Workspace(root: str | os.PathLike[str])
+Workspace.initialize(*, overwrite_prompts: bool = False) -> Workspace
+initialize_workspace(root: str | os.PathLike[str], *,
+                     overwrite_prompts: bool = False) -> Workspace
+
+Workspace.validate_identifier(value: str, *, label: str = "session ID") -> str
+Workspace.validate_template_name(value: str) -> str
+Workspace.path(relative) -> pathlib.Path
+Workspace.read_text(relative) -> str
+Workspace.read_json(relative) -> Any
+Workspace.write_text(relative, content, *, overwrite: bool = True) -> pathlib.Path
+Workspace.write_json(relative, value, *, overwrite: bool = True) -> pathlib.Path
+Workspace.read_persona(template_name: str) -> str
+Workspace.persona_path(template_name: str) -> pathlib.Path
+Workspace.persona_exists(template_name: str) -> bool
+Workspace.read_core_documents(filenames: tuple[str, ...]) -> dict[str, str]
+Workspace.read_manuscript(manuscript_name: str) -> str
+Workspace.write_manuscript(manuscript_name: str, content: str) -> pathlib.Path
+Workspace.load_session_overrides(session_id: str) -> dict[str, Any]
+Workspace.save_session_overrides(session_id: str,
+                                 overrides: Mapping[str, Any]) -> pathlib.Path
+```
+
+Initialization creates missing scaffold and normally preserves existing files.
+With `overwrite_prompts=True`, it replaces exactly the four canonical role
+prompts and preserves all other existing content.
+
+The workspace root is resolved once. Public path operations accept only safely
+contained workspace-relative paths with no absolute path, `..`, or symlink
+component. Text is strict UTF-8. JSON readers reject malformed structures where
+the consuming contract performs schema validation.
+
+`write_text` and `write_json` atomically replace one file when overwrite is
+allowed. `write_manuscript` never overwrites. A direct caller of generic write
+methods is a trusted workspace client and may change any safely contained
+relative file; orchestration itself restricts core updates to four names.
+
+## Orchestration persistence primitives
+
+```python
+Workspace.append_agent_state(entry: AgentStateEntry) -> None
+Workspace.read_agent_state(agent_id: str, session_id: str,
+                           debate_id: str) -> tuple[AgentStateEntry, ...]
+Workspace.append_debate_message(session_id: str, debate_id: str,
+                                message: DebateMessage) -> None
+Workspace.reserve_debate(session_id: str, debate_id: str, *,
+                         input_kind: str, owner_token: str) -> dict[str, Any]
+Workspace.transition_debate(session_id: str, debate_id: str, *,
+    owner_token: str, status: str, terminal: bool,
+    revision_id: str | None, rounds_completed: int,
+    error: str | None = None) -> dict[str, Any]
+Workspace.read_debate_messages(session_id: str,
+                               debate_id: str) -> tuple[DebateMessage, ...]
+Workspace.save_debate_result(result: DebateResult, *,
+                             overwrite: bool = False) -> pathlib.Path
+Workspace.inspect_debate(session_id: str, debate_id: str) -> dict[str, Any]
+Workspace.inspect_session(session_id: str) -> dict[str, Any]
+Workspace.commit_approved_artifacts(manuscript_name: str, candidate: str,
+    core_updates: Mapping[str, str]) -> tuple[str, tuple[str, ...]]
+```
+
+These methods are public but are low-level orchestration primitives; normal
+integrations should use `StoryRuntime`. Reservation uses exclusive creation, so
+one session/debate ID has one owner. The owner token coordinates transitions
+but is not authentication and is omitted by normal inspection.
+
+Artifact commit validates the complete update map and manuscript target before
+content writes. It stages and atomically replaces allowlisted core documents in
+fixed order, then exclusively creates the exact approved manuscript. On later
+failure it attempts to remove the manuscript and restore earlier core files.
+That rollback is best effort, not a transaction spanning files, logs, or state.
+
+## Directive utility
+
+```python
+RuntimeDirective(kind: DirectiveKind, language: str | None = None,
+                 agent_id: str | None = None, persona: str | None = None)
+parse_directive(text: str) -> RuntimeDirective | None
+apply_directive(workspace: Workspace, session_id: str,
+                text: str) -> dict[str, object]
+```
+
+Parsing recognizes only a complete exact directive and returns `None`
+otherwise. Applying validates and atomically saves the resulting override or
+raises `DirectiveError`. Exact forms and precedence are in
+[Runtime overrides](configuration/runtime-overrides.md).
+
+`FilesystemConversationCatalog` is also backed by `Workspace`; its complete
+contract is in [Conversation catalog](conversation-catalog.md). See
+[Filesystem safety](../operations/filesystem-safety.md) for the security
+boundary and [Session storage](configuration/session-storage.md) for paths.

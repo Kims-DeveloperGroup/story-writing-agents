@@ -1,30 +1,18 @@
 # story-writing-agents
 
-A Python multi-agent runtime for writing and reviewing novels.
+<a id="objective"></a>
 
-## Objective
+A Python 3.11+ multi-agent runtime for drafting and reviewing long-form fiction.
+Four fixed roles work from editable project documents, audit the same revision,
+and write a manuscript only after all three voting specialists agree.
 
-Operate a team of specialized agents that cooperates with the user to produce
-coherent long-form fiction. The lead orchestrator drafts and synthesizes while
-plot, character, and execution specialists independently audit each revision.
+> **Available now:** workspace setup, exact directives, prompt or draft consensus
+> runs, inspection, persistent Codex sessions, and a provider-free smoke test.
+> There is no interactive chat shell, transcript command, or search command yet.
 
-The runtime turns a prompt or supplied draft into a versioned candidate,
-requires all three specialists to approve the same revision, and commits the
-manuscript only after consensus. It persists directives, debate state, the
-public blackboard, owner-isolated agent outcomes, and Codex thread references
-in a local workspace.
+## Quick start
 
-This implementation realizes the designs in
-[Issue #1: Overall System Architecture Design](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1)
-and
-[Issue #2: Multi-Agent Open Debate Workflow](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/2).
-The detailed documentation describes the implemented behavior where it narrows
-those proposals.
-
-## Quick Start
-
-Python 3.11 or later and the Codex CLI are required for real story runs.
-Install and authenticate Codex first:
+Install and authenticate the Codex CLI for real story runs:
 
 ```bash
 npm install -g @openai/codex
@@ -32,178 +20,96 @@ rehash
 codex login
 ```
 
-Alternatively, provide `CODEX_API_KEY` in the process environment. The runtime
-does not store provider credentials in its workspace.
+Alternatively, set `CODEX_API_KEY` in the process environment. Credentials are
+not stored in the story workspace.
 
-From the repository root, choose one Python environment setup. Do not create a
-standard-library virtual environment inside an active Conda environment.
-
-Standard-library `venv`:
+Install this repository in either a standard-library virtual environment or a
+Conda environment. Do not nest a `venv` inside active Conda.
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --editable .
 rehash
-```
-
-Or Conda:
-
-```bash
-conda create --name story-writing-agents python=3.11
-conda activate story-writing-agents
-python -m pip install --editable .
-rehash
-```
-
-The installation provides `story-writing-agents` and the shorter `story` as
-exact aliases. Examples use `story`.
-
-Run the built-in provider-free check:
-
-```bash
 story smoke
 ```
 
-It exercises the complete deterministic revision workflow in a temporary
-workspace without invoking Codex, using credentials, or making a network call.
-A passing report contains `"provider_tested": false`.
+`story` and `story-writing-agents` are exact aliases. The smoke test uses no
+provider, credentials, or network; a pass includes `"provider_tested":false`.
 
-Initialize a workspace, enter it, and select a persistent provider session:
-
-```bash
-story init ./quickstart-workspace
-cd ./quickstart-workspace
-story session start my_novel
-```
-
-Initialization creates one editable role prompt per agent at
-`config/agents/<agent-id>/AGENTS.md`. It preserves existing files. To reset all
-four role prompts to the packaged defaults:
+Create a workspace and run the first real debate:
 
 ```bash
-story init . --overwrite-prompts
-```
-
-That flag changes only the four canonical prompt files.
-
-Run a story-writing debate using the default Codex backend:
-
-```bash
-story run \
-  'Write an opening scene using the workspace core documents.'
-```
-
-From an initialized workspace or any directory beneath it, the CLI discovers
-the nearest workspace and uses the session selected by the last successful
-`story session start`. Debate IDs and output names are generated when omitted.
-Explicit `--workspace`, `--session`, `--debate-id`, and `--output` options
-remain available for scripts and automation.
-
-When work on the provider session is complete:
-
-```bash
+story init ./my-story
+cd ./my-story
+story session start novel
+story run 'Write an opening scene using the workspace core documents.'
 story session end
 ```
 
-Ending a session prevents new provider calls but retains its per-agent Codex
-thread IDs. Starting the same session later resumes compatible threads.
+Commands run inside the workspace, or a directory beneath it, discover the
+nearest initialized workspace. They use the session selected by the last
+successful `session start`. Scripts can pass `--workspace` and `--session`.
 
-The [CLI User Guide](UserGuide.md) covers installation, prompt and draft
-workflows, backend overrides, directives, inspection, generated files, and an
-[end-to-end story-writing scenario](UserGuide.md#end-to-end-story-writing-scenario).
-See [Configuration](docs/configuration.md) for complete schemas.
+## Choose the next page
 
-## Backends
+- [Getting started](docs/getting-started.md) explains installation and the first
+  run.
+- [Documentation index](docs/README.md) shows what is implemented and routes
+  each task, exact contract, design topic, and operational concern.
+- [Workspace guide](docs/guides/workspaces.md) explains the editable project
+  files.
+- [Consensus-run guide](docs/guides/consensus-runs.md) covers prompts, drafts,
+  outputs, and round limits.
+- [CLI reference](docs/reference/cli.md) is the exact installed command contract.
+- [Package API](docs/reference/package-api.md) starts the Python reference.
+- [Security and provider privacy](docs/operations/privacy-and-provider.md) should
+  be read before using sensitive material.
 
-`AgentBackend` and `BoundAgent` are concrete runtime classes. `AgentBackend`
-resolves each agent's configured vendor, stages its definition, owns provider
-session leases, and persists resumable threads. `BoundAgent` embeds the
-vendor-specific invocation path for one immutable agent definition.
+<a id="backends"></a>
 
-Codex is the default and currently the only implemented provider. Each entry
-in `config/agent_configs.json` has a `backend` field. `gemini` is a recognized
-configuration value reserved for future implementation; selecting it fails
-before a debate begins.
+`AgentBackend` is the concrete provider coordinator; Codex is the only
+implemented provider. `gemini` is a reserved configuration value and fails
+preflight. `StoryRuntime` owns the consensus workflow and persistence. See the
+[system design](docs/design/overview.md) for their responsibilities.
 
-A backend can be overridden for one run with a repeatable assignment:
+<a id="minimal-python-api"></a>
 
-```bash
-story run ... --backend plot_architect=codex
-```
+For Python integrations, start with the [runtime API](docs/reference/runtime-api.md)
+and [agent contracts](docs/reference/agent-contracts.md).
 
-The CLI does not dynamically import user-selected backend modules.
+<a id="current-limitations"></a>
 
-## Minimal Python API
+## Important limits
 
-```python
-import asyncio
+- Provider calls have a timeout but no automatic retry or rate limiter.
+- Deadlocked and interrupted debates cannot resume under the same debate ID.
+- Workspace content, logs, provider metadata, agent state, and manuscripts are
+  plaintext.
+- Artifact replacement is atomic per file with best-effort multi-file rollback,
+  not a power-loss-safe transaction.
+- Conversation metadata and interactive-line parsing exist as Python APIs, but
+  selection, dispatch, transcripts, and search are not implemented.
 
-from story_writing_agents import AgentBackend, StoryRuntime, initialize_workspace
+## Development
 
+<a id="verification"></a>
 
-async def main() -> None:
-    workspace = initialize_workspace("./python-workspace")
-    backend = AgentBackend(workspace)
-    backend.start_session("demo")
-    try:
-        runtime = StoryRuntime(workspace, backend)
-        result = await runtime.run_prompt(
-            "demo",
-            "Write a restrained opening scene.",
-            debate_id="opening_01",
-            manuscript_name="opening.md",
-        )
-        print(result.status.value, result.manuscript_path)
-    finally:
-        backend.close()
-
-
-asyncio.run(main())
-```
-
-`AgentBackend.bind()` receives an `AgentDefinition` containing verified local
-file references and returns a concrete `BoundAgent`. Per-turn `AgentRequest`
-values contain dynamic data only. See the [API reference](docs/api.md).
-
-## Verification
+Run the standard-library tests with:
 
 ```bash
 python -m unittest discover -s tests -v
 ```
 
-## Current Limitations
+<a id="contribution-guidelines"></a>
 
-- Codex is the only implemented provider; Gemini is reserved but unsupported.
-- Provider calls are not automatically retried or rate-limited.
-- Session-wide owner-isolated agent history has no compaction or retention
-  limit.
-- Deadlocked debates cannot resume under the same debate ID.
-- Workspace configuration, logs, provider metadata, agent state, and
-  manuscripts are plaintext.
-- Filesystem replacement is atomic per file with best-effort multi-file
-  rollback, not a power-loss-safe transaction across all artifacts.
+Contributors should read [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md),
+[AGENT_TASK_RUNBOOK.md](AGENT_TASK_RUNBOOK.md), and
+[COMMIT_POLICY.md](COMMIT_POLICY.md).
 
-Read [Architecture](docs/architecture.md) for workflow and persistence details
-and [Security, Privacy, and Limitations](docs/security.md) before using
-sensitive story material.
+<a id="project-structure"></a>
 
-## Contribution Guidelines
-
-See [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md) for the Issues, Projects,
-milestones, logical iterations, branches, and pull-request workflow. Coding
-agents use [AGENT_TASK_RUNBOOK.md](AGENT_TASK_RUNBOOK.md) for the parent/child
-branch and worktree procedure. See [COMMIT_POLICY.md](COMMIT_POLICY.md) for
-commit rules.
-
-## Project Structure
-
-- `README.md` contains the project overview and contribution entry point.
-- `PYTHON_MODULE_INDEX.md` records the current Python package and module map.
-- `GITHUB_WORKFLOW.md` defines the GitHub planning and delivery workflow.
-- `AGENT_TASK_RUNBOOK.md` defines the agent branch and worktree procedure.
-- `UserGuide.md` is the complete CLI workflow and troubleshooting guide.
-- `docs/` contains API, architecture, configuration, and security details.
-- `src/story_writing_agents/` contains the Python runtime and concrete backend.
-- `tests/` contains the standard-library test suite.
-- `config/agents/` contains the four editable role prompts.
+The Python package is under
+`src/story_writing_agents/`; tests are under `tests/`; editable role prompts are
+under `config/agents/`; and [PYTHON_MODULE_INDEX.md](PYTHON_MODULE_INDEX.md) is
+the current module navigation map.
