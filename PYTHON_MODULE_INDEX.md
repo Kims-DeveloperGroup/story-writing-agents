@@ -214,7 +214,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **State, resources, and side effects:** None.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
   `tests/test_conversation_catalog.py`, `tests/test_session_lifecycle.py`,
-  failure-path tests, and `docs/api.md`.
+  `tests/test_interactive_commands.py`, failure-path tests, and `docs/api.md`.
 
 ### `story_writing_agents.interactive_commands`
 

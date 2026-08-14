@@ -128,7 +128,9 @@ make an incidental architecture decision silently.
    brief, including its index delta, before writing begins.
 4. After requirements and any boundary brief are accepted, the main agent
    passes the GitHub planning gate or records `not_required`. No writer starts
-   while the gate is `pending` or `blocked`.
+   while the gate is `pending` or `blocked`. For tracked implementation, create
+   and verify the Issue's native Development-linked task branch before handing
+   its worktree to a writer.
 5. Exactly one agent owns production writes at a time. Use
    `modularity_maintainer` for architecture-dominant splits, moves, merges, and
    extractions. Use `runtime_implementer` for behavior-dominant work constrained
@@ -173,6 +175,8 @@ Every subagent handoff must include:
 - objective and relevant evidence;
 - `github_planning_gate`, its rationale, and verified Issue, Project, and
   Iteration evidence when applicable;
+- the native Development-linked branch or PR when implementation writes are
+  authorized;
 - approved scope and explicit out-of-scope work;
 - acceptance criteria and compatibility constraints;
 - the `modularity_gate` decision and accepted brief, when applicable;

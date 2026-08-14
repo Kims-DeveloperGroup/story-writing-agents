@@ -4,9 +4,9 @@ Use this runbook for GitHub-tracked implementation. The rules in
 [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md) and
 [COMMIT_POLICY.md](COMMIT_POLICY.md) remain authoritative. An explicit
 implementation request bundles only the initial-planning mutations defined by
-the workflow policy. Obtain explicit authorization for every other GitHub
-mutation, push, pull request, merge, Issue closure, staging, commit, or branch
-deletion.
+the workflow policy and creation of its native Development-linked task branch.
+Obtain explicit authorization for every other GitHub mutation, push, pull
+request, merge, Issue closure, staging, commit, or branch deletion.
 
 ## Initialize GitHub Planning
 
@@ -116,21 +116,69 @@ git log --left-right --count origin/main...main
 ```
 
 If `main` is ahead, behind, or diverged, identify and record the approved base
-commit before continuing. Then adapt these templates:
+commit before continuing. After the gate passes, create the remote task branch
+through the Issue's native Development relationship. Resolve IDs and the
+approved base OID at runtime; link the parent branch to the parent Issue and a
+child branch to its child Issue:
 
 ```bash
-git worktree add -b issue-<parent>-<slug> \
-  ../<repository>-worktrees/issue-<parent>-<slug>/parent \
-  <approved-base-ref>
+repo=Kims-DeveloperGroup/story-writing-agents
+issue_number=<issue-number>
+branch=issue-<issue-number>-<slug>
+base_oid=<approved-base-oid>
+repo_id="$(gh repo view "$repo" --json id --jq .id)"
+issue_id="$(gh issue view "$issue_number" --repo "$repo" --json id --jq .id)"
 
-git worktree add -b issue-<child>-<slug> \
-  ../<repository>-worktrees/issue-<parent>-<slug>/issue-<child>-<slug> \
-  issue-<parent>-<slug>
+gh api graphql \
+  -f query='mutation($repo:ID!,$issue:ID!,$oid:GitObjectID!,$name:String!){
+    createLinkedBranch(input:{repositoryId:$repo,issueId:$issue,oid:$oid,name:$name}){
+      linkedBranch{ref{name target{oid}}}
+    }
+  }' \
+  -F repo="$repo_id" -F issue="$issue_id" -F oid="$base_oid" -f name="$branch"
 ```
 
-If an approved branch already exists, omit `-b` and add a worktree for that
-branch. A branch can be checked out in only one worktree. Create a child only
-from a clean, current parent branch.
+Stop if the branch already exists but is not linked; do not silently recreate,
+rename, or replace it. Use a linked PR to repair legacy traceability when that
+action is authorized. The Development operation created the remote branch;
+fetch it, then adapt these tracking-worktree templates:
+
+```bash
+git fetch origin "$branch"
+
+git worktree add --track -b issue-<parent>-<slug> \
+  ../<repository>-worktrees/issue-<parent>-<slug>/parent \
+  origin/issue-<parent>-<slug>
+
+git worktree add --track -b issue-<child>-<slug> \
+  ../<repository>-worktrees/issue-<parent>-<slug>/issue-<child>-<slug> \
+  origin/issue-<child>-<slug>
+```
+
+If the linked branch already exists locally, omit `--track -b` and add a
+worktree for that branch. A branch can be checked out in only one worktree.
+Create a child only from a clean, current parent commit that exists on GitHub.
+
+Verify the Issue's Development link before writing:
+
+```bash
+gh api graphql \
+  -f query='query($owner:String!,$repo:String!,$number:Int!){
+    repository(owner:$owner,name:$repo){
+      issue(number:$number){linkedBranches(first:20){nodes{ref{name}}}}
+    }
+  }' \
+  -F owner=Kims-DeveloperGroup -F repo=story-writing-agents \
+  -F number=<issue-number>
+```
+
+After a PR is linked, verify the Project's built-in field:
+
+```bash
+gh project item-list 1 --owner Kims-DeveloperGroup --limit 100 --format json \
+  --jq '.items[] | select(.content.number == <issue-number>) |
+    .["linked pull requests"]'
+```
 
 ## Task Lifecycle
 
@@ -138,21 +186,23 @@ from a clean, current parent branch.
    Record the gate state, Issue graph, Project metadata, logical Iteration,
    dependencies, approved base, and authorization. Stop before writing unless
    the gate is `passed` or `not_required`.
-2. **Prepare the parent.** Create or reuse its branch and worktree at the
-   recorded base commit, assign the integration owner, and move the parent to
-   the correct Project state. Publish only when authorized. After the first
-   child lands, open the parent PR to `main` as a draft with `Refs #<parent>`.
+2. **Prepare the parent.** Create or reuse its Development-linked branch and
+   worktree at the recorded base commit, assign the integration owner, verify
+   the link, and move the parent to the correct Project state. After the first
+   child lands, open the parent PR to `main` as a draft with `Refs #<parent>`
+   when authorized.
 3. **Start one child.** Confirm that the child is `Ready`, assigned the root's
-   Iteration, and unblocked. Create its branch and worktree from the current
-   parent commit,
-   assign its owner, and move it to `In progress`.
+   Iteration, and unblocked. Create its Development-linked branch and worktree
+   from the current parent commit, assign its owner, verify the link, and move
+   it to `In progress` before tracked edits.
 4. **Implement and verify.** Change only the child scope. Follow the commit
    policy, update tests and documentation, run relevant checks, and review the
    final diff and worktree status.
 5. **Review the child.** Merge the latest parent branch into the child without
    rebasing, rerun affected checks, and open a draft PR whose base is the
    parent branch and whose head is the child branch. Use `Refs #<child>`. Mark
-   it ready and move the child to `In review` only when all evidence is present.
+   it ready and move the child to `In review` only when all evidence is present
+   and the PR appears in Development and Project `Linked pull requests`.
 6. **Integrate the child.** Reconfirm the PR base and head, then use **Squash
    and merge** when authorized. The child must contain the current parent tip;
    otherwise merge the parent into it, rerun affected checks, and repeat
@@ -179,5 +229,6 @@ from a clean, current parent branch.
 
 The handoff must include the planning-gate state and evidence, Issue and PR
 links, base/head branches and SHAs, resulting squash SHAs, worktree paths,
-Project metadata and Iteration, completed and remaining criteria, checks,
-blockers, cleanup, GitHub mutations, and the next owner or action.
+Development and `Linked pull requests` evidence, Project metadata and
+Iteration, completed and remaining criteria, checks, blockers, cleanup, GitHub
+mutations, and the next owner or action.
