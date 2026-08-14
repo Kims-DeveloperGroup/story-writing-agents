@@ -563,6 +563,23 @@ class FilesystemConversationEventStorePersistenceTests(
             (user, reply),
         )
 
+    def test_unicode_line_separators_remain_content_not_jsonl_records(self) -> None:
+        content = "before\u0085middle\u2028later\u2029after"
+        event = self.store.append(
+            self.request("turn_unicode_separators", content=content)
+        )
+
+        raw = self.transcript.read_bytes()
+        self.assertTrue(raw.endswith(b"\n"))
+        self.assertEqual(raw.count(b"\n"), 1)
+        payload = json.loads(raw[:-1].decode("utf-8"))
+        self.assertEqual(payload["content"], content)
+
+        reloaded = FilesystemConversationEventStore(str(self.workspace.root))
+        reloaded_events = reloaded.read(self.session_id, self.conversation_id)
+        self.assertEqual(reloaded_events, (event,))
+        self.assertEqual(reloaded_events[0].content, content)
+
     def test_missing_transcript_reads_empty_without_any_mutation(self) -> None:
         before = _tree_snapshot(self.workspace.root)
 

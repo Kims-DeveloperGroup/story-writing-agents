@@ -1511,8 +1511,9 @@ class FilesystemConversationEventStore:
                 f"conversation transcript is empty: {logical_artifact}"
             )
 
+        records = text[:-1] if text.endswith("\n") else text
         events: list[ConversationEvent] = []
-        for line_number, line in enumerate(text.splitlines(), 1):
+        for line_number, line in enumerate(records.split("\n"), 1):
             try:
                 value = json.loads(
                     line,
