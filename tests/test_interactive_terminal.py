@@ -1192,6 +1192,25 @@ class PromptAndRenderingTests(unittest.TestCase):
         self.assertNotIn("\x1b", "".join(callbacks.records))
         self.assertNotIn("\x00", "".join(callbacks.records))
 
+        narrow_terminal, narrow_callbacks = make_terminal(width=24)
+        narrow_terminal.write_conversation_transcript_event(
+            "c_0123456789",
+            **common,
+            content="  alpha  \n   \n  beta gamma delta  ",
+        )
+        self.assertEqual(len(narrow_callbacks.records), 1)
+        _header, marker, rendered_content = narrow_callbacks.records[0].partition(
+            "[content] "
+        )
+        self.assertEqual(marker, "[content] ")
+        self.assertEqual(
+            rendered_content,
+            "  alpha  \n"
+            "             \n"
+            "            beta gamma \n"
+            "          delta  \n",
+        )
+
     def test_transcript_events_require_exact_nonempty_primitive_content(
         self,
     ) -> None:

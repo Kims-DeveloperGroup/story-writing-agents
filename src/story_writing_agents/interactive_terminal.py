@@ -1185,15 +1185,24 @@ def _wrap_preserved_content_lines(
     """Wrap content while preserving each LF as a safe continued line.
 
     The first source line receives ``prefix`` and later source lines receive
-    matching indentation. The pure result retains empty and trailing lines;
-    callback ownership remains with the caller.
+    matching indentation. The result retains empty and trailing source lines
+    plus boundary whitespace; callback ownership remains with the caller.
     """
 
     continuation_prefix = " " * len(prefix)
     rendered: list[str] = []
     for line_number, content_line in enumerate(value.split("\n")):
         line_prefix = prefix if line_number == 0 else continuation_prefix
-        rendered.extend(_wrap_prefixed(line_prefix, content_line, width))
+        wrapper = textwrap.TextWrapper(
+            width=width,
+            initial_indent=line_prefix,
+            subsequent_indent=continuation_prefix,
+            break_long_words=False,
+            break_on_hyphens=False,
+            replace_whitespace=False,
+            drop_whitespace=False,
+        )
+        rendered.extend(wrapper.wrap(content_line) or [line_prefix.rstrip()])
     return rendered
 
 
