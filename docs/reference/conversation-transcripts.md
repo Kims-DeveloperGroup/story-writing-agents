@@ -1,9 +1,8 @@
 # Conversation transcripts
 
 > **Availability:** transcript persistence and read-only search/pages are
-> implemented Python APIs. `StoryRuntime` uses the event-store contract for one
-> explicit-ID provider turn; interactive selection and transcript commands are
-> not implemented.
+> implemented Python APIs. Interactive turns append transcripts and consume
+> bounded context, but transcript viewing and search commands are not implemented.
 
 Key terms: **event**—one visible stored record; **complete turn**—one user
 event plus one outcome; **unmatched turn**—a user event with no outcome yet;

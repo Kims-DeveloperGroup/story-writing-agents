@@ -4,51 +4,46 @@
 > reduce exposure but do not make Codex, its executable, or the workspace a
 > trusted security boundary.
 
-Key terms: **plaintext**—unencrypted local content; **visible context**—prior
-events deliberately sent in a request; **provider-private history**—vendor
-state behind a thread ID; **diagnostic**—stored failure text; **credential**—a
-secret used to authenticate provider access.
+Key terms: **plaintext**—unencrypted content; **visible context**—events sent in
+a request; **provider-private history**—vendor thread state; **diagnostic**—
+stored failure text; **credential**—provider authentication.
 
 ## Local data is plaintext
 
-The runtime provides no encryption, access control, secure erase, or retention
-policy. Project content, runtime state, provider metadata, transcripts, and
-manuscripts are ordinary files protected only by the operating system.
+There is no encryption, access control, secure erase, or retention policy.
+Project content, state, provider metadata, transcripts, and manuscripts are
+ordinary files protected only by the operating system.
 
-The debate blackboard can contain complete input, candidates, reviews, errors,
-and commit metadata. Owner-isolated state is narrower and length-bounded, but
-provider output is not semantically scrubbed.
+The blackboard can contain complete input, drafts, reviews, errors, and commit
+metadata. Owner state is narrower, but provider output is not scrubbed.
 
-A conversation subject and transcript are also plaintext. The transcript keeps
-exact visible user messages, agent replies, and runtime errors. Archiving changes
-discovery status; it does not delete or hide either file. `read_context()`
-returns a bounded view without rewriting the full transcript. A caller that
-uses the event store directly remains responsible for any error text it appends;
-the store itself performs no redaction.
+Subjects and transcripts are plaintext. Transcripts keep exact visible messages,
+replies, and runtime errors; archive does not delete or hide them. `read_context()`
+is a bounded view. Direct event-store callers must redact their own error text.
 
 Local search and cited reads make no provider call or index, but can expose
 subjects, snippets, and events. See [Conversation search](../reference/conversation-search.md).
 
 ## What a conversation sends
 
-`StoryRuntime.converse()` sends the current text and the explicitly addressed
-conversation's bounded, validated complete-turn context to exactly one bound
-agent. It does not add another conversation, debate history, manuscripts, core
-updates, or another agent's owner-isolated state to that visible context. The
-agent definition separately provides only that role's allowlisted core files.
+`StoryRuntime.converse()` sends current text and bounded complete-turn context
+from the addressed conversation to one agent. Visible context excludes other
+conversations, debates, manuscripts, core updates, and owner state. The agent
+definition separately provides that role's allowlisted core files.
 See the [provider handoff](../design/prompts-and-provider.md#conversation-turn-flow).
 
-`BoundAgent.converse()` may update thread metadata, never transcripts; the
-runtime owns provider-turn sequencing. Lobby subject management/selection is
-local and provider-free. Ordinary/routed chat, provider dispatch, and
-transcript/search commands remain unavailable. See
-[Story sessions](../guides/story-sessions.md).
+`BoundAgent.converse()` may update thread metadata, not transcripts. `/agents`,
+target changes, and subject management are provider-free. Ordinary, `@AGENT`,
+and `/say` turns can contact the provider and append the selected transcript;
+the shell cannot view or search it. See [Story sessions](../guides/story-sessions.md).
 
-Visible context is conversation-scoped; provider-private history is not. A
-compatible thread is keyed by session, backend, and agent and can span
-conversation IDs and debate calls. A provider may therefore remember material
-absent from the current visible payload. Separate conversation IDs are not a
-provider-isolation boundary.
+Direct routing is not private: it chooses one responder in a shared conversation.
+Later agents can receive its bounded context. A different conversation separates
+visible context, not provider history.
+
+Compatible provider threads are keyed by session, backend, and agent, so they
+can span conversations and debates. The provider may remember content absent
+from the visible payload.
 
 ## Runtime-error diagnostics
 
@@ -56,37 +51,31 @@ After a user event is durable, `StoryRuntime` stores an ordinary failure as the
 exception type alone or `ExceptionType: sanitized detail`. Before storing it,
 the runtime:
 
-- replaces the exact current text and every context-event content value, their
-  JSON-escaped forms, and their control/format-to-space whitespace-collapsed
-  equivalents with `<redacted>`;
+- replaces current/context text, JSON-escaped forms, and control-normalized
+  collapsed forms with `<redacted>`;
 - replaces literal and resolved workspace-root spellings and their collapsed
   equivalents with `<workspace>`;
-- turns every Unicode `Cc` or `Cf` character into a space, collapses whitespace,
-  and trims the detail;
+- replaces Unicode `Cc`/`Cf` with spaces, collapses whitespace, and trims;
 - uses `ExceptionType: unavailable diagnostic` when exception stringification
   fails or the result cannot be strict UTF-8; and
 - caps the complete stored value at 4,096 characters, ending a truncated value
   with ` …[truncated]` inside that limit.
 
 Cancellation uses the fixed [runtime diagnostic](../reference/runtime-api.md#one-conversation-turn).
-Replies are stored unchanged. Sanitization protects exact values; it is not a
-general secret detector.
+Replies remain unchanged. Sanitization is not a general secret detector.
 
-The backend also sanitizes a nonzero Codex-exit diagnostic before raising it;
-the runtime sanitizer applies again before that exception becomes a transcript
-event.
+Backend exit diagnostics are sanitized before raising, then again before
+transcript storage.
 
-The terminal escapes display text and caps caller-redacted error summaries/hints
-at 512/256 characters. Display sanitization does not persist terminal text or
-sanitize provider payloads; it differs from the 4,096-character stored
-diagnostic. See [Terminal display safety](terminal-safety.md).
+Terminal error summary/hint caps are 512/256 characters. Display sanitization
+does not persist text or sanitize provider payloads. See
+[Terminal display safety](terminal-safety.md).
 
 ## Codex process boundary
 
-Codex runs without shell evaluation in isolated staging. The runtime requests a
-read-only sandbox, no approvals, ignored user/project configuration, and
-disabled shell, web, app, and multi-agent tools. Verified role context is staged
-in a temporary `AGENTS.md`; request JSON enters on standard input.
+Codex runs without shell evaluation in isolated staging: read-only sandbox, no
+approvals, ignored project/user configuration, and disabled shell, web, app, and
+multi-agent tools. Verified role context is staged; JSON enters on standard input.
 
 SHA-256 detects changed files but does not encrypt or authorize content.
 Installation-level or vendor-global instructions can still apply. Codex may

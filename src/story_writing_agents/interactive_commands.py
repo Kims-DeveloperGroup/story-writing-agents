@@ -12,6 +12,7 @@ from .agents import (
     EXECUTION_SPECIALIST,
     LEAD_ORCHESTRATOR,
     PLOT_ARCHITECT,
+    ROSTER,
 )
 
 
@@ -48,6 +49,132 @@ class ActionKind(StrEnum):
     HELP = "help"
     QUIT = "quit"
     PARSE_ERROR = "parse_error"
+
+
+@dataclass(frozen=True, slots=True)
+class AgentRouteSpec:
+    """Declare one canonical interactive advisory route and its display copy."""
+
+    agent_id: str
+    prompt_alias: str
+    aliases: tuple[str, ...]
+    advisory_domain: str
+
+    def __post_init__(self) -> None:
+        """Validate route values without normalizing, mutating, or acquiring resources.
+
+        Invalid identifiers, alias relationships, display text, or UTF-8 raise
+        ``TypeError`` or ``ValueError`` before a route can enter the registry;
+        validation owns no cleanup because it performs no external operation.
+        """
+
+        _validate_route_token("agent_id", self.agent_id)
+        if self.agent_id not in ROSTER:
+            raise ValueError(f"unknown canonical agent ID: {self.agent_id}")
+        _validate_route_token("prompt_alias", self.prompt_alias)
+        if not isinstance(self.aliases, tuple):
+            raise TypeError("aliases must be a tuple")
+        if not self.aliases:
+            raise ValueError("aliases must not be empty")
+        for alias in self.aliases:
+            _validate_route_token("alias", alias)
+        if len(set(self.aliases)) != len(self.aliases):
+            raise ValueError("aliases must be unique within one route")
+        if self.prompt_alias != self.aliases[0]:
+            raise ValueError("prompt_alias must be the first alias")
+        _validate_advisory_domain(self.advisory_domain)
+
+
+def _validate_route_token(name: str, value: object) -> str:
+    """Validate and return one named lowercase ASCII identifier token.
+
+    Inputs are not normalized or mutated. Invalid types and values raise before
+    publication, and validation acquires no resource requiring cleanup.
+    """
+
+    if not isinstance(value, str):
+        raise TypeError(f"{name} must be a string")
+    if re.fullmatch(r"[a-z][a-z0-9_]*", value) is None:
+        raise ValueError(
+            f"{name} must be a lowercase ASCII identifier token"
+        )
+    return value
+
+
+def _validate_advisory_domain(value: object) -> str:
+    """Validate and return one nonblank control-free strict-UTF-8 line.
+
+    The input is preserved exactly. Invalid display copy raises before registry
+    publication; no external state is read or left for cleanup.
+    """
+
+    if not isinstance(value, str):
+        raise TypeError("advisory_domain must be a string")
+    if not value or value.isspace():
+        raise ValueError("advisory_domain must not be blank")
+    if any(
+        unicodedata.category(character) in {"Cc", "Cf", "Cs"}
+        or character in {"\u2028", "\u2029"}
+        for character in value
+    ):
+        raise ValueError("advisory_domain must be one control-free line")
+    try:
+        value.encode("utf-8", errors="strict")
+    except UnicodeEncodeError as exc:
+        raise ValueError("advisory_domain must be strict UTF-8") from exc
+    return value
+
+
+def _validated_agent_routes(
+    routes: tuple[AgentRouteSpec, ...],
+) -> tuple[AgentRouteSpec, ...]:
+    """Return a roster-complete globally unique registry without mutation.
+
+    The ordered tuple is validated against ``ROSTER`` and returned unchanged.
+    Invalid route types, canonical order, or cross-route aliases fail at import
+    before publication; no external state exists to clean up.
+    """
+
+    if not isinstance(routes, tuple) or any(
+        type(route) is not AgentRouteSpec for route in routes
+    ):
+        raise TypeError("agent routes must be a tuple of AgentRouteSpec")
+    if tuple(route.agent_id for route in routes) != ROSTER:
+        raise ValueError("agent route order must exactly match ROSTER")
+    aliases = tuple(alias for route in routes for alias in route.aliases)
+    if len(set(aliases)) != len(aliases):
+        raise ValueError("agent aliases must be globally unique")
+    return routes
+
+
+AGENT_ROUTES: tuple[AgentRouteSpec, ...] = _validated_agent_routes(
+    (
+        AgentRouteSpec(
+            LEAD_ORCHESTRATOR,
+            "lead",
+            ("lead", "orchestrator", "lead_orchestrator"),
+            "Moderation, synthesis, and finalization.",
+        ),
+        AgentRouteSpec(
+            PLOT_ARCHITECT,
+            "plot",
+            ("plot", "plot_architect"),
+            "Plot, structure, flow, and pacing.",
+        ),
+        AgentRouteSpec(
+            CHARACTER_CUSTODIAN,
+            "character",
+            ("character", "character_custodian"),
+            "Characters, relationships, world, and continuity.",
+        ),
+        AgentRouteSpec(
+            EXECUTION_SPECIALIST,
+            "execution",
+            ("execution", "prose", "execution_specialist"),
+            "Drafting, prose, point of view, tone, grammar, and format.",
+        ),
+    )
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,14 +239,7 @@ class InteractiveAction:
 
 
 _NO_FIELDS = frozenset()
-_CANONICAL_AGENTS = frozenset(
-    {
-        LEAD_ORCHESTRATOR,
-        PLOT_ARCHITECT,
-        CHARACTER_CUSTODIAN,
-        EXECUTION_SPECIALIST,
-    }
-)
+_CANONICAL_AGENTS = frozenset(route.agent_id for route in AGENT_ROUTES)
 _ACTION_FIELD_RULES: dict[
     ActionKind, tuple[frozenset[str], frozenset[str]]
 ] = {
@@ -294,16 +414,9 @@ COMMANDS: tuple[CommandSpec, ...] = (
 
 
 _AGENT_ALIASES: dict[str, str] = {
-    "lead": LEAD_ORCHESTRATOR,
-    "orchestrator": LEAD_ORCHESTRATOR,
-    "lead_orchestrator": LEAD_ORCHESTRATOR,
-    "plot": PLOT_ARCHITECT,
-    "plot_architect": PLOT_ARCHITECT,
-    "character": CHARACTER_CUSTODIAN,
-    "character_custodian": CHARACTER_CUSTODIAN,
-    "execution": EXECUTION_SPECIALIST,
-    "prose": EXECUTION_SPECIALIST,
-    "execution_specialist": EXECUTION_SPECIALIST,
+    alias: route.agent_id
+    for route in AGENT_ROUTES
+    for alias in route.aliases
 }
 
 _COMMAND_ALIASES: dict[str, str] = {
@@ -800,6 +913,8 @@ def _parse_error(
 
 __all__ = [
     "ActionKind",
+    "AgentRouteSpec",
+    "AGENT_ROUTES",
     "COMMANDS",
     "CommandSpec",
     "InteractiveAction",

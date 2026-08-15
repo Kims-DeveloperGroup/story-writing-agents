@@ -1,7 +1,7 @@
 # Terminal display safety
 
 > **Availability:** these rules protect the module-supported terminal component
-> and installed session/conversation lobby. They do not make a terminal or its
+> and installed session/conversation shell. They do not make a terminal or its
 > scrollback private.
 
 Key terms: **TTY guard**—the check for interactive streams; **typed error**—a
@@ -41,6 +41,8 @@ callback and adds one final LF. A block may keep internal LFs. Workspace text
 inside orientation is forced inline, so an input LF displays as `\x0a`.
 Conversation subjects receive the same inline treatment in scope, list, and
 status records. Stored whitespace is subject data; presentation may wrap it.
+The four-entry agent roster is derived from trusted route/display metadata and
+passes through the same sanitized, width-bounded writer.
 
 This is plain-text safety, not trusted rendering. Markdown is preserved but not
 interpreted. The component does not detect color, width, or other terminal
@@ -84,9 +86,10 @@ secure erasure because callbacks, the terminal, or process memory may retain a
 copy.
 
 The component opens no file, contacts no provider, and stores no history. The
-installed lobby passes `history_count=None`; subject management reads metadata
-but does not read or write transcripts. Chat dispatch and visible history remain
-unavailable.
+installed shell passes `history_count=None`; it has no transcript-view command.
+The controller sends content through `StoryRuntime`, then passes returned reply
+text once to `write_agent()`. Command-looking reply text is escaped for display
+as needed but never reparsed or executed.
 
 Terminal errors are presentation-only, not conversation `runtime_error`
 events. Stored runtime diagnostics use a different automatic redaction set and

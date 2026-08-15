@@ -1,6 +1,8 @@
-"""Synchronous story-session lobby transitions for interactive CLI entry."""
+"""Synchronous interactive session, conversation, and advisory coordination."""
 
 from __future__ import annotations
+
+import asyncio
 
 from .agents import LEAD_ORCHESTRATOR
 from .backend import AgentBackend
@@ -42,8 +44,13 @@ from .interactive_terminal import (
     TerminalActionKind,
     TerminalMessageKind,
 )
-from .models import SessionLeaseState, SessionSummary
-from .workspace import FilesystemConversationCatalog, Workspace
+from .models import ConversationResult, SessionLeaseState, SessionSummary
+from .orchestrator import StoryRuntime
+from .workspace import (
+    FilesystemConversationCatalog,
+    FilesystemConversationEventStore,
+    Workspace,
+)
 
 
 _UNAVAILABLE_SUMMARY = "This command is not available in the session lobby."
@@ -101,11 +108,12 @@ class _ConversationCatalogProtocolFailure(Exception):
 
 
 class InteractiveController:
-    """Own one interactive process's session attachment and lobby loop.
+    """Own one interactive process's attachment and synchronous shell loop.
 
     Construction borrows collaborators without I/O. ``run_session_lobby`` is
     single-use; once it starts, this controller closes the backend on every
-    exit and releases any attachment it can still identify safely.
+    exit and releases any attachment it can still identify safely. The retained
+    ``StoryRuntime`` exclusively owns provider turns and transcript outcomes.
     """
 
     __slots__ = (
@@ -114,6 +122,7 @@ class InteractiveController:
         "_closed",
         "_conversation_catalog",
         "_context",
+        "_runtime",
         "_selected_conversation",
         "_started",
         "_target_agent_id",
@@ -130,12 +139,13 @@ class InteractiveController:
         *,
         conversation_catalog: ConversationCatalog | None = None,
     ) -> None:
-        """Bind borrowed collaborators without reading or mutating resources.
+        """Bind collaborators and construct the retained advisory runtime.
 
         The four positional arguments remain the established construction
         contract. An omitted keyword-only catalog creates the workspace-backed
         adapter; an injected protocol implementation is retained as borrowed
-        state and is never closed by this controller.
+        state and is never closed by this controller. Construction performs no
+        provider call or filesystem write and acquires no cleanup lifecycle.
         """
 
         if not isinstance(workspace, Workspace):
@@ -163,6 +173,15 @@ class InteractiveController:
                 "conversation_catalog must implement ConversationCatalog"
             )
         self._conversation_catalog = resolved_catalog
+        conversation_event_store = FilesystemConversationEventStore(
+            workspace,
+            catalog=resolved_catalog,
+        )
+        self._runtime = StoryRuntime(
+            workspace,
+            backend,
+            conversation_event_store=conversation_event_store,
+        )
         self._attached_session_id: str | None = None
         self._selected_conversation: ConversationMetadata | None = None
         self._target_agent_id = LEAD_ORCHESTRATOR
@@ -174,12 +193,14 @@ class InteractiveController:
         *,
         requested_session: str | None = None,
     ) -> int:
-        """Run one lobby/attachment lifecycle and return shell status 0 or 2.
+        """Run one interactive attachment lifecycle and return status 0 or 2.
 
         ``requested_session`` selects explicit create/attach/resume behavior;
-        ``None`` uses saved selection. The method mutates only session lifecycle
-        and CLI selection state, closes its borrowed backend on every started
-        exit, and rejects a second run with ``RuntimeError``.
+        ``None`` uses saved selection. Commands may mutate owned process state,
+        established session/conversation persistence, or runtime-owned turn
+        transcripts. Every started exit detaches known ownership and closes the
+        borrowed backend; fatal uncertainty returns 2, and a second run raises
+        ``RuntimeError`` without reacquiring resources.
         """
 
         if self._started:
@@ -592,12 +613,13 @@ class InteractiveController:
         )
 
     def _read_session_lobby_commands(self) -> int:
-        """Read and dispatch lobby/navigation commands until normal exit.
+        """Read and dispatch interactive actions until normal exit status 0.
 
         Main Ctrl-C clears only the current input operation. Main EOF, quit, or
         EOF during a call-local subject or confirmation read returns 0. Each
         attached input is preceded immediately by its current conversation
-        scope; fatal transition uncertainty reaches the outer cleanup boundary.
+        scope; advisory turns run sequentially, and fatal transition or turn
+        uncertainty reaches the outer backend cleanup boundary.
         """
 
         while True:
@@ -621,24 +643,34 @@ class InteractiveController:
                     InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
                 )
             assert terminal_action.text is not None
-            action = parse_interactive_line(terminal_action.text)
-            if self._dispatch_session_lobby_action(action):
+            original_line = terminal_action.text
+            action = parse_interactive_line(original_line)
+            if self._dispatch_session_lobby_action(action, original_line):
                 return 0
 
-    def _dispatch_session_lobby_action(self, action: InteractiveAction) -> bool:
+    def _dispatch_session_lobby_action(
+        self,
+        action: InteractiveAction,
+        original_line: str,
+    ) -> bool:
         """Execute one parser action and return whether the loop should exit.
 
-        Help and story-session navigation remain universally available.
-        Unattached conversation actions receive session-inactive before any
-        mutation. Attached actions enforce selection-aware allowlists;
-        later-feature actions receive conversation-required only in the
-        conversation lobby and remain command-invalid otherwise.
+        ``original_line`` is used only to choose the trusted parse-error
+        category. Global help, roster, and story-session navigation remain
+        provider-free; routed content uses the retained runtime, while
+        later-feature actions preserve their selection-aware rejection. The
+        returned boolean signals loop exit; command-specific state changes are
+        delegated to their owners, and fatal failures reach the outer cleanup
+        boundary without local resource acquisition.
         """
 
         if action.kind is ActionKind.IGNORED:
             return False
         if action.kind is ActionKind.HELP:
             self._terminal.write_help(action.argument)
+            return False
+        if action.kind is ActionKind.LIST_AGENTS:
+            self._terminal.write_agent_roster()
             return False
         if action.kind is ActionKind.SESSION_LIST:
             self._list_story_sessions()
@@ -655,7 +687,16 @@ class InteractiveController:
         if action.kind is ActionKind.QUIT:
             return True
         if action.kind is ActionKind.PARSE_ERROR:
-            self._write_parser_error(action)
+            self._write_parser_error(action, original_line)
+            return False
+        if action.kind is ActionKind.SET_TARGET:
+            self._set_target_agent(action)
+            return False
+        if action.kind in {
+            ActionKind.MESSAGE,
+            ActionKind.ROUTED_MESSAGE,
+        }:
+            self._run_advisory_turn(action)
             return False
         if action.kind in {
             ActionKind.CONVERSATION_NEW,
@@ -702,6 +743,172 @@ class InteractiveController:
             return False
         self._write_unavailable_lobby_command_error()
         return False
+
+    def _set_target_agent(self, action: InteractiveAction) -> None:
+        """Set one attached process's sticky responder without provider work.
+
+        The validated action supplies a canonical agent and the method returns
+        no value. An unattached controller renders ``session_inactive``;
+        success mutates only process-local routing and needs no cleanup.
+        """
+
+        assert action.kind is ActionKind.SET_TARGET
+        assert action.agent_id is not None
+        if self._attached_session_id is None:
+            self._terminal.write_error(
+                InteractiveError(InteractiveErrorCode.SESSION_INACTIVE)
+            )
+            return
+        self._target_agent_id = action.agent_id
+        self._terminal.write_status(
+            TerminalMessageKind.ROUTING,
+            f"Sticky target set to {action.agent_id}.",
+        )
+
+    def _run_advisory_turn(self, action: InteractiveAction) -> None:
+        """Run one selected-conversation turn through the retained runtime.
+
+        ``MESSAGE`` uses the sticky target and ``ROUTED_MESSAGE`` uses its
+        one-shot canonical agent without changing sticky state. The method
+        revalidates attachment and selection, renders safe progress, performs
+        exactly one synchronous ``asyncio.run`` boundary, and delegates durable
+        turn outcome ownership to ``StoryRuntime``. Typed expected failures
+        return to the prompt; invalid results or uncertain ownership abort into
+        the controller's existing detach/close cleanup boundary.
+        """
+
+        if self._attached_session_id is None:
+            self._terminal.write_error(
+                InteractiveError(InteractiveErrorCode.SESSION_INACTIVE)
+            )
+            return
+        selected = self._require_active_selected_conversation()
+        if selected is None:
+            return
+
+        session_id = self._attached_session_id
+        assert session_id is not None
+        assert action.text is not None
+        if action.kind is ActionKind.ROUTED_MESSAGE:
+            assert action.agent_id is not None
+            agent_id = action.agent_id
+            routing = (
+                f"One-shot route to {agent_id}; sticky target remains "
+                f"{self._target_agent_id}. "
+            )
+        else:
+            assert action.kind is ActionKind.MESSAGE
+            agent_id = self._target_agent_id
+            routing = f"Routing this turn to {agent_id}. "
+        routing += (
+            "Direct routing selects the responder in this shared room; "
+            "it does not make the turn private."
+        )
+        self._terminal.write_status(TerminalMessageKind.ROUTING, routing)
+        self._terminal.write_status(
+            TerminalMessageKind.WAITING,
+            f"Waiting for {agent_id}.",
+        )
+
+        try:
+            result = asyncio.run(
+                self._runtime.converse(
+                    session_id,
+                    selected.conversation_id,
+                    agent_id,
+                    action.text,
+                )
+            )
+        except Exception as exc:
+            self._present_advisory_turn_failure(exc)
+            return
+
+        if (
+            type(result) is not ConversationResult
+            or result.session_id != session_id
+            or result.conversation_id != selected.conversation_id
+            or result.agent_id != agent_id
+        ):
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            )
+        if result.context.truncated:
+            event_count = len(result.context.events)
+            retained_turns = result.context.retained_turns
+            omitted_turns = result.context.omitted_turns
+            self._terminal.write_status(
+                TerminalMessageKind.CONTEXT,
+                (
+                    f"Context truncated: {event_count} "
+                    f"{'event' if event_count == 1 else 'events'} retained "
+                    f"across {retained_turns} "
+                    f"{'turn' if retained_turns == 1 else 'turns'}; "
+                    f"{omitted_turns} earlier "
+                    f"{'turn' if omitted_turns == 1 else 'turns'} omitted."
+                ),
+            )
+        self._terminal.write_agent(agent_id, result.content)
+
+    def _present_advisory_turn_failure(self, failure: Exception) -> None:
+        """Render one typed turn failure or abort when recovery is uncertain.
+
+        Exception classes, never exception prose, select the result. Missing
+        conversations clear only stale effective in-memory selection, leaving
+        the persisted selection and catalog untouched. Session/workspace
+        failures require proof that the existing lease remains active and
+        owned. Unknown failures enter fatal internal cleanup, while runtime
+        remains the sole owner of any durable turn outcome.
+        """
+
+        error = self._classify_advisory_turn_failure(failure)
+        if error.code is InteractiveErrorCode.INTERNAL_ERROR:
+            raise _ControllerAbort(error)
+        if error.code is InteractiveErrorCode.CONVERSATION_NOT_FOUND:
+            self._selected_conversation = None
+        if error.code in {
+            InteractiveErrorCode.SESSION_INVALID,
+            InteractiveErrorCode.SESSION_EXISTS,
+            InteractiveErrorCode.SESSION_NOT_FOUND,
+            InteractiveErrorCode.SESSION_IN_USE,
+            InteractiveErrorCode.WORKSPACE_INVALID,
+            InteractiveErrorCode.WORKSPACE_UNSAFE,
+        }:
+            self._confirm_attachment_after_command_failure()
+        self._terminal.write_error(error)
+
+    @staticmethod
+    def _classify_advisory_turn_failure(
+        failure: Exception,
+    ) -> InteractiveError:
+        """Map exact turn exception types to safe codes without mutation.
+
+        Established session, conversation, and workspace categories take
+        precedence over provider categories. The returned error carries no raw
+        diagnostic; unknown exceptions become ``internal_error`` for fatal
+        cleanup at the caller.
+        """
+
+        if isinstance(failure, SessionIdError):
+            code = InteractiveErrorCode.SESSION_INVALID
+        elif isinstance(failure, SessionExistsError):
+            code = InteractiveErrorCode.SESSION_EXISTS
+        elif isinstance(failure, SessionNotFoundError):
+            code = InteractiveErrorCode.SESSION_NOT_FOUND
+        elif isinstance(failure, SessionInUseError):
+            code = InteractiveErrorCode.SESSION_IN_USE
+        elif isinstance(failure, ConversationNotFoundError):
+            code = InteractiveErrorCode.CONVERSATION_NOT_FOUND
+        elif isinstance(failure, WorkspaceSecurityError):
+            code = InteractiveErrorCode.WORKSPACE_UNSAFE
+        elif isinstance(failure, (WorkspaceFormatError, OSError)):
+            code = InteractiveErrorCode.WORKSPACE_INVALID
+        elif isinstance(failure, ConfigurationError):
+            code = InteractiveErrorCode.PROVIDER_PREFLIGHT_FAILED
+        elif isinstance(failure, BackendProtocolError):
+            code = InteractiveErrorCode.PROVIDER_PROTOCOL_ERROR
+        else:
+            code = InteractiveErrorCode.INTERNAL_ERROR
+        return InteractiveError(code)
 
     def _write_unavailable_lobby_command_error(self) -> None:
         """Render the stable later-feature error without mutating controller state."""
@@ -1716,15 +1923,26 @@ class InteractiveController:
             and type(summary.active) is bool
         )
 
-    def _write_parser_error(self, action: InteractiveAction) -> None:
-        """Render one parser-selected command error and optional suggestion.
+    def _write_parser_error(
+        self,
+        action: InteractiveAction,
+        original_line: str,
+    ) -> None:
+        """Render a routed-agent or general parse error from original syntax.
 
-        Parser text is trusted only after ``PARSE_ERROR`` selection. No
-        exception text is inspected, and the operation performs no mutation.
+        The raw line's first exact ASCII-delimited token, never parser error
+        prose, selects ``agent_invalid`` for ``@``, ``/to``, and ``/agent``
+        forms. The method returns no value, mutates no state, and relies on the
+        terminal writer to sanitize copy; writer failure needs no local cleanup.
         """
 
         assert action.kind is ActionKind.PARSE_ERROR
         assert action.error is not None
+        code = (
+            InteractiveErrorCode.AGENT_INVALID
+            if self._parse_error_targets_agent(original_line)
+            else InteractiveErrorCode.COMMAND_INVALID
+        )
         hint = (
             f"Try {action.suggestion}, or type /help."
             if action.suggestion is not None
@@ -1732,11 +1950,32 @@ class InteractiveController:
         )
         self._terminal.write_error(
             InteractiveError(
-                InteractiveErrorCode.COMMAND_INVALID,
+                code,
                 summary=action.error,
                 hint=hint,
             )
         )
+
+    @staticmethod
+    def _parse_error_targets_agent(original_line: str) -> bool:
+        """Return whether raw input begins an exact agent-routing form.
+
+        The original line is inspected only at character zero and its first
+        ASCII space/tab boundary. It is not mutated, no failure prose is read,
+        and the pure classification owns no resource or cleanup.
+        """
+
+        if original_line.startswith("@"):
+            return True
+        first_delimiter = next(
+            (
+                index
+                for index, character in enumerate(original_line)
+                if character in " \t"
+            ),
+            len(original_line),
+        )
+        return original_line[:first_delimiter] in {"/to", "/agent"}
 
     def _present_session_failure(
         self,

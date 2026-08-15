@@ -1,11 +1,12 @@
 # Session lifecycle design
 
-> **Availability:** the TTY controller manages nested story-session and subject-
-> conversation lobbies without provider, transcript, search, or artifact work.
+> **Availability:** the controller manages sessions and conversations and
+> dispatches selected-conversation turns. Search, transcript viewing, consensus,
+> and artifact work remain unavailable.
 
-Key terms: **active**—provider work is allowed; **attached**—this process owns
-the session lease; **selected conversation**—one session's saved active record;
-**compensation**—attempting to restore and prove earlier state.
+Key terms: **active**—provider work allowed; **attached**—this process owns the
+lease; **selected conversation**—a saved record; **sticky target**—the
+default responder; **compensation**—restoring and proving earlier state.
 
 <a id="three-independent-facts"></a>
 
@@ -16,7 +17,7 @@ the session lease; **selected conversation**—one session's saved active record
 | Session active | Yes, in its manifest | Provider work is allowed. |
 | Session selected | Yes, in CLI context | Bare `story` knows which session to try. |
 | Session attached | No, through a lease | This backend temporarily owns it. |
-| Conversation selected | Yes, per story session | The nested lobby knows which subject is current. |
+| Conversation selected | Yes, per story session | The shell knows the current subject. |
 
 Selection never proves lease ownership. Quit detaches; end makes the session
 inactive. Both retain saved selections.
@@ -33,7 +34,16 @@ selection enters the inner lobby; stale IDs are not rewritten. Malformed or
 unsafe selection storage is fatal on initial entry.
 
 Session acquisition preflights routes and executable discovery but starts no
-provider. Conversation commands, session list, and session end are provider-free.
+provider. Conversation commands, agent roster/target changes, session list,
+and session end are provider-free.
+
+## Target and turn gates
+
+`/agents` is global. `/to` and `/agent` require attachment but not conversation
+selection; they set the sticky target. Ordinary and `/say` messages use that
+target, while `@AGENT` selects one responder without changing it. Content also
+requires a selected active conversation and blocks the command loop for one
+runtime turn. Conversation create, use, rename, and archive preserve the target.
 
 ## Attach and switch ordering
 
@@ -75,6 +85,7 @@ flowchart TD
 `new` writes exact display metadata, then selection; save failure leaves the new
 record and prior effective choice. `use` saves a resolved active ID before
 memory changes. `subject` renames the selected active record; `list` is read-only.
+None changes the sticky target.
 
 Nonselected archive needs no confirmation and does not reselect. Selected
 archive defaults to no; yes selects the first other active catalog record or
@@ -84,8 +95,9 @@ and the owned active lease are proved; otherwise it is fatal.
 ## End, detach, and close
 
 `/session end` defaults to no. Yes deactivates, releases the lease, retains both
-selections, clears in-process conversation state, and returns to the outer
-lobby. No, blank, or Ctrl-C keeps the attachment; EOF exits without ending.
+selections, clears in-process conversation state, resets the target to lead,
+and returns to the outer lobby. No, blank, or Ctrl-C keeps the attachment; EOF
+exits without ending.
 
 `/quit`, `/exit`, and main-prompt EOF detach without deactivation, then close
 the backend. Detach or close failure changes the final status to `2`. Exact

@@ -7,10 +7,11 @@ Four fixed roles work from editable project documents, audit the same revision,
 and write a manuscript only after all three voting specialists agree.
 
 > **Available now:** workspace setup, exact directives, prompt or draft consensus
-> runs, inspection, persistent Codex sessions, a provider-free smoke test, and
-> an interactive TTY lobby. After attaching a story session, the lobby can
-> create, list, select, rename, and archive subject conversations. Chat turns,
-> transcripts, and search are not yet available there.
+> runs, inspection, persistent Codex sessions, a provider-free smoke test, and an
+> interactive TTY shell. After attaching a story session and selecting a
+> subject conversation, the shell sends routed, single-line advisory turns and
+> saves their transcripts. History, transcript viewing, search, and artifact
+> commands are not yet available there.
 
 ## Quick start
 
@@ -61,7 +62,8 @@ initialized workspace and use its saved session selection. Scripts can pass
   each task, exact contract, design topic, and operational concern.
 - [Workspace guide](docs/guides/workspaces.md) explains the editable project
   files.
-- [Story sessions](docs/guides/story-sessions.md) shows the session/conversation lobby.
+- [Story sessions](docs/guides/story-sessions.md) shows the interactive shell,
+  subject conversations, and agent routing.
 - [Consensus-run guide](docs/guides/consensus-runs.md) covers prompts, drafts,
   outputs, and round limits.
 - [CLI reference](docs/reference/cli.md) is the exact installed command contract.
@@ -73,8 +75,8 @@ initialized workspace and use its saved session selection. Scripts can pass
 
 `AgentBackend` is the concrete provider coordinator; Codex is the only
 implemented provider. `gemini` is a reserved configuration value and fails
-preflight. `StoryRuntime` owns the consensus workflow and persistence. See the
-[system design](docs/design/overview.md) for their responsibilities.
+preflight. `StoryRuntime` owns consensus and advisory-turn sequencing and
+persistence. See the [system design](docs/design/overview.md) for responsibilities.
 
 <a id="minimal-python-api"></a>
 
@@ -90,11 +92,11 @@ For Python integrations, start with the [runtime API](docs/reference/runtime-api
   plaintext.
 - Artifact replacement is atomic per file with best-effort multi-file rollback,
   not a power-loss-safe transaction.
-- Conversation metadata, transcript persistence, [bounded search and cited
-  transcript pages](docs/reference/conversation-search.md), and interactive-line
-  parsing exist as Python APIs. The installed lobby manages conversation
-  subjects and selection, but does not dispatch chat turns or expose history,
-  search, transcript, or artifact commands.
+- The interactive shell accepts one line per advisory turn; multiline composition
+  and active-turn cancellation are not dispatched. It saves transcripts but
+  exposes no history, search, transcript, debate, or artifact command. [Search
+  and cited transcript pages](docs/reference/conversation-search.md)
+  remain Python APIs.
 
 ## Development
 
@@ -114,7 +116,5 @@ Contributors should read [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md),
 
 <a id="project-structure"></a>
 
-The Python package is under
-`src/story_writing_agents/`; tests are under `tests/`; editable role prompts are
-under `config/agents/`; and [PYTHON_MODULE_INDEX.md](PYTHON_MODULE_INDEX.md) is
-the current module navigation map.
+The Python package is under `src/story_writing_agents/`; tests are under `tests/`;
+role prompts are under `config/agents/`; and [PYTHON_MODULE_INDEX.md](PYTHON_MODULE_INDEX.md) is the module navigation map.

@@ -1,6 +1,6 @@
 # Runtime API
 
-> **Availability:** debate execution and one persisted conversation turn are implemented; interactive dispatch is not.
+> **Availability:** debate execution and persisted conversation turns are implemented; the installed shell dispatches one turn for its selected conversation.
 
 Key terms: **runtime**—the coordinator; **preflight**—checks before a user event;
 **context**—earlier turns sent to the provider; **outcome**—reply or runtime error.
@@ -26,9 +26,8 @@ await RuntimeSession.run_prompt(prompt: str, **options) -> DebateResult
 await RuntimeSession.run_draft(draft: str, **options) -> DebateResult
 ```
 
-`RuntimeSession` also provides `apply_directive()`, `set_overrides()`,
-`inspect()`, and `inspect_debate()` for its fixed session ID. `Runtime` aliases
-`StoryRuntime`; `Session` aliases `RuntimeSession`.
+`RuntimeSession` also provides `apply_directive()`, `set_overrides()`, `inspect()`,
+and `inspect_debate()`. `Runtime`/`Session` alias `StoryRuntime`/`RuntimeSession`.
 
 The event-store collaborator is keyword-only. The runtime keeps an injected
 store or creates one `FilesystemConversationEventStore`. It never creates, selects, renames,

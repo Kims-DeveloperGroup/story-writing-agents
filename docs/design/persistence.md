@@ -18,6 +18,7 @@ separate:
 | Per-agent JSONL | Only its owning agent |
 | Provider manifest and temporary lease | `AgentBackend` |
 | Story-session and conversation selections | CLI context helpers |
+| Sticky interactive target | Controller memory only; never persisted |
 | Conversation metadata | Catalog adapter |
 | Conversation transcript JSONL | Event-store adapter |
 | Approved manuscript | Workspace commit path |
@@ -31,11 +32,11 @@ uses the bounded compensation described in the [lifecycle diagram](session-lifec
 There is no atomic transaction across those files. A stale saved ID is retained
 for diagnosis and becomes an unselected lobby state at restart.
 
-`StoryRuntime.converse()` saves the user event before its one provider call. It
-then attempts to save a valid reply as `agent_reply`, or an ordinary post-user
-failure as a sanitized `runtime_error`. This order preserves what the user tried
-even when provider work does not finish. The event store never calls or retries
-the provider.
+Each accepted interactive line delegates persistence to
+`StoryRuntime.converse()`: it saves the user event before its one provider call,
+then attempts to save a valid `agent_reply` or a sanitized `runtime_error`.
+Terminal status and reply rendering create no extra event. The event store never
+calls or retries the provider.
 
 A hard interruption or failed reply/error/cancellation write can leave only the
 user event. That unmatched event stays authoritative but is excluded from later

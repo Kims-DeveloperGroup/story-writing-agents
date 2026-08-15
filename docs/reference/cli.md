@@ -1,12 +1,11 @@
 # CLI reference
 
 > **Availability:** bare `story` and `story chat` open the installed TTY lobby.
-> It manages story sessions and, once one is attached, subject conversations.
-> It does not send chat turns or expose history, search, or transcripts.
+> It manages sessions and conversations and sends routed single-line advisory
+> turns. History, transcript viewing, search, consensus, and artifacts are not exposed.
 
-Key terms: **bare entry**—`story` with no subcommand; **TTY**—an interactive
-terminal stream; **session selection**—the saved default session ID; **exit
-code**—the process outcome number.
+Key terms: **bare entry**—`story` alone; **TTY**—interactive terminal;
+**session selection**—saved default; **exit code**—process outcome.
 
 `story` and `story-writing-agents` are exact aliases for
 `story_writing_agents.cli:main`.
@@ -24,40 +23,47 @@ code**—the process outcome number.
 | Start/end session | `story session (start | end) [ID] [--workspace PATH] [--session ID]` |
 | Smoke | `story smoke [--workspace PATH]` |
 
-`argparse` supplies `-h`/`--help` for the root and subcommands. Help and syntax
-errors finish before interactive setup and therefore do not require a TTY.
-Bare entry accepts no options; use `story chat` when passing a session or
-interactive configuration.
+`argparse` handles `-h`/`--help` and syntax errors before the TTY check. Bare
+entry accepts no options; use `story chat` for session or runtime options.
 
 ## Interactive streams
 
-After argument parsing, bare and `chat` entry require both standard input and
-standard output to report that they are TTYs. This check runs before input,
-interactive option validation, workspace or CLI-context reads, and backend
-construction. A missing or failing TTY check writes `tty_required` to standard
-error and exits `2` without touching the workspace.
+Bare and `chat` entry require TTY standard input and output. This check precedes
+input, option validation, workspace/context reads, and backend construction.
+Failure writes `tty_required` to standard error and exits `2` without workspace
+access.
 
-Prompts, orientation, status, and command-loop errors use standard output.
-Startup and adapter errors use standard error. Interactive errors are typed and
-sanitized; see [Terminal display safety](../operations/terminal-safety.md).
+Interactive prompts, status, and errors use standard output; startup and adapter
+errors use standard error. All are typed and sanitized; see
+[Terminal safety](../operations/terminal-safety.md).
 
-The unattached lobby supports help, story-session navigation, and quit.
-Conversation creation, listing, selection, rename, and archive become available
-only after attachment; these operations call no provider and write no
-transcript or story artifact. Other parsed interaction remains unavailable.
-See the [story-session scenario](../guides/story-sessions.md) and the canonical
-[interactive grammar](interactive-command-parser.md).
+`/agents`, help, session navigation, and quit are global and provider-free.
+`/to NAME` and `/agent NAME` need attachment, not conversation selection, and
+change only the process-local sticky target. Conversation management also needs
+attachment and remains provider-free.
+
+An ordinary line, `@AGENT TEXT`, or `/say TEXT` also needs a selected active
+conversation. Ordinary and `/say` use the sticky target; `@AGENT` is one-shot.
+Each line waits for one `StoryRuntime.converse()` call with pre-turn context;
+the reply is displayed, never reparsed. Routing selects a responder in a shared
+room, not a private channel. Conversation changes keep the target; session
+attach, switch, and end reset it to lead.
+
+The loop is synchronous per turn. `/compose`, active-turn cancellation, a persistent
+event loop, history, search, transcript, debate, and artifact actions are
+unavailable. See the [story-session scenario](../guides/story-sessions.md),
+[interactive grammar](interactive-command-parser.md),
+and [turn contract](runtime-api.md#one-conversation-turn).
 
 ## Workspace and session resolution
 
-Except for `init` and `smoke`, an explicit workspace must already be
-initialized. Without one, commands search upward and choose the nearest fully
-initialized ancestor; they never initialize during resolution. Bare entry
-always uses discovery, while `chat` can take `--workspace`.
+Except for `init` and `smoke`, the workspace must be initialized. Without an
+explicit path, commands choose the nearest initialized ancestor. Bare entry
+always discovers; `chat` accepts `--workspace`.
 
 Session precedence is `--session`, the `session start|end` positional ID, then
-saved selection; both explicit forms are an error. Only successful start or an
-acquired lobby destination reselects. Failure and end preserve selection.
+saved selection; both explicit forms conflict. Successful start or shell
+acquisition reselects; failure and end preserve selection.
 
 Each story session has an independent, lazy conversation selection. It is not
 stored in `cli_context.json`; see [Session storage](configuration/session-storage.md).
@@ -65,13 +71,13 @@ stored in `cli_context.json`; see [Session storage](configuration/session-storag
 ## Run options
 
 Exactly one input is required. Positional input and `--prompt` are prompts;
-`--draft` is an inline candidate; `--draft-file` reads strict UTF-8 relative to
-the caller's directory. Resolution precedes provider construction.
+`--draft` is inline, and `--draft-file` reads strict UTF-8 relative to the
+caller's directory. Resolution precedes backend construction.
 
-`--backend` is repeatable, requires a canonical agent ID and valid backend, and
-lasts one invocation. Duplicate agents are rejected. `--codex-model` selects
-the Codex model for that invocation. `--codex-timeout` is positive and defaults
-to 300 seconds. `--max-debate-rounds` is a nonnegative replacement count.
+`--backend` is repeatable, accepts canonical agent IDs and valid backend names,
+and lasts one invocation; duplicates fail. `--codex-model` selects the model.
+`--codex-timeout` is positive and defaults to 300 seconds;
+`--max-debate-rounds` is nonnegative.
 
 Omitted debate IDs are generated. Omitted output becomes
 `<session_id>_<debate_id>.md` under `manuscript/`. Run prints complete

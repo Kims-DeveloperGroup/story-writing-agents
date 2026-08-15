@@ -485,6 +485,7 @@ class ControllerContractTests(ControllerTestCase):
                 "interactive_commands",
                 "interactive_terminal",
                 "models",
+                "orchestrator",
                 "workspace",
             },
         )
@@ -1267,7 +1268,7 @@ class ControllerConversationStartupTests(ControllerTestCase):
 
 
 class ControllerCommandTests(ControllerTestCase):
-    """Verify the intentionally limited lobby command dispatcher."""
+    """Verify global commands and intentionally unavailable shell domains."""
 
     def test_help_parser_interrupt_and_unsupported_domains_are_nonmutating(
         self,
@@ -1308,7 +1309,8 @@ class ControllerCommandTests(ControllerTestCase):
             "[error command_invalid] This command is not available in the "
             "session lobby.\n"
         )
-        self.assertEqual(rendered.count(unavailable), 4)
+        self.assertEqual(rendered.count(unavailable), 2)
+        self.assertEqual(rendered.count("[error session_inactive]"), 3)
         self.assertIn("[session] No story sessions found.\n", rendered)
         self.assertIn(_error_record(InteractiveErrorCode.SESSION_INACTIVE), rendered)
 
@@ -2039,7 +2041,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
                     workspace.path(_lease_relative("session")).exists()
                 )
 
-    def test_selection_aware_allowlists_are_provider_and_artifact_free(
+    def test_later_feature_allowlists_are_provider_and_artifact_free(
         self,
     ) -> None:
         conversation_actions = (
@@ -2051,10 +2053,6 @@ class ControllerConversationCommandTests(ControllerTestCase):
             "/conversation archive",
         )
         future_actions = (
-            "ordinary message",
-            "@plot routed message",
-            "/to plot",
-            "/agents",
             "/compose",
             "/send",
             "/cancel",
