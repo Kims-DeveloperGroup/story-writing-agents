@@ -1,9 +1,9 @@
 # Interactive command parser
 
-> **Availability:** `COMMANDS` and `parse_interactive_line()` are implemented,
-> provider-free Python APIs. No installed TTY, dispatcher, bare `story` mode, or
-> slash-command execution exists. `/conversation`, `/search`, and `/transcript`
-> are unknown commands.
+> **Availability:** `COMMANDS` and `parse_interactive_line()` are provider-free
+> Python APIs. The [terminal component](interactive-terminal.md) presents lines,
+> but no installed controller executes commands;
+> `/conversation`, `/search`, and `/transcript` remain unknown.
 
 Key terms: **registry**—immutable command-help metadata; **action**—one typed
 parse result; **opaque remainder**—payload preserved after its delimiter;
@@ -77,7 +77,8 @@ The immutable registry also stores the examples shown by the implementation:
 `/run Outline chapter one`, `/draft-file drafts/chapter-01.md`,
 `/session new chapter-01`, `/inspect last`, `/history 20`, `/status`,
 `/help run`, and `/quit`. Capability flags describe what a future dispatcher
-could do; registry and parser perform no I/O or state mutation.
+could do. Registry and parser perform no I/O or mutation; terminal help only
+projects this registry.
 
 ## Parsing contract
 
