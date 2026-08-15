@@ -1,10 +1,11 @@
 # Session and workspace storage
 
-> **Availability:** local workspace, selection, session, debate, agent-state,
-> conversation, and transcript persistence is implemented. All files are plaintext.
+> **Availability:** session/conversation selections, provider sessions, debates,
+> metadata, transcripts, and manuscripts persist as plaintext workspace files.
 
-Key terms: **selection**—the saved default session ID; **manifest**—durable provider-session
-metadata; **lease**—temporary attachment metadata; **transcript**—visible events.
+Key terms: **session selection**—the default story session; **conversation
+selection**—one session's current subject conversation; **manifest**—durable
+provider-session metadata; **lease**—temporary attachment metadata.
 
 ## Canonical workspace tree
 
@@ -12,20 +13,13 @@ metadata; **lease**—temporary attachment metadata; **transcript**—visible ev
 
 ```text
 workspace/
-├── config/
-│   ├── system_defaults.json
-│   ├── agent_configs.json
-│   ├── agents/<canonical-agent-id>/AGENTS.md
-│   └── persona_templates/{default_kim_eun_hee.md,alternative_templates/}
-├── core_documents/
-│   ├── global_outline.md
-│   ├── part_outlines.md
-│   ├── character_sheets.md
-│   └── narrative_rules.md
+├── config/{system_defaults.json,agent_configs.json,agents/,persona_templates/}
+├── core_documents/{global_outline.md,part_outlines.md,character_sheets.md,narrative_rules.md}
 ├── agent_states/
 │   ├── orchestrator_state/
 │   │   ├── sessions/<session_id>.json                         [lazy overrides]
-│   │   ├── cli_context.json                                  [lazy selection]
+│   │   ├── cli_context.json                          [lazy session selection]
+│   │   ├── conversation_selections/<session_id>.json [lazy conversation choice]
 │   │   ├── provider_sessions/.lease-claims.lock              [lazy guard]
 │   │   ├── provider_sessions/<session_id>.json               [lazy manifest]
 │   │   ├── provider_sessions/<session_id>.lease.json         [temporary]
@@ -40,9 +34,8 @@ workspace/
 └── manuscript/<safe-output-path>
 ```
 
-Initialization places `.gitkeep` sentinels in initially empty state,
-discussion-log, alternative-template, and manuscript directories. Normal init
-preserves existing files; prompt overwrite replaces only the four role prompts.
+Initialization adds `.gitkeep` to initially empty directories. Normal init
+preserves files; prompt overwrite replaces only the four role prompts.
 
 ## CLI context and selection timing
 
@@ -58,15 +51,26 @@ Both fields are required; extras are rejected. Version is integer `1`, not
 boolean, and selection is a safe session ID. `AgentBackend` never reads or
 writes this file.
 
-The interactive controller saves a destination only after acquiring and
-validating its lease. During a switch it saves the destination before detaching
-the source. Failed acquisition or selection writing preserves the prior
-selection. If source detach then fails, the destination selection remains: the
-controller cannot safely roll back to a source whose lease is uncertain.
+Each story session has an independent lazy file at
+`agent_states/orchestrator_state/conversation_selections/<session_id>.json`:
 
-Reattaching an already selected session does not rewrite the file. Ending keeps
-selection, including when it now points to an inactive session. Attachment
-itself remains in process and in the temporary lease, never in CLI context.
+```json
+{
+  "schema_version": 1,
+  "session_id": "demo",
+  "selected_conversation_id": "c_0123456789abcdef0123456789abcdef"
+}
+```
+
+The three fields are exact. Version is integer `1`; both IDs are safe and the
+embedded session must match the filename. `selected_conversation_id` may be
+`null` to record an explicit clear. A missing file also means no selection and
+is read without creating storage. Malformed JSON, duplicate/missing/extra
+fields, unsupported versions, mismatched IDs, and non-UTF-8 bytes fail closed.
+
+Conversation files are independent of `cli_context.json` and of one another.
+Each save atomically replaces one complete file; it does not change conversation
+metadata. Transition ordering is canonical in [Session lifecycle](../../design/session-lifecycle.md).
 
 ## Provider-session manifest
 
@@ -83,12 +87,11 @@ itself remains in process and in the temporary lease, never in CLI context.
 }
 ```
 
-Version is integer `1`; filename and embedded ID agree; active is boolean;
-timestamps are timezone-aware and ordered. Thread keys are exact
-`<backend>:<agent_id>` pairs. Each record has exactly the six shown fields; only
-`tainted` is boolean and the rest are nonempty strings. Thread ID is at most 128
-ASCII letters, digits, `_`, or `-`, starting alphanumeric. Metadata survives
-detach, end, and close.
+Version is integer `1`; filename and ID agree; active is boolean; timestamps are
+ordered and timezone-aware. Thread keys are `<backend>:<agent_id>`. Each record
+has the six shown fields; `tainted` is boolean and other values are nonempty.
+Thread ID is at most 128 ASCII alphanumerics, `_`, or `-`, beginning
+alphanumeric. Metadata survives detach, end, and close.
 
 ## Lease sidecar and guard
 
@@ -111,10 +114,7 @@ or remove it while the workspace may be used.
 ## Other persisted records
 
 Session overrides use [Runtime overrides](runtime-overrides.md). Agent JSONL is
-owner-local; discussion JSONL is the public blackboard. Lifecycle state keeps
-an internal owner token omitted by normal inspection. Completed debates normally
-add result JSON without duplicated messages; external cancellation may leave
-only state and blackboard. Conversation metadata has its [catalog schema](../conversation-catalog.md),
-and transcripts have a separate [event schema](../conversation-transcripts.md).
-All reads require strict UTF-8 and exact schemas. Do not manually edit these
-files. Durability is in [Persistence design](../../design/persistence.md).
+owner-local; discussion JSONL is the public blackboard. Conversation metadata
+has its [catalog schema](../conversation-catalog.md), and transcripts have a
+separate [event schema](../conversation-transcripts.md). Reads require strict
+UTF-8 and exact schemas. Do not edit them. See [Persistence](../../design/persistence.md).

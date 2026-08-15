@@ -2,11 +2,10 @@
 
 Use this index to find one canonical answer instead of searching a long manual.
 
-> **Availability:** the installed CLI exposes the existing commands plus a bare
-> or `chat` TTY session lobby. The lobby manages session attachment only. Chat
-> turns, conversation selection/history, transcript, search, and artifact work
-> remain follow-up work in Issues #22 and #11. Their lower-level parser,
-> terminal, catalog, transcript, search, and one-turn runtime APIs are available.
+> **Availability:** bare `story` and `story chat` open the installed TTY lobby.
+> It manages story sessions and, after attachment, conversation subjects and
+> selection. Chat turns, history, transcript, search, and artifact commands are
+> not available there; their lower-level Python foundations remain separate.
 
 ## Availability matrix
 
@@ -15,14 +14,14 @@ Use this index to find one canonical answer instead of searching a long manual.
 | Initialize a workspace; run or inspect a debate | Installed CLI and Python API |
 | Start or end a provider session | Installed CLI and Python API |
 | Open the TTY lobby; list, create, resume, switch, or end sessions | Bare `story` or `story chat` |
+| Create, list, select, rename, or archive subject conversations | Installed lobby after session attachment; catalog Python API |
 | Strict create/resume/attach/detach session lifecycle | Python API; used by the installed lobby |
-| Parse the interactive command language | Python API; the lobby dispatches only help, sessions, and quit |
-| Prompt, confirm, compose, and render safe terminal records | Module-supported Python API; the lobby uses the non-chat subset |
-| Create, rename, archive, and list conversation metadata | Python API only; no selection or dispatch |
+| Parse the interactive command language | Python API; the lobby dispatches help, sessions, conversations, and quit |
+| Prompt, confirm, compose, and render safe terminal records | Module-supported Python API; the lobby uses the session/conversation subset |
 | Append/read transcripts; derive bounded complete-turn context | Python API only; no dispatcher or viewing command |
 | Search one session; cite hits; read bounded transcript pages | Python API only; no dispatcher or command |
 | Persist and send one explicitly addressed conversation turn | `StoryRuntime` Python API only; caller supplies the existing conversation ID |
-| Chat turns and conversation/history/search/transcript commands | Not implemented |
+| Chat turns and history/search/transcript commands | Not implemented in the lobby |
 
 ## Start and concepts
 
@@ -34,7 +33,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 ## Guides
 
 - [Workspaces](guides/workspaces.md)
-- [Story sessions](guides/story-sessions.md)
+- [Story sessions and subject conversations](guides/story-sessions.md)
 - [Provider-free smoke test](guides/smoke-test.md)
 - [Consensus runs](guides/consensus-runs.md)
 - [Directives](guides/directives.md)

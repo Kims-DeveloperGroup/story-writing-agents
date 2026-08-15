@@ -8,9 +8,9 @@ and write a manuscript only after all three voting specialists agree.
 
 > **Available now:** workspace setup, exact directives, prompt or draft consensus
 > runs, inspection, persistent Codex sessions, a provider-free smoke test, and
-> an interactive TTY session lobby. The lobby manages session attachment only;
-> chat turns, conversation history, transcript, and search remain unavailable
-> until Issues #22 and #11.
+> an interactive TTY lobby. After attaching a story session, the lobby can
+> create, list, select, rename, and archive subject conversations. Chat turns,
+> transcripts, and search are not yet available there.
 
 ## Quick start
 
@@ -61,7 +61,7 @@ initialized workspace and use its saved session selection. Scripts can pass
   each task, exact contract, design topic, and operational concern.
 - [Workspace guide](docs/guides/workspaces.md) explains the editable project
   files.
-- [Story sessions](docs/guides/story-sessions.md) shows the interactive lobby.
+- [Story sessions](docs/guides/story-sessions.md) shows the session/conversation lobby.
 - [Consensus-run guide](docs/guides/consensus-runs.md) covers prompts, drafts,
   outputs, and round limits.
 - [CLI reference](docs/reference/cli.md) is the exact installed command contract.
@@ -92,9 +92,9 @@ For Python integrations, start with the [runtime API](docs/reference/runtime-api
   not a power-loss-safe transaction.
 - Conversation metadata, transcript persistence, [bounded search and cited
   transcript pages](docs/reference/conversation-search.md), and interactive-line
-  parsing exist as Python APIs. The installed lobby navigates story sessions;
-  conversation selection, chat dispatch, and conversation/search/transcript
-  commands are not implemented.
+  parsing exist as Python APIs. The installed lobby manages conversation
+  subjects and selection, but does not dispatch chat turns or expose history,
+  search, transcript, or artifact commands.
 
 ## Development
 

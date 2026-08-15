@@ -1,8 +1,8 @@
 # CLI reference
 
-> **Availability:** the installed CLI includes a TTY session lobby through bare
-> `story` and `story chat`. This lobby attaches story sessions but does not send
-> chat turns or select conversation history.
+> **Availability:** bare `story` and `story chat` open the installed TTY lobby.
+> It manages story sessions and, once one is attached, subject conversations.
+> It does not send chat turns or expose history, search, or transcripts.
 
 Key terms: **bare entry**—`story` with no subcommand; **TTY**—an interactive
 terminal stream; **session selection**—the saved default session ID; **exit
@@ -40,8 +40,13 @@ error and exits `2` without touching the workspace.
 Prompts, orientation, status, and command-loop errors use standard output.
 Startup and adapter errors use standard error. Interactive errors are typed and
 sanitized; see [Terminal display safety](../operations/terminal-safety.md).
-Session behavior and the supported lobby commands are demonstrated in
-[Story sessions](../guides/story-sessions.md).
+
+The unattached lobby supports help, story-session navigation, and quit.
+Conversation creation, listing, selection, rename, and archive become available
+only after attachment; these operations call no provider and write no
+transcript or story artifact. Other parsed interaction remains unavailable.
+See the [story-session scenario](../guides/story-sessions.md) and the canonical
+[interactive grammar](interactive-command-parser.md).
 
 ## Workspace and session resolution
 
@@ -50,17 +55,18 @@ initialized. Without one, commands search upward and choose the nearest fully
 initialized ancestor; they never initialize during resolution. Bare entry
 always uses discovery, while `chat` can take `--workspace`.
 
-Legacy session precedence is `--session`, then the positional ID accepted by
-`session start|end`, then the saved selection. Supplying both lifecycle forms
-is an error. Only successful legacy start or an acquired lobby destination may
-update selection. Failed work and session end preserve it.
+Session precedence is `--session`, the `session start|end` positional ID, then
+saved selection; both explicit forms are an error. Only successful start or an
+acquired lobby destination reselects. Failure and end preserve selection.
+
+Each story session has an independent, lazy conversation selection. It is not
+stored in `cli_context.json`; see [Session storage](configuration/session-storage.md).
 
 ## Run options
 
 Exactly one input is required. Positional input and `--prompt` are prompts;
-`--draft` is a complete inline candidate; `--draft-file` reads strict UTF-8
-relative to the caller's current directory. Input resolution finishes before
-provider construction.
+`--draft` is an inline candidate; `--draft-file` reads strict UTF-8 relative to
+the caller's directory. Resolution precedes provider construction.
 
 `--backend` is repeatable, requires a canonical agent ID and valid backend, and
 lasts one invocation. Duplicate agents are rejected. `--codex-model` selects
@@ -74,13 +80,12 @@ Omitted debate IDs are generated. Omitted output becomes
 ## Other outputs
 
 Initialization, directives, inspection, and legacy lifecycle print indented
-JSON. Legacy caught exceptions print `ExceptionType: message` to standard
-error. Interactive errors instead follow the safe stream boundary above.
+JSON. Legacy failures print `ExceptionType: message` to standard error;
+interactive errors use the safe boundary above.
 
-Smoke without a workspace uses and removes a temporary workspace. With a path,
-it initializes or reuses that directory and retains diagnostics. It calls no
-provider. Passed compact JSON includes `status: passed` and
-`provider_tested: false`; failed invariant JSON includes `failed_check`.
+Smoke uses a temporary workspace unless given a retained path. It calls no
+provider. Pass JSON includes `status: passed` and `provider_tested: false`;
+invariant failure includes `failed_check`.
 
 ## Exit codes
 

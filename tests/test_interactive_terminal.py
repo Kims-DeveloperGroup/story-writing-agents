@@ -108,6 +108,33 @@ ERROR_DEFAULTS = {
         "The story session is inactive.",
         "Resume the session before starting provider work.",
     ),
+    InteractiveErrorCode.CONVERSATION_REQUIRED: (
+        "No conversation is selected.",
+        "Create, list, or use a conversation first.",
+    ),
+    InteractiveErrorCode.CONVERSATION_INVALID: (
+        "The conversation input is invalid.",
+        (
+            "Provide a valid subject or a full or unique ID prefix of at "
+            "least 12 characters."
+        ),
+    ),
+    InteractiveErrorCode.CONVERSATION_NOT_FOUND: (
+        "No matching conversation was found.",
+        "Use `/conversation list [--all] [QUERY]` to find an ID.",
+    ),
+    InteractiveErrorCode.CONVERSATION_AMBIGUOUS: (
+        "The conversation ID prefix is ambiguous.",
+        "Use a longer prefix or the full ID.",
+    ),
+    InteractiveErrorCode.CONVERSATION_ARCHIVED: (
+        "The conversation is archived.",
+        "Choose an active conversation or create a new one.",
+    ),
+    InteractiveErrorCode.CONVERSATION_CREATE_FAILED: (
+        "A unique conversation ID could not be created.",
+        "Try creating the conversation again.",
+    ),
     InteractiveErrorCode.TRANSCRIPT_INVALID: (
         "The conversation transcript is invalid.",
         "Inspect and repair the reported transcript before retrying.",
@@ -247,8 +274,11 @@ class PublicContractTests(unittest.TestCase):
                 self.assertIs(getattr(terminal_module, name), globals()[name])
         for changed_callable in (
             ConfirmationResult,
+            InteractiveTerminal.request_conversation_subject,
             InteractiveTerminal.request_confirmation,
             InteractiveTerminal.write_session_orientation,
+            InteractiveTerminal.write_conversation_scope,
+            InteractiveTerminal.write_conversation_list_entry,
         ):
             with self.subTest(docstring=changed_callable.__qualname__):
                 self.assertTrue(inspect.getdoc(changed_callable))
@@ -277,6 +307,7 @@ class PublicContractTests(unittest.TestCase):
             TerminalMessageKind: (
                 ("COMPOSE", "compose"),
                 ("SESSION", "session"),
+                ("CONVERSATION", "conversation"),
                 ("ROUTING", "routing"),
                 ("CONTEXT", "context"),
                 ("WAITING", "waiting"),
@@ -297,6 +328,15 @@ class PublicContractTests(unittest.TestCase):
                 ("SESSION_NOT_FOUND", "session_not_found"),
                 ("SESSION_IN_USE", "session_in_use"),
                 ("SESSION_INACTIVE", "session_inactive"),
+                ("CONVERSATION_REQUIRED", "conversation_required"),
+                ("CONVERSATION_INVALID", "conversation_invalid"),
+                ("CONVERSATION_NOT_FOUND", "conversation_not_found"),
+                ("CONVERSATION_AMBIGUOUS", "conversation_ambiguous"),
+                ("CONVERSATION_ARCHIVED", "conversation_archived"),
+                (
+                    "CONVERSATION_CREATE_FAILED",
+                    "conversation_create_failed",
+                ),
                 ("TRANSCRIPT_INVALID", "transcript_invalid"),
                 ("PROVIDER_PREFLIGHT_FAILED", "provider_preflight_failed"),
                 ("PROVIDER_EXITED", "provider_exited"),
@@ -505,6 +545,49 @@ class PromptAndRenderingTests(unittest.TestCase):
             signature.parameters["width"].kind,
             inspect.Parameter.KEYWORD_ONLY,
         )
+        subject_signature = inspect.signature(
+            InteractiveTerminal.request_conversation_subject
+        )
+        self.assertEqual(tuple(subject_signature.parameters), ("self",))
+        scope_signature = inspect.signature(
+            InteractiveTerminal.write_conversation_scope
+        )
+        self.assertEqual(
+            tuple(scope_signature.parameters),
+            (
+                "self",
+                "session_id",
+                "conversation_handle",
+                "conversation_subject",
+                "agent_id",
+            ),
+        )
+        self.assertTrue(
+            all(
+                parameter.kind is inspect.Parameter.KEYWORD_ONLY
+                for parameter in tuple(scope_signature.parameters.values())[1:]
+            )
+        )
+        list_signature = inspect.signature(
+            InteractiveTerminal.write_conversation_list_entry
+        )
+        self.assertEqual(
+            tuple(list_signature.parameters),
+            (
+                "self",
+                "conversation_handle",
+                "conversation_subject",
+                "archived",
+                "selected",
+            ),
+        )
+        self.assertTrue(
+            all(
+                list_signature.parameters[name].kind
+                is inspect.Parameter.KEYWORD_ONLY
+                for name in ("archived", "selected")
+            )
+        )
 
         valid, _ = make_terminal(width=20)
         self.assertIsInstance(valid, InteractiveTerminal)
@@ -580,6 +663,46 @@ class PromptAndRenderingTests(unittest.TestCase):
                         agent_id=agent_id,
                     )
         self.assertEqual(callbacks.prompts, [])
+
+    def test_subject_prompt_is_exact_call_local_and_returns_typed_events(
+        self,
+    ) -> None:
+        terminal, callbacks = make_terminal("  Chapter 1 opening  ")
+        self.assertEqual(
+            terminal.request_conversation_subject(),
+            TerminalAction(
+                TerminalActionKind.LINE,
+                text="  Chapter 1 opening  ",
+            ),
+        )
+        self.assertEqual(callbacks.prompts, ["conversation[subject]> "])
+        self.assertEqual(callbacks.records, [])
+
+        for event, expected in (
+            (KeyboardInterrupt(), TerminalActionKind.INTERRUPT),
+            (EOFError(), TerminalActionKind.EOF),
+        ):
+            with self.subTest(event=expected):
+                terminal, callbacks = make_terminal(event)
+                self.assertEqual(
+                    terminal.request_conversation_subject(),
+                    TerminalAction(expected),
+                )
+                self.assertEqual(
+                    callbacks.prompts,
+                    ["conversation[subject]> "],
+                )
+                self.assertEqual(callbacks.records, [])
+
+        for value, error_type in (
+            (None, TypeError),
+            ("two\nlines", ValueError),
+            (RuntimeError("reader failed"), RuntimeError),
+        ):
+            with self.subTest(value=repr(value)):
+                terminal, _callbacks = make_terminal(value)
+                with self.assertRaises(error_type):
+                    terminal.request_conversation_subject()
 
     def test_confirmation_normalizes_answers_defaults_and_reprompts(self) -> None:
         cases = (
@@ -767,6 +890,113 @@ class PromptAndRenderingTests(unittest.TestCase):
         )
         self.assertIn("History: 0 visible room events\n", callbacks.records[0])
         self.assertIn("Room messages are saved locally", callbacks.records[0])
+
+    def test_conversation_scope_has_exact_selected_and_lobby_records(self) -> None:
+        terminal, callbacks = make_terminal(width=200)
+        terminal.write_conversation_scope(
+            session_id="SESSION",
+            conversation_handle="c_0123456789",
+            conversation_subject="Opening scene",
+            agent_id=PLOT_ARCHITECT,
+        )
+        terminal.write_conversation_scope(
+            session_id="SESSION",
+            conversation_handle=None,
+            conversation_subject=None,
+            agent_id=LEAD_ORCHESTRATOR,
+        )
+        self.assertEqual(
+            callbacks.records,
+            [
+                "[context] Session: SESSION | Conversation: c_0123456789 | "
+                "Subject: Opening scene | Agent: plot\n",
+                "[context] Session: SESSION | Conversation: none | "
+                "Agent: lead\n",
+            ],
+        )
+
+        terminal, callbacks = make_terminal(width=35)
+        terminal.write_conversation_scope(
+            session_id="SESSION",
+            conversation_handle="c_0123456789",
+            conversation_subject="Unsafe\nsubject\x1b and more words",
+            agent_id=LEAD_ORCHESTRATOR,
+        )
+        rendered = callbacks.records[0]
+        self.assertIn("Subject:", rendered)
+        self.assertIn("Unsafe\\x0asubject\\x1b", rendered)
+        self.assertTrue(rendered.startswith("[context] "))
+        self.assertTrue(rendered.endswith("\n"))
+        rendered.encode("utf-8", errors="strict")
+
+    def test_conversation_list_records_are_exact_bounded_and_validated(
+        self,
+    ) -> None:
+        terminal, callbacks = make_terminal(width=200)
+        terminal.write_conversation_list_entry(
+            "c_0123456789",
+            "Opening scene",
+            archived=False,
+            selected=True,
+        )
+        terminal.write_conversation_list_entry(
+            "c_fedcba9876",
+            "Old\nsubject\x1b",
+            archived=True,
+            selected=False,
+        )
+        self.assertEqual(
+            callbacks.records,
+            [
+                "[conversation] c_0123456789 | active | selected | "
+                "Subject: Opening scene\n",
+                "[conversation] c_fedcba9876 | archived | not selected | "
+                "Subject: Old\\x0asubject\\x1b\n",
+            ],
+        )
+
+        invalid_calls = (
+            lambda: terminal.write_conversation_scope(
+                session_id="SESSION",
+                conversation_handle="conversation",
+                conversation_subject=None,
+                agent_id=LEAD_ORCHESTRATOR,
+            ),
+            lambda: terminal.write_conversation_scope(
+                session_id="unsafe/id",
+                conversation_handle=None,
+                conversation_subject=None,
+                agent_id=LEAD_ORCHESTRATOR,
+            ),
+            lambda: terminal.write_conversation_list_entry(
+                "unsafe/id",
+                "Subject",
+                archived=False,
+                selected=False,
+            ),
+            lambda: terminal.write_conversation_list_entry(
+                "conversation",
+                " ",
+                archived=False,
+                selected=False,
+            ),
+            lambda: terminal.write_conversation_list_entry(
+                "conversation",
+                "Subject",
+                archived=True,
+                selected=True,
+            ),
+            lambda: terminal.write_conversation_list_entry(
+                "conversation",
+                "Subject",
+                archived=1,  # type: ignore[arg-type]
+                selected=False,
+            ),
+        )
+        for call in invalid_calls:
+            with self.subTest(call=call):
+                with self.assertRaises((TypeError, ValueError)):
+                    call()
 
     def test_status_run_and_agent_records_use_exact_trusted_prefixes(self) -> None:
         for kind in TerminalMessageKind:
@@ -1284,7 +1514,12 @@ class TerminalBoundaryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             before = tuple(root.iterdir())
-            callbacks = ScriptedCallbacks("raw /run", "message", "/send")
+            callbacks = ScriptedCallbacks(
+                "raw /run",
+                "subject",
+                "message",
+                "/send",
+            )
             terminal = InteractiveTerminal(
                 callbacks.read_line,
                 callbacks.write_text,
@@ -1307,8 +1542,24 @@ class TerminalBoundaryTests(unittest.TestCase):
                     "raw /run",
                 )
                 self.assertEqual(
+                    terminal.request_conversation_subject().text,
+                    "subject",
+                )
+                self.assertEqual(
                     terminal.compose(ComposeMode.RUN).text,
                     "message",
+                )
+                terminal.write_conversation_scope(
+                    session_id="session",
+                    conversation_handle="c_0123456789",
+                    conversation_subject="Subject",
+                    agent_id=LEAD_ORCHESTRATOR,
+                )
+                terminal.write_conversation_list_entry(
+                    "c_0123456789",
+                    "Subject",
+                    archived=False,
+                    selected=True,
                 )
                 terminal.write_help()
                 terminal.write_error(

@@ -60,6 +60,7 @@ class TerminalMessageKind(StrEnum):
 
     COMPOSE = "compose"
     SESSION = "session"
+    CONVERSATION = "conversation"
     ROUTING = "routing"
     CONTEXT = "context"
     WAITING = "waiting"
@@ -83,6 +84,12 @@ class InteractiveErrorCode(StrEnum):
     SESSION_NOT_FOUND = "session_not_found"
     SESSION_IN_USE = "session_in_use"
     SESSION_INACTIVE = "session_inactive"
+    CONVERSATION_REQUIRED = "conversation_required"
+    CONVERSATION_INVALID = "conversation_invalid"
+    CONVERSATION_NOT_FOUND = "conversation_not_found"
+    CONVERSATION_AMBIGUOUS = "conversation_ambiguous"
+    CONVERSATION_ARCHIVED = "conversation_archived"
+    CONVERSATION_CREATE_FAILED = "conversation_create_failed"
     TRANSCRIPT_INVALID = "transcript_invalid"
     PROVIDER_PREFLIGHT_FAILED = "provider_preflight_failed"
     PROVIDER_EXITED = "provider_exited"
@@ -254,6 +261,33 @@ INTERACTIVE_ERROR_SPECS: Mapping[
             "The story session is inactive.",
             "Resume the session before starting provider work.",
         ),
+        InteractiveErrorCode.CONVERSATION_REQUIRED: InteractiveErrorSpec(
+            "No conversation is selected.",
+            "Create, list, or use a conversation first.",
+        ),
+        InteractiveErrorCode.CONVERSATION_INVALID: InteractiveErrorSpec(
+            "The conversation input is invalid.",
+            (
+                "Provide a valid subject or a full or unique ID prefix of at "
+                "least 12 characters."
+            ),
+        ),
+        InteractiveErrorCode.CONVERSATION_NOT_FOUND: InteractiveErrorSpec(
+            "No matching conversation was found.",
+            "Use `/conversation list [--all] [QUERY]` to find an ID.",
+        ),
+        InteractiveErrorCode.CONVERSATION_AMBIGUOUS: InteractiveErrorSpec(
+            "The conversation ID prefix is ambiguous.",
+            "Use a longer prefix or the full ID.",
+        ),
+        InteractiveErrorCode.CONVERSATION_ARCHIVED: InteractiveErrorSpec(
+            "The conversation is archived.",
+            "Choose an active conversation or create a new one.",
+        ),
+        InteractiveErrorCode.CONVERSATION_CREATE_FAILED: InteractiveErrorSpec(
+            "A unique conversation ID could not be created.",
+            "Try creating the conversation again.",
+        ),
         InteractiveErrorCode.TRANSCRIPT_INVALID: InteractiveErrorSpec(
             "The conversation transcript is invalid.",
             "Inspect and repair the reported transcript before retrying.",
@@ -383,6 +417,22 @@ class InteractiveTerminal:
         prompt = _main_prompt(session_id=session_id, agent_id=agent_id)
         try:
             line = self._read_line(prompt)
+        except KeyboardInterrupt:
+            return TerminalAction(TerminalActionKind.INTERRUPT)
+        except EOFError:
+            return TerminalAction(TerminalActionKind.EOF)
+        return TerminalAction(TerminalActionKind.LINE, text=_validated_input_line(line))
+
+    def request_conversation_subject(self) -> TerminalAction:
+        """Read one unparsed subject line or return interrupt/EOF without output.
+
+        The call owns no buffer and performs one synchronous read using the
+        fixed subject prompt. Callback and line-framing failures propagate;
+        no catalog, selection, or cleanup resource is mutated here.
+        """
+
+        try:
+            line = self._read_line("conversation[subject]> ")
         except KeyboardInterrupt:
             return TerminalAction(TerminalActionKind.INTERRUPT)
         except EOFError:
@@ -572,6 +622,88 @@ class InteractiveTerminal:
             "Type /help for commands; /quit leaves the story session active."
         )
         self._write_block("\n".join(lines))
+
+    def write_conversation_scope(
+        self,
+        *,
+        session_id: str,
+        conversation_handle: str | None,
+        conversation_subject: str | None,
+        agent_id: str,
+    ) -> None:
+        """Render one bounded attached-prompt scope without changing state.
+
+        A nullable handle and subject must be absent together for the explicit
+        conversation-lobby form. Selected values are validated, sanitized,
+        and width-wrapped with the stable short agent alias before one terminal
+        record is written; writer failures propagate without cleanup here.
+        """
+
+        safe_session = _safe_identifier("session_id", session_id)
+        agent_alias = _agent_alias(agent_id)
+        if conversation_handle is None and conversation_subject is None:
+            scope = (
+                f"Session: {safe_session} | Conversation: none | "
+                f"Agent: {agent_alias}"
+            )
+        elif conversation_handle is None or conversation_subject is None:
+            raise ValueError(
+                "conversation_handle and conversation_subject must be absent together"
+            )
+        else:
+            safe_handle = _safe_identifier(
+                "conversation_handle",
+                conversation_handle,
+            )
+            safe_subject = _inline_text(
+                _required_text("conversation_subject", conversation_subject)
+            )
+            scope = (
+                f"Session: {safe_session} | Conversation: {safe_handle} | "
+                f"Subject: {safe_subject} | Agent: {agent_alias}"
+            )
+        self._write_block(
+            "\n".join(_wrap_prefixed("[context] ", scope, self._width))
+        )
+
+    def write_conversation_list_entry(
+        self,
+        conversation_handle: str,
+        conversation_subject: str,
+        *,
+        archived: bool,
+        selected: bool,
+    ) -> None:
+        """Render one bounded catalog row from validated display metadata.
+
+        ``archived`` selects the lifecycle label and ``selected`` marks the
+        current in-memory choice; an archived selected row is rejected. Values
+        are sanitized and written once, with no catalog or selection mutation.
+        """
+
+        safe_handle = _safe_identifier(
+            "conversation_handle",
+            conversation_handle,
+        )
+        safe_subject = _inline_text(
+            _required_text("conversation_subject", conversation_subject)
+        )
+        if type(archived) is not bool:
+            raise TypeError("archived must be a bool")
+        if type(selected) is not bool:
+            raise TypeError("selected must be a bool")
+        if archived and selected:
+            raise ValueError("an archived conversation cannot be selected")
+        status = "archived" if archived else "active"
+        selection = "selected" if selected else "not selected"
+        entry = (
+            f"{safe_handle} | {status} | {selection} | Subject: {safe_subject}"
+        )
+        self._write_block(
+            "\n".join(
+                _wrap_prefixed("[conversation] ", entry, self._width)
+            )
+        )
 
     def write_status(self, kind: TerminalMessageKind, text: str) -> None:
         """Write one trusted status prefix followed by safe display text."""

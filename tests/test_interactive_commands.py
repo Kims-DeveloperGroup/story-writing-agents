@@ -55,6 +55,7 @@ COMMAND_NAMES = {
     "run": "/run",
     "draft-file": "/draft-file",
     "session": "/session",
+    "conversation": "/conversation",
     "inspect": "/inspect",
     "history": "/history",
     "status": "/status",
@@ -110,6 +111,12 @@ ACTION_RULES = {
     ActionKind.SESSION_NEW: ({"argument"}, {"argument"}),
     ActionKind.SESSION_RESUME: ({"argument"}, set()),
     ActionKind.SESSION_END: (set(), set()),
+    ActionKind.CONVERSATION_NEW: ({"argument"}, set()),
+    ActionKind.CONVERSATION_LIST: ({"argument"}, set()),
+    ActionKind.CONVERSATION_LIST_ALL: ({"argument"}, set()),
+    ActionKind.CONVERSATION_USE: ({"argument"}, {"argument"}),
+    ActionKind.CONVERSATION_SUBJECT: ({"argument"}, {"argument"}),
+    ActionKind.CONVERSATION_ARCHIVE: ({"argument"}, set()),
     ActionKind.HELP: ({"argument"}, set()),
     ActionKind.QUIT: (set(), set()),
     ActionKind.PARSE_ERROR: (
@@ -208,6 +215,12 @@ class ActionContractTests(unittest.TestCase):
             "SESSION_NEW": "session_new",
             "SESSION_RESUME": "session_resume",
             "SESSION_END": "session_end",
+            "CONVERSATION_NEW": "conversation_new",
+            "CONVERSATION_LIST": "conversation_list",
+            "CONVERSATION_LIST_ALL": "conversation_list_all",
+            "CONVERSATION_USE": "conversation_use",
+            "CONVERSATION_SUBJECT": "conversation_subject",
+            "CONVERSATION_ARCHIVE": "conversation_archive",
             "HELP": "help",
             "QUIT": "quit",
             "PARSE_ERROR": "parse_error",
@@ -294,7 +307,7 @@ class ActionContractTests(unittest.TestCase):
 
 
 class CommandRegistryTests(unittest.TestCase):
-    def test_registry_is_the_exact_ordered_seventeen_row_contract(self) -> None:
+    def test_registry_is_the_exact_ordered_eighteen_row_contract(self) -> None:
         expected = (
             CommandSpec("Conversation", "/compose", (), False, False, "/compose"),
             CommandSpec("Conversation", "/send", (), False, False, "/send"),
@@ -356,6 +369,17 @@ class CommandRegistryTests(unittest.TestCase):
                 False,
                 False,
                 "/session new chapter-01",
+            ),
+            CommandSpec(
+                "Conversations",
+                (
+                    "/conversation new [SUBJECT] | list [--all] [QUERY] | "
+                    "use ID | subject SUBJECT | archive [ID]"
+                ),
+                (),
+                False,
+                False,
+                "/conversation new Chapter 1 opening",
             ),
             CommandSpec(
                 "Inspection",
@@ -513,6 +537,48 @@ class SuccessfulParsingTests(unittest.TestCase):
             ),
             ("/session end", InteractiveAction(ActionKind.SESSION_END)),
             (
+                "/conversation new Chapter 1 opening",
+                InteractiveAction(
+                    ActionKind.CONVERSATION_NEW,
+                    argument="Chapter 1 opening",
+                ),
+            ),
+            (
+                "/conversation list motivation",
+                InteractiveAction(
+                    ActionKind.CONVERSATION_LIST,
+                    argument="motivation",
+                ),
+            ),
+            (
+                "/conversation list --all archived",
+                InteractiveAction(
+                    ActionKind.CONVERSATION_LIST_ALL,
+                    argument="archived",
+                ),
+            ),
+            (
+                "/conversation use c_0123456789abcdef",
+                InteractiveAction(
+                    ActionKind.CONVERSATION_USE,
+                    argument="c_0123456789abcdef",
+                ),
+            ),
+            (
+                "/conversation subject Revised opening",
+                InteractiveAction(
+                    ActionKind.CONVERSATION_SUBJECT,
+                    argument="Revised opening",
+                ),
+            ),
+            (
+                "/conversation archive c_0123456789abcdef",
+                InteractiveAction(
+                    ActionKind.CONVERSATION_ARCHIVE,
+                    argument="c_0123456789abcdef",
+                ),
+            ),
+            (
                 "/help run",
                 InteractiveAction(ActionKind.HELP, argument="/run"),
             ),
@@ -605,6 +671,22 @@ class SuccessfulParsingTests(unittest.TestCase):
                 "/session resume ",
                 InteractiveAction(ActionKind.SESSION_RESUME),
             ),
+            (
+                "/conversation new ",
+                InteractiveAction(ActionKind.CONVERSATION_NEW),
+            ),
+            (
+                "/conversation list\t\t",
+                InteractiveAction(ActionKind.CONVERSATION_LIST),
+            ),
+            (
+                "/conversation list --all ",
+                InteractiveAction(ActionKind.CONVERSATION_LIST_ALL),
+            ),
+            (
+                "/conversation archive\t",
+                InteractiveAction(ActionKind.CONVERSATION_ARCHIVE),
+            ),
             ("/help\t", InteractiveAction(ActionKind.HELP)),
         )
         for line, expected in cases:
@@ -671,12 +753,91 @@ class InvalidInputTests(ParserAssertions, unittest.TestCase):
             with self.subTest(line=line):
                 self.assert_parse_error(line)
 
-    def test_issue_22_and_23_commands_remain_unknown_in_this_leaf(self) -> None:
-        for line in ("/conversation", "/search", "/transcript"):
+    def test_issue_23_commands_remain_unknown_in_this_leaf(self) -> None:
+        for line in ("/search", "/transcript"):
             with self.subTest(line=line):
                 action = self.assert_parse_error(line)
                 assert action.error is not None
                 self.assertIn("unknown", action.error.lower())
+
+    def test_conversation_grammar_and_opaque_remainders_are_exact(self) -> None:
+        cases = (
+            (
+                "/conversation new",
+                InteractiveAction(ActionKind.CONVERSATION_NEW),
+            ),
+            (
+                "/conversation new  Subject  with  spacing ",
+                InteractiveAction(
+                    ActionKind.CONVERSATION_NEW,
+                    argument=" Subject  with  spacing ",
+                ),
+            ),
+            (
+                "/conversation list",
+                InteractiveAction(ActionKind.CONVERSATION_LIST),
+            ),
+            (
+                "/conversation list  Mara  motivation ",
+                InteractiveAction(
+                    ActionKind.CONVERSATION_LIST,
+                    argument="Mara  motivation ",
+                ),
+            ),
+            (
+                "/conversation list --all",
+                InteractiveAction(ActionKind.CONVERSATION_LIST_ALL),
+            ),
+            (
+                "/conversation list  --all  old subject ",
+                InteractiveAction(
+                    ActionKind.CONVERSATION_LIST_ALL,
+                    argument="old subject ",
+                ),
+            ),
+            (
+                "/conversation use ../unsafe",
+                InteractiveAction(
+                    ActionKind.CONVERSATION_USE,
+                    argument="../unsafe",
+                ),
+            ),
+            (
+                "/conversation subject \u00a0",
+                InteractiveAction(
+                    ActionKind.CONVERSATION_SUBJECT,
+                    argument="\u00a0",
+                ),
+            ),
+            (
+                "/conversation archive ../unsafe",
+                InteractiveAction(
+                    ActionKind.CONVERSATION_ARCHIVE,
+                    argument="../unsafe",
+                ),
+            ),
+        )
+        for line, expected in cases:
+            with self.subTest(line=line):
+                self.assertEqual(parse_interactive_line(line), expected)
+
+    def test_conversation_subcommands_enforce_arity_and_flag_position(self) -> None:
+        cases = (
+            "/conversation",
+            "/conversation unknown",
+            "/conversation use",
+            "/conversation use one two",
+            "/conversation subject",
+            "/conversation subject   ",
+            "/conversation archive one two",
+            "/conversation list --unknown",
+            "/conversation list --all --all",
+            "/conversation list query --all",
+            "/conversation list --all query --all",
+        )
+        for line in cases:
+            with self.subTest(line=line):
+                self.assert_parse_error(line)
 
     def test_case_sensitive_and_missing_delimiter_near_misses_fail(self) -> None:
         cases = (

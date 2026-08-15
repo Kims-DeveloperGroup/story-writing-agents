@@ -1,8 +1,8 @@
 # Terminal display safety
 
 > **Availability:** these rules protect the module-supported terminal component
-> and the installed session lobby. They do not make a terminal or its scrollback
-> private.
+> and installed session/conversation lobby. They do not make a terminal or its
+> scrollback private.
 
 Key terms: **TTY guard**—the check for interactive streams; **typed error**—a
 trusted public error code instead of exception prose; **display escaping**—
@@ -39,6 +39,8 @@ nothing.
 Every terminal writer sends one sanitized string to its borrowed output
 callback and adds one final LF. A block may keep internal LFs. Workspace text
 inside orientation is forced inline, so an input LF displays as `\x0a`.
+Conversation subjects receive the same inline treatment in scope, list, and
+status records. Stored whitespace is subject data; presentation may wrap it.
 
 This is plain-text safety, not trusted rendering. Markdown is preserved but not
 interpreted. The component does not detect color, width, or other terminal
@@ -50,6 +52,12 @@ CLI and controller boundaries classify failures by exception type and validated
 public session state. They pass `InteractiveError` values to the terminal and
 never display exception messages, owner tokens, or other raw diagnostics.
 Parser-owned safe errors may supply their own summary and suggestion.
+
+Conversation failures have separate required, invalid, missing, ambiguous,
+archived, and create-failed categories. Workspace corruption and unsafe paths
+remain workspace categories; uncertain resource ownership becomes
+`cleanup_failed`. These distinctions do not expose the rejected subject, ID,
+path, or exception prose.
 
 `write_error()` accepts a trusted error and explicit secret strings. It:
 
@@ -76,8 +84,9 @@ secure erasure because callbacks, the terminal, or process memory may retain a
 copy.
 
 The component opens no file, contacts no provider, and stores no history. The
-Issue #10 lobby passes `history_count=None` and therefore makes no room-history
-claim. Chat dispatch and conversation history remain unavailable.
+installed lobby passes `history_count=None`; subject management reads metadata
+but does not read or write transcripts. Chat dispatch and visible history remain
+unavailable.
 
 Terminal errors are presentation-only, not conversation `runtime_error`
 events. Stored runtime diagnostics use a different automatic redaction set and
