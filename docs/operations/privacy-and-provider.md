@@ -74,6 +74,11 @@ The backend also sanitizes a nonzero Codex-exit diagnostic before raising it;
 the runtime sanitizer applies again before that exception becomes a transcript
 event.
 
+The separate terminal component escapes display text and caps caller-redacted
+error summaries/hints at 512/256 characters. It is neither wired nor persistent;
+these rules differ from the 4,096-character stored diagnostic above. See
+[Terminal display safety](terminal-safety.md).
+
 ## Codex process boundary
 
 Codex runs without shell evaluation in isolated staging. The runtime requests a

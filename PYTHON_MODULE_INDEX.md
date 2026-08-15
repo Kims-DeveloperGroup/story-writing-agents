@@ -16,7 +16,7 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 17.
+Importable production units indexed: 18.
 
 ## Current Dependency Direction
 
@@ -34,6 +34,7 @@ __main__ -> cli -> orchestrator -> prompts -> config -> workspace
 smoke -> orchestrator/workspace/models/agents
 directives -> config/workspace/errors/agents
 interactive_commands -> agents
+interactive_terminal -> interactive_commands/agents
 story_writing_agents facade -> interactive_commands
                             -> conversation_search -> conversations/errors
 models -> conversations/agents/errors
@@ -292,6 +293,30 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_public_api_and_cli.py`, and
   `docs/reference/interactive-command-parser.md`.
 
+### `story_writing_agents.interactive_terminal`
+
+- **Source:** `src/story_writing_agents/interactive_terminal.py`
+- **Responsibility:** Provide deterministic, safe plain-text interaction
+  primitives for an interactive terminal.
+- **Supported surface:** Module-supported `AttachmentKind`, `ComposeMode`,
+  `TerminalActionKind`, `TerminalMessageKind`, `InteractiveErrorCode`,
+  `TerminalAction`, `InteractiveErrorSpec`, `INTERACTIVE_ERROR_SPECS`,
+  `InteractiveError`, `sanitize_terminal_text`, and `InteractiveTerminal`;
+  rendering and validation helpers are private.
+- **Direct internal dependencies:** `agents` and `interactive_commands`.
+- **State, resources, and side effects:** Instances retain borrowed synchronous
+  line-read and text-write callbacks plus an immutable display width; each
+  composition call owns only its local line buffer. Methods read through the
+  supplied callback and write sanitized, newline-terminated plain-text blocks.
+  The module owns immutable display metadata, no persistent or external
+  resource, and performs no provider, filesystem, persistence, environment, or
+  import-time operational side effects.
+- **Primary verification/documentation:** `tests/test_interactive_terminal.py`,
+  `docs/reference/interactive-terminal.md`, and
+  `docs/operations/terminal-safety.md`; `tests/test_interactive_commands.py`
+  and `docs/reference/interactive-command-parser.md` verify the consumed
+  command registry contract.
+
 ### `story_writing_agents.models`
 
 - **Source:** `src/story_writing_agents/models.py`
@@ -394,6 +419,13 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 ## Consistency Notes
 
+- `interactive_commands` owns canonical command metadata, parse rules, and
+  typed parsed actions. `interactive_terminal` consumes only its public command
+  metadata and canonical agent metadata to own safe prompt, help, status, error,
+  and call-local composition presentation. It returns unparsed input or
+  composition outcomes without dispatching them; callers retain interaction
+  state, error-code mapping, parsing, provider, session, and persistence
+  lifecycles.
 - `Workspace` and `ConversationEventStore` implementations own persistence
   mechanics. `StoryRuntime` sequences debate persistence and, for advisory
   turns, the validated context read, durable user append, one provider call,
