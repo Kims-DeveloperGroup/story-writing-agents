@@ -285,6 +285,69 @@ class ConversationSelectionTests(unittest.TestCase):
             ).exists()
         )
 
+    def test_read_time_disappearance_is_absent_but_other_io_propagates(
+        self,
+    ) -> None:
+        """Treat only a direct read-time FileNotFoundError as absence."""
+
+        session_id = "chapter_one"
+        conversation_id = "c_0123456789abcdef0123456789abcdef"
+        save_conversation_selection(
+            self.workspace,
+            session_id,
+            conversation_id,
+        )
+        target = conversation_selection_path(self.workspace, session_id)
+        before = tree_snapshot(self.workspace.root)
+        expected_after = dict(before)
+        expected_after.pop(str(target.relative_to(self.workspace.root)))
+        original_read_text = self.workspace.read_text
+
+        def disappear_then_read(relative: str | os.PathLike[str]) -> str:
+            target.unlink()
+            return original_read_text(relative)
+
+        with mock.patch.object(
+            self.workspace,
+            "read_text",
+            side_effect=disappear_then_read,
+        ) as read_text:
+            self.assertIsNone(
+                load_conversation_selection(self.workspace, session_id)
+            )
+        read_text.assert_called_once_with(
+            f"{CONVERSATION_SELECTION_DIRECTORY}/{session_id}.json"
+        )
+        self.assertFalse(target.exists())
+        self.assertEqual(tree_snapshot(self.workspace.root), expected_after)
+        self.assertEqual(list(target.parent.iterdir()), [])
+
+        save_conversation_selection(
+            self.workspace,
+            session_id,
+            conversation_id,
+        )
+        persisted_before = (target.read_bytes(), target.stat().st_mtime_ns)
+
+        def deny_read(_relative: str | os.PathLike[str]) -> str:
+            try:
+                raise PermissionError("read-secret")
+            except PermissionError as exc:
+                raise WorkspaceFormatError("cannot read selection") from exc
+
+        with mock.patch.object(
+            self.workspace,
+            "read_text",
+            side_effect=deny_read,
+        ):
+            with self.assertRaises(WorkspaceFormatError) as raised:
+                load_conversation_selection(self.workspace, session_id)
+        self.assertIsInstance(raised.exception.__cause__, PermissionError)
+        self.assertEqual(
+            (target.read_bytes(), target.stat().st_mtime_ns),
+            persisted_before,
+        )
+
     def test_save_load_and_explicit_null_use_exact_independent_v1_files(
         self,
     ) -> None:

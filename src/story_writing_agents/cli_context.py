@@ -118,7 +118,7 @@ def load_conversation_selection(
     workspace: Workspace,
     session_id: str,
 ) -> str | None:
-    """Load one session's selected conversation without creating storage.
+    """Load one session's selected conversation, returning ``None`` if absent.
 
     The session and exact version-1 JSON object are validated before the
     nullable conversation ID is returned. Reads have no mutation or cleanup
@@ -128,11 +128,12 @@ def load_conversation_selection(
 
     session = workspace.validate_identifier(session_id)
     relative = _conversation_selection_path(session)
-    target = workspace.path(relative)
-    if not target.exists():
-        return None
-
-    text = workspace.read_text(relative)
+    try:
+        text = workspace.read_text(relative)
+    except WorkspaceFormatError as exc:
+        if isinstance(exc.__cause__, FileNotFoundError):
+            return None
+        raise
 
     def reject_duplicate_fields(
         pairs: list[tuple[str, Any]],
