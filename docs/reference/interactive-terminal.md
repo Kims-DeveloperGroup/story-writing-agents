@@ -11,8 +11,8 @@ terminal control.
 
 ## Public API
 
-Import from `story_writing_agents.interactive_terminal`, not the package
-facade. Exact `__all__` also contains the enums and error registry below.
+Import from `story_writing_agents.interactive_terminal`, not the package facade. Its exact `__all__` is `AttachmentKind`, `ComposeMode`, `ConfirmationResult`, `TerminalActionKind`, `TerminalMessageKind`, `InteractiveErrorCode`,
+`TerminalAction`, `InteractiveErrorSpec`, `INTERACTIVE_ERROR_SPECS`, `InteractiveError`, `sanitize_terminal_text`, and `InteractiveTerminal`.
 
 ```python
 InteractiveTerminal(read_line, write_text, *, width: int = 80)
