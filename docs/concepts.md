@@ -1,10 +1,8 @@
 # Core concepts
 
-> **Availability:** this model describes the implemented runtime. The attached
-> TTY lobby manages subject metadata and selection without a provider. Ordinary
-> or routed chat, transcript/search commands, and provider dispatch remain
-> unavailable there; transcript, search, cited-page, and explicit-turn Python
-> APIs remain separate. See [Story sessions](guides/story-sessions.md).
+> **Availability:** the attached TTY shell manages subject conversations and
+> dispatches routed advisory turns; transcript viewing and search remain Python
+> APIs. See [Story sessions](guides/story-sessions.md).
 
 Key terms: **scope**—what one persisted object groups; **ownership**—which
 component controls data or a transition; **turn**—one user event and its

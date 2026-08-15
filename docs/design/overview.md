@@ -1,7 +1,7 @@
 # System design overview
 
 > **Availability:** this page describes the implemented runtime, Codex backend,
-> filesystem adapters, and installed nested session/conversation lobby.
+> filesystem adapters, and installed session/conversation shell.
 
 Key terms: **orchestration**—coordination of provider work; **controller**—the
 owner of interactive transition order; **adapter**—a concrete implementation
@@ -47,18 +47,20 @@ finish in another order.
 
 | Owner | Responsibility |
 | --- | --- |
-| `interactive_controller` | Nested lobby state, command dispatch, transition/compensation order, and backend cleanup coordination |
+| `interactive_commands` | Pure command grammar plus canonical agent-route IDs, aliases, and advisory domains |
+| `interactive_controller` | Attachment, selection, sticky target, synchronous dispatch, transition order, and backend cleanup coordination |
 | `cli_context` | Saved story-session selection and lazy per-session conversation selections |
 | `ConversationCatalog` | Conversation identity, display subject, archive status, and ordered metadata reads |
-| `InteractiveTerminal` | Synchronous input and sanitized presentation; no parsing or persistence |
+| `InteractiveTerminal` | Synchronous input and safe roster, status, error, and result presentation |
 | `AgentBackend` | Session manifests, leases, provider routes, threads, and provider resources |
 | `ConversationEventStore` | Transcript append, authoritative read, and bounded complete-turn context |
-| `StoryRuntime` | Debate orchestration and one explicitly addressed persisted provider turn |
+| `StoryRuntime` | Debate orchestration; advisory context, provider, and transcript sequencing |
 
-The controller uses the catalog but never the event store, conversation search,
-or `StoryRuntime`. Subject management therefore cannot send a turn or create a
-transcript. `StoryRuntime` depends on the event-store protocol, not the catalog
-or selection files. The read-only memory service consumes catalog and event
+The controller constructs one retained `StoryRuntime` with an event store bound
+to the same catalog, but calls only `StoryRuntime.converse()` for accepted
+content. It never reads context, appends events, invokes a bound agent, or
+reparses a result itself. `StoryRuntime` depends on the event-store protocol,
+not selection files; the read-only memory service consumes catalog and event
 store contracts without owning either. See [Conversation catalog](../reference/conversation-catalog.md),
 [Conversation transcripts](../reference/conversation-transcripts.md), and
 [Conversation search](../reference/conversation-search.md).
@@ -66,11 +68,10 @@ store contracts without owning either. See [Conversation catalog](../reference/c
 ## Dependency direction
 
 The CLI creates the terminal, backend, and controller. The controller depends
-downward on backend, selection, catalog, parser, terminal, models, and workspace
-contracts; neither parser nor terminal depends back on it. Orchestration depends
-on provider-neutral models, conversation-event contracts, and workspace
-operations. The concrete backend persists provider metadata through the
-workspace. The production import graph remains acyclic.
+downward on backend, selection, catalog, parser, terminal, runtime, models, and
+workspace contracts; neither parser nor terminal depends back on it.
+Orchestration depends on provider-neutral models, conversation-event contracts,
+and workspace operations. The production import graph remains acyclic.
 
 This separation allows deterministic test backends that satisfy the same
 duck-typed binding and invocation shape, but it is not a dynamically loaded

@@ -1,8 +1,8 @@
 # Recovery and limitations
 
 > **Availability:** inspection, new-ID debate recovery, subject-conversation
-> management, and one explicitly addressed Python conversation turn are
-> implemented. Automatic retry, stale-owner cleanup, and event deletion are not.
+> management, and installed or Python advisory turns are implemented. Automatic
+> retry, stale-owner cleanup, and event deletion are not.
 
 Key terms: **immutable reservation**—an ID that cannot be reused; **deadlock**—
 unresolved specialist conflict at the round limit; **liveness**—evidence about
@@ -57,6 +57,12 @@ retries or repairs them. Inspect, fix, then call explicitly. See the
 [pairing rules](../reference/conversation-transcripts.md) and
 [sequence](../reference/runtime-api.md#one-conversation-turn).
 
+For shell turns, configuration failures display `provider_preflight_failed`;
+remaining `BackendProtocolError` failures, including provider exit or timeout,
+display `provider_protocol_error`. Raw exception prose is not printed. Expected
+typed failures return to the prompt; an unknown failure exits through safe
+`internal_error` cleanup.
+
 A cursor is valid only for its first-page snapshot; discard it after append.
 ID-based citations survive rename, but event mismatches fail closed. Check
 `scan_truncated` before treating search as exhaustive. See
@@ -71,12 +77,13 @@ ID-based citations survive rename, but event mismatches fail closed. Check
 - Owner history has no compaction, expiry, or retention policy.
 - Filesystem guarantees depend on Python and operating-system atomic primitives.
 - Inspection cannot prove process liveness or story-content correctness.
-- The installed lobby manages metadata and per-session selection only. It does
-  not dispatch chat, read/write transcripts, search, run debates, or write
-  artifacts.
-- Transcript, search/page, and provider-turn APIs remain Python-only. There is
-  no legacy migration, database, persistent index, RAG, `/search`, or `/transcript`.
-- The parser and terminal expose more actions than this lobby dispatches; their
+- The installed shell dispatches one synchronous line per advisory turn. It has
+  no multiline `/compose`, persistent event loop, or active-turn cancellation.
+- The shell writes turn transcripts but cannot view history, search, run
+  debates, or write story artifacts.
+- Transcript reads and search/pages remain Python-only. There is no legacy
+  migration, database, persistent index, RAG, `/search`, or `/transcript`.
+- The parser and terminal expose more actions than this shell dispatches; their
   capability metadata is not an availability promise.
 
 ## Operational response

@@ -1,7 +1,7 @@
 # Getting started
 
-> **Availability:** this guide uses the implemented installed CLI. Real runs use
-> Codex; `story smoke` is provider-free. There is no interactive chat shell.
+> **Availability:** this guide uses the installed CLI. Real runs and routed
+> interactive turns use Codex; `story smoke` is provider-free. See [Story sessions](guides/story-sessions.md) for the shell.
 
 Key terms: **editable install**—an installation that points at this checkout;
 **workspace**—the local story project directory; **selected session**—the

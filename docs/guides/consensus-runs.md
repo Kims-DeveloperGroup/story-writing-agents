@@ -1,7 +1,7 @@
 # Run a consensus debate
 
 > **Availability:** prompt and complete-draft debates are implemented through
-> `story run` and `StoryRuntime`. Interactive message dispatch is not.
+> `story run` and `StoryRuntime`; the interactive shell does not dispatch `/run`.
 
 Key terms: **prompt**—instructions from which an agent creates `r0`; **draft**—
 a complete supplied `r0`; **debate ID**—the immutable attempt key; **round

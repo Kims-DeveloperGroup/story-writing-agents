@@ -11,14 +11,8 @@ from dataclasses import KW_ONLY, dataclass
 from enum import StrEnum
 from types import MappingProxyType
 
-from .agents import (
-    AGENT_SPECS,
-    CHARACTER_CUSTODIAN,
-    EXECUTION_SPECIALIST,
-    LEAD_ORCHESTRATOR,
-    PLOT_ARCHITECT,
-)
-from .interactive_commands import COMMANDS, CommandSpec
+from .agents import AGENT_SPECS
+from .interactive_commands import AGENT_ROUTES, COMMANDS, CommandSpec
 
 
 class AttachmentKind(StrEnum):
@@ -346,12 +340,7 @@ INTERACTIVE_ERROR_SPECS: Mapping[
 
 _SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
 _AGENT_ALIASES: Mapping[str, str] = MappingProxyType(
-    {
-        LEAD_ORCHESTRATOR: "lead",
-        PLOT_ARCHITECT: "plot",
-        CHARACTER_CUSTODIAN: "character",
-        EXECUTION_SPECIALIST: "execution",
-    }
+    {route.agent_id: route.prompt_alias for route in AGENT_ROUTES}
 )
 _AGENT_DISPLAY_NAMES: Mapping[str, str] = MappingProxyType(
     {agent_id: AGENT_SPECS[agent_id].display_name for agent_id in _AGENT_ALIASES}
@@ -704,6 +693,28 @@ class InteractiveTerminal:
                 _wrap_prefixed("[conversation] ", entry, self._width)
             )
         )
+
+    def write_agent_roster(self) -> None:
+        """Render every advisory route in registry order without mutation.
+
+        Canonical IDs, display names, aliases, and advisory domains come from
+        immutable trusted metadata, are width-wrapped, sanitized, and written
+        as one block. Writer failures propagate; this method acquires no other
+        resource and therefore owns no cleanup.
+        """
+
+        lines: list[str] = []
+        for route in AGENT_ROUTES:
+            display_name = AGENT_SPECS[route.agent_id].display_name
+            description = (
+                f"{display_name} | ID: {route.agent_id} | "
+                f"Aliases: {', '.join(route.aliases)} | "
+                f"Advisory domain: {route.advisory_domain}"
+            )
+            lines.extend(
+                _wrap_prefixed("[agent] ", description, self._width)
+            )
+        self._write_block("\n".join(lines))
 
     def write_status(self, kind: TerminalMessageKind, text: str) -> None:
         """Write one trusted status prefix followed by safe display text."""

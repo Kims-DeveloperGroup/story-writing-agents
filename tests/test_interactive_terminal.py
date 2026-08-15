@@ -12,7 +12,7 @@ import sys
 import tempfile
 import unicodedata
 import unittest
-from dataclasses import MISSING, FrozenInstanceError, fields
+from dataclasses import MISSING, FrozenInstanceError, fields, replace
 from enum import StrEnum
 from pathlib import Path
 from types import MappingProxyType
@@ -28,6 +28,7 @@ from story_writing_agents import (
 )
 from story_writing_agents import interactive_commands as commands_module
 from story_writing_agents import interactive_terminal as terminal_module
+from story_writing_agents.interactive_commands import AGENT_ROUTES
 from story_writing_agents.interactive_terminal import (
     INTERACTIVE_ERROR_SPECS,
     AttachmentKind,
@@ -279,6 +280,7 @@ class PublicContractTests(unittest.TestCase):
             InteractiveTerminal.write_session_orientation,
             InteractiveTerminal.write_conversation_scope,
             InteractiveTerminal.write_conversation_list_entry,
+            InteractiveTerminal.write_agent_roster,
         ):
             with self.subTest(docstring=changed_callable.__qualname__):
                 self.assertTrue(inspect.getdoc(changed_callable))
@@ -588,6 +590,14 @@ class PromptAndRenderingTests(unittest.TestCase):
                 for name in ("archived", "selected")
             )
         )
+        self.assertEqual(
+            tuple(
+                inspect.signature(
+                    InteractiveTerminal.write_agent_roster
+                ).parameters
+            ),
+            ("self",),
+        )
 
         valid, _ = make_terminal(width=20)
         self.assertIsInstance(valid, InteractiveTerminal)
@@ -606,6 +616,17 @@ class PromptAndRenderingTests(unittest.TestCase):
                     )
 
     def test_main_prompts_are_exact_and_return_unparsed_lines(self) -> None:
+        self.assertEqual(
+            tuple(
+                (
+                    route.agent_id,
+                    route.prompt_alias,
+                    terminal_module.AGENT_SPECS[route.agent_id].display_name,
+                )
+                for route in AGENT_ROUTES
+            ),
+            AGENT_CASES,
+        )
         terminal, callbacks = make_terminal("/run untouched")
         self.assertEqual(
             terminal.read_main(),
@@ -997,6 +1018,57 @@ class PromptAndRenderingTests(unittest.TestCase):
             with self.subTest(call=call):
                 with self.assertRaises((TypeError, ValueError)):
                     call()
+
+    def test_agent_roster_is_exact_ordered_wrapped_and_sanitized(self) -> None:
+        terminal, callbacks = make_terminal(width=1000)
+        terminal.write_agent_roster()
+        self.assertEqual(
+            callbacks.records,
+            [
+                "[agent] Lead Orchestrator | ID: lead_orchestrator | "
+                "Aliases: lead, orchestrator, lead_orchestrator | "
+                "Advisory domain: Moderation, synthesis, and finalization.\n"
+                "[agent] Plot & Structure Architect | ID: plot_architect | "
+                "Aliases: plot, plot_architect | Advisory domain: Plot, "
+                "structure, flow, and pacing.\n"
+                "[agent] Character & World Custodian | ID: "
+                "character_custodian | Aliases: character, "
+                "character_custodian | Advisory domain: Characters, "
+                "relationships, world, and continuity.\n"
+                "[agent] Tone & Execution Specialist | ID: "
+                "execution_specialist | Aliases: execution, prose, "
+                "execution_specialist | Advisory domain: Drafting, prose, "
+                "point of view, tone, grammar, and format.\n"
+            ],
+        )
+
+        terminal, callbacks = make_terminal(width=44)
+        terminal.write_agent_roster()
+        wrapped = callbacks.records[0]
+        self.assertEqual(
+            [line for line in wrapped.splitlines() if line.startswith("[agent] ")],
+            [
+                "[agent] Lead Orchestrator | ID:",
+                "[agent] Plot & Structure Architect | ID:",
+                "[agent] Character & World Custodian | ID:",
+                "[agent] Tone & Execution Specialist | ID:",
+            ],
+        )
+        self.assertTrue(all(len(line) <= 44 for line in wrapped.splitlines()))
+
+        original = terminal_module.AGENT_SPECS[LEAD_ORCHESTRATOR]
+        unsafe = replace(original, display_name="Unsafe\x1bLead")
+        terminal, callbacks = make_terminal(width=1000)
+        with mock.patch.dict(
+            terminal_module.AGENT_SPECS,
+            {LEAD_ORCHESTRATOR: unsafe},
+        ):
+            terminal.write_agent_roster()
+        self.assertIn(
+            "[agent] Unsafe\\x1bLead | ID: lead_orchestrator",
+            callbacks.records[0],
+        )
+        self.assertNotIn("\x1b", callbacks.records[0])
 
     def test_status_run_and_agent_records_use_exact_trusted_prefixes(self) -> None:
         for kind in TerminalMessageKind:
@@ -1561,6 +1633,7 @@ class TerminalBoundaryTests(unittest.TestCase):
                     archived=False,
                     selected=True,
                 )
+                terminal.write_agent_roster()
                 terminal.write_help()
                 terminal.write_error(
                     InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)

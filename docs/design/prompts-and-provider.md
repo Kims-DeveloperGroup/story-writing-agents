@@ -37,10 +37,16 @@ state remains partitioned by session and agent.
 
 ## Conversation turn flow
 
-`StoryRuntime.converse()` is the high-level handoff. It reads the explicitly
+The installed controller resolves its attached session, selected conversation,
+and routed agent, then makes one synchronous `StoryRuntime.converse()` call for
+the input line. It does not assemble context or invoke the backend directly.
+Returned content goes to safe terminal output and never back through the command
+parser; only `result.context.truncated` controls the optional context notice.
+
+`StoryRuntime.converse()` is the high-level provider handoff. It reads the
 addressed conversation's pre-turn context, preflights and binds the definition,
 saves the user event, calls exactly one `BoundAgent`, validates the reply, and
-saves the outcome. The exact ordering and failure branches live in the
+saves the outcome. Exact ordering and failures live in the
 [Runtime API](../reference/runtime-api.md#one-conversation-turn).
 
 `BoundAgent.converse()` is the lower-level provider boundary. It receives an
@@ -54,7 +60,8 @@ kind, and content—not storage metadata or window counters. If the same agent i
 later asked about an `ending` conversation, this visible context contains only
 validated `ending` events. Codex may still resume the compatible session-and-
 agent thread that saw `opening`: conversation IDs scope visible context, not
-provider-private history.
+provider-private history. `/to` and `@AGENT` select a responder in this shared
+room; neither creates a private provider or transcript boundary.
 
 ## Codex process boundary
 

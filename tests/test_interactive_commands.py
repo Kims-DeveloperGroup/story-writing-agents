@@ -14,6 +14,7 @@ from dataclasses import FrozenInstanceError, fields
 from pathlib import Path
 from unittest import mock
 
+import story_writing_agents
 from story_writing_agents import (
     CHARACTER_CUSTODIAN,
     COMMANDS,
@@ -26,19 +27,43 @@ from story_writing_agents import (
     parse_interactive_line,
 )
 from story_writing_agents import interactive_commands as commands_module
+from story_writing_agents.interactive_commands import (
+    AGENT_ROUTES,
+    AgentRouteSpec,
+)
 
+
+EXPECTED_AGENT_ROUTES = (
+    AgentRouteSpec(
+        LEAD_ORCHESTRATOR,
+        "lead",
+        ("lead", "orchestrator", "lead_orchestrator"),
+        "Moderation, synthesis, and finalization.",
+    ),
+    AgentRouteSpec(
+        PLOT_ARCHITECT,
+        "plot",
+        ("plot", "plot_architect"),
+        "Plot, structure, flow, and pacing.",
+    ),
+    AgentRouteSpec(
+        CHARACTER_CUSTODIAN,
+        "character",
+        ("character", "character_custodian"),
+        "Characters, relationships, world, and continuity.",
+    ),
+    AgentRouteSpec(
+        EXECUTION_SPECIALIST,
+        "execution",
+        ("execution", "prose", "execution_specialist"),
+        "Drafting, prose, point of view, tone, grammar, and format.",
+    ),
+)
 
 AGENT_ALIASES = {
-    "lead": LEAD_ORCHESTRATOR,
-    "orchestrator": LEAD_ORCHESTRATOR,
-    "lead_orchestrator": LEAD_ORCHESTRATOR,
-    "plot": PLOT_ARCHITECT,
-    "plot_architect": PLOT_ARCHITECT,
-    "character": CHARACTER_CUSTODIAN,
-    "character_custodian": CHARACTER_CUSTODIAN,
-    "execution": EXECUTION_SPECIALIST,
-    "prose": EXECUTION_SPECIALIST,
-    "execution_specialist": EXECUTION_SPECIALIST,
+    alias: route.agent_id
+    for route in EXPECTED_AGENT_ROUTES
+    for alias in route.aliases
 }
 
 COMMAND_NAMES = {
@@ -232,6 +257,10 @@ class ActionContractTests(unittest.TestCase):
 
     def test_dataclass_schemas_are_exact_keyword_only_and_slotted(self) -> None:
         self.assertEqual(
+            tuple(field.name for field in fields(AgentRouteSpec)),
+            ("agent_id", "prompt_alias", "aliases", "advisory_domain"),
+        )
+        self.assertEqual(
             tuple(field.name for field in fields(InteractiveAction)),
             ("kind", *ACTION_FIELDS),
         )
@@ -248,8 +277,66 @@ class ActionContractTests(unittest.TestCase):
         )
         with self.assertRaises(TypeError):
             InteractiveAction(ActionKind.MESSAGE, "text")  # type: ignore[misc]
+        self.assertFalse(hasattr(AGENT_ROUTES[0], "__dict__"))
         self.assertFalse(hasattr(InteractiveAction(ActionKind.IGNORED), "__dict__"))
         self.assertFalse(hasattr(COMMANDS[0], "__dict__"))
+
+    def test_agent_route_registry_is_exact_ordered_valid_and_immutable(
+        self,
+    ) -> None:
+        self.assertIsInstance(AGENT_ROUTES, tuple)
+        self.assertEqual(AGENT_ROUTES, EXPECTED_AGENT_ROUTES)
+        self.assertEqual(
+            tuple(route.agent_id for route in AGENT_ROUTES),
+            (
+                LEAD_ORCHESTRATOR,
+                PLOT_ARCHITECT,
+                CHARACTER_CUSTODIAN,
+                EXECUTION_SPECIALIST,
+            ),
+        )
+        aliases = tuple(
+            alias for route in AGENT_ROUTES for alias in route.aliases
+        )
+        self.assertEqual(len(aliases), len(set(aliases)))
+        for route in AGENT_ROUTES:
+            with self.subTest(agent_id=route.agent_id):
+                self.assertEqual(route.prompt_alias, route.aliases[0])
+                self.assertRegex(route.prompt_alias, r"\A[a-z][a-z0-9_]*\Z")
+                route.advisory_domain.encode("utf-8", errors="strict")
+
+        with self.assertRaises(FrozenInstanceError):
+            AGENT_ROUTES[0].prompt_alias = "changed"  # type: ignore[misc]
+        with self.assertRaises(TypeError):
+            AGENT_ROUTES[0] = AGENT_ROUTES[0]  # type: ignore[index]
+        with self.assertRaises(TypeError):
+            AGENT_ROUTES[0].aliases[0] = "changed"  # type: ignore[index]
+
+    def test_agent_route_specs_reject_invalid_identity_aliases_and_copy(
+        self,
+    ) -> None:
+        valid = (
+            LEAD_ORCHESTRATOR,
+            "lead",
+            ("lead", "orchestrator"),
+            "Advisory domain.",
+        )
+        invalid_cases = (
+            (("unknown", *valid[1:]), ValueError),
+            ((valid[0], "Lead", valid[2], valid[3]), ValueError),
+            ((valid[0], valid[1], ["lead"], valid[3]), TypeError),
+            ((valid[0], valid[1], (), valid[3]), ValueError),
+            ((valid[0], valid[1], ("lead", "lead"), valid[3]), ValueError),
+            ((valid[0], valid[1], ("orchestrator", "lead"), valid[3]), ValueError),
+            ((valid[0], valid[1], ("lead", "bad-alias"), valid[3]), ValueError),
+            ((valid[0], valid[1], valid[2], " \t"), ValueError),
+            ((valid[0], valid[1], valid[2], "unsafe\x1bcopy"), ValueError),
+            ((valid[0], valid[1], valid[2], "invalid-\ud800"), ValueError),
+        )
+        for arguments, error_type in invalid_cases:
+            with self.subTest(arguments=repr(arguments)):
+                with self.assertRaises(error_type):
+                    AgentRouteSpec(*arguments)  # type: ignore[arg-type]
 
     def test_each_action_kind_accepts_only_its_payload_shape(self) -> None:
         self.assertEqual(set(ACTION_RULES), set(ActionKind))
@@ -1175,14 +1262,20 @@ class DeterministicPropertyTests(ParserAssertions, unittest.TestCase):
 
 class ParserBoundaryTests(unittest.TestCase):
     def test_direct_module_public_surface_and_dependency_are_minimal(self) -> None:
-        expected_exports = {
+        expected_exports = (
             "ActionKind",
-            "InteractiveAction",
-            "CommandSpec",
+            "AgentRouteSpec",
+            "AGENT_ROUTES",
             "COMMANDS",
+            "CommandSpec",
+            "InteractiveAction",
             "parse_interactive_line",
-        }
-        self.assertEqual(set(commands_module.__all__), expected_exports)
+        )
+        self.assertEqual(tuple(commands_module.__all__), expected_exports)
+        for name in ("AgentRouteSpec", "AGENT_ROUTES"):
+            with self.subTest(facade_name=name):
+                self.assertNotIn(name, story_writing_agents.__all__)
+                self.assertFalse(hasattr(story_writing_agents, name))
 
         source_path = (
             Path(__file__).resolve().parents[1]
@@ -1245,6 +1338,12 @@ class ParserBoundaryTests(unittest.TestCase):
             "from story_writing_agents import interactive_commands as module; "
             "assert facade.parse_interactive_line is module.parse_interactive_line; "
             "assert facade.COMMANDS is module.COMMANDS; "
+            "assert 'AgentRouteSpec' not in facade.__all__; "
+            "assert 'AGENT_ROUTES' not in facade.__all__; "
+            "assert not hasattr(facade, 'AgentRouteSpec'); "
+            "assert not hasattr(facade, 'AGENT_ROUTES'); "
+            "assert tuple(route.agent_id for route in module.AGENT_ROUTES) == "
+            "tuple(facade.ROSTER); "
             "print('ok')"
         )
         with tempfile.TemporaryDirectory() as temporary:
