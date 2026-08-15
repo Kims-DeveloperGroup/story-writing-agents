@@ -1,82 +1,92 @@
 # Story sessions
 
-> **Availability:** bare `story` and `story chat` provide an interactive TTY
-> session lobby. It can list, create, resume, switch, and end story sessions,
-> but it cannot send chat turns or select conversation history yet.
+> **Availability:** bare `story` and `story chat` open the interactive TTY
+> lobby. Attach a story session before managing its subject conversations.
+> These commands do not send chat turns or expose transcripts or search.
 
-Key terms: **lobby**—the prompt with no attached session; **selected**—the
-workspace's saved default; **attached**—temporarily leased by this process;
-**end**—make a session inactive without deleting its data.
+Key terms: **story session**—the durable provider-work scope; **conversation
+lobby**—an attached session with no subject selected; **subject**—the preserved
+display title; **handle**—the short unique or full conversation ID shown by the
+lobby.
 
-## The lobby at a glance
+<a id="the-lobby-at-a-glance"></a>
+<a id="scenario-first-session-return-switch-and-end"></a>
 
-```mermaid
-stateDiagram-v2
-    Shell --> Lobby: story, no selection
-    Shell --> Attached: story, selected active
-    Lobby --> Attached: new or resume
-    Attached --> Attached: switch
-    Attached --> Lobby: confirmed end
-    Attached --> Shell: quit or EOF (detach only)
-    Lobby --> Shell: quit or EOF
-```
+## Scenario: organize one drafting session
 
-In words: entry opens the lobby or attaches the saved active session. Creating,
-resuming, or switching leads to an attachment. Confirmed end returns to the
-lobby and makes that session inactive. Quit or EOF returns to the shell; it
-releases attachment but leaves the session active.
+This single walkthrough creates two subjects, returns to the first, renames and
+archives it, then verifies the saved successor after restart.
 
-## Scenario: first session, return, switch, and end
-
-Create a workspace, then name the first session explicitly:
+Create a workspace and attach a new story session named `draft`:
 
 ```console
-$ story init ./session-demo
-$ cd ./session-demo
-$ story chat chapter_01
-story[chapter_01:lead]> /quit
+$ story init ./river-story
+$ cd ./river-story
+$ story chat draft
 ```
 
-Because `chapter_01` did not exist, explicit entry creates, selects, and
-attaches it without a question. `/quit` detaches it but does not end it.
+The attached prompt is `story[draft:lead]> `. Before every prompt, a context
+line says either `Conversation: none` or shows the selected handle and subject.
+Create two conversations; each new record becomes selected:
 
-Return with bare entry, then switch twice:
-
-```console
-$ story
-story[chapter_01:lead]> /session new chapter_02
-story[chapter_02:lead]> /session resume chapter_01
-story[chapter_01:lead]> /session end
-End session chapter_01? [y/N] yes
-story[lobby]> /quit
+```text
+/conversation new Opening scene
+/conversation new Finale
+/conversation list
 ```
 
-Bare entry finds the saved active `chapter_01` and attaches it. Creating
-`chapter_02` switches to a new selected session. Resuming `chapter_01` switches
-back. Confirmed end makes `chapter_01` inactive but deliberately retains it as
-the saved selection.
+The list stays in catalog order and marks `Finale` as selected. It prints each
+handle as the first 12 ID characters when that prefix is unique across active
+and archived records; otherwise it prints the full ID. Copy the handle shown
+for `Opening scene` and replace `OPENING_HANDLE` below:
 
-The next bare entry recognizes that inactive selection and asks before
-resuming it; Enter accepts the displayed yes default:
-
-```console
-$ story
-Resume selected session chapter_01? [Y/n]
-story[chapter_01:lead]> /quit
+```text
+/conversation use OPENING_HANDLE
+/conversation subject Chapter 1 opening
+/conversation list chapter 1
 ```
 
-Use `/session list` to see active, selected, and lease status. `/help session`
-shows the parser-owned session syntax.
+`use` selects the existing identity. `subject` changes only its display title.
+The list query is normalized for case and Unicode whitespace, then matched as a
+subject substring; accepted display text remains unchanged.
 
-## Current boundary
+Archive the selected opening:
 
-The lobby dispatches only `/help`, `/session list`, `/session new`,
-`/session resume`, `/session end`, and `/quit` (including documented aliases).
-Other registered commands return an unavailable error. No chat turn, selected
-conversation, history, transcript, search, or artifact action is wired until
-follow-up Issues #22 and #11.
+```text
+/conversation archive
+```
 
-Exact installed syntax and exit codes are in the [CLI reference](../reference/cli.md).
-Switch failure ordering is in [Session lifecycle](../design/session-lifecycle.md#attach-and-switch-ordering).
-Lease and provider-thread details are in
-[Backend and sessions](../reference/backend-and-sessions.md).
+The confirmation names the current subject and handle and defaults to no:
+press Enter to keep it, or type `yes` to continue. In this scenario, type
+`yes`. The opening becomes archived and the first other active record,
+`Finale`, becomes selected. Confirm both facts:
+
+```text
+/conversation list --all opening
+/conversation list
+```
+
+`--all` must appear once and first. The first command includes the archived
+opening; the second shows active conversations only.
+
+End the story session, confirm with `yes`, and leave the outer lobby:
+
+```text
+/session end
+/quit
+```
+
+Ending keeps both saved selections. On the next bare entry, the story session
+is inactive, so the lobby asks `Resume selected session draft? [Y/n] `. Press
+Enter to resume; the context restores `Finale`. `/quit` then detaches without
+ending it.
+
+<a id="current-boundary"></a>
+
+For exact grammar, see the [command parser](../reference/interactive-command-parser.md).
+For ordering and failure compensation, see the single
+[lifecycle diagram](../design/session-lifecycle.md#conversation-lifecycle-and-compensation).
+Installed entry and exit behavior is in the [CLI reference](../reference/cli.md),
+and story-session switching uses the documented
+[attach order](../design/session-lifecycle.md#attach-and-switch-ordering).
+Lease details are in [Backend and sessions](../reference/backend-and-sessions.md).

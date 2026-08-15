@@ -1,8 +1,8 @@
 # Recovery and limitations
 
-> **Availability:** inspection, new-ID debate recovery, and one explicitly
-> addressed conversation turn are implemented. Automatic retry, stale-owner
-> cleanup, event deletion, and interactive conversation commands are not.
+> **Availability:** inspection, new-ID debate recovery, subject-conversation
+> management, and one explicitly addressed Python conversation turn are
+> implemented. Automatic retry, stale-owner cleanup, and event deletion are not.
 
 Key terms: **immutable reservation**—an ID that cannot be reused; **deadlock**—
 unresolved specialist conflict at the round limit; **liveness**—evidence about
@@ -11,56 +11,56 @@ whether an owner still runs; **retention**—how long persisted data remains;
 
 ## Debate recovery
 
-A session/debate pair is reserved before provider work. Its owner token
-coordinates transitions but is not authentication. `active` proves reservation,
-not liveness; there is no heartbeat, stale-owner cleanup, or same-ID resume.
+A session/debate pair is reserved before provider work. `active` proves
+reservation, not liveness; there is no heartbeat, stale-owner cleanup, or
+same-ID resume. Every terminal or abandoned outcome consumes the ID.
 
-External coroutine cancellation propagates to provider calls and is
-best-effort recorded as terminal `interrupted`. Consensus, deadlock, failure,
-interruption, and abandoned active work all consume the ID. Inspect preserved
-state, make any user ruling, repair the cause, and start a new debate ID.
-
-A deadlock reports `action_required` but has no continuation API or manuscript.
-Failures may require filesystem inspection because multi-file commit is not a
-transaction. Never delete lifecycle evidence to reuse an ID.
+Cancellation propagates and is best-effort recorded as `interrupted`. Inspect
+preserved state, resolve conflicts, repair the cause, and use a new debate ID.
+A deadlock has no continuation or manuscript. Never delete lifecycle evidence.
 
 ## Session and lease recovery
 
-Lease status is evidence, not proof of ownership or remote health. Another or
-uncertain owner blocks attachment; do not infer staleness from age or delete
-coordination files. Exact classification and reclamation rules live only in
+Lease status is evidence, not remote-health proof. Another or uncertain owner
+blocks attachment; age does not make it stale. Never delete coordination files
+or replace the local-process claim guard. Exact rules are in
 [Backend and sessions](../reference/backend-and-sessions.md).
 
-The persistent claim guard coordinates only cooperating local processes. It is
-not authentication, a distributed lock, or a network-filesystem guarantee. Do
-not replace its pathname while the workspace may be active.
+End makes a session inactive but retains provider threads, both CLI selections,
+overrides, state, debates, manuscripts, and provider-governed transcripts.
 
-Ending a session makes it inactive but retains provider thread references,
-external provider transcripts, CLI selection, runtime overrides, agent state,
-debates, manuscripts, and unrelated session files. Provider transcript
-retention and deletion remain governed by the provider.
+## Conversation selection recovery
+
+Restart restores a saved conversation only when its session-owned catalog record
+exists and is active. Missing or archived records open the inner lobby without
+rewriting the stale file. Malformed or unsafe storage releases initial
+attachment and exits `2`.
+
+If create succeeds but selection save fails, metadata remains and the prior
+effective choice stays. Repair storage and select the reported full ID. Failed
+`use` saving also preserves the prior choice.
+
+Selected archive writes status before successor or `null`. Save failure
+continues only after unarchive proves the original record, selection, and lease;
+otherwise it exits `2` with `cleanup_failed`. Restart may show a stale ID as no
+selection. Follow the [lifecycle diagram](../design/session-lifecycle.md#conversation-lifecycle-and-compensation).
 
 ## Conversation turn recovery
 
-Failure before the user append leaves no transcript evidence. After it, an
-ordinary failure normally adds a sanitized error; cancellation best-effort adds
-its fixed outcome. A hard interruption or failed reply/error/cancellation append
-can leave an unmatched user. Reply-storage failure creates no false provider
-error; failed ordinary-error persistence surfaces the storage exception chained
-from the provider failure.
+Failure before user append leaves no transcript evidence. Later failure normally
+adds a sanitized error; cancellation best-effort adds its fixed outcome. Hard
+interruption or outcome-write failure can leave an unmatched user. Reply-storage
+failure creates no false provider error.
 
-Full reads expose an unmatched user; bounded context excludes it. The runtime
-and store do not retry or repair it. Inspect, fix the cause, then make an
-explicit later call. See [pairing rules](../reference/conversation-transcripts.md)
-and the [complete sequence](../reference/runtime-api.md#one-conversation-turn).
+Full reads expose unmatched users; bounded context excludes them. Nothing
+retries or repairs them. Inspect, fix, then call explicitly. See the
+[pairing rules](../reference/conversation-transcripts.md) and
+[sequence](../reference/runtime-api.md#one-conversation-turn).
 
-A transcript cursor is valid only for the last-sequence snapshot from its first
-page. If any event is appended, discard the stale cursor and begin a new read.
-A citation remains valid across a subject rename because it uses immutable IDs;
-an exact event citation fails closed if its event identity no longer matches.
-Search callers must inspect `scan_truncated` before treating an empty or partial
-result as exhaustive. Exact recovery conditions are in [Conversation search and
-cited transcript pages](../reference/conversation-search.md).
+A cursor is valid only for its first-page snapshot; discard it after append.
+ID-based citations survive rename, but event mismatches fail closed. Check
+`scan_truncated` before treating search as exhaustive. See
+[Conversation search](../reference/conversation-search.md).
 
 ## Current product limits
 
@@ -68,29 +68,22 @@ cited transcript pages](../reference/conversation-search.md).
   preflight.
 - Provider calls have a configurable timeout but no automatic retry or
   rate-limit manager.
-- Stable parallel outcome order is roster order, not completion order.
-- Session-wide owner history has no compaction, count limit, expiry, or
-  retention policy.
-- Filesystem safety relies on Python and the underlying operating system
-  correctly implementing the atomic primitives used.
-- Debate inspection validates persisted state but cannot establish process
-  liveness or validate provider-generated story content.
-- The catalog, event store, and search/page service remain Python foundations.
-  `StoryRuntime` can persist one explicit-ID provider turn, but there is no
-  current selection, automatic dispatch, legacy migration, database,
-  persistent index, RAG, or conversation/search/transcript command.
-- The interactive command registry and parser do not provide dispatch, a TTY,
-  provider control, session switching, artifact actions, `/conversation`,
-  `/search`, or `/transcript`.
+- Owner history has no compaction, expiry, or retention policy.
+- Filesystem guarantees depend on Python and operating-system atomic primitives.
+- Inspection cannot prove process liveness or story-content correctness.
+- The installed lobby manages metadata and per-session selection only. It does
+  not dispatch chat, read/write transcripts, search, run debates, or write
+  artifacts.
+- Transcript, search/page, and provider-turn APIs remain Python-only. There is
+  no legacy migration, database, persistent index, RAG, `/search`, or `/transcript`.
+- The parser and terminal expose more actions than this lobby dispatches; their
+  capability metadata is not an availability promise.
 
 ## Operational response
 
-Preserve plaintext evidence, record the old IDs and output paths, and inspect
-before retrying after interruption. Resolve user-level continuity conflicts
-explicitly. For provider failure, check executable, login or environment key,
-model, timeout, active session, and lease owner. For persisted format errors,
-do not let the runtime silently skip damaged records—it intentionally fails
-closed.
+Preserve plaintext evidence and IDs; inspect before retrying. For provider
+failure, check executable, login/key, model, timeout, session, and lease. Do not
+skip damaged records: persisted format errors intentionally fail closed.
 
 Use [Inspection and recovery](../guides/inspection-and-recovery.md) for commands,
 [Session lifecycle](../design/session-lifecycle.md) for coordination, and

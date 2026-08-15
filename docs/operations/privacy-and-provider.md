@@ -38,9 +38,11 @@ updates, or another agent's owner-isolated state to that visible context. The
 agent definition separately provides only that role's allowlisted core files.
 See the [provider handoff](../design/prompts-and-provider.md#conversation-turn-flow).
 
-`BoundAgent.converse()` projects the request to provider JSON and may update
-thread metadata, but never reads or writes the transcript. The runtime owns
-that sequencing; automatic interactive selection and dispatch are unavailable.
+`BoundAgent.converse()` may update thread metadata, never transcripts; the
+runtime owns provider-turn sequencing. Lobby subject management/selection is
+local and provider-free. Ordinary/routed chat, provider dispatch, and
+transcript/search commands remain unavailable. See
+[Story sessions](../guides/story-sessions.md).
 
 Visible context is conversation-scoped; provider-private history is not. A
 compatible thread is keyed by session, backend, and agent and can span
@@ -74,10 +76,10 @@ The backend also sanitizes a nonzero Codex-exit diagnostic before raising it;
 the runtime sanitizer applies again before that exception becomes a transcript
 event.
 
-The separate terminal component escapes display text and caps caller-redacted
-error summaries/hints at 512/256 characters. It is neither wired nor persistent;
-these rules differ from the 4,096-character stored diagnostic above. See
-[Terminal display safety](terminal-safety.md).
+The terminal escapes display text and caps caller-redacted error summaries/hints
+at 512/256 characters. Display sanitization does not persist terminal text or
+sanitize provider payloads; it differs from the 4,096-character stored
+diagnostic. See [Terminal display safety](terminal-safety.md).
 
 ## Codex process boundary
 

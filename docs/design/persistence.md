@@ -1,39 +1,35 @@
 # Persistence design
 
-> **Availability:** filesystem persistence for configuration, sessions,
-> debates, agent memory, conversation metadata and transcripts, and manuscripts
-> is implemented.
+> **Availability:** filesystem persistence covers configuration, session and
+> conversation selections, provider sessions, debates, conversation metadata
+> and transcripts, and manuscripts.
 
 Key terms: **blackboard**—the public debate log; **owner-isolated state**—
 history visible only to its agent; **lifecycle**—reservation and terminal status;
 **transcript**—one conversation's visible event history; **durability**—which
 completed file changes survive interruption.
 
-The workspace intentionally uses inspectable files instead of a database. Each
-channel has one owner and audience:
+The workspace uses inspectable files instead of a database. Channels stay
+separate:
 
-```mermaid
-flowchart LR
-    accTitle: Persistence channel ownership
-    accDescr: Each stored channel flows to its owning reader or adapter.
-    U[User input and candidates] --> B[Public debate JSONL]
-    B --> I[Inspection and all agents]
-    O[Concise provider outcomes] --> A[Per-agent JSONL]
-    A --> E[Only the owning agent]
-    L[Lifecycle and terminal result JSON] --> I
-    P[Provider manifest and lease JSON] --> K[AgentBackend]
-    C[Conversation metadata JSON] --> G[Catalog adapter]
-    T[Conversation transcript JSONL] --> V[Event-store read and context]
-    F[Approved candidate] --> M[Immutable manuscript]
-```
-
-In words: the public blackboard is the complete visible debate record;
-per-agent state is a narrower owner-only memory channel; lifecycle/result files
-support recovery and inspection; provider state belongs to the backend;
-conversation metadata and visible events belong to separate adapters; only
-approved content reaches a manuscript.
+| Channel | Durable owner or reader |
+| --- | --- |
+| Public debate JSONL and lifecycle/result JSON | Runtime and inspection |
+| Per-agent JSONL | Only its owning agent |
+| Provider manifest and temporary lease | `AgentBackend` |
+| Story-session and conversation selections | CLI context helpers |
+| Conversation metadata | Catalog adapter |
+| Conversation transcript JSONL | Event-store adapter |
+| Approved manuscript | Workspace commit path |
 
 ## Conversation durability
+
+Subject metadata and per-session selection are different files. Create writes
+metadata before saving the new selection; use changes only selection; rename
+changes only metadata. Archive of the selected record crosses both files and
+uses the bounded compensation described in the [lifecycle diagram](session-lifecycle.md#conversation-lifecycle-and-compensation).
+There is no atomic transaction across those files. A stale saved ID is retained
+for diagnosis and becomes an unselected lobby state at restart.
 
 `StoryRuntime.converse()` saves the user event before its one provider call. It
 then attempts to save a valid reply as `agent_reply`, or an ordinary post-user
@@ -59,20 +55,20 @@ provider may still echo sensitive material into those fields.
 
 Session override JSON survives runtime instances. Provider manifests preserve
 compatible thread IDs across debates, detach, end, and backend close. CLI
-selection survives session end. Conversation metadata retains its exact
-display subject even when archived. Its transcript retains every visible event,
-including an unmatched user remainder. None of these actions is deletion or
-secure erasure.
+session and conversation selections survive session end. Conversation metadata
+retains its exact display subject when archived. Its transcript retains every
+visible event, including an unmatched user remainder. None of these actions is
+deletion or secure erasure.
 
 ## Ownership and durability boundaries
 
-The workspace validates and mutates one channel at a time. Debate reservation
-belongs to lifecycle state; blackboard and owner histories append separately;
-terminal result is a projection rather than a second message store. Approved
-artifact coordination crosses core documents and one manuscript, while a
-conversation metadata transition is isolated to that identity. The event store
-owns transcript append, full read, and bounded context projection. Neither
-adapter performs migration, and absent reads create nothing.
+The workspace validates and mutates one channel at a time. Blackboard and
+owner histories append separately; terminal result is a projection, not a
+second message store. Approved artifact coordination crosses core documents and
+one manuscript. Each selection or metadata replacement is atomic only for its
+own file. The event store owns transcript replacement and context projection.
+Neither conversation adapter performs migration, and absent reads create
+nothing.
 
 The conversation memory service is another projection, not a persistence
 owner. It reads the catalog and event-store contracts but stores no search

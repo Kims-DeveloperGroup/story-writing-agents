@@ -1,9 +1,9 @@
 # Glossary
 
-> **Availability:** most terms describe installed runtime behavior. Conversation
-> persistence is Python-only; the session lobby uses strict lifecycle. Interactive
-> conversation selection and its search/transcript commands are not implemented;
-> explicit-ID runtime turns and conversation search are Python APIs.
+> **Availability:** after attachment, the provider-free lobby can create, list,
+> select, rename, and archive subject conversations. Ordinary/routed chat,
+> provider dispatch, and transcript/search commands remain unavailable. See
+> [Story sessions](guides/story-sessions.md).
 
 Key terms: **story session**—durable related work; **conversation**—a
 session-scoped subject and visible history; **turn**—one user event and its

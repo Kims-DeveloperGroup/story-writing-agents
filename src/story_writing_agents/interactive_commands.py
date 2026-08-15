@@ -39,6 +39,12 @@ class ActionKind(StrEnum):
     SESSION_NEW = "session_new"
     SESSION_RESUME = "session_resume"
     SESSION_END = "session_end"
+    CONVERSATION_NEW = "conversation_new"
+    CONVERSATION_LIST = "conversation_list"
+    CONVERSATION_LIST_ALL = "conversation_list_all"
+    CONVERSATION_USE = "conversation_use"
+    CONVERSATION_SUBJECT = "conversation_subject"
+    CONVERSATION_ARCHIVE = "conversation_archive"
     HELP = "help"
     QUIT = "quit"
     PARSE_ERROR = "parse_error"
@@ -58,6 +64,8 @@ class InteractiveAction:
     suggestion: str | None = None
 
     def __post_init__(self) -> None:
+        """Validate the declared action payload without external side effects."""
+
         if not isinstance(self.kind, ActionKind):
             raise TypeError("kind must be an ActionKind")
 
@@ -154,6 +162,21 @@ _ACTION_FIELD_RULES: dict[
     ),
     ActionKind.SESSION_RESUME: (frozenset({"argument"}), _NO_FIELDS),
     ActionKind.SESSION_END: (_NO_FIELDS, _NO_FIELDS),
+    ActionKind.CONVERSATION_NEW: (frozenset({"argument"}), _NO_FIELDS),
+    ActionKind.CONVERSATION_LIST: (frozenset({"argument"}), _NO_FIELDS),
+    ActionKind.CONVERSATION_LIST_ALL: (
+        frozenset({"argument"}),
+        _NO_FIELDS,
+    ),
+    ActionKind.CONVERSATION_USE: (
+        frozenset({"argument"}),
+        frozenset({"argument"}),
+    ),
+    ActionKind.CONVERSATION_SUBJECT: (
+        frozenset({"argument"}),
+        frozenset({"argument"}),
+    ),
+    ActionKind.CONVERSATION_ARCHIVE: (frozenset({"argument"}), _NO_FIELDS),
     ActionKind.HELP: (frozenset({"argument"}), _NO_FIELDS),
     ActionKind.QUIT: (_NO_FIELDS, _NO_FIELDS),
     ActionKind.PARSE_ERROR: (
@@ -231,6 +254,17 @@ COMMANDS: tuple[CommandSpec, ...] = (
         "/session new chapter-01",
     ),
     CommandSpec(
+        "Conversations",
+        (
+            "/conversation new [SUBJECT] | list [--all] [QUERY] | use ID | "
+            "subject SUBJECT | archive [ID]"
+        ),
+        (),
+        False,
+        False,
+        "/conversation new Chapter 1 opening",
+    ),
+    CommandSpec(
         "Inspection",
         "/inspect [DEBATE|last]",
         (),
@@ -286,6 +320,7 @@ _COMMAND_ALIASES: dict[str, str] = {
     "run": "/run",
     "draft-file": "/draft-file",
     "session": "/session",
+    "conversation": "/conversation",
     "inspect": "/inspect",
     "history": "/history",
     "status": "/status",
@@ -300,6 +335,14 @@ _SESSION_COMMANDS: dict[str, str] = {
     "new": "/session new",
     "resume": "/session resume",
     "end": "/session end",
+}
+
+_CONVERSATION_COMMANDS: dict[str, str] = {
+    "new": "/conversation new",
+    "list": "/conversation list",
+    "use": "/conversation use",
+    "subject": "/conversation subject",
+    "archive": "/conversation archive",
 }
 
 def parse_interactive_line(line: str) -> InteractiveAction:
@@ -326,6 +369,8 @@ def parse_interactive_line(line: str) -> InteractiveAction:
 
 
 def _parse_slash_command(line: str) -> InteractiveAction:
+    """Parse one slash-prefixed line into a typed action without mutation."""
+
     head, tail = _split_head(line)
     command = head[1:]
     if command not in _COMMAND_ALIASES:
@@ -364,6 +409,8 @@ def _parse_slash_command(line: str) -> InteractiveAction:
         return InteractiveAction(ActionKind.DRAFT_FILE, argument=argument)
     if command == "session":
         return _parse_session(tail)
+    if command == "conversation":
+        return _parse_conversation(tail)
     if command == "inspect":
         return _parse_inspect(tail)
     if command == "history":
@@ -507,6 +554,88 @@ def _parse_session(tail: str | None) -> InteractiveAction:
     return InteractiveAction(ActionKind.SESSION_END)
 
 
+def _parse_conversation(tail: str | None) -> InteractiveAction:
+    """Parse the exact conversation grammar without catalog or filesystem I/O."""
+
+    remainder = _remainder_after_ascii_delimiters(tail)
+    if remainder is None:
+        return _parse_error("/conversation requires a subcommand")
+
+    subcommand, subcommand_tail = _split_head(remainder)
+    if subcommand not in _CONVERSATION_COMMANDS:
+        return _parse_error(
+            f"unknown /conversation subcommand: {subcommand}",
+            _suggest(subcommand, _CONVERSATION_COMMANDS),
+        )
+
+    if subcommand == "new":
+        subject = _optional_remainder(subcommand_tail)
+        return InteractiveAction(ActionKind.CONVERSATION_NEW, argument=subject)
+
+    if subcommand == "list":
+        query = _remainder_after_ascii_delimiters(subcommand_tail)
+        if query is None:
+            return InteractiveAction(ActionKind.CONVERSATION_LIST)
+        first_token, query_tail = _split_head(query)
+        if first_token == "--all":
+            all_query = _remainder_after_ascii_delimiters(query_tail)
+            if all_query is not None and "--all" in _tokens(all_query):
+                return _parse_error(
+                    "/conversation list --all must appear once and first"
+                )
+            return InteractiveAction(
+                ActionKind.CONVERSATION_LIST_ALL,
+                argument=all_query,
+            )
+        if first_token.startswith("--"):
+            return _parse_error(
+                f"unknown /conversation list flag: {first_token}"
+            )
+        if "--all" in _tokens(query):
+            return _parse_error(
+                "/conversation list --all must appear once and first"
+            )
+        return InteractiveAction(ActionKind.CONVERSATION_LIST, argument=query)
+
+    if subcommand == "use":
+        tokens = _tokens(subcommand_tail)
+        if len(tokens) != 1:
+            return _parse_error("/conversation use requires exactly one ID")
+        conversation_id = tokens[0]
+        if not _is_valid_token(conversation_id):
+            return _parse_error(
+                "/conversation use ID must be a control-free token"
+            )
+        return InteractiveAction(
+            ActionKind.CONVERSATION_USE,
+            argument=conversation_id,
+        )
+
+    if subcommand == "subject":
+        subject = _required_remainder(subcommand_tail)
+        if subject is None:
+            return _parse_error("/conversation subject requires a subject")
+        return InteractiveAction(
+            ActionKind.CONVERSATION_SUBJECT,
+            argument=subject,
+        )
+
+    tokens = _tokens(subcommand_tail)
+    if len(tokens) > 1:
+        return _parse_error("/conversation archive accepts at most one ID")
+    if not tokens:
+        return InteractiveAction(ActionKind.CONVERSATION_ARCHIVE)
+    conversation_id = tokens[0]
+    if not _is_valid_token(conversation_id):
+        return _parse_error(
+            "/conversation archive ID must be a control-free token"
+        )
+    return InteractiveAction(
+        ActionKind.CONVERSATION_ARCHIVE,
+        argument=conversation_id,
+    )
+
+
 def _parse_inspect(tail: str | None) -> InteractiveAction:
     tokens = _tokens(tail)
     if not tokens:
@@ -592,6 +721,20 @@ def _optional_remainder(tail: str | None) -> str | None:
         return None
     value = tail[1:]
     return None if _is_ascii_blank(value) else value
+
+
+def _remainder_after_ascii_delimiters(tail: str | None) -> str | None:
+    """Remove one grammar delimiter run while preserving remaining text exactly.
+
+    Only leading ASCII spaces and tabs are syntax. The returned subcommand or
+    list remainder retains all later characters, including trailing whitespace;
+    no process state or external resource is read or mutated.
+    """
+
+    if tail is None:
+        return None
+    value = tail.lstrip(" \t")
+    return value or None
 
 
 def _is_ascii_blank(value: str) -> bool:

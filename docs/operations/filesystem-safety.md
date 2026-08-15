@@ -1,8 +1,9 @@
 # Filesystem safety
 
-> **Availability:** containment checks, no-symlink handling, exclusive
-> manuscript and identity creation, serialized transcript replacement, atomic
-> per-file replacement, and best-effort artifact rollback are implemented.
+> **Availability:** containment and no-symlink checks, exclusive manuscript and
+> conversation creation, serialized transcript replacement, atomic per-file
+> selection/metadata replacement, and best-effort artifact rollback are
+> implemented.
 
 Key terms: **containment**—keeping paths beneath the workspace root; **symlink**—
 a filesystem alias the runtime rejects; **exclusive creation**—failure instead
@@ -18,41 +19,29 @@ of overwrite; **atomic file**—a replacement observed as old or complete new da
 - every symbolic-link component, even when it points elsewhere inside the
   workspace.
 
-The symlink rule protects logical boundaries as well as physical containment.
-A link beneath `manuscript/` cannot redirect an output into `core_documents/`,
-and a linked core document cannot redirect a consensus update into `config/`.
-Workspace and template identifiers have additional conservative validation.
+The symlink rule protects logical as well as physical boundaries. A link cannot
+redirect a manuscript, core document, selection, catalog record, or transcript.
+Workspace and template identifiers have additional validation.
 
-CLI discovery without `--workspace` selects the nearest fully initialized
-ancestor of the current directory. Use an explicit path in automation or when
-nested workspaces make that choice unclear. Discovery never initializes a
-directory.
+CLI discovery chooses the nearest initialized ancestor and never initializes a
+directory. Use an explicit path for automation or nested workspaces.
 
 Orchestration core-document access is limited to the four fixed filenames.
 Manuscript names may use safe relative subdirectories beneath `manuscript/`.
 A direct client of generic `Workspace.write_text()` is trusted and can modify
 any safely contained relative file; containment is not authorization.
 
-The filesystem conversation adapters bind safe session and conversation IDs to
-fixed metadata and transcript paths. They apply no-symlink and containment
-checks to every directory and file, then require embedded IDs to match the
-owning path. This preserves namespace integrity but is not access control: any
-process with workspace access can still name another session.
+Conversation adapters and selection helpers bind safe IDs to fixed paths. They
+check every component and require embedded IDs to match the owning path. This
+protects namespace integrity, not access control: a process with workspace
+access can still name another session.
 
-The provider-session claim guard is opened without following symlinks where the
-platform provides that flag, checked as a regular file, and verified so the
-open descriptor and pathname keep the same file identity. Unsafe, replaced,
-unverifiable, or unsupported guard state fails closed. POSIX uses exclusive
-`flock`; Windows uses advisory one-byte locking. Closing the descriptor,
-including at process exit, releases the operating-system lock. Replacing the
-guard pathname could split cooperating processes across different locks, so do
-not delete or replace it while a workspace may be used.
+The provider-session claim guard is opened without following symlinks when the
+platform supports it, verified as the same regular file, and locked with POSIX
+`flock` or Windows one-byte advisory locking. Suspicious state fails closed.
+Do not replace the guard pathname while a workspace may be used.
 
 ## Conversation transcript safety
-
-Key terms: **in-process lock**—serialization inside one Python process;
-**session lease**—the cross-process same-session write guard; **fail closed**—
-rejecting suspicious persisted data instead of repairing or skipping it.
 
 Transcript reads and appends for the same workspace, session, and conversation
 share a weakly retained process-wide lock. Different conversations are not
@@ -96,6 +85,11 @@ file. Failure before replacement preserves the old record. A failure reported
 after successful replacement can leave the complete new record durable, but
 not partial JSON. Catalog mutations cannot alter provider sessions, debates,
 manuscripts, core documents, CLI selection, or agent state.
+
+Session and conversation selection saves also replace one complete fixed JSON
+file. A conversation-selection failure preserves its prior bytes and cannot
+alter catalog metadata; operations spanning both files are not atomic. See
+[Persistence](../design/persistence.md) for the cross-file consequence.
 
 Invalid identifiers raise `SessionIdError`; unsafe paths or symlinks raise
 `WorkspaceSecurityError`; malformed or path-mismatched persisted data raises

@@ -24,9 +24,9 @@ The current graph flows from entry points and orchestration toward provider,
 configuration, prompt, persistence, and stable contract modules:
 
 ```text
-__main__ -> cli -> interactive_controller -> agents/backend/cli_context/errors
-                 |                         -> interactive_commands/interactive_terminal
-                 |                         -> models/workspace
+__main__ -> cli -> interactive_controller -> agents/backend/cli_context/conversations
+                 |                         -> errors/interactive_commands
+                 |                         -> interactive_terminal/models/workspace
                  -> interactive_terminal -> interactive_commands/agents
                  -> orchestrator -> prompts -> config -> workspace
                  |               |         |         -> conversations/models/errors/agents
@@ -179,13 +179,17 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 - **Source:** `src/story_writing_agents/cli_context.py`
 - **Responsibility:** Discover initialized workspaces and manage workspace-local
-  CLI session selection.
+  CLI selections.
 - **Supported surface:** Internal `CliContext`, `resolve_workspace`,
-  `load_cli_context`, `select_session`, and `resolve_session`.
+  `load_cli_context`, `select_session`, `resolve_session`,
+  `load_conversation_selection`, and `save_conversation_selection`.
 - **Direct internal dependencies:** `agents`, `errors`, and `workspace`.
 - **State, resources, and side effects:** Reads workspace sentinels and owns
-  `agent_states/orchestrator_state/cli_context.json`, written through
-  `Workspace`.
+  `agent_states/orchestrator_state/cli_context.json` plus lazy version-1
+  per-session selection objects under
+  `agent_states/orchestrator_state/conversation_selections/<session_id>.json`,
+  all read and atomically written through `Workspace`. Missing conversation
+  selection files are read as no selection without creating storage.
 - **Primary verification/documentation:** `tests/test_cli_context.py`,
   `docs/reference/cli.md`,
   `docs/reference/configuration/session-storage.md`, and
@@ -292,7 +296,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   typed actions and publish canonical command metadata.
 - **Supported surface:** Package-supported `ActionKind`, `InteractiveAction`,
   `CommandSpec`, `COMMANDS`, and `parse_interactive_line`; all parser helpers,
-  agent aliases, and command aliases are internal.
+  agent aliases, and command aliases are internal. The immutable registry and
+  action enum include canonical conversation new, active/all list, use,
+  subject, and archive operations without changing `InteractiveAction`'s value
+  shape.
 - **Direct internal dependencies:** `agents`.
 - **State, resources, and side effects:** Immutable metadata only; owns no
   process state and performs no provider, filesystem, persistence, environment,
@@ -304,25 +311,33 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.interactive_controller`
 
 - **Source:** `src/story_writing_agents/interactive_controller.py`
-- **Responsibility:** Coordinate one synchronous interactive story-session
-  lobby lifecycle.
+- **Responsibility:** Coordinate one synchronous nested
+  story-session/conversation lobby lifecycle.
 - **Supported surface:** Module-supported `InteractiveController`, whose
   constructor accepts explicit workspace, CLI-context, backend, and terminal
-  collaborators and whose single-use `run_session_lobby` operation returns
-  process status 0 or 2. All transition and rendering helpers are private; the
-  package facade does not re-export this module.
-- **Direct internal dependencies:** `agents`, `backend`, `cli_context`, `errors`,
-  `interactive_commands`, `interactive_terminal`, `models`, and `workspace`.
-- **State, resources, and side effects:** Instances retain borrowed
-  collaborators and own only their current attached-session identifier, lead
-  target, current CLI-context snapshot, and one-run/closed state. After the run
-  starts, the controller owns orderly backend detach/close coordination while
+  collaborators plus an optional keyword-only `ConversationCatalog`, and whose
+  single-use `run_session_lobby` operation returns process status 0 or 2. An
+  omitted catalog uses `FilesystemConversationCatalog`; all transition,
+  identity-resolution, and rendering helpers are private, and the package
+  facade does not re-export this module.
+- **Direct internal dependencies:** `agents`, `backend`, `cli_context`,
+  `conversations`, `errors`, `interactive_commands`, `interactive_terminal`,
+  `models`, and `workspace`.
+- **State, resources, and side effects:** Instances retain borrowed workspace,
+  CLI-context, backend, and terminal collaborators plus either a borrowed
+  injected catalog or a controller-constructed default filesystem catalog.
+  They own only their current attached-session identifier, selected
+  conversation metadata, sticky target, current CLI-context snapshot, and
+  one-run/closed state. After the run starts, the controller owns orderly
+  backend detach/close coordination while
   `AgentBackend` retains actual lease, manifest, and provider-resource
   ownership. Through public collaborators it reads and parses terminal input,
-  renders safe output, sequences session summary/acquisition/release calls, and
-  persists selection through `cli_context`; it performs no provider invocation,
-  transcript, conversation, or artifact work and has no import-time operational
-  side effects.
+  renders safe output, sequences session and nested conversation transitions,
+  performs catalog create/list/get/rename/archive and compensating unarchive
+  calls, and persists session/conversation selections through `cli_context`.
+  The catalog and `Workspace` retain persistence ownership; the controller
+  performs no provider invocation, transcript, search, or artifact work and
+  has no import-time operational side effects.
 - **Primary verification/documentation:** `tests/test_interactive_controller.py`,
   `tests/test_session_lifecycle.py`, `tests/test_cli_context.py`,
   `tests/test_interactive_commands.py`, `tests/test_interactive_terminal.py`,
@@ -341,13 +356,18 @@ every intermediate arrow. The current runtime graph is acyclic.
   `INTERACTIVE_ERROR_SPECS`, `InteractiveError`, `sanitize_terminal_text`, and
   `InteractiveTerminal`. `InteractiveTerminal.request_confirmation` returns a
   typed yes/no/interrupt/EOF result, and `write_session_orientation` accepts an
-  optional history count whose absence omits history claims; rendering and
-  validation helpers are private.
+  optional history count whose absence omits history claims.
+  `request_conversation_subject` performs one typed line/interrupt/EOF read;
+  `write_conversation_scope` and `write_conversation_list_entry` render bounded
+  conversation context and catalog rows. The message-kind and immutable error
+  registries include conversation presentation and the six typed conversation
+  failures; rendering and validation helpers are private.
 - **Direct internal dependencies:** `agents` and `interactive_commands`.
 - **State, resources, and side effects:** Instances retain borrowed synchronous
   line-read and text-write callbacks plus an immutable display width; each
-  composition call owns only its local line buffer. Methods read through the
-  supplied callback and write sanitized, newline-terminated plain-text blocks.
+  composition call and subject request own only call-local input state. Methods
+  read through the supplied callback and write sanitized, newline-terminated
+  plain-text blocks, including adjacent conversation scope and listing rows.
   The module owns immutable display metadata, no persistent or external
   resource, and performs no provider, filesystem, persistence, environment, or
   import-time operational side effects.
@@ -462,15 +482,19 @@ every intermediate arrow. The current runtime graph is acyclic.
 - `interactive_commands` owns canonical command metadata, parse rules, and
   typed parsed actions. `interactive_terminal` consumes only its public command
   metadata and canonical agent metadata to own safe prompt, confirmation, help,
-  status, error, and call-local composition presentation. It returns typed
-  terminal outcomes without dispatching them.
-- `interactive_controller` owns session-lobby action mapping, current in-memory
-  attachment state, transition ordering, and backend detach/close coordination
-  after its one run starts. `AgentBackend` retains actual session lease,
-  manifest, and provider-resource ownership; `cli_context` retains selection
-  persistence ownership; and `interactive_terminal` retains synchronous I/O
-  and presentation ownership. The controller uses only those public boundaries
-  and performs no provider, transcript, conversation, or artifact operation.
+  status, error, call-local composition, subject input, conversation scope, and
+  catalog-row presentation. It returns typed terminal outcomes without
+  dispatching them.
+- `interactive_controller` owns session/conversation-lobby action mapping,
+  current in-memory attachment and selected-conversation state, transition and
+  compensation ordering, and backend detach/close coordination after its one
+  run starts. `AgentBackend` retains actual session lease, manifest, and
+  provider-resource ownership; `ConversationCatalog` retains conversation
+  metadata ownership; `cli_context` owns both session and per-session
+  conversation-selection persistence; and `interactive_terminal` retains
+  synchronous I/O and presentation ownership. The controller uses only those
+  public boundaries and performs no provider, transcript, search, or artifact
+  operation.
 - `Workspace` and `ConversationEventStore` implementations own persistence
   mechanics. `StoryRuntime` sequences debate persistence and, for advisory
   turns, the validated context read, durable user append, one provider call,

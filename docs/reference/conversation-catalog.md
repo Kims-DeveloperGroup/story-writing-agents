@@ -1,20 +1,18 @@
 # Conversation catalog
 
-> **Availability:** the provider-neutral catalog and filesystem adapter are
-> implemented Python APIs. They are not wired to the CLI or `StoryRuntime`.
-> Current selection and interactive dispatch are not implemented. The separate
-> conversation-memory API performs a bounded scan without a persistent index.
+> **Availability:** the provider-neutral catalog and filesystem adapter serve
+> the installed TTY lobby's subject metadata. The lobby adds selection and
+> display handles; `StoryRuntime` does not depend on the catalog.
 
 Key terms: **conversation ID**—an immutable identity scoped to one session;
 **display subject**—the exact stored title; **normalized key**—a derived
 comparison form that is not identity; **archive**—a reversible status, not
 deletion; **transcript**—visible events stored separately from metadata.
 
-The catalog answers “which conversation is this?” and “how is it discovered?”
-The separate [conversation transcript](conversation-transcripts.md) answers
-“what visible events happened?” Archiving changes discovery only; it does not
-make the transcript unreadable. [Conversation search and cited transcript
-pages](conversation-search.md) consumes both contracts without changing them.
+The catalog answers “which conversation is this?” The separate
+[transcript](conversation-transcripts.md) answers “what happened?” Archive
+changes discovery, not transcript readability. [Conversation search](conversation-search.md)
+consumes both contracts without changing them.
 
 ```python
 CONVERSATION_METADATA_SCHEMA_VERSION = 1
@@ -78,6 +76,10 @@ trailing, and repeated whitespace is preserved. Normalization applies NFKC,
 case folding, then trims and collapses Unicode whitespace runs to one ASCII
 space. The key is derived, not stored, and does not enforce uniqueness.
 
+The installed `/conversation list [--all] [QUERY]` reads catalog order and
+uses that same normalization for case-insensitive subject substring matching.
+It never replaces the stored display subject with the normalized key.
+
 ## Operation semantics
 
 `create()` allocates an immutable ID scoped to the story session, starts at
@@ -92,14 +94,26 @@ on every success—including the same display value—and refreshes update time.
 Archive transitions preserve subject revision. Repeating the current status is
 idempotent and leaves update time unchanged; a real transition refreshes it.
 
-An absent catalog lists as `()` without creating directories or migrating
-legacy data. Reads validate strict UTF-8, exact JSON shape, values, timestamps,
-and path ownership. Missing records raise `ConversationNotFoundError`; an
-exhausted generated-ID allocation raises `ConversationExistsError`; unsafe IDs
-raise `SessionIdError`; malformed records raise `WorkspaceFormatError`; and
-containment or symlink violations raise `WorkspaceSecurityError`.
+## IDs in the installed lobby
+
+The immutable catalog ID is the durable identity; subject text may change.
+`/conversation use` and explicit archive accept an exact full ID or a
+case-sensitive unique prefix. An exact ID wins; a nonexact prefix must be at
+least 12 characters. Resolution includes active and archived records, so an
+archived match is found and then rejected for selection.
+
+For display, the lobby uses the first 12 ID characters only when that prefix is
+unique across all active and archived records. Otherwise it prints the full ID.
+Copy the shown handle back into commands. Conversation selection itself is a
+separate per-session record; see [Session storage](configuration/session-storage.md).
+
+An absent catalog lists as `()` without creating or migrating data. Reads
+validate UTF-8, schema, values, timestamps, and path ownership. Failures use
+`ConversationNotFoundError`, `ConversationExistsError`, `SessionIdError`,
+`WorkspaceFormatError`, or `WorkspaceSecurityError` as applicable.
 
 Creation is exclusive and never overwrites an identity. Later mutations
 atomically replace only the complete metadata file. The catalog never invokes
-a provider or changes CLI selection, sessions, debates, manuscripts, core
-documents, or agent state. Metadata is plaintext and archiving is not deletion.
+a provider or changes CLI selection, sessions, transcripts, debates,
+manuscripts, core documents, or agent state. Metadata is plaintext; archive is
+reversible status, not deletion.

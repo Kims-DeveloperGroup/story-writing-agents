@@ -4,10 +4,23 @@ from __future__ import annotations
 
 from .agents import LEAD_ORCHESTRATOR
 from .backend import AgentBackend
-from .cli_context import CliContext, select_session
+from .cli_context import (
+    CliContext,
+    load_conversation_selection,
+    save_conversation_selection,
+    select_session,
+)
+from .conversations import (
+    ConversationCatalog,
+    ConversationMetadata,
+    ConversationStatus,
+    normalize_conversation_subject,
+)
 from .errors import (
     BackendProtocolError,
     ConfigurationError,
+    ConversationExistsError,
+    ConversationNotFoundError,
     SessionExistsError,
     SessionIdError,
     SessionInUseError,
@@ -30,13 +43,22 @@ from .interactive_terminal import (
     TerminalMessageKind,
 )
 from .models import SessionLeaseState, SessionSummary
-from .workspace import Workspace
+from .workspace import FilesystemConversationCatalog, Workspace
 
 
 _UNAVAILABLE_SUMMARY = "This command is not available in the session lobby."
 _LOBBY_COMMAND_HINT = (
     "Use /help, /session list, /session new NAME, /session resume [NAME], "
     "/session end, or /quit."
+)
+_MINIMUM_CONVERSATION_PREFIX_LENGTH = 12
+_CONVERSATION_CATALOG_OPERATIONS = (
+    "create",
+    "get",
+    "list",
+    "rename",
+    "archive",
+    "unarchive",
 )
 _RECOVERABLE_SESSION_ERRORS = frozenset(
     {
@@ -60,6 +82,24 @@ class _ControllerAbort(Exception):
         self.error = error
 
 
+class _ConversationResolutionFailure(Exception):
+    """Carry one trusted lookup error code without retaining input prose."""
+
+    def __init__(self, code: InteractiveErrorCode) -> None:
+        """Store a typed resolution category without external side effects."""
+
+        super().__init__(code.value)
+        self.code = code
+
+
+class _ConversationInputFailure(Exception):
+    """Mark a failure from controller-owned subject or query validation."""
+
+
+class _ConversationCatalogProtocolFailure(Exception):
+    """Mark an injected catalog return that violates its public protocol."""
+
+
 class InteractiveController:
     """Own one interactive process's session attachment and lobby loop.
 
@@ -72,7 +112,9 @@ class InteractiveController:
         "_attached_session_id",
         "_backend",
         "_closed",
+        "_conversation_catalog",
         "_context",
+        "_selected_conversation",
         "_started",
         "_target_agent_id",
         "_terminal",
@@ -85,8 +127,16 @@ class InteractiveController:
         context: CliContext,
         backend: AgentBackend,
         terminal: InteractiveTerminal,
+        *,
+        conversation_catalog: ConversationCatalog | None = None,
     ) -> None:
-        """Bind validated collaborators without reading or mutating resources."""
+        """Bind borrowed collaborators without reading or mutating resources.
+
+        The four positional arguments remain the established construction
+        contract. An omitted keyword-only catalog creates the workspace-backed
+        adapter; an injected protocol implementation is retained as borrowed
+        state and is never closed by this controller.
+        """
 
         if not isinstance(workspace, Workspace):
             raise TypeError("workspace must be a Workspace")
@@ -100,7 +150,21 @@ class InteractiveController:
         self._context = context
         self._backend = backend
         self._terminal = terminal
+        resolved_catalog = (
+            FilesystemConversationCatalog(workspace)
+            if conversation_catalog is None
+            else conversation_catalog
+        )
+        if any(
+            not callable(getattr(resolved_catalog, operation, None))
+            for operation in _CONVERSATION_CATALOG_OPERATIONS
+        ):
+            raise TypeError(
+                "conversation_catalog must implement ConversationCatalog"
+            )
+        self._conversation_catalog = resolved_catalog
         self._attached_session_id: str | None = None
+        self._selected_conversation: ConversationMetadata | None = None
         self._target_agent_id = LEAD_ORCHESTRATOR
         self._started = False
         self._closed = False
@@ -346,15 +410,80 @@ class InteractiveController:
         ):
             self._release_uncommitted_destination(expected_session)
             self._abandon_known_attachment_for_cleanup_abort()
-        if self._attached_session_id is None:
-            self._attach_selected_session(summary.session_id, attachment)
+        try:
+            selected_conversation = self._load_destination_conversation(
+                summary.session_id
+            )
+        except Exception as exc:
+            self._release_uncommitted_destination(expected_session)
+            self._present_destination_conversation_failure(exc)
             return
-        self._switch_attached_session(summary.session_id, attachment)
+        if self._attached_session_id is None:
+            self._attach_selected_session(
+                summary.session_id,
+                attachment,
+                selected_conversation,
+            )
+            return
+        self._switch_attached_session(
+            summary.session_id,
+            attachment,
+            selected_conversation,
+        )
+
+    def _load_destination_conversation(
+        self,
+        session_id: str,
+    ) -> ConversationMetadata | None:
+        """Load an existing active saved choice for one acquired destination.
+
+        Missing files, null choices, absent records, and archived records return
+        ``None`` without rewriting persistence. Malformed selection or catalog
+        state propagates so the caller can release the uncommitted destination
+        before presenting a safe error.
+        """
+
+        selected_id = load_conversation_selection(self._workspace, session_id)
+        if selected_id is None:
+            return None
+        try:
+            metadata = self._conversation_catalog.get(session_id, selected_id)
+        except ConversationNotFoundError:
+            return None
+        validated = self._validated_catalog_metadata(
+            metadata,
+            session_id,
+            expected_conversation_id=selected_id,
+        )
+        if validated.status is ConversationStatus.ARCHIVED:
+            return None
+        return validated
+
+    def _present_destination_conversation_failure(
+        self,
+        failure: Exception,
+    ) -> None:
+        """Render a released destination's typed catalog failure without prose.
+
+        The caller has already returned the destination lease. Workspace
+        failures render and preserve an existing source, but an initial
+        attachment has no source and aborts. Protocol/internal failure always
+        aborts so the outer boundary detaches any known source and closes.
+        """
+
+        error = self._classify_conversation_failure(failure)
+        if (
+            error.code is InteractiveErrorCode.INTERNAL_ERROR
+            or self._attached_session_id is None
+        ):
+            raise _ControllerAbort(error)
+        self._terminal.write_error(error)
 
     def _attach_selected_session(
         self,
         session_id: str,
         attachment: AttachmentKind,
+        selected_conversation: ConversationMetadata | None,
     ) -> None:
         """Persist an initial destination and commit it as process attachment.
 
@@ -366,12 +495,18 @@ class InteractiveController:
         next_context = self._persist_destination_selection(session_id)
         if next_context is None:
             return
-        self._commit_attached_session(next_context, session_id, attachment)
+        self._commit_attached_session(
+            next_context,
+            session_id,
+            attachment,
+            selected_conversation,
+        )
 
     def _switch_attached_session(
         self,
         destination_session: str,
         attachment: AttachmentKind,
+        selected_conversation: ConversationMetadata | None,
     ) -> None:
         """Select a leased destination before detaching and replacing source.
 
@@ -394,6 +529,7 @@ class InteractiveController:
             next_context,
             destination_session,
             attachment,
+            selected_conversation,
         )
 
     def _persist_destination_selection(
@@ -434,16 +570,18 @@ class InteractiveController:
         context: CliContext,
         session_id: str,
         attachment: AttachmentKind,
+        selected_conversation: ConversationMetadata | None,
     ) -> None:
         """Commit process state, reset routing to lead, and render orientation.
 
-        The destination lease and selection are already durable. This method
-        performs no backend lifecycle operation and deliberately omits history
-        because conversation selection belongs to a later feature.
+        The destination lease and story-session selection are already durable.
+        This method performs no backend or catalog lifecycle operation and
+        stores only validated conversation metadata owned by the destination.
         """
 
         self._context = context
         self._attached_session_id = session_id
+        self._selected_conversation = selected_conversation
         self._target_agent_id = LEAD_ORCHESTRATOR
         self._terminal.write_session_orientation(
             str(self._workspace.root),
@@ -454,14 +592,17 @@ class InteractiveController:
         )
 
     def _read_session_lobby_commands(self) -> int:
-        """Read and dispatch the session-only command loop until normal exit.
+        """Read and dispatch lobby/navigation commands until normal exit.
 
         Main Ctrl-C clears only the current input operation. Main EOF, quit, or
-        EOF during end confirmation returns 0; fatal transition uncertainty is
-        raised to the outer cleanup boundary.
+        EOF during a call-local subject or confirmation read returns 0. Each
+        attached input is preceded immediately by its current conversation
+        scope; fatal transition uncertainty reaches the outer cleanup boundary.
         """
 
         while True:
+            if self._attached_session_id is not None:
+                self._write_attached_conversation_scope()
             terminal_action = self._terminal.read_main(
                 session_id=self._attached_session_id,
                 agent_id=(
@@ -487,9 +628,11 @@ class InteractiveController:
     def _dispatch_session_lobby_action(self, action: InteractiveAction) -> bool:
         """Execute one parser action and return whether the loop should exit.
 
-        Only help and story-session navigation mutate or inspect state in this
-        leaf. All other valid actions receive a stable unavailable error, and
-        parser errors may surface only their parser-owned safe suggestion.
+        Help and story-session navigation remain universally available.
+        Unattached conversation actions receive session-inactive before any
+        mutation. Attached actions enforce selection-aware allowlists;
+        later-feature actions receive conversation-required only in the
+        conversation lobby and remain command-invalid otherwise.
         """
 
         if action.kind is ActionKind.IGNORED:
@@ -514,6 +657,55 @@ class InteractiveController:
         if action.kind is ActionKind.PARSE_ERROR:
             self._write_parser_error(action)
             return False
+        if action.kind in {
+            ActionKind.CONVERSATION_NEW,
+            ActionKind.CONVERSATION_LIST,
+            ActionKind.CONVERSATION_LIST_ALL,
+            ActionKind.CONVERSATION_USE,
+            ActionKind.CONVERSATION_SUBJECT,
+            ActionKind.CONVERSATION_ARCHIVE,
+        }:
+            if self._attached_session_id is None:
+                self._terminal.write_error(
+                    InteractiveError(InteractiveErrorCode.SESSION_INACTIVE)
+                )
+                return False
+            if action.kind is ActionKind.CONVERSATION_NEW:
+                return self._create_subject_conversation(action.argument)
+            if action.kind in {
+                ActionKind.CONVERSATION_LIST,
+                ActionKind.CONVERSATION_LIST_ALL,
+            }:
+                self._list_subject_conversations(
+                    include_archived=(
+                        action.kind is ActionKind.CONVERSATION_LIST_ALL
+                    ),
+                    query=action.argument,
+                )
+                return False
+            if action.kind is ActionKind.CONVERSATION_USE:
+                assert action.argument is not None
+                self._select_subject_conversation(action.argument)
+                return False
+            if action.kind is ActionKind.CONVERSATION_SUBJECT:
+                assert action.argument is not None
+                self._rename_selected_conversation(action.argument)
+                return False
+            return self._archive_subject_conversation(action.argument)
+        if (
+            self._attached_session_id is not None
+            and self._selected_conversation is None
+        ):
+            self._terminal.write_error(
+                InteractiveError(InteractiveErrorCode.CONVERSATION_REQUIRED)
+            )
+            return False
+        self._write_unavailable_lobby_command_error()
+        return False
+
+    def _write_unavailable_lobby_command_error(self) -> None:
+        """Render the stable later-feature error without mutating controller state."""
+
         self._terminal.write_error(
             InteractiveError(
                 InteractiveErrorCode.COMMAND_INVALID,
@@ -521,7 +713,880 @@ class InteractiveController:
                 hint=_LOBBY_COMMAND_HINT,
             )
         )
+
+    def _write_attached_conversation_scope(self) -> None:
+        """Render the effective selected scope immediately before main input.
+
+        The current metadata is revalidated against the complete catalog so a
+        unique display handle can be derived across active and archived IDs.
+        Missing or archived external state drops only in-memory selection and
+        reports its typed category; durable selection is never rewritten here.
+        """
+
+        session_id = self._attached_session_id
+        assert session_id is not None
+        selected = self._selected_conversation
+        if selected is None:
+            self._terminal.write_conversation_scope(
+                session_id=session_id,
+                conversation_handle=None,
+                conversation_subject=None,
+                agent_id=self._target_agent_id,
+            )
+            return
+
+        try:
+            entries = self._catalog_entries(session_id)
+        except Exception as exc:
+            self._present_conversation_failure(exc)
+            handle = selected.conversation_id
+        else:
+            current = next(
+                (
+                    entry
+                    for entry in entries
+                    if entry.conversation_id == selected.conversation_id
+                ),
+                None,
+            )
+            if current is None:
+                self._selected_conversation = None
+                self._terminal.write_error(
+                    InteractiveError(
+                        InteractiveErrorCode.CONVERSATION_NOT_FOUND
+                    )
+                )
+                self._terminal.write_conversation_scope(
+                    session_id=session_id,
+                    conversation_handle=None,
+                    conversation_subject=None,
+                    agent_id=self._target_agent_id,
+                )
+                return
+            if current.status is ConversationStatus.ARCHIVED:
+                self._selected_conversation = None
+                self._terminal.write_error(
+                    InteractiveError(InteractiveErrorCode.CONVERSATION_ARCHIVED)
+                )
+                self._terminal.write_conversation_scope(
+                    session_id=session_id,
+                    conversation_handle=None,
+                    conversation_subject=None,
+                    agent_id=self._target_agent_id,
+                )
+                return
+            self._selected_conversation = current
+            selected = current
+            handle = self._visible_conversation_handle(current, entries)
+
+        self._terminal.write_conversation_scope(
+            session_id=session_id,
+            conversation_handle=handle,
+            conversation_subject=selected.subject,
+            agent_id=self._target_agent_id,
+        )
+
+    def _create_subject_conversation(self, subject: str | None) -> bool:
+        """Create and select one active conversation, returning EOF exit intent.
+
+        A missing subject causes exactly one call-local terminal read. Interrupt
+        cancels without mutation and EOF requests normal process cleanup. After
+        catalog creation, selection is saved before memory changes; a save
+        failure leaves the created entry and prior process state intact.
+        """
+
+        if subject is None:
+            subject_action = self._terminal.request_conversation_subject()
+            if subject_action.kind is TerminalActionKind.INTERRUPT:
+                self._write_conversation_cancelled_status(
+                    "Conversation creation cancelled."
+                )
+                return False
+            if subject_action.kind is TerminalActionKind.EOF:
+                return True
+            if subject_action.kind is not TerminalActionKind.LINE:
+                raise _ControllerAbort(
+                    InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+                )
+            assert subject_action.text is not None
+            subject = subject_action.text
+
+        session_id = self._attached_session_id
+        assert session_id is not None
+        try:
+            self._normalized_conversation_input(subject)
+            created = self._conversation_catalog.create(session_id, subject)
+            created = self._validated_catalog_metadata(
+                created,
+                session_id,
+            )
+            if created.status is not ConversationStatus.ACTIVE:
+                raise _ConversationCatalogProtocolFailure(
+                    "new conversation metadata is not active"
+                )
+        except Exception as exc:
+            self._present_conversation_failure(exc, creating=True)
+            return False
+
+        try:
+            save_conversation_selection(
+                self._workspace,
+                session_id,
+                created.conversation_id,
+            )
+        except Exception as exc:
+            self._confirm_attachment_after_command_failure()
+            error = self._classify_conversation_failure(exc)
+            self._terminal.write_error(
+                InteractiveError(
+                    error.code,
+                    summary=(
+                        f"Conversation {created.conversation_id} was created "
+                        "but was not selected."
+                    ),
+                    hint=(
+                        "Repair workspace storage, then use the full ID to "
+                        "select it."
+                    ),
+                )
+            )
+            return False
+
+        self._selected_conversation = created
+        handle = self._visible_handle_after_mutation(created)
+        self._terminal.write_status(
+            TerminalMessageKind.CONVERSATION,
+            f"Created and selected {handle} | Subject: {created.subject}",
+        )
         return False
+
+    def _list_subject_conversations(
+        self,
+        *,
+        include_archived: bool,
+        query: str | None,
+    ) -> None:
+        """Render a filtered catalog in storage order without durable mutation.
+
+        Handles are derived from the complete active-and-archived ID set even
+        when only active rows are requested. The optional query uses the
+        established normalized-subject substring rule; external loss or
+        archival of the in-memory selection clears memory but not its file.
+        """
+
+        session_id = self._attached_session_id
+        assert session_id is not None
+        try:
+            normalized_query = (
+                None
+                if query is None
+                else self._normalized_conversation_input(query)
+            )
+            entries = self._catalog_entries(session_id)
+        except Exception as exc:
+            self._present_conversation_failure(exc)
+            return
+
+        self._reconcile_in_memory_selection(entries)
+        visible_entries = tuple(
+            entry
+            for entry in entries
+            if (
+                include_archived
+                or entry.status is ConversationStatus.ACTIVE
+            )
+            and (
+                normalized_query is None
+                or normalized_query
+                in normalize_conversation_subject(entry.subject)
+            )
+        )
+        if not visible_entries:
+            self._terminal.write_status(
+                TerminalMessageKind.CONVERSATION,
+                "No conversations found.",
+            )
+            return
+
+        selected_id = (
+            None
+            if self._selected_conversation is None
+            else self._selected_conversation.conversation_id
+        )
+        for entry in visible_entries:
+            self._terminal.write_conversation_list_entry(
+                self._visible_conversation_handle(entry, entries),
+                entry.subject,
+                archived=(entry.status is ConversationStatus.ARCHIVED),
+                selected=(entry.conversation_id == selected_id),
+            )
+
+    def _select_subject_conversation(self, reference: str) -> None:
+        """Resolve and durably select one active conversation without rerouting.
+
+        Exact IDs win over case-sensitive prefixes of at least twelve
+        characters. Resolution includes archived records, which receive a
+        typed rejection. Selection persistence completes before in-memory
+        metadata and presentation change.
+        """
+
+        session_id = self._attached_session_id
+        assert session_id is not None
+        try:
+            selected, entries = self._resolve_conversation_reference(
+                session_id,
+                reference,
+            )
+        except Exception as exc:
+            self._present_conversation_failure(exc)
+            return
+        if selected.status is ConversationStatus.ARCHIVED:
+            self._terminal.write_error(
+                InteractiveError(InteractiveErrorCode.CONVERSATION_ARCHIVED)
+            )
+            return
+        try:
+            save_conversation_selection(
+                self._workspace,
+                session_id,
+                selected.conversation_id,
+            )
+        except Exception as exc:
+            self._confirm_attachment_after_command_failure()
+            self._terminal.write_error(
+                self._classify_conversation_failure(exc)
+            )
+            return
+
+        self._selected_conversation = selected
+        self._terminal.write_status(
+            TerminalMessageKind.CONVERSATION,
+            (
+                "Selected "
+                f"{self._visible_conversation_handle(selected, entries)} | "
+                f"Subject: {selected.subject}"
+            ),
+        )
+
+    def _rename_selected_conversation(self, subject: str) -> None:
+        """Atomically rename the selected active conversation, then update memory.
+
+        The exact display subject is validated without normalization replacement.
+        Missing or externally archived selections enter the conversation lobby
+        without rewriting their stale durable choice; catalog failure leaves
+        the previous process metadata intact until later revalidation.
+        """
+
+        current = self._require_active_selected_conversation()
+        if current is None:
+            return
+        session_id = self._attached_session_id
+        assert session_id is not None
+        try:
+            self._normalized_conversation_input(subject)
+            renamed = self._conversation_catalog.rename(
+                session_id,
+                current.conversation_id,
+                subject,
+            )
+            renamed = self._validated_catalog_metadata(
+                renamed,
+                session_id,
+                expected_conversation_id=current.conversation_id,
+            )
+        except ConversationNotFoundError as exc:
+            self._selected_conversation = None
+            self._present_conversation_failure(exc)
+            return
+        except Exception as exc:
+            self._present_conversation_failure(exc)
+            return
+        if renamed.status is ConversationStatus.ARCHIVED:
+            self._selected_conversation = None
+            self._terminal.write_error(
+                InteractiveError(InteractiveErrorCode.CONVERSATION_ARCHIVED)
+            )
+            return
+
+        self._selected_conversation = renamed
+        handle = self._visible_handle_after_mutation(renamed)
+        self._terminal.write_status(
+            TerminalMessageKind.CONVERSATION,
+            f"Renamed {handle} | Subject: {renamed.subject}",
+        )
+
+    def _archive_subject_conversation(self, reference: str | None) -> bool:
+        """Archive one resolved conversation and return confirmation EOF intent.
+
+        Bare archive requires the selected active record. Explicit lookup can
+        target any record; an already archived nonselection is an acknowledged
+        no-op. Archiving the current selection delegates to the compensated
+        successor transition, while other targets require one catalog mutation.
+        """
+
+        session_id = self._attached_session_id
+        assert session_id is not None
+        if reference is None:
+            target = self._require_active_selected_conversation()
+            if target is None:
+                return False
+            try:
+                entries = self._catalog_entries(session_id)
+            except Exception as exc:
+                self._present_conversation_failure(exc)
+                return False
+        else:
+            try:
+                target, entries = self._resolve_conversation_reference(
+                    session_id,
+                    reference,
+                )
+            except Exception as exc:
+                self._present_conversation_failure(exc)
+                return False
+
+        selected_id = (
+            None
+            if self._selected_conversation is None
+            else self._selected_conversation.conversation_id
+        )
+        is_selected = target.conversation_id == selected_id
+        if target.status is ConversationStatus.ARCHIVED:
+            if is_selected:
+                self._selected_conversation = None
+                self._terminal.write_error(
+                    InteractiveError(InteractiveErrorCode.CONVERSATION_ARCHIVED)
+                )
+            else:
+                self._terminal.write_status(
+                    TerminalMessageKind.CONVERSATION,
+                    (
+                        "Already archived "
+                        f"{self._visible_conversation_handle(target, entries)} | "
+                        f"Subject: {target.subject}"
+                    ),
+                )
+            return False
+        if is_selected:
+            return self._archive_selected_conversation(target, entries)
+        self._archive_unselected_conversation(target, entries)
+        return False
+
+    def _archive_unselected_conversation(
+        self,
+        target: ConversationMetadata,
+        entries: tuple[ConversationMetadata, ...],
+    ) -> None:
+        """Archive one active nonselection with a single catalog mutation.
+
+        The durable and in-memory selection are never changed. A validated
+        archived result is rendered using the pre-mutation all-record handle;
+        failures follow command-time lease confirmation rules.
+        """
+
+        session_id = self._attached_session_id
+        assert session_id is not None
+        try:
+            archived = self._conversation_catalog.archive(
+                session_id,
+                target.conversation_id,
+            )
+            archived = self._validated_catalog_metadata(
+                archived,
+                session_id,
+                expected_conversation_id=target.conversation_id,
+            )
+            if archived.status is not ConversationStatus.ARCHIVED:
+                raise _ConversationCatalogProtocolFailure(
+                    "archived conversation metadata is not archived"
+                )
+        except Exception as exc:
+            self._present_conversation_failure(exc)
+            return
+        self._terminal.write_status(
+            TerminalMessageKind.CONVERSATION,
+            (
+                f"Archived {self._visible_conversation_handle(target, entries)} | "
+                f"Subject: {archived.subject}"
+            ),
+        )
+
+    def _archive_selected_conversation(
+        self,
+        target: ConversationMetadata,
+        entries: tuple[ConversationMetadata, ...],
+    ) -> bool:
+        """Confirm, archive, and durably select the first active successor.
+
+        No, blank, or interrupt cancels without mutation; EOF requests normal
+        detach. After archive, successor/null persistence precedes memory. A
+        failed selection write best-effort unarchives and proves both original
+        active metadata and original durable selection before recovery is
+        claimed; any uncertainty aborts through cleanup-failed.
+        """
+
+        session_id = self._attached_session_id
+        assert session_id is not None
+        successor = next(
+            (
+                entry
+                for entry in entries
+                if entry.conversation_id != target.conversation_id
+                and entry.status is ConversationStatus.ACTIVE
+            ),
+            None,
+        )
+        target_handle = self._visible_conversation_handle(target, entries)
+        decision = self._terminal.request_confirmation(
+            (
+                f'Archive current conversation "{target.subject}" '
+                f"({target_handle})?"
+            ),
+            default=False,
+        )
+        if decision is ConfirmationResult.EOF:
+            return True
+        if decision is not ConfirmationResult.YES:
+            self._write_conversation_cancelled_status(
+                "Conversation archive cancelled."
+            )
+            return False
+
+        try:
+            archived = self._conversation_catalog.archive(
+                session_id,
+                target.conversation_id,
+            )
+            archived = self._validated_catalog_metadata(
+                archived,
+                session_id,
+                expected_conversation_id=target.conversation_id,
+            )
+            if archived.status is not ConversationStatus.ARCHIVED:
+                raise _ConversationCatalogProtocolFailure(
+                    "archived conversation metadata is not archived"
+                )
+        except ConversationNotFoundError as exc:
+            self._selected_conversation = None
+            self._present_conversation_failure(exc)
+            return False
+        except Exception as exc:
+            self._present_conversation_failure(exc)
+            return False
+
+        try:
+            save_conversation_selection(
+                self._workspace,
+                session_id,
+                (
+                    None
+                    if successor is None
+                    else successor.conversation_id
+                ),
+            )
+        except Exception as exc:
+            self._compensate_failed_selected_archive(target, exc)
+            return False
+
+        self._selected_conversation = successor
+        status = f"Archived {target_handle} | Subject: {archived.subject}"
+        if successor is None:
+            status += "; no conversation is selected."
+        else:
+            status += (
+                "; selected "
+                f"{self._visible_conversation_handle(successor, entries)} | "
+                f"Subject: {successor.subject}"
+            )
+        self._terminal.write_status(
+            TerminalMessageKind.CONVERSATION,
+            status,
+        )
+        return False
+
+    def _compensate_failed_selected_archive(
+        self,
+        original: ConversationMetadata,
+        selection_failure: Exception,
+    ) -> None:
+        """Restore and prove the original active selection after save failure.
+
+        Compensation uses only public catalog and selection APIs. It succeeds
+        only when unarchive/get both show the original active metadata, the
+        durable selection still names it, and the current session lease is
+        publicly confirmed active and owned. Otherwise controller bookkeeping
+        is abandoned for best-effort backend close and ``cleanup_failed``.
+        """
+
+        session_id = self._attached_session_id
+        assert session_id is not None
+        try:
+            restored = self._conversation_catalog.unarchive(
+                session_id,
+                original.conversation_id,
+            )
+            restored = self._validated_catalog_metadata(
+                restored,
+                session_id,
+                expected_conversation_id=original.conversation_id,
+            )
+            confirmed = self._conversation_catalog.get(
+                session_id,
+                original.conversation_id,
+            )
+            confirmed = self._validated_catalog_metadata(
+                confirmed,
+                session_id,
+                expected_conversation_id=original.conversation_id,
+            )
+            durable_selection = load_conversation_selection(
+                self._workspace,
+                session_id,
+            )
+            if (
+                restored.status is not ConversationStatus.ACTIVE
+                or confirmed.status is not ConversationStatus.ACTIVE
+            ):
+                raise _ConversationCatalogProtocolFailure(
+                    "unarchived conversation metadata is not active"
+                )
+            if (
+                durable_selection != original.conversation_id
+                or not self._attachment_is_safely_retained(session_id)
+            ):
+                raise WorkspaceFormatError(
+                    "selected archive compensation could not be confirmed"
+                )
+        except Exception:
+            self._abandon_known_attachment_for_cleanup_abort()
+
+        self._selected_conversation = confirmed
+        self._terminal.write_error(
+            self._classify_conversation_failure(selection_failure)
+        )
+        self._terminal.write_status(
+            TerminalMessageKind.CONVERSATION,
+            "Archive did not complete; the original conversation remains selected.",
+        )
+
+    def _require_active_selected_conversation(
+        self,
+    ) -> ConversationMetadata | None:
+        """Return the revalidated active selection or render its typed absence.
+
+        Missing and archived records clear only effective in-memory selection,
+        leaving the durable stale ID for safe restart behavior. Other failures
+        preserve memory and follow command-time lease confirmation rules.
+        """
+
+        selected = self._selected_conversation
+        if selected is None:
+            self._terminal.write_error(
+                InteractiveError(InteractiveErrorCode.CONVERSATION_REQUIRED)
+            )
+            return None
+        session_id = self._attached_session_id
+        assert session_id is not None
+        try:
+            current = self._conversation_catalog.get(
+                session_id,
+                selected.conversation_id,
+            )
+            current = self._validated_catalog_metadata(
+                current,
+                session_id,
+                expected_conversation_id=selected.conversation_id,
+            )
+        except ConversationNotFoundError as exc:
+            self._selected_conversation = None
+            self._present_conversation_failure(exc)
+            return None
+        except Exception as exc:
+            self._present_conversation_failure(exc)
+            return None
+        if current.status is ConversationStatus.ARCHIVED:
+            self._selected_conversation = None
+            self._terminal.write_error(
+                InteractiveError(InteractiveErrorCode.CONVERSATION_ARCHIVED)
+            )
+            return None
+        self._selected_conversation = current
+        return current
+
+    def _reconcile_in_memory_selection(
+        self,
+        entries: tuple[ConversationMetadata, ...],
+    ) -> None:
+        """Refresh, drop, and safely report selection against one catalog read.
+
+        The operation changes only effective in-memory metadata. Missing or
+        archived durable choices remain untouched so no silent rewrite occurs.
+        """
+
+        selected = self._selected_conversation
+        if selected is None:
+            return
+        current = next(
+            (
+                entry
+                for entry in entries
+                if entry.conversation_id == selected.conversation_id
+            ),
+            None,
+        )
+        if current is None:
+            self._selected_conversation = None
+            self._terminal.write_error(
+                InteractiveError(InteractiveErrorCode.CONVERSATION_NOT_FOUND)
+            )
+        elif current.status is ConversationStatus.ARCHIVED:
+            self._selected_conversation = None
+            self._terminal.write_error(
+                InteractiveError(InteractiveErrorCode.CONVERSATION_ARCHIVED)
+            )
+        else:
+            self._selected_conversation = current
+
+    def _resolve_conversation_reference(
+        self,
+        session_id: str,
+        reference: str,
+    ) -> tuple[ConversationMetadata, tuple[ConversationMetadata, ...]]:
+        """Resolve exact ID or one case-sensitive unique prefix across all rows.
+
+        Exact identity wins at any valid length. Nonexact prefixes shorter than
+        twelve characters, zero matches, and multiple matches raise private
+        trusted categories; catalog/storage failures propagate unchanged.
+        """
+
+        try:
+            safe_reference = self._workspace.validate_identifier(
+                reference,
+                label="conversation ID",
+            )
+        except SessionIdError as exc:
+            raise _ConversationResolutionFailure(
+                InteractiveErrorCode.CONVERSATION_INVALID
+            ) from exc
+        entries = self._catalog_entries(session_id)
+        exact = next(
+            (
+                entry
+                for entry in entries
+                if entry.conversation_id == safe_reference
+            ),
+            None,
+        )
+        if exact is not None:
+            return exact, entries
+        if len(safe_reference) < _MINIMUM_CONVERSATION_PREFIX_LENGTH:
+            raise _ConversationResolutionFailure(
+                InteractiveErrorCode.CONVERSATION_INVALID
+            )
+        matches = tuple(
+            entry
+            for entry in entries
+            if entry.conversation_id.startswith(safe_reference)
+        )
+        if not matches:
+            raise _ConversationResolutionFailure(
+                InteractiveErrorCode.CONVERSATION_NOT_FOUND
+            )
+        if len(matches) > 1:
+            raise _ConversationResolutionFailure(
+                InteractiveErrorCode.CONVERSATION_AMBIGUOUS
+            )
+        return matches[0], entries
+
+    def _catalog_entries(
+        self,
+        session_id: str,
+    ) -> tuple[ConversationMetadata, ...]:
+        """Read and validate the complete ordered catalog for one session.
+
+        The method requests active and archived rows, rejects malformed return
+        shapes, wrong owners, and duplicate IDs, and performs no sorting or
+        persistence mutation so adapter order remains authoritative.
+        """
+
+        entries = self._conversation_catalog.list(
+            session_id,
+            include_archived=True,
+        )
+        if type(entries) is not tuple:
+            raise _ConversationCatalogProtocolFailure(
+                "conversation catalog returned an invalid collection"
+            )
+        validated = tuple(
+            self._validated_catalog_metadata(entry, session_id)
+            for entry in entries
+        )
+        identifiers = tuple(entry.conversation_id for entry in validated)
+        if len(set(identifiers)) != len(identifiers):
+            raise _ConversationCatalogProtocolFailure(
+                "conversation catalog contains duplicate identifiers"
+            )
+        return validated
+
+    @staticmethod
+    def _validated_catalog_metadata(
+        metadata: object,
+        expected_session_id: str,
+        *,
+        expected_conversation_id: str | None = None,
+    ) -> ConversationMetadata:
+        """Return exact session-owned metadata or raise a safe format failure.
+
+        Validation is read-only and ensures an injected or filesystem catalog
+        cannot make the controller commit foreign or malformed identity state.
+        """
+
+        if type(metadata) is not ConversationMetadata:
+            raise _ConversationCatalogProtocolFailure(
+                "conversation catalog returned invalid metadata"
+            )
+        if metadata.session_id != expected_session_id:
+            raise _ConversationCatalogProtocolFailure(
+                "conversation metadata belongs to another session"
+            )
+        if (
+            expected_conversation_id is not None
+            and metadata.conversation_id != expected_conversation_id
+        ):
+            raise _ConversationCatalogProtocolFailure(
+                "conversation metadata identity changed unexpectedly"
+            )
+        return metadata
+
+    @staticmethod
+    def _normalized_conversation_input(value: str) -> str:
+        """Return a normalized valid subject/query or raise trusted invalid input.
+
+        Only ``TypeError`` and ``ValueError`` raised directly by the stable
+        normalization contract are wrapped. Catalog and callback exceptions are
+        classified independently and cannot masquerade as user-input failures.
+        """
+
+        try:
+            return normalize_conversation_subject(value)
+        except (TypeError, ValueError) as exc:
+            raise _ConversationInputFailure from exc
+
+    @staticmethod
+    def _visible_conversation_handle(
+        metadata: ConversationMetadata,
+        entries: tuple[ConversationMetadata, ...],
+    ) -> str:
+        """Return a unique twelve-character prefix or the immutable full ID.
+
+        Uniqueness is evaluated across every supplied active and archived row.
+        The function performs no I/O or mutation and assumes validated metadata.
+        """
+
+        prefix = metadata.conversation_id[:_MINIMUM_CONVERSATION_PREFIX_LENGTH]
+        collisions = sum(
+            entry.conversation_id.startswith(prefix) for entry in entries
+        )
+        return prefix if collisions == 1 else metadata.conversation_id
+
+    def _visible_handle_after_mutation(
+        self,
+        metadata: ConversationMetadata,
+    ) -> str:
+        """Derive a post-mutation handle, falling back safely to the full ID.
+
+        Catalog-read failure is reported under command-time lease rules. The
+        completed durable mutation is never rolled back merely for presentation.
+        """
+
+        session_id = self._attached_session_id
+        assert session_id is not None
+        try:
+            entries = self._catalog_entries(session_id)
+        except Exception as exc:
+            self._present_conversation_failure(exc)
+            return metadata.conversation_id
+        return self._visible_conversation_handle(metadata, entries)
+
+    def _confirm_attachment_after_command_failure(self) -> None:
+        """Require public proof of the same active owned lease after storage failure.
+
+        The provider-free summary read performs no mutation. Missing, foreign,
+        inactive, unowned, or unreadable state abandons explicit detach and
+        raises ``cleanup_failed`` so backend close remains best effort.
+        """
+
+        session_id = self._attached_session_id
+        if (
+            session_id is None
+            or not self._attachment_is_safely_retained(session_id)
+        ):
+            self._abandon_known_attachment_for_cleanup_abort()
+
+    def _present_conversation_failure(
+        self,
+        failure: Exception,
+        *,
+        creating: bool = False,
+    ) -> None:
+        """Map one conversation failure and render it without exception prose.
+
+        Invalid input and deterministic lookup categories are immediately safe.
+        Workspace, I/O, and unexpected command-time failures require public
+        proof that the same session lease remains active and owned before the
+        controller returns to its prompt; failed proof aborts cleanup.
+        """
+
+        error = self._classify_conversation_failure(
+            failure,
+            creating=creating,
+        )
+        if error.code is InteractiveErrorCode.INTERNAL_ERROR:
+            raise _ControllerAbort(error)
+        if error.code in {
+            InteractiveErrorCode.WORKSPACE_INVALID,
+            InteractiveErrorCode.WORKSPACE_UNSAFE,
+        }:
+            self._confirm_attachment_after_command_failure()
+        self._terminal.write_error(error)
+
+    @staticmethod
+    def _classify_conversation_failure(
+        failure: Exception,
+        *,
+        creating: bool = False,
+    ) -> InteractiveError:
+        """Select the exact safe conversation/workspace code by exception type.
+
+        Resolution categories take precedence, followed by creation exhaustion,
+        missing records, invalid subject/ID values, workspace security/format,
+        and finally unexpected internal failure. Raw diagnostics are discarded.
+        """
+
+        if isinstance(failure, _ConversationResolutionFailure):
+            code = failure.code
+        elif isinstance(failure, _ConversationInputFailure):
+            code = InteractiveErrorCode.CONVERSATION_INVALID
+        elif isinstance(failure, _ConversationCatalogProtocolFailure):
+            code = InteractiveErrorCode.INTERNAL_ERROR
+        elif creating and isinstance(failure, ConversationExistsError):
+            code = InteractiveErrorCode.CONVERSATION_CREATE_FAILED
+        elif isinstance(failure, ConversationNotFoundError):
+            code = InteractiveErrorCode.CONVERSATION_NOT_FOUND
+        elif isinstance(failure, SessionIdError):
+            code = InteractiveErrorCode.CONVERSATION_INVALID
+        elif isinstance(failure, WorkspaceSecurityError):
+            code = InteractiveErrorCode.WORKSPACE_UNSAFE
+        elif isinstance(failure, (WorkspaceFormatError, OSError)):
+            code = InteractiveErrorCode.WORKSPACE_INVALID
+        else:
+            code = InteractiveErrorCode.INTERNAL_ERROR
+        return InteractiveError(code)
+
+    def _write_conversation_cancelled_status(self, text: str) -> None:
+        """Acknowledge one cancelled conversation action without state mutation."""
+
+        self._terminal.write_status(TerminalMessageKind.CANCELLED, text)
 
     def _list_story_sessions(self) -> None:
         """Render deterministic public session summaries without mutation.
@@ -604,6 +1669,7 @@ class InteractiveController:
             return False
 
         self._attached_session_id = None
+        self._selected_conversation = None
         self._target_agent_id = LEAD_ORCHESTRATOR
         self._terminal.write_status(
             TerminalMessageKind.SESSION,
@@ -792,6 +1858,7 @@ class InteractiveController:
         """
 
         self._attached_session_id = None
+        self._selected_conversation = None
         raise _ControllerAbort(
             InteractiveError(InteractiveErrorCode.CLEANUP_FAILED)
         )
@@ -820,6 +1887,7 @@ class InteractiveController:
                 cleanup_failed = True
             finally:
                 self._attached_session_id = None
+                self._selected_conversation = None
         try:
             self._backend.close()
         except Exception:
