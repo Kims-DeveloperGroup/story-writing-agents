@@ -50,8 +50,8 @@ f"compose[chat:{alias}:{line_number}]> "
 f"compose[run:{line_number}]> "
 ```
 
-Agents display as `lead`, `plot`, `character`, or `execution`. Attached prompts require both IDs.
-`read_main()` returns an unparsed one-line `line` action; interrupt and EOF become typed actions.
+Pass canonical IDs such as `plot_architect`; display aliases such as `plot` are invalid as `agent_id`.
+Attached prompts need both IDs; `read_main()` returns `line`, interrupt, or EOF actions without parsing.
 
 Lobby orientation is one record:
 
