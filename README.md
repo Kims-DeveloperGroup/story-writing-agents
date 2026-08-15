@@ -88,9 +88,10 @@ and [agent contracts](docs/reference/agent-contracts.md).
   plaintext.
 - Artifact replacement is atomic per file with best-effort multi-file rollback,
   not a power-loss-safe transaction.
-- Conversation metadata, transcript persistence, and interactive-line parsing
-  exist as Python APIs, but selection, dispatch, transcript CLI commands, and
-  search are not implemented.
+- Conversation metadata, transcript persistence, [bounded search and cited
+  transcript pages](docs/reference/conversation-search.md), and interactive-line
+  parsing exist as Python APIs. Selection, dispatch, and
+  conversation/search/transcript CLI commands are not implemented.
 
 ## Development
 

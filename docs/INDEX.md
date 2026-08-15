@@ -5,9 +5,10 @@ Use this index to find one canonical answer instead of searching a long manual.
 > **Availability:** the installed CLI currently exposes `init`, `directive`,
 > `run`, `inspect`, `session start|end`, and `smoke`. The interactive command
 > parser, conversation catalog, transcript event store, and one-turn bound-agent
-> provider call are implemented Python APIs. Automatic interactive dispatch,
-> current-conversation selection, search, `/conversation`, `/search`, and
-> `/transcript` are not implemented.
+> provider call are implemented Python APIs. So are bounded literal conversation
+> search, stable citations, and transcript pages. Automatic interactive dispatch,
+> current-conversation selection, `/conversation`, `/search`, and `/transcript`
+> are not implemented.
 
 ## Availability matrix
 
@@ -19,8 +20,9 @@ Use this index to find one canonical answer instead of searching a long manual.
 | Parse the future interactive command language | Python API only; no dispatcher or TTY |
 | Create, rename, archive, and list conversation metadata | Python API only; no selection or dispatch |
 | Append/read transcripts; derive bounded complete-turn context | Python API only; no dispatcher or viewing command |
+| Search one session; cite hits; read bounded transcript pages | Python API only; no dispatcher or command |
 | Send one validated conversation turn to a bound agent | Python API only; caller supplies context and persistence |
-| Interactive chat, transcript command, and search | Not implemented |
+| Interactive chat and conversation/search/transcript commands | Not implemented |
 
 ## Start and concepts
 
@@ -46,6 +48,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 - [Package API and exports](reference/package-api.md)
 - [Conversation catalog](reference/conversation-catalog.md)
 - [Conversation transcripts](reference/conversation-transcripts.md)
+- [Conversation search and cited transcript pages](reference/conversation-search.md)
 - [Interactive command parser](reference/interactive-command-parser.md)
 - [Backend and sessions](reference/backend-and-sessions.md)
 - [Agent contracts](reference/agent-contracts.md)

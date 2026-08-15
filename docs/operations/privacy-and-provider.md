@@ -45,6 +45,14 @@ the transcript. Exact bounds live in
 context contains only version and selected ID, but the ID itself may be
 sensitive.
 
+Conversation search and cited pages are local, read-only operations and do not
+contact a provider or create a stored index. Hits expose subjects and normalized
+snippets to their caller; transcript pages can expose every selected stored
+event, including a caller-supplied runtime error. Archived records are excluded
+from search unless explicitly requested, but remain readable by identity. The
+API does not control what its caller displays or persists. See [Conversation
+search and cited transcript pages](../reference/conversation-search.md).
+
 ## Conversation call boundary
 
 The conversation event store does not invoke a provider or send its context

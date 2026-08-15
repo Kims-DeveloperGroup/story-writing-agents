@@ -136,6 +136,20 @@ class PublicApiTests(unittest.TestCase):
                     getattr(interactive_commands, name),
                 )
 
+    def test_conversation_search_exports_use_the_supported_package_facade(
+        self,
+    ) -> None:
+        from story_writing_agents import conversation_search
+
+        required = set(conversation_search.__all__)
+        self.assertTrue(required.issubset(story_writing_agents.__all__))
+        for name in required:
+            with self.subTest(name=name):
+                self.assertIs(
+                    getattr(story_writing_agents, name),
+                    getattr(conversation_search, name),
+                )
+
 
 class PersistenceValidationTests(unittest.TestCase):
     def test_persisted_debate_log_rejects_wrong_field_types(self) -> None:

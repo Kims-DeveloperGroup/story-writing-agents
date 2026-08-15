@@ -2,7 +2,8 @@
 
 > **Availability:** most terms describe installed runtime behavior. Conversation
 > persistence and strict session lifecycle are Python-only. Interactive
-> selection, dispatch, transcript commands, and search are not implemented.
+> selection, dispatch, and conversation/search/transcript commands are not
+> implemented; conversation search itself is a Python API.
 
 Key terms: **story session**—durable related work; **conversation**—a
 session-scoped subject and visible history; **turn**—one user event and its
@@ -50,8 +51,20 @@ Use this page for lookup; follow its links for exact behavior and contracts.
 
 - **Conversation catalog and event store.** The catalog owns identity and
   discovery metadata. The event store owns append, full transcript reads, and
-  bounded context; archiving does not hide transcript data. See
-  [Conversation transcripts](reference/conversation-transcripts.md).
+  bounded context; the read-only memory service consumes both. Archiving does
+  not hide transcript data. See [Conversation
+  transcripts](reference/conversation-transcripts.md).
+
+- **Conversation citation, page, and cursor.** A citation keeps immutable
+  session/conversation identity and may name one exact event. A page is a
+  bounded inclusive transcript read; its cursor continues that unchanged
+  snapshot. See [Conversation search and cited transcript
+  pages](reference/conversation-search.md).
+
+- **Conversation search.** A bounded, literal, current-session read of subjects
+  and visible user/reply text. It is neither semantic retrieval nor a CLI
+  command. See [Conversation search and cited transcript
+  pages](reference/conversation-search.md).
 
 - **Core documents.** Editable files containing durable outlines, character and
   world facts, and narrative rules. Each role receives only its allowed subset.

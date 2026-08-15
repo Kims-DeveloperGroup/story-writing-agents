@@ -2,8 +2,8 @@
 
 > **Availability:** the provider-neutral catalog and filesystem adapter are
 > implemented Python APIs. They are not wired to the CLI or `StoryRuntime`.
-> Current selection, indexing, search, and interactive dispatch are not
-> implemented.
+> Current selection and interactive dispatch are not implemented. The separate
+> conversation-memory API performs a bounded scan without a persistent index.
 
 Key terms: **conversation ID**—an immutable identity scoped to one session;
 **display subject**—the exact stored title; **normalized key**—a derived
@@ -13,7 +13,8 @@ deletion; **transcript**—visible events stored separately from metadata.
 The catalog answers “which conversation is this?” and “how is it discovered?”
 The separate [conversation transcript](conversation-transcripts.md) answers
 “what visible events happened?” Archiving changes discovery only; it does not
-make the transcript unreadable.
+make the transcript unreadable. [Conversation search and cited transcript
+pages](conversation-search.md) consumes both contracts without changing them.
 
 ```python
 CONVERSATION_METADATA_SCHEMA_VERSION = 1
