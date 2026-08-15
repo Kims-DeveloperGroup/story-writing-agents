@@ -138,10 +138,11 @@ class StoryRuntime:
         read_context = self._conversation_store_method("read_context")
         append = self._conversation_store_method("append")
 
-        lock = self._conversation_locks.setdefault(
-            (session, conversation),
-            asyncio.Lock(),
-        )
+        lock_key = (session, conversation)
+        lock = self._conversation_locks.get(lock_key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._conversation_locks[lock_key] = lock
         async with lock:
             turn_id = self._new_conversation_turn_id()
             context = read_context(session, conversation)
