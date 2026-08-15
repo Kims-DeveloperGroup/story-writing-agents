@@ -25,6 +25,7 @@ from story_writing_agents import (
     ProgressObserverError,
     SessionLeaseState,
     SessionNotFoundError,
+    WorkspaceFormatError,
     WorkspaceSecurityError,
 )
 from story_writing_agents import interactive_controller as controller_module
@@ -712,6 +713,14 @@ class InteractiveConsensusResultTests(InteractiveConversationTestCase):
                 ),
             ),
             (
+                "pre_result_format_unowned",
+                WorkspaceFormatError("pre-format-unowned-secret"),
+                lambda summary: replace(
+                    summary,
+                    lease_state=SessionLeaseState.AVAILABLE,
+                ),
+            ),
+            (
                 "pre_result_missing",
                 WorkspaceSecurityError("pre-missing-secret"),
                 missing_summary,
@@ -796,6 +805,7 @@ class InteractiveConsensusResultTests(InteractiveConversationTestCase):
                 )
                 for secret in (
                     "pre-unowned-secret",
+                    "pre-format-unowned-secret",
                     "pre-missing-secret",
                     "missing-proof-secret",
                     "RAW_RESULT_SECRET",
@@ -884,6 +894,177 @@ class RecordingMixedBoundAgent:
 
 class RealRetainedConsensusRuntimeTests(InteractiveConversationTestCase):
     """Exercise chat and consensus on one runtime across distinct event loops."""
+
+    def test_malformed_system_defaults_before_run_require_owned_proof(
+        self,
+    ) -> None:
+        """Treat late workspace corruption as proven recoverable workspace failure."""
+
+        run_command_returned = False
+
+        def corrupt_defaults_before_run(_prompt: str) -> str:
+            """Corrupt defaults only after startup has safely attached."""
+
+            nonlocal run_command_returned
+            workspace.path("config/system_defaults.json").write_bytes(b"{invalid")
+            run_command_returned = True
+            return "/run malformed defaults"
+
+        (
+            workspace,
+            _catalog,
+            _entries,
+            controller,
+            backend,
+            callbacks,
+            _store,
+        ) = self.prepared_selected_controller(
+            corrupt_defaults_before_run,
+            "/quit",
+            runtime=_REAL_RUNTIME,
+        )
+        original_summary = backend.get_session_summary
+        summary_observations: list[tuple[bool, Any]] = []
+
+        def record_summary_phase(
+            session_id: str,
+            *,
+            selected_session: str | None = None,
+        ) -> object:
+            """Distinguish startup lookup from post-dispatch recovery proof."""
+
+            summary = original_summary(
+                session_id,
+                selected_session=selected_session,
+            )
+            summary_observations.append((run_command_returned, summary))
+            return summary
+
+        with (
+            mock.patch.object(
+                backend,
+                "get_session_summary",
+                side_effect=record_summary_phase,
+            ),
+            mock.patch.object(
+                backend,
+                "detach_session",
+                wraps=backend.detach_session,
+            ) as detach,
+            mock.patch.object(
+                workspace,
+                "reserve_debate",
+                wraps=workspace.reserve_debate,
+            ) as reserve,
+        ):
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        self.assertEqual(
+            [after_dispatch for after_dispatch, _summary in summary_observations],
+            [False, True],
+        )
+        post_dispatch_proofs = [
+            summary
+            for after_dispatch, summary in summary_observations
+            if after_dispatch
+        ]
+        self.assertEqual(len(post_dispatch_proofs), 1)
+        proof = post_dispatch_proofs[0]
+        self.assertIs(proof.active, True)
+        self.assertIs(proof.lease_state, SessionLeaseState.OWNED)
+        reserve.assert_not_called()
+        detach.assert_called_once_with("session")
+        self.assertEqual(callbacks.reads, [])
+        rendered = "".join(callbacks.records)
+        self.assertEqual(rendered.count("[error "), 1)
+        self.assertEqual(
+            rendered.count(_error_record(InteractiveErrorCode.WORKSPACE_INVALID)),
+            1,
+        )
+        self.assertNotIn("Started prompt consensus.", rendered)
+
+    def test_malformed_selected_transcript_is_not_a_workspace_failure(
+        self,
+    ) -> None:
+        """Normalize a selected-transcript format error without lease proof."""
+
+        run_command_returned = False
+
+        def request_malformed_transcript_run(_prompt: str) -> str:
+            """Mark the exact point after startup and before run dispatch."""
+
+            nonlocal run_command_returned
+            run_command_returned = True
+            return "/run malformed transcript"
+
+        (
+            workspace,
+            _catalog,
+            entries,
+            controller,
+            backend,
+            callbacks,
+            _store,
+        ) = self.prepared_selected_controller(
+            request_malformed_transcript_run,
+            "/quit",
+            runtime=_REAL_RUNTIME,
+        )
+        transcript_path = workspace.path(
+            _transcript_relative("session", entries[0].conversation_id)
+        )
+        transcript_path.parent.mkdir(parents=True, exist_ok=True)
+        transcript_path.write_bytes(b"{invalid")
+        original_summary = backend.get_session_summary
+        summary_observations: list[tuple[bool, Any]] = []
+
+        def record_summary_phase(
+            session_id: str,
+            *,
+            selected_session: str | None = None,
+        ) -> object:
+            """Record whether any summary read occurs after run dispatch."""
+
+            summary = original_summary(
+                session_id,
+                selected_session=selected_session,
+            )
+            summary_observations.append((run_command_returned, summary))
+            return summary
+
+        with (
+            mock.patch.object(
+                backend,
+                "get_session_summary",
+                side_effect=record_summary_phase,
+            ),
+            mock.patch.object(
+                backend,
+                "detach_session",
+                wraps=backend.detach_session,
+            ) as detach,
+            mock.patch.object(
+                workspace,
+                "reserve_debate",
+                wraps=workspace.reserve_debate,
+            ) as reserve,
+        ):
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        self.assertEqual(
+            [after_dispatch for after_dispatch, _summary in summary_observations],
+            [False],
+        )
+        reserve.assert_not_called()
+        detach.assert_called_once_with("session")
+        self.assertEqual(callbacks.reads, [])
+        rendered = "".join(callbacks.records)
+        self.assertEqual(rendered.count("[error "), 1)
+        self.assertEqual(
+            rendered.count(_error_record(InteractiveErrorCode.TRANSCRIPT_INVALID)),
+            1,
+        )
+        self.assertNotIn("Started prompt consensus.", rendered)
 
     def test_mixed_chat_included_fresh_and_draft_runs_remain_loop_safe(self) -> None:
         workspace = self.make_workspace()

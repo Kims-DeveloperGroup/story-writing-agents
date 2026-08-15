@@ -429,7 +429,15 @@ class StoryRuntime:
         ):
             try:
                 read_context = self._conversation_store_method("read_context")
-                captured = read_context(session, context_request.conversation_id)
+                try:
+                    captured = read_context(
+                        session,
+                        context_request.conversation_id,
+                    )
+                except WorkspaceFormatError as exc:
+                    raise ValueError(
+                        "conversation context capture is invalid"
+                    ) from exc
                 self._reject_async_result(captured, operation="read_context")
             except BackendProtocolError as exc:
                 raise ValueError(

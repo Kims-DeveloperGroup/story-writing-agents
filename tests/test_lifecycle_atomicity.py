@@ -24,6 +24,7 @@ from story_writing_agents import (
     SPECIALIST_IDS,
     StoryRuntime,
     Workspace,
+    WorkspaceFormatError,
 )
 
 
@@ -273,6 +274,62 @@ class DebateReservationTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(events, [])
         self.assertEqual(backend.requests, [])
+        self.assertEqual(lifecycle_file_snapshot(workspace), before)
+
+    async def test_included_context_format_failure_is_normalized_before_reservation(
+        self,
+    ) -> None:
+        """Preserve the store failure as cause while emitting and mutating nothing."""
+
+        workspace = initialized_workspace(self)
+        before = lifecycle_file_snapshot(workspace)
+        failure = WorkspaceFormatError("invalid selected transcript")
+        store = _ContextReadStore(failure)
+        backend = ScriptedBackend(lambda request: AssertionError(request.phase))
+        events: list[DebateProgressEvent] = []
+
+        with (
+            mock.patch.object(
+                backend,
+                "bind",
+                wraps=backend.bind,
+            ) as bind,
+            mock.patch.object(
+                workspace,
+                "reserve_debate",
+                wraps=workspace.reserve_debate,
+            ) as reserve,
+            self.assertRaises(ValueError) as raised,
+        ):
+            await StoryRuntime(
+                workspace,
+                backend,
+                conversation_event_store=store,
+            ).run_draft(
+                "format_context_session",
+                "candidate",
+                debate_id="format_context_debate",
+                conversation_context=DebateContextRequest(
+                    conversation_id="conversation_a",
+                    mode=DebateContextMode.INCLUDED,
+                ),
+                progress_sink=events.append,
+            )
+
+        self.assertEqual(
+            str(raised.exception),
+            "conversation context capture is invalid",
+        )
+        self.assertIs(raised.exception.__cause__, failure)
+        self.assertEqual(
+            store.calls,
+            [("format_context_session", "conversation_a")],
+        )
+        self.assertEqual(events, [])
+        bind.assert_not_called()
+        self.assertEqual(backend.definitions, [])
+        self.assertEqual(backend.requests, [])
+        reserve.assert_not_called()
         self.assertEqual(lifecycle_file_snapshot(workspace), before)
 
     async def test_async_generator_collaborators_fail_before_reservation(

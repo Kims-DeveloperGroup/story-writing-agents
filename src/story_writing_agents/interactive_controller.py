@@ -1336,11 +1336,7 @@ class InteractiveController:
         elif isinstance(failure, WorkspaceSecurityError):
             code = InteractiveErrorCode.WORKSPACE_INVALID
         elif isinstance(failure, WorkspaceFormatError):
-            code = (
-                InteractiveErrorCode.TRANSCRIPT_INVALID
-                if not progress_events
-                else InteractiveErrorCode.WORKSPACE_INVALID
-            )
+            code = InteractiveErrorCode.WORKSPACE_INVALID
         elif isinstance(failure, OSError):
             code = InteractiveErrorCode.WORKSPACE_INVALID
         elif (
