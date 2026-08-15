@@ -1,118 +1,98 @@
 # Privacy and provider exposure
 
-> **Availability:** the controls and storage behavior here describe the current
-> implementation. They reduce exposure but do not make Codex, its executable,
-> or the local workspace a security boundary.
+> **Availability:** these controls describe the implemented runtime. They
+> reduce exposure but do not make Codex, its executable, or the workspace a
+> trusted security boundary.
 
-Key terms: **plaintext**—unencrypted local content; **local transcript**—visible
-events stored in the workspace; **provider transcript**—a conversation retained
-outside the workspace; **visible output**—provider text the runtime may log;
-**provider-private history**—vendor-retained context behind a resumable thread;
-**credential**—a secret used to authenticate provider access.
+Key terms: **plaintext**—unencrypted local content; **visible context**—prior
+events deliberately sent in a request; **provider-private history**—vendor
+state behind a thread ID; **diagnostic**—stored failure text; **credential**—a
+secret used to authenticate provider access.
 
 ## Local data is plaintext
 
-The runtime provides no encryption, redaction, access-control manager, secure
-erase, or automatic retention policy. Role prompts, configuration, persona
-templates, core documents, runtime overrides, CLI selection, provider metadata,
-agent outcomes, blackboard logs, lifecycle and result state, conversation
-subjects and transcript events, and manuscripts are ordinary local files
-governed by operating-system permissions.
+The runtime provides no encryption, access control, secure erase, or retention
+policy. Project content, runtime state, provider metadata, transcripts, and
+manuscripts are ordinary files protected only by the operating system.
 
-The public blackboard includes original user prompt or draft, complete
-candidates, approvals, critiques, proposals, visible errors, finalization
-metadata, and committed path. CLI run output includes that message history.
-Treat `discussion_logs/` as sensitively as source material and manuscripts.
+The debate blackboard can contain complete input, candidates, reviews, errors,
+and commit metadata. Owner-isolated state is narrower and length-bounded, but
+provider output is not semantically scrubbed.
 
-Owner-isolated agent state is narrower: the runtime does not deliberately copy
-the full input, candidate, or core documents. It retains generic outcomes,
-updated filenames, and that agent's visible notes, critiques, and proposals,
-with a 4096-character entry cap. Provider output is not scrubbed, so a provider
-can echo sensitive source content into an outcome. Session-wide history has no
-compaction, count, expiry, or retention limit and is sent again in later calls
-to that owner.
+A conversation subject and transcript are also plaintext. The transcript keeps
+exact visible user messages, agent replies, and runtime errors. Archiving changes
+discovery status; it does not delete or hide either file. `read_context()`
+returns a bounded view without rewriting the full transcript. A caller that
+uses the event store directly remains responsible for any error text it appends;
+the store itself performs no redaction.
 
-Conversation metadata and its sibling transcript are separate plaintext files.
-The subject can disclose content; the transcript preserves exact visible user
-messages, agent replies, and caller-supplied runtime errors. The caller must
-sanitize error text before append because the store does not redact it.
-Archiving changes discovery status; it does not delete or hide either file.
+Local search and cited reads make no provider call or index, but can expose
+subjects, snippets, and events. See [Conversation search](../reference/conversation-search.md).
 
-The full local transcript has no compaction, expiry, deletion, or retention
-policy. `read_context()` returns a bounded complete-turn view but never rewrites
-the transcript. Exact bounds live in
-[Conversation transcripts](../reference/conversation-transcripts.md). CLI
-context contains only version and selected ID, but the ID itself may be
-sensitive.
+## What a conversation sends
 
-Conversation search and cited pages are local, read-only operations and do not
-contact a provider or create a stored index. Hits expose subjects and normalized
-snippets to their caller; transcript pages can expose every selected stored
-event, including a caller-supplied runtime error. Archived records are excluded
-from search unless explicitly requested, but remain readable by identity. The
-API does not control what its caller displays or persists. See [Conversation
-search and cited transcript pages](../reference/conversation-search.md).
+`StoryRuntime.converse()` sends the current text and the explicitly addressed
+conversation's bounded, validated complete-turn context to exactly one bound
+agent. It does not add another conversation, debate history, manuscripts, core
+updates, or another agent's owner-isolated state to that visible context. The
+agent definition separately provides only that role's allowlisted core files.
+See the [provider handoff](../design/prompts-and-provider.md#conversation-turn-flow).
 
-## Conversation call boundary
+`BoundAgent.converse()` projects the request to provider JSON and may update
+thread metadata, but never reads or writes the transcript. The runtime owns
+that sequencing; automatic interactive selection and dispatch are unavailable.
 
-The conversation event store does not invoke a provider or send its context
-window anywhere. `BoundAgent.converse()` is a separate Python API: its caller
-explicitly supplies the current content and a validated context window. There
-is no interactive controller that selects a conversation, calls the agent, or
-persists the result. The exact handoff is shown in the
-[conversation turn flow](../design/prompts-and-provider.md#conversation-turn-flow).
+Visible context is conversation-scoped; provider-private history is not. A
+compatible thread is keyed by session, backend, and agent and can span
+conversation IDs and debate calls. A provider may therefore remember material
+absent from the current visible payload. Separate conversation IDs are not a
+provider-isolation boundary.
 
-The call sends the current content plus the visible fields of the supplied
-prior events to Codex. It may update provider-thread metadata and uses temporary
-prompt/output directories. It does not append the local transcript, discussion
-logs, core documents, or manuscripts. The caller must record the user event and
-returned reply if those events should become durable.
+## Runtime-error diagnostics
 
-Visible context is conversation-scoped, but provider-private history is not.
-One compatible thread can span conversation IDs and earlier debate turns. A
-provider may therefore remember material absent from the current visible
-payload. Do not treat separate conversation IDs as a provider-isolation
-boundary; exact thread scope is in
-[Backend and sessions](../reference/backend-and-sessions.md#conversation-calls).
+After a user event is durable, `StoryRuntime` stores an ordinary failure as the
+exception type alone or `ExceptionType: sanitized detail`. Before storing it,
+the runtime:
 
-For a nonzero Codex exit, the backend redacts current request content, supplied
-context content, and workspace and staging paths from the diagnostic. It also
-replaces control characters and bounds the result. This protects the local
-exception message, not the provider transfer. Successful reply content is
-returned as visible text without semantic redaction.
+- replaces the exact current text and every context-event content value, their
+  JSON-escaped forms, and their control/format-to-space whitespace-collapsed
+  equivalents with `<redacted>`;
+- replaces literal and resolved workspace-root spellings and their collapsed
+  equivalents with `<workspace>`;
+- turns every Unicode `Cc` or `Cf` character into a space, collapses whitespace,
+  and trims the detail;
+- uses `ExceptionType: unavailable diagnostic` when exception stringification
+  fails or the result cannot be strict UTF-8; and
+- caps the complete stored value at 4,096 characters, ending a truncated value
+  with ` …[truncated]` inside that limit.
+
+Cancellation uses the fixed [runtime diagnostic](../reference/runtime-api.md#one-conversation-turn).
+Replies are stored unchanged. Sanitization protects exact values; it is not a
+general secret detector.
+
+The backend also sanitizes a nonzero Codex-exit diagnostic before raising it;
+the runtime sanitizer applies again before that exception becomes a transcript
+event.
 
 ## Codex process boundary
 
-Codex is launched without shell evaluation. The runtime asks for a read-only
-sandbox, no approvals, ignored user configuration and project rules, and
-disabled shell, web-search, app, and multi-agent tools. It stages verified role,
-persona, language, and allowlisted core content in an isolated temporary
-top-level `AGENTS.md`; per-turn standard input holds dynamic request JSON.
+Codex runs without shell evaluation in isolated staging. The runtime requests a
+read-only sandbox, no approvals, ignored user/project configuration, and
+disabled shell, web, app, and multi-agent tools. Verified role context is staged
+in a temporary `AGENTS.md`; request JSON enters on standard input.
 
-SHA-256 detects file changes but does not encrypt, hide, authorize, or redact
-content. Isolated staging and empty project-root markers prevent ordinary
-repository instruction discovery, but installation-level or vendor-global
-instructions can still apply. Review the installed CLI and account before
-processing private material.
-
-Codex may store resumable conversations according to vendor and account
-behavior. The runtime persists one current thread record per session, backend,
-and agent. Session end, detach, and backend close retain those references and
-do not delete external transcripts. A changed agent-definition fingerprint
-starts a new thread; it does not erase the old provider conversation.
+SHA-256 detects changed files but does not encrypt or authorize content.
+Installation-level or vendor-global instructions can still apply. Codex may
+retain remote conversations according to vendor and account policy. Session
+end, detach, and backend close keep local thread references; a changed agent
+fingerprint starts a new thread but does not erase the old one.
 
 ## Credentials and visible reasoning
 
-Use `codex login` or process-environment `CODEX_API_KEY`. Never place passwords,
-API tokens, private keys, or credentials in prompts, drafts, role prompts,
-configuration, personas, core documents, replies, logs, agent state,
-manuscripts, or filenames.
+Use `codex login` or process-environment `CODEX_API_KEY`. Never put credentials
+in story content, configuration, filenames, prompts, replies, or logs. Public
+models have no hidden-reasoning field; text returned as ordinary `content` is
+visible and may be persisted.
 
-Public models have no hidden-chain-of-thought field, and runtime tasks ask for
-only the structured result. This is a provider contract, not semantic
-filtering. If a backend puts hidden reasoning or secrets in ordinary `content`,
-the runtime treats it as visible and may persist it.
-
-`story smoke` uses fixed synthetic content and no provider. Persistent smoke
-mode still writes ordinary plaintext diagnostics. A pass says nothing about
-provider privacy, authentication, network, model, or real story content.
+`story smoke` uses synthetic data and no provider. A pass says nothing about
+provider privacy, authentication, network behavior, or real story content.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import inspect
 import json
 import os
 import subprocess
@@ -12,10 +13,13 @@ import tempfile
 import tomllib
 import unittest
 from pathlib import Path
+from typing import get_type_hints
 
 import story_writing_agents
 from story_writing_agents import (
     AGENT_SPECS,
+    ConversationEventStore,
+    ConversationResult,
     PLOT_ARCHITECT,
     Runtime,
     RuntimeSession,
@@ -72,6 +76,7 @@ class PublicApiTests(unittest.TestCase):
             "BoundAgent",
             "ConversationReply",
             "ConversationRequest",
+            "ConversationResult",
             "DirectiveKind",
             "PromptFileReference",
             "StoryWritingAgentsError",
@@ -90,7 +95,11 @@ class PublicApiTests(unittest.TestCase):
                 self.assertIsNotNone(getattr(story_writing_agents, name))
         from story_writing_agents import models
 
-        for name in ("ConversationRequest", "ConversationReply"):
+        for name in (
+            "ConversationRequest",
+            "ConversationReply",
+            "ConversationResult",
+        ):
             self.assertIs(
                 getattr(story_writing_agents, name),
                 getattr(models, name),
@@ -106,6 +115,7 @@ class PublicApiTests(unittest.TestCase):
                 "BoundAgent",
                 "ConversationReply",
                 "ConversationRequest",
+                "ConversationResult",
                 "DirectiveKind",
                 "PromptFileReference",
                 "StoryWritingAgentsError",
@@ -114,6 +124,56 @@ class PublicApiTests(unittest.TestCase):
             with self.subTest(error=name):
                 self.assertTrue(
                     issubclass(getattr(story_writing_agents, name), base_error)
+                )
+
+    def test_conversation_runtime_signatures_are_exact_and_compatible(self) -> None:
+        constructor = inspect.signature(StoryRuntime)
+        self.assertEqual(
+            tuple(constructor.parameters),
+            ("workspace", "backend", "conversation_event_store"),
+        )
+        self.assertIs(
+            constructor.parameters["workspace"].kind,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        )
+        self.assertIs(
+            constructor.parameters["backend"].kind,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        )
+        self.assertIsNone(constructor.parameters["backend"].default)
+        collaborator = constructor.parameters["conversation_event_store"]
+        self.assertIs(collaborator.kind, inspect.Parameter.KEYWORD_ONLY)
+        self.assertIsNone(collaborator.default)
+        self.assertEqual(
+            get_type_hints(StoryRuntime.__init__)["conversation_event_store"],
+            ConversationEventStore | None,
+        )
+
+        cases = (
+            (
+                StoryRuntime.converse,
+                ("self", "session_id", "conversation_id", "agent_id", "text"),
+            ),
+            (
+                RuntimeSession.converse,
+                ("self", "conversation_id", "agent_id", "text"),
+            ),
+        )
+        for method, names in cases:
+            with self.subTest(method=method.__qualname__):
+                signature = inspect.signature(method)
+                self.assertEqual(tuple(signature.parameters), names)
+                self.assertTrue(
+                    all(
+                        parameter.kind
+                        is inspect.Parameter.POSITIONAL_OR_KEYWORD
+                        and parameter.default is inspect.Parameter.empty
+                        for parameter in signature.parameters.values()
+                    )
+                )
+                self.assertIs(
+                    get_type_hints(method)["return"],
+                    ConversationResult,
                 )
 
     def test_interactive_parser_exports_use_the_supported_package_facade(

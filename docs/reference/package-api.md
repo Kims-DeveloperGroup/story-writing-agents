@@ -1,7 +1,8 @@
 # Package API and exports
 
 > **Availability:** every name below is exported from the implemented
-> `story_writing_agents` package facade. An export does not imply a CLI command.
+> `story_writing_agents` package facade. The persisted one-turn runtime API is
+> Python-only; an export does not imply a CLI command.
 
 Key terms: **package facade**—the names re-exported at the package root;
 **public import**—a supported symbol imported from that facade; **alias**—a
@@ -21,8 +22,9 @@ The exact export inventory is:
   `SessionLeaseState`;
 - agent, conversation-turn, and debate models: `PromptFileReference`,
   `AgentDefinition`, `AgentRequest`, `AgentReply`, `ConversationRequest`,
-  `ConversationReply`, `AgentStateEntry`, `DebateMessage`, `DebateResult`,
-  `InputKind`, `Phase`, `Verdict`, `DebateStatus`;
+  `ConversationReply`, `ConversationResult`, `AgentStateEntry`,
+  `DebateMessage`, `DebateResult`, `InputKind`, `Phase`, `Verdict`,
+  `DebateStatus`;
 - runtime: `StoryRuntime`, `RuntimeSession`, `Runtime`, `Session`;
 - directives: `DirectiveKind`, `RuntimeDirective`, `parse_directive`,
   `apply_directive`;

@@ -6,9 +6,8 @@
 
 Key terms: **agent definition**—stable context for one role; **fingerprint**—a
 hash-derived identity for that context; **binding**—the provider object created
-for a definition; **staging**—assembling verified context in a temporary area;
-**visible context**—the prior events explicitly sent in a request;
-**provider-private history**—conversation state retained behind a thread ID.
+for a definition; **visible context**—prior events explicitly sent in a request;
+**provider-private history**—state retained behind a provider thread ID.
 
 Stable prompt context and dynamic turn data travel through different channels.
 The runtime resolves the role prompt, persona, language, and allowlisted core
@@ -38,39 +37,24 @@ state remains partitioned by session and agent.
 
 ## Conversation turn flow
 
-Suppose a caller is sending `turn_2` in the `opening` conversation to the plot
-architect. It first records the user event, derives context from earlier
-complete `opening` turns, and calls the already-bound agent. The bound agent
-checks the correlated reply; the caller then records that reply itself:
+`StoryRuntime.converse()` is the high-level handoff. It reads the explicitly
+addressed conversation's pre-turn context, preflights and binds the definition,
+saves the user event, calls exactly one `BoundAgent`, validates the reply, and
+saves the outcome. The exact ordering and failure branches live in the
+[Runtime API](../reference/runtime-api.md#one-conversation-turn).
 
-```mermaid
-sequenceDiagram
-    participant C as Caller
-    participant E as Event store
-    participant B as BoundAgent
-    participant P as Codex
-    C->>E: append user event
-    C->>E: read_context()
-    E-->>C: earlier complete turns
-    C->>B: converse(request)
-    B->>P: exact visible JSON
-    P-->>B: correlated reply JSON
-    B-->>C: ConversationReply
-    C->>E: append agent reply
-```
+`BoundAgent.converse()` is the lower-level provider boundary. It receives an
+already validated `ConversationRequest`, projects its visible fields into JSON,
+invokes Codex, and returns a correlated `ConversationReply`. It may update
+provider-thread metadata, but it never reads or writes the local transcript.
 
-The outer provider payload contains exactly `session_id`, `conversation_id`,
-`turn_id`, `agent_id`, `content`, and `context`. Each context item contains only
-`turn_id`, `sender`, `recipient`, `kind`, and `content`. Storage schema version,
-timestamps, sequence numbers, repeated session or conversation IDs, and window
-summary counters are not projected. `converse()` does not read or append the
-event store; the caller supplies the window and decides whether to persist the
-returned reply.
-
-If the same agent is next asked about an `ending` conversation, its explicit
-context contains only validated `ending` events while Codex still resumes the
-compatible session-and-agent thread that saw `opening`. Conversation IDs scope
-the visible request, not provider-private history.
+The provider payload contains the request's session, conversation, turn, agent,
+current content, and context. A context item exposes only its turn, actors,
+kind, and content—not storage metadata or window counters. If the same agent is
+later asked about an `ending` conversation, this visible context contains only
+validated `ending` events. Codex may still resume the compatible session-and-
+agent thread that saw `opening`: conversation IDs scope visible context, not
+provider-private history.
 
 ## Codex process boundary
 

@@ -265,6 +265,45 @@ class ConversationReply:
 
 
 @dataclass(frozen=True, slots=True)
+class ConversationResult:
+    """One successful persisted advisory conversation turn."""
+
+    session_id: str
+    conversation_id: str
+    turn_id: str
+    agent_id: str
+    content: str
+    context: ConversationContextWindow
+
+    def __post_init__(self) -> None:
+        _validate_conversation_identifier(self.session_id, label="session ID")
+        _validate_conversation_identifier(
+            self.conversation_id,
+            label="conversation ID",
+        )
+        _validate_conversation_identifier(self.turn_id, label="turn ID")
+        _validate_conversation_identifier(self.agent_id, label="agent ID")
+        if self.agent_id not in ROSTER:
+            raise ValueError(f"conversation agent is not canonical: {self.agent_id}")
+        _validate_conversation_content(
+            self.content,
+            label="conversation result content",
+        )
+        if type(self.context) is not ConversationContextWindow:
+            raise TypeError("conversation context must be a ConversationContextWindow")
+        object.__setattr__(
+            self,
+            "context",
+            _validated_conversation_context(
+                self.context,
+                session_id=self.session_id,
+                conversation_id=self.conversation_id,
+                current_turn_id=self.turn_id,
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class AgentReply:
     """Structured backend response.
 

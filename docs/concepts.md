@@ -1,8 +1,9 @@
 # Core concepts
 
 > **Availability:** this model describes the implemented runtime. Conversation
-> metadata, transcripts, bounded search, citations, and transcript pages are
-> Python foundations; selection and dispatch are not implemented.
+> metadata, transcripts, bounded search, cited pages, and one explicitly
+> addressed provider turn are Python APIs; interactive selection and automatic
+> dispatch are not implemented.
 
 Key terms: **scope**—what one persisted object groups; **ownership**—which
 component controls data or a transition; **turn**—one user event and its
@@ -36,8 +37,9 @@ identity is scoped by the same story session but remains separate from debate
 execution. Its catalog owns subject and archive status; its event store owns
 the full visible transcript and a bounded complete-turn view. A read-only
 memory service searches both and follows stable citations into bounded pages.
-None is connected to interactive dispatch today. See [Conversation search and
-cited transcript pages](reference/conversation-search.md).
+`StoryRuntime` can also persist and send one turn for an existing conversation
+ID, without creating or selecting that identity. See [Runtime API](reference/runtime-api.md#one-conversation-turn)
+and [Conversation search and cited transcript pages](reference/conversation-search.md).
 
 ## The four roles
 
@@ -48,10 +50,11 @@ cited transcript pages](reference/conversation-search.md).
 | `character_custodian` | Character, relationships, world, and continuity | Yes |
 | `execution_specialist` | Drafting, prose, POV, tone, grammar, and format | Yes |
 
-The runtime owns phase ordering and validation. The three specialists audit the
-same current revision; the lead cannot vote or erase a conflict. Consensus
-requires all three approvals before the lead can finalize artifacts. Role
-definitions limit each agent to the core documents needed for its responsibility.
+For debates, the runtime owns phase ordering and consensus validation. For an
+advisory turn, it owns preflight, event/provider ordering, and reply validation.
+The three specialists audit the same debate revision; the lead cannot vote or
+erase a conflict. Role definitions limit each agent to the core documents
+needed for its responsibility.
 
 ## Public and owner-isolated memory
 

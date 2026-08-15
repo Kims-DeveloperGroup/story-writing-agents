@@ -1,9 +1,9 @@
 # Conversation transcripts
 
-> **Availability:** transcript persistence is an implemented, provider-neutral
-> Python API. A separate Python API now provides read-only search and transcript
-> pages. Neither is connected to interactive dispatch, conversation selection,
-> or a transcript CLI command.
+> **Availability:** transcript persistence and read-only search/pages are
+> implemented Python APIs. `StoryRuntime` uses the event-store contract for one
+> explicit-ID provider turn; interactive selection and transcript commands are
+> not implemented.
 
 Key terms: **event**—one visible stored record; **complete turn**—one user
 event plus one outcome; **unmatched turn**—a user event with no outcome yet;
@@ -11,8 +11,8 @@ event plus one outcome; **unmatched turn**—a user event with no outcome yet;
 view containing only complete turns.
 
 The transcript is the authoritative visible history for one conversation.
-`read()` returns that full history; `read_context()` derives a smaller view for
-a future provider caller without changing the transcript. [Conversation search
+`read()` returns that full history; `read_context()` derives the smaller view
+used by a runtime provider call without changing the transcript. [Conversation search
 and cited transcript pages](conversation-search.md) defines a separate bounded
 read projection over this same authoritative history.
 
@@ -71,21 +71,22 @@ JSON-compatible shape.
 | `runtime_error` | `runtime` | `user` | Completes an existing user turn |
 
 An outcome cannot precede its user event, and a turn cannot have two outcomes.
-Runtime-error text is visible content; the caller must sanitize it before
-append because the store does not redact it.
+Runtime-error text is visible content. The store does not redact it; direct
+callers must sanitize their own values. `StoryRuntime` sanitizes the failures it
+records, as defined in [Privacy](../operations/privacy-and-provider.md#runtime-error-diagnostics).
 
 ## Example: interruption leaves evidence
 
 Suppose the user asks `plot_architect` about an opening scene:
 
-1. The caller appends `turn_7` as `user_message` before invoking a provider.
-2. The provider process is interrupted, so no outcome is appended.
+1. `StoryRuntime` appends `turn_7` as `user_message` before provider work.
+2. A hard interruption or outcome-storage failure prevents an outcome append.
 3. `read()` still returns `turn_7`, preserving what happened locally.
 4. `read_context()` excludes `turn_7` because it is incomplete. The store does
    not retry it; a later workflow must decide explicitly what to do.
 
-This ordering is a caller contract. The current runtime does not yet perform
-interactive provider dispatch.
+The [Runtime API](runtime-api.md#one-conversation-turn) defines the complete
+success, ordinary-failure, and cancellation sequence.
 
 ## Context selection
 
