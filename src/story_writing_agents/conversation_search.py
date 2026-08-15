@@ -855,6 +855,13 @@ class ConversationMemoryService:
             raise ValueError(
                 "conversation search adapter crossed the authorized session"
             )
+        if not query.include_archived and any(
+            hit.status is ConversationStatus.ARCHIVED for hit in result.hits
+        ):
+            raise ValueError(
+                "conversation search adapter returned archived results "
+                "without authorization"
+            )
         return result
 
     def read_transcript(

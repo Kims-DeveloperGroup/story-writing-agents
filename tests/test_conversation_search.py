@@ -804,6 +804,45 @@ class ConversationSearchBehaviorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "crossed the authorized session"):
             service.search(query)
 
+        archived_hit = ConversationSearchHit(
+            citation=ConversationCitation(
+                "session_a",
+                item.conversation_id,
+                None,
+                None,
+                None,
+            ),
+            subject="Needle",
+            subject_revision=1,
+            status=ConversationStatus.ARCHIVED,
+            updated_at=BASE_TIME.isoformat(),
+            match_kind=ConversationSearchMatchKind.EXACT_SUBJECT,
+            snippet="needle",
+        )
+        archived_result = ConversationSearchResult(
+            query,
+            "needle",
+            (archived_hit,),
+            1,
+            1,
+            0,
+            False,
+            False,
+        )
+
+        class ArchivedInjected:
+            def search(self, scope, supplied_query):
+                return archived_result
+
+        archived_service = ConversationMemoryService(
+            self.scope,
+            self.catalog,
+            self.store,
+            search=ArchivedInjected(),
+        )
+        with self.assertRaisesRegex(ValueError, "archived results"):
+            archived_service.search(query)
+
     def test_corrupt_event_pairing_fails_closed(self) -> None:
         item = self.catalog.create("session_a", "Corrupt")
         self.store.events[("session_a", item.conversation_id)] = (
