@@ -4,20 +4,21 @@
 > concrete Codex backend, and Python-only conversation persistence and memory
 > foundations.
 
-Key terms: **orchestration**—coordination of the debate workflow; **backend**—
-the provider/session coordinator; **blackboard**—the team's public append-only
-history; **adapter**—a concrete implementation of a provider-neutral contract;
-**event store**—the adapter boundary for visible conversation events.
+Key terms: **orchestration**—coordination of debates and advisory turns;
+**backend**—the provider/session coordinator; **adapter**—a concrete
+implementation of a provider-neutral contract; **event store**—the adapter
+boundary for visible conversation events.
 
 `story-writing-agents` separates story workflow from provider invocation and
 filesystem persistence. In this project, “commit” means writing approved text
 to workspace artifacts; the runtime never invokes Git.
 
-`StoryRuntime` owns input validation, immutable debate reservation, phase
-sequencing, concurrency, reply validation, consensus, and final artifact
-coordination. It resolves current configuration and builds each role's agent
-definition before a phase. It also controls the public blackboard and
-owner-isolated history supplied to requests.
+`StoryRuntime` owns workflow validation, sequencing, concurrency, and reply
+validation. For debates it also owns reservation, consensus, the public
+blackboard, owner-isolated history, and final artifact coordination. For one
+advisory turn it owns preflight, one per-conversation lock, the event-store
+collaborator, and the user-before-provider/outcome sequence. Exact operation
+rules belong to the [Runtime API](../reference/runtime-api.md#one-conversation-turn).
 
 `AgentBackend` owns provider routes, Codex executable preflight, prompt staging,
 team-session leases, and resumable provider thread metadata. A `BoundAgent`
@@ -43,30 +44,31 @@ agent receives only its own concise outcomes across the story session. The
 runtime writes peer outputs in stable roster order even when provider calls
 finish in another order.
 
-## Separate conversation foundation
+## Conversation responsibilities
 
-The conversation catalog, event store, and read-only memory service are
-alongside, not inside, debate orchestration. Storage-neutral protocols separate
-identity and discovery metadata from visible transcript events. Filesystem
-adapters use `Workspace` for fixed, safe paths.
+Storage-neutral protocols separate conversation identity and discovery
+metadata from visible transcript events. The catalog owns create, get, list,
+rename, archive, and unarchive. The event store owns append, authoritative read,
+and bounded complete-turn context. Filesystem adapters use `Workspace` for
+fixed, safe paths.
 
-This foundation has no dependency on providers or the consensus runtime. The
-catalog owns create, get, list, rename, archive, and unarchive. The event store
-owns append, authoritative read, and bounded complete-turn context. The memory
-service depends only on those two contracts and common errors; it owns bounded
-literal search, stable citations, and event-atomic transcript pages. It creates
-no persistent index and does not provide current selection, interactive
-dispatch, or RAG. See [Conversation catalog](../reference/conversation-catalog.md),
+The catalog, event-store, and memory modules remain provider-neutral.
+`StoryRuntime` depends on the event-store protocol to persist an explicitly
+addressed advisory turn; it does not depend on the catalog or memory service
+and does not own discovery or selection. The memory service reads the catalog
+and event store to provide bounded literal search, stable citations, and
+event-atomic pages without a stored index. See [Conversation catalog](../reference/conversation-catalog.md),
 [Conversation transcripts](../reference/conversation-transcripts.md), and
 [Conversation search](../reference/conversation-search.md).
 
 ## Dependency direction
 
 The CLI translates arguments and workspace selection into public runtime or
-backend calls. Orchestration depends on provider-neutral models and workspace
-operations. The concrete backend consumes those models and persists provider
-metadata through the workspace. Provider output does not bypass runtime reply
-validation or write manuscripts directly.
+backend calls. Orchestration depends on provider-neutral models, conversation
+event contracts, and workspace operations. The concrete backend consumes the
+models and persists provider metadata through the workspace. Provider output
+does not bypass runtime reply validation or write conversation/story content
+directly.
 
 This separation allows deterministic test backends that satisfy the same
 duck-typed binding and invocation shape, but it is not a dynamically loaded

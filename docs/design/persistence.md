@@ -33,31 +33,19 @@ support recovery and inspection; provider state belongs to the backend;
 conversation metadata and visible events belong to separate adapters; only
 approved content reaches a manuscript.
 
-## Conversation write order
+## Conversation durability
 
-Key terms: **complete turn**—a user event plus one outcome; **unmatched
-turn**—a durable user event with no outcome yet.
+`StoryRuntime.converse()` saves the user event before its one provider call. It
+then attempts to save a valid reply as `agent_reply`, or an ordinary post-user
+failure as a sanitized `runtime_error`. This order preserves what the user tried
+even when provider work does not finish. The event store never calls or retries
+the provider.
 
-Interactive dispatch is not wired today. A future caller must use this order:
-
-```mermaid
-sequenceDiagram
-    accTitle: Conversation write order
-    accDescr: Save the user event before provider work, then save its outcome.
-    participant C as Future interactive caller
-    participant S as Conversation event store
-    participant P as Provider
-    C->>S: Append user message
-    C->>P: Invoke provider (not wired today)
-    alt Reply or terminal error
-        C->>S: Append visible reply or sanitized error
-    else Interruption
-        Note over S: User event remains unmatched
-    end
-```
-
-The durable user event therefore records what was attempted even if provider
-work never finishes. The store does not call or retry the provider.
+A hard interruption or failed reply/error/cancellation write can leave only the
+user event. That unmatched event stays authoritative but is excluded from later
+complete-turn context. The exact operation belongs
+to the [Runtime API](../reference/runtime-api.md#one-conversation-turn); operator
+response belongs to [Recovery](../operations/recovery-and-limitations.md#conversation-turn-recovery).
 
 ## What is retained
 

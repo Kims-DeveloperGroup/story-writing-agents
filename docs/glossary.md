@@ -2,8 +2,8 @@
 
 > **Availability:** most terms describe installed runtime behavior. Conversation
 > persistence and strict session lifecycle are Python-only. Interactive
-> selection, dispatch, and conversation/search/transcript commands are not
-> implemented; conversation search itself is a Python API.
+> selection and conversation/search/transcript commands are not implemented;
+> explicit-ID runtime turns and conversation search are Python APIs.
 
 Key terms: **story session**—durable related work; **conversation**—a
 session-scoped subject and visible history; **turn**—one user event and its
@@ -46,8 +46,9 @@ Use this page for lookup; follow its links for exact behavior and contracts.
 
 - **Conversation.** One immutable identity within a story session. Its catalog
   stores subject and archive status; its event store separately keeps the
-  visible transcript. Selection and dispatch are not implemented. See
-  [Conversation catalog](reference/conversation-catalog.md).
+  visible transcript. `StoryRuntime` can address an existing identity for one
+  provider turn, but it does not create or select it. See [Conversation
+  catalog](reference/conversation-catalog.md).
 
 - **Conversation catalog and event store.** The catalog owns identity and
   discovery metadata. The event store owns append, full transcript reads, and
@@ -114,7 +115,7 @@ Use this page for lookup; follow its links for exact behavior and contracts.
   layer. See [Backend and sessions](reference/backend-and-sessions.md).
 
 - **Runtime.** The local orchestration layer that validates input, coordinates
-  agents, decides consensus, and persists results. See the
+  debate consensus or one advisory turn, and persists results. See the
   [System overview](design/overview.md).
 
 - **Story session.** The durable boundary for related work and agent history;

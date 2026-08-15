@@ -1,12 +1,12 @@
 # Agent contracts
 
-> **Availability:** these provider-neutral models are implemented Python APIs.
-> `StoryRuntime` uses debate models; `BoundAgent.converse()` uses conversation models.
+> **Availability:** these models are Python APIs; `StoryRuntime` uses both sets,
+> while `BoundAgent.converse()` uses the conversation request and reply.
 
 Key terms: **definition**—stable context bound to one agent; **file reference**—
 a path plus content digest; **request**—dynamic data for one turn; **reply**—
 validated provider output; **visible context**—prior transcript events the
-caller explicitly supplies; **phase**—the workflow step governing a debate.
+caller explicitly supplies.
 
 ## Bound definition
 
@@ -92,9 +92,9 @@ increasing events from the same session and conversation, within fixed caps and
 without the current turn. Its metadata must match its events; sequence gaps and
 interleaved turns are allowed. See [Conversation transcripts](conversation-transcripts.md).
 
-The reply validates its own fields; `converse()` also correlates all three IDs.
-See [Backend and sessions](backend-and-sessions.md) and the
-[conversation turn flow](../design/prompts-and-provider.md#conversation-turn-flow).
+The reply validates and correlates its IDs. `StoryRuntime` persistence and
+results belong to the [Runtime API](runtime-api.md#one-conversation-turn);
+provider details belong to [Backend and sessions](backend-and-sessions.md).
 
 ## Debate reply
 

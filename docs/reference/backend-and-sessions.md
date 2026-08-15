@@ -1,9 +1,8 @@
 # Backend and session API
 
-> **Availability:** `AgentBackend` and `BoundAgent` are concrete implemented
-> classes. Codex is the only implemented provider. Strict lifecycle methods are
-> Python-only foundations; `BoundAgent.converse()` is also Python-only. The CLI
-> exposes only `session start|end`.
+> **Availability:** `AgentBackend`, `BoundAgent`, strict lifecycle methods, and
+> persisted `StoryRuntime.converse()` are implemented. Codex is the only
+> provider; the CLI exposes only `session start|end`.
 
 Key terms: **binding**—one immutable agent/provider pairing; **manifest**—the
 durable session and thread record; **lease sidecar**—temporary process ownership
@@ -40,7 +39,8 @@ rejected as unimplemented; there is no runtime-imported plugin loader.
 
 `bind()` verifies the definition and returns a `BoundAgent` with public
 `backend`, `definition`, `vendor`, and `staging_directory` attributes.
-`invoke()` runs a debate phase; `converse()` runs one visible conversation turn.
+`invoke()` runs a debate phase; `converse()` runs the provider-facing part of
+one visible conversation turn.
 
 ## Conversation calls
 
@@ -51,7 +51,7 @@ rejected as unimplemented; there is no runtime-imported plugin loader.
 | Provider | Codex is implemented; unsupported configured vendors raise `ConfigurationError`. |
 | Lifecycle | Shares `invoke()` lease, timeout, cancellation, taint, and `(session_id, backend, agent_id)` lock rules; changed fingerprints and tainted threads start fresh. |
 | Thread scope | `conversation_id` is not a thread key: visible context stays in one conversation while provider-private history can span conversations and debate calls. See the [flow](../design/prompts-and-provider.md#conversation-turn-flow). |
-| Persistence | May update provider-thread metadata, not conversation or story content; the caller owns transcript persistence. See [Privacy](../operations/privacy-and-provider.md#conversation-call-boundary). |
+| Persistence | May update provider metadata, not local content. `StoryRuntime` owns the persisted flow; direct callers own their transcript. See [Runtime API](runtime-api.md#one-conversation-turn). |
 
 ## Session status
 

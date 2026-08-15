@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import unicodedata
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,10 +14,17 @@ from typing import Any, Callable, Mapping
 from .agents import (
     EXECUTION_SPECIALIST,
     LEAD_ORCHESTRATOR,
+    ROSTER,
     SPECIALIST_IDS,
 )
 from .backend import AgentBackend, BoundAgent
 from .config import ConfigManager
+from .conversations import (
+    ConversationEvent,
+    ConversationEventAppend,
+    ConversationEventKind,
+    ConversationEventStore,
+)
 from .directives import apply_directive as persist_directive
 from .errors import BackendProtocolError
 from .models import (
@@ -24,6 +32,9 @@ from .models import (
     AgentReply,
     AgentRequest,
     AgentStateEntry,
+    ConversationReply,
+    ConversationRequest,
+    ConversationResult,
     DebateMessage,
     DebateResult,
     DebateStatus,
@@ -32,21 +43,34 @@ from .models import (
     Verdict,
 )
 from .prompts import PromptAssembler
-from .workspace import Workspace
+from .workspace import FilesystemConversationEventStore, Workspace
 
 
 class StoryRuntime:
-    """Public runtime for persistent sessions and typed debate outcomes."""
+    """Public runtime for persistent sessions, debates, and advisory turns."""
 
     def __init__(
         self,
         workspace: Workspace | str | Path,
         backend: AgentBackend | None = None,
+        *,
+        conversation_event_store: ConversationEventStore | None = None,
     ) -> None:
+        workspace_literal = (
+            str(workspace.root) if isinstance(workspace, Workspace) else str(workspace)
+        )
         self.workspace = (
             workspace if isinstance(workspace, Workspace) else Workspace(workspace)
         )
         self.backend = backend
+        self.conversation_event_store = (
+            conversation_event_store
+            if conversation_event_store is not None
+            else FilesystemConversationEventStore(self.workspace)
+        )
+        self._conversation_workspace_roots = tuple(
+            dict.fromkeys((workspace_literal, str(self.workspace.root)))
+        )
         backend_overrides = (
             getattr(backend, "backend_overrides", {}) if backend is not None else {}
         )
@@ -61,6 +85,7 @@ class StoryRuntime:
         ] = {}
         self._binding_waiters: dict[tuple[str, str], int] = {}
         self._binding_lock = asyncio.Lock()
+        self._conversation_locks: dict[tuple[str, str], asyncio.Lock] = {}
 
     def session(self, session_id: str) -> RuntimeSession:
         self.workspace.validate_identifier(session_id)
@@ -87,6 +112,137 @@ class StoryRuntime:
         self, session_id: str, debate_id: str
     ) -> dict[str, Any]:
         return self.workspace.inspect_debate(session_id, debate_id)
+
+    async def converse(
+        self,
+        session_id: str,
+        conversation_id: str,
+        agent_id: str,
+        text: str,
+    ) -> ConversationResult:
+        """Run and persist one advisory turn in an explicit conversation."""
+
+        session = self.workspace.validate_identifier(session_id)
+        conversation = self.workspace.validate_identifier(
+            conversation_id,
+            label="conversation ID",
+        )
+        agent = self.workspace.validate_identifier(agent_id, label="agent ID")
+        if agent not in ROSTER:
+            raise ValueError(f"conversation agent is not canonical: {agent}")
+        content = self._validate_conversation_text(text)
+        if self.backend is None:
+            raise BackendProtocolError(
+                "running a conversation requires an AgentBackend adapter"
+            )
+        read_context = self._conversation_store_method("read_context")
+        append = self._conversation_store_method("append")
+
+        lock_key = (session, conversation)
+        lock = self._conversation_locks.get(lock_key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._conversation_locks[lock_key] = lock
+        async with lock:
+            turn_id = self._new_conversation_turn_id()
+            context = read_context(session, conversation)
+            self._reject_async_result(context, operation="read_context")
+            try:
+                request = ConversationRequest(
+                    session_id=session,
+                    conversation_id=conversation,
+                    turn_id=turn_id,
+                    agent_id=agent,
+                    content=content,
+                    context=context,
+                )
+            except Exception as exc:
+                raise BackendProtocolError(
+                    "conversation event store read_context() returned "
+                    "an invalid context"
+                ) from exc
+
+            self._prepare_conversation_session(session)
+            definition = self.prompts.build_definition(
+                session_id=session,
+                agent_id=agent,
+            )
+            bound_agent = await self._bound_agent(definition)
+            bound_converse = getattr(bound_agent, "converse", None)
+            if bound_converse is None or not callable(bound_converse):
+                raise BackendProtocolError(
+                    f"{agent} binding does not provide converse()"
+                )
+            if not inspect.iscoroutinefunction(bound_converse):
+                raise BackendProtocolError(
+                    f"{agent} bound converse() must be async"
+                )
+            self._verify_definition_files(definition)
+
+            user_event = ConversationEventAppend(
+                session_id=session,
+                conversation_id=conversation,
+                turn_id=turn_id,
+                sender="user",
+                recipient=agent,
+                kind=ConversationEventKind.USER_MESSAGE,
+                content=content,
+            )
+            self._append_conversation_event(append, user_event)
+
+            try:
+                raw_reply = await bound_converse(request)
+                reply = self._validated_conversation_reply(raw_reply, request)
+                reply_event = ConversationEventAppend(
+                    session_id=session,
+                    conversation_id=conversation,
+                    turn_id=turn_id,
+                    sender=agent,
+                    recipient="user",
+                    kind=ConversationEventKind.AGENT_REPLY,
+                    content=reply.content,
+                )
+                result = ConversationResult(
+                    session_id=session,
+                    conversation_id=conversation,
+                    turn_id=turn_id,
+                    agent_id=agent,
+                    content=reply.content,
+                    context=request.context,
+                )
+            except asyncio.CancelledError:
+                cancellation = ConversationEventAppend(
+                    session_id=session,
+                    conversation_id=conversation,
+                    turn_id=turn_id,
+                    sender="runtime",
+                    recipient="user",
+                    kind=ConversationEventKind.RUNTIME_ERROR,
+                    content="CancelledError: conversation turn was cancelled",
+                )
+                try:
+                    self._append_conversation_event(append, cancellation)
+                except BaseException:
+                    pass
+                raise
+            except Exception as exc:
+                failure = ConversationEventAppend(
+                    session_id=session,
+                    conversation_id=conversation,
+                    turn_id=turn_id,
+                    sender="runtime",
+                    recipient="user",
+                    kind=ConversationEventKind.RUNTIME_ERROR,
+                    content=self._conversation_error_text(exc, request),
+                )
+                try:
+                    self._append_conversation_event(append, failure)
+                except Exception as persistence_exc:
+                    raise persistence_exc from exc
+                raise
+
+            self._append_conversation_event(append, reply_event)
+            return result
 
     async def run_prompt(
         self,
@@ -846,6 +1002,238 @@ class StoryRuntime:
             )
         )
 
+    def _conversation_store_method(self, name: str) -> Callable[..., Any]:
+        method = getattr(self.conversation_event_store, name, None)
+        if method is None or not callable(method):
+            raise BackendProtocolError(
+                f"conversation event store does not provide {name}()"
+            )
+        if inspect.iscoroutinefunction(method) or inspect.iscoroutinefunction(
+            getattr(method, "__call__", None)
+        ):
+            raise BackendProtocolError(
+                f"conversation event store {name}() must be synchronous"
+            )
+        return method
+
+    def _prepare_conversation_session(self, session_id: str) -> None:
+        assert self.backend is not None
+        prepare_session = getattr(self.backend, "prepare_session", None)
+        if prepare_session is None:
+            return
+        if not callable(prepare_session):
+            raise BackendProtocolError("backend prepare_session must be callable")
+        if inspect.iscoroutinefunction(prepare_session) or inspect.iscoroutinefunction(
+            getattr(prepare_session, "__call__", None)
+        ):
+            raise BackendProtocolError("backend prepare_session must be synchronous")
+        outcome = prepare_session(session_id)
+        self._reject_async_result(outcome, operation="backend prepare_session")
+
+    @staticmethod
+    def _reject_async_result(value: Any, *, operation: str) -> None:
+        if not inspect.isawaitable(value):
+            return
+        if inspect.iscoroutine(value):
+            value.close()
+        raise BackendProtocolError(f"{operation}() must be synchronous")
+
+    @staticmethod
+    def _append_conversation_event(
+        append: Callable[[ConversationEventAppend], ConversationEvent],
+        requested: ConversationEventAppend,
+    ) -> ConversationEvent:
+        stored = append(requested)
+        StoryRuntime._reject_async_result(stored, operation="append")
+        if type(stored) is not ConversationEvent:
+            raise BackendProtocolError(
+                "conversation event store append() returned an invalid event"
+            )
+        try:
+            canonical = ConversationEvent(
+                schema_version=stored.schema_version,
+                session_id=stored.session_id,
+                conversation_id=stored.conversation_id,
+                turn_id=stored.turn_id,
+                sequence=stored.sequence,
+                timestamp=stored.timestamp,
+                sender=stored.sender,
+                recipient=stored.recipient,
+                kind=stored.kind,
+                content=stored.content,
+            )
+        except Exception as exc:
+            raise BackendProtocolError(
+                "conversation event store append() returned an invalid event"
+            ) from exc
+        caller_fields = (
+            "session_id",
+            "conversation_id",
+            "turn_id",
+            "sender",
+            "recipient",
+            "kind",
+            "content",
+        )
+        if any(
+            getattr(canonical, field) != getattr(requested, field)
+            for field in caller_fields
+        ):
+            raise BackendProtocolError(
+                "conversation event store append() changed caller-owned fields"
+            )
+        return canonical
+
+    @staticmethod
+    def _validated_conversation_reply(
+        reply: Any,
+        request: ConversationRequest,
+    ) -> ConversationReply:
+        if type(reply) is not ConversationReply:
+            raise BackendProtocolError(
+                f"{request.agent_id} returned {type(reply).__name__}, "
+                "expected ConversationReply"
+            )
+        try:
+            canonical = ConversationReply(
+                session_id=reply.session_id,
+                conversation_id=reply.conversation_id,
+                turn_id=reply.turn_id,
+                content=reply.content,
+            )
+        except Exception as exc:
+            raise BackendProtocolError("conversation reply is invalid") from exc
+        for field in ("session_id", "conversation_id", "turn_id"):
+            if getattr(canonical, field) != getattr(request, field):
+                raise BackendProtocolError(
+                    f"conversation reply {field} does not match its request"
+                )
+        return canonical
+
+    def _conversation_error_text(
+        self,
+        exc: Exception,
+        request: ConversationRequest,
+    ) -> str:
+        exception_name = type(exc).__name__
+        replacements: dict[str, str] = {}
+        normalized_replacements: dict[str, str] = {}
+        sensitive_values = (
+            request.content,
+            *(event.content for event in request.context.events),
+        )
+        for value in sensitive_values:
+            for variant in (
+                value,
+                json.dumps(value, ensure_ascii=False)[1:-1],
+                json.dumps(value, ensure_ascii=True)[1:-1],
+            ):
+                if variant:
+                    replacements.setdefault(variant, "<redacted>")
+                normalized = self._normalize_conversation_diagnostic(variant)
+                if normalized:
+                    normalized_replacements.setdefault(normalized, "<redacted>")
+        for root in self._conversation_workspace_roots:
+            if root:
+                replacements.setdefault(root, "<workspace>")
+            normalized_root = self._normalize_conversation_diagnostic(root)
+            if normalized_root:
+                normalized_replacements.setdefault(normalized_root, "<workspace>")
+
+        try:
+            detail = str(exc)
+        except Exception:
+            detail = "unavailable diagnostic"
+            include_detail = True
+        else:
+            include_detail = bool(
+                self._sanitize_conversation_diagnostic(
+                    detail,
+                    replacements=replacements,
+                    normalized_replacements=normalized_replacements,
+                )
+            )
+        raw_complete = (
+            f"{exception_name}: {detail}" if include_detail else exception_name
+        )
+        complete = self._sanitize_conversation_diagnostic(
+            raw_complete,
+            replacements=replacements,
+            normalized_replacements=normalized_replacements,
+        )
+        try:
+            complete.encode("utf-8", errors="strict")
+        except UnicodeEncodeError:
+            safe_name = self._sanitize_conversation_diagnostic(
+                exception_name,
+                replacements=replacements,
+                normalized_replacements=normalized_replacements,
+            )
+            try:
+                safe_name.encode("utf-8", errors="strict")
+            except UnicodeEncodeError:
+                safe_name = "Exception"
+            complete = self._sanitize_conversation_diagnostic(
+                f"{safe_name or 'Exception'}: unavailable diagnostic",
+                replacements=replacements,
+                normalized_replacements=normalized_replacements,
+            )
+        if not complete:
+            complete = "Exception"
+        return self._bounded_conversation_error(complete)
+
+    @staticmethod
+    def _sanitize_conversation_diagnostic(
+        value: str,
+        *,
+        replacements: Mapping[str, str],
+        normalized_replacements: Mapping[str, str],
+    ) -> str:
+        for sensitive, replacement in sorted(
+            replacements.items(),
+            key=lambda item: (-len(item[0]), item[1] != "<redacted>", item[0]),
+        ):
+            value = value.replace(sensitive, replacement)
+        value = StoryRuntime._normalize_conversation_diagnostic(value)
+        for sensitive, replacement in sorted(
+            normalized_replacements.items(),
+            key=lambda item: (-len(item[0]), item[1] != "<redacted>", item[0]),
+        ):
+            value = value.replace(sensitive, replacement)
+        return value
+
+    @staticmethod
+    def _normalize_conversation_diagnostic(value: str) -> str:
+        normalized = "".join(
+            " " if unicodedata.category(character) in {"Cc", "Cf"} else character
+            for character in value
+        )
+        return " ".join(normalized.split())
+
+    @staticmethod
+    def _bounded_conversation_error(value: str) -> str:
+        maximum = 4096
+        suffix = " …[truncated]"
+        if len(value) <= maximum:
+            return value
+        return value[: maximum - len(suffix)] + suffix
+
+    @staticmethod
+    def _validate_conversation_text(value: str) -> str:
+        if not isinstance(value, str):
+            raise TypeError("conversation text must be a string")
+        if not value:
+            raise ValueError("conversation text must not be empty")
+        try:
+            value.encode("utf-8", errors="strict")
+        except UnicodeEncodeError as exc:
+            raise ValueError("conversation text must be valid UTF-8") from exc
+        return value
+
+    @staticmethod
+    def _new_conversation_turn_id() -> str:
+        return f"t_{uuid.uuid4().hex}"
+
     async def _invoke(self, request: AgentRequest) -> AgentReply:
         definition = self.prompts.build_definition(
             session_id=request.session_id,
@@ -1155,6 +1543,19 @@ class RuntimeSession:
 
     def inspect_debate(self, debate_id: str) -> dict[str, Any]:
         return self.runtime.inspect_debate(self.session_id, debate_id)
+
+    async def converse(
+        self,
+        conversation_id: str,
+        agent_id: str,
+        text: str,
+    ) -> ConversationResult:
+        return await self.runtime.converse(
+            self.session_id,
+            conversation_id,
+            agent_id,
+            text,
+        )
 
     async def run_prompt(self, prompt: str, **options: Any) -> DebateResult:
         return await self.runtime.run_prompt(
