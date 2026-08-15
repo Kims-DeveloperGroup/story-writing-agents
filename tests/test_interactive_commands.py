@@ -81,6 +81,8 @@ COMMAND_NAMES = {
     "draft-file": "/draft-file",
     "session": "/session",
     "conversation": "/conversation",
+    "search": "/search",
+    "transcript": "/transcript",
     "inspect": "/inspect",
     "history": "/history",
     "status": "/status",
@@ -95,6 +97,7 @@ ACTION_FIELDS = (
     "agent_id",
     "argument",
     "count",
+    "start_sequence",
     "error",
     "suggestion",
 )
@@ -104,6 +107,7 @@ FIELD_SAMPLES = {
     "agent_id": PLOT_ARCHITECT,
     "argument": "argument",
     "count": 1,
+    "start_sequence": 1,
     "error": "error",
     "suggestion": "/run",
 }
@@ -123,6 +127,11 @@ ACTION_RULES = {
     ActionKind.RUN: ({"text"}, set()),
     ActionKind.RUN_FRESH: ({"text"}, {"text"}),
     ActionKind.DRAFT_FILE: ({"argument"}, {"argument"}),
+    ActionKind.SEARCH: ({"text"}, {"text"}),
+    ActionKind.TRANSCRIPT: (
+        {"argument", "count", "start_sequence"},
+        {"argument"},
+    ),
     ActionKind.INSPECT: ({"argument"}, set()),
     ActionKind.HISTORY: ({"count"}, set()),
     ActionKind.STATUS: (set(), set()),
@@ -212,6 +221,7 @@ class ParserAssertions:
         self.assertIsNone(action.agent_id)
         self.assertIsNone(action.argument)
         self.assertIsNone(action.count)
+        self.assertIsNone(action.start_sequence)
         self.assertEqual(action, parse_interactive_line(line))  # type: ignore[arg-type]
         return action
 
@@ -230,6 +240,8 @@ class ActionContractTests(unittest.TestCase):
             "RUN": "run",
             "RUN_FRESH": "run_fresh",
             "DRAFT_FILE": "draft_file",
+            "SEARCH": "search",
+            "TRANSCRIPT": "transcript",
             "INSPECT": "inspect",
             "HISTORY": "history",
             "STATUS": "status",
@@ -368,6 +380,21 @@ class ActionContractTests(unittest.TestCase):
             ((ActionKind.HISTORY,), {"count": True}, TypeError),
             ((ActionKind.HISTORY,), {"count": 0}, ValueError),
             ((ActionKind.HISTORY,), {"count": -1}, ValueError),
+            (
+                (ActionKind.TRANSCRIPT,),
+                {"argument": "id", "start_sequence": True},
+                TypeError,
+            ),
+            (
+                (ActionKind.TRANSCRIPT,),
+                {"argument": "id", "start_sequence": 0},
+                ValueError,
+            ),
+            (
+                (ActionKind.TRANSCRIPT,),
+                {"argument": "id", "start_sequence": -1},
+                ValueError,
+            ),
             ((ActionKind.DRAFT_FILE,), {"argument": ""}, ValueError),
             ((ActionKind.PARSE_ERROR,), {"error": ""}, ValueError),
             (
@@ -394,7 +421,7 @@ class ActionContractTests(unittest.TestCase):
 
 
 class CommandRegistryTests(unittest.TestCase):
-    def test_registry_is_the_exact_ordered_eighteen_row_contract(self) -> None:
+    def test_registry_is_the_exact_ordered_twenty_row_contract(self) -> None:
         expected = (
             CommandSpec("Conversation", "/compose", (), False, False, "/compose"),
             CommandSpec("Conversation", "/send", (), False, False, "/send"),
@@ -467,6 +494,22 @@ class CommandRegistryTests(unittest.TestCase):
                 False,
                 False,
                 "/conversation new Chapter 1 opening",
+            ),
+            CommandSpec(
+                "Inspection",
+                "/search QUERY",
+                (),
+                False,
+                False,
+                "/search council vessel",
+            ),
+            CommandSpec(
+                "Inspection",
+                "/transcript ID [COUNT] [--from SEQUENCE]",
+                (),
+                False,
+                False,
+                "/transcript c_0123456789 24 --from 25",
             ),
             CommandSpec(
                 "Inspection",
@@ -590,6 +633,19 @@ class SuccessfulParsingTests(unittest.TestCase):
             (
                 "/draft-file draft.md",
                 InteractiveAction(ActionKind.DRAFT_FILE, argument="draft.md"),
+            ),
+            (
+                "/search council vessel",
+                InteractiveAction(ActionKind.SEARCH, text="council vessel"),
+            ),
+            (
+                "/transcript c_0123456789 24 --from 25",
+                InteractiveAction(
+                    ActionKind.TRANSCRIPT,
+                    argument="c_0123456789",
+                    count=24,
+                    start_sequence=25,
+                ),
             ),
             (
                 "/inspect last",
@@ -840,12 +896,88 @@ class InvalidInputTests(ParserAssertions, unittest.TestCase):
             with self.subTest(line=line):
                 self.assert_parse_error(line)
 
-    def test_issue_23_commands_remain_unknown_in_this_leaf(self) -> None:
-        for line in ("/search", "/transcript"):
+    def test_search_requires_and_preserves_one_opaque_query(self) -> None:
+        for line in ("/search", "/search ", "/search\t\t"):
             with self.subTest(line=line):
-                action = self.assert_parse_error(line)
-                assert action.error is not None
-                self.assertIn("unknown", action.error.lower())
+                self.assert_parse_error(line)
+
+        cases = (
+            ("/search council vessel", "council vessel"),
+            ("/search  council  vessel ", " council  vessel "),
+            ("/search\t\tcouncil\tvessel\t", "\tcouncil\tvessel\t"),
+            ("/search --from 25", "--from 25"),
+        )
+        for line, query in cases:
+            with self.subTest(line=line):
+                self.assertEqual(
+                    parse_interactive_line(line),
+                    InteractiveAction(ActionKind.SEARCH, text=query),
+                )
+
+    def test_transcript_accepts_valid_forms_without_service_limits(self) -> None:
+        cases = (
+            (
+                "/transcript c_0123456789",
+                InteractiveAction(
+                    ActionKind.TRANSCRIPT,
+                    argument="c_0123456789",
+                ),
+            ),
+            (
+                "/transcript c_0123456789 24",
+                InteractiveAction(
+                    ActionKind.TRANSCRIPT,
+                    argument="c_0123456789",
+                    count=24,
+                ),
+            ),
+            (
+                "/transcript c_0123456789 --from 25",
+                InteractiveAction(
+                    ActionKind.TRANSCRIPT,
+                    argument="c_0123456789",
+                    start_sequence=25,
+                ),
+            ),
+            (
+                "/transcript c_0123456789 101 --from 00025",
+                InteractiveAction(
+                    ActionKind.TRANSCRIPT,
+                    argument="c_0123456789",
+                    count=101,
+                    start_sequence=25,
+                ),
+            ),
+        )
+        for line, expected in cases:
+            with self.subTest(line=line):
+                self.assertEqual(parse_interactive_line(line), expected)
+
+    def test_transcript_rejects_invalid_arity_flags_and_numeric_tokens(self) -> None:
+        cases = (
+            "/transcript",
+            "/transcript --from 2",
+            "/transcript id count",
+            "/transcript id 0",
+            "/transcript id +1",
+            "/transcript id 1_0",
+            "/transcript id ١",
+            "/transcript id １",
+            "/transcript id 2 3",
+            "/transcript id --unknown 2",
+            "/transcript id 2 --unknown 3",
+            "/transcript id --from",
+            "/transcript id --from 0",
+            "/transcript id --from +1",
+            "/transcript id --from ١",
+            "/transcript id --from 2 3",
+            "/transcript id --from 2 --from 3",
+            "/transcript id 2 --from 3 extra",
+            "/transcript id 2 --from 3 --from 4",
+        )
+        for line in cases:
+            with self.subTest(line=line):
+                self.assert_parse_error(line)
 
     def test_conversation_grammar_and_opaque_remainders_are_exact(self) -> None:
         cases = (

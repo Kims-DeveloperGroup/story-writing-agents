@@ -24,8 +24,8 @@ The current graph flows from entry points and orchestration toward provider,
 configuration, prompt, persistence, and stable contract modules:
 
 ```text
-__main__ -> cli -> interactive_controller -> agents/backend/cli_context/conversations
-                 |                         -> errors/interactive_commands
+__main__ -> cli -> interactive_controller -> agents/backend/cli_context/conversation_search
+                 |                         -> conversations/errors/interactive_commands
                  |                         -> interactive_terminal/models/orchestrator/workspace
                  -> interactive_terminal -> interactive_commands/agents
                  -> orchestrator -> prompts -> config -> workspace
@@ -89,6 +89,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   `RuntimeSession`, `Runtime`, and `Session` from `orchestrator`; and
   `FilesystemConversationCatalog`, `FilesystemConversationEventStore`,
   `Workspace`, plus `initialize_workspace` from `workspace`.
+  The re-exported `ActionKind` and `InteractiveAction` include additive search
+  and transcript cases plus the optional positive `start_sequence` payload;
+  their public names and import paths are unchanged.
 - **Direct internal dependencies:** `agents`, `backend`, `conversation_search`,
   `conversations`, `directives`, `errors`, `interactive_commands`, `models`,
   `orchestrator`, and `workspace`.
@@ -300,8 +303,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   order, and owns each route's canonical ID, preferred prompt alias, ordered
   aliases, and advisory-domain copy. Parser helpers and command-alias maps are
   internal; agent parsing and canonical validation derive from the route
-  registry. Conversation actions retain the established
-  `InteractiveAction` value shape. The package facade does not re-export the
+  registry. Search and transcript actions extend the frozen, slotted
+  `InteractiveAction` with the optional positive `start_sequence` field;
+  existing action payloads remain compatible. `/search QUERY` and
+  `/transcript ID [COUNT] [--from SEQUENCE]` participate in the same immutable
+  help registry and exact parser. The package facade does not re-export the
   route metadata.
 - **Direct internal dependencies:** `agents`.
 - **State, resources, and side effects:** Immutable command and agent-route
@@ -321,38 +327,47 @@ every intermediate arrow. The current runtime graph is acyclic.
   collaborators plus an optional keyword-only `ConversationCatalog`, and whose
   single-use `run_session_lobby` operation returns process status 0 or 2. An
   omitted catalog uses `FilesystemConversationCatalog`. The shell dispatches
-  provider-free roster and sticky-target actions plus selected-conversation
-  advisory turns while retaining the established conversation and
-  story-session commands. All transition, identity-resolution, routing,
-  result-validation, and rendering helpers are private, and the package facade
-  does not re-export this module.
+  provider-free roster, sticky-target, current-session search, and bounded
+  transcript-read actions plus selected-conversation advisory turns while
+  retaining the established conversation and story-session commands. Search
+  and transcript reads require an attachment but no selected conversation. All
+  transition, identity-resolution, routing, result-validation, and rendering
+  helpers are private, and the package facade does not re-export this module.
 - **Direct internal dependencies:** `agents`, `backend`, `cli_context`,
-  `conversations`, `errors`, `interactive_commands`, `interactive_terminal`,
-  `models`, `orchestrator`, and `workspace`.
+  `conversation_search`, `conversations`, `errors`, `interactive_commands`,
+  `interactive_terminal`, `models`, `orchestrator`, and `workspace`.
 - **State, resources, and side effects:** Instances retain borrowed workspace,
   CLI-context, backend, and terminal collaborators plus either a borrowed
   injected catalog or a controller-constructed default filesystem catalog. It
-  constructs and retains one `StoryRuntime`; that runtime retains a
-  controller-constructed `FilesystemConversationEventStore` bound to the same
-  resolved catalog. The controller owns its current attached-session
-  identifier, selected conversation metadata, sticky target, current
-  CLI-context snapshot, and one-run/closed state. After the run starts, it owns
-  orderly backend detach/close coordination while `AgentBackend` retains the
-  actual lease, manifest, subprocess, and provider-thread resources. Through
-  public collaborators the controller reads and parses terminal input, renders
-  safe output, sequences session and nested conversation transitions, performs
+  constructs and retains one `StoryRuntime` and one
+  `FilesystemConversationEventStore` bound to the resolved catalog. It shares
+  that exact event-store instance with the runtime and the attachment-scoped
+  `ConversationMemoryService`. The memory service is absent in lobby state,
+  constructed for a validated destination before attachment commit, rebound on
+  a successful switch, and cleared on end, cleanup, and final close. The
+  controller also owns its current attached-session identifier, selected
+  conversation metadata, sticky target, current CLI-context snapshot, and
+  one-run/closed state. After the run starts, it owns orderly backend
+  detach/close coordination while `AgentBackend` retains the actual lease,
+  manifest, subprocess, and provider-thread resources. Through public
+  collaborators the controller reads and parses terminal input, renders safe
+  output, sequences session and nested conversation transitions, performs
   catalog create/list/get/rename/archive and compensating unarchive calls,
-  persists selections through `cli_context`, and runs one synchronous
-  `StoryRuntime.converse` operation per accepted content turn. `StoryRuntime`
-  owns context reads, transcript/provider sequencing, validated results, and
-  its async caches and locks; the event store, catalog, and `Workspace` retain
-  persistence ownership. The controller never calls event-store operations or
-  backend provider dispatch directly, performs no search, consensus, or
-  artifact work, and has no import-time operational side effects.
+  persists selections through `cli_context`, performs active-only search and
+  fresh bounded active-or-archived transcript reads through
+  `ConversationMemoryService`, and runs one synchronous `StoryRuntime.converse`
+  operation per accepted content turn. `StoryRuntime` owns context reads,
+  transcript/provider sequencing, validated results, and its async caches and
+  locks; the event store, catalog, and `Workspace` retain persistence ownership.
+  The controller never calls event-store operations or backend provider
+  dispatch directly, performs no consensus or artifact work, and has no
+  import-time operational side effects.
 - **Primary verification/documentation:** `tests/test_interactive_controller.py`,
   `tests/test_interactive_conversation.py`, `tests/test_session_lifecycle.py`,
   `tests/test_cli_context.py`, `tests/test_interactive_commands.py`,
-  `tests/test_interactive_terminal.py`, `docs/design/session-lifecycle.md`,
+  `tests/test_interactive_terminal.py`, and
+  `tests/test_interactive_search.py` for real-filesystem shell search and
+  transcript-read integration; `docs/design/session-lifecycle.md`,
   `docs/reference/cli.md`, and `docs/reference/interactive-terminal.md` verify
   the current collaborator and lifecycle contracts.
 
@@ -372,6 +387,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   `write_conversation_scope` and `write_conversation_list_entry` render bounded
   conversation context and catalog rows, and `write_agent_roster` projects the
   shared route registry and canonical display names into one safe roster block.
+  `write_conversation_search_hit` accepts primitive `conversation_handle`,
+  `conversation_subject`, `match_kind`, and `snippet` values plus keyword-only
+  `archived` and optional citation values;
+  `write_conversation_transcript_event` accepts primitive
+  `conversation_handle`, `sequence`, `turn_id`, `kind`, `sender`, `recipient`,
+  and `content` values and preserves internal, empty, and trailing content lines
+  in one output record.
   The message-kind and immutable error registries include conversation
   presentation and the six typed conversation failures; rendering and
   validation helpers are private.
@@ -384,7 +406,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   the metadata-derived agent roster. Prompt aliases derive from
   `AGENT_ROUTES`; the module owns immutable display metadata, no persistent or
   external resource, and performs no provider, filesystem, persistence,
-  environment, or import-time operational side effects.
+  environment, or import-time operational side effects. Search-hit and
+  transcript-event blocks sanitize controls; transcript content preserves line
+  structure with deterministic hanging indentation while remaining one
+  callback record.
 - **Primary verification/documentation:** `tests/test_interactive_terminal.py`,
   `docs/reference/interactive-terminal.md`, and
   `docs/operations/terminal-safety.md`; `tests/test_interactive_commands.py`
@@ -499,22 +524,32 @@ every intermediate arrow. The current runtime graph is acyclic.
   rules, and typed parsed actions. `interactive_terminal` consumes its public
   `COMMANDS` and `AGENT_ROUTES` metadata plus canonical display names to own
   safe prompt, confirmation, help, roster, status, error, call-local
-  composition, subject input, conversation scope, and catalog-row presentation.
-  It returns typed terminal outcomes without dispatching them.
+  composition, subject input, conversation scope, catalog-row, search-hit, and
+  transcript-event presentation. It returns typed terminal outcomes without
+  dispatching them.
 - `interactive_controller` owns interactive shell action mapping, current
   in-memory attachment, selected-conversation and sticky-target state,
-  transition and compensation ordering, retained runtime wiring, and backend
-  detach/close coordination after its one run starts. `AgentBackend` retains
-  actual session lease, manifest, subprocess, and provider-thread ownership;
-  `ConversationCatalog` retains conversation metadata ownership; `cli_context`
-  owns both session and per-session conversation-selection persistence; and
-  `interactive_terminal` retains synchronous I/O and presentation ownership.
-  Advisory content crosses only the public `StoryRuntime.converse` boundary;
-  the controller performs no direct event-store or backend provider operation
-  and performs no search, consensus, or artifact operation.
-- The controller wires its resolved `ConversationCatalog` into the retained
-  runtime's `FilesystemConversationEventStore`, so injected and default
-  catalogs remain the same authority for metadata and transcript identity.
+  transition and compensation ordering, retained runtime and memory-service
+  wiring, and backend detach/close coordination after its one run starts.
+  `AgentBackend` retains actual session lease, manifest, subprocess, and
+  provider-thread ownership; `ConversationCatalog` retains conversation
+  metadata ownership; `cli_context` owns both session and per-session
+  conversation-selection persistence; and `interactive_terminal` retains
+  synchronous I/O and presentation ownership. Advisory content crosses only
+  the public `StoryRuntime.converse` boundary. Provider-free inspection crosses
+  only public `ConversationMemoryService.search` and
+  `ConversationMemoryService.read_transcript` boundaries; the controller
+  performs no direct event-store or backend provider operation and performs no
+  consensus or artifact operation.
+- The controller wires its resolved `ConversationCatalog` and one retained
+  `FilesystemConversationEventStore` into both `StoryRuntime` and the
+  attachment-scoped `ConversationMemoryService`, so injected and default
+  catalogs remain the same authority for metadata and transcript identity. It
+  prepares the destination service before attachment commit, rebinds it only
+  with the committed attachment, and clears it on switch, end, cleanup, and
+  final close; conversation selection does not rebind it. Search defaults to
+  active conversations, while transcript identifiers resolve across active and
+  archived conversations and each invocation obtains a fresh bounded page.
   `StoryRuntime` owns the advisory context read, user append, provider call,
   validated result, and reply or sanitized-error append; the controller uses
   only the returned result and performs no duplicate transcript read.

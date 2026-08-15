@@ -280,6 +280,8 @@ class PublicContractTests(unittest.TestCase):
             InteractiveTerminal.write_session_orientation,
             InteractiveTerminal.write_conversation_scope,
             InteractiveTerminal.write_conversation_list_entry,
+            InteractiveTerminal.write_conversation_search_hit,
+            InteractiveTerminal.write_conversation_transcript_event,
             InteractiveTerminal.write_agent_roster,
         ):
             with self.subTest(docstring=changed_callable.__qualname__):
@@ -588,6 +590,58 @@ class PromptAndRenderingTests(unittest.TestCase):
                 list_signature.parameters[name].kind
                 is inspect.Parameter.KEYWORD_ONLY
                 for name in ("archived", "selected")
+            )
+        )
+        search_signature = inspect.signature(
+            InteractiveTerminal.write_conversation_search_hit
+        )
+        self.assertEqual(
+            tuple(search_signature.parameters),
+            (
+                "self",
+                "conversation_handle",
+                "conversation_subject",
+                "match_kind",
+                "snippet",
+                "archived",
+                "citation_turn_id",
+                "citation_sequence",
+                "citation_kind",
+            ),
+        )
+        self.assertTrue(
+            all(
+                search_signature.parameters[name].kind
+                is inspect.Parameter.KEYWORD_ONLY
+                for name in (
+                    "archived",
+                    "citation_turn_id",
+                    "citation_sequence",
+                    "citation_kind",
+                )
+            )
+        )
+        transcript_signature = inspect.signature(
+            InteractiveTerminal.write_conversation_transcript_event
+        )
+        self.assertEqual(
+            tuple(transcript_signature.parameters),
+            (
+                "self",
+                "conversation_handle",
+                "sequence",
+                "turn_id",
+                "kind",
+                "sender",
+                "recipient",
+                "content",
+            ),
+        )
+        self.assertTrue(
+            all(
+                transcript_signature.parameters[name].kind
+                is inspect.Parameter.KEYWORD_ONLY
+                for name in tuple(transcript_signature.parameters)[2:]
             )
         )
         self.assertEqual(
@@ -1018,6 +1072,169 @@ class PromptAndRenderingTests(unittest.TestCase):
             with self.subTest(call=call):
                 with self.assertRaises((TypeError, ValueError)):
                     call()
+
+    def test_search_hits_have_exact_rows_citations_and_visible_controls(
+        self,
+    ) -> None:
+        terminal, callbacks = make_terminal(width=240)
+        terminal.write_conversation_search_hit(
+            "c_0123456789",
+            "Opening scene",
+            "subject",
+            "council vessel",
+            archived=False,
+        )
+        terminal.write_conversation_search_hit(
+            "c_fedcba9876",
+            "Old\nsubject",
+            "event",
+            "unsafe\x1b\ntext",
+            archived=True,
+            citation_turn_id="turn_7",
+            citation_sequence=9,
+            citation_kind="reply",
+        )
+        self.assertEqual(
+            callbacks.records,
+            [
+                "[search c_0123456789] Status: active | Match: subject | "
+                "Subject: Opening scene | Citation: conversation "
+                "c_0123456789\n"
+                "[snippet] council vessel\n",
+                "[search c_fedcba9876] Status: archived | Match: event | "
+                "Subject: Old\\x0asubject | Citation: conversation "
+                "c_fedcba9876, turn turn_7, sequence 9, kind reply\n"
+                "[snippet] unsafe\\x1b\\x0atext\n",
+            ],
+        )
+        self.assertEqual(len(callbacks.records), 2)
+        self.assertNotIn("\x1b", "".join(callbacks.records))
+
+    def test_search_hits_reject_invalid_primitives_and_partial_citations(
+        self,
+    ) -> None:
+        terminal, callbacks = make_terminal()
+        valid = ("c_0123456789", "Subject", "event", "snippet")
+        invalid_calls = (
+            lambda: terminal.write_conversation_search_hit(
+                "unsafe/id", *valid[1:], archived=False
+            ),
+            lambda: terminal.write_conversation_search_hit(
+                valid[0], " ", *valid[2:], archived=False
+            ),
+            lambda: terminal.write_conversation_search_hit(
+                *valid[:2], "", valid[3], archived=False
+            ),
+            lambda: terminal.write_conversation_search_hit(
+                *valid[:3], "", archived=False
+            ),
+            lambda: terminal.write_conversation_search_hit(
+                *valid, archived=1  # type: ignore[arg-type]
+            ),
+            lambda: terminal.write_conversation_search_hit(
+                *valid,
+                archived=False,
+                citation_turn_id="turn_1",
+            ),
+            lambda: terminal.write_conversation_search_hit(
+                *valid,
+                archived=False,
+                citation_turn_id="turn_1",
+                citation_sequence=True,
+                citation_kind="reply",
+            ),
+        )
+        for call in invalid_calls:
+            with self.subTest(call=call):
+                with self.assertRaises((TypeError, ValueError)):
+                    call()
+        self.assertEqual(callbacks.records, [])
+
+    def test_transcript_events_preserve_whitespace_lines_and_escape_controls(
+        self,
+    ) -> None:
+        terminal, callbacks = make_terminal(width=240)
+        common = {
+            "sequence": 2,
+            "turn_id": "turn_2",
+            "kind": "reply",
+            "sender": "plot",
+            "recipient": "user",
+        }
+        terminal.write_conversation_transcript_event(
+            "c_0123456789",
+            **common,
+            content=" \t",
+        )
+        terminal.write_conversation_transcript_event(
+            "c_0123456789",
+            **common,
+            content="first\n\nthird\n",
+        )
+        terminal.write_conversation_transcript_event(
+            "c_0123456789",
+            **common,
+            content="\x1b[31mred\x00\nlast",
+        )
+        header = (
+            "[transcript c_0123456789] Sequence: 2 | Turn: turn_2 | "
+            "Kind: reply | Sender: plot | Recipient: user\n"
+        )
+        self.assertEqual(
+            callbacks.records,
+            [
+                header + "[content]  \\x09\n",
+                header + "[content] first\n\n          third\n\n",
+                header + "[content] \\x1b[31mred\\x00\n          last\n",
+            ],
+        )
+        self.assertEqual(len(callbacks.records), 3)
+        self.assertNotIn("\x1b", "".join(callbacks.records))
+        self.assertNotIn("\x00", "".join(callbacks.records))
+
+    def test_transcript_events_require_exact_nonempty_primitive_content(
+        self,
+    ) -> None:
+        class TextSubclass(str):
+            """Distinguish rejected string subclasses from built-in strings."""
+
+        terminal, callbacks = make_terminal()
+        base = {
+            "sequence": 1,
+            "turn_id": "turn_1",
+            "kind": "message",
+            "sender": "user",
+            "recipient": "plot",
+            "content": "body",
+        }
+        invalid_calls = (
+            lambda: terminal.write_conversation_transcript_event(
+                "unsafe/id", **base
+            ),
+            lambda: terminal.write_conversation_transcript_event(
+                "c_0123456789", **{**base, "sequence": True}
+            ),
+            lambda: terminal.write_conversation_transcript_event(
+                "c_0123456789", **{**base, "sequence": 0}
+            ),
+            lambda: terminal.write_conversation_transcript_event(
+                "c_0123456789", **{**base, "turn_id": "unsafe/id"}
+            ),
+            lambda: terminal.write_conversation_transcript_event(
+                "c_0123456789", **{**base, "kind": " "}
+            ),
+            lambda: terminal.write_conversation_transcript_event(
+                "c_0123456789", **{**base, "content": ""}
+            ),
+            lambda: terminal.write_conversation_transcript_event(
+                "c_0123456789", **{**base, "content": TextSubclass("body")}
+            ),
+        )
+        for call in invalid_calls:
+            with self.subTest(call=call):
+                with self.assertRaises((TypeError, ValueError)):
+                    call()
+        self.assertEqual(callbacks.records, [])
 
     def test_agent_roster_is_exact_ordered_wrapped_and_sanitized(self) -> None:
         terminal, callbacks = make_terminal(width=1000)
@@ -1632,6 +1849,22 @@ class TerminalBoundaryTests(unittest.TestCase):
                     "Subject",
                     archived=False,
                     selected=True,
+                )
+                terminal.write_conversation_search_hit(
+                    "c_0123456789",
+                    "Subject",
+                    "subject",
+                    "snippet",
+                    archived=False,
+                )
+                terminal.write_conversation_transcript_event(
+                    "c_0123456789",
+                    sequence=1,
+                    turn_id="turn_1",
+                    kind="message",
+                    sender="user",
+                    recipient="plot",
+                    content="body",
                 )
                 terminal.write_agent_roster()
                 terminal.write_help()

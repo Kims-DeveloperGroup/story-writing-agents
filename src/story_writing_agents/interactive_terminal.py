@@ -694,6 +694,138 @@ class InteractiveTerminal:
             )
         )
 
+    def write_conversation_search_hit(
+        self,
+        conversation_handle: str,
+        conversation_subject: str,
+        match_kind: str,
+        snippet: str,
+        *,
+        archived: bool,
+        citation_turn_id: str | None = None,
+        citation_sequence: int | None = None,
+        citation_kind: str | None = None,
+    ) -> None:
+        """Render one bounded search hit from primitive validated values.
+
+        Citation event fields must be present together. All caller text is
+        sanitized and width-wrapped into one LF-ended output record; this
+        method owns no search, persistence, or other resource lifecycle.
+        """
+
+        safe_handle = _strict_safe_identifier(
+            "conversation_handle",
+            conversation_handle,
+        )
+        safe_subject = _inline_text(
+            _strict_required_text(
+                "conversation_subject",
+                conversation_subject,
+            )
+        )
+        safe_match_kind = _inline_text(
+            _strict_required_text("match_kind", match_kind)
+        )
+        safe_snippet = _inline_text(
+            _strict_required_text("snippet", snippet)
+        )
+        if type(archived) is not bool:
+            raise TypeError("archived must be a bool")
+
+        citation_values = (
+            citation_turn_id,
+            citation_sequence,
+            citation_kind,
+        )
+        if all(value is None for value in citation_values):
+            citation = f"Citation: conversation {safe_handle}"
+        elif any(value is None for value in citation_values):
+            raise ValueError(
+                "citation turn ID, sequence, and kind must be present together"
+            )
+        else:
+            safe_turn_id = _strict_safe_identifier(
+                "citation_turn_id",
+                citation_turn_id,
+            )
+            safe_sequence = _positive_event_sequence(
+                "citation_sequence",
+                citation_sequence,
+            )
+            safe_citation_kind = _inline_text(
+                _strict_required_text("citation_kind", citation_kind)
+            )
+            citation = (
+                f"Citation: conversation {safe_handle}, turn {safe_turn_id}, "
+                f"sequence {safe_sequence}, kind {safe_citation_kind}"
+            )
+
+        status = "archived" if archived else "active"
+        header = (
+            f"Status: {status} | Match: {safe_match_kind} | "
+            f"Subject: {safe_subject} | {citation}"
+        )
+        lines = _wrap_prefixed(
+            f"[search {safe_handle}] ",
+            header,
+            self._width,
+        )
+        lines.extend(
+            _wrap_prefixed("[snippet] ", safe_snippet, self._width)
+        )
+        self._write_block("\n".join(lines))
+
+    def write_conversation_transcript_event(
+        self,
+        conversation_handle: str,
+        *,
+        sequence: int,
+        turn_id: str,
+        kind: str,
+        sender: str,
+        recipient: str,
+        content: str,
+    ) -> None:
+        """Render one chronological event from primitive validated values.
+
+        Identity and sequence metadata are validated before the event header.
+        Content LFs are preserved with safe continuation indentation while the
+        sanitized event remains one callback record. No resource is retained.
+        """
+
+        safe_handle = _strict_safe_identifier(
+            "conversation_handle",
+            conversation_handle,
+        )
+        safe_sequence = _positive_event_sequence("sequence", sequence)
+        safe_turn_id = _strict_safe_identifier("turn_id", turn_id)
+        safe_kind = _inline_text(_strict_required_text("kind", kind))
+        safe_sender = _inline_text(_strict_required_text("sender", sender))
+        safe_recipient = _inline_text(
+            _strict_required_text("recipient", recipient)
+        )
+        safe_content = sanitize_terminal_text(
+            _strict_nonempty_terminal_content(content)
+        )
+        header = (
+            f"Sequence: {safe_sequence} | Turn: {safe_turn_id} | "
+            f"Kind: {safe_kind} | Sender: {safe_sender} | "
+            f"Recipient: {safe_recipient}"
+        )
+        lines = _wrap_prefixed(
+            f"[transcript {safe_handle}] ",
+            header,
+            self._width,
+        )
+        lines.extend(
+            _wrap_preserved_content_lines(
+                "[content] ",
+                safe_content,
+                self._width,
+            )
+        )
+        self._write_block("\n".join(lines))
+
     def write_agent_roster(self) -> None:
         """Render every advisory route in registry order without mutation.
 
@@ -881,6 +1013,49 @@ def _safe_identifier(name: str, value: object) -> str:
     return value
 
 
+def _strict_safe_identifier(name: str, value: object) -> str:
+    """Return one exact-string identifier without I/O or normalization."""
+
+    if type(value) is not str:
+        raise TypeError(f"{name} must be a string")
+    return _safe_identifier(name, value)
+
+
+def _strict_required_text(name: str, value: object) -> str:
+    """Return one exact nonblank primitive string without mutation."""
+
+    if type(value) is not str:
+        raise TypeError(f"{name} must be a string")
+    if not value or value.isspace():
+        raise ValueError(f"{name} must not be blank")
+    return value
+
+
+def _strict_nonempty_terminal_content(value: object) -> str:
+    """Return exact nonempty event content for safe terminal presentation.
+
+    Whitespace and LF structure remain valid content. The pure validator
+    rejects subclasses and empty input but leaves control escaping to the
+    terminal sanitizer.
+    """
+
+    if type(value) is not str:
+        raise TypeError("content must be a string")
+    if not value:
+        raise ValueError("content must not be empty")
+    return value
+
+
+def _positive_event_sequence(name: str, value: object) -> int:
+    """Return one exact positive event sequence without external effects."""
+
+    if type(value) is not int:
+        raise TypeError(f"{name} must be an integer")
+    if value <= 0:
+        raise ValueError(f"{name} must be positive")
+    return value
+
+
 def _agent_alias(agent_id: object) -> str:
     """Resolve one canonical agent ID to its stable prompt alias."""
 
@@ -1000,6 +1175,26 @@ def _wrap_prefixed(prefix: str, value: str, width: int) -> list[str]:
         drop_whitespace=True,
     )
     return wrapper.wrap(value) or [prefix.rstrip()]
+
+
+def _wrap_preserved_content_lines(
+    prefix: str,
+    value: str,
+    width: int,
+) -> list[str]:
+    """Wrap content while preserving each LF as a safe continued line.
+
+    The first source line receives ``prefix`` and later source lines receive
+    matching indentation. The pure result retains empty and trailing lines;
+    callback ownership remains with the caller.
+    """
+
+    continuation_prefix = " " * len(prefix)
+    rendered: list[str] = []
+    for line_number, content_line in enumerate(value.split("\n")):
+        line_prefix = prefix if line_number == 0 else continuation_prefix
+        rendered.extend(_wrap_prefixed(line_prefix, content_line, width))
+    return rendered
 
 
 def _redaction_variants(secrets: Iterable[str]) -> tuple[str, ...]:
