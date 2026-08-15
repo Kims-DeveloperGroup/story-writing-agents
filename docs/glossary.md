@@ -1,8 +1,8 @@
 # Glossary
 
 > **Availability:** most terms describe installed runtime behavior. Conversation
-> persistence and strict session lifecycle are Python-only. Interactive
-> selection and conversation/search/transcript commands are not implemented;
+> persistence is Python-only; the session lobby uses strict lifecycle. Interactive
+> conversation selection and its search/transcript commands are not implemented;
 > explicit-ID runtime turns and conversation search are Python APIs.
 
 Key terms: **story session**—durable related work; **conversation**—a

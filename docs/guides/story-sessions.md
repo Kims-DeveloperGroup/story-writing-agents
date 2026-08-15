@@ -1,76 +1,82 @@
 # Story sessions
 
-> **Availability:** `story session start|end` is implemented. Strict create,
-> resume, attach, and detach operations are Python APIs only; an interactive
-> switch controller and session-list CLI are not implemented.
+> **Availability:** bare `story` and `story chat` provide an interactive TTY
+> session lobby. It can list, create, resume, switch, and end story sessions,
+> but it cannot send chat turns or select conversation history yet.
 
-Key terms: **active**—durable permission for provider work; **selected**—the
-CLI's saved default session; **lease**—one backend's temporary attachment;
-**provider thread**—a resumable agent conversation reference.
+Key terms: **lobby**—the prompt with no attached session; **selected**—the
+workspace's saved default; **attached**—temporarily leased by this process;
+**end**—make a session inactive without deleting its data.
 
-A story session groups runtime overrides, agent history, and four resumable
-provider threads. Its three status dimensions are independent: `active` allows
-new provider work, CLI `selected` supplies a default session name, and a
-temporary `lease` gives one backend process exclusive use of the threads.
+## The lobby at a glance
 
-## A complete lifecycle
-
-```bash
-story init ./session-demo
-cd ./session-demo
-story session start chapter_01
-story run \
-  --debate-id chapter_01_draft \
-  --output chapter-01.md \
-  'Draft chapter one from the core documents.'
-story session end
-story session start
-story inspect --debate chapter_01_draft
-story session end
+```mermaid
+stateDiagram-v2
+    Shell --> Lobby: story, no selection
+    Shell --> Attached: story, selected active
+    Lobby --> Attached: new or resume
+    Attached --> Attached: switch
+    Attached --> Lobby: confirmed end
+    Attached --> Shell: quit or EOF (detach only)
+    Lobby --> Shell: quit or EOF
 ```
 
-The first start creates or reactivates `chapter_01`, then atomically saves it
-as this workspace's selected CLI session. The run attaches to the active
-provider session, uses its compatible per-agent thread IDs, and releases the
-lease when the backend closes. Ending writes `active: false` but deliberately
-keeps thread metadata and CLI selection. The bare later `session start`
-resolves that selection and reactivates the same session.
+In words: entry opens the lobby or attaches the saved active session. Creating,
+resuming, or switching leads to an attachment. Confirmed end returns to the
+lobby and makes that session inactive. Quit or EOF returns to the shell; it
+releases attachment but leaves the session active.
 
-Choose a new session ID when every agent should start with a separate session
-history. Reusing an ID may resume a compatible provider thread; editing a role
-prompt, persona, language, or allowlisted core document changes the agent
-definition fingerprint and starts a fresh thread for that agent.
+## Scenario: first session, return, switch, and end
 
-## Explicit session resolution
+Create a workspace, then name the first session explicitly:
 
-For automation, name both workspace and session:
-
-```bash
-story run \
-  --workspace ./session-demo \
-  --session chapter_01 \
-  --draft 'A complete candidate.'
+```console
+$ story init ./session-demo
+$ cd ./session-demo
+$ story chat chapter_01
+story[chapter_01:lead]> /quit
 ```
 
-An explicit `--session` wins over saved selection. Lifecycle commands also
-accept one positional session name, but supplying both forms is an error. If no
-form resolves, the CLI asks you to start or name a session. Only a successful
-`session start` changes selection; run, inspect, directive, failed start, and
-session end do not.
+Because `chapter_01` did not exist, explicit entry creates, selects, and
+attaches it without a question. `/quit` detaches it but does not end it.
 
-## Contention and safe handling
+Return with bare entry, then switch twice:
 
-Two cooperating processes cannot attach the same session simultaneously. A
-lease that reports another or uncertain owner blocks the second process; stop
-the known owner normally and do not manually edit lease files or the persistent
-`.lease-claims.lock` guard. The exact state classifications, platform rules,
-and reclamation contract live in
+```console
+$ story
+story[chapter_01:lead]> /session new chapter_02
+story[chapter_02:lead]> /session resume chapter_01
+story[chapter_01:lead]> /session end
+End session chapter_01? [y/N] yes
+story[lobby]> /quit
+```
+
+Bare entry finds the saved active `chapter_01` and attaches it. Creating
+`chapter_02` switches to a new selected session. Resuming `chapter_01` switches
+back. Confirmed end makes `chapter_01` inactive but deliberately retains it as
+the saved selection.
+
+The next bare entry recognizes that inactive selection and asks before
+resuming it; Enter accepts the displayed yes default:
+
+```console
+$ story
+Resume selected session chapter_01? [Y/n]
+story[chapter_01:lead]> /quit
+```
+
+Use `/session list` to see active, selected, and lease status. `/help session`
+shows the parser-owned session syntax.
+
+## Current boundary
+
+The lobby dispatches only `/help`, `/session list`, `/session new`,
+`/session resume`, `/session end`, and `/quit` (including documented aliases).
+Other registered commands return an unavailable error. No chat turn, selected
+conversation, history, transcript, search, or artifact action is wired until
+follow-up Issues #22 and #11.
+
+Exact installed syntax and exit codes are in the [CLI reference](../reference/cli.md).
+Switch failure ordering is in [Session lifecycle](../design/session-lifecycle.md#attach-and-switch-ordering).
+Lease and provider-thread details are in
 [Backend and sessions](../reference/backend-and-sessions.md).
-
-Ending a session does not delete provider transcripts, runtime overrides,
-agent state, debates, manuscripts, or selected-session state. `close()` and
-detach release attachment without ending the durable session.
-
-Python lifecycle method contracts and lease states are in
-[Backend and sessions](../reference/backend-and-sessions.md); ordering and race
-handling are in [Session lifecycle design](../design/session-lifecycle.md).

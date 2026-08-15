@@ -14,8 +14,10 @@ import tomllib
 import unittest
 from pathlib import Path
 from typing import get_type_hints
+from unittest import mock
 
 import story_writing_agents
+from story_writing_agents import cli as cli_module
 from story_writing_agents import (
     AGENT_SPECS,
     ConversationEventStore,
@@ -27,11 +29,53 @@ from story_writing_agents import (
     StoryRuntime,
     Workspace,
 )
-from story_writing_agents.cli import main
-from story_writing_agents.errors import WorkspaceFormatError
+from story_writing_agents.cli import build_parser, main
+from story_writing_agents.cli_context import CliContext
+from story_writing_agents.errors import (
+    BackendProtocolError,
+    ConfigurationError,
+    SessionIdError,
+    WorkspaceFormatError,
+    WorkspaceSecurityError,
+)
+from story_writing_agents.interactive_terminal import (
+    INTERACTIVE_ERROR_SPECS,
+    InteractiveErrorCode,
+    InteractiveTerminal,
+)
 from story_writing_agents.workspace import DEFAULT_AGENT_PROMPTS
 
 from tests.helpers import initialized_workspace
+
+
+class TtyStringIO(io.StringIO):
+    """In-memory stream with observable terminal capability and input reads."""
+
+    def __init__(self, *, is_terminal: bool, value: str = "") -> None:
+        super().__init__(value)
+        self.is_terminal = is_terminal
+        self.readline_calls = 0
+
+    def isatty(self) -> bool:
+        """Return the configured terminal capability without other effects."""
+
+        return self.is_terminal
+
+    def readline(self, *args, **kwargs) -> str:
+        """Record any attempted input read before delegating to StringIO."""
+
+        self.readline_calls += 1
+        return super().readline(*args, **kwargs)
+
+
+def expected_interactive_error(code: InteractiveErrorCode) -> str:
+    """Return the exact canonical two-line startup error record."""
+
+    spec = INTERACTIVE_ERROR_SPECS[code]
+    return (
+        f"[error {code.value}] {spec.summary}\n"
+        f"[hint] {spec.hint}\n"
+    )
 
 
 class PackagingTests(unittest.TestCase):
@@ -254,9 +298,494 @@ class CliTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("story-writing-agents", completed.stdout)
-        for command in ("init", "directive", "run", "inspect", "session", "smoke"):
+        for command in (
+            "chat",
+            "init",
+            "directive",
+            "run",
+            "inspect",
+            "session",
+            "smoke",
+        ):
             with self.subTest(command=command):
                 self.assertIn(command, completed.stdout)
+
+    def test_bare_and_chat_parser_shapes_preserve_legacy_help(self) -> None:
+        parser = build_parser()
+        self.assertEqual(vars(parser.parse_args([])), {"command": None})
+        parsed = parser.parse_args(
+            [
+                "chat",
+                "chapter_one",
+                "--workspace",
+                "/stories/example",
+                "--backend",
+                "lead_orchestrator=codex",
+                "--codex-model",
+                "model-name",
+                "--codex-timeout",
+                "12.5",
+            ]
+        )
+        self.assertEqual(
+            vars(parsed),
+            {
+                "command": "chat",
+                "session_name": "chapter_one",
+                "workspace": "/stories/example",
+                "backend": ["lead_orchestrator=codex"],
+                "codex_model": "model-name",
+                "codex_timeout": "12.5",
+            },
+        )
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as raised:
+                parser.parse_args(["--workspace", "/not-a-bare-option"])
+        self.assertEqual(raised.exception.code, 2)
+
+        repository_root = Path(__file__).resolve().parents[1]
+        environment = os.environ.copy()
+        source_path = str(repository_root / "src")
+        environment["PYTHONPATH"] = source_path
+        for arguments in (
+            ["--help"],
+            ["chat", "--help"],
+            ["run", "--help"],
+            ["session", "start", "--help"],
+        ):
+            with self.subTest(arguments=arguments):
+                completed = subprocess.run(
+                    [sys.executable, "-m", "story_writing_agents", *arguments],
+                    cwd=repository_root,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                self.assertIn("usage:", completed.stdout)
+
+    def test_non_tty_guard_precedes_input_options_workspace_and_backend(self) -> None:
+        cases = (
+            ([], False, True),
+            (["chat", "--codex-timeout", "not-a-number"], True, False),
+            (
+                [
+                    "chat",
+                    "target",
+                    "--workspace",
+                    "/missing",
+                    "--backend",
+                    "unsafe override",
+                ],
+                False,
+                False,
+            ),
+        )
+        for arguments, stdin_tty, stdout_tty in cases:
+            with self.subTest(arguments=arguments):
+                stdin = TtyStringIO(is_terminal=stdin_tty, value="/quit\n")
+                stdout = TtyStringIO(is_terminal=stdout_tty)
+                stderr = io.StringIO()
+                with (
+                    mock.patch.object(sys, "stdin", stdin),
+                    mock.patch.object(sys, "stdout", stdout),
+                    mock.patch.object(sys, "stderr", stderr),
+                    mock.patch.object(
+                        cli_module,
+                        "_parse_backend_overrides",
+                        side_effect=AssertionError("parsed overrides before TTY"),
+                    ) as parse_overrides,
+                    mock.patch.object(
+                        cli_module,
+                        "resolve_workspace",
+                        side_effect=AssertionError("resolved workspace before TTY"),
+                    ) as resolve_workspace,
+                    mock.patch.object(
+                        cli_module,
+                        "load_cli_context",
+                        side_effect=AssertionError("loaded context before TTY"),
+                    ) as load_context,
+                    mock.patch.object(cli_module, "AgentBackend") as backend,
+                    mock.patch.object(
+                        cli_module,
+                        "InteractiveController",
+                    ) as controller,
+                ):
+                    exit_code = main(arguments)
+                self.assertEqual(exit_code, 2)
+                self.assertEqual(stdout.getvalue(), "")
+                self.assertEqual(
+                    stderr.getvalue(),
+                    expected_interactive_error(InteractiveErrorCode.TTY_REQUIRED),
+                )
+                self.assertEqual(stdin.readline_calls, 0)
+                parse_overrides.assert_not_called()
+                resolve_workspace.assert_not_called()
+                load_context.assert_not_called()
+                backend.assert_not_called()
+                controller.assert_not_called()
+
+    def test_module_non_tty_entry_is_exact_and_does_not_touch_cwd(self) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = str(repository_root / "src")
+        environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        invocations = (
+            [],
+            [
+                "chat",
+                "target",
+                "--workspace",
+                "missing",
+                "--backend",
+                "invalid",
+                "--codex-timeout",
+                "invalid",
+            ],
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for arguments in invocations:
+                with self.subTest(arguments=arguments):
+                    before = tuple(root.iterdir())
+                    completed = subprocess.run(
+                        [
+                            sys.executable,
+                            "-m",
+                            "story_writing_agents",
+                            *arguments,
+                        ],
+                        cwd=root,
+                        env=environment,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    self.assertEqual(completed.returncode, 2)
+                    self.assertEqual(completed.stdout, "")
+                    self.assertEqual(
+                        completed.stderr,
+                        expected_interactive_error(
+                            InteractiveErrorCode.TTY_REQUIRED
+                        ),
+                    )
+                    self.assertEqual(tuple(root.iterdir()), before)
+
+    def test_interactive_adapter_passes_exact_chat_and_bare_configuration(self) -> None:
+        workspace = initialized_workspace(self)
+        contexts = (
+            (
+                [
+                    "chat",
+                    "chapter_one",
+                    "--workspace",
+                    str(workspace.root),
+                    "--backend",
+                    "lead_orchestrator=codex",
+                    "--codex-model",
+                    "model-name",
+                    "--codex-timeout",
+                    "12.5",
+                ],
+                "chapter_one",
+                "model-name",
+                12.5,
+                {"lead_orchestrator": "codex"},
+            ),
+            ([], None, None, 300.0, {}),
+        )
+        for arguments, requested, model, timeout, overrides in contexts:
+            with self.subTest(arguments=arguments):
+                stdin = TtyStringIO(is_terminal=True)
+                stdout = TtyStringIO(is_terminal=True)
+                stderr = io.StringIO()
+                cli_context = CliContext(selected_session="saved")
+                backend_value = mock.Mock()
+                controller_value = mock.Mock()
+                controller_value.run_session_lobby.return_value = 7
+                with (
+                    mock.patch.object(sys, "stdin", stdin),
+                    mock.patch.object(sys, "stdout", stdout),
+                    mock.patch.object(sys, "stderr", stderr),
+                    mock.patch.object(
+                        cli_module,
+                        "resolve_workspace",
+                        return_value=workspace,
+                    ) as resolve_workspace,
+                    mock.patch.object(
+                        cli_module,
+                        "load_cli_context",
+                        return_value=cli_context,
+                    ) as load_context,
+                    mock.patch.object(
+                        cli_module,
+                        "AgentBackend",
+                        return_value=backend_value,
+                    ) as backend_factory,
+                    mock.patch.object(
+                        cli_module,
+                        "InteractiveController",
+                        return_value=controller_value,
+                    ) as controller_factory,
+                ):
+                    self.assertEqual(main(arguments), 7)
+
+                expected_workspace_option = (
+                    str(workspace.root) if arguments else None
+                )
+                resolve_workspace.assert_called_once_with(
+                    expected_workspace_option
+                )
+                load_context.assert_called_once_with(workspace)
+                backend_factory.assert_called_once_with(
+                    workspace,
+                    model=model,
+                    timeout_seconds=timeout,
+                    backend_overrides=overrides,
+                )
+                controller_args = controller_factory.call_args.args
+                self.assertEqual(
+                    controller_args[:3],
+                    (workspace, cli_context, backend_value),
+                )
+                self.assertIsInstance(controller_args[3], InteractiveTerminal)
+                controller_value.run_session_lobby.assert_called_once_with(
+                    requested_session=requested
+                )
+                backend_value.close.assert_not_called()
+                self.assertEqual(stdout.getvalue(), "")
+                self.assertEqual(stderr.getvalue(), "")
+
+    def test_backend_cleanup_ownership_transfers_only_when_run_begins(self) -> None:
+        workspace = initialized_workspace(self)
+        context = CliContext()
+
+        def invoke_with(
+            backend_value: mock.Mock,
+            controller_factory: mock.Mock,
+        ) -> tuple[int, str]:
+            """Invoke a TTY chat with supplied backend/controller doubles."""
+
+            stdin = TtyStringIO(is_terminal=True)
+            stdout = TtyStringIO(is_terminal=True)
+            stderr = io.StringIO()
+            with (
+                mock.patch.object(sys, "stdin", stdin),
+                mock.patch.object(sys, "stdout", stdout),
+                mock.patch.object(sys, "stderr", stderr),
+                mock.patch.object(
+                    cli_module,
+                    "resolve_workspace",
+                    return_value=workspace,
+                ),
+                mock.patch.object(
+                    cli_module,
+                    "load_cli_context",
+                    return_value=context,
+                ),
+                mock.patch.object(
+                    cli_module,
+                    "AgentBackend",
+                    return_value=backend_value,
+                ),
+                mock.patch.object(
+                    cli_module,
+                    "InteractiveController",
+                    controller_factory,
+                ),
+            ):
+                return main(["chat"]), stderr.getvalue()
+
+        unstarted_backend = mock.Mock()
+        constructor_failure = mock.Mock(
+            side_effect=RuntimeError("constructor-secret")
+        )
+        exit_code, stderr = invoke_with(
+            unstarted_backend,
+            constructor_failure,
+        )
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(
+            stderr,
+            expected_interactive_error(InteractiveErrorCode.INTERNAL_ERROR),
+        )
+        self.assertNotIn("constructor-secret", stderr)
+        unstarted_backend.close.assert_called_once_with()
+
+        transferred_backend = mock.Mock()
+        running_controller = mock.Mock()
+        running_controller.run_session_lobby.side_effect = RuntimeError(
+            "controller-secret"
+        )
+        exit_code, stderr = invoke_with(
+            transferred_backend,
+            mock.Mock(return_value=running_controller),
+        )
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(
+            stderr,
+            expected_interactive_error(InteractiveErrorCode.INTERNAL_ERROR),
+        )
+        self.assertNotIn("controller-secret", stderr)
+        transferred_backend.close.assert_not_called()
+
+    def test_setup_failures_are_phase_typed_and_never_expose_prose(self) -> None:
+        workspace = initialized_workspace(self)
+        workspace_cases = (
+            (
+                ConfigurationError("workspace-secret"),
+                InteractiveErrorCode.WORKSPACE_NOT_INITIALIZED,
+            ),
+            (
+                WorkspaceSecurityError("workspace-secret"),
+                InteractiveErrorCode.WORKSPACE_UNSAFE,
+            ),
+            (
+                WorkspaceFormatError("workspace-secret"),
+                InteractiveErrorCode.WORKSPACE_INVALID,
+            ),
+            (OSError("workspace-secret"), InteractiveErrorCode.WORKSPACE_INVALID),
+            (RuntimeError("workspace-secret"), InteractiveErrorCode.INTERNAL_ERROR),
+        )
+        for failure, code in workspace_cases:
+            with self.subTest(phase="workspace", failure=type(failure).__name__):
+                stdin = TtyStringIO(is_terminal=True)
+                stdout = TtyStringIO(is_terminal=True)
+                stderr = io.StringIO()
+                with (
+                    mock.patch.object(sys, "stdin", stdin),
+                    mock.patch.object(sys, "stdout", stdout),
+                    mock.patch.object(sys, "stderr", stderr),
+                    mock.patch.object(
+                        cli_module,
+                        "resolve_workspace",
+                        side_effect=failure,
+                    ),
+                ):
+                    self.assertEqual(main(["chat"]), 2)
+                self.assertEqual(stderr.getvalue(), expected_interactive_error(code))
+                self.assertEqual(stdout.getvalue(), "")
+                self.assertNotIn("workspace-secret", stderr.getvalue())
+
+        context_cases = (
+            (ConfigurationError, InteractiveErrorCode.CONFIGURATION_INVALID),
+            (SessionIdError, InteractiveErrorCode.CONFIGURATION_INVALID),
+            (BackendProtocolError, InteractiveErrorCode.CONFIGURATION_INVALID),
+            (WorkspaceSecurityError, InteractiveErrorCode.WORKSPACE_UNSAFE),
+            (WorkspaceFormatError, InteractiveErrorCode.WORKSPACE_INVALID),
+            (OSError, InteractiveErrorCode.WORKSPACE_INVALID),
+            (RuntimeError, InteractiveErrorCode.INTERNAL_ERROR),
+        )
+        for failure_type, code in context_cases:
+            with self.subTest(phase="context", failure=failure_type.__name__):
+                stdin = TtyStringIO(is_terminal=True)
+                stdout = TtyStringIO(is_terminal=True)
+                stderr = io.StringIO()
+                with (
+                    mock.patch.object(sys, "stdin", stdin),
+                    mock.patch.object(sys, "stdout", stdout),
+                    mock.patch.object(sys, "stderr", stderr),
+                    mock.patch.object(
+                        cli_module,
+                        "resolve_workspace",
+                        return_value=workspace,
+                    ),
+                    mock.patch.object(
+                        cli_module,
+                        "load_cli_context",
+                        side_effect=failure_type("context-secret"),
+                    ),
+                ):
+                    self.assertEqual(main(["chat"]), 2)
+                self.assertEqual(stderr.getvalue(), expected_interactive_error(code))
+                self.assertEqual(stdout.getvalue(), "")
+                self.assertNotIn("context-secret", stderr.getvalue())
+
+        backend_cases = (
+            (ConfigurationError, InteractiveErrorCode.CONFIGURATION_INVALID),
+            (WorkspaceSecurityError, InteractiveErrorCode.WORKSPACE_UNSAFE),
+            (OSError, InteractiveErrorCode.WORKSPACE_INVALID),
+            (RuntimeError, InteractiveErrorCode.INTERNAL_ERROR),
+        )
+        for failure_type, code in backend_cases:
+            with self.subTest(phase="backend", failure=failure_type.__name__):
+                stdin = TtyStringIO(is_terminal=True)
+                stdout = TtyStringIO(is_terminal=True)
+                stderr = io.StringIO()
+                with (
+                    mock.patch.object(sys, "stdin", stdin),
+                    mock.patch.object(sys, "stdout", stdout),
+                    mock.patch.object(sys, "stderr", stderr),
+                    mock.patch.object(
+                        cli_module,
+                        "resolve_workspace",
+                        return_value=workspace,
+                    ),
+                    mock.patch.object(
+                        cli_module,
+                        "load_cli_context",
+                        return_value=CliContext(),
+                    ),
+                    mock.patch.object(
+                        cli_module,
+                        "AgentBackend",
+                        side_effect=failure_type("backend-secret"),
+                    ),
+                ):
+                    self.assertEqual(main(["chat"]), 2)
+                self.assertEqual(stderr.getvalue(), expected_interactive_error(code))
+                self.assertEqual(stdout.getvalue(), "")
+                self.assertNotIn("backend-secret", stderr.getvalue())
+
+        for arguments in (
+            ["chat", "--backend", "invalid-secret"],
+            ["chat", "--codex-timeout", "nan-secret"],
+        ):
+            with self.subTest(phase="options", arguments=arguments):
+                stdin = TtyStringIO(is_terminal=True)
+                stdout = TtyStringIO(is_terminal=True)
+                stderr = io.StringIO()
+                with (
+                    mock.patch.object(sys, "stdin", stdin),
+                    mock.patch.object(sys, "stdout", stdout),
+                    mock.patch.object(sys, "stderr", stderr),
+                    mock.patch.object(
+                        cli_module,
+                        "resolve_workspace",
+                    ) as resolve_workspace,
+                ):
+                    self.assertEqual(main(arguments), 2)
+                self.assertEqual(
+                    stderr.getvalue(),
+                    expected_interactive_error(
+                        InteractiveErrorCode.CONFIGURATION_INVALID
+                    ),
+                )
+                self.assertEqual(stdout.getvalue(), "")
+                resolve_workspace.assert_not_called()
+
+    def test_changed_cli_callables_have_specification_docstrings(self) -> None:
+        names = (
+            "build_parser",
+            "_parse_backend_overrides",
+            "_parse_positive_timeout_seconds",
+            "_resolve_run_input",
+            "_interactive_streams_are_terminals",
+            "_reject_unexpected_startup_input",
+            "_write_interactive_cli_error",
+            "_classify_workspace_entry_failure",
+            "_classify_interactive_configuration_failure",
+            "_close_unstarted_interactive_backend",
+            "_run_interactive_cli",
+            "main",
+        )
+        for name in names:
+            with self.subTest(callable=name):
+                value = getattr(cli_module, name)
+                self.assertTrue(inspect.getdoc(value))
 
     def test_init_inspect_and_expected_error_exit_codes(self) -> None:
         temporary = tempfile.TemporaryDirectory()

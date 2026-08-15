@@ -1,8 +1,9 @@
 # Backend and session API
 
 > **Availability:** `AgentBackend`, `BoundAgent`, strict lifecycle methods, and
-> persisted `StoryRuntime.converse()` are implemented. Codex is the only
-> provider; the CLI exposes only `session start|end`.
+> persisted `StoryRuntime.converse()` are implemented; Codex is the only provider.
+> The CLI retains compatibility `session start|end` and uses strict lifecycle
+> through its [session lobby](../guides/story-sessions.md).
 
 Key terms: **binding**—one immutable agent/provider pairing; **manifest**—the
 durable session and thread record; **lease sidecar**—temporary process ownership

@@ -1,8 +1,8 @@
 # Troubleshooting
 
-> **Availability:** these remedies cover the implemented CLI, Codex backend,
-> workspace persistence, and Python foundations. There is no interactive shell
-> or transcript/search command to repair.
+> **Availability:** these remedies cover the implemented CLI, session lobby,
+> Codex backend, workspace persistence, and Python foundations. Chat turns and
+> conversation transcript/search commands are not implemented.
 
 Key terms: **preflight**—checks before debate execution; **strict UTF-8**—text
 that rejects invalid byte sequences; **immutable ID**—a reservation that cannot

@@ -32,6 +32,7 @@ from story_writing_agents.interactive_terminal import (
     INTERACTIVE_ERROR_SPECS,
     AttachmentKind,
     ComposeMode,
+    ConfirmationResult,
     InteractiveError,
     InteractiveErrorCode,
     InteractiveErrorSpec,
@@ -46,6 +47,7 @@ from story_writing_agents.interactive_terminal import (
 PUBLIC_EXPORTS = (
     "AttachmentKind",
     "ComposeMode",
+    "ConfirmationResult",
     "TerminalActionKind",
     "TerminalMessageKind",
     "InteractiveErrorCode",
@@ -243,6 +245,13 @@ class PublicContractTests(unittest.TestCase):
         for name in PUBLIC_EXPORTS:
             with self.subTest(name=name):
                 self.assertIs(getattr(terminal_module, name), globals()[name])
+        for changed_callable in (
+            ConfirmationResult,
+            InteractiveTerminal.request_confirmation,
+            InteractiveTerminal.write_session_orientation,
+        ):
+            with self.subTest(docstring=changed_callable.__qualname__):
+                self.assertTrue(inspect.getdoc(changed_callable))
 
     def test_enums_have_exact_ordered_members_and_values(self) -> None:
         expected = {
@@ -252,6 +261,12 @@ class PublicContractTests(unittest.TestCase):
                 ("RESUMED", "resumed"),
             ),
             ComposeMode: (("CHAT", "chat"), ("RUN", "run")),
+            ConfirmationResult: (
+                ("YES", "yes"),
+                ("NO", "no"),
+                ("INTERRUPT", "interrupt"),
+                ("EOF", "eof"),
+            ),
             TerminalActionKind: (
                 ("LINE", "line"),
                 ("SEND", "send"),
@@ -566,6 +581,97 @@ class PromptAndRenderingTests(unittest.TestCase):
                     )
         self.assertEqual(callbacks.prompts, [])
 
+    def test_confirmation_normalizes_answers_defaults_and_reprompts(self) -> None:
+        cases = (
+            (True, "", ConfirmationResult.YES),
+            (False, "\u2003\u00a0", ConfirmationResult.NO),
+            (False, "\u2003YeS\u00a0", ConfirmationResult.YES),
+            (True, " N ", ConfirmationResult.NO),
+            (True, "no", ConfirmationResult.NO),
+            (False, "y", ConfirmationResult.YES),
+        )
+        for default, answer, expected in cases:
+            with self.subTest(default=default, answer=answer):
+                terminal, callbacks = make_terminal(answer)
+                self.assertIs(
+                    terminal.request_confirmation("Continue?", default=default),
+                    expected,
+                )
+                suffix = "[Y/n] " if default else "[y/N] "
+                self.assertEqual(callbacks.prompts, [f"Continue? {suffix}"])
+                self.assertEqual(callbacks.records, [])
+
+        terminal, callbacks = make_terminal("later", " MAYBE ", "yes")
+        self.assertIs(
+            terminal.request_confirmation("Resume?", default=False),
+            ConfirmationResult.YES,
+        )
+        self.assertEqual(
+            callbacks.prompts,
+            ["Resume? [y/N] ", "Resume? [y/N] ", "Resume? [y/N] "],
+        )
+        self.assertEqual(
+            callbacks.records,
+            [
+                "[hint] Enter y, yes, n, or no.\n",
+                "[hint] Enter y, yes, n, or no.\n",
+            ],
+        )
+
+    def test_confirmation_sanitizes_prompts_and_returns_terminal_events(self) -> None:
+        terminal, callbacks = make_terminal(KeyboardInterrupt())
+        self.assertIs(
+            terminal.request_confirmation("unsafe\n\x1b?", default=True),
+            ConfirmationResult.INTERRUPT,
+        )
+        self.assertEqual(callbacks.prompts, ["unsafe\\x0a\\x1b? [Y/n] "])
+        self.assertEqual(callbacks.records, [])
+
+        terminal, callbacks = make_terminal(EOFError())
+        self.assertIs(
+            terminal.request_confirmation("End?", default=False),
+            ConfirmationResult.EOF,
+        )
+        self.assertEqual(callbacks.prompts, ["End? [y/N] "])
+        self.assertEqual(callbacks.records, [])
+
+    def test_confirmation_rejects_bad_inputs_and_propagates_collaborator_failures(
+        self,
+    ) -> None:
+        terminal, callbacks = make_terminal("unused")
+        for message, default, error_type in (
+            ("", True, ValueError),
+            (" \t", True, ValueError),
+            (None, True, TypeError),
+            ("Continue?", 1, TypeError),
+        ):
+            with self.subTest(message=message, default=default):
+                with self.assertRaises(error_type):
+                    terminal.request_confirmation(  # type: ignore[arg-type]
+                        message,
+                        default=default,
+                    )
+        self.assertEqual(callbacks.prompts, [])
+
+        for value, error_type in (
+            (None, TypeError),
+            ("two\nlines", ValueError),
+            (RuntimeError("reader failed"), RuntimeError),
+        ):
+            with self.subTest(value=repr(value)):
+                terminal, _callbacks = make_terminal(value)
+                with self.assertRaises(error_type):
+                    terminal.request_confirmation("Continue?", default=True)
+
+        callbacks = ScriptedCallbacks("invalid")
+
+        def failing_writer(_text: str) -> None:
+            raise RuntimeError("writer failed")
+
+        terminal = InteractiveTerminal(callbacks.read_line, failing_writer)
+        with self.assertRaisesRegex(RuntimeError, "writer failed"):
+            terminal.request_confirmation("Continue?", default=True)
+
     def test_lobby_orientation_is_one_exact_sanitized_record(self) -> None:
         terminal, callbacks = make_terminal()
         terminal.write_lobby_orientation("/stories/example")
@@ -627,6 +733,40 @@ class PromptAndRenderingTests(unittest.TestCase):
                         )
                     ],
                 )
+
+    def test_session_orientation_omits_unknown_history_without_changing_counts(
+        self,
+    ) -> None:
+        terminal, callbacks = make_terminal()
+        terminal.write_session_orientation(
+            "/stories/example",
+            "SESSION",
+            AttachmentKind.CREATED,
+            LEAD_ORCHESTRATOR,
+        )
+        self.assertEqual(
+            callbacks.records,
+            [
+                "Story chat\n"
+                "Workspace: /stories/example\n"
+                "Session: SESSION (created)\n"
+                "Target: Lead Orchestrator\n"
+                "Type /help for commands; /quit leaves the story session active.\n"
+            ],
+        )
+        self.assertNotIn("History:", callbacks.records[0])
+        self.assertNotIn("Room messages", callbacks.records[0])
+
+        terminal, callbacks = make_terminal()
+        terminal.write_session_orientation(
+            "/stories/example",
+            "SESSION",
+            AttachmentKind.CREATED,
+            LEAD_ORCHESTRATOR,
+            0,
+        )
+        self.assertIn("History: 0 visible room events\n", callbacks.records[0])
+        self.assertIn("Room messages are saved locally", callbacks.records[0])
 
     def test_status_run_and_agent_records_use_exact_trusted_prefixes(self) -> None:
         for kind in TerminalMessageKind:

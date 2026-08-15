@@ -1,17 +1,30 @@
 # Terminal display safety
 
-> **Availability:** these rules apply to the module-supported interactive
-> terminal component. No installed interactive TTY or controller uses it yet.
+> **Availability:** these rules protect the module-supported terminal component
+> and the installed session lobby. They do not make a terminal or its scrollback
+> private.
 
-Key terms: **display escaping**—showing a control code as text; **redaction**—
-replacing caller-identified secrets; **plain terminal**—an output stream with no
-trusted rich rendering; **process-local buffer**—unsent lines held for one call.
+Key terms: **TTY guard**—the check for interactive streams; **typed error**—a
+trusted public error code instead of exception prose; **display escaping**—
+showing a control code as text; **redaction**—replacing caller-supplied secrets.
+
+## The TTY guard comes first
+
+After `argparse` accepts bare or `chat` entry, both standard input and standard
+output must report that they are TTYs. A missing, false, or failing `isatty()`
+result writes one sanitized `tty_required` record to standard error and exits
+`2`. It reads no input and performs no interactive option validation, workspace
+or CLI-context access, backend construction, or controller work.
+
+Help and syntax errors finish in `argparse` before this guard. Standard error
+does not itself need to be a TTY. Exact stream and exit-code behavior is in the
+[CLI reference](../reference/cli.md#interactive-streams).
 
 ## Safe display boundary
 
 `sanitize_terminal_text()` preserves ordinary Unicode, Markdown characters,
-and LF. It replaces every other Unicode `Cc` character, all `Cf` and `Cs`
-characters, and U+2028/U+2029 with a visible lowercase escape:
+and LF. It replaces every other Unicode `Cc`, every `Cf` and `Cs`, and
+U+2028/U+2029 with a visible lowercase escape:
 
 | Code point | Display form |
 | --- | --- |
@@ -19,65 +32,53 @@ characters, and U+2028/U+2029 with a visible lowercase escape:
 | U+0100–U+FFFF | `\uhhhh` |
 | Above U+FFFF | `\Uhhhhhhhh` |
 
-For example, ANSI color input `ESC[31m` displays as `\x1b[31m`; it cannot act
-as a terminal escape. The result is strict UTF-8 and sanitizing it again makes
-no change.
+For example, ANSI input `ESC[31m` displays as `\x1b[31m` and cannot act as a
+terminal escape. The result is strict UTF-8 and sanitizing it again changes
+nothing.
 
-Every `InteractiveTerminal` writer sends exactly one sanitized string to its
-borrowed output callback and adds one final LF. A block may contain preserved
-internal LFs. Workspace text inside orientation is forced inline, so an input
-LF displays as `\x0a` instead.
+Every terminal writer sends one sanitized string to its borrowed output
+callback and adds one final LF. A block may keep internal LFs. Workspace text
+inside orientation is forced inline, so an input LF displays as `\x0a`.
 
-This is plain-text safety, not trusted rendering. The component preserves
-Markdown syntax without interpreting it and does not detect terminal features,
-colors, width, or TTY presence. The callback or surrounding terminal can still
-record, transform, or expose the text it receives.
+This is plain-text safety, not trusted rendering. Markdown is preserved but not
+interpreted. The component does not detect color, width, or other terminal
+features. A callback or terminal may still record or transform its input.
 
-## Typed error redaction
+## Typed errors, never raw diagnostics
 
-`write_error()` accepts an `InteractiveError` chosen by trusted controller code
-and an explicit iterable of secret strings. It does not accept an exception or
-infer a code from exception text.
+CLI and controller boundaries classify failures by exception type and validated
+public session state. They pass `InteractiveError` values to the terminal and
+never display exception messages, owner tokens, or other raw diagnostics.
+Parser-owned safe errors may supply their own summary and suggestion.
 
-Before display, it:
+`write_error()` accepts a trusted error and explicit secret strings. It:
 
-1. expands each nonempty secret to raw, JSON-escaped Unicode/ASCII, visibly
-   escaped, whitespace-collapsed, and control-normalized variants;
-2. replaces longer variants first with `<redacted>`, both before and after
-   display escaping;
-3. converts summary and hint to one trimmed, whitespace-collapsed line, falling
-   back to the registry default when custom copy is blank after processing;
-4. truncates the summary to 512 characters and hint to 256, ending truncated
-   text with ` ...[truncated]` inside the cap; and
-5. wraps the trusted `[error CODE]` and `[hint]` prefixes to the configured
-   width without splitting long words.
+1. expands each nonempty secret to raw, JSON-escaped, visibly escaped,
+   whitespace-collapsed, and control-normalized variants;
+2. replaces longer variants first with `<redacted>` before and after escaping;
+3. makes summary and hint one trimmed line, using registry defaults if blank;
+4. caps summary at 512 characters and hint at 256, including the marker
+   ` ...[truncated]`; and
+5. wraps trusted `[error CODE]` and `[hint]` prefixes without splitting words.
 
-Redaction only covers secrets supplied by the caller and their derived forms.
-It is not a general credential detector. Default summaries and hints are fixed,
-single-line strict-UTF-8 values in the immutable registry. Exact codes and API
-shapes live in [Interactive terminal](../reference/interactive-terminal.md#help-output-and-errors).
+Redaction covers supplied secrets and derived forms; it is not a credential
+detector. The terminal never accepts an exception or infers a code from its
+text. A `provider_preflight_failed` hint may suggest broader troubleshooting,
+but it is not a report of checks already performed. See the exact boundary in
+[Session lifecycle](../design/session-lifecycle.md#entering-the-lobby).
 
-## Input and history consequences
+## Input and process-local history
 
-Display escaping does not alter input returned in a `TerminalAction`. A sent
-composition preserves its exact lines joined by LF; the future controller must
-decide whether to parse, send, or persist it.
+Display escaping does not change input returned in a `TerminalAction`. Sent
+composition keeps exact lines joined by LF. Its buffer exists only for that
+`compose()` call; cancel, Ctrl-C, or EOF returns counts but no text. This is not
+secure erasure because callbacks, the terminal, or process memory may retain a
+copy.
 
-Composition history exists only in a list owned by that `compose()` call.
-Cancel, keyboard interrupt, or EOF returns counts but no text and releases the
-buffer when the call ends. This is not secure erasure: the input callback,
-terminal emulator, process memory, or surrounding controller may retain copies.
+The component opens no file, contacts no provider, and stores no history. The
+Issue #10 lobby passes `history_count=None` and therefore makes no room-history
+claim. Chat dispatch and conversation history remain unavailable.
 
-The component itself opens no file, contacts no provider, and stores no
-history. Its output callback may do any of those things, so callers must choose
-callbacks appropriate for their privacy requirements.
-
-## Different from stored runtime diagnostics
-
-Terminal errors are presentation-only, use caller-supplied secrets and the caps
-above, and are not conversation `runtime_error` events.
-
-`StoryRuntime` diagnostics are stored transcript content. Their sanitizer
-automatically redacts the current message, context, and workspace roots and
-uses a different cap. See [Privacy and provider exposure](privacy-and-provider.md#runtime-error-diagnostics)
-for that persistence contract.
+Terminal errors are presentation-only, not conversation `runtime_error`
+events. Stored runtime diagnostics use a different automatic redaction set and
+4096-character cap; see [Privacy and provider exposure](privacy-and-provider.md#runtime-error-diagnostics).
