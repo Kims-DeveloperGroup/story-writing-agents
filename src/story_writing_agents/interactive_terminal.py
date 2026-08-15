@@ -1184,9 +1184,10 @@ def _wrap_preserved_content_lines(
 ) -> list[str]:
     """Wrap content while preserving each LF as a safe continued line.
 
-    The first source line receives ``prefix`` and later source lines receive
-    matching indentation. The result retains empty and trailing source lines
-    plus boundary whitespace; callback ownership remains with the caller.
+    The first source line receives ``prefix`` and nonempty later source lines
+    receive matching indentation. Empty source lines remain empty. The result
+    retains trailing source lines and boundary whitespace; callback ownership
+    remains with the caller.
     """
 
     continuation_prefix = " " * len(prefix)
