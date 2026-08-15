@@ -99,6 +99,10 @@ if mode == "nonzero":
         sensitive.extend(item["content"] for item in payload["context"])
     else:
         sensitive = [payload["user_payload"]]
+        sensitive.extend(
+            item["content"]
+            for item in payload.get("conversation_context", [])
+        )
     prefix = "X" * 5000 if os.environ.get("STORY_FAKE_CODEX_LONG_DIAGNOSTIC") else ""
     print(
         prefix
@@ -623,6 +627,85 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             )
         )
         self.assertNotIn("resume", argv)
+
+    async def test_debate_context_is_the_only_additive_payload_field(self) -> None:
+        session_id = "debate_context_session"
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        backend.start_session(session_id)
+        bound = await backend.bind(self.definition())
+        legacy = self.request(session_id=session_id)
+        await bound.invoke(legacy)
+
+        context = _context_window(
+            _conversation_pair(
+                "prior_turn",
+                session_id=session_id,
+                conversation_id="selected_conversation",
+                user_content="selected question",
+                outcome_content="selected answer",
+            )
+        )
+        included = replace(
+            legacy,
+            debate_id="included_debate",
+            conversation_context=context,
+        )
+        await bound.invoke(included)
+
+        legacy_payload, included_payload = (
+            invocation["payload"] for invocation in self.provider_invocations()
+        )
+        legacy_fields = {
+            "session_id",
+            "debate_id",
+            "agent_id",
+            "phase",
+            "round_number",
+            "revision_id",
+            "task",
+            "user_payload",
+            "candidate_payload",
+            "messages",
+            "agent_state",
+        }
+        self.assertEqual(set(legacy_payload), legacy_fields)
+        self.assertNotIn("conversation_context", legacy_payload)
+        self.assertEqual(
+            set(included_payload),
+            legacy_fields | {"conversation_context"},
+        )
+        projected = included_payload["conversation_context"]
+        self.assertEqual(
+            projected,
+            [
+                {
+                    "turn_id": event.turn_id,
+                    "sender": event.sender,
+                    "recipient": event.recipient,
+                    "kind": event.kind.value,
+                    "content": event.content,
+                }
+                for event in context.events
+            ],
+        )
+        self.assertTrue(
+            all(
+                set(event)
+                == {"turn_id", "sender", "recipient", "kind", "content"}
+                for event in projected
+            )
+        )
+        serialized = json.dumps(included_payload, ensure_ascii=False)
+        for metadata_name in (
+            "total_complete_turns",
+            "retained_turns",
+            "omitted_turns",
+            "retained_utf8_bytes",
+            "truncated",
+            "selected_conversation",
+        ):
+            self.assertNotIn(metadata_name, serialized)
 
     async def test_conversation_projects_exact_payload_schema_and_no_artifacts(
         self,
@@ -1413,6 +1496,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
     async def test_debate_diagnostic_redacts_control_bearing_payload(self) -> None:
         session_id = "debate_diagnostic_session"
         secret = "DEBATE_SECRET\x00TAIL"
+        context_secret = 'CONTEXT_SECRET\\"한🙂\x1bTAIL'
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
         backend.start_session(session_id)
@@ -1420,6 +1504,15 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         request = replace(
             self.request(session_id=session_id),
             user_payload=secret,
+            conversation_context=_context_window(
+                _conversation_pair(
+                    "secret_turn",
+                    session_id=session_id,
+                    conversation_id="selected_conversation",
+                    user_content=context_secret,
+                    outcome_content="context reply secret",
+                )
+            ),
         )
         with mock.patch.dict(
             os.environ,
@@ -1432,9 +1525,19 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 await bound.invoke(request)
 
         diagnostic = str(caught.exception)
-        for sensitive in (secret, secret.replace("\x00", "?"), "DEBATE_SECRET"):
+        for sensitive in (
+            secret,
+            secret.replace("\x00", "?"),
+            "DEBATE_SECRET",
+            context_secret,
+            "CONTEXT_SECRET",
+            "context reply secret",
+            json.dumps(context_secret, ensure_ascii=False)[1:-1],
+            json.dumps(context_secret, ensure_ascii=True)[1:-1],
+        ):
             self.assertNotIn(sensitive, diagnostic)
-        self.assertNotIn("\x00", diagnostic)
+        for control in ("\x00", "\x1b"):
+            self.assertNotIn(control, diagnostic)
         self.assertIn("<redacted>", diagnostic)
 
     async def test_missing_executable_nonzero_and_malformed_output_fail_cleanly(

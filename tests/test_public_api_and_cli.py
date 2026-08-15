@@ -12,6 +12,7 @@ import sys
 import tempfile
 import tomllib
 import unittest
+from dataclasses import MISSING, FrozenInstanceError, fields
 from pathlib import Path
 from typing import get_type_hints
 from unittest import mock
@@ -22,7 +23,16 @@ from story_writing_agents import (
     AGENT_SPECS,
     ConversationEventStore,
     ConversationResult,
+    DebateContextMode,
+    DebateContextRequest,
+    DebateFailureKind,
+    DebateProgressEvent,
+    DebateProgressPhase,
+    DebateResult,
+    DebateStatus,
+    InputKind,
     PLOT_ARCHITECT,
+    ProgressObserverError,
     Runtime,
     RuntimeSession,
     Session,
@@ -169,6 +179,386 @@ class PublicApiTests(unittest.TestCase):
                 self.assertTrue(
                     issubclass(getattr(story_writing_agents, name), base_error)
                 )
+
+    def test_debate_context_and_progress_public_models_are_exact(self) -> None:
+        required = {
+            "DebateContextMode",
+            "DebateContextRequest",
+            "DebateFailureKind",
+            "DebateProgressEvent",
+            "DebateProgressPhase",
+            "DebateProgressSink",
+            "ProgressObserverError",
+        }
+        self.assertTrue(required.issubset(story_writing_agents.__all__))
+        self.assertEqual(
+            tuple((member.name, member.value) for member in DebateContextMode),
+            (("INCLUDED", "included"), ("FRESH", "fresh")),
+        )
+        self.assertEqual(
+            tuple((member.name, member.value) for member in DebateProgressPhase),
+            (
+                ("STARTED", "started"),
+                ("DRAFTED", "drafted"),
+                ("AUDIT_STARTED", "audit_started"),
+                ("AUDIT_COMPLETED", "audit_completed"),
+                ("SYNTHESIZED", "synthesized"),
+                ("ARTIFACTS_COMMITTED", "artifacts_committed"),
+                ("CONSENSUS", "consensus"),
+                ("DEADLOCK", "deadlock"),
+                ("FAILED", "failed"),
+                ("INTERRUPTED", "interrupted"),
+            ),
+        )
+        self.assertEqual(
+            tuple((member.name, member.value) for member in DebateFailureKind),
+            (
+                ("PREFLIGHT", "preflight"),
+                ("PROTOCOL", "protocol"),
+                ("CONTEXT", "context"),
+                ("WORKSPACE", "workspace"),
+                ("ARTIFACT_CONFLICT", "artifact_conflict"),
+                ("ARTIFACT_FAILURE", "artifact_failure"),
+                ("INTERNAL", "internal"),
+            ),
+        )
+
+        context_fields = fields(DebateContextRequest)
+        self.assertEqual(
+            tuple(field.name for field in context_fields),
+            ("conversation_id", "mode"),
+        )
+        self.assertTrue(all(field.default is MISSING for field in context_fields))
+        self.assertTrue(
+            all(
+                parameter.kind is inspect.Parameter.KEYWORD_ONLY
+                for parameter in inspect.signature(
+                    DebateContextRequest
+                ).parameters.values()
+            )
+        )
+        request = DebateContextRequest(
+            conversation_id="conversation_a",
+            mode=DebateContextMode.INCLUDED,
+        )
+        self.assertFalse(hasattr(request, "__dict__"))
+        with self.assertRaises(FrozenInstanceError):
+            request.mode = DebateContextMode.FRESH  # type: ignore[misc]
+        with self.assertRaises(TypeError):
+            DebateContextRequest(  # type: ignore[misc]
+                "conversation_a",
+                DebateContextMode.INCLUDED,
+            )
+
+        progress_fields = fields(DebateProgressEvent)
+        self.assertEqual(
+            tuple(field.name for field in progress_fields),
+            (
+                "session_id",
+                "debate_id",
+                "input_kind",
+                "phase",
+                "revision_id",
+                "round_number",
+                "context_mode",
+                "context_event_count",
+                "context_omitted_turns",
+                "conflicting_agents",
+                "manuscript_path",
+                "core_updates",
+                "failure_kind",
+            ),
+        )
+        self.assertEqual(
+            tuple(field.default for field in progress_fields),
+            (
+                MISSING,
+                MISSING,
+                MISSING,
+                MISSING,
+                None,
+                0,
+                None,
+                0,
+                0,
+                (),
+                None,
+                (),
+                None,
+            ),
+        )
+        self.assertTrue(
+            all(
+                parameter.kind is inspect.Parameter.KEYWORD_ONLY
+                for parameter in inspect.signature(
+                    DebateProgressEvent
+                ).parameters.values()
+            )
+        )
+        event = DebateProgressEvent(
+            session_id="session_a",
+            debate_id="debate_a",
+            input_kind=InputKind.PROMPT,
+            phase=DebateProgressPhase.STARTED,
+        )
+        self.assertFalse(hasattr(event, "__dict__"))
+        with self.assertRaises(FrozenInstanceError):
+            event.phase = DebateProgressPhase.DRAFTED  # type: ignore[misc]
+        self.assertEqual(tuple(inspect.signature(ProgressObserverError).parameters), ())
+        observer_error = ProgressObserverError()
+        self.assertEqual(str(observer_error), "debate progress observer failed")
+        self.assertFalse(hasattr(observer_error, "cause"))
+        self.assertIsNone(observer_error.__cause__)
+        self.assertNotIn("private observer prose", str(observer_error))
+        with self.assertRaises(TypeError):
+            ProgressObserverError(RuntimeError("private observer prose"))
+
+    def test_debate_progress_phase_invariants_are_exhaustive(self) -> None:
+        common = {
+            "session_id": "session_a",
+            "debate_id": "debate_a",
+            "input_kind": InputKind.PROMPT,
+        }
+        valid = (
+            {"phase": DebateProgressPhase.STARTED},
+            {
+                "phase": DebateProgressPhase.STARTED,
+                "context_mode": DebateContextMode.INCLUDED,
+                "context_event_count": 2,
+                "context_omitted_turns": 3,
+            },
+            {
+                "phase": DebateProgressPhase.DRAFTED,
+                "revision_id": "r0",
+            },
+            {
+                "phase": DebateProgressPhase.AUDIT_STARTED,
+                "revision_id": "r0",
+            },
+            {
+                "phase": DebateProgressPhase.AUDIT_COMPLETED,
+                "revision_id": "r0",
+                "conflicting_agents": ("plot_architect",),
+            },
+            {
+                "phase": DebateProgressPhase.SYNTHESIZED,
+                "revision_id": "r1",
+                "round_number": 1,
+            },
+            {
+                "phase": DebateProgressPhase.ARTIFACTS_COMMITTED,
+                "revision_id": "r1",
+                "round_number": 1,
+                "manuscript_path": "manuscript/chapter.md",
+                "core_updates": ("global_outline.md",),
+            },
+            {
+                "phase": DebateProgressPhase.CONSENSUS,
+                "revision_id": "r1",
+                "round_number": 1,
+            },
+            {
+                "phase": DebateProgressPhase.DEADLOCK,
+                "revision_id": "r1",
+                "round_number": 1,
+            },
+            {
+                "phase": DebateProgressPhase.FAILED,
+                "revision_id": None,
+                "round_number": 2,
+                "failure_kind": DebateFailureKind.INTERNAL,
+            },
+            {"phase": DebateProgressPhase.INTERRUPTED},
+        )
+        for values in valid:
+            with self.subTest(valid=values["phase"]):
+                self.assertIsInstance(
+                    DebateProgressEvent(**common, **values),  # type: ignore[arg-type]
+                    DebateProgressEvent,
+                )
+
+        invalid = (
+            {"phase": DebateProgressPhase.STARTED, "revision_id": "r0"},
+            {"phase": DebateProgressPhase.STARTED, "context_event_count": 1},
+            {
+                "phase": DebateProgressPhase.STARTED,
+                "context_mode": DebateContextMode.FRESH,
+                "context_omitted_turns": 1,
+            },
+            {"phase": DebateProgressPhase.DRAFTED, "revision_id": "r1"},
+            {
+                "phase": DebateProgressPhase.AUDIT_STARTED,
+                "revision_id": "r0",
+                "conflicting_agents": ("plot_architect",),
+            },
+            {
+                "phase": DebateProgressPhase.AUDIT_COMPLETED,
+                "revision_id": "r0",
+                "conflicting_agents": ("execution_specialist", "plot_architect"),
+            },
+            {
+                "phase": DebateProgressPhase.SYNTHESIZED,
+                "revision_id": "r1",
+            },
+            {
+                "phase": DebateProgressPhase.ARTIFACTS_COMMITTED,
+                "revision_id": "r0",
+            },
+            {
+                "phase": DebateProgressPhase.CONSENSUS,
+                "revision_id": None,
+            },
+            {
+                "phase": DebateProgressPhase.DEADLOCK,
+                "revision_id": "r0",
+                "context_mode": DebateContextMode.FRESH,
+            },
+            {"phase": DebateProgressPhase.FAILED},
+            {
+                "phase": DebateProgressPhase.INTERRUPTED,
+                "failure_kind": DebateFailureKind.INTERNAL,
+            },
+        )
+        for values in invalid:
+            with self.subTest(invalid=values):
+                with self.assertRaises((TypeError, ValueError)):
+                    DebateProgressEvent(**common, **values)  # type: ignore[arg-type]
+
+    def test_debate_run_signatures_are_additive_and_result_shape_is_unchanged(
+        self,
+    ) -> None:
+        method_cases = (
+            (
+                StoryRuntime.run_prompt,
+                (
+                    "self",
+                    "session_id",
+                    "prompt",
+                    "manuscript_name",
+                    "max_debate_rounds",
+                    "debate_id",
+                    "conversation_context",
+                    "progress_sink",
+                ),
+                3,
+            ),
+            (
+                StoryRuntime.run_draft,
+                (
+                    "self",
+                    "session_id",
+                    "draft",
+                    "manuscript_name",
+                    "max_debate_rounds",
+                    "debate_id",
+                    "conversation_context",
+                    "progress_sink",
+                ),
+                3,
+            ),
+            (
+                RuntimeSession.run_prompt,
+                (
+                    "self",
+                    "prompt",
+                    "manuscript_name",
+                    "max_debate_rounds",
+                    "debate_id",
+                    "conversation_context",
+                    "progress_sink",
+                ),
+                2,
+            ),
+            (
+                RuntimeSession.run_draft,
+                (
+                    "self",
+                    "draft",
+                    "manuscript_name",
+                    "max_debate_rounds",
+                    "debate_id",
+                    "conversation_context",
+                    "progress_sink",
+                ),
+                2,
+            ),
+        )
+        for method, names, positional_count in method_cases:
+            with self.subTest(method=method.__qualname__):
+                signature = inspect.signature(method)
+                self.assertEqual(tuple(signature.parameters), names)
+                parameters = tuple(signature.parameters.values())
+                self.assertTrue(
+                    all(
+                        parameter.kind
+                        is inspect.Parameter.POSITIONAL_OR_KEYWORD
+                        for parameter in parameters[:positional_count]
+                    )
+                )
+                self.assertTrue(
+                    all(
+                        parameter.kind is inspect.Parameter.KEYWORD_ONLY
+                        and parameter.default is None
+                        for parameter in parameters[positional_count:]
+                    )
+                )
+        for method, names in (
+            (
+                StoryRuntime.inspect_debate_context,
+                ("self", "session_id", "debate_id"),
+            ),
+            (RuntimeSession.inspect_debate_context, ("self", "debate_id")),
+        ):
+            signature = inspect.signature(method)
+            self.assertEqual(tuple(signature.parameters), names)
+
+        self.assertEqual(
+            tuple(field.name for field in fields(DebateResult)),
+            (
+                "session_id",
+                "debate_id",
+                "input_kind",
+                "status",
+                "revision_id",
+                "rounds_completed",
+                "final_candidate",
+                "latest_candidate",
+                "manuscript_path",
+                "core_updates",
+                "messages",
+                "error",
+                "action_required",
+            ),
+        )
+        legacy = DebateResult(
+            "session_a",
+            "debate_a",
+            InputKind.DRAFT,
+            DebateStatus.DEADLOCK,
+            "r1",
+            1,
+            None,
+            "candidate",
+            None,
+        )
+        self.assertEqual(
+            set(legacy.to_dict()),
+            {
+                "session_id",
+                "debate_id",
+                "input_kind",
+                "status",
+                "revision_id",
+                "rounds_completed",
+                "final_candidate",
+                "latest_candidate",
+                "manuscript_path",
+                "core_updates",
+                "messages",
+                "error",
+                "action_required",
+            },
+        )
 
     def test_conversation_runtime_signatures_are_exact_and_compatible(self) -> None:
         constructor = inspect.signature(StoryRuntime)

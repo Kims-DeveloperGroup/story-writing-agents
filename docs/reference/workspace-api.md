@@ -13,8 +13,7 @@ ownership of a debate ID; **allowlist**—the fixed permitted core filenames.
 ```python
 Workspace(root: str | os.PathLike[str])
 Workspace.initialize(*, overwrite_prompts: bool = False) -> Workspace
-initialize_workspace(root: str | os.PathLike[str], *,
-                     overwrite_prompts: bool = False) -> Workspace
+initialize_workspace(root: str | os.PathLike[str], *, overwrite_prompts: bool = False) -> Workspace
 
 Workspace.validate_identifier(value: str, *, label: str = "session ID") -> str
 Workspace.validate_template_name(value: str) -> str
@@ -30,8 +29,7 @@ Workspace.read_core_documents(filenames: tuple[str, ...]) -> dict[str, str]
 Workspace.read_manuscript(manuscript_name: str) -> str
 Workspace.write_manuscript(manuscript_name: str, content: str) -> pathlib.Path
 Workspace.load_session_overrides(session_id: str) -> dict[str, Any]
-Workspace.save_session_overrides(session_id: str,
-                                 overrides: Mapping[str, Any]) -> pathlib.Path
+Workspace.save_session_overrides(session_id: str, overrides: Mapping[str, Any]) -> pathlib.Path
 ```
 
 Initialization creates missing scaffold and normally preserves existing files.
@@ -66,6 +64,10 @@ Workspace.read_debate_messages(session_id: str,
                                debate_id: str) -> tuple[DebateMessage, ...]
 Workspace.save_debate_result(result: DebateResult, *,
                              overwrite: bool = False) -> pathlib.Path
+Workspace.save_debate_context(session_id: str, debate_id: str, *,
+    conversation_id: str, mode: DebateContextMode,
+    snapshot: ConversationContextWindow | None) -> pathlib.Path
+Workspace.inspect_debate_context(session_id: str, debate_id: str) -> dict[str, Any] | None
 Workspace.inspect_debate(session_id: str, debate_id: str) -> dict[str, Any]
 Workspace.inspect_session(session_id: str) -> dict[str, Any]
 Workspace.commit_approved_artifacts(manuscript_name: str, candidate: str,
@@ -76,6 +78,13 @@ These methods are public but are low-level orchestration primitives; normal
 integrations should use `StoryRuntime`. Reservation uses exclusive creation, so
 one session/debate ID has one owner. The owner token coordinates transitions
 but is not authentication and is omitted by normal inspection.
+
+`save_debate_context()` exclusively creates an identity-bound sidecar: included
+mode requires a canonical snapshot, while fresh mode requires `None`.
+`inspect_debate_context()` is a separate strict read and returns `None` for an
+absent legacy sidecar. It does not change `inspect_debate()` or
+`inspect_session()`. The schema is owned by
+[Persistence](../design/persistence.md#debate-context-sidecar).
 
 Artifact commit validates the complete update map and manuscript target before
 content writes. It stages and atomically replaces allowlisted core documents in

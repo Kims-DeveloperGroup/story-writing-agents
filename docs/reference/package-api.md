@@ -1,8 +1,8 @@
 # Package API and exports
 
 > **Availability:** every name below is exported from the implemented
-> `story_writing_agents` package facade. The persisted one-turn runtime API is
-> Python-only; an export does not imply a CLI command.
+> `story_writing_agents` package facade. Context and progress types are Python
+> APIs; an export does not imply a CLI command.
 
 Key terms: **package facade**—the names re-exported at the package root;
 **public import**—a supported symbol imported from that facade; **alias**—a
@@ -24,7 +24,9 @@ The exact export inventory is:
   `AgentDefinition`, `AgentRequest`, `AgentReply`, `ConversationRequest`,
   `ConversationReply`, `ConversationResult`, `AgentStateEntry`,
   `DebateMessage`, `DebateResult`, `InputKind`, `Phase`, `Verdict`,
-  `DebateStatus`;
+  `DebateStatus`, `DebateContextMode`, `DebateContextRequest`,
+  `DebateFailureKind`, `DebateProgressPhase`, `DebateProgressEvent`, and
+  `DebateProgressSink`;
 - runtime: `StoryRuntime`, `RuntimeSession`, `Runtime`, `Session`;
 - directives: `DirectiveKind`, `RuntimeDirective`, `parse_directive`,
   `apply_directive`;
@@ -53,7 +55,7 @@ The exact export inventory is:
   `SessionIdError`, `ConversationNotFoundError`,
   `ConversationExistsError`, `ManuscriptExistsError`,
   `BackendProtocolError`, `SessionExistsError`, `SessionNotFoundError`,
-  `SessionInUseError`, and `DebateExistsError`.
+  `SessionInUseError`, `DebateExistsError`, and `ProgressObserverError`.
 
 `Runtime` is exactly an alias of `StoryRuntime`; `Session` is exactly an alias
 of `RuntimeSession`. They do not provide different behavior.
@@ -66,6 +68,9 @@ of `RuntimeSession`. They do not provide different behavior.
 | `Phase` | `draft`, `audit`, `propose_revision`, `synthesize`, `finalize` |
 | `Verdict` | `approve`, `conflict` |
 | `DebateStatus` | `consensus`, `deadlock`, `failed` |
+| `DebateContextMode` | `included`, `fresh` |
+| `DebateProgressPhase` | `started`, `drafted`, `audit_started`, `audit_completed`, `synthesized`, `artifacts_committed`, `consensus`, `deadlock`, `failed`, `interrupted` |
+| `DebateFailureKind` | `preflight`, `protocol`, `context`, `workspace`, `artifact_conflict`, `artifact_failure`, `internal` |
 | `DirectiveKind` | `language`, `persona`, `reset` |
 | `SessionLeaseState` | `available`, `owned`, `in_use`, `unverified` |
 | `ConversationStatus` | `active`, `archived` |

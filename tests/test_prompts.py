@@ -14,6 +14,7 @@ from story_writing_agents import (
     AgentDefinition,
     AgentReply,
     AgentRequest,
+    ConversationContextWindow,
     DebateMessage,
     PLOT_ARCHITECT,
     Phase,
@@ -88,6 +89,40 @@ class PromptAssemblerTests(unittest.TestCase):
         self.assertEqual(request.messages, (visible_message,))
         self.assertTrue(request.task.startswith("Audit the candidate."))
         self.assertIn("Do not reveal", request.task)
+        self.assertIsNone(request.conversation_context)
+
+    def test_agent_request_optional_context_is_last_and_forwarded_canonically(
+        self,
+    ) -> None:
+        request_fields = fields(AgentRequest)
+        self.assertEqual(request_fields[-1].name, "conversation_context")
+        self.assertIsNone(request_fields[-1].default)
+        context = ConversationContextWindow(
+            events=(),
+            total_complete_turns=0,
+            retained_turns=0,
+            omitted_turns=0,
+            retained_utf8_bytes=0,
+            truncated=False,
+        )
+
+        request = self.assembler.build_request(
+            session_id="prompt_session",
+            debate_id="prompt_debate",
+            agent_id=PLOT_ARCHITECT,
+            phase=Phase.AUDIT,
+            round_number=0,
+            revision_id="r0",
+            task="Audit the candidate.",
+            user_payload="payload",
+            conversation_context=context,
+        )
+
+        self.assertEqual(request.conversation_context, context)
+        self.assertIsInstance(
+            request.conversation_context,
+            ConversationContextWindow,
+        )
 
     def test_definition_has_exact_reference_order_paths_hashes_and_language(
         self,

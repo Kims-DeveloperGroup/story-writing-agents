@@ -55,3 +55,12 @@ class SessionInUseError(BackendProtocolError):
 
 class DebateExistsError(StoryWritingAgentsError):
     """Raised when a session/debate identifier has already been reserved."""
+
+
+class ProgressObserverError(StoryWritingAgentsError):
+    """Fixed nonsensitive failure raised for a debate progress observer."""
+
+    def __init__(self) -> None:
+        """Create the fixed-message error without public payload or mutation."""
+
+        super().__init__("debate progress observer failed")

@@ -34,6 +34,7 @@ from .conversations import (
     ConversationEventKind,
     ConversationMetadata,
     ConversationStatus,
+    validate_conversation_context_window,
 )
 from .errors import (
     ConversationExistsError,
@@ -44,7 +45,12 @@ from .errors import (
     WorkspaceFormatError,
     WorkspaceSecurityError,
 )
-from .models import AgentStateEntry, DebateMessage, DebateResult
+from .models import (
+    AgentStateEntry,
+    DebateContextMode,
+    DebateMessage,
+    DebateResult,
+)
 
 
 _SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
@@ -71,6 +77,22 @@ _CONVERSATION_EVENT_FIELDS = frozenset({
     "recipient",
     "kind",
     "content",
+})
+_DEBATE_CONTEXT_FIELDS = frozenset({
+    "schema_version",
+    "session_id",
+    "debate_id",
+    "conversation_id",
+    "mode",
+    "snapshot",
+})
+_DEBATE_CONTEXT_SNAPSHOT_FIELDS = frozenset({
+    "events",
+    "total_complete_turns",
+    "retained_turns",
+    "omitted_turns",
+    "retained_utf8_bytes",
+    "truncated",
 })
 
 
@@ -463,7 +485,12 @@ class Workspace:
         input_kind: str,
         owner_token: str,
     ) -> dict[str, Any]:
-        """Atomically claim a debate identifier and persist its active state."""
+        """Atomically claim a debate identifier and persist its active state.
+
+        Existing state, log, result, or context-sidecar artifacts reject the
+        reservation without replacement. Valid input returns the durable active
+        state; validation, security, collision, or I/O failures propagate.
+        """
 
         session = self.validate_identifier(session_id)
         debate = self.validate_identifier(debate_id, label="debate ID")
@@ -472,7 +499,7 @@ class Workspace:
         if not isinstance(owner_token, str) or not owner_token:
             raise WorkspaceFormatError("debate owner token must be non-empty text")
 
-        for suffix in (".jsonl", ".result.json"):
+        for suffix in (".jsonl", ".result.json", ".context.json"):
             if self.path(self._debate_relative(session, debate, suffix)).exists():
                 raise DebateExistsError(
                     f"debate already exists: {session}/{debate}"
@@ -621,6 +648,97 @@ class Workspace:
                 f"debate result already exists: "
                 f"{result.session_id}/{result.debate_id}"
             ) from exc
+
+    def save_debate_context(
+        self,
+        session_id: str,
+        debate_id: str,
+        *,
+        conversation_id: str,
+        mode: DebateContextMode,
+        snapshot: ConversationContextWindow | None,
+    ) -> Path:
+        """Create one immutable, identity-bound version-1 debate context sidecar.
+
+        Included mode requires and canonically validates an exact conversation
+        snapshot; fresh mode requires ``None``. The sidecar is durably written
+        without replacement and its path is returned. Invalid values raise
+        validation errors, while an existing sidecar raises ``DebateExistsError``.
+        """
+
+        session = self.validate_identifier(session_id)
+        debate = self.validate_identifier(debate_id, label="debate ID")
+        conversation = self.validate_identifier(
+            conversation_id,
+            label="conversation ID",
+        )
+        if not isinstance(mode, DebateContextMode):
+            raise TypeError("debate context mode must be a DebateContextMode")
+        if mode is DebateContextMode.INCLUDED:
+            if snapshot is None:
+                raise ValueError("included debate context requires a snapshot")
+            canonical_snapshot = validate_conversation_context_window(
+                snapshot,
+                session_id=session,
+                conversation_id=conversation,
+            )
+            serialized_snapshot = self._serialize_debate_context_snapshot(
+                canonical_snapshot
+            )
+        else:
+            if snapshot is not None:
+                raise ValueError("fresh debate context snapshot must be null")
+            serialized_snapshot = None
+
+        value = {
+            "schema_version": 1,
+            "session_id": session,
+            "debate_id": debate,
+            "conversation_id": conversation,
+            "mode": mode.value,
+            "snapshot": serialized_snapshot,
+        }
+        relative = self._debate_relative(session, debate, ".context.json")
+        try:
+            return self.write_json(relative, value, overwrite=False)
+        except ManuscriptExistsError as exc:
+            raise DebateExistsError(
+                f"debate context already exists: {session}/{debate}"
+            ) from exc
+
+    def inspect_debate_context(
+        self,
+        session_id: str,
+        debate_id: str,
+    ) -> dict[str, Any] | None:
+        """Read one strict debate context sidecar without creating workspace state.
+
+        Absence returns ``None`` for a legacy run. A present sidecar is parsed
+        with duplicate-key rejection, identity-bound, and returned as the exact
+        version-1 JSON shape; malformed or mismatched data raises
+        ``WorkspaceFormatError`` and no file is changed.
+        """
+
+        session = self.validate_identifier(session_id)
+        debate = self.validate_identifier(debate_id, label="debate ID")
+        relative = self._debate_relative(session, debate, ".context.json")
+        target = self.path(relative)
+        if not target.exists():
+            return None
+        try:
+            value = json.loads(
+                self.read_text(relative),
+                object_pairs_hook=self._reject_duplicate_json_fields,
+            )
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise WorkspaceFormatError(
+                f"debate context sidecar is not valid JSON: {session}/{debate}"
+            ) from exc
+        return self._validate_debate_context_sidecar(
+            value,
+            session_id=session,
+            debate_id=debate,
+        )
 
     def inspect_debate(self, session_id: str, debate_id: str) -> dict[str, Any]:
         session = self.validate_identifier(session_id)
@@ -983,6 +1101,177 @@ class Workspace:
         ):
             raise WorkspaceFormatError("debate result core_updates is invalid")
         return dict(value)
+
+    @staticmethod
+    def _serialize_debate_context_snapshot(
+        snapshot: ConversationContextWindow,
+    ) -> dict[str, Any]:
+        """Return one canonical snapshot's exact version-1 JSON fields."""
+
+        return {
+            "events": [event.to_dict() for event in snapshot.events],
+            "total_complete_turns": snapshot.total_complete_turns,
+            "retained_turns": snapshot.retained_turns,
+            "omitted_turns": snapshot.omitted_turns,
+            "retained_utf8_bytes": snapshot.retained_utf8_bytes,
+            "truncated": snapshot.truncated,
+        }
+
+    def _validate_debate_context_sidecar(
+        self,
+        value: Any,
+        *,
+        session_id: str,
+        debate_id: str,
+    ) -> dict[str, Any]:
+        """Return a strict identity-bound sidecar or raise without mutation."""
+
+        if not isinstance(value, dict) or set(value) != _DEBATE_CONTEXT_FIELDS:
+            raise WorkspaceFormatError("debate context sidecar has an invalid schema")
+        if (
+            isinstance(value["schema_version"], bool)
+            or not isinstance(value["schema_version"], int)
+            or value["schema_version"] != 1
+        ):
+            raise WorkspaceFormatError(
+                "unsupported debate context sidecar schema version"
+            )
+        try:
+            stored_session = self.validate_identifier(value["session_id"])
+            stored_debate = self.validate_identifier(
+                value["debate_id"],
+                label="debate ID",
+            )
+            conversation = self.validate_identifier(
+                value["conversation_id"],
+                label="conversation ID",
+            )
+        except (SessionIdError, TypeError, ValueError) as exc:
+            raise WorkspaceFormatError(
+                "debate context sidecar has an invalid identity"
+            ) from exc
+        if stored_session != session_id or stored_debate != debate_id:
+            raise WorkspaceFormatError(
+                "debate context sidecar identity does not match its path"
+            )
+        raw_mode = value["mode"]
+        if not isinstance(raw_mode, str):
+            raise WorkspaceFormatError("debate context sidecar mode is invalid")
+        try:
+            mode = DebateContextMode(raw_mode)
+        except ValueError as exc:
+            raise WorkspaceFormatError(
+                "debate context sidecar mode is invalid"
+            ) from exc
+
+        raw_snapshot = value["snapshot"]
+        if mode is DebateContextMode.FRESH:
+            if raw_snapshot is not None:
+                raise WorkspaceFormatError(
+                    "fresh debate context sidecar snapshot must be null"
+                )
+            serialized_snapshot = None
+        else:
+            canonical_snapshot = self._parse_debate_context_snapshot(
+                raw_snapshot,
+                session_id=session_id,
+                conversation_id=conversation,
+            )
+            serialized_snapshot = self._serialize_debate_context_snapshot(
+                canonical_snapshot
+            )
+        return {
+            "schema_version": 1,
+            "session_id": session_id,
+            "debate_id": debate_id,
+            "conversation_id": conversation,
+            "mode": mode.value,
+            "snapshot": serialized_snapshot,
+        }
+
+    @staticmethod
+    def _parse_debate_context_snapshot(
+        value: Any,
+        *,
+        session_id: str,
+        conversation_id: str,
+    ) -> ConversationContextWindow:
+        """Parse and canonicalize strict snapshot fields without filesystem I/O."""
+
+        if (
+            not isinstance(value, dict)
+            or set(value) != _DEBATE_CONTEXT_SNAPSHOT_FIELDS
+        ):
+            raise WorkspaceFormatError(
+                "included debate context snapshot has an invalid schema"
+            )
+        raw_events = value["events"]
+        if not isinstance(raw_events, list):
+            raise WorkspaceFormatError(
+                "included debate context snapshot events must be a list"
+            )
+        events: list[ConversationEvent] = []
+        for raw_event in raw_events:
+            if (
+                not isinstance(raw_event, dict)
+                or set(raw_event) != _CONVERSATION_EVENT_FIELDS
+            ):
+                raise WorkspaceFormatError(
+                    "included debate context event has an invalid schema"
+                )
+            try:
+                raw_kind = raw_event["kind"]
+                if not isinstance(raw_kind, str):
+                    raise TypeError("event kind must be a string")
+                events.append(
+                    ConversationEvent(
+                        schema_version=raw_event["schema_version"],
+                        session_id=raw_event["session_id"],
+                        conversation_id=raw_event["conversation_id"],
+                        turn_id=raw_event["turn_id"],
+                        sequence=raw_event["sequence"],
+                        timestamp=raw_event["timestamp"],
+                        sender=raw_event["sender"],
+                        recipient=raw_event["recipient"],
+                        kind=ConversationEventKind(raw_kind),
+                        content=raw_event["content"],
+                    )
+                )
+            except (SessionIdError, TypeError, ValueError) as exc:
+                raise WorkspaceFormatError(
+                    "included debate context event has an invalid value"
+                ) from exc
+        try:
+            snapshot = ConversationContextWindow(
+                events=tuple(events),
+                total_complete_turns=value["total_complete_turns"],
+                retained_turns=value["retained_turns"],
+                omitted_turns=value["omitted_turns"],
+                retained_utf8_bytes=value["retained_utf8_bytes"],
+                truncated=value["truncated"],
+            )
+            return validate_conversation_context_window(
+                snapshot,
+                session_id=session_id,
+                conversation_id=conversation_id,
+            )
+        except (SessionIdError, TypeError, ValueError) as exc:
+            raise WorkspaceFormatError(
+                "included debate context snapshot has an invalid value"
+            ) from exc
+
+    @staticmethod
+    def _reject_duplicate_json_fields(
+        pairs: list[tuple[str, Any]],
+    ) -> dict[str, Any]:
+        """Build one JSON object while rejecting every duplicate field name."""
+
+        result: dict[str, Any] = {}
+        for key, field_value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate field: {key}")
+            result[key] = field_value
+        return result
 
     @staticmethod
     def _manuscript_relative(manuscript_name: str) -> Path:

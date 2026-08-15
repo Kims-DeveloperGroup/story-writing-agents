@@ -4,8 +4,8 @@ Use this index to find one canonical answer instead of searching a long manual.
 
 > **Availability:** bare `story` and `story chat` open the installed TTY shell.
 > It manages story sessions and subject conversations, routes single-line
-> advisory turns, searches active conversations, and reads bounded active or
-> archived transcripts. History, consensus, and artifact commands remain separate.
+> advisory turns, searches and reads transcripts, and runs selected-conversation
+> consensus. `/history` and standalone artifact commands remain separate.
 
 ## Availability matrix
 
@@ -18,11 +18,12 @@ Use this index to find one canonical answer instead of searching a long manual.
 | List or target agents; send ordinary, `@AGENT`, or `/say` turns | Installed shell; a selected active conversation is required for turns |
 | Strict create/resume/attach/detach session lifecycle | Python API; used by the installed shell |
 | Parse the interactive command language and route metadata | Python API; the shell dispatches a documented subset |
-| Prompt, confirm, compose, and render safe terminal records | Module-supported Python API; shell renders search and transcript records; composition is not dispatched |
+| Compose a prompt and render safe terminal records | Bare shell `/run`; module-supported terminal Python API |
 | Append/read transcripts; derive bounded complete-turn context | Shell turns append/consume context and `/transcript` reads fresh bounded pages; Python API |
 | Search one session and cite hits | Attached shell `/search` for active records; Python API can explicitly include archived records |
 | Persist and send one explicitly addressed conversation turn | Installed shell for its selected conversation; `StoryRuntime` for an explicit ID |
-| History, consensus, and artifact commands | Not implemented in the shell |
+| Run consensus with included, fresh, or draft-file input | Selected active shell conversation; noninteractive CLI and Python API remain available |
+| History and standalone artifact commands | Not implemented in the shell |
 
 ## Start and concepts
 

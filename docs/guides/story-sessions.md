@@ -1,105 +1,86 @@
-# Story sessions and routed conversations
+# Story sessions and conversations
 
-> **Availability:** bare `story` and `story chat` open the interactive TTY
-> shell. After attaching a story session, you can search active conversations
-> and read active or archived transcripts without selecting a conversation.
-> Sending a turn still requires one selected active conversation.
+> **Availability:** bare `story` and `story chat` open the TTY shell. After
+> attaching a story session, a selected active conversation supports advisory
+> turns and consensus runs. Search and transcript reads need no selection.
 
-Key terms: **story session**—the durable provider-work scope;
-**conversation**—one subject and visible transcript; **handle**—a copyable full
-ID or unique prefix; **sticky target**—the responder used by ordinary lines;
-**one-shot route**—an `@AGENT` turn that does not change that target.
+Key terms: **story session**—durable provider-work scope; **conversation**—one
+subject and visible transcript; **selection**—the active conversation used by
+writes and runs; **sticky target**—the responder for ordinary advisory lines;
+**included run**—a debate given one fixed transcript snapshot.
 
-<a id="the-lobby-at-a-glance"></a>
-<a id="scenario-first-session-return-switch-and-end"></a>
+## Scenario: discuss, then run
 
-## Scenario: find and continue an earlier discussion
-
-Assume `river-story` already has a `draft` session with conversation logs, but
-no conversation is selected. Attach the session:
+Attach the `draft` session and create a subject conversation:
 
 ```console
 $ cd river-story
 $ story chat draft
 ```
 
-The scope line reports that `draft` is attached and its conversation is
-`none`. Search the active subjects and visible user/reply text:
-
-```text
-/search council vessel
-```
-
-Search needs the attachment, not a selection. It makes no provider call and
-returns at most the default number of deterministic cited hits. Copy a handle
-from a hit, then request the first two stored events:
-
-```text
-/transcript c_0123456789 2
-```
-
-If the continuation hint names sequence 3, follow it explicitly:
-
-```text
-/transcript c_0123456789 2 --from 3
-```
-
-That second command takes a fresh snapshot; the shell did not retain a cursor.
-Search is active-only. To read an archived discussion, find its handle in the
-all-record catalog and name it explicitly:
-
-```text
-/conversation list --all
-/transcript ARCHIVED_HANDLE
-```
-
-These reads do not select the conversation, change the sticky target, call the
-provider, or rewrite any story data. Their scope always follows the attached
-session; creating, selecting, renaming, or archiving conversations does not
-create a separate read scope.
-
-## Routed turns
-
-Create or select an active conversation before sending content:
-
 ```text
 /conversation new Opening scene
 /to plot
 Should the reveal happen before the midpoint?
-@character Check whether Mara's choice fits her motives.
-/say /run is literal conversation text
 ```
 
-`/to plot` changes the process-local sticky target to `plot_architect` without
-calling a provider. The ordinary line and `/say` use that target;
-`@character` is one-shot. All responders share the selected conversation—it is
-not a private channel.
+The advisory line appends a user event and one reply to the selected
+conversation. Now compose a consensus prompt:
 
-Each accepted line waits for one runtime turn. Bounded complete-turn context
-from only that conversation goes to the addressed agent. Normally the user
-event is stored before provider work, then one reply or safe runtime-error
-outcome is stored. Returned content is displayed once and never reparsed.
+```text
+/run
+Draft the opening using the decision we just discussed.
+/send
+```
 
-Conversation create/use/rename/archive preserves the sticky target. Attaching,
-switching, or ending a story session resets it to `lead`. Quit detaches without
-ending; end makes the session inactive while retaining saved session and
-conversation selections.
+Bare `/run` opens the existing multiline run composer. Only `/send` starts the
+debate; `/cancel` or an input interrupt discards the local composition. The
+runtime reads the selected conversation once and gives that same bounded
+snapshot to every debate phase.
 
-## Command gates and limits
+Compare a fresh prompt:
 
-- `/agents`, help, and session listing work without attachment.
-- `/to`, `/search`, `/transcript`, and conversation create/list/use require an
-  attachment but no selected conversation. Rename and unqualified archive need
-  a selection.
-- Ordinary lines, `@AGENT TEXT`, and `/say TEXT` require a selected active
-  conversation and may contact the provider.
-- `/compose`, active-turn cancellation, `/history`, debate, and artifact
-  actions are not dispatched in this shell.
+```text
+/run --fresh Draft an unrelated opening in a train station.
+```
 
-<a id="current-boundary"></a>
+This records which conversation was selected but reads and sends none of its
+events. To audit a complete local draft with selected context:
 
-Exact syntax lives in the [command parser](../reference/interactive-command-parser.md),
-search and page rules in [Conversation search](../reference/conversation-search.md),
-and exact display copy in the [terminal reference](../reference/interactive-terminal.md).
-For persistence, see [Conversation transcripts](../reference/conversation-transcripts.md);
-for exposure, read [Privacy and provider](../operations/privacy-and-provider.md).
+```text
+/draft-file ./working/opening.md
+```
+
+The file is read exactly as strict UTF-8 from the shell process's current
+directory. Path and error details are in the [CLI reference](../reference/cli.md#interactive-consensus).
+
+## Outcomes and unchanged conversation state
+
+The shell shows typed progress, then one of three expected outcomes:
+
+- consensus reports revision, round count, manuscript path, and core updates;
+- deadlock reports a fixed safe error and requires a new run; or
+- handled failure reports a fixed category such as provider, transcript,
+  workspace, or artifact failure.
+
+Each expected outcome returns to the same prompt. Consensus commands can write
+debate records and approved artifacts, but they do not append the conversation
+transcript or change its selection, sticky target, session attachment, or
+conversation-memory binding. Fresh mode still requires a selected active
+conversation so its identity can be recorded.
+
+## Find or route conversation work
+
+`/search QUERY` scans active subjects and visible user/reply text locally.
+`/transcript ID [COUNT] [--from SEQUENCE]` reads a fresh bounded page from an
+active or archived conversation. Neither command selects a conversation or
+calls the provider.
+
+Ordinary lines and `/say TEXT` use the sticky target; `@AGENT TEXT` is one-shot.
+Changing conversations preserves the target. Attaching, switching, or ending a
+story session resets it to `lead`. All responders share the selected transcript;
+direct routing is not a private channel.
+
+Exact shell grammar lives in the [CLI reference](../reference/cli.md), search
+and paging in [Conversation search](../reference/conversation-search.md), and
+provider exposure in [Privacy and provider](../operations/privacy-and-provider.md).

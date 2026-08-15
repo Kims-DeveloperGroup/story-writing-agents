@@ -1,78 +1,96 @@
 # Consensus workflow
 
-> **Availability:** the complete prompt/draft, audit, revision, consensus,
-> deadlock, and finalization workflow is implemented in `StoryRuntime`.
+> **Availability:** `StoryRuntime` implements prompt and supplied-draft debates,
+> optional selected-conversation context, trusted progress, terminal results,
+> and approved artifact commits.
 
-Key terms: **reservation**—the immutable claim on one debate ID; **silent
-audit**—parallel review from one shared snapshot; **replacement revision**—a
-complete successor candidate; **finalization**—the post-approval artifact step.
+Key terms: **reservation**—the immutable claim on one debate ID; **snapshot**—
+one bounded conversation window; **revision round**—one complete replacement;
+**terminal durability**—result and lifecycle state saved before terminal
+progress; **observer**—the optional synchronous progress sink.
 
 ```mermaid
 flowchart TD
-    I[Validate run preflight and reserve debate ID] --> K{Input kind}
-    K -->|prompt| D[Execution specialist drafts r0]
-    K -->|draft| A[Use supplied draft as r0]
-    D --> A
-    A --> V[Three parallel silent audits]
-    V -->|all approve current revision| F[Lead finalizes]
-    V -->|conflict and rounds remain| P[Conflicting specialists propose repairs]
-    P --> S[Lead synthesizes complete next revision]
-    S --> V
-    V -->|conflict at limit| X[Deadlock and user ruling]
-    F --> C[Validate artifact paths and commit updates then manuscript]
+    P[Validate input, observer, session, and options] --> C{Context mode}
+    C -->|included| R[Read and canonicalize selected context once]
+    C -->|fresh or legacy| V[Reserve debate ID]
+    R --> V
+    V --> S[Save requested sidecar and initiation log]
+    S --> ST[STARTED]
+    ST --> D[Create or accept r0]
+    D --> DR[DRAFTED]
+    DR --> AS[AUDIT_STARTED]
+    AS --> AC[AUDIT_COMPLETED]
+    AC -->|conflicts and rounds remain| Y[Proposals and lead synthesis]
+    Y --> SY[SYNTHESIZED]
+    SY --> AS
+    AC -->|conflicts at limit| TD[Save deadlock result and terminal state]
+    TD --> DE[DEADLOCK]
+    AC -->|all approve| F[Lead finalizes and artifacts commit]
+    F --> TC[Save consensus result and terminal state]
+    TC --> AR[ARTIFACTS_COMMITTED]
+    AR --> CO[CONSENSUS]
+    ST -. handled failure .-> TF[Save failed result and terminal state]
+    DR -. handled failure .-> TF
+    AS -. handled failure .-> TF
+    AC -. handled failure .-> TF
+    Y -. handled failure .-> TF
+    F -. handled failure .-> TF
+    TF --> FA[FAILED]
 ```
 
-In words: the debate ID is reserved before any provider call; a prompt first
-becomes `r0`, while a supplied draft already is `r0`; all specialists audit the
-same candidate; conflicts can produce complete replacement revisions; only
-unanimous approval of the current revision reaches artifact commit.
+## Before provider work
 
-## Reservation and drafting
+The runtime validates the backend, nonempty input, IDs, round limit, optional
+context request, and observer, then prepares the story session. Included mode
+performs exactly one synchronous context read and canonical validation before
+reservation. Fresh and legacy modes perform no context read. Any failure here
+emits nothing and leaves the debate ID unreserved.
 
-Before reservation, the runtime requires a backend, validates the session and
-debate IDs, nonempty input, and round limit, and prepares the provider session.
-It then exclusively creates lifecycle state. A concurrent attempt at the same
-session/debate pair fails before debate execution. The original input is
-appended to the public blackboard. Prompt input calls the execution specialist
-for a full candidate; draft input skips that call.
+Reservation exclusively creates lifecycle state. A requested included or fresh
+sidecar is then created before the initiation blackboard entry, provider work,
+or `STARTED`. Sidecar failure is raised and best-effort makes the reserved state
+terminal `failed`; it produces no result or progress.
 
-The output name is only selected at this point, not path-validated. Manuscript
-path safety and nonexistence are checked during finalization and artifact
-commit. An unsafe output can therefore consume the reserved debate ID, reach a
-terminal `failed` result, and require a new ID for retry.
+## Trusted progress sequence
 
-## Parallel silent phases
+`STARTED` follows the durable initiation entry and is the only event carrying
+context mode and counts. Prompt input then asks the execution specialist for
+`r0`; supplied-draft input skips that provider call. Both emit `DRAFTED` once
+`r0` exists.
 
-Plot, character, and execution specialists audit concurrently from one
-pre-audit blackboard snapshot. They cannot see or react to peer verdicts still
-in flight. A reply must target the current revision and be approval with an
-optional note or conflict with an actionable critique. Outcomes are appended
-in canonical specialist order, not completion order. On the first backend or
-validation failure, unfinished peers are cancelled and recorded stably.
+Each revision emits `AUDIT_STARTED`, then the three specialists audit the same
+candidate and the same immutable context snapshot in parallel. Successful
+audit persistence precedes `AUDIT_COMPLETED`, whose typed agent list reports
+conflicts in roster order. Peer prose never enters progress.
 
-Only specialists owning conflicts propose repairs. They again share one
-pre-proposal snapshot. The non-voting lead then sees candidate, critiques, and
-proposals and must synthesize one complete replacement. All three specialists
-re-audit it. Older approvals never count. Round limit counts replacements, not
-audits.
+If conflicts remain and another replacement is allowed, only conflicting
+specialists propose repairs. The lead synthesizes a complete next revision;
+after it is durable the runtime emits `SYNTHESIZED` and starts the next audit.
+There is no separate proposal event. Older approvals never count.
 
-## Terminal paths
+At the round limit, conflicts produce a durable deadlock result and state before
+`DEADLOCK`. Unanimous approval allows lead finalization and artifact commit;
+the consensus result and state are then durable before
+`ARTIFACTS_COMMITTED`, followed by `CONSENSUS`. A handled provider, protocol,
+context-propagation, workspace, finalization, or artifact failure similarly
+saves its result and state before a typed `FAILED` event.
 
-Remaining conflicts at the limit produce `deadlock` and `action_required`.
-Handled backend, peer-cancellation, validation, finalization, or artifact
-errors produce `failed`. Both persist state, public messages, owner outcomes,
-and normally a result, without a successful manuscript. External coroutine
-cancellation propagates and best-effort marks `interrupted`.
+## Observer and cancellation boundaries
 
-After three approvals, the lead may preserve the candidate and return
-full-text updates for four allowlisted core documents. The runtime validates
-all names, values, and manuscript nonexistence, replaces core documents in
-allowlist order, then creates the exact approved manuscript. A later write
-failure triggers best-effort rollback.
+Declared coroutine or async-generator observers fail validation before
+mutation. Every failure raised synchronously by an accepted observer, plus an
+awaitable or non-`None` result, becomes `ProgressObserverError` through
+`__cause__`.
+Before terminal durability this best-effort marks the debate `interrupted` and
+raises. After terminal durability it raises without rewriting the saved result,
+state, or artifacts.
 
-Debate IDs remain immutable after consensus, deadlock, failure, interruption,
-or abandoned active state. Recovery is inspection, a user decision where
-needed, and a new ID—not same-ID continuation.
+Genuine external cancellation remains `asyncio.CancelledError`. The runtime
+joins its execution task, best-effort persists `interrupted`, and emits
+`INTERRUPTED` only after that transition is confirmed. If that observer call
+fails, cancellation remains primary and the observer error is its cause.
 
-Exact request/reply rules are in [Agent contracts](../reference/agent-contracts.md);
-result shapes are in [Runtime API](../reference/runtime-api.md).
+Exact types are in [Runtime API](../reference/runtime-api.md); artifact and
+sidecar storage are in [Persistence](persistence.md); operator response is in
+[Recovery and limitations](../operations/recovery-and-limitations.md).

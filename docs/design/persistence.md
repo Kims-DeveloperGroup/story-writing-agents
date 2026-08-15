@@ -1,90 +1,109 @@
 # Persistence design
 
-> **Availability:** filesystem persistence covers configuration, session and
-> conversation selections, provider sessions, debates, conversation metadata
-> and transcripts, and manuscripts.
+> **Availability:** filesystem persistence covers configuration, sessions,
+> conversations, debates, optional debate-context sidecars, and manuscripts.
 
-Key terms: **blackboard**—the public debate log; **owner-isolated state**—
-history visible only to its agent; **lifecycle**—reservation and terminal status;
-**transcript**—one conversation's visible event history; **durability**—which
-completed file changes survive interruption.
+Key terms: **blackboard**—public debate JSONL; **sidecar**—context stored apart
+from established debate records; **create-only**—never replaces an existing
+path; **legacy run**—a debate created without a context request.
 
-The workspace uses inspectable files instead of a database. Channels stay
-separate:
+The workspace uses separate inspectable files rather than a database:
 
-| Channel | Durable owner or reader |
+| Channel | Owner |
 | --- | --- |
-| Public debate JSONL and lifecycle/result JSON | Runtime and inspection |
-| Per-agent JSONL | Only its owning agent |
-| Provider manifest and temporary lease | `AgentBackend` |
-| Story-session and conversation selections | CLI context helpers |
-| Sticky interactive target | Controller memory only; never persisted |
-| Conversation metadata | Catalog adapter |
-| Conversation transcript JSONL | Event-store adapter |
-| Approved manuscript | Workspace commit path |
+| Debate log, lifecycle, and result | Runtime and normal inspection |
+| Debate context sidecar | Runtime; separate context inspection |
+| Per-agent history | Its owning agent |
+| Provider manifest and lease | `AgentBackend` |
+| Session/conversation selections | CLI context helpers |
+| Conversation metadata and transcript | Catalog and event-store adapters |
+| Sticky interactive target | Controller memory only |
+| Approved manuscript | Workspace artifact commit |
 
-## Conversation durability
+<a id="debate-context-sidecar"></a>
 
-Subject metadata and per-session selection are different files. Create writes
-metadata before saving the new selection; use changes only selection; rename
-changes only metadata. Archive of the selected record crosses both files and
-uses the bounded compensation described in the [lifecycle diagram](session-lifecycle.md#conversation-lifecycle-and-compensation).
-There is no atomic transaction across those files. A stale saved ID is retained
-for diagnosis and becomes an unselected lobby state at restart.
+## Debate-context sidecar
 
-Each accepted interactive line delegates persistence to
-`StoryRuntime.converse()`: it saves the user event before its one provider call,
-then attempts to save a valid `agent_reply` or a sanitized `runtime_error`.
-Terminal status and reply rendering create no extra event. The event store never
-calls or retries the provider.
+The exact lazy path is
+`discussion_logs/<session_id>/<debate_id>.context.json`. Its version-1 included
+shape is:
 
-A hard interruption or failed reply/error/cancellation write can leave only the
-user event. That unmatched event stays authoritative but is excluded from later
-complete-turn context. The exact operation belongs
-to the [Runtime API](../reference/runtime-api.md#one-conversation-turn); operator
-response belongs to [Recovery](../operations/recovery-and-limitations.md#conversation-turn-recovery).
+```json
+{
+  "schema_version": 1,
+  "session_id": "novel",
+  "debate_id": "opening_01",
+  "conversation_id": "c_opening",
+  "mode": "included",
+  "snapshot": {
+    "events": [{
+      "schema_version": 1,
+      "session_id": "novel",
+      "conversation_id": "c_opening",
+      "turn_id": "t_01",
+      "sequence": 1,
+      "timestamp": "2026-01-02T00:00:00+00:00",
+      "sender": "user",
+      "recipient": "plot_architect",
+      "kind": "user_message",
+      "content": "Question"
+    }, {
+      "schema_version": 1,
+      "session_id": "novel",
+      "conversation_id": "c_opening",
+      "turn_id": "t_01",
+      "sequence": 2,
+      "timestamp": "2026-01-02T00:00:01+00:00",
+      "sender": "plot_architect",
+      "recipient": "user",
+      "kind": "agent_reply",
+      "content": "Answer"
+    }],
+    "total_complete_turns": 1,
+    "retained_turns": 1,
+    "omitted_turns": 0,
+    "retained_utf8_bytes": 14,
+    "truncated": false
+  }
+}
+```
 
-## What is retained
+The paired events are one complete turn. Top-level objects have exactly the six
+shown keys, event objects exactly the ten shown keys, and snapshot objects
+exactly the six shown keys. Snapshot metadata must match ordered,
+identity-bound events and fixed context caps.
 
-The blackboard keeps original input, candidates, verdict notes, critiques,
-proposals, visible errors, finalization metadata, and commit record. Terminal
-result JSON omits its duplicated message list; inspection combines it with
-validated JSONL and lifecycle state. Agent state deliberately avoids copying
-the entire prompt, candidate, or core documents, but keeps generic outcomes and
-the owner's visible notes, critiques, and proposals, capped per entry. A
-provider may still echo sensitive material into those fields.
+Included mode always stores an exact snapshot, including the empty form
+`events: []` with zero counts and `truncated: false`. Fresh mode keeps the same
+six top-level fields, sets `mode` to `fresh`, and sets `snapshot` to `null`.
+A legacy run has no sidecar; absence is read as `None`.
 
-Session override JSON survives runtime instances. Provider manifests preserve
-compatible thread IDs across debates, detach, end, and backend close. CLI
-session and conversation selections survive session end. Conversation metadata
-retains its exact display subject when archived. Its transcript retains every
-visible event, including an unmatched user remainder. None of these actions is
-deletion or secure erasure.
+Creation occurs after debate reservation and before initiation or provider
+work. The file is strict UTF-8 JSON, identity-bound to its path, rejects
+missing, extra, or duplicate keys, and is never overwritten. A collision raises
+`DebateExistsError`. `Workspace.inspect_debate_context()` and the matching
+runtime methods are read-only; existing debate/session inspection, logs, result
+JSON, and `DebateResult` remain unchanged.
 
-## Ownership and durability boundaries
+## Durability boundaries
 
-The workspace validates and mutates one channel at a time. Blackboard and
-owner histories append separately; terminal result is a projection, not a
-second message store. Approved artifact coordination crosses core documents and
-one manuscript. Each selection or metadata replacement is atomic only for its
-own file. The event store owns transcript replacement and context projection.
-Neither conversation adapter performs migration, and absent reads create
-nothing.
+The blackboard retains input, candidates, audits, proposals, visible errors,
+finalization metadata, and commit record. Result JSON is a projection and omits
+its duplicated message list. Agent history remains owner-isolated and bounded,
+though provider output in visible fields may still be sensitive.
 
-The conversation memory service is another projection, not a persistence
-owner. It reads the catalog and event-store contracts but stores no search
-index, result, citation, page, or cursor and changes no metadata or transcript.
-Its exact read contract lives in [Conversation search and cited transcript
-pages](../reference/conversation-search.md).
+Terminal result creation and lifecycle transition finish before terminal
+progress. Approved artifact commit validates the whole set, replaces core files
+in fixed order, then exclusively creates the manuscript; cross-file rollback is
+best effort. No sidecar, log, selection, transcript, result, state, and artifact
+set forms one database transaction.
 
-Because these channels are separate files, persistence design does not imply a
-database transaction across them. The normative containment, exclusive-create,
-atomic-file, write-order, rollback, and interruption guarantees live in
-[Filesystem safety](../operations/filesystem-safety.md); recovery behavior lives
-in [Recovery and limitations](../operations/recovery-and-limitations.md).
+Advisory turns separately append a user event before provider work and then a
+reply or sanitized runtime error. An unmatched user event can remain after hard
+interruption and is excluded from later complete-turn context. Consensus runs
+read a snapshot but never append the transcript.
 
-The complete path tree and strict schemas live in
-[Session storage](../reference/configuration/session-storage.md). Filesystem
-trust boundaries are in [Filesystem safety](../operations/filesystem-safety.md).
-The exact event and context contract lives in
-[Conversation transcripts](../reference/conversation-transcripts.md).
+The canonical path tree is in [Session storage](../reference/configuration/session-storage.md).
+Accessor signatures are in [Workspace API](../reference/workspace-api.md),
+containment guarantees in [Filesystem safety](../operations/filesystem-safety.md),
+and consequences in [Recovery](../operations/recovery-and-limitations.md).

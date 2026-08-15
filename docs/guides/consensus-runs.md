@@ -1,75 +1,66 @@
 # Run a consensus debate
 
-> **Availability:** prompt and complete-draft debates are implemented through
-> `story run` and `StoryRuntime`; the interactive shell does not dispatch `/run`.
+> **Availability:** prompt and complete-draft debates are available through the
+> noninteractive CLI, selected-conversation TTY shell, and `StoryRuntime`.
 
-Key terms: **prompt**—instructions from which an agent creates `r0`; **draft**—
-a complete supplied `r0`; **debate ID**—the immutable attempt key; **round
-limit**—the maximum replacement count; **manuscript**—the consensus output file.
+Key terms: **prompt**—instructions used to create revision `r0`; **draft**—a
+supplied complete `r0`; **context mode**—whether selected transcript events are
+included; **round limit**—maximum replacement count; **debate ID**—an immutable
+attempt key.
 
-Start an active provider session, then choose one input kind. A prompt asks the
-execution specialist to create revision `r0`:
+## Choose an entry point
+
+| Entry | Conversation context | Best for |
+| --- | --- | --- |
+| `story run ...` | None; established noninteractive behavior | Scripts, explicit IDs, outputs, and round limits |
+| Shell `/run [PROMPT]` | One selected-conversation snapshot | Turning a discussion into a manuscript |
+| Shell `/run --fresh PROMPT` | Selected identity only; no transcript read | Starting without prior conversation content |
+| Shell `/draft-file PATH` | One selected-conversation snapshot | Auditing a complete local draft |
+
+The shell forms require an attached session and selected active conversation.
+Bare `/run` opens the multiline composer and starts only on `/send`. See the
+[story-session scenario](story-sessions.md#scenario-discuss-then-run).
+
+## Run noninteractively
+
+A prompt asks the execution specialist to create `r0`:
 
 ```bash
-story run \
-  --prompt 'Write an opening scene from the core documents.' \
-  --debate-id opening_01 \
-  --output chapters/opening.md
+story run --prompt 'Write an opening scene.' \
+  --debate-id opening_01 --output chapters/opening.md
 ```
 
-A complete draft skips provider drafting and audits the supplied text as `r0`:
+A draft skips provider drafting and begins with the three audits:
 
 ```bash
-story run \
-  --draft-file ./working/opening.md \
-  --debate-id opening_edit_01 \
-  --output chapters/opening-edit.md
+story run --draft-file ./working/opening.md \
+  --debate-id opening_edit_01 --output chapters/opening-edit.md
 ```
 
-Exactly one of a positional prompt, `--prompt`, `--draft`, or `--draft-file`
-is required. A relative draft-file path is resolved from the shell's current
-directory, not the workspace, and must decode as strict UTF-8. Inline values
-are passed as content without shell or nested-command parsing by the runtime.
+Exactly one positional prompt, `--prompt`, `--draft`, or `--draft-file` is
+required. Draft files use the shared exact strict-UTF-8 loader. Relative paths
+follow the caller's current directory; `~`, absolute paths, symlinks, and literal
+metacharacters use normal path semantics without runtime shell evaluation.
+Unreadable or invalid UTF-8 files fail; empty files load exactly but are rejected
+because debate input must be nonempty.
 
-## Pick durable names
+## Names, rounds, and results
 
-If omitted, the runtime generates a debate ID and uses
-`<session_id>_<debate_id>.md` under `manuscript/`. Explicit names make
-automation and inspection clearer. Output is always a safe relative path
-beneath `manuscript/`; absolute paths, traversal, and symlink components are
-rejected.
+If omitted, the runtime generates a debate ID and writes
+`manuscript/<session_id>_<debate_id>.md`. Explicit outputs must be safe relative
+paths below `manuscript/`; existing files are never overwritten. A reserved
+session/debate pair cannot be reused, so every retry needs a new debate ID.
 
-A session/debate pair is reserved before the first backend call and can never
-be reused. Existing manuscripts are never overwritten. For a retry after any
-failure, use a new debate ID; after an output collision, also use a new output
-path.
+`--max-debate-rounds` counts complete replacements, not audits: `0` permits only
+the `r0` audit, the default `1` permits `r1`, and `2` also permits `r2`.
+Consensus requires all three specialists to approve the current revision.
+Deadlock creates no manuscript and needs a user decision; handled failures are
+also terminal.
 
-## Understand rounds and results
+The noninteractive command prints the unchanged `DebateResult` JSON and exits
+`0` for consensus, `3` for deadlock, or `4` for failed. The shell instead shows
+safe typed progress and returns to its prompt after expected terminal outcomes.
 
-The three specialists audit the same revision. Conflicting specialists propose
-repairs, the lead synthesizes one complete replacement, and all three audit it
-again. `--max-debate-rounds` counts replacements, not audits:
-
-- `0` allows the `r0` audit but no replacement;
-- the default `1` permits `r1` and its audit;
-- `2` additionally permits `r2` and its audit.
-
-Consensus requires three approvals on the current revision. A deadlock returns
-an `action_required` user ruling and creates no manuscript. A handled provider,
-protocol, finalization, or artifact error returns `failed`. Only consensus
-populates `final_candidate` and `manuscript_path`; deadlock and most failures
-retain `latest_candidate` for diagnosis.
-
-After unanimous approval, the lead may return full-text replacements for the
-four allowlisted core documents. The runtime validates the entire update and
-output set, writes core files first, and creates the exact approved manuscript
-last. Rollback across files is best effort, so inspect after infrastructure
-failure.
-
-`--backend AGENT=BACKEND` may be repeated for a one-run route override;
-`--codex-model` selects a model and `--codex-timeout` sets a positive per-call
-timeout. Codex is implemented. Selecting the reserved `gemini` value fails
-before debate execution. There is no automatic retry.
-
-Inspect outcomes with [Inspection and recovery](inspection-and-recovery.md).
-The complete option and exit contract lives in the [CLI reference](../reference/cli.md).
+Use [Consensus workflow](../design/consensus-workflow.md) for sequencing,
+[CLI reference](../reference/cli.md) for exact grammar and exits, and
+[Runtime API](../reference/runtime-api.md) for Python contracts.

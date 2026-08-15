@@ -31,6 +31,7 @@ from .errors import (
     ConfigurationError,
     ConversationExistsError,
     ConversationNotFoundError,
+    ProgressObserverError,
     SessionExistsError,
     SessionIdError,
     SessionInUseError,
@@ -45,6 +46,7 @@ from .interactive_commands import (
 )
 from .interactive_terminal import (
     AttachmentKind,
+    ComposeMode,
     ConfirmationResult,
     InteractiveError,
     InteractiveErrorCode,
@@ -52,8 +54,21 @@ from .interactive_terminal import (
     TerminalActionKind,
     TerminalMessageKind,
 )
-from .models import ConversationResult, SessionLeaseState, SessionSummary
+from .models import (
+    ConversationResult,
+    DebateContextMode,
+    DebateContextRequest,
+    DebateFailureKind,
+    DebateProgressEvent,
+    DebateProgressPhase,
+    DebateResult,
+    DebateStatus,
+    InputKind,
+    SessionLeaseState,
+    SessionSummary,
+)
 from .orchestrator import StoryRuntime
+from .run_inputs import read_draft_file
 from .workspace import (
     FilesystemConversationCatalog,
     FilesystemConversationEventStore,
@@ -121,8 +136,10 @@ class InteractiveController:
     Construction borrows collaborators without I/O. ``run_session_lobby`` is
     single-use; once it starts, this controller closes the backend on every
     exit and releases any attachment it can still identify safely. The retained
-    ``StoryRuntime`` exclusively owns provider turns and transcript outcomes;
-    one attachment-scoped memory service owns provider-free search/read access.
+    ``StoryRuntime`` exclusively owns provider turns, transcript outcomes, and
+    consensus durability; one attachment-scoped memory service owns provider-free
+    search/read access. The controller only validates and renders trusted debate
+    progress and results.
     """
 
     __slots__ = (
@@ -696,11 +713,11 @@ class InteractiveController:
 
         ``original_line`` is used only to choose the trusted parse-error
         category. Global help, roster, story-session navigation, search, and
-        transcript reads remain provider-free; routed content uses the retained
-        runtime, while other later-feature actions preserve selection-aware
-        rejection. The returned boolean signals loop exit; command-specific
-        state changes are delegated to their owners, and fatal failures reach
-        outer cleanup without local resource acquisition.
+        transcript reads remain provider-free; routed and consensus content use
+        the retained runtime, while other later-feature actions preserve
+        selection-aware rejection. The returned boolean signals loop exit;
+        command-specific state changes are delegated to their owners, and fatal
+        failures reach outer cleanup without local resource acquisition.
         """
 
         if action.kind is ActionKind.IGNORED:
@@ -737,6 +754,12 @@ class InteractiveController:
         }:
             self._run_advisory_turn(action)
             return False
+        if action.kind in {
+            ActionKind.RUN,
+            ActionKind.RUN_FRESH,
+            ActionKind.DRAFT_FILE,
+        }:
+            return self._run_consensus_action(action)
         if action.kind in {ActionKind.SEARCH, ActionKind.TRANSCRIPT}:
             if self._attached_session_id is None:
                 self._terminal.write_error(
@@ -898,6 +921,472 @@ class InteractiveController:
                 ),
             )
         self._terminal.write_agent(agent_id, result.content)
+
+    def _run_consensus_action(self, action: InteractiveAction) -> bool:
+        """Execute one interactive prompt, fresh prompt, or draft-file debate.
+
+        The attached session and selected active conversation are revalidated
+        before composition or file access. Bare ``/run`` submits only a terminal
+        ``SEND`` result; cancel and interrupt discard locally, while compose EOF
+        requests normal shell exit. Draft files use the shared strict loader.
+        Accepted input reaches one ``asyncio.run`` boundary, and runtime context,
+        sidecar, progress, provider, result, and artifact durability remain owned
+        by ``StoryRuntime``. Expected terminal outcomes return to the shell.
+        """
+
+        if self._attached_session_id is None:
+            self._terminal.write_error(
+                InteractiveError(InteractiveErrorCode.SESSION_INACTIVE)
+            )
+            return False
+        selected = self._require_active_selected_conversation()
+        if selected is None:
+            return False
+
+        if action.kind is ActionKind.RUN:
+            prompt = action.text
+            if prompt is None:
+                composed = self._terminal.compose(ComposeMode.RUN)
+                if composed.kind is TerminalActionKind.EOF:
+                    return True
+                if composed.kind in {
+                    TerminalActionKind.CANCEL,
+                    TerminalActionKind.INTERRUPT,
+                }:
+                    return False
+                if composed.kind is not TerminalActionKind.SEND:
+                    raise _ControllerAbort(
+                        InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+                    )
+                assert composed.text is not None
+                prompt = composed.text
+            input_kind = InputKind.PROMPT
+            context_mode = DebateContextMode.INCLUDED
+            payload = prompt
+        elif action.kind is ActionKind.RUN_FRESH:
+            assert action.text is not None
+            input_kind = InputKind.PROMPT
+            context_mode = DebateContextMode.FRESH
+            payload = action.text
+        else:
+            assert action.kind is ActionKind.DRAFT_FILE
+            assert action.argument is not None
+            try:
+                payload = read_draft_file(action.argument)
+            except ConfigurationError:
+                self._terminal.write_error(
+                    InteractiveError(InteractiveErrorCode.DRAFT_INPUT_INVALID)
+                )
+                return False
+            input_kind = InputKind.DRAFT
+            context_mode = DebateContextMode.INCLUDED
+
+        draft_payload_was_empty = input_kind is InputKind.DRAFT and payload == ""
+        session_id = self._attached_session_id
+        assert session_id is not None
+        request = DebateContextRequest(
+            conversation_id=selected.conversation_id,
+            mode=context_mode,
+        )
+        progress_events: list[DebateProgressEvent] = []
+
+        def accept_and_render_progress(event: DebateProgressEvent) -> None:
+            """Validate, render, and retain one progress event for this run."""
+
+            self._accept_debate_progress(
+                event,
+                expected_session_id=session_id,
+                expected_input_kind=input_kind,
+                expected_context_mode=context_mode,
+                events=progress_events,
+            )
+
+        try:
+            result = asyncio.run(
+                self._runtime.run_prompt(
+                    session_id,
+                    payload,
+                    conversation_context=request,
+                    progress_sink=accept_and_render_progress,
+                )
+                if input_kind is InputKind.PROMPT
+                else self._runtime.run_draft(
+                    session_id,
+                    payload,
+                    conversation_context=request,
+                    progress_sink=accept_and_render_progress,
+                )
+            )
+        except ProgressObserverError:
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            ) from None
+        except Exception as exc:
+            self._present_consensus_execution_failure(
+                exc,
+                draft_payload_was_empty=draft_payload_was_empty,
+                progress_events=progress_events,
+            )
+            return False
+
+        terminal_event, artifact_event = self._validated_consensus_result(
+            result,
+            expected_session_id=session_id,
+            expected_input_kind=input_kind,
+            progress_events=progress_events,
+        )
+        self._present_consensus_result(result, terminal_event, artifact_event)
+        return False
+
+    def _accept_debate_progress(
+        self,
+        event: DebateProgressEvent,
+        *,
+        expected_session_id: str,
+        expected_input_kind: InputKind,
+        expected_context_mode: DebateContextMode,
+        events: list[DebateProgressEvent],
+    ) -> None:
+        """Validate, render, and retain one trusted runtime progress event.
+
+        Only exact built-in events with matching run identity and legal phase
+        succession are accepted. Rendering uses typed fields and fixed copy only;
+        invalid events or terminal writer failures propagate to the runtime sink
+        boundary, which owns interruption and observer-error semantics.
+        """
+
+        if type(event) is not DebateProgressEvent:
+            raise TypeError("progress sink requires a DebateProgressEvent")
+        try:
+            canonical = DebateProgressEvent(
+                session_id=event.session_id,
+                debate_id=event.debate_id,
+                input_kind=event.input_kind,
+                phase=event.phase,
+                revision_id=event.revision_id,
+                round_number=event.round_number,
+                context_mode=event.context_mode,
+                context_event_count=event.context_event_count,
+                context_omitted_turns=event.context_omitted_turns,
+                conflicting_agents=event.conflicting_agents,
+                manuscript_path=event.manuscript_path,
+                core_updates=event.core_updates,
+                failure_kind=event.failure_kind,
+            )
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise TypeError("progress event is invalid") from exc
+        if (
+            canonical.session_id != expected_session_id
+            or canonical.input_kind is not expected_input_kind
+        ):
+            raise ValueError("progress event identity does not match the run")
+        previous = events[-1] if events else None
+        if previous is None:
+            if canonical.phase is not DebateProgressPhase.STARTED:
+                raise ValueError("the first progress event must be started")
+            if canonical.context_mode is not expected_context_mode:
+                raise ValueError("started progress context mode does not match")
+        else:
+            if canonical.debate_id != previous.debate_id:
+                raise ValueError("progress debate identity changed")
+            if not self._debate_progress_transition_is_valid(
+                previous.phase,
+                canonical.phase,
+            ):
+                raise ValueError("progress phase order is invalid")
+        self._render_debate_progress(canonical)
+        events.append(canonical)
+
+    @staticmethod
+    def _debate_progress_transition_is_valid(
+        previous: DebateProgressPhase,
+        current: DebateProgressPhase,
+    ) -> bool:
+        """Return whether two adjacent trusted phases can occur in one workflow."""
+
+        terminal = {
+            DebateProgressPhase.CONSENSUS,
+            DebateProgressPhase.DEADLOCK,
+            DebateProgressPhase.FAILED,
+            DebateProgressPhase.INTERRUPTED,
+        }
+        if previous in terminal:
+            return False
+        if current is DebateProgressPhase.INTERRUPTED:
+            return True
+        allowed = {
+            DebateProgressPhase.STARTED: {
+                DebateProgressPhase.DRAFTED,
+                DebateProgressPhase.FAILED,
+            },
+            DebateProgressPhase.DRAFTED: {
+                DebateProgressPhase.AUDIT_STARTED,
+            },
+            DebateProgressPhase.AUDIT_STARTED: {
+                DebateProgressPhase.AUDIT_COMPLETED,
+                DebateProgressPhase.FAILED,
+            },
+            DebateProgressPhase.AUDIT_COMPLETED: {
+                DebateProgressPhase.SYNTHESIZED,
+                DebateProgressPhase.ARTIFACTS_COMMITTED,
+                DebateProgressPhase.DEADLOCK,
+                DebateProgressPhase.FAILED,
+            },
+            DebateProgressPhase.SYNTHESIZED: {
+                DebateProgressPhase.AUDIT_STARTED,
+            },
+            DebateProgressPhase.ARTIFACTS_COMMITTED: {
+                DebateProgressPhase.CONSENSUS,
+            },
+        }
+        return current in allowed.get(previous, set())
+
+    def _render_debate_progress(self, event: DebateProgressEvent) -> None:
+        """Render one validated event using only typed fields and fixed labels."""
+
+        phase = event.phase
+        if phase is DebateProgressPhase.STARTED:
+            self._terminal.write_run(
+                event.debate_id,
+                f"Started {event.input_kind.value} consensus.",
+            )
+            if event.context_mode is DebateContextMode.INCLUDED:
+                self._terminal.write_status(
+                    TerminalMessageKind.CONTEXT,
+                    (
+                        f"Included {event.context_event_count} selected-conversation "
+                        f"events; {event.context_omitted_turns} earlier turns omitted."
+                    ),
+                )
+            elif event.context_mode is DebateContextMode.FRESH:
+                self._terminal.write_status(
+                    TerminalMessageKind.CONTEXT,
+                    "Fresh run; no conversation events were included.",
+                )
+            return
+        if phase is DebateProgressPhase.DRAFTED:
+            text = "Drafted revision r0."
+        elif phase is DebateProgressPhase.AUDIT_STARTED:
+            text = (
+                f"Audit started for {event.revision_id} at round "
+                f"{event.round_number}."
+            )
+        elif phase is DebateProgressPhase.AUDIT_COMPLETED:
+            conflicts = (
+                ", ".join(event.conflicting_agents)
+                if event.conflicting_agents
+                else "none"
+            )
+            text = (
+                f"Audit completed for {event.revision_id} at round "
+                f"{event.round_number}; conflicts: {conflicts}."
+            )
+        elif phase is DebateProgressPhase.SYNTHESIZED:
+            text = (
+                f"Synthesized {event.revision_id} at round "
+                f"{event.round_number}."
+            )
+        elif phase is DebateProgressPhase.ARTIFACTS_COMMITTED:
+            updates = ", ".join(event.core_updates) if event.core_updates else "none"
+            text = (
+                f"Artifacts committed for {event.revision_id}: "
+                f"{event.manuscript_path}; core updates: {updates}."
+            )
+        elif phase is DebateProgressPhase.CONSENSUS:
+            text = (
+                f"Consensus reached on {event.revision_id} after "
+                f"{event.round_number} revision rounds."
+            )
+        elif phase is DebateProgressPhase.DEADLOCK:
+            text = (
+                f"Deadlock on {event.revision_id} after "
+                f"{event.round_number} revision rounds."
+            )
+        elif phase is DebateProgressPhase.FAILED:
+            assert event.failure_kind is not None
+            text = f"Run failed ({event.failure_kind.value})."
+        else:
+            assert phase is DebateProgressPhase.INTERRUPTED
+            text = "Run interrupted after durable state transition."
+        self._terminal.write_run(event.debate_id, text)
+
+    def _validated_consensus_result(
+        self,
+        result: DebateResult,
+        *,
+        expected_session_id: str,
+        expected_input_kind: InputKind,
+        progress_events: list[DebateProgressEvent],
+    ) -> tuple[DebateProgressEvent, DebateProgressEvent | None]:
+        """Validate terminal result identity and typed progress correlation.
+
+        The operation reads no persistence and exposes no result prose. Any type,
+        identity, status, revision, round, or committed-artifact mismatch aborts
+        through the controller's fatal cleanup boundary.
+        """
+
+        invalid = InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+        if type(result) is not DebateResult or not progress_events:
+            raise _ControllerAbort(invalid)
+        started = progress_events[0]
+        terminal = progress_events[-1]
+        if (
+            started.phase is not DebateProgressPhase.STARTED
+            or result.session_id != expected_session_id
+            or result.session_id != started.session_id
+            or result.debate_id != started.debate_id
+            or result.input_kind is not expected_input_kind
+            or result.input_kind is not started.input_kind
+            or not isinstance(result.status, DebateStatus)
+            or result.revision_id != terminal.revision_id
+            or isinstance(result.rounds_completed, bool)
+            or not isinstance(result.rounds_completed, int)
+            or result.rounds_completed != terminal.round_number
+            or type(result.core_updates) is not tuple
+        ):
+            raise _ControllerAbort(invalid)
+        expected_terminal = {
+            DebateStatus.CONSENSUS: DebateProgressPhase.CONSENSUS,
+            DebateStatus.DEADLOCK: DebateProgressPhase.DEADLOCK,
+            DebateStatus.FAILED: DebateProgressPhase.FAILED,
+        }[result.status]
+        if terminal.phase is not expected_terminal:
+            raise _ControllerAbort(invalid)
+
+        artifact_event: DebateProgressEvent | None = None
+        if result.status is DebateStatus.CONSENSUS:
+            if len(progress_events) < 2:
+                raise _ControllerAbort(invalid)
+            artifact_event = progress_events[-2]
+            if (
+                artifact_event.phase
+                is not DebateProgressPhase.ARTIFACTS_COMMITTED
+                or result.manuscript_path != artifact_event.manuscript_path
+                or result.core_updates != artifact_event.core_updates
+                or result.manuscript_path is None
+            ):
+                raise _ControllerAbort(invalid)
+        elif (
+            result.manuscript_path is not None
+            or result.core_updates
+            or result.final_candidate is not None
+            or any(
+                event.phase is DebateProgressPhase.ARTIFACTS_COMMITTED
+                for event in progress_events
+            )
+        ):
+            raise _ControllerAbort(invalid)
+        return terminal, artifact_event
+
+    def _present_consensus_result(
+        self,
+        result: DebateResult,
+        terminal_event: DebateProgressEvent,
+        artifact_event: DebateProgressEvent | None,
+    ) -> None:
+        """Render only trusted terminal metadata from a validated result.
+
+        Workspace failures first prove the same active owned attachment. No
+        terminal outcome exposes provider or result prose.
+        """
+
+        if result.status is DebateStatus.CONSENSUS:
+            assert artifact_event is not None
+            updates = ", ".join(artifact_event.core_updates) or "none"
+            self._terminal.write_run(
+                result.debate_id,
+                (
+                    f"Consensus | revision: {terminal_event.revision_id} | "
+                    f"revision rounds: {terminal_event.round_number} | "
+                    f"manuscript: {artifact_event.manuscript_path} | "
+                    f"core updates: {updates}."
+                ),
+            )
+            return
+        if result.status is DebateStatus.DEADLOCK:
+            code = InteractiveErrorCode.CONSENSUS_DEADLOCK
+        else:
+            assert terminal_event.failure_kind is not None
+            code = self._interactive_code_for_debate_failure(
+                terminal_event.failure_kind
+            )
+        self._present_consensus_error_after_required_attachment_check(code)
+
+    def _present_consensus_execution_failure(
+        self,
+        failure: Exception,
+        *,
+        draft_payload_was_empty: bool,
+        progress_events: list[DebateProgressEvent],
+    ) -> None:
+        """Select a fixed pre-result error from trusted controller evidence.
+
+        The exact empty-draft flag and accepted progress history decide whether
+        a recoverable code is safe; ambiguous failures abort. Workspace errors
+        require attachment proof before output, and exception prose is never
+        rendered.
+        """
+
+        if isinstance(failure, ConfigurationError):
+            code = InteractiveErrorCode.PROVIDER_PREFLIGHT_FAILED
+        elif isinstance(failure, BackendProtocolError):
+            code = InteractiveErrorCode.PROVIDER_PROTOCOL_ERROR
+        elif isinstance(failure, ConversationNotFoundError):
+            code = InteractiveErrorCode.TRANSCRIPT_INVALID
+        elif isinstance(failure, WorkspaceSecurityError):
+            code = InteractiveErrorCode.WORKSPACE_INVALID
+        elif isinstance(failure, WorkspaceFormatError):
+            code = InteractiveErrorCode.WORKSPACE_INVALID
+        elif isinstance(failure, OSError):
+            code = InteractiveErrorCode.WORKSPACE_INVALID
+        elif (
+            draft_payload_was_empty
+            and not progress_events
+            and isinstance(failure, (TypeError, ValueError))
+        ):
+            code = InteractiveErrorCode.DRAFT_INPUT_INVALID
+        elif not progress_events and isinstance(failure, (TypeError, ValueError)):
+            code = InteractiveErrorCode.TRANSCRIPT_INVALID
+        else:
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            ) from None
+        self._present_consensus_error_after_required_attachment_check(code)
+
+    def _present_consensus_error_after_required_attachment_check(
+        self,
+        code: InteractiveErrorCode,
+    ) -> None:
+        """Render a fixed consensus error after any required lease proof.
+
+        Workspace errors return to the prompt only when public state proves the
+        same active owned attachment. Failed proof uses the existing fatal
+        cleanup boundary before any terminal error is written; other codes
+        render immediately without changing consensus mappings.
+        """
+
+        if code in {
+            InteractiveErrorCode.WORKSPACE_INVALID,
+            InteractiveErrorCode.WORKSPACE_UNSAFE,
+        }:
+            self._confirm_attachment_after_command_failure()
+        self._terminal.write_error(InteractiveError(code))
+
+    @staticmethod
+    def _interactive_code_for_debate_failure(
+        failure_kind: DebateFailureKind,
+    ) -> InteractiveErrorCode:
+        """Map one trusted runtime failure category to a fixed terminal code."""
+
+        return {
+            DebateFailureKind.PREFLIGHT: InteractiveErrorCode.PROVIDER_PREFLIGHT_FAILED,
+            DebateFailureKind.PROTOCOL: InteractiveErrorCode.PROVIDER_PROTOCOL_ERROR,
+            DebateFailureKind.CONTEXT: InteractiveErrorCode.TRANSCRIPT_INVALID,
+            DebateFailureKind.WORKSPACE: InteractiveErrorCode.WORKSPACE_INVALID,
+            DebateFailureKind.ARTIFACT_CONFLICT: InteractiveErrorCode.ARTIFACT_CONFLICT,
+            DebateFailureKind.ARTIFACT_FAILURE: InteractiveErrorCode.CONSENSUS_FAILED,
+            DebateFailureKind.INTERNAL: InteractiveErrorCode.CONSENSUS_FAILED,
+        }[failure_kind]
 
     def _present_advisory_turn_failure(self, failure: Exception) -> None:
         """Render one typed turn failure or abort when recovery is uncertain.

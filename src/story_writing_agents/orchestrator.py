@@ -20,13 +20,22 @@ from .agents import (
 from .backend import AgentBackend, BoundAgent
 from .config import ConfigManager
 from .conversations import (
+    ConversationContextWindow,
     ConversationEvent,
     ConversationEventAppend,
     ConversationEventKind,
     ConversationEventStore,
+    validate_conversation_context_window,
 )
 from .directives import apply_directive as persist_directive
-from .errors import BackendProtocolError
+from .errors import (
+    BackendProtocolError,
+    ConfigurationError,
+    ManuscriptExistsError,
+    ProgressObserverError,
+    WorkspaceFormatError,
+    WorkspaceSecurityError,
+)
 from .models import (
     AgentDefinition,
     AgentReply,
@@ -35,7 +44,13 @@ from .models import (
     ConversationReply,
     ConversationRequest,
     ConversationResult,
+    DebateContextMode,
+    DebateContextRequest,
+    DebateFailureKind,
     DebateMessage,
+    DebateProgressEvent,
+    DebateProgressPhase,
+    DebateProgressSink,
     DebateResult,
     DebateStatus,
     InputKind,
@@ -44,6 +59,47 @@ from .models import (
 )
 from .prompts import PromptAssembler
 from .workspace import FilesystemConversationEventStore, Workspace
+
+
+class _ProgressEmitter:
+    """Synchronously deliver validated progress while tracking durability."""
+
+    __slots__ = ("sink", "terminal_durable")
+
+    def __init__(self, sink: DebateProgressSink | None) -> None:
+        """Retain one prevalidated optional sink without invoking or mutating it."""
+
+        self.sink = sink
+        self.terminal_durable = False
+
+    def emit(self, event: DebateProgressEvent) -> None:
+        """Deliver one event sequentially and require a synchronous ``None`` result.
+
+        The event itself owns schema validation. Every failure raised
+        synchronously by the sink, along with any invalid return, is wrapped in
+        fixed-message ``ProgressObserverError`` and retained only through
+        standard exception chaining; returned coroutine objects are closed and
+        never scheduled.
+        """
+
+        if self.sink is None:
+            return
+        try:
+            outcome = self.sink(event)
+        except BaseException as exc:
+            raise ProgressObserverError() from exc
+        if inspect.isawaitable(outcome):
+            if inspect.iscoroutine(outcome):
+                outcome.close()
+            cause = TypeError("debate progress sink must be synchronous")
+            raise ProgressObserverError() from cause
+        if outcome is not None:
+            cause = TypeError("debate progress sink must return None")
+            raise ProgressObserverError() from cause
+
+
+class _DebateContextPropagationError(Exception):
+    """Mark a validated snapshot that could not enter an agent request."""
 
 
 class StoryRuntime:
@@ -112,6 +168,15 @@ class StoryRuntime:
         self, session_id: str, debate_id: str
     ) -> dict[str, Any]:
         return self.workspace.inspect_debate(session_id, debate_id)
+
+    def inspect_debate_context(
+        self,
+        session_id: str,
+        debate_id: str,
+    ) -> dict[str, Any] | None:
+        """Return a strict context sidecar or ``None`` without mutating state."""
+
+        return self.workspace.inspect_debate_context(session_id, debate_id)
 
     async def converse(
         self,
@@ -252,7 +317,18 @@ class StoryRuntime:
         manuscript_name: str | None = None,
         max_debate_rounds: int | None = None,
         debate_id: str | None = None,
+        conversation_context: DebateContextRequest | None = None,
+        progress_sink: DebateProgressSink | None = None,
     ) -> DebateResult:
+        """Run a prompt debate with optional selected context and progress facts.
+
+        Inputs are validated before session preparation. Requested context is
+        captured and persisted before provider work; terminal results and state
+        are durable before terminal progress. Expected workflow failures return
+        a ``DebateResult`` while invalid pre-reservation inputs, observer errors,
+        cancellation, and persistence uncertainty raise.
+        """
+
         return await self._run(
             session_id=session_id,
             payload=prompt,
@@ -260,6 +336,8 @@ class StoryRuntime:
             manuscript_name=manuscript_name,
             max_debate_rounds=max_debate_rounds,
             debate_id=debate_id,
+            conversation_context=conversation_context,
+            progress_sink=progress_sink,
         )
 
     async def run_draft(
@@ -270,7 +348,17 @@ class StoryRuntime:
         manuscript_name: str | None = None,
         max_debate_rounds: int | None = None,
         debate_id: str | None = None,
+        conversation_context: DebateContextRequest | None = None,
+        progress_sink: DebateProgressSink | None = None,
     ) -> DebateResult:
+        """Run a supplied-draft debate with optional context and progress facts.
+
+        Validation, context capture and sidecar durability precede provider work;
+        the supplied draft produces a trusted drafted fact without a drafting
+        provider call. Terminal durability, expected failures, observer errors,
+        cancellation, and raised persistence uncertainty match ``run_prompt``.
+        """
+
         return await self._run(
             session_id=session_id,
             payload=draft,
@@ -278,6 +366,8 @@ class StoryRuntime:
             manuscript_name=manuscript_name,
             max_debate_rounds=max_debate_rounds,
             debate_id=debate_id,
+            conversation_context=conversation_context,
+            progress_sink=progress_sink,
         )
 
     async def _run(
@@ -289,7 +379,17 @@ class StoryRuntime:
         manuscript_name: str | None,
         max_debate_rounds: int | None,
         debate_id: str | None,
+        conversation_context: DebateContextRequest | None,
+        progress_sink: DebateProgressSink | None,
     ) -> DebateResult:
+        """Validate, capture requested context, reserve, and run one debate.
+
+        Validation and synchronous session preparation precede mutation. Included
+        context is read once and canonicalized before reservation; requested
+        sidecars precede initiation and provider work. Cancellation and observer
+        failures preserve their typed control flow with best-effort interruption.
+        """
+
         if self.backend is None:
             raise BackendProtocolError(
                 "running a debate requires an AgentBackend adapter"
@@ -314,15 +414,41 @@ class StoryRuntime:
             or round_limit < 0
         ):
             raise ValueError("max_debate_rounds must be a non-negative integer")
+        context_request = self._validate_debate_context_request(
+            conversation_context
+        )
+        progress = _ProgressEmitter(self._validate_progress_sink(progress_sink))
 
         target_name = manuscript_name or f"{session}_{debate}.md"
-        prepare_session = getattr(self.backend, "prepare_session", None)
-        if prepare_session is not None:
-            if not callable(prepare_session):
-                raise BackendProtocolError(
-                    "backend prepare_session must be callable"
-                )
-            prepare_session(session)
+        self._prepare_debate_session(session)
+
+        context_snapshot: ConversationContextWindow | None = None
+        if (
+            context_request is not None
+            and context_request.mode is DebateContextMode.INCLUDED
+        ):
+            try:
+                read_context = self._conversation_store_method("read_context")
+                try:
+                    captured = read_context(
+                        session,
+                        context_request.conversation_id,
+                    )
+                except WorkspaceFormatError as exc:
+                    raise ValueError(
+                        "conversation context capture is invalid"
+                    ) from exc
+                self._reject_async_result(captured, operation="read_context")
+            except BackendProtocolError as exc:
+                raise ValueError(
+                    "conversation context capture must be synchronous"
+                ) from exc
+            context_snapshot = validate_conversation_context_window(
+                captured,
+                session_id=session,
+                conversation_id=context_request.conversation_id,
+            )
+
         reservation_token = uuid.uuid4().hex
         self.workspace.reserve_debate(
             session,
@@ -330,6 +456,30 @@ class StoryRuntime:
             input_kind=input_kind.value,
             owner_token=reservation_token,
         )
+        if context_request is not None:
+            try:
+                self.workspace.save_debate_context(
+                    session,
+                    debate,
+                    conversation_id=context_request.conversation_id,
+                    mode=context_request.mode,
+                    snapshot=context_snapshot,
+                )
+            except Exception as exc:
+                try:
+                    self.workspace.transition_debate(
+                        session,
+                        debate,
+                        owner_token=reservation_token,
+                        status="failed",
+                        terminal=True,
+                        revision_id=None,
+                        rounds_completed=0,
+                        error=self._error_text(exc),
+                    )
+                except Exception:
+                    pass
+                raise
         execution = asyncio.create_task(
             self._run_reserved(
                 session=session,
@@ -339,16 +489,22 @@ class StoryRuntime:
                 target_name=target_name,
                 round_limit=round_limit,
                 reservation_token=reservation_token,
+                conversation_context=context_snapshot,
+                context_mode=(
+                    None if context_request is None else context_request.mode
+                ),
+                progress=progress,
             ),
             name=f"debate:{session}:{debate}",
         )
         try:
             return await execution
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as cancellation:
             execution.cancel()
             await asyncio.gather(execution, return_exceptions=True)
+            interrupted = False
             try:
-                self.workspace.transition_debate(
+                state = self.workspace.transition_debate(
                     session,
                     debate,
                     owner_token=reservation_token,
@@ -358,9 +514,41 @@ class StoryRuntime:
                     rounds_completed=0,
                     error="CancelledError: debate execution was cancelled",
                 )
+                interrupted = (
+                    state["terminal"] is True
+                    and state["status"] == "interrupted"
+                )
             except Exception:
                 # Cancellation must retain its external control-flow semantics.
                 pass
+            if interrupted:
+                try:
+                    progress.emit(
+                        DebateProgressEvent(
+                            session_id=session,
+                            debate_id=debate,
+                            input_kind=input_kind,
+                            phase=DebateProgressPhase.INTERRUPTED,
+                        )
+                    )
+                except ProgressObserverError as observer_error:
+                    raise cancellation from observer_error
+            raise
+        except ProgressObserverError:
+            if not progress.terminal_durable:
+                try:
+                    self.workspace.transition_debate(
+                        session,
+                        debate,
+                        owner_token=reservation_token,
+                        status="interrupted",
+                        terminal=True,
+                        revision_id=None,
+                        rounds_completed=0,
+                        error="ProgressObserverError: debate progress observer failed",
+                    )
+                except Exception:
+                    pass
             raise
         except Exception as exc:
             try:
@@ -388,7 +576,17 @@ class StoryRuntime:
         target_name: str,
         round_limit: int,
         reservation_token: str,
+        conversation_context: ConversationContextWindow | None,
+        context_mode: DebateContextMode | None,
+        progress: _ProgressEmitter,
     ) -> DebateResult:
+        """Execute a reserved debate with durable records before progress facts.
+
+        The supplied immutable context object is reused for every phase request.
+        Expected workflow failures are durably finished as typed results; record,
+        artifact, progress, and unexpected failures propagate to the outer owner.
+        """
+
         messages: list[DebateMessage] = []
 
         def record(
@@ -421,6 +619,25 @@ class StoryRuntime:
             kind=input_kind.value,
             content=payload,
         )
+        progress.emit(
+            DebateProgressEvent(
+                session_id=session,
+                debate_id=debate,
+                input_kind=input_kind,
+                phase=DebateProgressPhase.STARTED,
+                context_mode=context_mode,
+                context_event_count=(
+                    0
+                    if conversation_context is None
+                    else len(conversation_context.events)
+                ),
+                context_omitted_turns=(
+                    0
+                    if conversation_context is None
+                    else conversation_context.omitted_turns
+                ),
+            )
+        )
 
         candidate: str
         current_revision = "r0"
@@ -442,6 +659,7 @@ class StoryRuntime:
                         ),
                         user_payload=payload,
                         messages=tuple(messages),
+                        conversation_context=conversation_context,
                     )
                 )
                 self._validate_candidate_reply(reply, current_revision)
@@ -477,6 +695,8 @@ class StoryRuntime:
                     manuscript_path=None,
                     messages=messages,
                     error=self._error_text(exc),
+                    failure_kind=self._classify_debate_failure(exc),
+                    progress=progress,
                 )
             candidate = reply.content
             record(
@@ -499,8 +719,28 @@ class StoryRuntime:
             )
         else:
             candidate = payload
+        progress.emit(
+            DebateProgressEvent(
+                session_id=session,
+                debate_id=debate,
+                input_kind=input_kind,
+                phase=DebateProgressPhase.DRAFTED,
+                revision_id="r0",
+                round_number=0,
+            )
+        )
 
         while True:
+            progress.emit(
+                DebateProgressEvent(
+                    session_id=session,
+                    debate_id=debate,
+                    input_kind=input_kind,
+                    phase=DebateProgressPhase.AUDIT_STARTED,
+                    revision_id=current_revision,
+                    round_number=revision_cycles,
+                )
+            )
             audit_entries: list[DebateMessage] = []
             audit_replies, audit_error = await self._audit(
                 session=session,
@@ -512,6 +752,7 @@ class StoryRuntime:
                 visible_messages=tuple(messages),
                 record=record,
                 entries=audit_entries,
+                conversation_context=conversation_context,
             )
             if audit_error is not None:
                 return self._finish(
@@ -526,7 +767,9 @@ class StoryRuntime:
                     latest_candidate=candidate,
                     manuscript_path=None,
                     messages=messages,
-                    error=audit_error,
+                    error=self._error_text(audit_error),
+                    failure_kind=self._classify_debate_failure(audit_error),
+                    progress=progress,
                 )
 
             conflicts = [
@@ -534,6 +777,17 @@ class StoryRuntime:
                 for agent_id in SPECIALIST_IDS
                 if audit_replies[agent_id].verdict is Verdict.CONFLICT
             ]
+            progress.emit(
+                DebateProgressEvent(
+                    session_id=session,
+                    debate_id=debate,
+                    input_kind=input_kind,
+                    phase=DebateProgressPhase.AUDIT_COMPLETED,
+                    revision_id=current_revision,
+                    round_number=revision_cycles,
+                    conflicting_agents=tuple(conflicts),
+                )
+            )
             if not conflicts:
                 break
             if revision_cycles >= round_limit:
@@ -566,6 +820,7 @@ class StoryRuntime:
                     manuscript_path=None,
                     messages=messages,
                     action_required=action,
+                    progress=progress,
                 )
 
             proposal_entries: list[DebateMessage] = []
@@ -580,6 +835,7 @@ class StoryRuntime:
                 visible_messages=tuple(messages),
                 record=record,
                 entries=proposal_entries,
+                conversation_context=conversation_context,
             )
             if proposal_error is not None:
                 return self._finish(
@@ -594,7 +850,9 @@ class StoryRuntime:
                     latest_candidate=candidate,
                     manuscript_path=None,
                     messages=messages,
-                    error=proposal_error,
+                    error=self._error_text(proposal_error),
+                    failure_kind=self._classify_debate_failure(proposal_error),
+                    progress=progress,
                 )
 
             next_revision = f"r{revision_cycles + 1}"
@@ -615,6 +873,7 @@ class StoryRuntime:
                         user_payload=payload,
                         candidate_payload=candidate,
                         messages=tuple(messages),
+                        conversation_context=conversation_context,
                     )
                 )
                 self._validate_candidate_reply(synthesis, next_revision)
@@ -651,6 +910,8 @@ class StoryRuntime:
                     manuscript_path=None,
                     messages=messages,
                     error=error,
+                    failure_kind=self._classify_debate_failure(exc),
+                    progress=progress,
                 )
 
             candidate = synthesis.content
@@ -674,7 +935,18 @@ class StoryRuntime:
                 kind="candidate_created",
                 content=f"{current_revision} candidate synthesized",
             )
+            progress.emit(
+                DebateProgressEvent(
+                    session_id=session,
+                    debate_id=debate,
+                    input_kind=input_kind,
+                    phase=DebateProgressPhase.SYNTHESIZED,
+                    revision_id=current_revision,
+                    round_number=revision_cycles,
+                )
+            )
 
+        artifact_commit_started = False
         try:
             finalization = await self._invoke(
                 self._request(
@@ -692,6 +964,7 @@ class StoryRuntime:
                     user_payload=payload,
                     candidate_payload=candidate,
                     messages=tuple(messages),
+                    conversation_context=conversation_context,
                 )
             )
             updates = self._validate_finalization_reply(
@@ -715,6 +988,7 @@ class StoryRuntime:
                 kind="core_updates",
                 content=json.dumps(sorted(updates), ensure_ascii=False),
             )
+            artifact_commit_started = True
             manuscript_path, applied_updates = (
                 self.workspace.commit_approved_artifacts(
                     target_name,
@@ -755,6 +1029,11 @@ class StoryRuntime:
                 manuscript_path=None,
                 messages=messages,
                 error=error,
+                failure_kind=self._classify_debate_failure(
+                    exc,
+                    artifact_commit=artifact_commit_started,
+                ),
+                progress=progress,
             )
 
         record(
@@ -778,6 +1057,7 @@ class StoryRuntime:
             manuscript_path=manuscript_path,
             core_updates=applied_updates,
             messages=messages,
+            progress=progress,
         )
 
     async def _audit(
@@ -792,33 +1072,47 @@ class StoryRuntime:
         visible_messages: tuple[DebateMessage, ...],
         record: Any,
         entries: list[DebateMessage],
-    ) -> tuple[dict[str, AgentReply], str | None]:
-        requests = [
-            self._request(
-                session=session,
-                debate=debate,
-                agent_id=agent_id,
-                phase=Phase.AUDIT,
-                round_number=round_number,
-                revision_id=revision_id,
-                task=(
-                    "Independently audit the current candidate for objective domain "
-                    "compliance. Return APPROVE with an optional concise note, or "
-                    "CONFLICT with a concise actionable critique. Do not rewrite."
-                ),
-                user_payload=payload,
-                candidate_payload=candidate,
-                messages=visible_messages,
-            )
-            for agent_id in SPECIALIST_IDS
-        ]
+        conversation_context: ConversationContextWindow | None,
+    ) -> tuple[dict[str, AgentReply], Exception | None]:
+        """Run all specialist audits, durably record each, and return first failure.
+
+        Requests share the supplied immutable context. Provider calls may run in
+        parallel, but records and agent state are written canonically afterward;
+        context-propagation and provider failures are returned for durable debate
+        completion, while persistence failures propagate.
+        """
+
+        try:
+            requests = [
+                self._request(
+                    session=session,
+                    debate=debate,
+                    agent_id=agent_id,
+                    phase=Phase.AUDIT,
+                    round_number=round_number,
+                    revision_id=revision_id,
+                    task=(
+                        "Independently audit the current candidate for objective "
+                        "domain compliance. Return APPROVE with an optional concise "
+                        "note, or CONFLICT with a concise actionable critique. Do "
+                        "not rewrite."
+                    ),
+                    user_payload=payload,
+                    candidate_payload=candidate,
+                    messages=visible_messages,
+                    conversation_context=conversation_context,
+                )
+                for agent_id in SPECIALIST_IDS
+            ]
+        except _DebateContextPropagationError as exc:
+            return {}, exc
         raw_replies = await self._invoke_parallel(
             requests,
             self._validate_audit_reply,
             revision_id,
         )
         replies: dict[str, AgentReply] = {}
-        first_error: str | None = None
+        first_error: Exception | None = None
         for agent_id, raw in zip(SPECIALIST_IDS, raw_replies, strict=True):
             try:
                 if isinstance(raw, Exception):
@@ -838,7 +1132,7 @@ class StoryRuntime:
                 content = self._error_text(exc)
                 kind = "error"
                 if first_error is None:
-                    first_error = content
+                    first_error = exc
             entry = record(
                 sender=agent_id,
                 phase=Phase.AUDIT.value,
@@ -877,33 +1171,46 @@ class StoryRuntime:
         visible_messages: tuple[DebateMessage, ...],
         record: Any,
         entries: list[DebateMessage],
-    ) -> tuple[dict[str, AgentReply], str | None]:
-        requests = [
-            self._request(
-                session=session,
-                debate=debate,
-                agent_id=agent_id,
-                phase=Phase.PROPOSE_REVISION,
-                round_number=round_number,
-                revision_id=revision_id,
-                task=(
-                    "Propose a concise, actionable revision that resolves the "
-                    "visible critiques in your responsible domain. The orchestrator "
-                    "will synthesize the complete candidate."
-                ),
-                user_payload=payload,
-                candidate_payload=candidate,
-                messages=visible_messages,
-            )
-            for agent_id in responsible_agents
-        ]
+        conversation_context: ConversationContextWindow | None,
+    ) -> tuple[dict[str, AgentReply], Exception | None]:
+        """Run responsible proposals, durably record them, and return first failure.
+
+        Each request receives the supplied context snapshot. Provider work may be
+        parallel; durable records remain canonically ordered. Context-propagation,
+        provider, and reply-validation failures are returned for durable debate
+        completion, while persistence failures propagate.
+        """
+
+        try:
+            requests = [
+                self._request(
+                    session=session,
+                    debate=debate,
+                    agent_id=agent_id,
+                    phase=Phase.PROPOSE_REVISION,
+                    round_number=round_number,
+                    revision_id=revision_id,
+                    task=(
+                        "Propose a concise, actionable revision that resolves the "
+                        "visible critiques in your responsible domain. The "
+                        "orchestrator will synthesize the complete candidate."
+                    ),
+                    user_payload=payload,
+                    candidate_payload=candidate,
+                    messages=visible_messages,
+                    conversation_context=conversation_context,
+                )
+                for agent_id in responsible_agents
+            ]
+        except _DebateContextPropagationError as exc:
+            return {}, exc
         raw_replies = await self._invoke_parallel(
             requests,
             self._validate_proposal_reply,
             revision_id,
         )
         replies: dict[str, AgentReply] = {}
-        first_error: str | None = None
+        first_error: Exception | None = None
         for agent_id, raw in zip(
             responsible_agents, raw_replies, strict=True
         ):
@@ -917,7 +1224,7 @@ class StoryRuntime:
                 content = self._error_text(exc)
                 kind = "error"
                 if first_error is None:
-                    first_error = content
+                    first_error = exc
             entry = record(
                 sender=agent_id,
                 phase=Phase.PROPOSE_REVISION.value,
@@ -956,19 +1263,36 @@ class StoryRuntime:
         user_payload: str,
         candidate_payload: str | None = None,
         messages: tuple[DebateMessage, ...] = (),
+        conversation_context: ConversationContextWindow | None = None,
     ) -> AgentRequest:
-        return self.prompts.build_request(
-            session_id=session,
-            debate_id=debate,
-            agent_id=agent_id,
-            phase=phase,
-            round_number=round_number,
-            revision_id=revision_id,
-            task=task,
-            user_payload=user_payload,
-            candidate_payload=candidate_payload,
-            messages=messages,
-        )
+        """Build one agent request and mark included-context propagation errors.
+
+        Prompt and state reads remain owned by ``PromptAssembler``. Validation
+        failures caused while an included snapshot is attached receive a fixed
+        internal stage marker for trusted failure classification; configuration
+        and workspace exceptions retain their original public type.
+        """
+
+        try:
+            return self.prompts.build_request(
+                session_id=session,
+                debate_id=debate,
+                agent_id=agent_id,
+                phase=phase,
+                round_number=round_number,
+                revision_id=revision_id,
+                task=task,
+                user_payload=user_payload,
+                candidate_payload=candidate_payload,
+                messages=messages,
+                conversation_context=conversation_context,
+            )
+        except (TypeError, ValueError) as exc:
+            if conversation_context is not None:
+                raise _DebateContextPropagationError(
+                    "conversation context propagation failed"
+                ) from exc
+            raise
 
     def _remember(
         self,
@@ -1003,13 +1327,23 @@ class StoryRuntime:
         )
 
     def _conversation_store_method(self, name: str) -> Callable[..., Any]:
+        """Return one declared-synchronous store callable without invoking it.
+
+        Coroutine and async-generator declarations are rejected here; dynamic
+        awaitable or async-generator results are rejected after one invocation.
+        """
+
         method = getattr(self.conversation_event_store, name, None)
         if method is None or not callable(method):
             raise BackendProtocolError(
                 f"conversation event store does not provide {name}()"
             )
-        if inspect.iscoroutinefunction(method) or inspect.iscoroutinefunction(
-            getattr(method, "__call__", None)
+        method_call = getattr(method, "__call__", None)
+        if (
+            inspect.iscoroutinefunction(method)
+            or inspect.isasyncgenfunction(method)
+            or inspect.iscoroutinefunction(method_call)
+            or inspect.isasyncgenfunction(method_call)
         ):
             raise BackendProtocolError(
                 f"conversation event store {name}() must be synchronous"
@@ -1030,9 +1364,82 @@ class StoryRuntime:
         outcome = prepare_session(session_id)
         self._reject_async_result(outcome, operation="backend prepare_session")
 
+    def _prepare_debate_session(self, session_id: str) -> None:
+        """Synchronously prepare a validated debate session without provider work.
+
+        An absent compatibility hook is accepted. A non-callable, declared
+        asynchronous, awaitable- or async-generator-returning, or failing hook
+        raises before reservation, sidecar, progress, or provider mutation.
+        """
+
+        assert self.backend is not None
+        prepare_session = getattr(self.backend, "prepare_session", None)
+        if prepare_session is None:
+            return
+        if not callable(prepare_session):
+            raise BackendProtocolError("backend prepare_session must be callable")
+        prepare_call = getattr(prepare_session, "__call__", None)
+        if (
+            inspect.iscoroutinefunction(prepare_session)
+            or inspect.isasyncgenfunction(prepare_session)
+            or inspect.iscoroutinefunction(prepare_call)
+            or inspect.isasyncgenfunction(prepare_call)
+        ):
+            raise BackendProtocolError("backend prepare_session must be synchronous")
+        outcome = prepare_session(session_id)
+        self._reject_async_result(outcome, operation="backend prepare_session")
+
+    @staticmethod
+    def _validate_debate_context_request(
+        request: DebateContextRequest | None,
+    ) -> DebateContextRequest | None:
+        """Return a canonical optional context request without reading storage."""
+
+        if request is None:
+            return None
+        if type(request) is not DebateContextRequest:
+            raise TypeError(
+                "conversation_context must be a DebateContextRequest or None"
+            )
+        try:
+            return DebateContextRequest(
+                conversation_id=request.conversation_id,
+                mode=request.mode,
+            )
+        except AttributeError as exc:
+            raise TypeError("conversation_context is invalid") from exc
+
+    @staticmethod
+    def _validate_progress_sink(
+        sink: DebateProgressSink | None,
+    ) -> DebateProgressSink | None:
+        """Return a declared-synchronous optional sink without invoking it.
+
+        ``None`` and ordinary callables are accepted without mutation. A
+        non-callable, coroutine or async-generator function, or callable object
+        with a coroutine or async-generator ``__call__`` raises ``TypeError``
+        before debate preparation or durability.
+        """
+
+        if sink is None:
+            return None
+        if not callable(sink):
+            raise TypeError("progress_sink must be callable or None")
+        sink_call = getattr(sink, "__call__", None)
+        if (
+            inspect.iscoroutinefunction(sink)
+            or inspect.isasyncgenfunction(sink)
+            or inspect.iscoroutinefunction(sink_call)
+            or inspect.isasyncgenfunction(sink_call)
+        ):
+            raise TypeError("progress_sink must be synchronous")
+        return sink
+
     @staticmethod
     def _reject_async_result(value: Any, *, operation: str) -> None:
-        if not inspect.isawaitable(value):
+        """Reject awaitable or async-generator results without running them."""
+
+        if not inspect.isawaitable(value) and not inspect.isasyncgen(value):
             return
         if inspect.iscoroutine(value):
             value.close()
@@ -1482,10 +1889,27 @@ class StoryRuntime:
         latest_candidate: str | None,
         manuscript_path: str | None,
         messages: list[DebateMessage],
+        progress: _ProgressEmitter,
         core_updates: tuple[str, ...] = (),
         error: str | None = None,
         action_required: str | None = None,
+        failure_kind: DebateFailureKind | None = None,
     ) -> DebateResult:
+        """Persist one terminal result/state before emitting terminal progress.
+
+        The supplied result fields retain the established ``DebateResult`` JSON.
+        Result creation, create-only result persistence, and terminal state
+        transition complete before the emitter is marked durable. Consensus emits
+        committed artifacts then consensus; deadlock and handled failure emit one
+        typed fact. Persistence and observer failures propagate without rewriting
+        a successfully terminal state.
+        """
+
+        if status is DebateStatus.FAILED:
+            if failure_kind is None:
+                raise ValueError("failed debate completion requires a failure kind")
+        elif failure_kind is not None:
+            raise ValueError("failure kind is allowed only for failed completion")
         result = DebateResult(
             session_id=session,
             debate_id=debate,
@@ -1512,7 +1936,87 @@ class StoryRuntime:
             rounds_completed=rounds_completed,
             error=error,
         )
+        progress.terminal_durable = True
+        if status is DebateStatus.CONSENSUS:
+            assert revision_id is not None
+            assert manuscript_path is not None
+            progress.emit(
+                DebateProgressEvent(
+                    session_id=session,
+                    debate_id=debate,
+                    input_kind=input_kind,
+                    phase=DebateProgressPhase.ARTIFACTS_COMMITTED,
+                    revision_id=revision_id,
+                    round_number=rounds_completed,
+                    manuscript_path=manuscript_path,
+                    core_updates=core_updates,
+                )
+            )
+            progress.emit(
+                DebateProgressEvent(
+                    session_id=session,
+                    debate_id=debate,
+                    input_kind=input_kind,
+                    phase=DebateProgressPhase.CONSENSUS,
+                    revision_id=revision_id,
+                    round_number=rounds_completed,
+                )
+            )
+        elif status is DebateStatus.DEADLOCK:
+            assert revision_id is not None
+            progress.emit(
+                DebateProgressEvent(
+                    session_id=session,
+                    debate_id=debate,
+                    input_kind=input_kind,
+                    phase=DebateProgressPhase.DEADLOCK,
+                    revision_id=revision_id,
+                    round_number=rounds_completed,
+                )
+            )
+        else:
+            assert status is DebateStatus.FAILED
+            assert failure_kind is not None
+            progress.emit(
+                DebateProgressEvent(
+                    session_id=session,
+                    debate_id=debate,
+                    input_kind=input_kind,
+                    phase=DebateProgressPhase.FAILED,
+                    revision_id=revision_id,
+                    round_number=rounds_completed,
+                    failure_kind=failure_kind,
+                )
+            )
         return result
+
+    @staticmethod
+    def _classify_debate_failure(
+        failure: Exception,
+        *,
+        artifact_commit: bool = False,
+        context_propagation: bool = False,
+    ) -> DebateFailureKind:
+        """Classify a handled failure by trusted type and execution stage only."""
+
+        if context_propagation:
+            return DebateFailureKind.CONTEXT
+        if isinstance(failure, _DebateContextPropagationError):
+            return DebateFailureKind.CONTEXT
+        if artifact_commit:
+            if isinstance(failure, ManuscriptExistsError):
+                return DebateFailureKind.ARTIFACT_CONFLICT
+            return DebateFailureKind.ARTIFACT_FAILURE
+        if isinstance(failure, ConfigurationError):
+            return DebateFailureKind.PREFLIGHT
+        if isinstance(failure, BackendProtocolError):
+            return DebateFailureKind.PROTOCOL
+        if isinstance(
+            failure,
+            (WorkspaceSecurityError, WorkspaceFormatError, OSError),
+        ):
+            return DebateFailureKind.WORKSPACE
+        return DebateFailureKind.INTERNAL
 
     @staticmethod
     def _new_debate_id() -> str:
@@ -1544,6 +2048,11 @@ class RuntimeSession:
     def inspect_debate(self, debate_id: str) -> dict[str, Any]:
         return self.runtime.inspect_debate(self.session_id, debate_id)
 
+    def inspect_debate_context(self, debate_id: str) -> dict[str, Any] | None:
+        """Return this session's strict context sidecar without mutation."""
+
+        return self.runtime.inspect_debate_context(self.session_id, debate_id)
+
     async def converse(
         self,
         conversation_id: str,
@@ -1557,18 +2066,56 @@ class RuntimeSession:
             text,
         )
 
-    async def run_prompt(self, prompt: str, **options: Any) -> DebateResult:
+    async def run_prompt(
+        self,
+        prompt: str,
+        *,
+        manuscript_name: str | None = None,
+        max_debate_rounds: int | None = None,
+        debate_id: str | None = None,
+        conversation_context: DebateContextRequest | None = None,
+        progress_sink: DebateProgressSink | None = None,
+    ) -> DebateResult:
+        """Delegate a prompt debate with optional context and progress reporting.
+
+        The bound session ID is supplied without local mutation; durability and
+        failure behavior are exactly those of ``StoryRuntime.run_prompt``.
+        """
+
         return await self.runtime.run_prompt(
             self.session_id,
             prompt,
-            **options,
+            manuscript_name=manuscript_name,
+            max_debate_rounds=max_debate_rounds,
+            debate_id=debate_id,
+            conversation_context=conversation_context,
+            progress_sink=progress_sink,
         )
 
-    async def run_draft(self, draft: str, **options: Any) -> DebateResult:
+    async def run_draft(
+        self,
+        draft: str,
+        *,
+        manuscript_name: str | None = None,
+        max_debate_rounds: int | None = None,
+        debate_id: str | None = None,
+        conversation_context: DebateContextRequest | None = None,
+        progress_sink: DebateProgressSink | None = None,
+    ) -> DebateResult:
+        """Delegate a draft debate with optional context and progress reporting.
+
+        The bound session ID is supplied without local mutation; durability and
+        failure behavior are exactly those of ``StoryRuntime.run_draft``.
+        """
+
         return await self.runtime.run_draft(
             self.session_id,
             draft,
-            **options,
+            manuscript_name=manuscript_name,
+            max_debate_rounds=max_debate_rounds,
+            debate_id=debate_id,
+            conversation_context=conversation_context,
+            progress_sink=progress_sink,
         )
 
 

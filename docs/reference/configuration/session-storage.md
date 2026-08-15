@@ -1,11 +1,10 @@
 # Session and workspace storage
 
-> **Availability:** session/conversation selections, provider sessions, debates,
-> metadata, transcripts, and manuscripts persist as plaintext workspace files.
+> **Availability:** selections, provider sessions, debates, conversation records,
+> and manuscripts persist as plaintext workspace files.
 
-Key terms: **session selection**—the default story session; **conversation
-selection**—one session's current subject conversation; **manifest**—durable
-provider-session metadata; **lease**—temporary attachment metadata.
+Key terms: **session selection**—the default story session; **conversation selection**—one
+session's current subject; **manifest**—durable provider metadata; **lease**—temporary attachment metadata.
 
 ## Canonical workspace tree
 
@@ -28,6 +27,7 @@ workspace/
 │       └── debates/<session_id>/<debate_id>.jsonl
 ├── discussion_logs/<session_id>/
 │   ├── <debate_id>.{state.json,jsonl,result.json}
+│   ├── <debate_id>.context.json                    [lazy selected context]
 │   └── interactive/conversations/<conversation_id>/
 │       ├── metadata.json                                    [lazy identity]
 │       └── transcript.jsonl                                 [lazy events]

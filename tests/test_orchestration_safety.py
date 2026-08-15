@@ -4,15 +4,26 @@ from __future__ import annotations
 
 import asyncio
 import unittest
+from unittest import mock
 
 from story_writing_agents import (
     AgentReply,
+    BackendProtocolError,
+    ConfigurationError,
+    ConversationContextWindow,
+    DebateContextMode,
+    DebateContextRequest,
+    DebateFailureKind,
+    DebateProgressEvent,
+    DebateProgressPhase,
     DebateStatus,
     Phase,
     PLOT_ARCHITECT,
+    ProgressObserverError,
     SPECIALIST_IDS,
     StoryRuntime,
 )
+from story_writing_agents.errors import WorkspaceFormatError
 
 from tests.helpers import (
     BindingBackendMixin,
@@ -21,6 +32,44 @@ from tests.helpers import (
     core_snapshot,
     initialized_workspace,
 )
+
+
+def workspace_file_snapshot(workspace) -> dict[str, bytes]:
+    """Capture every existing workspace file for preflight purity assertions."""
+
+    return {
+        path.relative_to(workspace.root).as_posix(): path.read_bytes()
+        for path in sorted(workspace.root.rglob("*"))
+        if path.is_file()
+    }
+
+
+class StaticEmptyContextStore:
+    """Return an included-empty snapshot without conversation mutations."""
+
+    def __init__(self) -> None:
+        self.read_calls: list[tuple[str, str]] = []
+
+    def read_context(
+        self,
+        session_id: str,
+        conversation_id: str,
+    ) -> ConversationContextWindow:
+        self.read_calls.append((session_id, conversation_id))
+        return ConversationContextWindow(
+            events=(),
+            total_complete_turns=0,
+            retained_turns=0,
+            omitted_turns=0,
+            retained_utf8_bytes=0,
+            truncated=False,
+        )
+
+    def append(self, _event: object) -> object:
+        raise AssertionError("debate execution must not append transcript events")
+
+    def read(self, _session_id: str, _conversation_id: str) -> tuple[object, ...]:
+        raise AssertionError("debate execution must not read transcript events")
 
 
 class ArtifactSafetyTests(unittest.IsolatedAsyncioTestCase):
@@ -266,6 +315,426 @@ class BackendFailureTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("verdict", (result.error or "").lower())
         self.assertEqual(core_snapshot(workspace), before)
         self.assertEqual(all_manuscripts(workspace), [])
+
+
+class FailureClassificationTests(unittest.IsolatedAsyncioTestCase):
+    """Verify failure categories derive from trusted types and stages."""
+
+    async def test_handled_failure_kinds_ignore_misleading_exception_prose(
+        self,
+    ) -> None:
+        typed_cases = (
+            (
+                ConfigurationError("protocol artifact conflict context secret"),
+                DebateFailureKind.PREFLIGHT,
+            ),
+            (
+                BackendProtocolError("workspace internal context secret"),
+                DebateFailureKind.PROTOCOL,
+            ),
+            (
+                WorkspaceFormatError("preflight protocol context secret"),
+                DebateFailureKind.WORKSPACE,
+            ),
+            (
+                RuntimeError("preflight protocol artifact conflict secret"),
+                DebateFailureKind.INTERNAL,
+            ),
+        )
+        for index, (failure, expected_kind) in enumerate(typed_cases):
+            with self.subTest(expected_kind=expected_kind):
+                workspace = initialized_workspace(self)
+
+                def respond(request, injected=failure):
+                    if request.phase is Phase.AUDIT:
+                        return injected
+                    raise AssertionError(f"unexpected phase: {request.phase}")
+
+                events: list[DebateProgressEvent] = []
+
+                def observe(event: DebateProgressEvent) -> None:
+                    if event.phase is DebateProgressPhase.FAILED:
+                        inspected = workspace.inspect_debate(
+                            f"typed_{index}",
+                            f"typed_debate_{index}",
+                        )
+                        self.assertEqual(inspected["status"], "failed")
+                        self.assertIsNotNone(inspected["result"])
+                    events.append(event)
+
+                result = await StoryRuntime(
+                    workspace,
+                    ScriptedBackend(respond),
+                ).run_draft(
+                    f"typed_{index}",
+                    "candidate",
+                    debate_id=f"typed_debate_{index}",
+                    progress_sink=observe,
+                )
+                self.assertEqual(result.status, DebateStatus.FAILED)
+                self.assertIs(events[-1].phase, DebateProgressPhase.FAILED)
+                self.assertIs(events[-1].failure_kind, expected_kind)
+                self.assertNotIn("secret", repr(events[-1]))
+
+        workspace = initialized_workspace(self)
+        store = StaticEmptyContextStore()
+        backend = ScriptedBackend(lambda request: AssertionError(request.phase))
+        runtime = StoryRuntime(
+            workspace,
+            backend,
+            conversation_event_store=store,  # type: ignore[arg-type]
+        )
+        context_events: list[DebateProgressEvent] = []
+        with mock.patch.object(
+            runtime.prompts,
+            "build_request",
+            side_effect=ValueError("protocol artifact secret"),
+        ):
+            context_result = await runtime.run_draft(
+                "context_failure",
+                "candidate",
+                debate_id="context_failure_debate",
+                conversation_context=DebateContextRequest(
+                    conversation_id="conversation_a",
+                    mode=DebateContextMode.INCLUDED,
+                ),
+                progress_sink=context_events.append,
+            )
+        self.assertEqual(context_result.status, DebateStatus.FAILED)
+        self.assertIs(
+            context_events[-1].failure_kind,
+            DebateFailureKind.CONTEXT,
+        )
+        self.assertEqual(store.read_calls, [("context_failure", "conversation_a")])
+
+        artifact_cases = (
+            ("conflict", DebateFailureKind.ARTIFACT_CONFLICT),
+            ("failure", DebateFailureKind.ARTIFACT_FAILURE),
+        )
+        for label, expected_kind in artifact_cases:
+            with self.subTest(artifact=label):
+                workspace = initialized_workspace(self)
+
+                def approve(request):
+                    if request.phase is Phase.AUDIT:
+                        return AgentReply.approval(request.revision_id)
+                    if request.phase is Phase.FINALIZE:
+                        return AgentReply.finalization(request.revision_id)
+                    raise AssertionError(request.phase)
+
+                if label == "conflict":
+                    workspace.write_text("manuscript/target.md", "existing")
+                    commit_context = mock.patch.object(
+                        workspace,
+                        "commit_approved_artifacts",
+                        wraps=workspace.commit_approved_artifacts,
+                    )
+                else:
+                    commit_context = mock.patch.object(
+                        workspace,
+                        "commit_approved_artifacts",
+                        side_effect=OSError("protocol conflict secret"),
+                    )
+                events = []
+                with commit_context:
+                    result = await StoryRuntime(
+                        workspace,
+                        ScriptedBackend(approve),
+                    ).run_draft(
+                        f"artifact_{label}",
+                        "candidate",
+                        debate_id=f"artifact_{label}_debate",
+                        manuscript_name="target.md",
+                        progress_sink=events.append,
+                    )
+                self.assertEqual(result.status, DebateStatus.FAILED)
+                self.assertIs(events[-1].failure_kind, expected_kind)
+
+
+class ProgressObserverTests(unittest.IsolatedAsyncioTestCase):
+    """Verify synchronous observer validation and durability boundaries."""
+
+    @staticmethod
+    def approval_backend() -> ScriptedBackend:
+        """Return an immediate-consensus backend for observer cases."""
+
+        def respond(request):
+            if request.phase is Phase.AUDIT:
+                return AgentReply.approval(request.revision_id)
+            if request.phase is Phase.FINALIZE:
+                return AgentReply.finalization(request.revision_id)
+            raise AssertionError(request.phase)
+
+        return ScriptedBackend(respond)
+
+    async def test_declared_async_and_noncallable_sinks_fail_before_mutation(
+        self,
+    ) -> None:
+        async def async_sink(_event: DebateProgressEvent) -> None:
+            return None
+
+        async def async_generator_sink(_event: DebateProgressEvent):
+            yield None
+
+        class AsyncCallable:
+            async def __call__(self, _event: DebateProgressEvent) -> None:
+                return None
+
+        class AsyncGeneratorCallable:
+            async def __call__(self, _event: DebateProgressEvent):
+                yield None
+
+        sinks = (
+            ("noncallable", object()),
+            ("async_function", async_sink),
+            ("async_callable", AsyncCallable()),
+            ("async_generator_function", async_generator_sink),
+            ("async_generator_callable", AsyncGeneratorCallable()),
+        )
+        for index, (label, sink) in enumerate(sinks):
+            with self.subTest(sink=label):
+                workspace = initialized_workspace(self)
+                before = workspace_file_snapshot(workspace)
+                backend = self.approval_backend()
+                with self.assertRaises(TypeError):
+                    await StoryRuntime(workspace, backend).run_draft(
+                        f"sink_preflight_{index}",
+                        "candidate",
+                        debate_id=f"sink_preflight_debate_{index}",
+                        conversation_context=DebateContextRequest(
+                            conversation_id="conversation_a",
+                            mode=DebateContextMode.FRESH,
+                        ),
+                        progress_sink=sink,  # type: ignore[arg-type]
+                    )
+                self.assertEqual(workspace_file_snapshot(workspace), before)
+                self.assertEqual(backend.requests, [])
+
+    async def test_preterminal_exception_and_dynamic_async_results_interrupt(
+        self,
+    ) -> None:
+        observer_failure = RuntimeError("private observer prose")
+        returned_coroutine = None
+        returned_async_generator = None
+
+        async def unused_awaitable() -> None:
+            return None
+
+        async def unused_async_generator():
+            yield None
+
+        def raising_sink(event: DebateProgressEvent) -> None:
+            if event.phase is DebateProgressPhase.STARTED:
+                raise observer_failure
+
+        def non_none_sink(_event: DebateProgressEvent) -> object:
+            return object()
+
+        def awaitable_sink(_event: DebateProgressEvent) -> object:
+            nonlocal returned_coroutine
+            returned_coroutine = unused_awaitable()
+            return returned_coroutine
+
+        def async_generator_sink(_event: DebateProgressEvent) -> object:
+            nonlocal returned_async_generator
+            returned_async_generator = unused_async_generator()
+            return returned_async_generator
+
+        cases = (
+            ("exception", raising_sink, RuntimeError, None),
+            (
+                "non_none",
+                non_none_sink,
+                TypeError,
+                "debate progress sink must return None",
+            ),
+            (
+                "awaitable",
+                awaitable_sink,
+                TypeError,
+                "debate progress sink must be synchronous",
+            ),
+            (
+                "async_generator",
+                async_generator_sink,
+                TypeError,
+                "debate progress sink must return None",
+            ),
+        )
+        for label, sink, cause_type, cause_text in cases:
+            with self.subTest(label=label):
+                workspace = initialized_workspace(self)
+                backend = self.approval_backend()
+                with self.assertRaises(ProgressObserverError) as raised:
+                    await StoryRuntime(workspace, backend).run_draft(
+                        f"observer_{label}",
+                        "candidate",
+                        debate_id=f"observer_{label}_debate",
+                        progress_sink=sink,  # type: ignore[arg-type]
+                    )
+                self.assertFalse(hasattr(raised.exception, "cause"))
+                self.assertIsInstance(raised.exception.__cause__, cause_type)
+                if label == "exception":
+                    self.assertIs(raised.exception.__cause__, observer_failure)
+                elif cause_text is not None:
+                    self.assertEqual(str(raised.exception.__cause__), cause_text)
+                inspected = workspace.inspect_debate(
+                    f"observer_{label}",
+                    f"observer_{label}_debate",
+                )
+                self.assertEqual(inspected["status"], "interrupted")
+                self.assertIsNone(inspected["result"])
+                self.assertEqual(backend.requests, [])
+                self.assertEqual(all_manuscripts(workspace), [])
+        assert returned_coroutine is not None
+        self.assertIsNone(returned_coroutine.cr_frame)
+        assert returned_async_generator is not None
+        await returned_async_generator.aclose()
+
+    async def test_control_flow_sink_failures_wrap_at_started(self) -> None:
+        for failure_type in (
+            KeyboardInterrupt,
+            SystemExit,
+            asyncio.CancelledError,
+        ):
+            with self.subTest(failure=failure_type.__name__):
+                workspace = initialized_workspace(self)
+                backend = self.approval_backend()
+                observer_failure = failure_type("started observer secret")
+                attempted: list[DebateProgressPhase] = []
+
+                def observe(event: DebateProgressEvent) -> None:
+                    attempted.append(event.phase)
+                    if event.phase is DebateProgressPhase.STARTED:
+                        raise observer_failure
+
+                with self.assertRaises(ProgressObserverError) as raised:
+                    await StoryRuntime(workspace, backend).run_draft(
+                        f"started_{failure_type.__name__.lower()}",
+                        "candidate",
+                        debate_id=(
+                            f"started_{failure_type.__name__.lower()}_debate"
+                        ),
+                        progress_sink=observe,
+                    )
+
+                self.assertIs(raised.exception.__cause__, observer_failure)
+                self.assertEqual(attempted, [DebateProgressPhase.STARTED])
+                inspected = workspace.inspect_debate(
+                    f"started_{failure_type.__name__.lower()}",
+                    f"started_{failure_type.__name__.lower()}_debate",
+                )
+                self.assertEqual(inspected["status"], "interrupted")
+                self.assertTrue(inspected["terminal"])
+                self.assertIsNone(inspected["result"])
+                self.assertEqual(backend.requests, [])
+                self.assertEqual(all_manuscripts(workspace), [])
+
+    async def test_control_flow_sink_failures_wrap_after_artifact_commit(
+        self,
+    ) -> None:
+        for failure_type in (
+            KeyboardInterrupt,
+            SystemExit,
+            asyncio.CancelledError,
+        ):
+            with self.subTest(failure=failure_type.__name__):
+                workspace = initialized_workspace(self)
+                backend = self.approval_backend()
+                label = failure_type.__name__.lower()
+                observer_failure = failure_type("artifact observer secret")
+                attempted: list[DebateProgressPhase] = []
+
+                def observe(event: DebateProgressEvent) -> None:
+                    attempted.append(event.phase)
+                    if event.phase is DebateProgressPhase.ARTIFACTS_COMMITTED:
+                        raise observer_failure
+
+                with self.assertRaises(ProgressObserverError) as raised:
+                    await StoryRuntime(workspace, backend).run_draft(
+                        f"artifact_{label}",
+                        "durable candidate",
+                        debate_id=f"artifact_{label}_debate",
+                        manuscript_name=f"artifact-{label}.md",
+                        progress_sink=observe,
+                    )
+
+                self.assertIs(raised.exception.__cause__, observer_failure)
+                self.assertIs(
+                    attempted[-1],
+                    DebateProgressPhase.ARTIFACTS_COMMITTED,
+                )
+                inspected = workspace.inspect_debate(
+                    f"artifact_{label}",
+                    f"artifact_{label}_debate",
+                )
+                self.assertEqual(inspected["status"], "consensus")
+                self.assertTrue(inspected["terminal"])
+                self.assertEqual(inspected["result"]["status"], "consensus")
+                self.assertEqual(
+                    workspace.read_manuscript(f"artifact-{label}.md"),
+                    "durable candidate",
+                )
+
+    async def test_postterminal_observer_failure_never_rewrites_durable_result(
+        self,
+    ) -> None:
+        cases = (
+            ("artifacts", DebateProgressPhase.ARTIFACTS_COMMITTED, "consensus"),
+            ("consensus", DebateProgressPhase.CONSENSUS, "consensus"),
+            ("deadlock", DebateProgressPhase.DEADLOCK, "deadlock"),
+            ("failed", DebateProgressPhase.FAILED, "failed"),
+        )
+        for label, target_phase, expected_status in cases:
+            with self.subTest(label=label):
+                workspace = initialized_workspace(self)
+                observer_failure = RuntimeError(f"observer-{label}-secret")
+                attempted: list[DebateProgressPhase] = []
+
+                def observe(event: DebateProgressEvent) -> None:
+                    attempted.append(event.phase)
+                    if event.phase is target_phase:
+                        raise observer_failure
+
+                def respond(request):
+                    if request.phase is Phase.AUDIT:
+                        if label == "deadlock" and request.agent_id == PLOT_ARCHITECT:
+                            return AgentReply.conflict(request.revision_id, "unresolved")
+                        if label == "failed" and request.agent_id == PLOT_ARCHITECT:
+                            return RuntimeError("provider secret")
+                        return AgentReply.approval(request.revision_id)
+                    if request.phase is Phase.FINALIZE:
+                        return AgentReply.finalization(request.revision_id)
+                    raise AssertionError(request.phase)
+
+                with self.assertRaises(ProgressObserverError) as raised:
+                    await StoryRuntime(
+                        workspace,
+                        ScriptedBackend(respond),
+                    ).run_draft(
+                        f"postterminal_{label}",
+                        "candidate",
+                        debate_id=f"postterminal_{label}_debate",
+                        manuscript_name=f"postterminal-{label}.md",
+                        max_debate_rounds=0 if label == "deadlock" else None,
+                        progress_sink=observe,
+                    )
+                self.assertFalse(hasattr(raised.exception, "cause"))
+                self.assertIs(raised.exception.__cause__, observer_failure)
+                self.assertIs(attempted[-1], target_phase)
+                inspected = workspace.inspect_debate(
+                    f"postterminal_{label}",
+                    f"postterminal_{label}_debate",
+                )
+                self.assertEqual(inspected["status"], expected_status)
+                self.assertTrue(inspected["terminal"])
+                self.assertEqual(inspected["result"]["status"], expected_status)
+                if expected_status == "consensus":
+                    self.assertTrue(
+                        workspace.path(f"manuscript/postterminal-{label}.md").exists()
+                    )
+                else:
+                    self.assertEqual(all_manuscripts(workspace), [])
 
 
 class _FailFastBindBackend:

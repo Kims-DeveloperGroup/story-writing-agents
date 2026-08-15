@@ -11,6 +11,11 @@ from unittest import mock
 from story_writing_agents import (
     AGENT_SPECS,
     CHARACTER_CUSTODIAN,
+    CONVERSATION_EVENT_SCHEMA_VERSION,
+    ConversationContextWindow,
+    ConversationEvent,
+    ConversationEventKind,
+    DebateContextMode,
     EXECUTION_SPECIALIST,
     LEAD_ORCHESTRATOR,
     PLOT_ARCHITECT,
@@ -26,6 +31,7 @@ from story_writing_agents.config import ConfigManager
 from story_writing_agents.directives import DirectiveKind
 from story_writing_agents.errors import (
     ConfigurationError,
+    DebateExistsError,
     DirectiveError,
     ManuscriptExistsError,
     WorkspaceFormatError,
@@ -37,6 +43,54 @@ from story_writing_agents.workspace import (
 )
 
 from tests.helpers import initialized_workspace
+
+
+_CONTEXT_TIMESTAMP = "2026-08-15T01:02:03+00:00"
+
+
+def debate_context_window(
+    *,
+    session_id: str = "session_a",
+    conversation_id: str = "conversation_a",
+) -> ConversationContextWindow:
+    """Return one canonical complete turn for sidecar persistence tests."""
+
+    events = (
+        ConversationEvent(
+            CONVERSATION_EVENT_SCHEMA_VERSION,
+            session_id,
+            conversation_id,
+            "turn_a",
+            1,
+            _CONTEXT_TIMESTAMP,
+            "user",
+            PLOT_ARCHITECT,
+            ConversationEventKind.USER_MESSAGE,
+            "question",
+        ),
+        ConversationEvent(
+            CONVERSATION_EVENT_SCHEMA_VERSION,
+            session_id,
+            conversation_id,
+            "turn_a",
+            2,
+            _CONTEXT_TIMESTAMP,
+            PLOT_ARCHITECT,
+            "user",
+            ConversationEventKind.AGENT_REPLY,
+            "answer",
+        ),
+    )
+    return ConversationContextWindow(
+        events=events,
+        total_complete_turns=3,
+        retained_turns=1,
+        omitted_turns=2,
+        retained_utf8_bytes=sum(
+            len(event.content.encode("utf-8")) for event in events
+        ),
+        truncated=True,
+    )
 
 
 class AgentRosterTests(unittest.TestCase):
@@ -334,6 +388,236 @@ class WorkspaceTests(unittest.TestCase):
                 )
         self.assertEqual(outline_path.read_bytes(), outline_before)
         self.assertFalse(workspace.path("manuscript/core-rollback.md").exists())
+
+
+class DebateContextSidecarTests(unittest.TestCase):
+    """Verify immutable, strict, identity-bound debate context sidecars."""
+
+    def setUp(self) -> None:
+        self.workspace = initialized_workspace(self)
+        self.relative = "discussion_logs/session_a/debate_a.context.json"
+
+    def test_absent_fresh_included_and_empty_schemas_are_exact(self) -> None:
+        runtime = StoryRuntime(self.workspace)
+        self.assertIsNone(
+            self.workspace.inspect_debate_context("session_a", "debate_a")
+        )
+        self.assertIsNone(
+            runtime.inspect_debate_context("session_a", "debate_a")
+        )
+        self.assertIsNone(
+            runtime.session("session_a").inspect_debate_context("debate_a")
+        )
+        inspect_before = self.workspace.inspect_debate("session_a", "debate_a")
+        session_before = self.workspace.inspect_session("session_a")
+
+        self.workspace.save_debate_context(
+            "session_a",
+            "debate_a",
+            conversation_id="conversation_a",
+            mode=DebateContextMode.FRESH,
+            snapshot=None,
+        )
+        fresh = self.workspace.inspect_debate_context("session_a", "debate_a")
+        assert fresh is not None
+        self.assertEqual(
+            set(fresh),
+            {
+                "schema_version",
+                "session_id",
+                "debate_id",
+                "conversation_id",
+                "mode",
+                "snapshot",
+            },
+        )
+        self.assertEqual(
+            fresh,
+            {
+                "schema_version": 1,
+                "session_id": "session_a",
+                "debate_id": "debate_a",
+                "conversation_id": "conversation_a",
+                "mode": "fresh",
+                "snapshot": None,
+            },
+        )
+        self.assertEqual(
+            self.workspace.inspect_debate("session_a", "debate_a"),
+            inspect_before,
+        )
+        self.assertEqual(self.workspace.inspect_session("session_a"), session_before)
+
+        empty = ConversationContextWindow(
+            events=(),
+            total_complete_turns=0,
+            retained_turns=0,
+            omitted_turns=0,
+            retained_utf8_bytes=0,
+            truncated=False,
+        )
+        self.workspace.save_debate_context(
+            "session_a",
+            "empty_debate",
+            conversation_id="conversation_a",
+            mode=DebateContextMode.INCLUDED,
+            snapshot=empty,
+        )
+        empty_sidecar = self.workspace.inspect_debate_context(
+            "session_a", "empty_debate"
+        )
+        assert empty_sidecar is not None
+        self.assertEqual(
+            empty_sidecar["snapshot"],
+            {
+                "events": [],
+                "total_complete_turns": 0,
+                "retained_turns": 0,
+                "omitted_turns": 0,
+                "retained_utf8_bytes": 0,
+                "truncated": False,
+            },
+        )
+
+        context = debate_context_window()
+        self.workspace.save_debate_context(
+            "session_a",
+            "included_debate",
+            conversation_id="conversation_a",
+            mode=DebateContextMode.INCLUDED,
+            snapshot=context,
+        )
+        included = self.workspace.inspect_debate_context(
+            "session_a", "included_debate"
+        )
+        assert included is not None
+        snapshot = included["snapshot"]
+        assert isinstance(snapshot, dict)
+        self.assertEqual(
+            set(snapshot),
+            {
+                "events",
+                "total_complete_turns",
+                "retained_turns",
+                "omitted_turns",
+                "retained_utf8_bytes",
+                "truncated",
+            },
+        )
+        self.assertEqual(snapshot["events"], [event.to_dict() for event in context.events])
+        self.assertTrue(
+            all(
+                set(event)
+                == {
+                    "schema_version",
+                    "session_id",
+                    "conversation_id",
+                    "turn_id",
+                    "sequence",
+                    "timestamp",
+                    "sender",
+                    "recipient",
+                    "kind",
+                    "content",
+                }
+                for event in snapshot["events"]
+            )
+        )
+
+    def test_create_only_collision_preserves_bytes_and_blocks_reservation(
+        self,
+    ) -> None:
+        context = debate_context_window()
+        path = self.workspace.save_debate_context(
+            "session_a",
+            "debate_a",
+            conversation_id="conversation_a",
+            mode=DebateContextMode.INCLUDED,
+            snapshot=context,
+        )
+        before = (path.read_bytes(), path.stat().st_mtime_ns)
+        with self.assertRaises(DebateExistsError):
+            self.workspace.save_debate_context(
+                "session_a",
+                "debate_a",
+                conversation_id="conversation_a",
+                mode=DebateContextMode.FRESH,
+                snapshot=None,
+            )
+        with self.assertRaises(DebateExistsError):
+            self.workspace.reserve_debate(
+                "session_a",
+                "debate_a",
+                input_kind="prompt",
+                owner_token="owner",
+            )
+        self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), before)
+        self.assertFalse(
+            self.workspace.path(
+                "discussion_logs/session_a/debate_a.state.json"
+            ).exists()
+        )
+
+    def test_tampering_and_duplicate_fields_raise_without_rewriting(self) -> None:
+        self.workspace.save_debate_context(
+            "session_a",
+            "debate_a",
+            conversation_id="conversation_a",
+            mode=DebateContextMode.INCLUDED,
+            snapshot=debate_context_window(),
+        )
+        canonical = self.workspace.read_json(self.relative)
+
+        def clone() -> dict[str, object]:
+            return json.loads(json.dumps(canonical))
+
+        extra = clone()
+        extra["extra"] = True
+        wrong_path = clone()
+        wrong_path["debate_id"] = "other_debate"
+        missing_snapshot = clone()
+        missing_snapshot["snapshot"] = None
+        wrong_counts = clone()
+        assert isinstance(wrong_counts["snapshot"], dict)
+        wrong_counts["snapshot"]["retained_turns"] = 2
+        wrong_event_identity = clone()
+        assert isinstance(wrong_event_identity["snapshot"], dict)
+        events = wrong_event_identity["snapshot"]["events"]
+        assert isinstance(events, list)
+        events[0]["conversation_id"] = "other_conversation"
+        reordered = clone()
+        assert isinstance(reordered["snapshot"], dict)
+        reordered["snapshot"]["events"].reverse()
+
+        for label, value in (
+            ("extra top-level field", extra),
+            ("path identity", wrong_path),
+            ("included null snapshot", missing_snapshot),
+            ("inconsistent counts", wrong_counts),
+            ("event identity", wrong_event_identity),
+            ("event ordering", reordered),
+        ):
+            with self.subTest(label=label):
+                self.workspace.write_json(self.relative, value, overwrite=True)
+                before = self.workspace.path(self.relative).read_bytes()
+                with self.assertRaises(WorkspaceFormatError):
+                    self.workspace.inspect_debate_context("session_a", "debate_a")
+                self.assertEqual(
+                    self.workspace.path(self.relative).read_bytes(),
+                    before,
+                )
+
+        duplicate = (
+            '{"schema_version":1,"schema_version":1,'
+            '"session_id":"session_a","debate_id":"debate_a",'
+            '"conversation_id":"conversation_a","mode":"fresh",'
+            '"snapshot":null}'
+        )
+        self.workspace.write_text(self.relative, duplicate, overwrite=True)
+        before = self.workspace.path(self.relative).read_bytes()
+        with self.assertRaises(WorkspaceFormatError):
+            self.workspace.inspect_debate_context("session_a", "debate_a")
+        self.assertEqual(self.workspace.path(self.relative).read_bytes(), before)
 
 
 class ConfigurationCascadeTests(unittest.TestCase):
