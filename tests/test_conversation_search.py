@@ -531,7 +531,6 @@ class ConversationSearchBehaviorTests(unittest.TestCase):
 
     def test_event_scan_stops_before_event_10001_and_counts_runtime_errors(self) -> None:
         item = self.catalog.create("session_a", "Haystack")
-        self.catalog.create("session_a", "Empty tail")
         events: list[ConversationEvent] = []
         for turn_number in range(1, 5_001):
             user_sequence = turn_number * 2 - 1
@@ -574,6 +573,23 @@ class ConversationSearchBehaviorTests(unittest.TestCase):
         exact = self.service.search(ConversationSearchQuery("needle"))
         self.assertEqual(exact.scanned_events, 10_000)
         self.assertFalse(exact.scan_truncated)
+
+        tail = self.catalog.create("session_a", "Unexamined tail")
+        self.store.events[("session_a", tail.conversation_id)] = (
+            stored_event(
+                1,
+                session_id="session_other",
+                conversation_id=tail.conversation_id,
+                content="needle",
+            ),
+        )
+        self.store.read_calls.clear()
+        skipped_tail = self.service.search(ConversationSearchQuery("needle"))
+        self.assertTrue(skipped_tail.scan_truncated)
+        self.assertNotIn(
+            ("session_a", tail.conversation_id),
+            self.store.read_calls,
+        )
 
         corrupt_event_10000 = stored_event(
             10_000,

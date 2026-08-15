@@ -735,16 +735,7 @@ class ReferenceConversationSearch:
                 continue
 
             if event_budget_exhausted:
-                remaining_events = self._event_store.read(
-                    item.session_id,
-                    item.conversation_id,
-                )
-                if type(remaining_events) is not tuple:
-                    raise TypeError(
-                        "event store read must return a tuple of ConversationEvent"
-                    )
-                if remaining_events:
-                    scan_truncated = True
+                scan_truncated = True
                 continue
             raw_events = self._event_store.read(
                 item.session_id,
