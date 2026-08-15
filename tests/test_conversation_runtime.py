@@ -1113,6 +1113,46 @@ class ConversationRuntimePreflightTests(_ConversationRuntimeCase):
                 )
                 self.assertEqual(malformed_store.append_calls, [])
 
+    async def test_async_generator_prepare_result_is_sync_preflight_failure(
+        self,
+    ) -> None:
+        workspace, _, memory, conversation_id = self.memory_fixture()
+        backend = _ConversationBackend()
+        store = _TracingStore(memory)
+        returned_generators = []
+
+        async def deferred_prepare():
+            yield None
+
+        def prepare_session(_session_id: str) -> object:
+            result = deferred_prepare()
+            returned_generators.append(result)
+            return result
+
+        backend.prepare_session = prepare_session  # type: ignore[method-assign]
+        caught = await self.assert_runtime_failure(
+            workspace=workspace,
+            backend=backend,
+            store=store,
+            conversation_id=conversation_id,
+            error=BackendProtocolError,
+        )
+
+        self.assertEqual(
+            str(caught),
+            "backend prepare_session() must be synchronous",
+        )
+        self.assertEqual(
+            store.read_calls,
+            [("session_a", conversation_id)],
+        )
+        self.assertEqual(store.append_calls, [])
+        self.assertEqual(memory.read("session_a", conversation_id), ())
+        self.assertEqual(backend.definitions, [])
+        self.assertEqual(backend.requests, [])
+        self.assertEqual(len(returned_generators), 1)
+        await returned_generators[0].aclose()
+
     async def test_definition_is_reverified_for_new_and_cached_bindings(self) -> None:
         workspace, _, memory, conversation_id = self.memory_fixture()
         prompt_path = AGENT_SPECS[PLOT_ARCHITECT].system_prompt_file

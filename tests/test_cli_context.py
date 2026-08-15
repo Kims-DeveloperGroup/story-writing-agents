@@ -36,6 +36,7 @@ from story_writing_agents.errors import (
     WorkspaceFormatError,
     WorkspaceSecurityError,
 )
+from story_writing_agents.run_inputs import read_draft_file
 
 from tests.helpers import ScriptedBackend, phase_requests
 
@@ -831,17 +832,50 @@ class RunInputTests(unittest.TestCase):
                         )
                     )
 
-    def test_draft_file_is_cwd_relative_and_strict_utf8(self) -> None:
+    def test_shared_draft_loader_preserves_path_semantics_and_exact_text(
+        self,
+    ) -> None:
         cwd = Path(self.temporary.name) / "caller"
         cwd.mkdir()
-        (cwd / "neutral.md").write_text(
-            "cwd-relative draft",
-            encoding="utf-8",
-        )
-        (cwd / "invalid.md").write_bytes(b"\xff")
+        exact = "\ufefffirst\r\nsecond\x00  \n"
+        relative = cwd / "neutral.md"
+        relative.write_bytes(exact.encode("utf-8"))
+        absolute = cwd / "absolute.md"
+        absolute.write_text("absolute draft", encoding="utf-8")
+        metachar = cwd / 'literal ;$(touch marker) [*] "quoted".md'
+        metachar.write_text("literal metacharacters", encoding="utf-8")
+        empty = cwd / "empty.md"
+        empty.write_bytes(b"")
+        home = cwd / "home"
+        home.mkdir()
+        (home / "tilde.md").write_text("expanded home", encoding="utf-8")
+        symlink = cwd / "linked.md"
+        try:
+            symlink.symlink_to(absolute)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f"symbolic links unavailable: {exc}")
+
+        with (
+            working_directory(cwd),
+            mock.patch.dict(os.environ, {"HOME": str(home)}),
+        ):
+            self.assertEqual(read_draft_file("neutral.md"), exact)
+            self.assertEqual(read_draft_file(absolute), "absolute draft")
+            self.assertEqual(read_draft_file("linked.md"), "absolute draft")
+            self.assertEqual(read_draft_file(metachar.name), "literal metacharacters")
+            self.assertEqual(read_draft_file("~/tilde.md"), "expanded home")
+            self.assertEqual(read_draft_file(empty), "")
+        self.assertFalse((cwd / "marker").exists())
 
         backend = successful_backend()
-        with working_directory(cwd):
+        with (
+            working_directory(cwd),
+            mock.patch.object(
+                cli_module,
+                "read_draft_file",
+                wraps=read_draft_file,
+            ) as shared_loader,
+        ):
             exit_code, stdout, stderr = self._run(
                 [
                     "run",
@@ -858,14 +892,50 @@ class RunInputTests(unittest.TestCase):
                 ],
                 backend,
             )
+        shared_loader.assert_called_once_with("neutral.md")
         self.assertEqual(exit_code, 0, stderr)
         self.assertEqual(json.loads(stdout)["input_kind"], "draft")
         self.assertTrue(
             all(
-                request.user_payload == "cwd-relative draft"
+                request.user_payload == exact
                 for request in phase_requests(backend, Phase.AUDIT)
             )
         )
+
+    def test_shared_draft_loader_errors_are_strict_and_precede_backend(self) -> None:
+        cwd = Path(self.temporary.name) / "caller-errors"
+        cwd.mkdir()
+        invalid = cwd / "invalid.md"
+        invalid.write_bytes(b"\xff")
+        directory = cwd / "directory"
+        directory.mkdir()
+
+        with working_directory(cwd):
+            with self.assertRaises(ConfigurationError) as invalid_error:
+                read_draft_file("invalid.md")
+            self.assertEqual(
+                str(invalid_error.exception),
+                "draft file is not valid UTF-8: invalid.md",
+            )
+            for path in ("missing.md", "directory"):
+                with self.subTest(path=path):
+                    with self.assertRaises(ConfigurationError) as read_error:
+                        read_draft_file(path)
+                    self.assertTrue(
+                        str(read_error.exception).startswith(
+                            f"cannot read draft file {path}: "
+                        )
+                    )
+            with mock.patch.object(
+                Path,
+                "read_bytes",
+                side_effect=PermissionError("denied"),
+            ):
+                with self.assertRaisesRegex(
+                    ConfigurationError,
+                    r"^cannot read draft file blocked\.md: denied$",
+                ):
+                    read_draft_file("blocked.md")
 
         with mock.patch.object(cli_module, "AgentBackend") as backend_class:
             with working_directory(cwd):

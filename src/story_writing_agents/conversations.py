@@ -182,6 +182,143 @@ class ConversationContextWindow:
             raise ValueError("context truncated flag is inconsistent")
 
 
+def validate_conversation_context_window(
+    context: ConversationContextWindow,
+    *,
+    session_id: str,
+    conversation_id: str | None = None,
+    excluded_turn_id: str | None = None,
+) -> ConversationContextWindow:
+    """Return a canonical, identity-bound conversation context window.
+
+    The supplied immutable window is copied into built-in event/window types and
+    validated against the owning session, optional conversation, optional
+    excluded turn, pairing rules, ordering, metadata, and fixed policy caps. The
+    operation performs no I/O or mutation; invalid identities or content raise
+    ``SessionIdError``, ``TypeError``, or ``ValueError``.
+    """
+
+    _validate_identifier(session_id, label="session ID")
+    if conversation_id is not None:
+        _validate_identifier(conversation_id, label="conversation ID")
+    if excluded_turn_id is not None:
+        _validate_identifier(excluded_turn_id, label="excluded turn ID")
+    if type(context) is not ConversationContextWindow:
+        raise TypeError("conversation context must be a ConversationContextWindow")
+
+    try:
+        source_events = context.events
+        total_complete_turns = context.total_complete_turns
+        retained_turns_metadata = context.retained_turns
+        omitted_turns = context.omitted_turns
+        retained_utf8_bytes_metadata = context.retained_utf8_bytes
+        truncated = context.truncated
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ValueError("conversation context metadata is invalid") from exc
+    if type(source_events) is not tuple:
+        raise ValueError("conversation context metadata is invalid")
+
+    canonical_events: list[ConversationEvent] = []
+    for event in source_events:
+        if not isinstance(event, ConversationEvent):
+            raise ValueError("conversation context contains an invalid event")
+        try:
+            canonical_events.append(
+                ConversationEvent(
+                    schema_version=event.schema_version,
+                    session_id=event.session_id,
+                    conversation_id=event.conversation_id,
+                    turn_id=event.turn_id,
+                    sequence=event.sequence,
+                    timestamp=event.timestamp,
+                    sender=event.sender,
+                    recipient=event.recipient,
+                    kind=event.kind,
+                    content=event.content,
+                )
+            )
+        except (AttributeError, SessionIdError, TypeError, ValueError) as exc:
+            raise ValueError(
+                "conversation context contains an invalid event"
+            ) from exc
+
+    try:
+        canonical_context = ConversationContextWindow(
+            events=tuple(canonical_events),
+            total_complete_turns=total_complete_turns,
+            retained_turns=retained_turns_metadata,
+            omitted_turns=omitted_turns,
+            retained_utf8_bytes=retained_utf8_bytes_metadata,
+            truncated=truncated,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("conversation context metadata is invalid") from exc
+
+    turns: dict[str, list[ConversationEvent]] = {}
+    previous_sequence = 0
+    retained_utf8_bytes = 0
+    observed_conversation_id = conversation_id
+    for event in canonical_context.events:
+        if event.session_id != session_id:
+            raise ValueError("conversation context contains a different session")
+        if observed_conversation_id is None:
+            observed_conversation_id = event.conversation_id
+        elif event.conversation_id != observed_conversation_id:
+            raise ValueError("conversation context contains a different conversation")
+        if excluded_turn_id is not None and event.turn_id == excluded_turn_id:
+            raise ValueError("conversation context contains the excluded turn")
+        if event.sequence <= previous_sequence:
+            raise ValueError(
+                "conversation context event sequences must be strictly increasing"
+            )
+        previous_sequence = event.sequence
+        retained_utf8_bytes += len(event.content.encode("utf-8"))
+        turns.setdefault(event.turn_id, []).append(event)
+
+    for turn_id, events in turns.items():
+        if len(events) != 2:
+            raise ValueError(f"conversation context turn is incomplete: {turn_id}")
+        users = [
+            event
+            for event in events
+            if event.kind is ConversationEventKind.USER_MESSAGE
+        ]
+        outcomes = [
+            event
+            for event in events
+            if event.kind is not ConversationEventKind.USER_MESSAGE
+        ]
+        if len(users) != 1 or len(outcomes) != 1:
+            raise ValueError(
+                f"conversation context turn is not correctly paired: {turn_id}"
+            )
+        user, outcome = users[0], outcomes[0]
+        if user.sequence >= outcome.sequence:
+            raise ValueError(
+                f"conversation context outcome precedes its user event: {turn_id}"
+            )
+        if (
+            outcome.kind is ConversationEventKind.AGENT_REPLY
+            and outcome.sender != user.recipient
+        ):
+            raise ValueError(
+                "conversation context reply sender does not match addressed agent"
+            )
+
+    retained_turns = len(turns)
+    if canonical_context.retained_turns != retained_turns:
+        raise ValueError("conversation context retained-turn metadata is inconsistent")
+    if canonical_context.retained_utf8_bytes != retained_utf8_bytes:
+        raise ValueError("conversation context byte metadata is inconsistent")
+    if retained_turns > CONVERSATION_CONTEXT_POLICY.max_complete_turns:
+        raise ValueError("conversation context exceeds the retained-turn cap")
+    if retained_utf8_bytes > CONVERSATION_CONTEXT_POLICY.max_utf8_bytes:
+        raise ValueError("conversation context exceeds the UTF-8 byte cap")
+    if all(type(event) is ConversationEvent for event in source_events):
+        return context
+    return canonical_context
+
+
 class ConversationEventStore(Protocol):
     """Storage-neutral visible transcript operations."""
 
@@ -419,4 +556,5 @@ __all__ = [
     "ConversationMetadata",
     "ConversationStatus",
     "normalize_conversation_subject",
+    "validate_conversation_context_window",
 ]

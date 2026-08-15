@@ -489,6 +489,14 @@ class AgentBackend:
         bound_agent: BoundAgent,
         request: AgentRequest,
     ) -> AgentReply:
+        """Invoke Codex with conditional context projection and safe diagnostics.
+
+        The request is serialized without changing the legacy key set unless an
+        included conversation window is present. Provider and staging resources
+        retain their established lifecycle; protocol, process, and decode errors
+        propagate with request, message, state, and context content redacted.
+        """
+
         self._ensure_open()
 
         def decode(response_text: str) -> AgentReply:
@@ -531,6 +539,7 @@ class AgentBackend:
                 request.candidate_payload or "",
                 *(message.content for message in request.messages),
                 *(entry.content for entry in request.agent_state),
+                *self._debate_context_sensitive_values(request),
             ),
             decode=decode,
         )
@@ -830,7 +839,9 @@ class AgentBackend:
 
     @staticmethod
     def _request_payload(request: AgentRequest) -> dict[str, Any]:
-        return {
+        """Return the exact provider payload, adding context only when included."""
+
+        payload = {
             "session_id": request.session_id,
             "debate_id": request.debate_id,
             "agent_id": request.agent_id,
@@ -843,6 +854,39 @@ class AgentBackend:
             "messages": [message.to_dict() for message in request.messages],
             "agent_state": [entry.to_dict() for entry in request.agent_state],
         }
+        if request.conversation_context is not None:
+            payload["conversation_context"] = [
+                {
+                    "turn_id": event.turn_id,
+                    "sender": event.sender,
+                    "recipient": event.recipient,
+                    "kind": event.kind.value,
+                    "content": event.content,
+                }
+                for event in request.conversation_context.events
+            ]
+        return payload
+
+    @staticmethod
+    def _debate_context_sensitive_values(
+        request: AgentRequest,
+    ) -> tuple[str, ...]:
+        """Return raw and JSON-escaped included-context values for redaction."""
+
+        if request.conversation_context is None:
+            return ()
+        variants: set[str] = set()
+        for event in request.conversation_context.events:
+            value = event.content
+            variants.update(
+                (
+                    value,
+                    json.dumps(value, ensure_ascii=False)[1:-1],
+                    json.dumps(value, ensure_ascii=True)[1:-1],
+                )
+            )
+        variants.discard("")
+        return tuple(sorted(variants, key=lambda item: (-len(item), item)))
 
     @staticmethod
     def _conversation_request_payload(

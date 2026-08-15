@@ -1,12 +1,11 @@
 # Agent contracts
 
-> **Availability:** these models are Python APIs; `StoryRuntime` uses both sets,
-> while `BoundAgent.converse()` uses the conversation request and reply.
+> **Availability:** these models are Python APIs. Debate requests can carry an
+> optional conversation snapshot; advisory turns retain their separate request.
 
-Key terms: **definition**—stable context bound to one agent; **file reference**—
-a path plus content digest; **request**—dynamic data for one turn; **reply**—
-validated provider output; **visible context**—prior transcript events the
-caller explicitly supplies.
+Key terms: **definition**—stable context bound to one agent; **request**—dynamic
+data for one provider call; **blackboard**—public debate messages;
+**conversation context**—a transcript snapshot separate from debate input.
 
 ## Bound definition
 
@@ -14,36 +13,24 @@ caller explicitly supplies.
 PromptFileReference(path: pathlib.Path, sha256: str)
 PromptFileReference.from_path(path: pathlib.Path) -> PromptFileReference
 PromptFileReference.read_text() -> str
-
-AgentDefinition(
-    agent_id: str,
-    backend: str,
-    fingerprint: str,
+AgentDefinition(agent_id: str, backend: str, fingerprint: str,
     system_prompt_file: PromptFileReference,
-    persona_file: PromptFileReference,
-    language: str,
-    context_document_files: tuple[PromptFileReference, ...],
-)
+    persona_file: PromptFileReference, language: str,
+    context_document_files: tuple[PromptFileReference, ...])
 AgentDefinition.file_references() -> tuple[PromptFileReference, ...]
 ```
 
-`from_path()` validates strict UTF-8 and stores lowercase SHA-256 of exact
-bytes. `read_text()` accepts only unchanged bytes; missing, unreadable,
-invalid-UTF-8, or digest-mismatched content raises `WorkspaceFormatError`.
-`file_references()` returns role prompt, persona, then context documents.
+References validate strict UTF-8 and hash exact bytes. A definition stores
+absolute paths and hashes, not full text; its fingerprint covers the agent,
+backend, language, component identities, and hashes. Runtime bindings are
+cached by `(agent_id, fingerprint)`.
 
-Definitions contain absolute workspace paths and hashes, never full prompt or
-story text. The fingerprint covers agent, backend, language, component
-identities, and hashes. Runtime bindings are cached by `(agent_id,
-fingerprint)` for one runtime; identical concurrent binds share one in-flight
-operation and failed binds are not cached.
-
-| Agent | Role prompt | Context |
-| --- | --- | --- |
-| `lead_orchestrator` | `config/agents/lead_orchestrator/AGENTS.md` | all four core documents |
-| `plot_architect` | `config/agents/plot_architect/AGENTS.md` | `global_outline.md`, `part_outlines.md` |
-| `character_custodian` | `config/agents/character_custodian/AGENTS.md` | `character_sheets.md` |
-| `execution_specialist` | `config/agents/execution_specialist/AGENTS.md` | `narrative_rules.md` |
+| Agent | Bound core documents |
+| --- | --- |
+| `lead_orchestrator` | all four |
+| `plot_architect` | global and part outlines |
+| `character_custodian` | character sheets |
+| `execution_specialist` | narrative rules |
 
 ## Debate request
 
@@ -54,15 +41,21 @@ AgentRequest(
     candidate_payload: str | None = None,
     messages: tuple[DebateMessage, ...] = (),
     agent_state: tuple[AgentStateEntry, ...] = (),
+    conversation_context: ConversationContextWindow | None = None,
 )
 ```
 
-Requests are frozen and prompt-free. `task` carries phase instructions and the
-no-hidden-reasoning requirement; `user_payload` is the original input;
-`candidate_payload` is the current candidate where applicable. `messages` is
-the public blackboard snapshot. `agent_state` contains only the receiving
-agent's session-wide persisted outcomes, including earlier debates and already
-recorded current outcomes. Parallel peers receive the same pre-phase snapshot.
+Requests are frozen and prompt-free. `task` carries phase instructions;
+`user_payload` is the original input; `candidate_payload` is the current
+candidate where applicable. `messages` is the public blackboard snapshot.
+`agent_state` contains only the receiving agent's session-wide stored outcomes;
+parallel peers receive the same pre-phase state snapshot.
+
+`conversation_context` is `None` for legacy and fresh runs. Included runs put
+the same validated immutable window in every draft, audit, proposal, synthesis,
+and finalization request. It stays a separate provider field: the runtime does
+not concatenate it into the task, input, candidate, blackboard, agent state, or
+bound prompt.
 
 ```python
 DebateMessage(sender: str, phase: str, round: int, revision: str,
@@ -72,29 +65,25 @@ AgentStateEntry(agent_id: str, session_id: str, debate_id: str, phase: str,
                 timestamp: str)
 ```
 
-Both are frozen and provide `to_dict()`. Agent-state content is capped at 4096
+Both are frozen and provide `to_dict()`; agent-state content is capped at 4096
 characters per entry.
 
-## One conversation turn
+## One advisory conversation turn
 
 ```python
 ConversationRequest(session_id: str, conversation_id: str, turn_id: str,
-                    agent_id: str, content: str, context: ConversationContextWindow)
-ConversationReply(session_id: str, conversation_id: str, turn_id: str, content: str)
+                    agent_id: str, content: str,
+                    context: ConversationContextWindow)
+ConversationReply(session_id: str, conversation_id: str,
+                  turn_id: str, content: str)
 ```
 
-Both are frozen and slotted, with no defaults. IDs follow the common
-[safe-identifier contract](configuration/identifiers-and-errors.md); the request
-agent must be canonical. Content is nonempty strict UTF-8 and is not normalized.
-
-`context` must be an exact `ConversationContextWindow` of complete,
-increasing events from the same session and conversation, within fixed caps and
-without the current turn. Its metadata must match its events; sequence gaps and
-interleaved turns are allowed. See [Conversation transcripts](conversation-transcripts.md).
-
-The reply validates and correlates its IDs. `StoryRuntime` persistence and
-results belong to the [Runtime API](runtime-api.md#one-conversation-turn);
-provider details belong to [Backend and sessions](backend-and-sessions.md).
+Both are frozen and slotted with no defaults. IDs are safe, request agents are
+canonical, and content is nonempty exact strict UTF-8. `context` must be a
+bounded, increasing window of complete turns from the same session and
+conversation and must exclude the current turn. The reply correlates all IDs.
+See [Conversation transcripts](conversation-transcripts.md) for the window and
+[Runtime API](runtime-api.md#results-and-advisory-turns) for persistence.
 
 ## Debate reply
 
@@ -109,17 +98,14 @@ AgentReply.finalization(revision_id: str,
                         core_updates: Mapping[str, str] | None = None) -> AgentReply
 ```
 
-Revision ID must equal the request target. Content is a string, verdict is an
-enum member or `None`, and updates map filenames to complete string content.
-
 | Phase | Valid reply |
 | --- | --- |
 | `draft` | Nonempty candidate; no verdict or updates. |
-| `audit` | `APPROVE` with optional note, or `CONFLICT` with nonempty critique; no updates. |
+| `audit` | Approval with optional note, or conflict with nonempty critique. |
 | `propose_revision` | Nonempty proposal; no verdict or updates. |
 | `synthesize` | Nonempty complete replacement; no verdict or updates. |
-| `finalize` | No verdict; content empty or exactly the approved candidate; optional allowlisted full-text updates. |
+| `finalize` | Empty or approved candidate content; optional allowlisted full-text updates. |
 
-Specialists cannot update core documents, and finalization cannot alter the
-approved manuscript. Public models have no hidden-reasoning field; provider
-text put in ordinary content remains visible and may be persisted.
+Every reply targets the requested revision. Specialists cannot update core
+documents, and finalization cannot alter the approved manuscript. Public models
+have no hidden-reasoning field; ordinary content is visible and may persist.

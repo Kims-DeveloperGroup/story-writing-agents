@@ -7,7 +7,6 @@ import asyncio
 import json
 import math
 import sys
-from pathlib import Path
 from typing import Sequence
 
 from .agents import ROSTER
@@ -34,6 +33,7 @@ from .interactive_terminal import (
 )
 from .models import DebateStatus
 from .orchestrator import StoryRuntime
+from .run_inputs import read_draft_file
 from .workspace import initialize_workspace
 
 
@@ -247,18 +247,7 @@ def _resolve_run_input(arguments: argparse.Namespace) -> tuple[str, str]:
     if input_kind != "draft_file":
         return input_kind, value
 
-    draft_path = Path(value).expanduser()
-    try:
-        content = draft_path.read_bytes().decode("utf-8", errors="strict")
-    except UnicodeDecodeError as exc:
-        raise ConfigurationError(
-            f"draft file is not valid UTF-8: {draft_path}"
-        ) from exc
-    except OSError as exc:
-        raise ConfigurationError(
-            f"cannot read draft file {draft_path}: {exc}"
-        ) from exc
-    return "draft", content
+    return "draft", read_draft_file(value)
 
 
 def _interactive_streams_are_terminals() -> bool:

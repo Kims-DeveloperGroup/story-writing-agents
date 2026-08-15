@@ -5,7 +5,15 @@ from __future__ import annotations
 import unittest
 
 from story_writing_agents import (
+    CONVERSATION_EVENT_SCHEMA_VERSION,
     AgentReply,
+    ConversationContextWindow,
+    ConversationEvent,
+    ConversationEventKind,
+    DebateContextMode,
+    DebateContextRequest,
+    DebateProgressEvent,
+    DebateProgressPhase,
     DebateStatus,
     EXECUTION_SPECIALIST,
     InputKind,
@@ -26,6 +34,87 @@ from tests.helpers import (
     initialized_workspace,
     phase_requests,
 )
+
+
+def selected_context_window(
+    session_id: str,
+    conversation_id: str,
+) -> ConversationContextWindow:
+    """Return one canonical truncated turn for debate propagation tests."""
+
+    timestamp = "2026-08-15T01:02:03+00:00"
+    events = (
+        ConversationEvent(
+            CONVERSATION_EVENT_SCHEMA_VERSION,
+            session_id,
+            conversation_id,
+            "prior_turn",
+            1,
+            timestamp,
+            "user",
+            PLOT_ARCHITECT,
+            ConversationEventKind.USER_MESSAGE,
+            "selected question",
+        ),
+        ConversationEvent(
+            CONVERSATION_EVENT_SCHEMA_VERSION,
+            session_id,
+            conversation_id,
+            "prior_turn",
+            2,
+            timestamp,
+            PLOT_ARCHITECT,
+            "user",
+            ConversationEventKind.AGENT_REPLY,
+            "selected answer",
+        ),
+    )
+    return ConversationContextWindow(
+        events=events,
+        total_complete_turns=4,
+        retained_turns=1,
+        omitted_turns=3,
+        retained_utf8_bytes=sum(
+            len(event.content.encode("utf-8")) for event in events
+        ),
+        truncated=True,
+    )
+
+
+class RecordingDebateContextStore:
+    """Expose one immutable snapshot while recording debate-only reads."""
+
+    def __init__(
+        self,
+        workspace: Workspace,
+        snapshot: ConversationContextWindow,
+    ) -> None:
+        self.workspace = workspace
+        self.snapshot = snapshot
+        self.read_calls: list[tuple[str, str]] = []
+
+    def read_context(
+        self,
+        session_id: str,
+        conversation_id: str,
+    ) -> ConversationContextWindow:
+        self.read_calls.append((session_id, conversation_id))
+        self.assert_unreserved(session_id, "context_debate")
+        return self.snapshot
+
+    def assert_unreserved(self, session_id: str, debate_id: str) -> None:
+        """Prove context capture precedes debate-state reservation."""
+
+        if self.workspace.path(
+            f"discussion_logs/{session_id}/{debate_id}.state.json"
+        ).exists():
+            raise AssertionError("context was read after debate reservation")
+
+    def append(self, _event: object) -> object:
+        raise AssertionError("debate runs must not append conversation events")
+
+    def read(self, _session_id: str, _conversation_id: str) -> tuple[object, ...]:
+        raise AssertionError("debate runs must not read the transcript directly")
 
 
 class InputPathTests(unittest.IsolatedAsyncioTestCase):
@@ -95,11 +184,13 @@ class InputPathTests(unittest.IsolatedAsyncioTestCase):
             raise AssertionError(f"unexpected phase: {request.phase}")
 
         backend = ScriptedBackend(respond)
+        progress: list[DebateProgressEvent] = []
         result = await StoryRuntime(workspace, backend).run_draft(
             "draft_session",
             "supplied-r0",
             debate_id="draft_debate",
             manuscript_name="draft-result.md",
+            progress_sink=progress.append,
         )
 
         self.assertEqual(result.status, DebateStatus.CONSENSUS)
@@ -110,6 +201,223 @@ class InputPathTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(audits), 3)
         self.assertTrue(
             all(request.candidate_payload == "supplied-r0" for request in audits)
+        )
+        self.assertEqual(
+            [event.phase for event in progress],
+            [
+                DebateProgressPhase.STARTED,
+                DebateProgressPhase.DRAFTED,
+                DebateProgressPhase.AUDIT_STARTED,
+                DebateProgressPhase.AUDIT_COMPLETED,
+                DebateProgressPhase.ARTIFACTS_COMMITTED,
+                DebateProgressPhase.CONSENSUS,
+            ],
+        )
+
+
+class ContextAndProgressWorkflowTests(unittest.IsolatedAsyncioTestCase):
+    """Verify context capture, propagation, progress order, and durability."""
+
+    async def test_included_context_is_read_once_and_reused_for_every_phase(
+        self,
+    ) -> None:
+        workspace = initialized_workspace(self)
+        session_id = "context_session"
+        conversation_id = "conversation_a"
+        snapshot = selected_context_window(session_id, conversation_id)
+        store = RecordingDebateContextStore(workspace, snapshot)
+
+        def respond(request):
+            self.assertTrue(
+                workspace.path(
+                    f"discussion_logs/{session_id}/context_debate.context.json"
+                ).exists()
+            )
+            self.assertTrue(
+                workspace.read_debate_messages(session_id, "context_debate")
+            )
+            if request.phase is Phase.DRAFT:
+                return AgentReply.candidate(request.revision_id, "candidate-r0")
+            if request.phase is Phase.AUDIT:
+                if request.revision_id == "r0" and request.agent_id == PLOT_ARCHITECT:
+                    return AgentReply.conflict(request.revision_id, "revise plot")
+                return AgentReply.approval(request.revision_id)
+            if request.phase is Phase.PROPOSE_REVISION:
+                return AgentReply.candidate(request.revision_id, "proposal")
+            if request.phase is Phase.SYNTHESIZE:
+                return AgentReply.candidate(request.revision_id, "candidate-r1")
+            if request.phase is Phase.FINALIZE:
+                return AgentReply.finalization(
+                    request.revision_id,
+                    {"global_outline.md": "updated outline"},
+                )
+            raise AssertionError(f"unexpected phase: {request.phase}")
+
+        events: list[DebateProgressEvent] = []
+
+        def observe(event: DebateProgressEvent) -> None:
+            inspected = workspace.inspect_debate(session_id, "context_debate")
+            if event.phase is DebateProgressPhase.STARTED:
+                self.assertIsNotNone(
+                    workspace.inspect_debate_context(session_id, "context_debate")
+                )
+                self.assertEqual(inspected["status"], "active")
+                self.assertIsNone(inspected["result"])
+                self.assertEqual(inspected["messages"][0]["phase"], "initiation")
+            if event.phase in {
+                DebateProgressPhase.ARTIFACTS_COMMITTED,
+                DebateProgressPhase.CONSENSUS,
+            }:
+                self.assertEqual(inspected["status"], "consensus")
+                self.assertTrue(inspected["terminal"])
+                self.assertIsNotNone(inspected["result"])
+                self.assertTrue(workspace.path("manuscript/context.md").exists())
+            events.append(event)
+
+        backend = ScriptedBackend(respond)
+        result = await StoryRuntime(
+            workspace,
+            backend,
+            conversation_event_store=store,  # type: ignore[arg-type]
+        ).run_prompt(
+            session_id,
+            "write from selected context",
+            debate_id="context_debate",
+            manuscript_name="context.md",
+            conversation_context=DebateContextRequest(
+                conversation_id=conversation_id,
+                mode=DebateContextMode.INCLUDED,
+            ),
+            progress_sink=observe,
+        )
+
+        self.assertEqual(result.status, DebateStatus.CONSENSUS)
+        self.assertEqual(store.read_calls, [(session_id, conversation_id)])
+        self.assertTrue(backend.requests)
+        self.assertTrue(
+            all(request.conversation_context == snapshot for request in backend.requests)
+        )
+        self.assertEqual(
+            [event.phase for event in events],
+            [
+                DebateProgressPhase.STARTED,
+                DebateProgressPhase.DRAFTED,
+                DebateProgressPhase.AUDIT_STARTED,
+                DebateProgressPhase.AUDIT_COMPLETED,
+                DebateProgressPhase.SYNTHESIZED,
+                DebateProgressPhase.AUDIT_STARTED,
+                DebateProgressPhase.AUDIT_COMPLETED,
+                DebateProgressPhase.ARTIFACTS_COMMITTED,
+                DebateProgressPhase.CONSENSUS,
+            ],
+        )
+        self.assertEqual(
+            [(event.revision_id, event.round_number) for event in events[1:]],
+            [
+                ("r0", 0),
+                ("r0", 0),
+                ("r0", 0),
+                ("r1", 1),
+                ("r1", 1),
+                ("r1", 1),
+                ("r1", 1),
+                ("r1", 1),
+            ],
+        )
+        self.assertEqual(events[0].context_mode, DebateContextMode.INCLUDED)
+        self.assertEqual(events[0].context_event_count, 2)
+        self.assertEqual(events[0].context_omitted_turns, 3)
+        self.assertEqual(
+            events[3].conflicting_agents,
+            (PLOT_ARCHITECT,),
+        )
+        self.assertEqual(events[6].conflicting_agents, ())
+        self.assertEqual(events[-2].manuscript_path, "manuscript/context.md")
+        self.assertEqual(events[-2].core_updates, ("global_outline.md",))
+
+        sidecar = workspace.inspect_debate_context(session_id, "context_debate")
+        assert sidecar is not None
+        self.assertEqual(sidecar["conversation_id"], conversation_id)
+        self.assertEqual(sidecar["mode"], "included")
+        self.assertEqual(
+            sidecar["snapshot"]["events"],
+            [event.to_dict() for event in snapshot.events],
+        )
+
+    async def test_legacy_and_fresh_drafts_skip_context_read_but_emit_drafted(
+        self,
+    ) -> None:
+        workspace = initialized_workspace(self)
+        store = RecordingDebateContextStore(
+            workspace,
+            selected_context_window("draft_session", "conversation_a"),
+        )
+
+        def respond(request):
+            if request.phase is Phase.AUDIT:
+                return AgentReply.approval(request.revision_id)
+            if request.phase is Phase.FINALIZE:
+                return AgentReply.finalization(request.revision_id)
+            raise AssertionError(f"unexpected phase: {request.phase}")
+
+        backend = ScriptedBackend(respond)
+        runtime = StoryRuntime(
+            workspace,
+            backend,
+            conversation_event_store=store,  # type: ignore[arg-type]
+        )
+        event_sets: list[list[DebateProgressEvent]] = []
+        for debate_id, request in (
+            ("legacy_debate", None),
+            (
+                "fresh_debate",
+                DebateContextRequest(
+                    conversation_id="conversation_a",
+                    mode=DebateContextMode.FRESH,
+                ),
+            ),
+        ):
+            events: list[DebateProgressEvent] = []
+            result = await runtime.run_draft(
+                "draft_session",
+                f"supplied {debate_id}",
+                debate_id=debate_id,
+                manuscript_name=f"{debate_id}.md",
+                conversation_context=request,
+                progress_sink=events.append,
+            )
+            self.assertEqual(result.status, DebateStatus.CONSENSUS)
+            event_sets.append(events)
+
+        self.assertEqual(store.read_calls, [])
+        self.assertFalse(phase_requests(backend, Phase.DRAFT))
+        self.assertTrue(
+            all(request.conversation_context is None for request in backend.requests)
+        )
+        expected = [
+            DebateProgressPhase.STARTED,
+            DebateProgressPhase.DRAFTED,
+            DebateProgressPhase.AUDIT_STARTED,
+            DebateProgressPhase.AUDIT_COMPLETED,
+            DebateProgressPhase.ARTIFACTS_COMMITTED,
+            DebateProgressPhase.CONSENSUS,
+        ]
+        self.assertTrue(
+            all([event.phase for event in events] == expected for events in event_sets)
+        )
+        self.assertIsNone(event_sets[0][0].context_mode)
+        self.assertIs(
+            event_sets[1][0].context_mode,
+            DebateContextMode.FRESH,
+        )
+        self.assertIsNone(
+            workspace.inspect_debate_context("draft_session", "legacy_debate")
+        )
+        self.assertEqual(
+            workspace.inspect_debate_context("draft_session", "fresh_debate")[
+                "snapshot"
+            ],
+            None,
         )
 
 
@@ -288,11 +596,13 @@ class RevisionWorkflowTests(unittest.IsolatedAsyncioTestCase):
             raise AssertionError(f"unexpected phase: {request.phase}")
 
         backend = ScriptedBackend(respond)
+        progress: list[DebateProgressEvent] = []
         result = await StoryRuntime(workspace, backend).run_draft(
             "deadlock_session",
             "candidate-r0",
             debate_id="deadlock_debate",
             manuscript_name="deadlock.md",
+            progress_sink=progress.append,
         )
 
         self.assertEqual(result.status, DebateStatus.DEADLOCK)
@@ -305,6 +615,27 @@ class RevisionWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(phase_requests(backend, Phase.FINALIZE))
         self.assertEqual(core_snapshot(workspace), before)
         self.assertEqual(all_manuscripts(workspace), [])
+        self.assertEqual(
+            [event.phase for event in progress],
+            [
+                DebateProgressPhase.STARTED,
+                DebateProgressPhase.DRAFTED,
+                DebateProgressPhase.AUDIT_STARTED,
+                DebateProgressPhase.AUDIT_COMPLETED,
+                DebateProgressPhase.SYNTHESIZED,
+                DebateProgressPhase.AUDIT_STARTED,
+                DebateProgressPhase.AUDIT_COMPLETED,
+                DebateProgressPhase.DEADLOCK,
+            ],
+        )
+        terminal = progress[-1]
+        self.assertEqual((terminal.revision_id, terminal.round_number), ("r1", 1))
+        inspected = workspace.inspect_debate(
+            "deadlock_session",
+            "deadlock_debate",
+        )
+        self.assertEqual(inspected["status"], "deadlock")
+        self.assertIsNotNone(inspected["result"])
 
     async def test_round_limit_zero_and_two_have_no_off_by_one_error(self) -> None:
         cases = ((0, None, DebateStatus.DEADLOCK), (2, "r2", DebateStatus.CONSENSUS))

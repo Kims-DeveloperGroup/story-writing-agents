@@ -8,6 +8,7 @@ from typing import Mapping
 
 from .agents import AGENT_SPECS
 from .config import ConfigManager
+from .conversations import ConversationContextWindow
 from .models import (
     AgentDefinition,
     AgentRequest,
@@ -87,8 +88,14 @@ class PromptAssembler:
         user_payload: str,
         candidate_payload: str | None = None,
         messages: tuple[DebateMessage, ...] = (),
+        conversation_context: ConversationContextWindow | None = None,
     ) -> AgentRequest:
-        """Build a turn payload without embedding any prompt component."""
+        """Build a prompt-free turn with optional immutable conversation context.
+
+        Agent history is read from the workspace and returned in a validated
+        ``AgentRequest``; no state is written. Workspace or context validation
+        failures propagate before any provider invocation.
+        """
 
         agent_state = self.workspace.read_agent_state(
             agent_id,
@@ -110,6 +117,7 @@ class PromptAssembler:
             candidate_payload=candidate_payload,
             messages=messages,
             agent_state=agent_state,
+            conversation_context=conversation_context,
         )
 
     def _reference(self, relative: str) -> PromptFileReference:

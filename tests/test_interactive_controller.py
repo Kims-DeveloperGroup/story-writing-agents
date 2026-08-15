@@ -609,6 +609,7 @@ class ControllerContractTests(ControllerTestCase):
                 "interactive_terminal",
                 "models",
                 "orchestrator",
+                "run_inputs",
                 "workspace",
             },
         )
@@ -649,7 +650,11 @@ class ControllerContractTests(ControllerTestCase):
         script = (
             "import story_writing_agents as facade; "
             "from story_writing_agents import interactive_controller as module; "
+            "from story_writing_agents import run_inputs; "
             "assert module.__all__ == ['InteractiveController']; "
+            "assert run_inputs.__all__ == ['read_draft_file']; "
+            "assert 'read_draft_file' not in facade.__all__; "
+            "assert not hasattr(facade, 'read_draft_file'); "
             "assert 'InteractiveController' not in facade.__all__; "
             "assert not hasattr(facade, 'InteractiveController'); "
             "print('ok')"
@@ -698,7 +703,7 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 19)
+        self.assertEqual(len(modules), 20)
 
 
 class ControllerStartupTests(ControllerTestCase):
@@ -1432,8 +1437,8 @@ class ControllerCommandTests(ControllerTestCase):
             "[error command_invalid] This command is not available in the "
             "session lobby.\n"
         )
-        self.assertEqual(rendered.count(unavailable), 2)
-        self.assertEqual(rendered.count("[error session_inactive]"), 3)
+        self.assertEqual(rendered.count(unavailable), 1)
+        self.assertEqual(rendered.count("[error session_inactive]"), 4)
         self.assertIn("[session] No story sessions found.\n", rendered)
         self.assertIn(_error_record(InteractiveErrorCode.SESSION_INACTIVE), rendered)
 
@@ -2894,9 +2899,6 @@ class ControllerConversationCommandTests(ControllerTestCase):
             "/compose",
             "/send",
             "/cancel",
-            "/run prompt",
-            "/run --fresh prompt",
-            "/draft-file draft.md",
             "/inspect last",
             "/history 20",
             "/status",

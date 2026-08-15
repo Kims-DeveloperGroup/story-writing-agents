@@ -897,7 +897,8 @@ class ConversationPackageBoundaryTests(unittest.TestCase):
                     "FilesystemConversationCatalog",
                     "FilesystemConversationEventStore",
                 }
-            ),
+            )
+            | {"validate_conversation_context_window"},
         )
         self.assertIs(
             story_writing_agents.ConversationMetadata,
