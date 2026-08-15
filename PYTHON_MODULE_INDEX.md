@@ -16,7 +16,7 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 18.
+Importable production units indexed: 19.
 
 ## Current Dependency Direction
 
@@ -24,7 +24,11 @@ The current graph flows from entry points and orchestration toward provider,
 configuration, prompt, persistence, and stable contract modules:
 
 ```text
-__main__ -> cli -> orchestrator -> prompts -> config -> workspace
+__main__ -> cli -> interactive_controller -> agents/backend/cli_context/errors
+                 |                         -> interactive_commands/interactive_terminal
+                 |                         -> models/workspace
+                 -> interactive_terminal -> interactive_commands/agents
+                 -> orchestrator -> prompts -> config -> workspace
                  |               |         |         -> conversations/models/errors/agents
                  |               |         -> workspace
                  |               -> conversations/workspace/models/agents
@@ -158,11 +162,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   both `story` and `story-writing-agents`. `build_parser` and other helpers are
   not package-supported APIs.
 - **Direct internal dependencies:** `agents`, `backend`, `cli_context`, `config`,
-  `errors`, `models`, `orchestrator`, and `workspace`; imports `smoke` lazily for
-  the diagnostic command.
-- **State, resources, and side effects:** Reads draft files, writes JSON or
-  errors to standard streams, creates and closes backends, and runs the async
-  event loop.
+  `errors`, `interactive_controller`, `interactive_terminal`, `models`,
+  `orchestrator`, and `workspace`; imports `smoke` lazily for the diagnostic
+  command.
+- **State, resources, and side effects:** Reads draft files and terminal input;
+  writes JSON, plain-text interaction, or errors to standard streams; creates
+  backends; constructs the interactive controller after a stdin/stdout TTY
+  guard; and runs the async event loop. The controller owns interactive backend
+  cleanup after its session-lobby run begins, while the CLI closes a backend if
+  construction fails before that ownership transfer.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
   `tests/test_cli_context.py`, `tests/test_smoke_cli.py`,
   `docs/reference/cli.md`, and `docs/getting-started.md`.
@@ -293,16 +301,48 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_public_api_and_cli.py`, and
   `docs/reference/interactive-command-parser.md`.
 
+### `story_writing_agents.interactive_controller`
+
+- **Source:** `src/story_writing_agents/interactive_controller.py`
+- **Responsibility:** Coordinate one synchronous interactive story-session
+  lobby lifecycle.
+- **Supported surface:** Module-supported `InteractiveController`, whose
+  constructor accepts explicit workspace, CLI-context, backend, and terminal
+  collaborators and whose single-use `run_session_lobby` operation returns
+  process status 0 or 2. All transition and rendering helpers are private; the
+  package facade does not re-export this module.
+- **Direct internal dependencies:** `agents`, `backend`, `cli_context`, `errors`,
+  `interactive_commands`, `interactive_terminal`, `models`, and `workspace`.
+- **State, resources, and side effects:** Instances retain borrowed
+  collaborators and own only their current attached-session identifier, lead
+  target, current CLI-context snapshot, and one-run/closed state. After the run
+  starts, the controller owns orderly backend detach/close coordination while
+  `AgentBackend` retains actual lease, manifest, and provider-resource
+  ownership. Through public collaborators it reads and parses terminal input,
+  renders safe output, sequences session summary/acquisition/release calls, and
+  persists selection through `cli_context`; it performs no provider invocation,
+  transcript, conversation, or artifact work and has no import-time operational
+  side effects.
+- **Primary verification/documentation:** `tests/test_interactive_controller.py`,
+  `tests/test_session_lifecycle.py`, `tests/test_cli_context.py`,
+  `tests/test_interactive_commands.py`, `tests/test_interactive_terminal.py`,
+  `docs/design/session-lifecycle.md`, `docs/reference/cli.md`, and
+  `docs/reference/interactive-terminal.md` verify the current collaborator and
+  lifecycle contracts.
+
 ### `story_writing_agents.interactive_terminal`
 
 - **Source:** `src/story_writing_agents/interactive_terminal.py`
 - **Responsibility:** Provide deterministic, safe plain-text interaction
   primitives for an interactive terminal.
 - **Supported surface:** Module-supported `AttachmentKind`, `ComposeMode`,
-  `TerminalActionKind`, `TerminalMessageKind`, `InteractiveErrorCode`,
-  `TerminalAction`, `InteractiveErrorSpec`, `INTERACTIVE_ERROR_SPECS`,
-  `InteractiveError`, `sanitize_terminal_text`, and `InteractiveTerminal`;
-  rendering and validation helpers are private.
+  `ConfirmationResult`, `TerminalActionKind`, `TerminalMessageKind`,
+  `InteractiveErrorCode`, `TerminalAction`, `InteractiveErrorSpec`,
+  `INTERACTIVE_ERROR_SPECS`, `InteractiveError`, `sanitize_terminal_text`, and
+  `InteractiveTerminal`. `InteractiveTerminal.request_confirmation` returns a
+  typed yes/no/interrupt/EOF result, and `write_session_orientation` accepts an
+  optional history count whose absence omits history claims; rendering and
+  validation helpers are private.
 - **Direct internal dependencies:** `agents` and `interactive_commands`.
 - **State, resources, and side effects:** Instances retain borrowed synchronous
   line-read and text-write callbacks plus an immutable display width; each
@@ -421,11 +461,16 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 - `interactive_commands` owns canonical command metadata, parse rules, and
   typed parsed actions. `interactive_terminal` consumes only its public command
-  metadata and canonical agent metadata to own safe prompt, help, status, error,
-  and call-local composition presentation. It returns unparsed input or
-  composition outcomes without dispatching them; callers retain interaction
-  state, error-code mapping, parsing, provider, session, and persistence
-  lifecycles.
+  metadata and canonical agent metadata to own safe prompt, confirmation, help,
+  status, error, and call-local composition presentation. It returns typed
+  terminal outcomes without dispatching them.
+- `interactive_controller` owns session-lobby action mapping, current in-memory
+  attachment state, transition ordering, and backend detach/close coordination
+  after its one run starts. `AgentBackend` retains actual session lease,
+  manifest, and provider-resource ownership; `cli_context` retains selection
+  persistence ownership; and `interactive_terminal` retains synchronous I/O
+  and presentation ownership. The controller uses only those public boundaries
+  and performs no provider, transcript, conversation, or artifact operation.
 - `Workspace` and `ConversationEventStore` implementations own persistence
   mechanics. `StoryRuntime` sequences debate persistence and, for advisory
   turns, the validated context read, durable user append, one provider call,

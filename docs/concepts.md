@@ -2,8 +2,8 @@
 
 > **Availability:** this model describes the implemented runtime. Conversation
 > metadata, transcripts, bounded search, cited pages, and one explicitly
-> addressed provider turn are Python APIs; interactive selection and automatic
-> dispatch are not implemented.
+> addressed provider turn are Python APIs; interactive conversation selection
+> and automatic chat dispatch are not implemented.
 
 Key terms: **scope**—what one persisted object groups; **ownership**—which
 component controls data or a transition; **turn**—one user event and its

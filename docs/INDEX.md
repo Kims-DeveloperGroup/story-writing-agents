@@ -2,13 +2,11 @@
 
 Use this index to find one canonical answer instead of searching a long manual.
 
-> **Availability:** the installed CLI currently exposes `init`, `directive`,
-> `run`, `inspect`, `session start|end`, and `smoke`. The interactive command
-> parser, terminal presentation component, conversation catalog, transcript
-> event store, and StoryRuntime-managed persisted turn are Python APIs. So are
-> bounded literal search, stable citations, and transcript pages. The installed
-> interactive TTY/controller, current selection, and conversation commands are
-> not implemented.
+> **Availability:** the installed CLI exposes the existing commands plus a bare
+> or `chat` TTY session lobby. The lobby manages session attachment only. Chat
+> turns, conversation selection/history, transcript, search, and artifact work
+> remain follow-up work in Issues #22 and #11. Their lower-level parser,
+> terminal, catalog, transcript, search, and one-turn runtime APIs are available.
 
 ## Availability matrix
 
@@ -16,14 +14,15 @@ Use this index to find one canonical answer instead of searching a long manual.
 | --- | --- |
 | Initialize a workspace; run or inspect a debate | Installed CLI and Python API |
 | Start or end a provider session | Installed CLI and Python API |
-| Strict create/resume/attach/detach session lifecycle | Python API only |
-| Parse the future interactive command language | Python API only; no dispatcher or TTY |
-| Prompt, compose, and render safe terminal records | Module-supported Python API only; no controller or TTY |
+| Open the TTY lobby; list, create, resume, switch, or end sessions | Bare `story` or `story chat` |
+| Strict create/resume/attach/detach session lifecycle | Python API; used by the installed lobby |
+| Parse the interactive command language | Python API; the lobby dispatches only help, sessions, and quit |
+| Prompt, confirm, compose, and render safe terminal records | Module-supported Python API; the lobby uses the non-chat subset |
 | Create, rename, archive, and list conversation metadata | Python API only; no selection or dispatch |
 | Append/read transcripts; derive bounded complete-turn context | Python API only; no dispatcher or viewing command |
 | Search one session; cite hits; read bounded transcript pages | Python API only; no dispatcher or command |
 | Persist and send one explicitly addressed conversation turn | `StoryRuntime` Python API only; caller supplies the existing conversation ID |
-| Interactive chat and conversation/search/transcript commands | Not implemented |
+| Chat turns and conversation/history/search/transcript commands | Not implemented |
 
 ## Start and concepts
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -18,7 +19,19 @@ from .cli_context import (
     select_session,
 )
 from .config import ConfigManager
-from .errors import ConfigurationError
+from .errors import (
+    BackendProtocolError,
+    ConfigurationError,
+    SessionIdError,
+    WorkspaceFormatError,
+    WorkspaceSecurityError,
+)
+from .interactive_controller import InteractiveController
+from .interactive_terminal import (
+    InteractiveError,
+    InteractiveErrorCode,
+    InteractiveTerminal,
+)
 from .models import DebateStatus
 from .orchestrator import StoryRuntime
 from .workspace import initialize_workspace
@@ -31,8 +44,37 @@ _SESSION_HELP = "explicit session; omitted uses the workspace selection"
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the CLI grammar without reading files or starting runtime work.
+
+    The returned parser keeps all legacy command shapes and adds optional bare
+    interactive entry plus ``chat [SESSION]``. Parsing help has no TTY or
+    resource requirement; interactive value validation remains after the TTY
+    guard so non-terminal entry cannot touch configuration.
+    """
+
     parser = argparse.ArgumentParser(prog="story-writing-agents")
-    subcommands = parser.add_subparsers(dest="command", required=True)
+    subcommands = parser.add_subparsers(dest="command")
+
+    chat = subcommands.add_parser(
+        "chat",
+        help="enter the interactive story-session lobby",
+    )
+    chat.add_argument("session_name", nargs="?", metavar="SESSION")
+    chat.add_argument("--workspace", help=_WORKSPACE_HELP)
+    chat.add_argument(
+        "--backend",
+        action="append",
+        default=[],
+        metavar="AGENT=BACKEND",
+        help="override one canonical agent backend (repeatable)",
+    )
+    chat.add_argument("--codex-model", metavar="MODEL")
+    chat.add_argument(
+        "--codex-timeout",
+        metavar="SECONDS",
+        default=300,
+        help="positive provider timeout in seconds (default: 300)",
+    )
 
     initialize = subcommands.add_parser(
         "init",
@@ -133,6 +175,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _parse_backend_overrides(values: Sequence[str]) -> dict[str, str]:
+    """Validate CLI route overrides and return one backend per agent.
+
+    The function performs no filesystem or provider work. Invalid syntax,
+    duplicate agents, or unsupported backend names raise ``ConfigurationError``
+    before any caller-owned runtime resource is created.
+    """
+
     result: dict[str, str] = {}
     for value in values:
         if not isinstance(value, str) or value.count("=") != 1:
@@ -152,7 +201,34 @@ def _parse_backend_overrides(values: Sequence[str]) -> dict[str, str]:
     return result
 
 
+def _parse_positive_timeout_seconds(value: object) -> float:
+    """Return one finite positive chat timeout without mutating state.
+
+    Parsing is deliberately deferred until after the TTY guard. Invalid
+    numbers raise ``ConfigurationError`` before workspace or backend access.
+    """
+
+    if isinstance(value, bool):
+        raise ConfigurationError("Codex timeout must be a positive number")
+    try:
+        timeout = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ConfigurationError(
+            "Codex timeout must be a positive number"
+        ) from exc
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ConfigurationError("Codex timeout must be a positive number")
+    return timeout
+
+
 def _resolve_run_input(arguments: argparse.Namespace) -> tuple[str, str]:
+    """Resolve exactly one legacy prompt/draft source without runtime mutation.
+
+    Inline values are returned unchanged. Draft files are read as strict UTF-8;
+    ambiguous, missing, unreadable, or invalid input raises
+    ``ConfigurationError`` before backend construction.
+    """
+
     sources = (
         ("prompt", arguments.positional_prompt),
         ("prompt", arguments.prompt),
@@ -185,9 +261,216 @@ def _resolve_run_input(arguments: argparse.Namespace) -> tuple[str, str]:
     return "draft", content
 
 
+def _interactive_streams_are_terminals() -> bool:
+    """Return whether stdin and stdout safely report terminal capability.
+
+    The check performs no reads, writes, configuration access, or mutation.
+    Missing or failing ``isatty`` implementations are treated as non-terminals
+    so callers can emit the canonical automation-safe error.
+    """
+
+    try:
+        return bool(sys.stdin.isatty()) and bool(sys.stdout.isatty())
+    except Exception:
+        return False
+
+
+def _reject_unexpected_startup_input(_prompt: str) -> str:
+    """Guard the stderr-only startup renderer from accidental input reads."""
+
+    raise RuntimeError("startup error rendering must not read input")
+
+
+def _write_interactive_cli_error(error: InteractiveError) -> None:
+    """Render one sanitized interactive startup error only on stderr.
+
+    The helper borrows stderr for a single record and uses a reader that always
+    fails if invoked. It performs no workspace, configuration, or provider
+    access, and writer failures propagate to the process boundary.
+    """
+
+    terminal = InteractiveTerminal(
+        _reject_unexpected_startup_input,
+        sys.stderr.write,
+    )
+    terminal.write_error(error)
+
+
+def _classify_workspace_entry_failure(failure: Exception) -> InteractiveError:
+    """Map workspace discovery types to safe startup codes without raw prose.
+
+    Discovery ``ConfigurationError`` means no initialized workspace was found;
+    security and persisted-format/I/O failures retain their specific codes.
+    The function has no side effects.
+    """
+
+    if isinstance(failure, WorkspaceSecurityError):
+        code = InteractiveErrorCode.WORKSPACE_UNSAFE
+    elif isinstance(failure, (WorkspaceFormatError, OSError)):
+        code = InteractiveErrorCode.WORKSPACE_INVALID
+    elif isinstance(failure, ConfigurationError):
+        code = InteractiveErrorCode.WORKSPACE_NOT_INITIALIZED
+    else:
+        code = InteractiveErrorCode.INTERNAL_ERROR
+    return InteractiveError(code)
+
+
+def _classify_interactive_configuration_failure(
+    failure: Exception,
+) -> InteractiveError:
+    """Map context/override/backend setup types to safe startup codes.
+
+    No exception message is inspected or displayed. Workspace security and I/O
+    remain distinct, known value/configuration failures are configuration
+    errors, and unexpected failures use ``internal_error`` without mutation.
+    """
+
+    if isinstance(failure, WorkspaceSecurityError):
+        code = InteractiveErrorCode.WORKSPACE_UNSAFE
+    elif isinstance(failure, (WorkspaceFormatError, OSError)):
+        code = InteractiveErrorCode.WORKSPACE_INVALID
+    elif isinstance(
+        failure,
+        (
+            BackendProtocolError,
+            ConfigurationError,
+            SessionIdError,
+            TypeError,
+            ValueError,
+        ),
+    ):
+        code = InteractiveErrorCode.CONFIGURATION_INVALID
+    else:
+        code = InteractiveErrorCode.INTERNAL_ERROR
+    return InteractiveError(code)
+
+
+def _close_unstarted_interactive_backend(backend: AgentBackend) -> bool:
+    """Close a backend not transferred to a controller; report safe failure.
+
+    Returns ``True`` when cleanup completes. A close failure emits exactly one
+    ``cleanup_failed`` record on stderr and never exposes exception details.
+    """
+
+    try:
+        backend.close()
+    except Exception:
+        _write_interactive_cli_error(
+            InteractiveError(InteractiveErrorCode.CLEANUP_FAILED)
+        )
+        return False
+    return True
+
+
+def _run_interactive_cli(arguments: argparse.Namespace) -> int:
+    """Construct and transfer one guarded interactive session-lobby lifecycle.
+
+    Both streams are checked before input, option validation, workspace/context
+    access, or backend construction. Setup failures are rendered safely on
+    stderr. Once ``run_session_lobby`` is called, the controller owns backend
+    cleanup; before that transfer this adapter closes any constructed backend.
+    """
+
+    if not _interactive_streams_are_terminals():
+        _write_interactive_cli_error(
+            InteractiveError(InteractiveErrorCode.TTY_REQUIRED)
+        )
+        return 2
+
+    if arguments.command == "chat":
+        workspace_option = arguments.workspace
+        backend_values = arguments.backend
+        model = arguments.codex_model
+        timeout_value = arguments.codex_timeout
+        requested_session = arguments.session_name
+    else:
+        workspace_option = None
+        backend_values = ()
+        model = None
+        timeout_value = 300
+        requested_session = None
+
+    try:
+        backend_overrides = _parse_backend_overrides(backend_values)
+        timeout_seconds = _parse_positive_timeout_seconds(timeout_value)
+    except Exception as exc:
+        _write_interactive_cli_error(
+            _classify_interactive_configuration_failure(exc)
+        )
+        return 2
+
+    try:
+        workspace = resolve_workspace(workspace_option)
+    except Exception as exc:
+        _write_interactive_cli_error(_classify_workspace_entry_failure(exc))
+        return 2
+
+    try:
+        cli_context = load_cli_context(workspace)
+    except Exception as exc:
+        _write_interactive_cli_error(
+            _classify_interactive_configuration_failure(exc)
+        )
+        return 2
+
+    try:
+        terminal = InteractiveTerminal(input, sys.stdout.write)
+    except Exception:
+        _write_interactive_cli_error(
+            InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+        )
+        return 2
+
+    try:
+        backend = AgentBackend(
+            workspace,
+            model=model,
+            timeout_seconds=timeout_seconds,
+            backend_overrides=backend_overrides,
+        )
+    except Exception as exc:
+        _write_interactive_cli_error(
+            _classify_interactive_configuration_failure(exc)
+        )
+        return 2
+
+    try:
+        controller = InteractiveController(
+            workspace,
+            cli_context,
+            backend,
+            terminal,
+        )
+    except Exception:
+        _write_interactive_cli_error(
+            InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+        )
+        _close_unstarted_interactive_backend(backend)
+        return 2
+
+    try:
+        return controller.run_session_lobby(
+            requested_session=requested_session
+        )
+    except Exception:
+        _write_interactive_cli_error(
+            InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+        )
+        return 2
+
+
 def main(argv: Sequence[str] | None = None) -> int:
+    """Dispatch one CLI invocation while preserving legacy command contracts.
+
+    Bare and ``chat`` invocations use the guarded interactive adapter. Existing
+    commands retain their JSON, stderr, exit-code, backend-cleanup, and async
+    behavior; argparse continues to own help and syntax exits.
+    """
+
     parser = build_parser()
     arguments = parser.parse_args(argv)
+    if arguments.command is None or arguments.command == "chat":
+        return _run_interactive_cli(arguments)
     try:
         if arguments.command == "init":
             workspace = initialize_workspace(

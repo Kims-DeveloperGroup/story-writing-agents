@@ -36,6 +36,15 @@ class ComposeMode(StrEnum):
     RUN = "run"
 
 
+class ConfirmationResult(StrEnum):
+    """Validated answer or terminal event from one confirmation prompt."""
+
+    YES = "yes"
+    NO = "no"
+    INTERRUPT = "interrupt"
+    EOF = "eof"
+
+
 class TerminalActionKind(StrEnum):
     """Trusted actions returned by terminal input and composition."""
 
@@ -380,6 +389,45 @@ class InteractiveTerminal:
             return TerminalAction(TerminalActionKind.EOF)
         return TerminalAction(TerminalActionKind.LINE, text=_validated_input_line(line))
 
+    def request_confirmation(
+        self,
+        message: str,
+        *,
+        default: bool,
+    ) -> ConfirmationResult:
+        """Read y/yes/n/no, applying the shown default without other effects.
+
+        The message is sanitized into one prompt line. Invalid answers print a
+        fixed hint and retry; Ctrl-C and EOF return typed outcomes, while
+        callback and framing failures propagate without being reclassified.
+        """
+
+        prompt_message = _inline_text(_required_text("message", message))
+        if type(default) is not bool:
+            raise TypeError("default must be a bool")
+        suffix = "[Y/n] " if default else "[y/N] "
+        prompt = f"{prompt_message} {suffix}"
+        while True:
+            try:
+                answer = _validated_input_line(self._read_line(prompt))
+            except KeyboardInterrupt:
+                return ConfirmationResult.INTERRUPT
+            except EOFError:
+                return ConfirmationResult.EOF
+
+            normalized = answer.strip().casefold()
+            if not normalized:
+                return (
+                    ConfirmationResult.YES
+                    if default
+                    else ConfirmationResult.NO
+                )
+            if normalized in {"y", "yes"}:
+                return ConfirmationResult.YES
+            if normalized in {"n", "no"}:
+                return ConfirmationResult.NO
+            self._write_block("[hint] Enter y, yes, n, or no.")
+
     def compose(
         self,
         mode: ComposeMode,
@@ -480,26 +528,36 @@ class InteractiveTerminal:
         session_id: str,
         attachment: AttachmentKind,
         agent_id: str,
-        history_count: int,
+        history_count: int | None = None,
     ) -> None:
-        """Render the stable startup orientation for an attached session."""
+        """Render attached scope, optionally disclosing known room history.
+
+        Integer counts preserve the established history disclosure. ``None``
+        omits both history lines for callers that do not yet own conversation
+        selection; rendering performs no persistence or resource mutation.
+        """
 
         workspace_text = _inline_text(_required_text("workspace", workspace))
         safe_session = _safe_identifier("session_id", session_id)
         if not isinstance(attachment, AttachmentKind):
             raise TypeError("attachment must be an AttachmentKind")
         _agent_alias(agent_id)
-        if not isinstance(history_count, int) or isinstance(history_count, bool):
-            raise TypeError("history_count must be an integer")
-        if history_count < 0:
+        if history_count is not None and (
+            not isinstance(history_count, int) or isinstance(history_count, bool)
+        ):
+            raise TypeError("history_count must be an integer or None")
+        if history_count is not None and history_count < 0:
             raise ValueError("history_count must not be negative")
-        self._write_block(
-            "\n".join(
+
+        lines = [
+            "Story chat",
+            f"Workspace: {workspace_text}",
+            f"Session: {safe_session} ({attachment.value})",
+            f"Target: {_AGENT_DISPLAY_NAMES[agent_id]}",
+        ]
+        if history_count is not None:
+            lines.extend(
                 (
-                    "Story chat",
-                    f"Workspace: {workspace_text}",
-                    f"Session: {safe_session} ({attachment.value})",
-                    f"Target: {_AGENT_DISPLAY_NAMES[agent_id]}",
                     (
                         f"History: {history_count} visible room "
                         f"{_plural(history_count, 'event')}"
@@ -508,13 +566,12 @@ class InteractiveTerminal:
                         "Room messages are saved locally and shared with "
                         "addressed agents."
                     ),
-                    (
-                        "Type /help for commands; /quit leaves the story "
-                        "session active."
-                    ),
                 )
             )
+        lines.append(
+            "Type /help for commands; /quit leaves the story session active."
         )
+        self._write_block("\n".join(lines))
 
     def write_status(self, kind: TerminalMessageKind, text: str) -> None:
         """Write one trusted status prefix followed by safe display text."""
@@ -886,6 +943,7 @@ def _truncate(text: str, limit: int) -> str:
 __all__ = [
     "AttachmentKind",
     "ComposeMode",
+    "ConfirmationResult",
     "TerminalActionKind",
     "TerminalMessageKind",
     "InteractiveErrorCode",

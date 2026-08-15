@@ -7,8 +7,10 @@ Four fixed roles work from editable project documents, audit the same revision,
 and write a manuscript only after all three voting specialists agree.
 
 > **Available now:** workspace setup, exact directives, prompt or draft consensus
-> runs, inspection, persistent Codex sessions, and a provider-free smoke test.
-> There is no interactive chat shell, transcript command, or search command yet.
+> runs, inspection, persistent Codex sessions, a provider-free smoke test, and
+> an interactive TTY session lobby. The lobby manages session attachment only;
+> chat turns, conversation history, transcript, and search remain unavailable
+> until Issues #22 and #11.
 
 ## Quick start
 
@@ -47,9 +49,9 @@ story run 'Write an opening scene using the workspace core documents.'
 story session end
 ```
 
-Commands run inside the workspace, or a directory beneath it, discover the
-nearest initialized workspace. They use the session selected by the last
-successful `session start`. Scripts can pass `--workspace` and `--session`.
+Commands run inside the workspace, or beneath it, discover the nearest
+initialized workspace and use its saved session selection. Scripts can pass
+`--workspace` and `--session`.
 
 ## Choose the next page
 
@@ -59,6 +61,7 @@ successful `session start`. Scripts can pass `--workspace` and `--session`.
   each task, exact contract, design topic, and operational concern.
 - [Workspace guide](docs/guides/workspaces.md) explains the editable project
   files.
+- [Story sessions](docs/guides/story-sessions.md) shows the interactive lobby.
 - [Consensus-run guide](docs/guides/consensus-runs.md) covers prompts, drafts,
   outputs, and round limits.
 - [CLI reference](docs/reference/cli.md) is the exact installed command contract.
@@ -75,8 +78,7 @@ preflight. `StoryRuntime` owns the consensus workflow and persistence. See the
 
 <a id="minimal-python-api"></a>
 
-For Python integrations, start with the [runtime API](docs/reference/runtime-api.md)
-and [agent contracts](docs/reference/agent-contracts.md).
+For Python integrations, start with the [runtime API](docs/reference/runtime-api.md) and [agent contracts](docs/reference/agent-contracts.md).
 
 <a id="current-limitations"></a>
 
@@ -90,8 +92,9 @@ and [agent contracts](docs/reference/agent-contracts.md).
   not a power-loss-safe transaction.
 - Conversation metadata, transcript persistence, [bounded search and cited
   transcript pages](docs/reference/conversation-search.md), and interactive-line
-  parsing exist as Python APIs. Selection, dispatch, and
-  conversation/search/transcript CLI commands are not implemented.
+  parsing exist as Python APIs. The installed lobby navigates story sessions;
+  conversation selection, chat dispatch, and conversation/search/transcript
+  commands are not implemented.
 
 ## Development
 
