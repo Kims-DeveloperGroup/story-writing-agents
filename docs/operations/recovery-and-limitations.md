@@ -1,97 +1,100 @@
 # Recovery and limitations
 
-> **Availability:** inspection, new-ID debate recovery, subject-conversation
-> management, and installed or Python advisory turns are implemented. Automatic
-> retry, stale-owner cleanup, and event deletion are not.
+> **Availability:** debate inspection, subject-conversation management,
+> advisory turns, active conversation search, and bounded active/archived
+> transcript reads are implemented. Automatic retry, stale-owner cleanup,
+> event deletion, and `/history` are not.
 
-Key terms: **immutable reservation**—an ID that cannot be reused; **deadlock**—
-unresolved specialist conflict at the round limit; **liveness**—evidence about
-whether an owner still runs; **retention**—how long persisted data remains;
-**unmatched turn**—a stored user event without an outcome.
+Key terms: **liveness**—evidence that an owner still runs; **unmatched
+turn**—a user event without an outcome; **fresh read**—one new snapshot;
+**partial output**—records displayed before interruption.
 
-## Debate recovery
+## Debate, session, and selection recovery
 
-A session/debate pair is reserved before provider work. `active` proves
-reservation, not liveness; there is no heartbeat, stale-owner cleanup, or
-same-ID resume. Every terminal or abandoned outcome consumes the ID.
+A session/debate ID is reserved before provider work and cannot resume. `active`
+does not prove liveness; there is no heartbeat or stale-owner cleanup. Inspect,
+repair, and use a new ID. Deadlock has no continuation or manuscript.
 
-Cancellation propagates and is best-effort recorded as `interrupted`. Inspect
-preserved state, resolve conflicts, repair the cause, and use a new debate ID.
-A deadlock has no continuation or manuscript. Never delete lifecycle evidence.
+A lease is ownership evidence, not remote-health proof. Another or uncertain
+owner blocks attachment regardless of age. Never delete coordination files.
+End retains provider threads, selections, state, artifacts, and transcripts.
 
-## Session and lease recovery
+Restart restores only an existing active saved conversation. Missing or
+archived records open unselected without rewriting the saved file. Unsafe or
+malformed initial storage releases attachment and exits `2`.
 
-Lease status is evidence, not remote-health proof. Another or uncertain owner
-blocks attachment; age does not make it stale. Never delete coordination files
-or replace the local-process claim guard. Exact rules are in
-[Backend and sessions](../reference/backend-and-sessions.md).
+Create/use save failure preserves the prior choice, though a created record
+remains. Archive writes status before successor selection; failed saving is
+recoverable only if unarchive proves the original state and lease. See the
+[lifecycle diagram](../design/session-lifecycle.md#conversation-lifecycle-and-compensation).
 
-End makes a session inactive but retains provider threads, both CLI selections,
-overrides, state, debates, manuscripts, and provider-governed transcripts.
-
-## Conversation selection recovery
-
-Restart restores a saved conversation only when its session-owned catalog record
-exists and is active. Missing or archived records open the inner lobby without
-rewriting the stale file. Malformed or unsafe storage releases initial
-attachment and exits `2`.
-
-If create succeeds but selection save fails, metadata remains and the prior
-effective choice stays. Repair storage and select the reported full ID. Failed
-`use` saving also preserves the prior choice.
-
-Selected archive writes status before successor or `null`. Save failure
-continues only after unarchive proves the original record, selection, and lease;
-otherwise it exits `2` with `cleanup_failed`. Restart may show a stale ID as no
-selection. Follow the [lifecycle diagram](../design/session-lifecycle.md#conversation-lifecycle-and-compensation).
+<a id="conversation-turn-recovery"></a>
 
 ## Conversation turn recovery
 
-Failure before user append leaves no transcript evidence. Later failure normally
-adds a sanitized error; cancellation best-effort adds its fixed outcome. Hard
-interruption or outcome-write failure can leave an unmatched user. Reply-storage
-failure creates no false provider error.
+Failure before user append leaves no transcript evidence. Later failure usually
+adds a safe runtime error. Hard interruption or outcome-write failure can leave
+an unmatched user: full reads expose it, context excludes it, and nothing
+repairs it. See the
+[pairing rules](../reference/conversation-transcripts.md).
 
-Full reads expose unmatched users; bounded context excludes them. Nothing
-retries or repairs them. Inspect, fix, then call explicitly. See the
-[pairing rules](../reference/conversation-transcripts.md) and
-[sequence](../reference/runtime-api.md#one-conversation-turn).
+Shell configuration failures use `provider_preflight_failed`; other backend
+protocol failures use `provider_protocol_error`. Unknown failures exit through
+`internal_error` cleanup. Raw exception prose is never printed.
 
-For shell turns, configuration failures display `provider_preflight_failed`;
-remaining `BackendProtocolError` failures, including provider exit or timeout,
-display `provider_protocol_error`. Raw exception prose is not printed. Expected
-typed failures return to the prompt; an unknown failure exits through safe
-`internal_error` cleanup.
+## Search and transcript-read failures
 
-A cursor is valid only for its first-page snapshot; discard it after append.
-ID-based citations survive rename, but event mismatches fail closed. Check
-`scan_truncated` before treating search as exhaustive. See
+Failures are classified without inspecting exception prose:
+
+| Condition | Interactive category |
+| --- | --- |
+| Invalid command shape or unsafe/overlong query | `command_invalid` |
+| Malformed ID or nonexact prefix shorter than 12 | `conversation_invalid` |
+| Zero or multiple case-sensitive matches | `conversation_not_found` or `conversation_ambiguous` |
+| Unsafe workspace containment | `workspace_unsafe` |
+| Invalid catalog, search result, ordinary I/O, or other storage contract | `workspace_invalid` |
+| Malformed transcript, stale/range error, count above 100, or tampered page | `transcript_invalid` |
+
+A missing service identity remains `conversation_not_found`. Archived or
+cross-session search results are invalid workspace behavior. Service-classified
+errors include no rejected values, paths, collaborator results, or exception
+messages; parser-owned errors may name a command token or flag.
+
+After `workspace_invalid` or `workspace_unsafe`, the controller confirms that
+the same session is active and still owned before returning to the prompt. If
+it cannot prove that lease, it clears uncertain process state, reports
+`cleanup_failed`, and relies on final backend close instead of claiming safe
+recovery.
+
+Ctrl-C during search or transcript reading returns to the same attached scope
+without changing selection, sticky target, or durable data. Output is emitted
+one hit or event record at a time. If interruption occurs after some records,
+those rows remain in scrollback; cancellation does not roll them back or mean
+the result was complete. An ordinary output-callback failure similarly leaves
+already written rows visible, then exits through internal cleanup.
+
+Every shell transcript command starts a fresh read. Its continuation hint is
+not retained cursor state, so use the shown next sequence explicitly. A Python
+cursor is valid only for its original snapshot and becomes stale after append.
+Check search truncation before treating results as exhaustive. See
 [Conversation search](../reference/conversation-search.md).
 
 ## Current product limits
 
 - Codex is the only implemented provider; `gemini` is reserved and fails
   preflight.
-- Provider calls have a configurable timeout but no automatic retry or
-  rate-limit manager.
+- Provider calls have a timeout but no automatic retry or rate-limit manager.
 - Owner history has no compaction, expiry, or retention policy.
-- Filesystem guarantees depend on Python and operating-system atomic primitives.
-- Inspection cannot prove process liveness or story-content correctness.
-- The installed shell dispatches one synchronous line per advisory turn. It has
-  no multiline `/compose`, persistent event loop, or active-turn cancellation.
-- The shell writes turn transcripts but cannot view history, search, run
-  debates, or write story artifacts.
-- Transcript reads and search/pages remain Python-only. There is no legacy
-  migration, database, persistent index, RAG, `/search`, or `/transcript`.
-- The parser and terminal expose more actions than this shell dispatches; their
-  capability metadata is not an availability promise.
-
-## Operational response
+- Filesystem guarantees depend on Python and operating-system primitives.
+- The shell sends one synchronous line per advisory turn; it has no multiline
+  `/compose`, persistent event loop, or active-turn cancellation.
+- `/search` is active-only. There is no archived-search switch, RAG, semantic
+  retrieval, database, or persisted search index.
+- `/transcript` retains no cursor. There is no legacy migration, event repair,
+  event deletion, `/history`, shell debate command, or shell artifact command.
 
 Preserve plaintext evidence and IDs; inspect before retrying. For provider
 failure, check executable, login/key, model, timeout, session, and lease. Do not
-skip damaged records: persisted format errors intentionally fail closed.
-
-Use [Inspection and recovery](../guides/inspection-and-recovery.md) for commands,
-[Session lifecycle](../design/session-lifecycle.md) for coordination, and
-[Filesystem safety](filesystem-safety.md) for durability guarantees.
+skip damaged records: persisted format errors fail closed. See
+[Inspection and recovery](../guides/inspection-and-recovery.md) and
+[Filesystem safety](filesystem-safety.md).

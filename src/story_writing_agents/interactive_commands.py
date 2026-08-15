@@ -30,6 +30,8 @@ class ActionKind(StrEnum):
     RUN = "run"
     RUN_FRESH = "run_fresh"
     DRAFT_FILE = "draft_file"
+    SEARCH = "search"
+    TRANSCRIPT = "transcript"
     INSPECT = "inspect"
     HISTORY = "history"
     STATUS = "status"
@@ -187,6 +189,7 @@ class InteractiveAction:
     agent_id: str | None = None
     argument: str | None = None
     count: int | None = None
+    start_sequence: int | None = None
     error: str | None = None
     suggestion: str | None = None
 
@@ -201,6 +204,7 @@ class InteractiveAction:
             "agent_id": self.agent_id,
             "argument": self.argument,
             "count": self.count,
+            "start_sequence": self.start_sequence,
             "error": self.error,
             "suggestion": self.suggestion,
         }
@@ -212,6 +216,11 @@ class InteractiveAction:
             not isinstance(self.count, int) or isinstance(self.count, bool)
         ):
             raise TypeError("count must be an integer or None")
+        if self.start_sequence is not None and (
+            not isinstance(self.start_sequence, int)
+            or isinstance(self.start_sequence, bool)
+        ):
+            raise TypeError("start_sequence must be an integer or None")
 
         allowed, required = _ACTION_FIELD_RULES[self.kind]
         supplied = {name for name, value in values.items() if value is not None}
@@ -228,6 +237,8 @@ class InteractiveAction:
             raise ValueError("text must contain non-whitespace content")
         if self.count is not None and self.count <= 0:
             raise ValueError("count must be positive")
+        if self.start_sequence is not None and self.start_sequence <= 0:
+            raise ValueError("start_sequence must be positive")
         if self.agent_id is not None and self.agent_id not in _CANONICAL_AGENTS:
             raise ValueError(f"unknown canonical agent ID: {self.agent_id}")
         if "argument" in required and self.argument == "":
@@ -261,6 +272,11 @@ _ACTION_FIELD_RULES: dict[
     ActionKind.RUN_FRESH: (frozenset({"text"}), frozenset({"text"})),
     ActionKind.DRAFT_FILE: (
         frozenset({"argument"}),
+        frozenset({"argument"}),
+    ),
+    ActionKind.SEARCH: (frozenset({"text"}), frozenset({"text"})),
+    ActionKind.TRANSCRIPT: (
+        frozenset({"argument", "count", "start_sequence"}),
         frozenset({"argument"}),
     ),
     ActionKind.INSPECT: (frozenset({"argument"}), _NO_FIELDS),
@@ -386,6 +402,22 @@ COMMANDS: tuple[CommandSpec, ...] = (
     ),
     CommandSpec(
         "Inspection",
+        "/search QUERY",
+        (),
+        False,
+        False,
+        "/search council vessel",
+    ),
+    CommandSpec(
+        "Inspection",
+        "/transcript ID [COUNT] [--from SEQUENCE]",
+        (),
+        False,
+        False,
+        "/transcript c_0123456789 24 --from 25",
+    ),
+    CommandSpec(
+        "Inspection",
         "/inspect [DEBATE|last]",
         (),
         False,
@@ -434,6 +466,8 @@ _COMMAND_ALIASES: dict[str, str] = {
     "draft-file": "/draft-file",
     "session": "/session",
     "conversation": "/conversation",
+    "search": "/search",
+    "transcript": "/transcript",
     "inspect": "/inspect",
     "history": "/history",
     "status": "/status",
@@ -524,6 +558,10 @@ def _parse_slash_command(line: str) -> InteractiveAction:
         return _parse_session(tail)
     if command == "conversation":
         return _parse_conversation(tail)
+    if command == "search":
+        return _parse_search(tail)
+    if command == "transcript":
+        return _parse_transcript(tail)
     if command == "inspect":
         return _parse_inspect(tail)
     if command == "history":
@@ -761,6 +799,72 @@ def _parse_inspect(tail: str | None) -> InteractiveAction:
     return InteractiveAction(ActionKind.INSPECT, argument=argument)
 
 
+def _parse_search(tail: str | None) -> InteractiveAction:
+    """Return one search action from required opaque text without I/O."""
+
+    query = _required_remainder(tail)
+    if query is None:
+        return _parse_error("/search requires a query")
+    return InteractiveAction(ActionKind.SEARCH, text=query)
+
+
+def _parse_transcript(tail: str | None) -> InteractiveAction:
+    """Return one transcript action from exact tokens without external state."""
+
+    tokens = _tokens(tail)
+    if not tokens:
+        return _parse_error("/transcript requires a conversation ID")
+
+    conversation_id = tokens[0]
+    if conversation_id.startswith("--"):
+        return _parse_error("/transcript requires an ID before any flag")
+    if not _is_valid_token(conversation_id):
+        return _parse_error(
+            "/transcript ID must be a control-free token"
+        )
+
+    remaining = tokens[1:]
+    count: int | None = None
+    start_sequence: int | None = None
+    if remaining and remaining[0] != "--from":
+        if remaining[0].startswith("--"):
+            return _parse_error(
+                f"unknown /transcript flag: {remaining[0]}"
+            )
+        count = _positive_ascii_integer(remaining[0])
+        if count is None:
+            return _parse_error(
+                "/transcript count must be positive ASCII digits"
+            )
+        remaining = remaining[1:]
+
+    if remaining:
+        if remaining[0] != "--from":
+            if remaining[0].startswith("--"):
+                return _parse_error(
+                    f"unknown /transcript flag: {remaining[0]}"
+                )
+            return _parse_error(
+                "/transcript accepts one ID, optional count, and optional --from"
+            )
+        if len(remaining) != 2:
+            return _parse_error(
+                "/transcript --from must appear once, last, with one sequence"
+            )
+        start_sequence = _positive_ascii_integer(remaining[1])
+        if start_sequence is None:
+            return _parse_error(
+                "/transcript start sequence must be positive ASCII digits"
+            )
+
+    return InteractiveAction(
+        ActionKind.TRANSCRIPT,
+        argument=conversation_id,
+        count=count,
+        start_sequence=start_sequence,
+    )
+
+
 def _parse_history(tail: str | None) -> InteractiveAction:
     tokens = _tokens(tail)
     if not tokens:
@@ -777,6 +881,20 @@ def _parse_history(tail: str | None) -> InteractiveAction:
     if count <= 0:
         return _parse_error("/history count must be positive ASCII digits")
     return InteractiveAction(ActionKind.HISTORY, count=count)
+
+
+def _positive_ascii_integer(value: str) -> int | None:
+    """Return one positive ASCII integer or ``None`` without side effects."""
+
+    if not value or any(
+        character < "0" or character > "9" for character in value
+    ):
+        return None
+    try:
+        parsed = int(value)
+    except ValueError:
+        return None
+    return parsed if parsed > 0 else None
 
 
 def _parse_help(tail: str | None, command: str) -> InteractiveAction:

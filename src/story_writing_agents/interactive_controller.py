@@ -12,6 +12,14 @@ from .cli_context import (
     save_conversation_selection,
     select_session,
 )
+from .conversation_search import (
+    CONVERSATION_MEMORY_POLICY,
+    ConversationMemoryService,
+    ConversationSearchQuery,
+    ConversationSearchResult,
+    ConversationSearchScope,
+    ConversationTranscriptPage,
+)
 from .conversations import (
     ConversationCatalog,
     ConversationMetadata,
@@ -113,7 +121,8 @@ class InteractiveController:
     Construction borrows collaborators without I/O. ``run_session_lobby`` is
     single-use; once it starts, this controller closes the backend on every
     exit and releases any attachment it can still identify safely. The retained
-    ``StoryRuntime`` exclusively owns provider turns and transcript outcomes.
+    ``StoryRuntime`` exclusively owns provider turns and transcript outcomes;
+    one attachment-scoped memory service owns provider-free search/read access.
     """
 
     __slots__ = (
@@ -121,6 +130,8 @@ class InteractiveController:
         "_backend",
         "_closed",
         "_conversation_catalog",
+        "_conversation_event_store",
+        "_conversation_memory_service",
         "_context",
         "_runtime",
         "_selected_conversation",
@@ -139,13 +150,14 @@ class InteractiveController:
         *,
         conversation_catalog: ConversationCatalog | None = None,
     ) -> None:
-        """Bind collaborators and construct the retained advisory runtime.
+        """Bind collaborators and construct one shared transcript adapter.
 
         The four positional arguments remain the established construction
         contract. An omitted keyword-only catalog creates the workspace-backed
         adapter; an injected protocol implementation is retained as borrowed
-        state and is never closed by this controller. Construction performs no
-        provider call or filesystem write and acquires no cleanup lifecycle.
+        state and is never closed by this controller. The event store is shared
+        by the retained runtime and later attachment-scoped memory services.
+        Construction performs no provider call, filesystem write, or lease.
         """
 
         if not isinstance(workspace, Workspace):
@@ -173,15 +185,18 @@ class InteractiveController:
                 "conversation_catalog must implement ConversationCatalog"
             )
         self._conversation_catalog = resolved_catalog
-        conversation_event_store = FilesystemConversationEventStore(
+        self._conversation_event_store = FilesystemConversationEventStore(
             workspace,
             catalog=resolved_catalog,
         )
         self._runtime = StoryRuntime(
             workspace,
             backend,
-            conversation_event_store=conversation_event_store,
+            conversation_event_store=self._conversation_event_store,
         )
+        self._conversation_memory_service: (
+            ConversationMemoryService | None
+        ) = None
         self._attached_session_id: str | None = None
         self._selected_conversation: ConversationMetadata | None = None
         self._target_agent_id = LEAD_ORCHESTRATOR
@@ -414,11 +429,13 @@ class InteractiveController:
         summary: SessionSummary,
         attachment: AttachmentKind,
     ) -> None:
-        """Validate the requested acquired lease, then attach or switch safely.
+        """Validate a lease and read scope, then attach or switch safely.
 
         The exact ``SessionSummary`` must identify ``expected_session`` as
         active and owned. Any mismatch releases the requested destination when
         possible and aborts into backend-close cleanup before selection writes.
+        Saved conversation validation and memory-service construction complete
+        before source detach or destination persistence.
         """
 
         if (
@@ -439,17 +456,30 @@ class InteractiveController:
             self._release_uncommitted_destination(expected_session)
             self._present_destination_conversation_failure(exc)
             return
+        try:
+            memory_service = ConversationMemoryService(
+                ConversationSearchScope(summary.session_id),
+                self._conversation_catalog,
+                self._conversation_event_store,
+            )
+        except Exception:
+            self._release_uncommitted_destination(expected_session)
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            ) from None
         if self._attached_session_id is None:
             self._attach_selected_session(
                 summary.session_id,
                 attachment,
                 selected_conversation,
+                memory_service,
             )
             return
         self._switch_attached_session(
             summary.session_id,
             attachment,
             selected_conversation,
+            memory_service,
         )
 
     def _load_destination_conversation(
@@ -505,12 +535,14 @@ class InteractiveController:
         session_id: str,
         attachment: AttachmentKind,
         selected_conversation: ConversationMetadata | None,
+        memory_service: ConversationMemoryService,
     ) -> None:
-        """Persist an initial destination and commit it as process attachment.
+        """Persist and commit one destination with its scoped memory service.
 
         Selection is written only after lease acquisition. A selection failure
         releases the destination before it is reported; failed release makes
         the remaining lease state fatal and delegates cleanup to backend close.
+        The validated candidate is retained only by a successful commit.
         """
 
         next_context = self._persist_destination_selection(session_id)
@@ -521,6 +553,7 @@ class InteractiveController:
             session_id,
             attachment,
             selected_conversation,
+            memory_service,
         )
 
     def _switch_attached_session(
@@ -528,13 +561,15 @@ class InteractiveController:
         destination_session: str,
         attachment: AttachmentKind,
         selected_conversation: ConversationMetadata | None,
+        memory_service: ConversationMemoryService,
     ) -> None:
-        """Select a leased destination before detaching and replacing source.
+        """Select a leased destination before replacing source and read scope.
 
         Destination acquisition has already succeeded. Selection failure
         releases it and preserves the source. Source-detach failure after the
         selection write is not rolled back; owned resources are closed best
-        effort and the process exits with ``cleanup_failed``.
+        effort and the process exits with ``cleanup_failed``. The candidate
+        memory service commits only after source detach succeeds.
         """
 
         source_session = self._attached_session_id
@@ -546,11 +581,13 @@ class InteractiveController:
             self._backend.detach_session(source_session)
         except Exception:
             self._abandon_known_attachment_for_cleanup_abort()
+        self._conversation_memory_service = None
         self._commit_attached_session(
             next_context,
             destination_session,
             attachment,
             selected_conversation,
+            memory_service,
         )
 
     def _persist_destination_selection(
@@ -592,17 +629,19 @@ class InteractiveController:
         session_id: str,
         attachment: AttachmentKind,
         selected_conversation: ConversationMetadata | None,
+        memory_service: ConversationMemoryService,
     ) -> None:
-        """Commit process state, reset routing to lead, and render orientation.
+        """Commit attachment, memory scope, routing, and orientation together.
 
         The destination lease and story-session selection are already durable.
         This method performs no backend or catalog lifecycle operation and
-        stores only validated conversation metadata owned by the destination.
+        retains the prebuilt read service plus validated destination metadata.
         """
 
         self._context = context
         self._attached_session_id = session_id
         self._selected_conversation = selected_conversation
+        self._conversation_memory_service = memory_service
         self._target_agent_id = LEAD_ORCHESTRATOR
         self._terminal.write_session_orientation(
             str(self._workspace.root),
@@ -656,12 +695,12 @@ class InteractiveController:
         """Execute one parser action and return whether the loop should exit.
 
         ``original_line`` is used only to choose the trusted parse-error
-        category. Global help, roster, and story-session navigation remain
-        provider-free; routed content uses the retained runtime, while
-        later-feature actions preserve their selection-aware rejection. The
-        returned boolean signals loop exit; command-specific state changes are
-        delegated to their owners, and fatal failures reach the outer cleanup
-        boundary without local resource acquisition.
+        category. Global help, roster, story-session navigation, search, and
+        transcript reads remain provider-free; routed content uses the retained
+        runtime, while other later-feature actions preserve selection-aware
+        rejection. The returned boolean signals loop exit; command-specific
+        state changes are delegated to their owners, and fatal failures reach
+        outer cleanup without local resource acquisition.
         """
 
         if action.kind is ActionKind.IGNORED:
@@ -697,6 +736,17 @@ class InteractiveController:
             ActionKind.ROUTED_MESSAGE,
         }:
             self._run_advisory_turn(action)
+            return False
+        if action.kind in {ActionKind.SEARCH, ActionKind.TRANSCRIPT}:
+            if self._attached_session_id is None:
+                self._terminal.write_error(
+                    InteractiveError(InteractiveErrorCode.SESSION_INACTIVE)
+                )
+                return False
+            if action.kind is ActionKind.SEARCH:
+                self._search_attached_conversations(action)
+            else:
+                self._read_attached_conversation_transcript(action)
             return False
         if action.kind in {
             ActionKind.CONVERSATION_NEW,
@@ -920,6 +970,398 @@ class InteractiveController:
                 hint=_LOBBY_COMMAND_HINT,
             )
         )
+
+    def _search_attached_conversations(
+        self,
+        action: InteractiveAction,
+    ) -> None:
+        """Search the attached session and render ordered active-only hits.
+
+        The parsed action supplies one query. Catalog and service validation
+        precede primitive rendering; expected failures retain attachment and
+        routing state, while Ctrl-C acknowledges cancellation without cleanup.
+        """
+
+        assert action.kind is ActionKind.SEARCH
+        assert action.text is not None
+        session_id = self._attached_session_id
+        assert session_id is not None
+
+        try:
+            try:
+                query = ConversationSearchQuery(action.text)
+            except (TypeError, ValueError):
+                self._terminal.write_error(
+                    InteractiveError(InteractiveErrorCode.COMMAND_INVALID)
+                )
+                return
+
+            try:
+                entries = self._catalog_entries(session_id)
+            except Exception as exc:
+                self._present_memory_catalog_or_reference_failure(exc)
+                return
+
+            memory_service = self._conversation_memory_service
+            if memory_service is None:
+                raise _ControllerAbort(
+                    InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+                )
+            try:
+                result = memory_service.search(query)
+                handles = self._validated_search_result_handles(
+                    result,
+                    query=query,
+                    session_id=session_id,
+                    entries=entries,
+                )
+            except Exception as exc:
+                self._present_search_service_failure(exc)
+                return
+
+            try:
+                for handle, hit in zip(handles, result.hits, strict=True):
+                    citation = hit.citation
+                    self._terminal.write_conversation_search_hit(
+                        handle,
+                        hit.subject,
+                        hit.match_kind.value,
+                        hit.snippet,
+                        archived=(hit.status is ConversationStatus.ARCHIVED),
+                        citation_turn_id=citation.turn_id,
+                        citation_sequence=citation.sequence,
+                        citation_kind=(
+                            None
+                            if citation.event_kind is None
+                            else citation.event_kind.value
+                        ),
+                    )
+                self._terminal.write_status(
+                    TerminalMessageKind.RESULT,
+                    (
+                        f"Search returned {len(result.hits)} of "
+                        f"{result.matched_conversations} matching conversations."
+                    ),
+                )
+                if result.truncated:
+                    self._terminal.write_status(
+                        TerminalMessageKind.HINT,
+                        (
+                            "Search was truncated by fixed scan or result "
+                            "limits; refine the query."
+                        ),
+                    )
+            except Exception:
+                raise _ControllerAbort(
+                    InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+                ) from None
+        except KeyboardInterrupt:
+            self._terminal.write_status(
+                TerminalMessageKind.CANCELLED,
+                "Search cancelled; attached state is unchanged.",
+            )
+
+    def _read_attached_conversation_transcript(
+        self,
+        action: InteractiveAction,
+    ) -> None:
+        """Resolve and render one fresh bounded transcript page.
+
+        The reference may name an active or archived conversation. The method
+        retains no cursor and mutates no attachment, selection, routing, or
+        persistence state; Ctrl-C returns to the same prompt after a status.
+        """
+
+        assert action.kind is ActionKind.TRANSCRIPT
+        assert action.argument is not None
+        session_id = self._attached_session_id
+        assert session_id is not None
+
+        try:
+            try:
+                metadata, entries = self._resolve_conversation_reference(
+                    session_id,
+                    action.argument,
+                )
+            except Exception as exc:
+                self._present_memory_catalog_or_reference_failure(exc)
+                return
+
+            memory_service = self._conversation_memory_service
+            if memory_service is None:
+                raise _ControllerAbort(
+                    InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+                )
+            start_sequence = action.start_sequence or 1
+            page_limit = (
+                action.count
+                or CONVERSATION_MEMORY_POLICY.default_page_events
+            )
+            try:
+                page = memory_service.read_transcript(
+                    metadata.conversation_id,
+                    start_sequence=start_sequence,
+                    max_events=page_limit,
+                )
+                page = self._validated_transcript_page(
+                    page,
+                    session_id=session_id,
+                    conversation_id=metadata.conversation_id,
+                    start_sequence=start_sequence,
+                    page_limit=page_limit,
+                )
+            except Exception as exc:
+                self._present_transcript_service_failure(exc)
+                return
+
+            handle = self._visible_conversation_handle(metadata, entries)
+            try:
+                for event in page.events:
+                    self._terminal.write_conversation_transcript_event(
+                        handle,
+                        sequence=event.sequence,
+                        turn_id=event.turn_id,
+                        kind=event.kind.value,
+                        sender=event.sender,
+                        recipient=event.recipient,
+                        content=event.content,
+                    )
+                self._terminal.write_status(
+                    TerminalMessageKind.RESULT,
+                    f"Transcript page returned {len(page.events)} events.",
+                )
+                if page.next_cursor is not None:
+                    self._terminal.write_status(
+                        TerminalMessageKind.HINT,
+                        (
+                            f"Continue with /transcript {handle} "
+                            f"{page.next_cursor.max_events} --from "
+                            f"{page.next_cursor.next_sequence}."
+                        ),
+                    )
+            except Exception:
+                raise _ControllerAbort(
+                    InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+                ) from None
+        except KeyboardInterrupt:
+            self._terminal.write_status(
+                TerminalMessageKind.CANCELLED,
+                "Transcript read cancelled; attached state is unchanged.",
+            )
+
+    @staticmethod
+    def _validated_search_result_handles(
+        result: object,
+        *,
+        query: ConversationSearchQuery,
+        session_id: str,
+        entries: tuple[ConversationMetadata, ...],
+    ) -> tuple[str, ...]:
+        """Validate one search result against the complete catalog snapshot.
+
+        Exact result/query identity and active metadata must agree before
+        copyable handles are returned in service order. The check is pure and
+        raises ``TypeError`` or ``ValueError`` for collaborator violations.
+        """
+
+        if type(result) is not ConversationSearchResult:
+            raise TypeError("conversation search returned an invalid result")
+        if result.query != query:
+            raise ValueError("conversation search changed its query")
+        metadata_by_id = {
+            entry.conversation_id: entry
+            for entry in entries
+        }
+        handles: list[str] = []
+        for hit in result.hits:
+            if hit.citation.session_id != session_id:
+                raise ValueError("conversation search crossed the attached session")
+            metadata = metadata_by_id.get(hit.citation.conversation_id)
+            if metadata is None:
+                raise ValueError("conversation search returned an unknown identity")
+            if (
+                hit.status is not ConversationStatus.ACTIVE
+                or metadata.status is not ConversationStatus.ACTIVE
+                or hit.status is not metadata.status
+                or hit.subject != metadata.subject
+                or hit.subject_revision != metadata.subject_revision
+                or hit.updated_at != metadata.updated_at
+            ):
+                raise ValueError("conversation search metadata is inconsistent")
+            handles.append(
+                InteractiveController._visible_conversation_handle(
+                    metadata,
+                    entries,
+                )
+            )
+        return tuple(handles)
+
+    @staticmethod
+    def _validated_transcript_page(
+        page: object,
+        *,
+        session_id: str,
+        conversation_id: str,
+        start_sequence: int,
+        page_limit: int,
+    ) -> ConversationTranscriptPage:
+        """Return a page matching one fresh no-filter transcript request.
+
+        The pure validation requires exact scope, full-snapshot range, count,
+        contiguous event, and cursor boundaries. Invalid collaborator output
+        raises ``TypeError`` or ``ValueError`` without lifecycle mutation.
+        """
+
+        if type(page) is not ConversationTranscriptPage:
+            raise TypeError("conversation transcript returned an invalid page")
+        if (
+            page.session_id != session_id
+            or page.conversation_id != conversation_id
+        ):
+            raise ValueError("conversation transcript crossed its attached scope")
+        if page.requested_start_sequence != start_sequence:
+            raise ValueError("conversation transcript changed its requested start")
+        if page.requested_end_sequence != page.snapshot_last_sequence:
+            raise ValueError("conversation transcript shortened its requested range")
+        if len(page.events) > page_limit:
+            raise ValueError("conversation transcript exceeded its requested count")
+        if (
+            page.next_cursor is not None
+            and page.next_cursor.max_events != page_limit
+        ):
+            raise ValueError("conversation transcript cursor changed its count")
+
+        if not page.events:
+            if (
+                page.requested_start_sequence
+                != page.snapshot_last_sequence + 1
+            ):
+                raise ValueError(
+                    "conversation transcript returned an invalid empty page"
+                )
+            return page
+
+        for expected_sequence, event in enumerate(
+            page.events,
+            start=start_sequence,
+        ):
+            if event.sequence != expected_sequence:
+                raise ValueError(
+                    "conversation transcript returned non-contiguous events"
+                )
+
+        last_returned_sequence = page.events[-1].sequence
+        if page.next_cursor is not None:
+            if page.next_cursor.next_sequence != last_returned_sequence + 1:
+                raise ValueError(
+                    "conversation transcript cursor skipped returned events"
+                )
+        elif last_returned_sequence != page.requested_end_sequence:
+            raise ValueError("conversation transcript returned an incomplete page")
+        return page
+
+    def _present_memory_catalog_or_reference_failure(
+        self,
+        failure: Exception,
+    ) -> None:
+        """Render safe reference/catalog failures under the retained lease.
+
+        Resolution categories preserve their exact public code. Unsafe paths
+        and invalid complete-catalog behavior are lease-confirmed before
+        rendering; unknown failures abort to final controller cleanup.
+        """
+
+        if isinstance(failure, _ConversationResolutionFailure):
+            code = failure.code
+        elif isinstance(failure, ConversationNotFoundError):
+            code = InteractiveErrorCode.CONVERSATION_NOT_FOUND
+        elif isinstance(failure, WorkspaceSecurityError):
+            code = InteractiveErrorCode.WORKSPACE_UNSAFE
+        elif isinstance(
+            failure,
+            (
+                _ConversationCatalogProtocolFailure,
+                WorkspaceFormatError,
+                OSError,
+                SessionIdError,
+                TypeError,
+                ValueError,
+            ),
+        ):
+            code = InteractiveErrorCode.WORKSPACE_INVALID
+        else:
+            code = InteractiveErrorCode.INTERNAL_ERROR
+        self._present_memory_error(InteractiveError(code))
+
+    def _present_search_service_failure(self, failure: Exception) -> None:
+        """Classify a valid-query search failure without exposing its prose.
+
+        Missing identities retain their conversation code; unsafe paths and
+        invalid storage/collaborator results are lease-confirmed workspace
+        failures. Unknown failures abort through the controller lifecycle.
+        """
+
+        if isinstance(failure, ConversationNotFoundError):
+            code = InteractiveErrorCode.CONVERSATION_NOT_FOUND
+        elif isinstance(failure, WorkspaceSecurityError):
+            code = InteractiveErrorCode.WORKSPACE_UNSAFE
+        elif isinstance(
+            failure,
+            (
+                _ConversationCatalogProtocolFailure,
+                WorkspaceFormatError,
+                OSError,
+                SessionIdError,
+                TypeError,
+                ValueError,
+            ),
+        ):
+            code = InteractiveErrorCode.WORKSPACE_INVALID
+        else:
+            code = InteractiveErrorCode.INTERNAL_ERROR
+        self._present_memory_error(InteractiveError(code))
+
+    def _present_transcript_service_failure(self, failure: Exception) -> None:
+        """Classify one post-catalog transcript failure without raw prose.
+
+        Missing identities and unsafe paths keep their public categories.
+        Transcript format/value failures are transcript-invalid, ordinary I/O
+        or unsafe identifiers are workspace-invalid, and unknowns are fatal.
+        """
+
+        if isinstance(failure, ConversationNotFoundError):
+            code = InteractiveErrorCode.CONVERSATION_NOT_FOUND
+        elif isinstance(failure, WorkspaceSecurityError):
+            code = InteractiveErrorCode.WORKSPACE_UNSAFE
+        elif isinstance(failure, WorkspaceFormatError):
+            code = InteractiveErrorCode.TRANSCRIPT_INVALID
+        elif isinstance(failure, (TypeError, ValueError)):
+            code = InteractiveErrorCode.TRANSCRIPT_INVALID
+        elif isinstance(
+            failure,
+            (_ConversationCatalogProtocolFailure, OSError, SessionIdError),
+        ):
+            code = InteractiveErrorCode.WORKSPACE_INVALID
+        else:
+            code = InteractiveErrorCode.INTERNAL_ERROR
+        self._present_memory_error(InteractiveError(code))
+
+    def _present_memory_error(self, error: InteractiveError) -> None:
+        """Render one trusted read error after any required lease proof.
+
+        Workspace-invalid and unsafe outcomes confirm the same active owned
+        attachment before output. Internal errors abort; other codes render
+        without changing memory scope, selection, routing, or persistence.
+        """
+
+        if error.code is InteractiveErrorCode.INTERNAL_ERROR:
+            raise _ControllerAbort(error)
+        if error.code in {
+            InteractiveErrorCode.WORKSPACE_INVALID,
+            InteractiveErrorCode.WORKSPACE_UNSAFE,
+        }:
+            self._confirm_attachment_after_command_failure()
+        self._terminal.write_error(error)
 
     def _write_attached_conversation_scope(self) -> None:
         """Render the effective selected scope immediately before main input.
@@ -1846,10 +2288,10 @@ class InteractiveController:
     def _end_attached_session(self) -> bool:
         """Confirm and deactivate the attachment, returning EOF exit intent.
 
-        No/blank/Ctrl-C preserves the attachment. EOF leaves ending untouched
-        and asks the outer boundary to detach normally. A failed end remains
-        recoverable only when public state confirms active ownership; all
-        uncertain outcomes abort with ``cleanup_failed``.
+        No/blank/Ctrl-C preserves the attachment and memory scope. EOF leaves
+        ending untouched and asks the outer boundary to detach normally. A
+        successful end clears the memory service; failed end remains
+        recoverable only with active owned state, else cleanup aborts.
         """
 
         session_id = self._attached_session_id
@@ -1877,6 +2319,7 @@ class InteractiveController:
 
         self._attached_session_id = None
         self._selected_conversation = None
+        self._conversation_memory_service = None
         self._target_agent_id = LEAD_ORCHESTRATOR
         self._terminal.write_status(
             TerminalMessageKind.SESSION,
@@ -1889,8 +2332,9 @@ class InteractiveController:
         """Return whether public state proves an active lease is still owned.
 
         The check performs a provider-free summary read and never mutates the
-        session. Any read failure or non-owned/inactive state is uncertainty,
-        so callers must close resources and abort instead of claiming recovery.
+        session. An ordinary read failure, ``KeyboardInterrupt``, or
+        non-owned/inactive state is unproven, so callers fail closed; unrelated
+        ``BaseException`` subclasses continue to propagate.
         """
 
         try:
@@ -1898,7 +2342,7 @@ class InteractiveController:
                 session_id,
                 selected_session=self._context.selected_session,
             )
-        except Exception:
+        except (Exception, KeyboardInterrupt):
             return False
         return (
             self._summary_matches_requested_session(summary, session_id)
@@ -2092,12 +2536,14 @@ class InteractiveController:
         """Clear uncertain bookkeeping and abort into backend-close cleanup.
 
         No further explicit detach is attempted because a prior lifecycle
-        failure made source/destination ownership ambiguous. Backend ``close``
-        remains the best-effort owner cleanup operation.
+        failure made source/destination ownership ambiguous. Process attachment,
+        selection, and memory scope are cleared while backend ``close`` remains
+        the best-effort resource cleanup operation.
         """
 
         self._attached_session_id = None
         self._selected_conversation = None
+        self._conversation_memory_service = None
         raise _ControllerAbort(
             InteractiveError(InteractiveErrorCode.CLEANUP_FAILED)
         )
@@ -2110,9 +2556,9 @@ class InteractiveController:
     ) -> int:
         """Detach known state, close the backend, and apply cleanup precedence.
 
-        Normal quit/EOF explicitly detaches without deactivation. Either
-        detach or close failure forces status 2; backend close is still tried,
-        and a single safe ``cleanup_failed`` record is added when needed.
+        Normal quit/EOF explicitly detaches without deactivation. Memory scope
+        is always cleared. Either detach or close failure forces status 2;
+        backend close is still tried, and one cleanup error is added as needed.
         """
 
         if self._closed:
@@ -2132,6 +2578,7 @@ class InteractiveController:
         except Exception:
             cleanup_failed = True
         finally:
+            self._conversation_memory_service = None
             self._closed = True
 
         if cleanup_failed and not cleanup_error_reported:

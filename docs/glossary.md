@@ -1,8 +1,8 @@
 # Glossary
 
-> **Availability:** after attachment, the shell manages subject conversations
-> and sends routed advisory turns. Transcript viewing and search remain Python
-> APIs. See [Story sessions](guides/story-sessions.md).
+> **Availability:** after attachment, the shell manages subject conversations,
+> sends routed advisory turns, searches active records, and reads bounded
+> active or archived transcripts. See [Story sessions](guides/story-sessions.md).
 
 Key terms: **story session**—related work; **conversation**—a session-scoped
 subject and visible history; **turn**—user event plus outcome; **debate**—one consensus

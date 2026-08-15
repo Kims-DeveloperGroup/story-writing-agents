@@ -4,8 +4,8 @@ Use this index to find one canonical answer instead of searching a long manual.
 
 > **Availability:** bare `story` and `story chat` open the installed TTY shell.
 > It manages story sessions and subject conversations, routes single-line
-> advisory turns, and saves transcripts. History, transcript viewing, search,
-> consensus, and artifact commands remain separate.
+> advisory turns, searches active conversations, and reads bounded active or
+> archived transcripts. History, consensus, and artifact commands remain separate.
 
 ## Availability matrix
 
@@ -18,11 +18,11 @@ Use this index to find one canonical answer instead of searching a long manual.
 | List or target agents; send ordinary, `@AGENT`, or `/say` turns | Installed shell; a selected active conversation is required for turns |
 | Strict create/resume/attach/detach session lifecycle | Python API; used by the installed shell |
 | Parse the interactive command language and route metadata | Python API; the shell dispatches a documented subset |
-| Prompt, confirm, compose, and render safe terminal records | Module-supported Python API; composition is not shell-dispatched |
-| Append/read transcripts; derive bounded complete-turn context | Shell turns append and consume context; direct reads remain Python API only |
-| Search one session; cite hits; read bounded transcript pages | Python API only; no dispatcher or command |
+| Prompt, confirm, compose, and render safe terminal records | Module-supported Python API; shell renders search and transcript records; composition is not dispatched |
+| Append/read transcripts; derive bounded complete-turn context | Shell turns append/consume context and `/transcript` reads fresh bounded pages; Python API |
+| Search one session and cite hits | Attached shell `/search` for active records; Python API can explicitly include archived records |
 | Persist and send one explicitly addressed conversation turn | Installed shell for its selected conversation; `StoryRuntime` for an explicit ID |
-| History/search/transcript, consensus, and artifact commands | Not implemented in the shell |
+| History, consensus, and artifact commands | Not implemented in the shell |
 
 ## Start and concepts
 

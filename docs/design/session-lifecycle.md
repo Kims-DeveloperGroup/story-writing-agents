@@ -1,8 +1,8 @@
 # Session lifecycle design
 
-> **Availability:** the controller manages sessions and conversations and
-> dispatches selected-conversation turns. Search, transcript viewing, consensus,
-> and artifact work remain unavailable.
+> **Availability:** the controller manages sessions, conversations, routed
+> turns, search, and transcript reads. History, consensus, and
+> artifact work remain unavailable.
 
 Key terms: **active**—provider work allowed; **attached**—this process owns the
 lease; **selected conversation**—a saved record; **sticky target**—the

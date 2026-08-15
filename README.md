@@ -8,10 +8,11 @@ and write a manuscript only after all three voting specialists agree.
 
 > **Available now:** workspace setup, exact directives, prompt or draft consensus
 > runs, inspection, persistent Codex sessions, a provider-free smoke test, and an
-> interactive TTY shell. After attaching a story session and selecting a
-> subject conversation, the shell sends routed, single-line advisory turns and
-> saves their transcripts. History, transcript viewing, search, and artifact
-> commands are not yet available there.
+> interactive TTY shell. After attaching a story session, the shell searches
+> active conversations and reads bounded active or archived transcripts without
+> a selected conversation. Selected active conversations support routed,
+> single-line advisory turns. History, debate, and artifact commands remain
+> unavailable there.
 
 ## Quick start
 
@@ -63,7 +64,7 @@ initialized workspace and use its saved session selection. Scripts can pass
 - [Workspace guide](docs/guides/workspaces.md) explains the editable project
   files.
 - [Story sessions](docs/guides/story-sessions.md) shows the interactive shell,
-  subject conversations, and agent routing.
+  conversation search, transcript reads, and agent routing.
 - [Consensus-run guide](docs/guides/consensus-runs.md) covers prompts, drafts,
   outputs, and round limits.
 - [CLI reference](docs/reference/cli.md) is the exact installed command contract.
@@ -93,10 +94,9 @@ For Python integrations, start with the [runtime API](docs/reference/runtime-api
 - Artifact replacement is atomic per file with best-effort multi-file rollback,
   not a power-loss-safe transaction.
 - The interactive shell accepts one line per advisory turn; multiline composition
-  and active-turn cancellation are not dispatched. It saves transcripts but
-  exposes no history, search, transcript, debate, or artifact command. [Search
-  and cited transcript pages](docs/reference/conversation-search.md)
-  remain Python APIs.
+  and active-turn cancellation are not dispatched. Search is active-only and
+  transcript reads are bounded; history, debate, and artifact commands remain
+  unavailable. See [conversation search and reads](docs/reference/conversation-search.md).
 
 ## Development
 

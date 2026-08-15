@@ -26,9 +26,22 @@ from story_writing_agents.cli_context import (
     save_conversation_selection,
     select_session,
 )
+from story_writing_agents.conversation_search import (
+    ConversationCitation,
+    ConversationSearchHit,
+    ConversationSearchMatchKind,
+    ConversationSearchQuery,
+    ConversationSearchResult,
+    ConversationSearchScope,
+    ConversationTranscriptCursor,
+    ConversationTranscriptPage,
+)
 from story_writing_agents.conversations import (
+    CONVERSATION_EVENT_SCHEMA_VERSION,
     CONVERSATION_METADATA_SCHEMA_VERSION,
     ConversationCatalog,
+    ConversationEvent,
+    ConversationEventKind,
     ConversationMetadata,
     ConversationStatus,
 )
@@ -185,6 +198,115 @@ def _conversation_metadata(
         created_at=created_at,
         updated_at=updated_at,
     )
+
+
+def _stored_transcript_event(
+    conversation_id: str,
+    sequence: int,
+    *,
+    session_id: str = "session",
+    content: str | None = None,
+) -> ConversationEvent:
+    """Build one valid stored event for controller page-validation tests."""
+
+    return ConversationEvent(
+        schema_version=CONVERSATION_EVENT_SCHEMA_VERSION,
+        session_id=session_id,
+        conversation_id=conversation_id,
+        turn_id=f"turn_{sequence}",
+        sequence=sequence,
+        timestamp=_CREATED,
+        sender="user",
+        recipient="lead_orchestrator",
+        kind=ConversationEventKind.USER_MESSAGE,
+        content=f"event {sequence}" if content is None else content,
+    )
+
+
+def _transcript_page(
+    conversation_id: str,
+    events: tuple[ConversationEvent, ...],
+    *,
+    requested_start: int,
+    requested_end: int,
+    snapshot_last: int,
+    cursor_next: int | None = None,
+    cursor_limit: int = 24,
+) -> ConversationTranscriptPage:
+    """Build one structurally valid fresh page with an optional continuation."""
+
+    cursor = (
+        None
+        if cursor_next is None
+        else ConversationTranscriptCursor(
+            "session",
+            conversation_id,
+            cursor_next,
+            requested_end,
+            snapshot_last,
+            None,
+            cursor_limit,
+            None,
+        )
+    )
+    return ConversationTranscriptPage(
+        "session",
+        conversation_id,
+        events,
+        requested_start,
+        requested_end,
+        snapshot_last,
+        sum(len(event.content.encode("utf-8")) for event in events),
+        cursor,
+        cursor is not None,
+    )
+
+
+class ScriptedConversationMemoryService:
+    """Return scripted search/pages while recording exact controller calls."""
+
+    def __init__(
+        self,
+        *,
+        search_outcomes: tuple[object, ...] = (),
+        transcript_outcomes: tuple[object, ...] = (),
+    ) -> None:
+        """Store deterministic outcomes and call logs without resources."""
+
+        self.search_outcomes = list(search_outcomes)
+        self.transcript_outcomes = list(transcript_outcomes)
+        self.search_calls: list[ConversationSearchQuery] = []
+        self.transcript_calls: list[tuple[str, int, int]] = []
+
+    def search(self, query: ConversationSearchQuery) -> object:
+        """Record and return one search outcome, raising scripted failures."""
+
+        self.search_calls.append(query)
+        if not self.search_outcomes:
+            raise AssertionError("unexpected conversation search")
+        outcome = self.search_outcomes.pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+    def read_transcript(
+        self,
+        conversation_id: str,
+        *,
+        start_sequence: int,
+        max_events: int,
+    ) -> object:
+        """Record and return one fresh-page outcome or scripted failure."""
+
+        self.transcript_calls.append(
+            (conversation_id, start_sequence, max_events)
+        )
+        if not self.transcript_outcomes:
+            raise AssertionError("unexpected transcript read")
+        outcome = self.transcript_outcomes.pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
 
 
 class MemoryConversationCatalog:
@@ -480,6 +602,7 @@ class ControllerContractTests(ControllerTestCase):
                 "agents",
                 "backend",
                 "cli_context",
+                "conversation_search",
                 "conversations",
                 "errors",
                 "interactive_commands",
@@ -1449,6 +1572,721 @@ class ControllerCommandTests(ControllerTestCase):
             callbacks.prompts.count("Resume selected session saved? [Y/n] "),
             1,
         )
+
+
+class ControllerSearchAndTranscriptTests(ControllerTestCase):
+    """Verify provider-free memory commands and attachment-scoped wiring."""
+
+    def prepared_attached_controller(
+        self,
+        *reads: object,
+        entries: tuple[ConversationMetadata, ...] = (),
+        selected_id: str | None = None,
+    ) -> tuple[
+        Workspace,
+        AgentBackend,
+        MemoryConversationCatalog,
+        InteractiveController,
+        ScriptedTerminalCallbacks,
+    ]:
+        """Create one attached session with an injected deterministic catalog."""
+
+        workspace = self.make_workspace()
+        self.seed_session(workspace, "session", active=True)
+        select_session(workspace, "session")
+        if selected_id is not None:
+            save_conversation_selection(workspace, "session", selected_id)
+        catalog = MemoryConversationCatalog(entries)
+        backend = self.make_backend(workspace)
+        controller, _backend, callbacks = self.make_controller(
+            workspace,
+            *reads,
+            backend=backend,
+            conversation_catalog=catalog,
+            terminal_width=240,
+        )
+        return workspace, backend, catalog, controller, callbacks
+
+    def test_unselected_search_uses_default_scope_order_and_exact_status(
+        self,
+    ) -> None:
+        exact = _conversation_metadata(_COLLIDING_A, "Council")
+        prefix = _conversation_metadata(_UNIQUE_C, "Council vessel")
+        query = ConversationSearchQuery("council")
+        result = ConversationSearchResult(
+            query,
+            "council",
+            (
+                ConversationSearchHit(
+                    ConversationCitation(
+                        "session",
+                        exact.conversation_id,
+                        None,
+                        None,
+                        None,
+                    ),
+                    exact.subject,
+                    exact.subject_revision,
+                    exact.status,
+                    exact.updated_at,
+                    ConversationSearchMatchKind.EXACT_SUBJECT,
+                    "council",
+                ),
+                ConversationSearchHit(
+                    ConversationCitation(
+                        "session",
+                        prefix.conversation_id,
+                        None,
+                        None,
+                        None,
+                    ),
+                    prefix.subject,
+                    prefix.subject_revision,
+                    prefix.status,
+                    prefix.updated_at,
+                    ConversationSearchMatchKind.SUBJECT_PREFIX,
+                    "council vessel",
+                ),
+            ),
+            2,
+            2,
+            0,
+            True,
+            True,
+        )
+        memory = ScriptedConversationMemoryService(
+            search_outcomes=(result,)
+        )
+        workspace, _backend, catalog, controller, callbacks = (
+            self.prepared_attached_controller(
+                "/search council",
+                "/quit",
+                entries=(exact, prefix),
+            )
+        )
+
+        with mock.patch.object(
+            controller_module,
+            "ConversationMemoryService",
+            return_value=memory,
+        ) as memory_factory:
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        memory_factory.assert_called_once()
+        scope, bound_catalog, bound_store = memory_factory.call_args.args
+        self.assertEqual(scope, ConversationSearchScope("session"))
+        self.assertIs(bound_catalog, catalog)
+        self.assertIs(bound_store, controller._conversation_event_store)
+        self.assertIs(
+            controller._runtime.conversation_event_store,
+            bound_store,
+        )
+        self.assertEqual(memory.search_calls, [query])
+        self.assertEqual(query.limit, 10)
+        self.assertFalse(query.include_archived)
+        rendered = "".join(callbacks.records)
+        self.assertLess(
+            rendered.index(f"[search {exact.conversation_id[:12]}]"),
+            rendered.index(f"[search {prefix.conversation_id[:12]}]"),
+        )
+        self.assertIn(
+            "[result] Search returned 2 of 2 matching conversations.\n",
+            rendered,
+        )
+        self.assertIn(
+            "[hint] Search was truncated by fixed scan or result limits; "
+            "refine the query.\n",
+            rendered,
+        )
+        self.assertIn("Conversation: none", rendered)
+        self.assertFalse(
+            workspace.path(_selection_relative("session")).exists()
+        )
+        self.assertIsNone(controller._conversation_memory_service)
+
+    def test_search_failures_and_cancellation_preserve_routing_and_selection(
+        self,
+    ) -> None:
+        entry = _conversation_metadata(_UNIQUE_C, "Council")
+        memory = ScriptedConversationMemoryService(
+            search_outcomes=(KeyboardInterrupt(), object()),
+            transcript_outcomes=(KeyboardInterrupt(),),
+        )
+        workspace, _backend, _catalog, controller, callbacks = (
+            self.prepared_attached_controller(
+                "/to plot",
+                "/search invalid\x00query",
+                "/search council",
+                "/search valid",
+                f"/transcript {entry.conversation_id}",
+                "/quit",
+                entries=(entry,),
+            )
+        )
+        context_before = workspace.path(_CONTEXT_PATH).read_bytes()
+
+        with (
+            mock.patch.object(
+                controller_module,
+                "ConversationMemoryService",
+                return_value=memory,
+            ),
+            mock.patch.object(controller_module.asyncio, "run") as async_run,
+        ):
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        async_run.assert_not_called()
+        self.assertEqual(
+            memory.search_calls,
+            [ConversationSearchQuery("council"), ConversationSearchQuery("valid")],
+        )
+        self.assertEqual(
+            memory.transcript_calls,
+            [(entry.conversation_id, 1, 24)],
+        )
+        rendered = "".join(callbacks.records)
+        self.assertIn(_error_record(InteractiveErrorCode.COMMAND_INVALID), rendered)
+        self.assertIn(
+            "[cancelled] Search cancelled; attached state is unchanged.\n",
+            rendered,
+        )
+        self.assertIn(
+            "[cancelled] Transcript read cancelled; attached state is "
+            "unchanged.\n",
+            rendered,
+        )
+        self.assertIn(_error_record(InteractiveErrorCode.WORKSPACE_INVALID), rendered)
+        self.assertEqual(workspace.path(_CONTEXT_PATH).read_bytes(), context_before)
+        self.assertFalse(
+            workspace.path(_selection_relative("session")).exists()
+        )
+        self.assertEqual(controller._target_agent_id, "plot_architect")
+        self.assertIsNone(controller._conversation_memory_service)
+
+    def test_memory_recovery_interrupt_fails_closed_for_search_and_transcript(
+        self,
+    ) -> None:
+        entry = _conversation_metadata(_UNIQUE_C, "Council")
+        cases = (
+            (
+                "search_workspace_invalid",
+                "/search council",
+                OSError("search-secret"),
+                InteractiveErrorCode.WORKSPACE_INVALID,
+                "Search cancelled; attached state is unchanged.",
+            ),
+            (
+                "transcript_workspace_unsafe",
+                f"/transcript {entry.conversation_id}",
+                WorkspaceSecurityError("transcript-secret"),
+                InteractiveErrorCode.WORKSPACE_UNSAFE,
+                "Transcript read cancelled; attached state is unchanged.",
+            ),
+        )
+        for label, command, service_failure, typed_code, cancelled in cases:
+            with self.subTest(case=label):
+                memory = ScriptedConversationMemoryService(
+                    search_outcomes=(service_failure,)
+                    if command.startswith("/search")
+                    else (),
+                    transcript_outcomes=(service_failure,)
+                    if command.startswith("/transcript")
+                    else (),
+                )
+                workspace, backend, catalog, controller, callbacks = (
+                    self.prepared_attached_controller(
+                        command,
+                        entries=(entry,),
+                    )
+                )
+                context_path = workspace.path(_CONTEXT_PATH)
+                context_before = (
+                    context_path.read_bytes(),
+                    context_path.stat().st_mtime_ns,
+                )
+                original_summary = backend.get_session_summary
+                summary_calls = 0
+
+                def interrupt_recovery_proof(
+                    session_id: str,
+                    *,
+                    selected_session: str | None = None,
+                ) -> SessionSummary:
+                    """Allow startup, then interrupt only the recovery proof."""
+
+                    nonlocal summary_calls
+                    summary_calls += 1
+                    if summary_calls == 1:
+                        return original_summary(
+                            session_id,
+                            selected_session=selected_session,
+                        )
+                    raise KeyboardInterrupt
+
+                with (
+                    mock.patch.object(
+                        controller_module,
+                        "ConversationMemoryService",
+                        return_value=memory,
+                    ),
+                    mock.patch.object(
+                        backend,
+                        "get_session_summary",
+                        side_effect=interrupt_recovery_proof,
+                    ),
+                    mock.patch.object(
+                        backend,
+                        "detach_session",
+                        wraps=backend.detach_session,
+                    ) as detach,
+                    mock.patch.object(
+                        controller_module.asyncio,
+                        "run",
+                    ) as async_run,
+                    mock.patch.object(
+                        controller._runtime,
+                        "converse",
+                    ) as converse,
+                    mock.patch.object(
+                        controller_module,
+                        "select_session",
+                    ) as persist_session,
+                    mock.patch.object(
+                        controller_module,
+                        "save_conversation_selection",
+                    ) as persist_conversation,
+                    mock.patch.object(
+                        controller._conversation_event_store,
+                        "append",
+                    ) as append,
+                ):
+                    self.assertEqual(controller.run_session_lobby(), 2)
+
+                self.assertEqual(summary_calls, 2)
+                detach.assert_not_called()
+                for untouched in (
+                    async_run,
+                    converse,
+                    persist_session,
+                    persist_conversation,
+                    append,
+                ):
+                    untouched.assert_not_called()
+                self.assertEqual(callbacks.prompts, ["story[session:lead]> "])
+                rendered = "".join(callbacks.records)
+                self.assertEqual(rendered.count("[error cleanup_failed]"), 1)
+                self.assertNotIn(f"[error {typed_code.value}]", rendered)
+                self.assertNotIn(f"[cancelled] {cancelled}\n", rendered)
+                self.assertNotIn("[error internal_error]", rendered)
+                self.assertNotIn(str(service_failure), rendered)
+                self.assertIsNone(controller._attached_session_id)
+                self.assertIsNone(controller._selected_conversation)
+                self.assertIsNone(controller._conversation_memory_service)
+                self.assertFalse(
+                    workspace.path(_lease_relative("session")).exists()
+                )
+                self.assertFalse(
+                    workspace.path(_selection_relative("session")).exists()
+                )
+                self.assertEqual(catalog.entries, [entry])
+                self.assertEqual(
+                    (
+                        context_path.read_bytes(),
+                        context_path.stat().st_mtime_ns,
+                    ),
+                    context_before,
+                )
+
+    def test_attachment_proof_does_not_swallow_system_exit(self) -> None:
+        _workspace, backend, _catalog, controller, _callbacks = (
+            self.prepared_attached_controller()
+        )
+        with mock.patch.object(
+            backend,
+            "get_session_summary",
+            side_effect=SystemExit(17),
+        ) as summary:
+            with self.assertRaises(SystemExit) as raised:
+                controller._attachment_is_safely_retained("session")
+
+        self.assertEqual(raised.exception.code, 17)
+        summary.assert_called_once_with(
+            "session",
+            selected_session="session",
+        )
+
+    def test_fresh_transcript_pages_accept_complete_and_bounded_shapes(
+        self,
+    ) -> None:
+        entry = _conversation_metadata(_UNIQUE_C, "Subject")
+        first = _stored_transcript_event(entry.conversation_id, 1)
+        second = _stored_transcript_event(entry.conversation_id, 2)
+        outcomes = (
+            _transcript_page(
+                entry.conversation_id,
+                (),
+                requested_start=1,
+                requested_end=0,
+                snapshot_last=0,
+            ),
+            _transcript_page(
+                entry.conversation_id,
+                (),
+                requested_start=3,
+                requested_end=2,
+                snapshot_last=2,
+            ),
+            _transcript_page(
+                entry.conversation_id,
+                (first,),
+                requested_start=1,
+                requested_end=2,
+                snapshot_last=2,
+                cursor_next=2,
+                cursor_limit=1,
+            ),
+            _transcript_page(
+                entry.conversation_id,
+                (first,),
+                requested_start=1,
+                requested_end=2,
+                snapshot_last=2,
+                cursor_next=2,
+            ),
+            _transcript_page(
+                entry.conversation_id,
+                (first, second),
+                requested_start=1,
+                requested_end=2,
+                snapshot_last=2,
+            ),
+        )
+        memory = ScriptedConversationMemoryService(
+            transcript_outcomes=outcomes
+        )
+        handle = entry.conversation_id[:12]
+        _workspace, _backend, _catalog, controller, callbacks = (
+            self.prepared_attached_controller(
+                f"/transcript {entry.conversation_id}",
+                f"/transcript {handle} --from 3",
+                f"/transcript {handle} 1",
+                f"/transcript {handle}",
+                f"/transcript {handle}",
+                "/quit",
+                entries=(entry,),
+            )
+        )
+
+        with mock.patch.object(
+            controller_module,
+            "ConversationMemoryService",
+            return_value=memory,
+        ):
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        self.assertEqual(
+            memory.transcript_calls,
+            [
+                (entry.conversation_id, 1, 24),
+                (entry.conversation_id, 3, 24),
+                (entry.conversation_id, 1, 1),
+                (entry.conversation_id, 1, 24),
+                (entry.conversation_id, 1, 24),
+            ],
+        )
+        rendered = "".join(callbacks.records)
+        self.assertEqual(
+            rendered.count("[result] Transcript page returned 0 events.\n"),
+            2,
+        )
+        self.assertEqual(
+            rendered.count("[result] Transcript page returned 1 events.\n"),
+            2,
+        )
+        self.assertIn(
+            "[result] Transcript page returned 2 events.\n",
+            rendered,
+        )
+        self.assertIn(
+            f"[hint] Continue with /transcript {handle} 1 --from 2.\n",
+            rendered,
+        )
+        self.assertIn(
+            f"[hint] Continue with /transcript {handle} 24 --from 2.\n",
+            rendered,
+        )
+        self.assertNotIn("[error transcript_invalid]", rendered)
+
+    def test_malformed_fresh_transcript_pages_are_transcript_invalid(self) -> None:
+        conversation_id = _UNIQUE_C
+        first = _stored_transcript_event(conversation_id, 1)
+        second = _stored_transcript_event(conversation_id, 2)
+        third = _stored_transcript_event(conversation_id, 3)
+        malformed_cases = (
+            ("wrong_type", object()),
+            ("value_failure", ValueError("private transcript detail")),
+            (
+                "shortened_end",
+                _transcript_page(
+                    conversation_id,
+                    (first,),
+                    requested_start=1,
+                    requested_end=1,
+                    snapshot_last=2,
+                ),
+            ),
+            (
+                "skipped_first",
+                _transcript_page(
+                    conversation_id,
+                    (second,),
+                    requested_start=1,
+                    requested_end=2,
+                    snapshot_last=2,
+                ),
+            ),
+            (
+                "noncontiguous",
+                _transcript_page(
+                    conversation_id,
+                    (first, third),
+                    requested_start=1,
+                    requested_end=3,
+                    snapshot_last=3,
+                ),
+            ),
+            (
+                "cursor_skip",
+                _transcript_page(
+                    conversation_id,
+                    (first,),
+                    requested_start=1,
+                    requested_end=3,
+                    snapshot_last=3,
+                    cursor_next=3,
+                ),
+            ),
+            (
+                "short_noncursor",
+                _transcript_page(
+                    conversation_id,
+                    (first,),
+                    requested_start=1,
+                    requested_end=2,
+                    snapshot_last=2,
+                ),
+            ),
+            (
+                "invalid_empty",
+                _transcript_page(
+                    conversation_id,
+                    (),
+                    requested_start=1,
+                    requested_end=1,
+                    snapshot_last=1,
+                ),
+            ),
+            (
+                "cursor_count_changed",
+                _transcript_page(
+                    conversation_id,
+                    (first,),
+                    requested_start=1,
+                    requested_end=2,
+                    snapshot_last=2,
+                    cursor_next=2,
+                    cursor_limit=1,
+                ),
+            ),
+        )
+        entry = _conversation_metadata(conversation_id, "Subject")
+
+        for label, outcome in malformed_cases:
+            with self.subTest(case=label):
+                memory = ScriptedConversationMemoryService(
+                    transcript_outcomes=(outcome,)
+                )
+                _workspace, _backend, _catalog, controller, callbacks = (
+                    self.prepared_attached_controller(
+                        f"/transcript {conversation_id}",
+                        "/quit",
+                        entries=(entry,),
+                    )
+                )
+                with mock.patch.object(
+                    controller_module,
+                    "ConversationMemoryService",
+                    return_value=memory,
+                ):
+                    self.assertEqual(controller.run_session_lobby(), 0)
+                rendered = "".join(callbacks.records)
+                self.assertEqual(
+                    rendered.count("[error transcript_invalid]"),
+                    1,
+                )
+                self.assertNotIn("private transcript detail", rendered)
+                self.assertIsNone(controller._conversation_memory_service)
+
+    def test_conversation_mutations_do_not_rebind_the_shared_memory_service(
+        self,
+    ) -> None:
+        first = _conversation_metadata(_COLLIDING_A, "First")
+        second = _conversation_metadata(_UNIQUE_C, "Second")
+        memory = ScriptedConversationMemoryService()
+        _workspace, _backend, catalog, controller, _callbacks = (
+            self.prepared_attached_controller(
+                f"/conversation use {second.conversation_id}",
+                "/conversation subject Revised",
+                "/conversation archive",
+                "yes",
+                "/conversation new New subject",
+                "/quit",
+                entries=(first, second),
+                selected_id=first.conversation_id,
+            )
+        )
+
+        with mock.patch.object(
+            controller_module,
+            "ConversationMemoryService",
+            return_value=memory,
+        ) as memory_factory:
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        memory_factory.assert_called_once()
+        bound_store = memory_factory.call_args.args[2]
+        self.assertIs(bound_store, controller._conversation_event_store)
+        self.assertIs(controller._runtime.conversation_event_store, bound_store)
+        self.assertEqual(len(catalog.entries), 3)
+        self.assertEqual(catalog.entries[1].subject, "Revised")
+        self.assertIs(catalog.entries[1].status, ConversationStatus.ARCHIVED)
+        self.assertIsNone(controller._conversation_memory_service)
+
+    def test_destination_scope_precedes_detach_and_failed_build_keeps_source(
+        self,
+    ) -> None:
+        for fails_destination in (False, True):
+            with self.subTest(fails_destination=fails_destination):
+                workspace = self.make_workspace()
+                for session_id in ("source", "destination"):
+                    self.seed_session(workspace, session_id, active=True)
+                select_session(workspace, "source")
+                backend = self.make_backend(workspace)
+                controller, _backend, callbacks = self.make_controller(
+                    workspace,
+                    "/session resume destination",
+                    "/quit",
+                    backend=backend,
+                    conversation_catalog=MemoryConversationCatalog(),
+                    terminal_width=240,
+                )
+                events: list[str] = []
+                source_memory = ScriptedConversationMemoryService()
+                destination_memory = ScriptedConversationMemoryService()
+
+                def build_memory_service(
+                    scope: ConversationSearchScope,
+                    _catalog: object,
+                    _store: object,
+                ) -> ScriptedConversationMemoryService:
+                    """Record scope construction and optionally reject destination."""
+
+                    events.append(f"service:{scope.session_id}")
+                    if fails_destination and scope.session_id == "destination":
+                        raise RuntimeError("destination service secret")
+                    return (
+                        source_memory
+                        if scope.session_id == "source"
+                        else destination_memory
+                    )
+
+                original_detach = backend.detach_session
+
+                def record_detach(session_id: str):
+                    """Record and delegate one concrete session detach."""
+
+                    events.append(f"detach:{session_id}")
+                    return original_detach(session_id)
+
+                with (
+                    mock.patch.object(
+                        controller_module,
+                        "ConversationMemoryService",
+                        side_effect=build_memory_service,
+                    ),
+                    mock.patch.object(
+                        backend,
+                        "detach_session",
+                        side_effect=record_detach,
+                    ),
+                ):
+                    self.assertEqual(
+                        controller.run_session_lobby(),
+                        2 if fails_destination else 0,
+                    )
+
+                if fails_destination:
+                    self.assertEqual(
+                        events,
+                        [
+                            "service:source",
+                            "service:destination",
+                            "detach:destination",
+                            "detach:source",
+                        ],
+                    )
+                    self.assertEqual(
+                        load_cli_context(workspace).selected_session,
+                        "source",
+                    )
+                    self.assertNotIn(
+                        "destination service secret",
+                        "".join(callbacks.records),
+                    )
+                else:
+                    self.assertEqual(
+                        events,
+                        [
+                            "service:source",
+                            "service:destination",
+                            "detach:source",
+                            "detach:destination",
+                        ],
+                    )
+                    self.assertEqual(
+                        load_cli_context(workspace).selected_session,
+                        "destination",
+                    )
+                self.assertIsNone(controller._conversation_memory_service)
+
+    def test_successful_end_clears_memory_scope_before_lobby_input(self) -> None:
+        memory = ScriptedConversationMemoryService()
+        holder: dict[str, InteractiveController] = {}
+
+        def observe_cleared_scope(prompt: str) -> str:
+            """Assert successful end cleared the service before lobby input."""
+
+            self.assertEqual(prompt, "story[lobby]> ")
+            self.assertIsNone(
+                holder["controller"]._conversation_memory_service
+            )
+            return "/quit"
+
+        _workspace, _backend, _catalog, controller, _callbacks = (
+            self.prepared_attached_controller(
+                "/session end",
+                "yes",
+                observe_cleared_scope,
+            )
+        )
+        holder["controller"] = controller
+        with mock.patch.object(
+            controller_module,
+            "ConversationMemoryService",
+            return_value=memory,
+        ):
+            self.assertEqual(controller.run_session_lobby(), 0)
+        self.assertIsNone(controller._conversation_memory_service)
 
 
 class ControllerConversationCommandTests(ControllerTestCase):
