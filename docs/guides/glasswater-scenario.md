@@ -27,7 +27,8 @@ story smoke
 story
 ```
 
-Smoke uses a temporary synthetic workspace. Bare `story` opens this workspace's lobby.
+Smoke uses a separate temporary synthetic workspace. Bare `story` opens the
+initialized Glasswater workspace in the current directory.
 
 ## Attach a session and discuss subject A
 

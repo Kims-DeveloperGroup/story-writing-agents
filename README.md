@@ -75,7 +75,7 @@ For scripts and non-TTY automation, use `story run`; it never uses selected conv
 
 <a id="backends"></a>
 
-`AgentBackend` coordinates providers; Codex is implemented and reserved `gemini` fails preflight.
+`AgentBackend` coordinates providers. Codex is implemented; reserved `gemini` configuration fails preflight.
 `StoryRuntime` owns consensus, advisory sequencing, and retrieval authorization. See the [system design](docs/design/overview.md).
 
 <a id="minimal-python-api"></a>
