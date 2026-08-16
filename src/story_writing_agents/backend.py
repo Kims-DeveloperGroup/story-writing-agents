@@ -1884,8 +1884,9 @@ class AgentBackend:
     ) -> SessionSummary:
         """Build a summary from a validated manifest and current lease state.
 
-        The manifest is not mutated; lease reads and format or liveness errors
-        propagate from the persistence helpers.
+        The manifest is not mutated; lease read and format failures propagate,
+        while uncertain liveness probes are represented as
+        ``SessionLeaseState.UNVERIFIED``.
         """
 
         session = manifest["session_id"]
