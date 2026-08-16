@@ -570,6 +570,46 @@ class ConversationModelContractTests(unittest.TestCase):
         self.assertIs(hints["handler"], ConversationRetrievalActionHandler)
         self.assertIs(hints["return"], ConversationRetrievalReply)
 
+    def test_retrieval_redaction_variants_visit_mapping_values_not_keys(self) -> None:
+        secret = 'needle "한🙂"'
+        mapping = {
+            "kind": "search_conversations",
+            "query": secret,
+            "session_id": "fixed_session",
+        }
+        variants = set(AgentBackend._conversation_retrieval_value_variants(mapping))
+        canonical = json.dumps(
+            mapping,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        ascii_canonical = json.dumps(
+            mapping,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+        self.assertTrue(set(mapping).isdisjoint(variants))
+        self.assertTrue(
+            {
+                secret,
+                json.dumps(secret, ensure_ascii=False)[1:-1],
+                json.dumps(secret, ensure_ascii=True)[1:-1],
+                canonical,
+                ascii_canonical,
+                json.dumps(canonical, ensure_ascii=False)[1:-1],
+                json.dumps(ascii_canonical, ensure_ascii=True)[1:-1],
+            }.issubset(variants)
+        )
+        self.assertIn(
+            "kind",
+            AgentBackend._conversation_retrieval_value_variants(
+                {"label": "kind"}
+            ),
+        )
+
     def test_context_accepts_interleaving_sequence_gaps_and_exact_caps(self) -> None:
         first = _conversation_pair(
             "turn_one",

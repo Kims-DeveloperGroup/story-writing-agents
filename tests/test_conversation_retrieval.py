@@ -1845,22 +1845,44 @@ class ConversationRetrievalRuntimeFailureTests(ConversationRetrievalRuntimeTestC
             (_search_action(1, secret),),
             bound_factory=_FailingRetrievalBound,
         )
+        diagnostic_mapping = {
+            "kind": "search_conversations",
+            "session_id": _SESSION,
+            "conversation_id": self.selected.conversation_id,
+            "turn_id": _FIXED_TURN,
+            "action_index": 1,
+            "query": secret,
+        }
         canonical = json.dumps(
-            {
-                "kind": "search_conversations",
-                "query": secret,
-            },
+            diagnostic_mapping,
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
         )
+        ascii_canonical = json.dumps(
+            diagnostic_mapping,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        escaped_canonical = json.dumps(canonical, ensure_ascii=False)[1:-1]
+        ascii_escaped_canonical = json.dumps(
+            ascii_canonical,
+            ensure_ascii=True,
+        )[1:-1]
         backend.failure = RuntimeError(  # type: ignore[attr-defined]
             " | ".join(
                 (
+                    "kind",
+                    "query",
+                    "session_id",
                     secret,
                     json.dumps(secret, ensure_ascii=False),
                     json.dumps(secret, ensure_ascii=True),
                     canonical,
+                    ascii_canonical,
+                    escaped_canonical,
+                    ascii_escaped_canonical,
                 )
             )
         )
@@ -1869,11 +1891,16 @@ class ConversationRetrievalRuntimeFailureTests(ConversationRetrievalRuntimeTestC
 
         error = self.store.read(_SESSION, self.selected.conversation_id)[-1]
         self.assertIs(error.kind, ConversationEventKind.RUNTIME_ERROR)
+        for label in ("kind", "query", "session_id"):
+            self.assertIn(label, error.content)
         for variant in (
             secret,
             json.dumps(secret, ensure_ascii=False),
             json.dumps(secret, ensure_ascii=True),
             canonical,
+            ascii_canonical,
+            escaped_canonical,
+            ascii_escaped_canonical,
             "한🙂",
             "\\ud55c",
         ):

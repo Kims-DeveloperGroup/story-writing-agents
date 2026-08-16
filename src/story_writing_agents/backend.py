@@ -1783,9 +1783,7 @@ class AgentBackend:
                 visit(candidate.to_dict())
                 return
             if isinstance(candidate, Mapping):
-                for key, item in candidate.items():
-                    if isinstance(key, str):
-                        add_text(key)
+                for item in candidate.values():
                     visit(item)
                 try:
                     canonical = json.dumps(

@@ -979,9 +979,7 @@ class _RuntimeConversationRetrievalHandler:
             if isinstance(candidate, str):
                 self._diagnostic_values.add(candidate)
             elif isinstance(candidate, Mapping):
-                for key, item in candidate.items():
-                    if isinstance(key, str):
-                        self._diagnostic_values.add(key)
+                for item in candidate.values():
                     visit(item)
             elif isinstance(candidate, (list, tuple)):
                 for item in candidate:
