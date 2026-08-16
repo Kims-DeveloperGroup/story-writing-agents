@@ -31,9 +31,9 @@ reading the entire diff.
 Examples:
 
 ```text
-Add chapter outline validation
-Fix duplicate character assignments
-Document story state transitions
+Add request schema validation
+Fix duplicate task assignments
+Document session state transitions
 ```
 
 Add a body when context is needed. Explain why the change was made and note

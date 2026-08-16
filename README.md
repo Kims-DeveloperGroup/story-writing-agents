@@ -196,6 +196,17 @@ agents use [AGENT_TASK_RUNBOOK.md](AGENT_TASK_RUNBOOK.md) for the parent/child
 branch and worktree procedure. See [COMMIT_POLICY.md](COMMIT_POLICY.md) for
 commit rules.
 
+This repository consumes `repository-engineering@repository-engineering-kit`
+version `0.2.0` from the canonical
+[AI Engineering Kit](https://github.com/Kims-DeveloperGroup/AI-engineering-kit).
+The [repository-engineering lock](.codex/repository-engineering-kit.lock.json)
+records the immutable source commit and is the authoritative installed
+baseline. The projected repository-development agents under `.codex/agents/`
+are distinct from the four editable story-runtime roles under `config/agents/`;
+only the latter participate in story-writing debates. Consult the canonical
+[package documentation](https://github.com/Kims-DeveloperGroup/AI-engineering-kit/blob/c19213d182f91de06447bbf632c7dab0e5a898f6/plugins/repository-engineering/README.md)
+for installation, ownership, upgrade, and MCP guidance.
+
 ## Project Structure
 
 - `README.md` contains the project overview and contribution entry point.
@@ -204,6 +215,10 @@ commit rules.
 - `AGENT_TASK_RUNBOOK.md` defines the agent branch and worktree procedure.
 - `UserGuide.md` is the complete CLI workflow and troubleshooting guide.
 - `docs/` contains API, architecture, configuration, and security details.
+- `.codex/agents/` contains the projected repository-development agents.
+- `.codex/repository-engineering-kit.lock.json` records the immutable installed
+  projection baseline and provenance.
 - `src/story_writing_agents/` contains the Python runtime and concrete backend.
 - `tests/` contains the standard-library test suite.
-- `config/agents/` contains the four editable role prompts.
+- `config/agents/` contains the four editable story-runtime role prompts used
+  in novel-writing debates.
