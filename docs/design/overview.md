@@ -85,7 +85,10 @@ For advisory content the controller passes its exact memory service to
 `StoryRuntime.converse_with_retrieval()`. Runtime alone calls its search/read
 methods; backend receives only the handler protocol and framed observations.
 Direct `/search` and `/transcript` remain controller-to-service local reads.
-Controller never calls the event store or a bound agent directly.
+The controller's sole direct event store call is public
+`ConversationEventStore.read(...)`, which reads the selected transcript for
+`/history` and derives transcript totals and context facts for `/status`; it
+never appends, calls `read_context`, or calls a bound agent.
 
 ## Dependency direction
 
