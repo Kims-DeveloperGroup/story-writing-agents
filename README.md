@@ -7,7 +7,7 @@ Four fixed roles work from editable project documents, audit the same revision,
 and write a manuscript only after all three voting specialists agree.
 
 > **Available now:** workspace setup, exact directives, consensus, inspection,
-> persistent Codex sessions, a provider-free smoke test, and an interactive TTY
+> persistent Codex sessions, a provider-free conversation smoke test, and a TTY
 > shell. The shell provides global help/status; attached directives and safe run
 > inspection; conversation search; and selected history. A selected active
 > conversation also supports routed retrieval turns and prompt, fresh, or
@@ -37,8 +37,10 @@ rehash
 story smoke
 ```
 
-`story` and `story-writing-agents` are exact aliases. The smoke test uses no
-provider, credentials, or network; a pass includes `"provider_tested":false`.
+`story` and `story-writing-agents` are exact aliases. Smoke uses synthetic data
+without Codex, credential reads, a terminal, subprocesses, apps, web, or network.
+It validates local conversation persistence/routing, exact search, cited retrieval, fresh-runtime
+continuity, and included-context consensus; a pass includes `"provider_tested":false`.
 
 Create a workspace and run the first real debate:
 
@@ -56,20 +58,17 @@ initialized workspace and use its saved session selection. Scripts can pass
 
 ## Choose the next page
 
-- [Getting started](docs/getting-started.md) explains installation and the first
-  run.
+- [Getting started](docs/getting-started.md) explains installation and the first run.
 - [Documentation index](docs/INDEX.md) shows what is implemented and routes
   each task, exact contract, design topic, and operational concern.
-- [Workspace guide](docs/guides/workspaces.md) explains the editable project
-  files.
+- [Workspace guide](docs/guides/workspaces.md) explains the editable project files.
 - [Story sessions](docs/guides/story-sessions.md) shows shell management,
   conversation reads, cited retrieval, and consensus.
 - [Consensus-run guide](docs/guides/consensus-runs.md) covers prompts, drafts,
   outputs, and round limits.
 - [CLI reference](docs/reference/cli.md) is the exact installed command contract.
 - [Package API](docs/reference/package-api.md) starts the Python reference.
-- [Security and provider privacy](docs/operations/privacy-and-provider.md) should
-  be read before using sensitive material.
+- [Security and provider privacy](docs/operations/privacy-and-provider.md) should be read before using sensitive material.
 
 <a id="backends"></a>
 
@@ -88,10 +87,12 @@ For Python integrations, start with the [runtime API](docs/reference/runtime-api
 
 - Provider calls have a timeout but no automatic retry or rate limiter.
 - Deadlocked and interrupted debates cannot resume under the same debate ID.
-- Workspace content, logs, provider metadata, agent state, and manuscripts are
-  plaintext.
-- Artifact replacement is atomic per file with best-effort multi-file rollback,
-  not a power-loss-safe transaction.
+- Workspace content, logs, provider metadata, agent state, and manuscripts are plaintext.
+- Artifact replacement is atomic per file with best-effort multi-file rollback, not a power-loss-safe transaction.
+- Smoke's explicit workspace is not read-only and retains plaintext diagnostics;
+  abrupt termination can interrupt temporary cleanup. A pass does not validate
+  provider/model or terminal behavior, external integration, or story quality.
+  See the [smoke guide](docs/guides/smoke-test.md).
 - The interactive shell accepts one advisory line; bare `/run` owns multiline
   composition. Process-level PTY tests verify TTY gating and VINTR/VEOF delivery
   on supported POSIX. Retrieval is active-only and bounded; standalone artifact
@@ -112,8 +113,7 @@ Without a usable POSIX PTY, the focused suite skips with an explicit reason; it 
 
 <a id="contribution-guidelines"></a>
 
-Contributors should read [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md),
-[AGENT_TASK_RUNBOOK.md](AGENT_TASK_RUNBOOK.md), and [COMMIT_POLICY.md](COMMIT_POLICY.md).
+Contributors should read [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md), [AGENT_TASK_RUNBOOK.md](AGENT_TASK_RUNBOOK.md), and [COMMIT_POLICY.md](COMMIT_POLICY.md).
 
 <a id="project-structure"></a>
 
