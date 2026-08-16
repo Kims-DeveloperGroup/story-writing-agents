@@ -509,15 +509,18 @@ class InteractiveCliPtyTests(unittest.TestCase):
         )
 
     def _provider_records(self) -> list[dict[str, Any]]:
-        """Read every complete deterministic fake-provider JSONL record."""
+        """Read one shared-lock-consistent fake-provider JSONL snapshot."""
 
         if not self.provider_log.exists():
             return []
-        return [
-            json.loads(line)
-            for line in self.provider_log.read_text(encoding="utf-8").splitlines()
-            if line
-        ]
+        assert fcntl is not None, "POSIX PTY tests require fcntl"
+        with self.provider_log.open("r", encoding="utf-8") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
+            return [
+                json.loads(line)
+                for line in handle.read().splitlines()
+                if line
+            ]
 
     def _wait_for_provider_record(
         self,
