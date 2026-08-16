@@ -177,17 +177,19 @@ every intermediate arrow. The current runtime graph is acyclic.
   leases, the lazily created persistent workspace-global `.lease-claims.lock`
   OS advisory guard that serializes lease-claim and stale-reclaim transactions,
   persisted thread metadata, shared debate/conversation/retrieval per-thread
-  locks, structured Codex process validation, timeout/cancellation taint
-  handling, cleanup, and per-instance `atexit` registration. One retrieval
-  thread lock covers the complete repeated-call action loop and synchronous
+  locks, structured Codex process and response validation,
+  timeout/cancellation taint handling, cleanup, and per-instance `atexit`
+  registration. One retrieval thread lock covers the complete repeated-call
+  action loop and synchronous
   handler invocations. The backend owns the exact Codex action schema, initial
   and continuation payloads, canonical observation framing handoff, provider
-  timeout/cancellation behavior, incomplete-history taint, and diagnostic
-  redaction; it receives no memory service and performs no retrieval search or
-  transcript-storage call. Debate requests add the canonical included-context
-  event list to provider payloads only when present; legacy and fresh requests
-  retain the exact context-free payload, while included event content
-  participates in diagnostic redaction.
+  timeout/cancellation behavior, incomplete-history taint, and fixed
+  provider-value-free process/response-validation diagnostics. It drains both
+  subprocess output streams but discards and never decodes stderr after a
+  nonzero Codex exit; it receives no memory service and performs no retrieval
+  search or transcript-storage call. Debate requests add the canonical
+  included-context event list to provider payloads only when present; legacy
+  and fresh requests retain the exact context-free payload.
 - **Primary verification/documentation:** `tests/test_codex_backend.py`,
   `tests/test_session_lifecycle.py`, `docs/reference/backend-and-sessions.md`,
   `docs/reference/conversation-retrieval.md`,
@@ -213,8 +215,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   session-lobby run begins, while the CLI closes a backend if construction
   fails before that ownership transfer.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
-  `tests/test_cli_context.py`, `tests/test_smoke_cli.py`,
-  `docs/reference/cli.md`, and `docs/getting-started.md`.
+  `tests/test_cli_context.py`, `tests/test_smoke_cli.py`, and
+  `tests/test_interactive_pty.py` for primary process-level POSIX PTY
+  verification; `docs/reference/cli.md` and `docs/getting-started.md`.
 
 ### `story_writing_agents.cli_context`
 
@@ -491,9 +494,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_interactive_conversation.py`,
   `tests/test_interactive_cancellation.py`, `tests/test_session_lifecycle.py`,
   `tests/test_cli_context.py`, `tests/test_interactive_commands.py`,
-  `tests/test_interactive_terminal.py`, and
+  `tests/test_interactive_terminal.py`,
   `tests/test_interactive_search.py` for real-filesystem shell search and
-  transcript-read integration; `docs/design/session-lifecycle.md`,
+  transcript-read integration, and `tests/test_interactive_pty.py` for primary
+  process-level POSIX PTY lifecycle verification;
+  `docs/design/session-lifecycle.md`,
   `docs/reference/cli.md`, `docs/reference/interactive-terminal.md`, and
   `docs/reference/conversation-retrieval.md` verify the current collaborator,
   lifecycle, and retrieval-presentation contracts.
@@ -782,7 +787,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   reply or sanitized runtime-error append. Retrieval actions, observations,
   progress, and sources have no persistence schema or artifact.
 - `AgentBackend` owns the shared structured Codex subprocess, thread,
-  per-call timeout, cancellation, diagnostic redaction, and taint lifecycle;
+  per-call timeout, cancellation, and taint lifecycle; it drains both subprocess
+  streams, discards nonzero-exit stderr without decoding it, and uses fixed
+  provider-value-free process/response-validation diagnostics.
   `BoundAgent` is the immutable per-definition dispatch handle for debate,
   one-step conversation, and retrieval calls. The backend owns retrieval
   provider schemas, initial/continuation payloads, repeated calls, and framing

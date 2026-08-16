@@ -92,28 +92,28 @@ For Python integrations, start with the [runtime API](docs/reference/runtime-api
   plaintext.
 - Artifact replacement is atomic per file with best-effort multi-file rollback,
   not a power-loss-safe transaction.
-- The interactive shell accepts one line per advisory turn; its multiline
-  composer is used only by bare `/run`. Controller cancellation is implemented
-  once `KeyboardInterrupt` reaches that boundary; end-to-end PTY signal delivery
-  remains tracked separately. Agent retrieval is current-session, active-only,
-  and bounded; standalone artifact commands remain unavailable. See
-  [bounded conversation retrieval](docs/reference/conversation-retrieval.md).
+- The interactive shell accepts one advisory line; bare `/run` owns multiline
+  composition. Process-level PTY tests verify TTY gating and VINTR/VEOF delivery
+  on supported POSIX. Retrieval is active-only and bounded; standalone artifact
+  commands remain unavailable. See [conversation retrieval](docs/reference/conversation-retrieval.md).
 
 ## Development
 
 <a id="verification"></a>
 
-Run the standard-library tests with:
+Run the full standard-library suite or the focused POSIX PTY boundary with:
 
 ```bash
 python -m unittest discover -s tests -v
+PYTHONPATH=src python -m unittest tests.test_interactive_pty -v
 ```
+
+Without a usable POSIX PTY, the focused suite skips with an explicit reason; it does not emulate Windows consoles.
 
 <a id="contribution-guidelines"></a>
 
 Contributors should read [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md),
-[AGENT_TASK_RUNBOOK.md](AGENT_TASK_RUNBOOK.md), and
-[COMMIT_POLICY.md](COMMIT_POLICY.md).
+[AGENT_TASK_RUNBOOK.md](AGENT_TASK_RUNBOOK.md), and [COMMIT_POLICY.md](COMMIT_POLICY.md).
 
 <a id="project-structure"></a>
 

@@ -28,7 +28,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 | Ask an agent to retrieve cited conversation history | Selected shell conversation; additive Python runtime API; active records in the current session only |
 | Persist and send one explicitly addressed one-step turn | Existing `StoryRuntime.converse()` Python API |
 | Run consensus with included, fresh, or draft-file input | Selected active shell conversation; noninteractive CLI and Python API remain available |
-| Cancel active advisory/consensus work or partial local rendering | Installed shell after `KeyboardInterrupt` reaches the controller; PTY signal delivery remains Issue #15 |
+| Cancel active advisory/consensus work or partial local rendering | Installed shell; process-level PTY verified on supported POSIX. [Delivery and platform scope](operations/recovery-and-limitations.md#posix-pty-boundary) |
 | Show one selected transcript snapshot and context accounting | Attached shell `/history`; active selection required |
 | Standalone artifact commands | Not implemented in the shell |
 

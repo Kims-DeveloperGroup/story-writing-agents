@@ -84,7 +84,6 @@ from .models import (
 from .workspace import Workspace
 
 
-_MAX_DIAGNOSTIC_LENGTH = 4096
 _SESSION_SCHEMA_VERSION = 1
 _LEASE_SCHEMA_VERSION = 1
 _SESSION_DIRECTORY = "agent_states/orchestrator_state/provider_sessions"
@@ -623,7 +622,7 @@ class AgentBackend:
         The request is serialized without changing the legacy key set unless an
         included conversation window is present. Provider and staging resources
         retain their established lifecycle; protocol, process, and decode errors
-        propagate with request, message, state, and context content redacted.
+        use provider-safe diagnostics that never reproduce response values.
         """
 
         self._ensure_open()
@@ -632,8 +631,7 @@ class AgentBackend:
             reply = self._decode_reply(request.phase, response_text)
             if reply.revision_id != request.revision_id:
                 raise BackendProtocolError(
-                    f"Codex reply targets {reply.revision_id!r}, "
-                    f"expected {request.revision_id!r}"
+                    "Codex reply revision_id does not match its request"
                 )
             if (
                 request.phase
@@ -662,14 +660,6 @@ class AgentBackend:
             session_id=request.session_id,
             schema=self._output_schema(request.phase),
             payload=self._request_payload(request),
-            sensitive_values=(
-                request.task,
-                request.user_payload,
-                request.candidate_payload or "",
-                *(message.content for message in request.messages),
-                *(entry.content for entry in request.agent_state),
-                *self._debate_context_sensitive_values(request),
-            ),
             decode=decode,
         )
 
@@ -684,10 +674,6 @@ class AgentBackend:
             session_id=request.session_id,
             schema=self._conversation_output_schema(),
             payload=self._conversation_request_payload(request),
-            sensitive_values=self._conversation_sensitive_values(
-                request,
-                bound_agent.staging_directory,
-            ),
             decode=lambda response_text: self._decode_conversation_reply(
                 request,
                 response_text,
@@ -717,9 +703,6 @@ class AgentBackend:
         observation_frame: str | None = None
         after_read = False
         pending_observation = False
-        sensitive_values: set[str] = set(
-            self._conversation_retrieval_sensitive_values(request)
-        )
         try:
             for action_index in range(
                 1,
@@ -747,16 +730,7 @@ class AgentBackend:
                     session_id=request.session_id,
                     schema=self._conversation_retrieval_action_schema(),
                     payload=payload,
-                    sensitive_values=tuple(
-                        sorted(
-                            sensitive_values,
-                            key=lambda value: (-len(value), value),
-                        )
-                    ),
                     decode=self._decode_conversation_retrieval_action,
-                )
-                sensitive_values.update(
-                    self._conversation_retrieval_value_variants(action)
                 )
                 if type(action) in {
                     ConversationRetrievalSearchAction,
@@ -845,12 +819,6 @@ class AgentBackend:
                     )
                 observation_frame = (
                     serialize_conversation_retrieval_observation(outcome)
-                )
-                sensitive_values.update(
-                    self._conversation_retrieval_value_variants(outcome)
-                )
-                sensitive_values.update(
-                    self._conversation_retrieval_value_variants(observation_frame)
                 )
                 if type(action) is ConversationRetrievalReadAction:
                     after_read = True
@@ -975,9 +943,15 @@ class AgentBackend:
         session_id: str,
         schema: Mapping[str, Any],
         payload: Mapping[str, Any],
-        sensitive_values: tuple[str, ...],
         decode: Callable[[str], _StructuredReply],
     ) -> _StructuredReply:
+        """Run one structured Codex call with fixed, stderr-free exit errors.
+
+        Both output streams are drained. Standard output and the final response
+        retain their existing validation, while nonzero stderr is never decoded
+        or reproduced in the raised ``BackendProtocolError``.
+        """
+
         self._ensure_open()
         session = session_id
         self._ensure_session_lease(session)
@@ -1017,7 +991,7 @@ class AgentBackend:
                 ) from exc
 
             try:
-                stdout, stderr = await asyncio.wait_for(
+                stdout, _stderr = await asyncio.wait_for(
                     process.communicate(
                         json.dumps(
                             payload,
@@ -1043,14 +1017,8 @@ class AgentBackend:
             if process.returncode != 0:
                 if thread_id is not None:
                     self._taint_thread(session, bound_agent.definition)
-                diagnostic = self._diagnostic(
-                    stderr.decode("utf-8", errors="replace"),
-                    bound_agent.staging_directory,
-                    sensitive_values,
-                )
-                suffix = f": {diagnostic}" if diagnostic else ""
                 raise BackendProtocolError(
-                    f"Codex CLI exited with status {process.returncode}{suffix}"
+                    f"Codex CLI exited with status {process.returncode}"
                 )
 
             try:
@@ -1269,27 +1237,6 @@ class AgentBackend:
                 for event in request.conversation_context.events
             ]
         return payload
-
-    @staticmethod
-    def _debate_context_sensitive_values(
-        request: AgentRequest,
-    ) -> tuple[str, ...]:
-        """Return raw and JSON-escaped included-context values for redaction."""
-
-        if request.conversation_context is None:
-            return ()
-        variants: set[str] = set()
-        for event in request.conversation_context.events:
-            value = event.content
-            variants.update(
-                (
-                    value,
-                    json.dumps(value, ensure_ascii=False)[1:-1],
-                    json.dumps(value, ensure_ascii=True)[1:-1],
-                )
-            )
-        variants.discard("")
-        return tuple(sorted(variants, key=lambda item: (-len(item), item)))
 
     @staticmethod
     def _conversation_request_payload(
@@ -1660,174 +1607,6 @@ class AgentBackend:
                 "Codex conversation retrieval response has invalid values"
             ) from exc
 
-    def _conversation_sensitive_values(
-        self,
-        request: ConversationRequest,
-        staging_directory: Path,
-    ) -> tuple[str, ...]:
-        values = (
-            request.content,
-            *(event.content for event in request.context.events),
-        )
-        variants: set[str] = set()
-        for value in values:
-            encoded_values = (
-                value,
-                json.dumps(value, ensure_ascii=False)[1:-1],
-                json.dumps(value, ensure_ascii=True)[1:-1],
-            )
-            for encoded in encoded_values:
-                sanitized = _CONTROL_CHARACTERS.sub("?", encoded)
-                variants.update((encoded, sanitized))
-                variants.add(
-                    sanitized.replace(
-                        str(staging_directory),
-                        "<agent-directory>",
-                    ).replace(str(self.workspace.root), "<workspace>")
-                )
-        return tuple(
-            sorted(variants, key=lambda variant: (-len(variant), variant))
-        )
-
-    def _conversation_retrieval_sensitive_values(
-        self,
-        request: ConversationRetrievalRequest,
-    ) -> tuple[str, ...]:
-        """Return raw and escaped current retrieval request secrets.
-
-        Current content, projected context, correlations, and serialized request
-        variants are collected without I/O or mutation. They are used only to
-        redact provider diagnostics; malformed request data may raise before a
-        provider process starts.
-        """
-
-        values: list[object] = [
-            request.session_id,
-            request.conversation_id,
-            request.turn_id,
-            request.agent_id,
-            request.content,
-            self._conversation_retrieval_context_projection(request),
-        ]
-        values.extend(event.content for event in request.context.events)
-        variants: set[str] = set()
-        for value in values:
-            variants.update(self._conversation_retrieval_value_variants(value))
-        variants.discard("")
-        return tuple(sorted(variants, key=lambda item: (-len(item), item)))
-
-    @classmethod
-    def _conversation_retrieval_value_variants(
-        cls,
-        value: object,
-    ) -> tuple[str, ...]:
-        """Return deterministic raw, canonical, and JSON-escaped redactions."""
-
-        collected: set[str] = set()
-
-        def add_text(text: str) -> None:
-            """Add raw and both JSON string-escaped forms for one value."""
-
-            if not text:
-                return
-            collected.add(text)
-            collected.add(json.dumps(text, ensure_ascii=False)[1:-1])
-            collected.add(json.dumps(text, ensure_ascii=True)[1:-1])
-
-        def visit(candidate: object) -> None:
-            """Visit only built-in containers and retrieval contract values."""
-
-            if isinstance(candidate, str):
-                add_text(candidate)
-                return
-            if type(candidate) is ConversationRetrievalSearchAction:
-                mapping: object = {
-                    "kind": candidate.kind.value,
-                    "session_id": candidate.session_id,
-                    "conversation_id": candidate.conversation_id,
-                    "turn_id": candidate.turn_id,
-                    "action_index": candidate.action_index,
-                    "query": candidate.query,
-                }
-                visit(mapping)
-                return
-            if type(candidate) is ConversationRetrievalReadAction:
-                mapping = {
-                    "kind": candidate.kind.value,
-                    "session_id": candidate.session_id,
-                    "conversation_id": candidate.conversation_id,
-                    "turn_id": candidate.turn_id,
-                    "action_index": candidate.action_index,
-                    "citation_id": candidate.citation_id,
-                    "start_sequence": candidate.start_sequence,
-                    "end_sequence": candidate.end_sequence,
-                }
-                visit(mapping)
-                return
-            if type(candidate) is ConversationRetrievalAnswerAction:
-                mapping = {
-                    "kind": candidate.kind.value,
-                    "session_id": candidate.session_id,
-                    "conversation_id": candidate.conversation_id,
-                    "turn_id": candidate.turn_id,
-                    "action_index": candidate.action_index,
-                    "content": candidate.content,
-                    "citation_ids": list(candidate.citation_ids),
-                }
-                visit(mapping)
-                return
-            if type(candidate) in {
-                ConversationRetrievalSearchObservation,
-                ConversationRetrievalReadObservation,
-            }:
-                visit(candidate.to_dict())
-                return
-            if isinstance(candidate, Mapping):
-                for item in candidate.values():
-                    visit(item)
-                try:
-                    canonical = json.dumps(
-                        candidate,
-                        ensure_ascii=False,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    )
-                    ascii_canonical = json.dumps(
-                        candidate,
-                        ensure_ascii=True,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    )
-                except (TypeError, ValueError):
-                    return
-                add_text(canonical)
-                add_text(ascii_canonical)
-                return
-            if isinstance(candidate, (list, tuple)):
-                for item in candidate:
-                    visit(item)
-                try:
-                    canonical = json.dumps(
-                        candidate,
-                        ensure_ascii=False,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    )
-                    ascii_canonical = json.dumps(
-                        candidate,
-                        ensure_ascii=True,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    )
-                except (TypeError, ValueError):
-                    return
-                add_text(canonical)
-                add_text(ascii_canonical)
-
-        visit(value)
-        collected.discard("")
-        return tuple(sorted(collected, key=lambda item: (-len(item), item)))
-
     @staticmethod
     def _conversation_output_schema() -> dict[str, Any]:
         properties = {
@@ -1856,6 +1635,8 @@ class AgentBackend:
         request: ConversationRequest,
         text: str,
     ) -> ConversationReply:
+        """Decode one exact correlated reply with fixed provider-safe errors."""
+
         def reject_duplicate_fields(
             pairs: list[tuple[str, Any]],
         ) -> dict[str, Any]:
@@ -1863,7 +1644,7 @@ class AgentBackend:
             for key, value in pairs:
                 if key in result:
                     raise BackendProtocolError(
-                        f"Codex conversation response duplicates field: {key}"
+                        "Codex conversation response duplicates a field"
                     )
                 result[key] = value
             return result
@@ -1984,6 +1765,8 @@ class AgentBackend:
 
     @staticmethod
     def _decode_reply(phase: Phase, text: str) -> AgentReply:
+        """Decode one phase reply without echoing provider values in errors."""
+
         value = json.loads(text)
         if not isinstance(value, dict):
             raise BackendProtocolError("Codex final response must be a JSON object")
@@ -2024,11 +1807,11 @@ class AgentBackend:
                 filename = _required_text(raw, "filename")
                 if filename not in CORE_DOCUMENTS:
                     raise BackendProtocolError(
-                        f"Codex core update filename is not allowed: {filename}"
+                        "Codex core update filename is not allowed"
                     )
                 if filename in updates:
                     raise BackendProtocolError(
-                        f"Codex returned duplicate core update: {filename}"
+                        "Codex returned a duplicate core update filename"
                     )
                 updates[filename] = _text(raw, "content")
             return AgentReply.finalization(revision_id, updates)
@@ -2672,40 +2455,6 @@ class AgentBackend:
     @staticmethod
     def _lease_relative(session_id: str) -> str:
         return f"{_SESSION_DIRECTORY}/{session_id}.lease.json"
-
-    def _diagnostic(
-        self,
-        value: str,
-        staging_directory: Path,
-        sensitive_values: tuple[str, ...],
-    ) -> str:
-        def sanitize(candidate: str) -> str:
-            candidate = _CONTROL_CHARACTERS.sub("?", candidate)
-            candidate = candidate.replace(
-                str(staging_directory),
-                "<agent-directory>",
-            )
-            return candidate.replace(str(self.workspace.root), "<workspace>")
-
-        sanitized = sanitize(value)
-        transformed_sensitive = {
-            sanitize(sensitive)
-            for sensitive in sensitive_values
-            if sensitive
-        }
-        for sensitive in sorted(
-            transformed_sensitive,
-            key=lambda item: (-len(item), item),
-        ):
-            sanitized = sanitized.replace(sensitive, "<redacted>")
-        sanitized = sanitized.strip()
-        if len(sanitized) > _MAX_DIAGNOSTIC_LENGTH:
-            sanitized = (
-                sanitized[-(_MAX_DIAGNOSTIC_LENGTH - 16) :]
-                + " [truncated]"
-            )
-        return sanitized
-
 
 def _parse_timestamp(value: Any, *, label: str) -> datetime:
     if not isinstance(value, str) or not value:
