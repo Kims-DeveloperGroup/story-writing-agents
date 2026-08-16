@@ -58,6 +58,10 @@ conversation_subject conversation_archive help quit parse_error
 `/agent`, `/?`, and `/exit` alias `/to`, `/help`, and `/quit`. Flags describe
 possible provider/artifact use, not shell gates. Parsing performs no I/O.
 
+Registry membership is not main-prompt availability: the installed shell
+rejects standalone `/compose`, `/send`, and `/cancel`. Bare `/run` composition
+intercepts only `/send` and `/cancel`.
+
 ## Line contract
 
 One final `LF` or `CRLF` is framing; any other line break returns

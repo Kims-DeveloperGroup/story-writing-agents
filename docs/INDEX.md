@@ -35,7 +35,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 ## Start and concepts
 
 - [Project landing page](../README.md)
-- [Getting started](getting-started.md)
+- [Getting started with bare `story`](getting-started.md)
 - [Glossary for quick term lookup](glossary.md)
 - [Core concepts and relationships](concepts.md)
 
@@ -43,11 +43,11 @@ Use this index to find one canonical answer instead of searching a long manual.
 
 - [Workspaces](guides/workspaces.md)
 - [Story sessions and subject conversations](guides/story-sessions.md)
+- [Glasswater interactive end-to-end journey](guides/glasswater-scenario.md)
 - [Provider-free smoke test](guides/smoke-test.md)
 - [Consensus runs](guides/consensus-runs.md)
 - [Directives](guides/directives.md)
 - [Inspection and recovery](guides/inspection-and-recovery.md)
-- [Glasswater end-to-end scenario](guides/glasswater-scenario.md)
 - [Troubleshooting](guides/troubleshooting.md)
 
 ## Exact reference

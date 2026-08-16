@@ -1,118 +1,98 @@
 # Story sessions and conversations
 
-> **Availability:** bare `story` and `story chat` open the TTY shell. After
-> attachment, a selected active conversation supports retrieval-enabled turns
-> and consensus runs. Global status/help, attached management, and local
-> conversation reads are also available.
+> **Availability:** bare `story` and `story chat` open the TTY shell. An attached
+> session supports subject management and local reads; advisory turns and
+> consensus additionally require one selected active conversation.
 
 Key terms: **story session**—durable provider-work scope; **conversation**—one
 subject and visible transcript; **selection**—the active conversation used by
-writes and runs; **sticky target**—the responder for ordinary advisory lines;
-**source**—the stable conversation or event cited beneath an answer.
+writes and runs; **sticky target**—the responder for ordinary advisory lines.
 
-## Scenario: discuss, then run
+## Enter and attach
 
-Attach the `draft` session and create a subject conversation:
-
-```console
-$ cd river-story
-$ story chat draft
-```
+Run `story` from an initialized workspace. With no saved session it opens
+`story[lobby]>`; with an active saved session it attaches automatically.
 
 ```text
-/conversation new Opening scene
-/to plot
-Should the reveal happen before the midpoint?
+/session list
+/session new draft
 ```
 
-The responder may answer directly or retrieve active same-session conversations
-and cited complete turns. The shell shows safe `[context]` progress, reply, then
-ordered sources; only the user and final outcome enter the transcript.
-Now compose a consensus prompt:
+`/session resume [NAME]` attaches an active session or resumes an inactive one.
+`story chat draft` is the explicit startup equivalent. Attachment resets the
+sticky target to `lead`. `/quit`, `/exit`, or EOF releases the lease without
+deactivating the session. `/session end` asks for confirmation, deactivates it,
+and returns to the lobby while retaining saved selections.
+
+## Manage subjects and routing
+
+| Command | Effect |
+| --- | --- |
+| `/conversation new [SUBJECT]` | Create and select an active subject. |
+| `/conversation list [--all] [QUERY]` | List in catalog order; optionally include archives or filter subjects. |
+| `/conversation use ID` | Select an active exact ID or displayed unique handle. |
+| `/conversation subject SUBJECT` | Rename the selected identity. |
+| `/conversation archive [ID]` | Confirm selected archive, or archive another identity directly. |
+
+Copy handles shown by creation, list, search, or transcript output; a subject can
+change but its generated identity cannot. All responders share the selected
+transcript—direct routing is not a private channel.
+
+At the main prompt, an ordinary line or `/say TEXT` uses the sticky target.
+`@plot TEXT` is one-shot; `/to character` changes later ordinary turns. Advisory
+input is exactly one line. Conversation changes preserve the target; session
+attach, switch, or end resets it to `lead`.
+
+## Choose the right memory operation
+
+| Operation | What it does |
+| --- | --- |
+| `/history [COUNT]` | Local selected-transcript snapshot plus context accounting; no provider. |
+| `/search QUERY` | Local bounded literal search over active subjects and visible events; no selection needed. |
+| `/transcript ID [COUNT] [--from N]` | Local fresh bounded page from active or archived identity; does not select it. |
+| One advisory question | The agent may directly answer or request bounded active same-session search/read actions. |
+
+Agent retrieval is conditional, not another spelling of `/search`. When chosen,
+the shell shows safe `[context]` progress, the reply, and ordered sources; only
+the user and final outcome enter the transcript. Local reads never call Codex,
+change selection, or enter transcript data.
+
+## Turn a selected discussion into consensus
 
 ```text
 /run
-Draft the opening using the decision we just discussed.
+Draft the opening using the decisions above.
+Keep the viewpoint close and the final discovery concrete.
 /send
 ```
 
-Bare `/run` opens the existing multiline run composer. Only `/send` starts the
-debate; `/cancel` or an input interrupt discards the local composition. The
-runtime reads the selected conversation once and gives that same bounded
-snapshot to every debate phase.
+Bare `/run` opens the multiline composer. At the main prompt, standalone
+`/compose`, `/send`, and `/cancel` are unavailable. Inside this composer only,
+`/send` starts the debate and `/cancel` or Ctrl-C discards the local buffer.
 
-Compare a fresh prompt:
+The runtime reads one bounded selected-conversation snapshot and supplies that
+same snapshot to every debate phase. Alternatives are:
 
 ```text
 /run --fresh Draft an unrelated opening in a train station.
-```
-
-This records which conversation was selected but reads and sends none of its
-events. To audit a complete local draft with selected context:
-
-```text
 /draft-file ./working/opening.md
 ```
 
-The file is read exactly as strict UTF-8 from the shell process's current
-directory. Path and error details are in the [CLI reference](../reference/cli.md#interactive-consensus).
+Fresh mode records selected identity but reads/sends no transcript. Draft-file
+mode reads strict UTF-8 from the shell process's current directory and includes
+the selected snapshot. Runs may write debates and artifacts but never append or
+change conversation state.
 
-## Outcomes and unchanged conversation state
+## Inspect outcomes and recover
 
-The shell shows typed progress, then one of three expected outcomes:
+`/status` is global. Attached `/inspect [ID|last]` exposes safe debate metadata;
+`last` is this process's latest accepted started run for that session, not the
+newest file. Expected consensus, deadlock, and handled failure return to the same
+prompt. A deadlock or interrupted debate needs a new ID.
 
-- consensus reports revision, round count, manuscript path, and core updates;
-- deadlock reports a fixed safe error and requires a new run; or
-- handled failure reports a fixed category such as provider, transcript,
-  workspace, or artifact failure.
-
-Each expected outcome returns to the same prompt. Consensus commands can write
-debate records and approved artifacts, but they do not append the conversation
-transcript or change its selection, sticky target, session attachment, or
-conversation-memory binding. Fresh mode still requires a selected active
-conversation so its identity can be recorded.
-
-During `[waiting]`, the first Ctrl-C recovers before entry only when the Runner is
-quiescent—without a runtime/provider call or durable mutation—or after entry when
-runtime cancellation joins. Both preserve scope and fixed copy;
-only entered cancellation may store fixed runtime error or restart a
-provider thread. Consensus Ctrl-C cancels before start without a debate or
-reports a durable, nonresumable interruption; retry with `/run`. Cancelling a
-search/transcript/history leaves only completed rows. See the
-[exact records](../reference/interactive-terminal.md#exact-cancellation-records).
-
-## Find or route conversation work
-
-`/search QUERY` scans active subjects and visible user/reply text locally.
-`/transcript ID [COUNT] [--from SEQUENCE]` reads a fresh bounded page from an
-active or archived conversation. Neither command selects a conversation or
-calls the provider; they are explicit inspection, not agent retrieval.
-
-Ordinary lines and `/say TEXT` use the sticky target; `@AGENT TEXT` is one-shot.
-Changing conversations preserves the target. Attaching, switching, or ending a
-story session resets it to `lead`. All responders share the selected transcript;
-direct routing is not a private channel.
-
-## Manage and audit without provider work
-
-| Command | Scope |
-| --- | --- |
-| `/help [COMMAND]` or `/?` | Global, registry-derived help. |
-| `/status` | Global shell/session/conversation/context/last-run snapshot. |
-| `/language`, `/persona`, `/reset` | Attached; update only runtime overrides. |
-| `/inspect [ID\|last]` | Attached; safe debate metadata and context counts. |
-| `/history [COUNT]` | Attached active selection; one transcript/context snapshot. |
-
-History includes every visible event kind, unmatched users, and whitespace;
-count selects the newest events but displays them chronologically. Inspection
-never prints raw messages, candidates, errors, actions, context content, or
-provider fields. `last` means the latest accepted `started` run retained for
-this process and session, not the newest file. Commands preserve shell/story
-state except that successful directives atomically change overrides. See the
-[CLI management contract](../reference/cli.md#interactive-streams) and
-[Inspection and recovery](inspection-and-recovery.md).
-
-Exact shell grammar lives in the [CLI reference](../reference/cli.md), local
-search in [Conversation search](../reference/conversation-search.md), agent
-actions in [Bounded retrieval](../reference/conversation-retrieval.md), and
-provider exposure in [Privacy](../operations/privacy-and-provider.md).
+Main-prompt Ctrl-C takes no action. Advisory/consensus cancellation recovers only
+at documented controller boundaries; a cancelled local read keeps completed
+rows. See [Inspection and recovery](inspection-and-recovery.md), the
+[CLI contract](../reference/cli.md), [local search](../reference/conversation-search.md),
+[agent retrieval](../reference/conversation-retrieval.md), and
+[recovery limits](../operations/recovery-and-limitations.md).
