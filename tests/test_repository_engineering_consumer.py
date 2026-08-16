@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 LOCK_PATH = ROOT / ".codex" / "repository-engineering-kit.lock.json"
 START_MARKER = b"<!-- repository-engineering:start -->"
 END_MARKER = b"<!-- repository-engineering:end -->"
-SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
+SHA256_RE = re.compile(r"\A[0-9a-f]{64}\Z")
 
 EXPECTED_TARGETS = {
     ".codex/agents/documentation_maintainer.toml",
@@ -116,7 +116,7 @@ class RepositoryEngineeringConsumerTests(unittest.TestCase):
         self.assertEqual(self.lock["profiles"], ["core", "github", "python"])
 
         source = self.lock["installationSource"]
-        self.assertRegex(source["immutableRef"], r"[0-9a-f]{40}\Z")
+        self.assertRegex(source["immutableRef"], r"\A[0-9a-f]{40}\Z")
         self.assertRegex(source["marketplaceManifestSha256"], SHA256_RE)
         _safe_relative_path(source["marketplaceManifest"])
         _safe_relative_path(source["pluginSource"])
