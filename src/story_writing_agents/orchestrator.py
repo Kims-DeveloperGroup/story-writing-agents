@@ -161,6 +161,7 @@ class _ConversationRetrievalProgressEmitter:
         if inspect.isawaitable(outcome):
             if inspect.iscoroutine(outcome):
                 outcome.close()
+            del outcome
             cause = TypeError(
                 "conversation retrieval progress sink must be synchronous"
             )

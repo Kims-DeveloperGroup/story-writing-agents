@@ -768,6 +768,7 @@ class AgentBackend:
                 if inspect.isawaitable(outcome):
                     if inspect.iscoroutine(outcome):
                         outcome.close()
+                    del outcome
                     raise BackendProtocolError(
                         "conversation retrieval handler returned an awaitable"
                     )

@@ -10,6 +10,7 @@ import os
 import subprocess
 import sys
 import unittest
+import warnings
 import weakref
 from collections.abc import Awaitable, Callable
 from dataclasses import MISSING, FrozenInstanceError, fields, replace
@@ -1657,6 +1658,113 @@ class ConversationRetrievalRuntimeFailureTests(ConversationRetrievalRuntimeTestC
         )
         self.assertNotIn("SECRET", events[-1].content)
         self.assertIn("ConversationRetrievalObserverError", events[-1].content)
+
+        class CustomProgressAwaitable:
+            """Expose a non-coroutine await protocol around one payload."""
+
+            def __init__(
+                self,
+                payload: mock.Mock,
+                await_calls: list[None],
+            ) -> None:
+                self.payload = payload
+                self.await_calls = await_calls
+
+            def __await__(self):
+                """Record forbidden awaiting without creating a coroutine."""
+
+                self.await_calls.append(None)
+                self.payload()
+                return iter(())
+
+        async def forbidden_progress_coroutine(
+            payload: mock.Mock,
+            body_executions: list[None],
+        ) -> None:
+            """Record forbidden coroutine and payload execution."""
+
+            body_executions.append(None)
+            payload()
+
+        for kind in ("coroutine", "custom"):
+            with self.subTest(awaitable=kind):
+                body_executions: list[None] = []
+                await_calls: list[None] = []
+                payload = mock.Mock()
+                if kind == "coroutine":
+                    outcome: object = forbidden_progress_coroutine(
+                        payload,
+                        body_executions,
+                    )
+                else:
+                    outcome = CustomProgressAwaitable(payload, await_calls)
+                outcome_reference = weakref.ref(outcome)
+                payload_reference = weakref.ref(payload)
+                observer = mock.Mock(return_value=outcome)
+                self.selected = self.catalog.create(
+                    _SESSION,
+                    f"{kind} progress observer",
+                )
+                backend = _ScriptedRetrievalBackend(
+                    (_search_action(1), _answer_action(2))
+                )
+                with mock.patch.object(
+                    self.memory,
+                    "search",
+                    wraps=self.memory.search,
+                ) as search:
+                    try:
+                        await self.run_turn(
+                            backend,
+                            progress_sink=observer,  # type: ignore[arg-type]
+                        )
+                    except ConversationRetrievalObserverError as error:
+                        retained_error = error
+                    else:
+                        self.fail(f"{kind} progress observer was accepted")
+                self.assertIs(
+                    type(retained_error),
+                    ConversationRetrievalObserverError,
+                )
+                self.assertEqual(
+                    str(retained_error),
+                    "conversation retrieval progress observer failed",
+                )
+                self.assertIs(type(retained_error.__cause__), TypeError)
+                self.assertEqual(
+                    str(retained_error.__cause__),
+                    "conversation retrieval progress sink must be synchronous",
+                )
+                self.assertIsNotNone(retained_error.__traceback__)
+                search.assert_not_called()
+                events = self.store.read(_SESSION, self.selected.conversation_id)
+                self.assertEqual(
+                    tuple(event.kind for event in events),
+                    (
+                        ConversationEventKind.USER_MESSAGE,
+                        ConversationEventKind.RUNTIME_ERROR,
+                    ),
+                )
+                self.assertTrue(inspect.isawaitable(outcome))
+                if kind == "coroutine":
+                    self.assertEqual(
+                        inspect.getcoroutinestate(outcome),  # type: ignore[arg-type]
+                        inspect.CORO_CLOSED,
+                    )
+                else:
+                    self.assertFalse(inspect.iscoroutine(outcome))
+                observer.assert_called_once()
+                observer.return_value = None
+                payload.assert_not_called()
+                del outcome, payload
+                with warnings.catch_warnings(record=True) as caught_warnings:
+                    warnings.simplefilter("always")
+                    gc.collect()
+                self.assertEqual(caught_warnings, [])
+                self.assertEqual(body_executions, [])
+                self.assertEqual(await_calls, [])
+                self.assertIsNone(outcome_reference())
+                self.assertIsNone(payload_reference())
 
         class CapturedProgressPayload:
             """Provide weak-referenceable data captured only by the generator."""

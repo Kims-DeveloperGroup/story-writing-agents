@@ -11,6 +11,7 @@ import json
 import os
 import tempfile
 import unittest
+import warnings
 import weakref
 from dataclasses import MISSING, FrozenInstanceError, fields, replace
 from pathlib import Path
@@ -2176,27 +2177,87 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             citation_ids=[],
         )
 
-        class AwaitableHandler:
-            """Return one forbidden coroutine from a synchronous declaration."""
+        class CustomHandlerAwaitable:
+            """Expose a non-coroutine await protocol around one payload."""
 
-            def handle_conversation_retrieval_action(
+            def __init__(
                 self,
-                _action: ConversationRetrievalAction,
-            ) -> object:
-                """Create a coroutine for backend dynamic rejection."""
+                payload: mock.Mock,
+                await_calls: list[None],
+            ) -> None:
+                self.payload = payload
+                self.await_calls = await_calls
 
-                async def outcome() -> None:
-                    """Provide the forbidden awaitable value."""
+            def __await__(self):
+                """Record forbidden awaiting without creating a coroutine."""
 
-                return outcome()
+                self.await_calls.append(None)
+                self.payload()
+                return iter(())
 
-        with mock.patch.dict(
-            os.environ,
-            {"STORY_FAKE_CODEX_OUTPUTS": json.dumps((answer,))},
-        ):
-            with self.assertRaisesRegex(BackendProtocolError, "awaitable"):
-                await bound.converse_with_retrieval(request, AwaitableHandler())
-        self.assertIs(self.thread(session_id)["tainted"], False)
+        async def forbidden_handler_coroutine(
+            payload: mock.Mock,
+            body_executions: list[None],
+        ) -> None:
+            """Record forbidden coroutine and payload execution."""
+
+            body_executions.append(None)
+            payload()
+
+        for kind in ("coroutine", "custom"):
+            with self.subTest(awaitable=kind):
+                body_executions: list[None] = []
+                await_calls: list[None] = []
+                payload = mock.Mock()
+                if kind == "coroutine":
+                    outcome: object = forbidden_handler_coroutine(
+                        payload,
+                        body_executions,
+                    )
+                else:
+                    outcome = CustomHandlerAwaitable(payload, await_calls)
+                outcome_reference = weakref.ref(outcome)
+                payload_reference = weakref.ref(payload)
+                handler = mock.Mock()
+                handler.handle_conversation_retrieval_action.return_value = outcome
+                with mock.patch.dict(
+                    os.environ,
+                    {"STORY_FAKE_CODEX_OUTPUTS": json.dumps((answer,))},
+                ):
+                    try:
+                        await bound.converse_with_retrieval(request, handler)
+                    except BackendProtocolError as error:
+                        retained_error = error
+                    else:
+                        self.fail(f"{kind} retrieval handler was accepted")
+                self.assertIs(type(retained_error), BackendProtocolError)
+                self.assertEqual(
+                    str(retained_error),
+                    "conversation retrieval handler returned an awaitable",
+                )
+                self.assertIsNone(retained_error.__cause__)
+                self.assertIsNotNone(retained_error.__traceback__)
+                self.assertTrue(inspect.isawaitable(outcome))
+                if kind == "coroutine":
+                    self.assertEqual(
+                        inspect.getcoroutinestate(outcome),  # type: ignore[arg-type]
+                        inspect.CORO_CLOSED,
+                    )
+                else:
+                    self.assertFalse(inspect.iscoroutine(outcome))
+                handler.handle_conversation_retrieval_action.assert_called_once()
+                handler.handle_conversation_retrieval_action.return_value = None
+                payload.assert_not_called()
+                del outcome, payload
+                with warnings.catch_warnings(record=True) as caught_warnings:
+                    warnings.simplefilter("always")
+                    gc.collect()
+                self.assertEqual(caught_warnings, [])
+                self.assertEqual(body_executions, [])
+                self.assertEqual(await_calls, [])
+                self.assertIsNone(outcome_reference())
+                self.assertIsNone(payload_reference())
+                self.assertIs(self.thread(session_id)["tainted"], False)
 
         class AsyncGeneratorHandler:
             """Return one forbidden async generator from a sync declaration."""
