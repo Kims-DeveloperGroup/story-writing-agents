@@ -1,0 +1,112 @@
+{
+  "schemaVersion": 1,
+  "plugin": "repository-engineering",
+  "installedPluginVersion": "0.2.0",
+  "pluginSelector": "repository-engineering@repository-engineering-kit",
+  "installationSource": {
+    "kind": "remote",
+    "marketplace": "repository-engineering-kit",
+    "marketplaceManifest": ".agents/plugins/marketplace.json",
+    "marketplaceManifestSha256": "6e0f44e7cf797eff7cdc73c06b25271f33c49915a1bc37dc0c554df06537b7db",
+    "pluginSource": "plugins/repository-engineering",
+    "marketplaceSource": "https://github.com/Kims-DeveloperGroup/AI-engineering-kit.git",
+    "immutableRef": "2cab4e6a2d0d7f693c4a65a9021622410bf23966"
+  },
+  "installedDistributionManifest": {
+    "path": "skills/repository-engineering-bootstrap/assets/distribution-manifest.json",
+    "sha256": "71696a46bf80bfd733e52cbc9baca62eabfe584df4dc0c61bbf3ac5806b9813c"
+  },
+  "profiles": [
+    "core",
+    "github",
+    "python"
+  ],
+  "files": [
+    {
+      "asset": "skills/repository-engineering-bootstrap/assets/core/.codex/agents/documentation_maintainer.toml",
+      "target": ".codex/agents/documentation_maintainer.toml",
+      "ownership": "managed",
+      "installedAssetSha256": "dcfc1cea1af8f4cb5728f633d69f9f863ad071feabe21935715e0277d22501a0",
+      "installedTargetSha256": "dcfc1cea1af8f4cb5728f633d69f9f863ad071feabe21935715e0277d22501a0"
+    },
+    {
+      "asset": "skills/repository-engineering-bootstrap/assets/core/.codex/agents/modularity_maintainer.toml",
+      "target": ".codex/agents/modularity_maintainer.toml",
+      "ownership": "managed",
+      "installedAssetSha256": "91b41393715b94b23330850dd135e5fa7b634583709fc7db60e746c13701f481",
+      "installedTargetSha256": "91b41393715b94b23330850dd135e5fa7b634583709fc7db60e746c13701f481"
+    },
+    {
+      "asset": "skills/repository-engineering-bootstrap/assets/profiles/python/.codex/agents/modularity_maintainer/PYTHON_MODULARITY_POLICY.md",
+      "target": ".codex/agents/modularity_maintainer/PYTHON_MODULARITY_POLICY.md",
+      "ownership": "managed",
+      "installedAssetSha256": "400aeb7d64cc47bed7c551935540507a6282438501613fdfe2c84b668d239578",
+      "installedTargetSha256": "400aeb7d64cc47bed7c551935540507a6282438501613fdfe2c84b668d239578"
+    },
+    {
+      "asset": "skills/repository-engineering-bootstrap/assets/core/.codex/agents/regression_diagnostician.toml",
+      "target": ".codex/agents/regression_diagnostician.toml",
+      "ownership": "managed",
+      "installedAssetSha256": "4b677f02df462ed29ac8838ddfcdeed14758142d4f4284b97bfa467b912510f5",
+      "installedTargetSha256": "4b677f02df462ed29ac8838ddfcdeed14758142d4f4284b97bfa467b912510f5"
+    },
+    {
+      "asset": "skills/repository-engineering-bootstrap/assets/core/.codex/agents/requirements_analyst.toml",
+      "target": ".codex/agents/requirements_analyst.toml",
+      "ownership": "managed",
+      "installedAssetSha256": "dd4f6b901ad3d738bdc9a684a15ac8450205107f430119e609722bbf7b167d6f",
+      "installedTargetSha256": "dd4f6b901ad3d738bdc9a684a15ac8450205107f430119e609722bbf7b167d6f"
+    },
+    {
+      "asset": "skills/repository-engineering-bootstrap/assets/core/.codex/agents/runtime_implementer.toml",
+      "target": ".codex/agents/runtime_implementer.toml",
+      "ownership": "managed",
+      "installedAssetSha256": "9b5160702a3e15c4753da5180d369a10313e32efd6803921e44856dfb1b76d1f",
+      "installedTargetSha256": "9b5160702a3e15c4753da5180d369a10313e32efd6803921e44856dfb1b76d1f"
+    },
+    {
+      "asset": "skills/repository-engineering-bootstrap/assets/core/.codex/agents/test_engineer.toml",
+      "target": ".codex/agents/test_engineer.toml",
+      "ownership": "managed",
+      "installedAssetSha256": "ed58c94c7ae7ebebe4c4617afc2383d83c58734337597b8378015cd72fe585fc",
+      "installedTargetSha256": "ed58c94c7ae7ebebe4c4617afc2383d83c58734337597b8378015cd72fe585fc"
+    },
+    {
+      "asset": "skills/repository-engineering-bootstrap/assets/core/AGENTS.managed.md",
+      "target": "AGENTS.md",
+      "ownership": "templated",
+      "installedAssetSha256": "0943a60be7dd1ecada4f2ddfda25b8d6a37193bc6bef24801de5fe661cb391a3",
+      "installedTargetSha256": "1cd27bc57f7027184e44c8b9b98d8e8b8b7b47e991c3945c405816f3c1aaaebe",
+      "startMarker": "<!-- repository-engineering:start -->",
+      "endMarker": "<!-- repository-engineering:end -->"
+    },
+    {
+      "asset": "skills/repository-engineering-bootstrap/assets/profiles/github/AGENT_TASK_RUNBOOK.md",
+      "target": "AGENT_TASK_RUNBOOK.md",
+      "ownership": "managed",
+      "installedAssetSha256": "77f4d24b814cfced855f2b558bb9fe3c5b0544551fdf2695697a9992aebcfe4d",
+      "installedTargetSha256": "77f4d24b814cfced855f2b558bb9fe3c5b0544551fdf2695697a9992aebcfe4d"
+    },
+    {
+      "asset": "skills/repository-engineering-bootstrap/assets/core/COMMIT_POLICY.md",
+      "target": "COMMIT_POLICY.md",
+      "ownership": "managed",
+      "installedAssetSha256": "a64067fb772fef987847bf3a1b0f31677522cd1d252031678bd2e95ac49504cf",
+      "installedTargetSha256": "a64067fb772fef987847bf3a1b0f31677522cd1d252031678bd2e95ac49504cf"
+    },
+    {
+      "asset": "skills/repository-engineering-bootstrap/assets/profiles/python/DEPENDENCY_POLICY.md",
+      "target": "DEPENDENCY_POLICY.md",
+      "ownership": "managed",
+      "installedAssetSha256": "53b308d2dfddab7a5d4a77fc1e37b98119f39b3f289e9d09bad813238505bb22",
+      "installedTargetSha256": "53b308d2dfddab7a5d4a77fc1e37b98119f39b3f289e9d09bad813238505bb22"
+    },
+    {
+      "asset": "skills/repository-engineering-bootstrap/assets/profiles/github/GITHUB_WORKFLOW.md",
+      "target": "GITHUB_WORKFLOW.md",
+      "ownership": "managed",
+      "installedAssetSha256": "3c021edd802e124c01670d01aa74bdc036ee7b5233b98fd9afefe7170cb22560",
+      "installedTargetSha256": "3c021edd802e124c01670d01aa74bdc036ee7b5233b98fd9afefe7170cb22560"
+    }
+  ]
+}

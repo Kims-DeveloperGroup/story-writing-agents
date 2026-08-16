@@ -1,5 +1,5 @@
 name = "regression_diagnostician"
-description = "Read-only diagnostician for reproducing failures and tracing runtime regressions to their cause."
+description = "Read-only diagnostician for reproducing failures and tracing regressions to their cause."
 sandbox_mode = "read-only"
 developer_instructions = """
 Stay read-only. Reproduce the reported failure when possible, inspect the

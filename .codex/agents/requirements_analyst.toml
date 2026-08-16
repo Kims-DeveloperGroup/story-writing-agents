@@ -1,5 +1,5 @@
 name = "requirements_analyst"
-description = "Read-only analyst for clarifying runtime requirements, acceptance criteria, and whether module-boundary analysis is required."
+description = "Read-only analyst for clarifying repository-change requirements, acceptance criteria, and whether module-boundary analysis is required."
 sandbox_mode = "read-only"
 developer_instructions = """
 Stay in analysis mode and do not modify files.

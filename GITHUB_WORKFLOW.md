@@ -18,14 +18,21 @@ in-scope Issues and a milestone, set native relationships, add items to the
 canonical Project, set their planning metadata, and create the in-scope task
 branch through the Issue's Development section after the gate passes.
 Project-schema changes, unrelated Issue edits, staging, commits, other pushes,
-PR actions, review, closure, merge, deletion, and cleanup still require explicit
-authorization.
+PR actions, review, closure, merge, deletion, and cleanup still require
+explicit authorization.
 
 ## Initial Planning Gate
 
 Before task branches, worktrees, writers, or tracked edits, record
 `github_planning_gate = not_required | pending | passed | blocked`. Only
 read-only analysis may continue while it is pending.
+
+Read the canonical repository slug, Project owner, Project number, and any
+independent profile declaration from the consumer repository instructions.
+This reusable profile supplies none of those consumer facts and they must not
+be inferred from its examples or installation source. When an installation
+lock exists, its selected profiles are authoritative; compare repository
+instructions only when they independently declare a profile selection.
 
 Work is large when any applies: estimated Size `L`/`XL`; two or more
 independently complete implementation slices or parent integration criteria;
@@ -36,11 +43,12 @@ count; uncertainty is large.
 
 Large work needs one root and all known descendants, including nested parents
 and leaves, before implementation. Use native hierarchy and dependencies. Add
-every item to [Project #1](https://github.com/orgs/Kims-DeveloperGroup/projects/1),
+every item to the canonical Project declared in the repository instructions,
 then set labels and organization Issue Priority plus Project Status and
 Iteration on all items, and milestone and Project Size on each leaf. Verify
 bodies, relationships, fields, approved base, and the first executable leaf
-with a fresh read.
+with a fresh read. If repository instructions do not declare the canonical
+repository slug, Project owner, and Project number, the gate is blocked.
 
 On partial failure, preserve IDs, repair only missing state, and set `blocked`;
 never create duplicates or implementation edits. Gate later scope too.
@@ -130,22 +138,36 @@ Inspect each worktree first and preserve unrelated changes.
 Use `issue-<number>-<short-slug>` for nontrivial work. A standalone branch
 identifies its leaf Issue. For a parent initiative, its branch is the
 integration base for child Issue branches. Child PRs target the parent branch
-and use **Squash and merge**; the final parent PR targets `main` and uses a
-merge commit. Follow [AGENT_TASK_RUNBOOK.md](AGENT_TASK_RUNBOOK.md) for the
-branch and worktree procedure.
+and use **Squash and merge**; the final parent PR targets the repository's
+resolved default branch and uses a merge commit. Resolve that branch from
+GitHub before creating worktrees or pull requests; never assume its name.
+Resolve exactly one local Git remote whose normalized GitHub repository
+identity matches the canonical repository slug from consumer instructions.
+Fail when no remote or multiple remotes match, and use the resolved remote for
+every fetch, remote-tracking ref, worktree base, and divergence check; never
+silently default to `origin`.
+Follow [AGENT_TASK_RUNBOOK.md](AGENT_TASK_RUNBOOK.md) for the branch and
+worktree procedure.
 
 Every Issue with implementation activity must have native GitHub Development
-traceability. Create its task branch from the Issue's Development section (or
-the equivalent `createLinkedBranch` API) before tracked edits. Link a parent
-integration branch to the parent Issue and each child branch to its child
-Issue. A matching branch name, URL, comment, or `Refs #N` text alone is not a
-link.
+traceability. Create its task branch from the Issue's Development section, or
+through the equivalent `createLinkedBranch` API, before tracked edits. Link a
+parent integration branch to the parent Issue and each child branch to its
+child Issue. A matching branch name, URL, comment, or `Refs #N` text alone is
+not a native Development link. Before writing, query all pages of the
+canonical Issue's linked branches and fail unless the exact expected task
+branch is present; printing a response or checking only a bounded first page is
+not verification.
 
 Once a PR exists, verify that it appears in the Issue's Development section
-and the Project's built-in `Linked pull requests` field. If it does not, link
-the PR through Development before moving the item to `In review`. Keep at
-least one linked branch or PR throughout `In progress`; after branch cleanup,
-the merged PR is the durable link for `Done`.
+and the canonical Project's built-in `Linked pull requests` field. If either
+link is missing, repair the authorized traceability before moving the item to
+`In review`. Query the exact ProjectV2 item node ID resolved during planning,
+verify that its content is the canonical repository's expected Issue, and
+paginate the item's linked pull requests; a first-page or issue-number-only
+Project lookup is not proof. Keep at least one linked branch or PR throughout
+`In progress`; after branch cleanup, the merged PR is the durable link for
+`Done`.
 
 Follow [COMMIT_POLICY.md](COMMIT_POLICY.md). An Issue may span multiple commits,
 but each commit must remain coherent, functional, tested, and reviewable.
@@ -160,9 +182,9 @@ it ready:
 
 Use `Refs #N` for partial work and for child PRs targeting a parent branch.
 Close a child manually after its squash merge and integration checks. Use
-`Closes #N` only in a PR to `main` when that merge completes the named Issue;
-never target a parent for one child's work. Merge requires explicit
-authorization.
+`Closes #N` only in a PR to the resolved default branch when that merge
+completes the named Issue; never target a parent for one child's work. Merge
+requires explicit authorization.
 
 Issue closure is the completion trigger; automation may then set `Done`. Do not
 use Project `Done` to close unfinished work. Verify Issue, PR, and Project state
@@ -183,4 +205,5 @@ explicitly.
 ## Agent Handoff
 
 Follow the runbook handoff contract. Report the planning-gate state and
-evidence, Issue and Project mutations, and preserved unrelated worktree changes.
+evidence, Issue and Project mutations, Development and linked-PR evidence, and
+preserved unrelated worktree changes.
