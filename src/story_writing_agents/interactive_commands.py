@@ -577,6 +577,12 @@ def _parse_slash_command(line: str) -> InteractiveAction:
 
 
 def _parse_routed_message(line: str) -> InteractiveAction:
+    """Parse an ``@agent`` message into a routed action without I/O.
+
+    The first ASCII-delimited alias must be known and the remaining message
+    nonblank; failures return a typed parse-error action with a safe suggestion.
+    """
+
     head, tail = _split_head(line)
     alias = head[1:]
     agent_id = _AGENT_ALIASES.get(alias)
@@ -596,6 +602,12 @@ def _parse_routed_message(line: str) -> InteractiveAction:
 
 
 def _parse_target(tail: str | None, command: str) -> InteractiveAction:
+    """Parse one known control-free agent token into a target action.
+
+    Cardinality, token, or alias failures return typed parse-error actions;
+    parsing performs no mutation or external lookup.
+    """
+
     tokens = _tokens(tail)
     if len(tokens) != 1:
         return _parse_error(f"/{command} requires exactly one agent")
@@ -612,6 +624,8 @@ def _parse_target(tail: str | None, command: str) -> InteractiveAction:
 
 
 def _parse_language(tail: str | None) -> InteractiveAction:
+    """Parse exactly one control-free language token without external state."""
+
     tokens = _tokens(tail)
     if len(tokens) != 1:
         return _parse_error("/language requires exactly one language")
@@ -622,6 +636,12 @@ def _parse_language(tail: str | None) -> InteractiveAction:
 
 
 def _parse_persona(tail: str | None) -> InteractiveAction:
+    """Parse a known agent and one control-free persona token.
+
+    Valid input returns a persona action; all grammar failures return typed
+    parse-error actions without I/O or mutation.
+    """
+
     tokens = _tokens(tail)
     if len(tokens) != 2:
         return _parse_error("/persona requires an agent and one persona name")
@@ -642,6 +662,12 @@ def _parse_persona(tail: str | None) -> InteractiveAction:
 
 
 def _parse_run(tail: str | None) -> InteractiveAction:
+    """Parse bare, prompted, or ``--fresh`` run syntax without I/O.
+
+    Non-flag prompt text is preserved, while unknown leading flags or a blank
+    fresh prompt return typed parse-error actions.
+    """
+
     prompt = _optional_remainder(tail)
     if prompt is None:
         return InteractiveAction(ActionKind.RUN)
@@ -667,6 +693,12 @@ def _parse_run(tail: str | None) -> InteractiveAction:
 
 
 def _parse_session(tail: str | None) -> InteractiveAction:
+    """Parse exact session subcommands and token counts without I/O.
+
+    Valid list/new/resume/end forms return typed actions; unknown, unsafe, or
+    mis-sized forms return parse-error actions with suggestions when available.
+    """
+
     tokens = _tokens(tail)
     if not tokens:
         return _parse_error("/session requires a subcommand")
@@ -788,6 +820,11 @@ def _parse_conversation(tail: str | None) -> InteractiveAction:
 
 
 def _parse_inspect(tail: str | None) -> InteractiveAction:
+    """Parse an optional control-free debate ID into an inspect action.
+
+    Extra or unsafe tokens return a typed parse-error action without I/O.
+    """
+
     tokens = _tokens(tail)
     if not tokens:
         return InteractiveAction(ActionKind.INSPECT)
@@ -866,6 +903,12 @@ def _parse_transcript(tail: str | None) -> InteractiveAction:
 
 
 def _parse_history(tail: str | None) -> InteractiveAction:
+    """Parse an optional positive ASCII history count without I/O.
+
+    Missing count selects the default history action; malformed, non-positive,
+    or unrepresentable counts return typed parse-error actions.
+    """
+
     tokens = _tokens(tail)
     if not tokens:
         return InteractiveAction(ActionKind.HISTORY)
@@ -898,6 +941,12 @@ def _positive_ascii_integer(value: str) -> int | None:
 
 
 def _parse_help(tail: str | None, command: str) -> InteractiveAction:
+    """Parse optional canonical or aliased help command metadata.
+
+    Bare help returns the overview action; invalid cardinality or unknown names
+    return typed parse-error actions with a unique close suggestion when found.
+    """
+
     tokens = _tokens(tail)
     if not tokens:
         return InteractiveAction(ActionKind.HELP)
@@ -919,12 +968,16 @@ def _no_argument_action(
     kind: ActionKind,
     command: str,
 ) -> InteractiveAction:
+    """Return the requested action only when no argument token is present."""
+
     if _tokens(tail):
         return _parse_error(f"{command} does not accept arguments")
     return InteractiveAction(kind)
 
 
 def _split_head(value: str) -> tuple[str, str | None]:
+    """Split at the first ASCII space or tab, retaining that delimiter in tail."""
+
     for index, character in enumerate(value):
         if character in " \t":
             return value[:index], value[index:]
@@ -932,6 +985,8 @@ def _split_head(value: str) -> tuple[str, str | None]:
 
 
 def _tokens(tail: str | None) -> tuple[str, ...]:
+    """Return ASCII-space/tab-delimited tokens after trimming those delimiters."""
+
     if tail is None:
         return ()
     value = tail.strip(" \t")
@@ -941,6 +996,12 @@ def _tokens(tail: str | None) -> tuple[str, ...]:
 
 
 def _required_remainder(tail: str | None) -> str | None:
+    """Drop one delimiter and return nonblank remaining text, else ``None``.
+
+    Later characters, including extra leading or trailing whitespace, are
+    preserved and no external state is read.
+    """
+
     if tail is None:
         return None
     value = tail[1:]
@@ -948,6 +1009,12 @@ def _required_remainder(tail: str | None) -> str | None:
 
 
 def _optional_remainder(tail: str | None) -> str | None:
+    """Drop one delimiter and return optional nonblank text, else ``None``.
+
+    Later characters, including extra leading or trailing whitespace, are
+    preserved and no external state is read.
+    """
+
     if tail is None:
         return None
     value = tail[1:]
@@ -969,10 +1036,14 @@ def _remainder_after_ascii_delimiters(tail: str | None) -> str | None:
 
 
 def _is_ascii_blank(value: str) -> bool:
+    """Report whether text is empty or contains only ASCII spaces and tabs."""
+
     return not value or all(character in " \t" for character in value)
 
 
 def _is_valid_token(value: str) -> bool:
+    """Report whether a token is nonempty and free of whitespace and controls."""
+
     return bool(value) and not any(
         character.isspace() or unicodedata.category(character) == "Cc"
         for character in value
@@ -980,11 +1051,19 @@ def _is_valid_token(value: str) -> bool:
 
 
 def _suggest_agent(value: str) -> str | None:
+    """Return a uniquely close canonical agent mention, or ``None``."""
+
     canonical = _suggest(value, _AGENT_ALIASES)
     return None if canonical is None else f"@{canonical}"
 
 
 def _suggest(value: str, candidates: dict[str, str]) -> str | None:
+    """Return the mapped unique candidate within edit distance two, if any.
+
+    Candidate mappings are read without mutation; ties, distant inputs, and an
+    empty mapping return ``None``.
+    """
+
     distances = {
         candidate: _levenshtein(value, candidate) for candidate in candidates
     }
@@ -1002,6 +1081,8 @@ def _suggest(value: str, candidates: dict[str, str]) -> str | None:
 
 
 def _levenshtein(left: str, right: str) -> int:
+    """Return the insertion, deletion, and substitution edit distance."""
+
     previous = list(range(len(right) + 1))
     for left_index, left_character in enumerate(left, start=1):
         current = [left_index]
@@ -1022,6 +1103,8 @@ def _parse_error(
     error: str,
     suggestion: str | None = None,
 ) -> InteractiveAction:
+    """Return a typed parse-error action with an optional safe suggestion."""
+
     return InteractiveAction(
         ActionKind.PARSE_ERROR,
         error=error,

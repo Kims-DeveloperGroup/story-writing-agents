@@ -618,6 +618,11 @@ class DebateResult:
 
 
 def _validate_conversation_identifier(value: str, *, label: str) -> str:
+    """Return a safe conversation identifier or raise ``SessionIdError``.
+
+    Validation preserves the string and performs no I/O or mutation.
+    """
+
     if not isinstance(value, str) or _SAFE_IDENTIFIER.fullmatch(value) is None:
         raise SessionIdError(
             f"{label} must match [A-Za-z0-9][A-Za-z0-9_-]{{0,63}}"
@@ -626,6 +631,12 @@ def _validate_conversation_identifier(value: str, *, label: str) -> str:
 
 
 def _validate_conversation_content(value: str, *, label: str) -> str:
+    """Return nonempty strict-UTF-8 conversation text without mutation.
+
+    Non-strings raise ``TypeError``; empty or unencodable strings raise
+    ``ValueError`` using the supplied diagnostic label.
+    """
+
     if not isinstance(value, str):
         raise TypeError(f"{label} must be a string")
     if not value:

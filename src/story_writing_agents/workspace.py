@@ -1557,6 +1557,13 @@ class FilesystemConversationCatalog:
         conversation_id: str,
         status: ConversationStatus,
     ) -> ConversationMetadata:
+        """Return metadata in the requested status, persisting only a change.
+
+        An already matching record is returned unchanged. Otherwise a new UTC
+        update timestamp is stored atomically through the workspace; read,
+        validation, and write failures propagate.
+        """
+
         current = self.get(session_id, conversation_id)
         if current.status is status:
             return current
@@ -1574,6 +1581,8 @@ class FilesystemConversationCatalog:
         return updated
 
     def _write_metadata(self, metadata: ConversationMetadata) -> None:
+        """Overwrite the identity-derived metadata file with its exact schema."""
+
         relative = self._metadata_relative(
             metadata.session_id,
             metadata.conversation_id,
@@ -1586,6 +1595,13 @@ class FilesystemConversationCatalog:
         expected_session_id: str,
         expected_conversation_id: str,
     ) -> ConversationMetadata:
+        """Read and strictly validate identity-bound conversation metadata.
+
+        Duplicate fields, malformed JSON, schema/value violations, and path
+        identity mismatches become ``WorkspaceFormatError``; storage is not
+        mutated.
+        """
+
         logical_artifact = (
             f"{expected_session_id}/{expected_conversation_id}/metadata.json"
         )
@@ -1594,6 +1610,8 @@ class FilesystemConversationCatalog:
         def reject_duplicate_fields(
             pairs: list[tuple[str, Any]],
         ) -> dict[str, Any]:
+            """Build one metadata object or raise on a duplicate field."""
+
             result: dict[str, Any] = {}
             for key, value in pairs:
                 if key in result:
@@ -1641,6 +1659,8 @@ class FilesystemConversationCatalog:
 
     @staticmethod
     def _catalog_relative(session_id: str) -> Path:
+        """Return the catalog directory for a previously validated session."""
+
         return (
             Path("discussion_logs")
             / session_id
@@ -1654,14 +1674,20 @@ class FilesystemConversationCatalog:
         session_id: str,
         conversation_id: str,
     ) -> Path:
+        """Return the metadata path for previously validated identities."""
+
         return cls._catalog_relative(session_id) / conversation_id / "metadata.json"
 
     @staticmethod
     def _timestamp() -> str:
+        """Return the current aware UTC timestamp in ISO-8601 form."""
+
         return datetime.now(UTC).isoformat()
 
     @staticmethod
     def _remove_empty_directory(directory: Path) -> None:
+        """Best-effort remove an empty directory, suppressing every OS error."""
+
         try:
             directory.rmdir()
         except OSError:
@@ -1758,6 +1784,12 @@ class FilesystemConversationEventStore:
         session_id: str,
         conversation_id: str,
     ) -> None:
+        """Verify catalog metadata matches the requested transcript path.
+
+        The catalog is read but not mutated. Missing attributes or an identity
+        mismatch raise ``WorkspaceFormatError``; catalog failures propagate.
+        """
+
         metadata = self.catalog.get(session_id, conversation_id)
         try:
             matches_path = (
@@ -1780,6 +1812,13 @@ class FilesystemConversationEventStore:
         session_id: str,
         conversation_id: str,
     ) -> tuple[ConversationEvent, ...]:
+        """Return a strictly validated authoritative transcript in file order.
+
+        An absent file yields an empty tuple. Present JSON Lines must have exact
+        schemas, path identity, contiguous sequences, and valid turn pairing;
+        malformed storage raises ``WorkspaceFormatError`` without mutation.
+        """
+
         relative = self._transcript_relative(session_id, conversation_id)
         logical_artifact = self._logical_artifact(session_id, conversation_id)
         target = self.workspace.path(relative)
@@ -1861,6 +1900,13 @@ class FilesystemConversationEventStore:
         return validated
 
     def _write_events(self, events: tuple[ConversationEvent, ...]) -> None:
+        """Atomically overwrite one transcript with canonical JSON Lines.
+
+        The nonempty tuple is serialized in its supplied order using the first
+        event's identity; an empty tuple raises ``ValueError`` and workspace
+        failures propagate.
+        """
+
         if not events:
             raise ValueError("cannot write an empty conversation transcript")
         relative = self._transcript_relative(
@@ -1884,6 +1930,13 @@ class FilesystemConversationEventStore:
         events: tuple[ConversationEvent, ...],
         event: ConversationEventAppend,
     ) -> None:
+        """Validate a proposed event against existing turn ownership and order.
+
+        Each turn accepts one user event followed by at most one outcome, and a
+        reply must come from the addressed agent. Violations raise ``ValueError``
+        without mutation.
+        """
+
         user_events = {
             stored.turn_id: stored
             for stored in events
@@ -1924,6 +1977,13 @@ class FilesystemConversationEventStore:
         *,
         logical_artifact: str,
     ) -> None:
+        """Validate stored user/outcome pairing in transcript sequence order.
+
+        Duplicate users, outcomes before users, duplicate outcomes, or wrong
+        reply senders raise artifact-specific ``WorkspaceFormatError`` without
+        mutation.
+        """
+
         user_events: dict[str, ConversationEvent] = {}
         completed_turn_ids: set[str] = set()
         for event in events:
@@ -1961,6 +2021,12 @@ class FilesystemConversationEventStore:
         session_id: str,
         conversation_id: str,
     ) -> _ConversationEventLock:
+        """Return the process-wide lock for one workspace transcript identity.
+
+        The weak registry is synchronized and populated when no live lock
+        exists; no filesystem resource is acquired here.
+        """
+
         key = (os.fspath(self.workspace.root), session_id, conversation_id)
         with _CONVERSATION_EVENT_LOCK_REGISTRY_GUARD:
             event_lock = _CONVERSATION_EVENT_LOCKS.get(key)
@@ -1974,6 +2040,8 @@ class FilesystemConversationEventStore:
         session_id: str,
         conversation_id: str,
     ) -> tuple[str, str]:
+        """Return validated session and conversation identifiers in order."""
+
         session = self.workspace.validate_identifier(session_id)
         conversation = self.workspace.validate_identifier(
             conversation_id,
@@ -1985,6 +2053,8 @@ class FilesystemConversationEventStore:
     def _reject_duplicate_fields(
         pairs: list[tuple[str, Any]],
     ) -> dict[str, Any]:
+        """Build one JSON object or raise ``ValueError`` on a duplicate field."""
+
         result: dict[str, Any] = {}
         for key, value in pairs:
             if key in result:
@@ -1997,6 +2067,8 @@ class FilesystemConversationEventStore:
         session_id: str,
         conversation_id: str,
     ) -> Path:
+        """Return the transcript path for previously validated identities."""
+
         return (
             Path("discussion_logs")
             / session_id
@@ -2008,6 +2080,8 @@ class FilesystemConversationEventStore:
 
     @staticmethod
     def _logical_artifact(session_id: str, conversation_id: str) -> str:
+        """Return the identity-relative transcript diagnostic name."""
+
         return f"{session_id}/{conversation_id}/transcript.jsonl"
 
 
