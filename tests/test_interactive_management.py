@@ -5,6 +5,7 @@ from __future__ import annotations
 import socket
 import subprocess
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -800,6 +801,118 @@ class InteractiveHistoryAndStatusTests(InteractiveConversationTestCase):
             "Search: available, active-only | Last interactive run: none.",
             rendered,
         )
+
+    def test_selector_snapshot_failures_are_safe_and_non_mutating(self) -> None:
+        class TranscriptTuple(tuple):
+            """Represent an exact-type violation returned by the store."""
+
+        for command in ("/history", "/status"):
+            for failure_kind in ("tuple_subclass", "noncontiguous_sequence"):
+                with self.subTest(command=command, failure=failure_kind):
+                    continuation_state: list[tuple[object, object]] = []
+
+                    def verify_failure_then_quit(prompt: str) -> str:
+                        """Observe retained command state before normal cleanup."""
+
+                        self.assertEqual(prompt, "story[session:lead]> ")
+                        continuation_state.append(
+                            (
+                                controller._selected_conversation,
+                                controller._target_agent_id,
+                            )
+                        )
+                        return "/quit"
+
+                    (
+                        workspace,
+                        _catalog,
+                        metadata,
+                        controller,
+                        backend,
+                        callbacks,
+                        store,
+                    ) = self.selected_controller(
+                        command,
+                        verify_failure_then_quit,
+                    )
+                    sentinel = (
+                        f"RAW_{command.removeprefix('/').upper()}_"
+                        f"{failure_kind.upper()}_SELECTOR_SECRET"
+                    )
+                    if failure_kind == "tuple_subclass":
+                        snapshot: object = TranscriptTuple((sentinel,))
+                    else:
+                        stored = store.append(
+                            ConversationEventAppend(
+                                session_id="session",
+                                conversation_id=metadata.conversation_id,
+                                turn_id="turn_invalid",
+                                sender="user",
+                                recipient=LEAD_ORCHESTRATOR,
+                                kind=ConversationEventKind.USER_MESSAGE,
+                                content="safe persisted content",
+                            )
+                        )
+                        snapshot = (
+                            replace(stored, sequence=2, content=sentinel),
+                        )
+
+                    durable_before = _durable_file_snapshot(workspace)
+                    with (
+                        mock.patch.object(
+                            store,
+                            "read",
+                            return_value=snapshot,
+                        ) as read,
+                        mock.patch.multiple(
+                            store,
+                            read_context=mock.DEFAULT,
+                            append=mock.DEFAULT,
+                        ) as store_calls,
+                        mock.patch.object(backend, "bind") as bind,
+                        mock.patch.object(
+                            controller_module.asyncio,
+                            "run",
+                        ) as async_run,
+                    ):
+                        self.assertEqual(controller.run_session_lobby(), 0)
+
+                    read.assert_called_once_with(
+                        "session",
+                        metadata.conversation_id,
+                    )
+                    for collaborator in (
+                        *store_calls.values(),
+                        bind,
+                        async_run,
+                    ):
+                        collaborator.assert_not_called()
+                    self.assertEqual(callbacks.reads, [])
+                    self.assertEqual(len(callbacks.prompts), 2)
+                    self.assertEqual(
+                        continuation_state,
+                        [(metadata, LEAD_ORCHESTRATOR)],
+                    )
+                    # Covers catalog, selection, transcript, run, and artifacts.
+                    self.assertEqual(
+                        _durable_file_snapshot(workspace),
+                        durable_before,
+                    )
+                    rendered = "".join(callbacks.records)
+                    self.assertEqual(rendered.count("[error "), 1)
+                    self.assertEqual(
+                        rendered.count(
+                            _error_record(
+                                InteractiveErrorCode.TRANSCRIPT_INVALID,
+                            )
+                        ),
+                        1,
+                    )
+                    self.assertNotIn(
+                        _error_record(InteractiveErrorCode.INTERNAL_ERROR),
+                        rendered,
+                    )
+                    self.assertNotIn(sentinel, rendered)
 
 
 class InteractiveInspectionTests(InteractiveConversationTestCase):

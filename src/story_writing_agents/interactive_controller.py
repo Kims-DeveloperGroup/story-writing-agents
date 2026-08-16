@@ -1156,12 +1156,7 @@ class InteractiveController:
             session_id,
             selected.conversation_id,
         )
-        try:
-            context = select_bounded_conversation_context(events)
-        except (TypeError, ValueError):
-            raise _ControllerAbort(
-                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
-            ) from None
+        context = select_bounded_conversation_context(events)
         return events, context
 
     @staticmethod
