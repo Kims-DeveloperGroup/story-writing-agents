@@ -166,6 +166,7 @@ class _ConversationRetrievalProgressEmitter:
             )
             raise ConversationRetrievalObserverError() from cause
         if inspect.isasyncgen(outcome):
+            del outcome
             cause = TypeError(
                 "conversation retrieval progress sink must be synchronous"
             )

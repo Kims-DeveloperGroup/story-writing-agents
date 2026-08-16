@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import gc
 import inspect
 import io
 import json
 import os
 import tempfile
 import unittest
+import weakref
 from dataclasses import MISSING, FrozenInstanceError, fields, replace
 from pathlib import Path
 from typing import get_type_hints
@@ -2199,28 +2201,61 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         class AsyncGeneratorHandler:
             """Return one forbidden async generator from a sync declaration."""
 
+            def __init__(self) -> None:
+                self.body_executions = 0
+                self.generator_reference: weakref.ReferenceType[object] | None = None
+                self.payload_reference: weakref.ReferenceType[object] | None = None
+
             def handle_conversation_retrieval_action(
                 self,
                 _action: ConversationRetrievalAction,
             ) -> object:
                 """Create an async generator for dynamic protocol rejection."""
 
+                class CapturedHandlerPayload:
+                    """Provide weak-referenceable data owned by the generator."""
+
+                payload = CapturedHandlerPayload()
+
                 async def outcomes():
-                    """Yield an unreachable value to define an async generator."""
+                    """Record forbidden execution before yielding the payload."""
 
-                    yield None
+                    self.body_executions += 1
+                    yield payload
 
-                return outcomes()
+                outcome = outcomes()
+                self.generator_reference = weakref.ref(outcome)
+                self.payload_reference = weakref.ref(payload)
+                return outcome
 
+        async_generator_handler = AsyncGeneratorHandler()
         with mock.patch.dict(
             os.environ,
             {"STORY_FAKE_CODEX_OUTPUTS": json.dumps((answer,))},
         ):
-            with self.assertRaisesRegex(BackendProtocolError, "async generator"):
+            try:
                 await bound.converse_with_retrieval(
                     request,
-                    AsyncGeneratorHandler(),
+                    async_generator_handler,
                 )
+            except BackendProtocolError as error:
+                retained_error = error
+            else:
+                self.fail("async-generator retrieval handler was accepted")
+        self.assertIs(type(retained_error), BackendProtocolError)
+        self.assertEqual(
+            str(retained_error),
+            "conversation retrieval handler returned an async generator",
+        )
+        self.assertIsNotNone(retained_error.__traceback__)
+        gc.collect()
+        self.assertEqual(async_generator_handler.body_executions, 0)
+        self.assertIsNotNone(async_generator_handler.generator_reference)
+        self.assertIsNotNone(async_generator_handler.payload_reference)
+        assert async_generator_handler.generator_reference is not None
+        assert async_generator_handler.payload_reference is not None
+        self.assertIsNone(async_generator_handler.generator_reference())
+        self.assertIsNone(async_generator_handler.payload_reference())
         self.assertIs(self.thread(session_id)["tainted"], False)
 
         search = _retrieval_action_json(

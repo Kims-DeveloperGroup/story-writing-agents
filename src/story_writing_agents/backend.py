@@ -772,6 +772,7 @@ class AgentBackend:
                         "conversation retrieval handler returned an awaitable"
                     )
                 if inspect.isasyncgen(outcome):
+                    del outcome
                     raise BackendProtocolError(
                         "conversation retrieval handler returned an async generator"
                     )

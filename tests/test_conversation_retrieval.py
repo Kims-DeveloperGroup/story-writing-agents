@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import inspect
 import json
 import os
 import subprocess
 import sys
 import unittest
+import weakref
 from collections.abc import Awaitable, Callable
 from dataclasses import MISSING, FrozenInstanceError, fields, replace
 from pathlib import Path
@@ -1655,6 +1657,78 @@ class ConversationRetrievalRuntimeFailureTests(ConversationRetrievalRuntimeTestC
         )
         self.assertNotIn("SECRET", events[-1].content)
         self.assertIn("ConversationRetrievalObserverError", events[-1].content)
+
+        class CapturedProgressPayload:
+            """Provide weak-referenceable data captured only by the generator."""
+
+        body_executions = 0
+        generator_references: list[weakref.ReferenceType[object]] = []
+        payload_references: list[weakref.ReferenceType[object]] = []
+
+        def async_generator_observer(
+            _event: ConversationRetrievalProgressEvent,
+        ) -> object:
+            """Return an unstarted async generator retaining one payload."""
+
+            payload = CapturedProgressPayload()
+
+            async def outcomes():
+                """Record forbidden execution before yielding the payload."""
+
+                nonlocal body_executions
+                body_executions += 1
+                yield payload
+
+            outcome = outcomes()
+            generator_references.append(weakref.ref(outcome))
+            payload_references.append(weakref.ref(payload))
+            return outcome
+
+        self.selected = self.catalog.create(
+            _SESSION,
+            "Async-generator progress observer",
+        )
+        backend = _ScriptedRetrievalBackend(
+            (_search_action(1), _answer_action(2))
+        )
+        prior_event_count = len(
+            self.store.read(_SESSION, self.selected.conversation_id)
+        )
+        with mock.patch.object(
+            self.memory,
+            "search",
+            wraps=self.memory.search,
+        ) as search:
+            try:
+                await self.run_turn(
+                    backend,
+                    progress_sink=async_generator_observer,  # type: ignore[arg-type]
+                )
+            except ConversationRetrievalObserverError as error:
+                retained_error = error
+            else:
+                self.fail("async-generator progress sink was accepted")
+        self.assertIs(type(retained_error), ConversationRetrievalObserverError)
+        self.assertEqual(
+            str(retained_error),
+            "conversation retrieval progress observer failed",
+        )
+        self.assertIsNotNone(retained_error.__traceback__)
+        search.assert_not_called()
+        events = self.store.read(_SESSION, self.selected.conversation_id)
+        self.assertEqual(
+            tuple(event.kind for event in events[prior_event_count:]),
+            (
+                ConversationEventKind.USER_MESSAGE,
+                ConversationEventKind.RUNTIME_ERROR,
+            ),
+        )
+        gc.collect()
+        self.assertEqual(body_executions, 0)
+        self.assertEqual(len(generator_references), 1)
+        self.assertEqual(len(payload_references), 1)
+        self.assertIsNone(generator_references[0]())
+        self.assertIsNone(payload_references[0]())
 
     async def test_diagnostic_redacts_raw_canonical_and_json_escaped_variants(self) -> None:
         secret = 'needle "한🙂"'
