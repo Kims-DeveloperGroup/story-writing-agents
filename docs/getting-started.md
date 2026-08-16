@@ -48,46 +48,57 @@ installed `story` and `story-writing-agents` commands are exact aliases.
 story smoke
 ```
 
-The command creates a temporary workspace, exercises one deterministic
-conflict-and-revision cycle, prints compact JSON, and removes the workspace.
-Success includes `"status":"passed"` and `"provider_tested":false`; it does
-not verify Codex, credentials, network access, story quality, or a model.
+The command creates and removes a temporary workspace while exercising local
+conversation, retrieval, and consensus persistence. Success includes
+`"status":"passed"` and `"provider_tested":false`; it does not validate Codex,
+credentials, network access, terminal behavior, story quality, or a model.
 
-## 3. Complete a first real run
+## 3. Prepare a story workspace
 
-This copyable scenario keeps everything in a dedicated directory:
+Initialize a dedicated directory, then work from inside it:
 
 ```bash
 story init ./first-story
 cd ./first-story
-story session start first_novel
-story directive '[SYS: LANG=EN]'
-story run \
-  --debate-id opening_01 \
-  --output opening.md \
-  'Write a restrained opening scene using the core documents.'
-story inspect --debate opening_01
-story session end
 ```
 
-`init` creates missing scaffold files without replacing existing content.
-`session start` activates `first_novel` and saves it as the workspace's default
-CLI session. Commands from this directory or a child discover the workspace and
-reuse that selection. `run` reserves the debate ID before calling a provider;
-on consensus it creates `manuscript/opening.md`. `inspect` prints the persisted
-lifecycle, result, and public blackboard.
+`init` creates missing scaffold files without replacing existing content. Edit
+the four files under `core_documents/` and the four role prompts under
+`config/agents/<agent-id>/AGENTS.md`; all are strict UTF-8 Markdown. The runtime
+reads current content before each provider phase.
 
-The directive must be the exact whole argument. It persists for this session.
-The CLI prints JSON to standard output and caught errors as
-`ExceptionType: message` to standard error.
+## 4. Begin the human workflow
 
-## 4. Add project context
+Bare `story` is the primary interactive entry:
 
-Edit the four files under `core_documents/` and the four role prompts under
-`config/agents/<agent-id>/AGENTS.md`. They are strict UTF-8 Markdown. The
-runtime reads current content before each phase, so edit between runs rather
-than while a run is binding files.
+```bash
+story
+```
+
+At the lobby prompt, create a durable session and subject conversation:
+
+```text
+/session new first_novel
+/conversation new Opening scene
+Which established fact should anchor the opening?
+/run Draft a restrained opening using our selected conversation.
+/inspect last
+/quit
+```
+
+The ordinary question is one advisory line. `/run PROMPT` starts consensus with
+one bounded snapshot of the selected conversation. `/inspect last` shows safe
+metadata for this process's latest accepted run. `/quit` releases the lease but
+keeps the session, conversation, and selections; later bare `story` reattaches.
+Use `/session end` and confirm when provider work for that session is finished.
+
+## 5. Automate without a TTY
+
+Scripts, pipelines, and other non-TTY callers must use noninteractive
+`story run`; it never receives selected conversation context. Use explicit
+workspace and session inputs in the [single automation example](guides/glasswater-scenario.md#use-one-explicit-automation-call-then-end),
+then consult the exact [CLI contract](reference/cli.md#workspace-noninteractive-behavior-and-exits).
 
 Continue with [Workspaces](guides/workspaces.md), [Consensus runs](guides/consensus-runs.md),
-or the complete [Glasswater scenario](guides/glasswater-scenario.md). Exact
-options and exit codes live only in the [CLI reference](reference/cli.md).
+or the complete interactive [Glasswater journey](guides/glasswater-scenario.md).
+Exact grammar and exits live in the [CLI reference](reference/cli.md).

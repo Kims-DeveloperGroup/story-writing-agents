@@ -23,59 +23,60 @@ rehash
 codex login
 ```
 
-Alternatively, set `CODEX_API_KEY` in the process environment. Credentials are
-not stored in the story workspace.
+Alternatively, set `CODEX_API_KEY` in the process environment; credentials are not stored in the story workspace.
 
-Install this repository in either a standard-library virtual environment or a
-Conda environment. Do not nest a `venv` inside active Conda.
+Install in a standard-library virtual environment or Conda; do not nest a `venv` inside active Conda.
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --editable .
 rehash
-story smoke
 ```
 
-`story` and `story-writing-agents` are exact aliases. Smoke uses synthetic data
-without Codex, credential reads, a terminal, subprocesses, apps, web, or network.
-It validates local conversation persistence/routing, exact search, cited retrieval, fresh-runtime
-continuity, and included-context consensus; a pass includes `"provider_tested":false`.
+`story` and `story-writing-agents` are exact aliases. Smoke uses synthetic data without Codex, credential reads, a terminal, subprocesses, apps, web, or network.
+It validates conversation persistence/routing, exact search, cited retrieval, fresh-runtime continuity, and included-context consensus; a pass includes `"provider_tested":false`.
 
-Create a workspace and run the first real debate:
+Create a workspace, run the provider-free check, and enter the primary human workflow:
 
 ```bash
 story init ./my-story
 cd ./my-story
-story session start novel
-story run 'Write an opening scene using the workspace core documents.'
-story session end
+story smoke
+story
 ```
 
-Commands run inside the workspace, or beneath it, discover the nearest
-initialized workspace and use its saved session selection. Scripts can pass
-`--workspace` and `--session`.
+At `story[lobby]>`, start a session and selected subject conversation:
+
+```text
+/session new novel
+/conversation new Opening scene
+Which core-document constraint should shape the opening?
+/run Draft the opening from our selected conversation.
+/inspect last
+/quit
+```
+
+Advisory input is one line; bare `/run` owns multiline composition. `/quit`
+detaches without ending the session; later `story` restores its selections. See the complete [Glasswater journey](docs/guides/glasswater-scenario.md).
+
+For scripts and non-TTY automation, use `story run`; it never uses selected conversation context. See the [single automation example](docs/guides/glasswater-scenario.md#use-one-explicit-automation-call-then-end) and [CLI contract](docs/reference/cli.md#workspace-noninteractive-behavior-and-exits).
 
 ## Choose the next page
 
 - [Getting started](docs/getting-started.md) explains installation and the first run.
-- [Documentation index](docs/INDEX.md) shows what is implemented and routes
-  each task, exact contract, design topic, and operational concern.
+- [Documentation index](docs/INDEX.md) routes each task, contract, design topic, and operational concern.
 - [Workspace guide](docs/guides/workspaces.md) explains the editable project files.
-- [Story sessions](docs/guides/story-sessions.md) shows shell management,
-  conversation reads, cited retrieval, and consensus.
-- [Consensus-run guide](docs/guides/consensus-runs.md) covers prompts, drafts,
-  outputs, and round limits.
+- [Story sessions](docs/guides/story-sessions.md) shows shell management, conversation reads, retrieval, and consensus.
+- [Consensus-run guide](docs/guides/consensus-runs.md) covers prompts, drafts, outputs, and round limits.
 - [CLI reference](docs/reference/cli.md) is the exact installed command contract.
 - [Package API](docs/reference/package-api.md) starts the Python reference.
 - [Security and provider privacy](docs/operations/privacy-and-provider.md) should be read before using sensitive material.
 
 <a id="backends"></a>
 
-`AgentBackend` is the concrete provider coordinator; Codex is the only
-implemented provider. `gemini` is a reserved configuration value and fails
-preflight. `StoryRuntime` owns consensus and advisory-turn sequencing and
-retrieval authorization. See the [system design](docs/design/overview.md).
+`AgentBackend` coordinates providers. Codex is implemented; reserved `gemini` configuration fails preflight.
+`StoryRuntime` owns consensus, advisory sequencing, and retrieval authorization. See the [system design](docs/design/overview.md).
 
 <a id="minimal-python-api"></a>
 
@@ -91,8 +92,7 @@ For Python integrations, start with the [runtime API](docs/reference/runtime-api
 - Artifact replacement is atomic per file with best-effort multi-file rollback, not a power-loss-safe transaction.
 - Smoke's explicit workspace is not read-only and retains plaintext diagnostics;
   abrupt termination can interrupt temporary cleanup. A pass does not validate
-  provider/model or terminal behavior, external integration, or story quality.
-  See the [smoke guide](docs/guides/smoke-test.md).
+  provider/model, terminal behavior, integration, or story quality. See the [smoke guide](docs/guides/smoke-test.md).
 - The interactive shell accepts one advisory line; bare `/run` owns multiline
   composition. Process-level PTY tests verify TTY gating and VINTR/VEOF delivery
   on supported POSIX. Retrieval is active-only and bounded; standalone artifact

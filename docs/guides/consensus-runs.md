@@ -19,7 +19,7 @@ attempt key.
 
 The shell forms require an attached session and selected active conversation.
 Bare `/run` opens the multiline composer and starts only on `/send`. See the
-[story-session scenario](story-sessions.md#scenario-discuss-then-run).
+[selected-discussion guide](story-sessions.md#turn-a-selected-discussion-into-consensus).
 
 ## Run noninteractively
 
