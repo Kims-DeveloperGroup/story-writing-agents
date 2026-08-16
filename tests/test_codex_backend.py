@@ -570,46 +570,6 @@ class ConversationModelContractTests(unittest.TestCase):
         self.assertIs(hints["handler"], ConversationRetrievalActionHandler)
         self.assertIs(hints["return"], ConversationRetrievalReply)
 
-    def test_retrieval_redaction_variants_visit_mapping_values_not_keys(self) -> None:
-        secret = 'needle "한🙂"'
-        mapping = {
-            "kind": "search_conversations",
-            "query": secret,
-            "session_id": "fixed_session",
-        }
-        variants = set(AgentBackend._conversation_retrieval_value_variants(mapping))
-        canonical = json.dumps(
-            mapping,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        ascii_canonical = json.dumps(
-            mapping,
-            ensure_ascii=True,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-
-        self.assertTrue(set(mapping).isdisjoint(variants))
-        self.assertTrue(
-            {
-                secret,
-                json.dumps(secret, ensure_ascii=False)[1:-1],
-                json.dumps(secret, ensure_ascii=True)[1:-1],
-                canonical,
-                ascii_canonical,
-                json.dumps(canonical, ensure_ascii=False)[1:-1],
-                json.dumps(ascii_canonical, ensure_ascii=True)[1:-1],
-            }.issubset(variants)
-        )
-        self.assertIn(
-            "kind",
-            AgentBackend._conversation_retrieval_value_variants(
-                {"label": "kind"}
-            ),
-        )
-
     def test_context_accepts_interleaving_sequence_gaps_and_exact_caps(self) -> None:
         first = _conversation_pair(
             "turn_one",
@@ -1683,9 +1643,11 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             any(item.get("terminated") is True for item in self.invocations())
         )
 
-    async def test_conversation_diagnostic_is_redacted_sanitized_and_bounded(
+    async def test_conversation_nonzero_exit_uses_fixed_stderr_free_error(
         self,
     ) -> None:
+        """Exclude conversation stderr and request values from fixed errors."""
+
         session_id = "diagnostic_session"
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
@@ -1704,20 +1666,23 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             content="CURRENT_SECRET\x1bTAIL",
             context=context,
         )
-        with mock.patch.dict(
-            os.environ,
-            {
-                "STORY_FAKE_CODEX_MODE": "nonzero",
-                "STORY_FAKE_CODEX_LONG_DIAGNOSTIC": "1",
-            },
+        captured_stderr = io.StringIO()
+        with (
+            mock.patch.dict(
+                os.environ,
+                {
+                    "STORY_FAKE_CODEX_MODE": "nonzero",
+                    "STORY_FAKE_CODEX_LONG_DIAGNOSTIC": "1",
+                },
+            ),
+            contextlib.redirect_stderr(captured_stderr),
+            self.assertRaises(BackendProtocolError) as caught,
         ):
-            with self.assertRaisesRegex(
-                BackendProtocolError,
-                "status 7",
-            ) as caught:
-                await bound.converse(request)
+            await bound.converse(request)
 
         diagnostic = str(caught.exception)
+        self.assertEqual(diagnostic, "Codex CLI exited with status 7")
+        self.assertEqual(captured_stderr.getvalue(), "")
         for sensitive in (
             "CURRENT_SECRET",
             "CONTEXT_SECRET",
@@ -1728,11 +1693,10 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(sensitive, diagnostic)
         for control in ("\x00", "\x1b", "\x7f"):
             self.assertNotIn(control, diagnostic)
-        self.assertIn("<redacted>", diagnostic)
-        self.assertIn("[truncated]", diagnostic)
-        self.assertLessEqual(len(diagnostic), 4_160)
 
-    async def test_debate_diagnostic_redacts_control_bearing_payload(self) -> None:
+    async def test_debate_nonzero_exit_uses_fixed_stderr_free_error(self) -> None:
+        """Exclude debate stderr and request values from fixed errors."""
+
         session_id = "debate_diagnostic_session"
         secret = "DEBATE_SECRET\x00TAIL"
         context_secret = 'CONTEXT_SECRET\\"한🙂\x1bTAIL'
@@ -1753,17 +1717,20 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 )
             ),
         )
-        with mock.patch.dict(
-            os.environ,
-            {"STORY_FAKE_CODEX_MODE": "nonzero"},
+        captured_stderr = io.StringIO()
+        with (
+            mock.patch.dict(
+                os.environ,
+                {"STORY_FAKE_CODEX_MODE": "nonzero"},
+            ),
+            contextlib.redirect_stderr(captured_stderr),
+            self.assertRaises(BackendProtocolError) as caught,
         ):
-            with self.assertRaisesRegex(
-                BackendProtocolError,
-                "status 7",
-            ) as caught:
-                await bound.invoke(request)
+            await bound.invoke(request)
 
         diagnostic = str(caught.exception)
+        self.assertEqual(diagnostic, "Codex CLI exited with status 7")
+        self.assertEqual(captured_stderr.getvalue(), "")
         for sensitive in (
             secret,
             secret.replace("\x00", "?"),
@@ -1777,7 +1744,113 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(sensitive, diagnostic)
         for control in ("\x00", "\x1b"):
             self.assertNotIn(control, diagnostic)
-        self.assertIn("<redacted>", diagnostic)
+
+    async def test_provider_validation_values_use_fixed_diagnostics(self) -> None:
+        """Keep provider-controlled validation values out of exact errors."""
+
+        session_id = "fixed_validation_diagnostic_session"
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        backend.start_session(session_id)
+        bound = await backend.bind(self.definition())
+        duplicate_key = "PRIVATE_DUPLICATE_KEY\x1bTAIL"
+        quoted_duplicate_key = json.dumps(duplicate_key)
+        cases = (
+            (
+                "revision mismatch",
+                json.dumps(
+                    {
+                        "revision_id": "PRIVATE_REVISION\x1bTAIL",
+                        "content": "candidate",
+                    }
+                ),
+                "Codex reply revision_id does not match its request",
+                "PRIVATE_REVISION",
+                Phase.DRAFT,
+            ),
+            (
+                "duplicate conversation key",
+                (
+                    "{"
+                    f'"session_id":"{session_id}",'
+                    '"conversation_id":"conversation_a",'
+                    '"turn_id":"turn_duplicate","content":"reply",'
+                    f"{quoted_duplicate_key}:\"one\","
+                    f"{quoted_duplicate_key}:\"two\"}}"
+                ),
+                "Codex conversation response duplicates a field",
+                "PRIVATE_DUPLICATE_KEY",
+                None,
+            ),
+            (
+                "disallowed core filename",
+                json.dumps(
+                    {
+                        "revision_id": "r0",
+                        "core_updates": [
+                            {
+                                "filename": "PRIVATE_CORE\x1bTAIL.md",
+                                "content": "update",
+                            }
+                        ],
+                    }
+                ),
+                "Codex core update filename is not allowed",
+                "PRIVATE_CORE",
+                Phase.FINALIZE,
+            ),
+            (
+                "duplicate core filename",
+                json.dumps(
+                    {
+                        "revision_id": "r0",
+                        "core_updates": [
+                            {
+                                "filename": "global_outline.md",
+                                "content": "first",
+                            },
+                            {
+                                "filename": "global_outline.md",
+                                "content": "second",
+                            },
+                        ],
+                    }
+                ),
+                "Codex returned a duplicate core update filename",
+                "global_outline.md",
+                Phase.FINALIZE,
+            ),
+        )
+
+        for index, (label, raw, expected, hidden, phase) in enumerate(cases):
+            with self.subTest(label=label):
+                with (
+                    mock.patch.dict(
+                        os.environ,
+                        {"STORY_FAKE_CODEX_OUTPUT": raw},
+                    ),
+                    self.assertRaises(BackendProtocolError) as caught,
+                ):
+                    if phase is None:
+                        await bound.converse(
+                            self.conversation_request(
+                                session_id=session_id,
+                                turn_id="turn_duplicate",
+                            )
+                        )
+                    else:
+                        await bound.invoke(
+                            self.request(
+                                session_id=session_id,
+                                debate_id=f"fixed_validation_{index}",
+                                phase=phase,
+                            )
+                        )
+
+                diagnostic = str(caught.exception)
+                self.assertEqual(diagnostic, expected)
+                self.assertNotIn(hidden, diagnostic)
+                self.assertNotIn("\x1b", diagnostic)
 
     async def test_missing_executable_nonzero_and_malformed_output_fail_cleanly(
         self,

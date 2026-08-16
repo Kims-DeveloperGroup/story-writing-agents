@@ -11,75 +11,72 @@ stored or displayed failure text.
 ## Plaintext local data
 
 There is no encryption, access control, secure erase, or retention policy.
-Project documents, debate records, context sidecars, provider metadata,
-subjects, transcripts, terminal scrollback, and manuscripts rely on operating-
-system and terminal-service protection.
+Documents, debate/context records, provider metadata, subjects, transcripts,
+scrollback, and manuscripts rely on OS/terminal-service protection.
 
-Blackboards can contain complete input, drafts, reviews, and errors. Owner state
-is narrower, but provider output is not generally scrubbed. Archive does not
-delete or conceal a conversation. Transcripts retain visible messages, replies,
-and runtime errors.
+Blackboards can contain input, drafts, reviews, and errors. Provider output is
+not generally scrubbed; archive neither deletes nor conceals conversations;
+transcripts retain messages, replies, and runtime errors.
 
 ## Local management, search, and reads
 
-`/search` scans active subjects and user/reply events; `/transcript` can display
-active or archived event metadata and full content. Selected `/history` displays
-all or a newest suffix from one full snapshot, including runtime errors,
-unmatched users, and whitespace. `/status` exposes workspace/session and
-selected subject/context/run metadata. Safe shell `/inspect` exposes only
-whitelisted lifecycle/artifact metadata and context identity/mode/counts—never
-raw messages, candidates, errors/actions, context content, or provider fields.
+`/search` shows active subjects/user/replies; `/transcript` shows active or
+archived metadata/content; `/history` shows one full or newest-suffix snapshot,
+including errors, unmatched users, and whitespace. `/status` exposes
+workspace/session/subject/context/run metadata. `/inspect` whitelists
+lifecycle/artifact/context identity/mode/counts, never raw messages, candidates,
+errors/actions, context content, or provider fields.
 
-Help, status, history, and inspection make no provider/network/binding call or
-story-data write. Directives are also provider-free but atomically update only
-validated session overrides. These commands otherwise preserve attachment,
-selection, target, thread, catalog, transcript, debate, artifact, and core data.
+Help/status/history/inspection are provider-free and read-only. Directives are
+provider-free but atomically update validated overrides. Other scope, thread,
+catalog, transcript, debate, artifact, and core state is preserved.
 
-Provider-free is not exposure-free. Subjects, snippets, identities, safe
-metadata, errors, whitespace, and multiline content can reach the output
-callback and scrollback.
-Terminal escaping is not redaction or anonymization. See
+Provider-free is not exposure-free: subjects, snippets, metadata, errors, and
+content reach callbacks/scrollback. Lobby/session orientation intentionally
+prints the normalized workspace root; unexpected diagnostic paths do not.
+Terminal escaping is not redaction. See
 [Conversation search](../reference/conversation-search.md) and
 [Terminal safety](terminal-safety.md).
 
 ## Provider disclosure
 
-A direct Python one-step call sends current text and bounded complete turns from
-its conversation. A retrieval turn begins with the same data, then may add
-runtime-authorized active-conversation search hits and complete user/reply pairs
-from the current story session. It cannot request archives, another session or
-workspace, arbitrary IDs, runtime errors, private state, tools, or native data
-access. Search/read observations are explicitly framed as untrusted story data.
+A Python one-step call sends current text and bounded complete turns. Retrieval
+starts there, then may add authorized active-conversation hits and complete
+user/reply pairs from the current session. It cannot request archives, another
+session/workspace, arbitrary IDs, runtime errors, private state, tools, or native
+data. Observations are framed as untrusted story data.
 
-The agent definition separately supplies that role's allowlisted core documents.
-Debates, manuscripts, core updates, and owner state are not retrieval memory.
-Direct routing selects one responder in a shared transcript, not a private channel.
+Agent definitions separately supply allowlisted core documents. Debates,
+manuscripts, core updates, and owner state are not retrieval memory. Direct
+routing selects a shared-transcript responder, not a private channel.
 
-Included consensus sends the captured selected-transcript event content in
-every agent request made across drafting, audits, proposals, synthesis, and
-finalization. Every request receives the same bounded snapshot. Fresh and
-legacy modes omit the `conversation_context` field entirely.
+Included consensus sends one selected-transcript snapshot through every phase.
+Fresh/legacy modes omit `conversation_context` entirely.
 
-Compatible provider threads are keyed by story session, backend, and agent.
-Within that session they can span subject conversations and debate calls;
-different visible context does not erase provider-private history. Detach, end,
-and backend close preserve thread references, so fresh or omitted context cannot
-make the provider forget earlier content.
+Provider threads are keyed by session/backend/agent and can span conversations
+and debates. Changed visible context does not erase private history. Detach, end,
+and close preserve thread references; fresh/omitted context cannot make the
+provider forget.
 
 <a id="runtime-error-diagnostics"></a>
 
 ## Diagnostic redaction
 
-The backend redacts current context plus retrieval actions, queries, results,
-subjects, snippets, events, citations, canonical frames, and JSON-escaped
-variants from process, timeout, and protocol diagnostics. Retrieval progress
-shows only counts and fixed labels; source lines intentionally reveal subject
-and stable citation after the visible answer, never query, snippet, or event
-prose. Consensus progress still excludes candidates, critiques, raw exceptions,
-result errors/actions, and model prose.
+Concrete `AgentBackend` drains nonzero Codex stderr but never decodes, exposes,
+or persists it. It raises `BackendProtocolError` with exact
+`Codex CLI exited with status N`. Python callers retain exception type/status,
+but lose stderr detail; reproduce the provider failure directly if that detail
+is required.
 
-After an advisory user event is durable, `StoryRuntime` stores an ordinary
-failure as its type plus sanitized detail. The sanitizer:
+Provider-controlled revision IDs, duplicate JSON keys, and disallowed/duplicate
+core-update filenames produce fixed protocol copy without echoing values. Other
+concrete backend protocol diagnostics use fixed categories or runtime-owned
+metadata and do not echo provider response values. Progress exposes fixed facts;
+sources intentionally reveal subject/citation, never
+query/event/candidate/critique/error/model prose.
+
+Separately, after a durable advisory user event, generic `StoryRuntime`
+persistence stores failure type plus sanitized detail. Its known-value sanitizer:
 
 - replaces current/context/retrieval variants with `<redacted>` and workspace
   roots with `<workspace>`;
@@ -88,8 +85,8 @@ failure as its type plus sanitized detail. The sanitizer:
 - caps output at 4,096 characters with an in-limit truncation marker.
 
 Cancellation stores fixed `CancelledError: conversation turn was cancelled`.
-Replies are unchanged, and sanitization is not a general secret detector.
-Terminal summaries use a separate boundary and are not transcript events.
+Only supplied/known variants are redacted; this is not a general secret detector.
+Replies are unchanged. Terminal summaries use a separate boundary.
 
 ## Codex and credentials
 
