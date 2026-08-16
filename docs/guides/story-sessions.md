@@ -90,9 +90,10 @@ change conversation state.
 newest file. Expected consensus, deadlock, and handled failure return to the same
 prompt. A deadlock or interrupted debate needs a new ID.
 
-Main-prompt Ctrl-C takes no action. Advisory/consensus cancellation recovers only
-at documented controller boundaries; a cancelled local read keeps completed
-rows. See [Inspection and recovery](inspection-and-recovery.md), the
+Main-prompt Ctrl-C emits `[cancelled] No action was taken.` and changes no
+state. Advisory/consensus cancellation recovers only at documented controller
+boundaries; a cancelled local read keeps completed rows. See
+[Inspection and recovery](inspection-and-recovery.md), the
 [CLI contract](../reference/cli.md), [local search](../reference/conversation-search.md),
 [agent retrieval](../reference/conversation-retrieval.md), and
 [recovery limits](../operations/recovery-and-limitations.md).
