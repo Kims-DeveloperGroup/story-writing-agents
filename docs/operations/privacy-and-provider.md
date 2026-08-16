@@ -1,8 +1,8 @@
 # Privacy and provider exposure
 
 > **Availability:** these controls cover local reads, advisory turns, and
-> retrieval-enabled advisory turns and selected-context consensus. They do not
-> make Codex, its executable, workspace, or terminal trusted.
+> retrieval-enabled turns, management commands, and selected-context consensus.
+> They do not make Codex, its executable, workspace, or terminal trusted.
 
 Key terms: **plaintext**—unencrypted content; **visible context**—events sent in
 a request; **provider-private history**—vendor thread state; **diagnostic**—
@@ -20,15 +20,24 @@ is narrower, but provider output is not generally scrubbed. Archive does not
 delete or conceal a conversation. Transcripts retain visible messages, replies,
 and runtime errors.
 
-## Local search and reads
+## Local management, search, and reads
 
 `/search` scans active subjects and user/reply events; `/transcript` can display
-active or archived event metadata and full content. They make no provider,
-network, process, or binding call and change no selection, target, thread,
-catalog, transcript, debate, artifact, or core document.
+active or archived event metadata and full content. Selected `/history` displays
+all or a newest suffix from one full snapshot, including runtime errors,
+unmatched users, and whitespace. `/status` exposes workspace/session and
+selected subject/context/run metadata. Safe shell `/inspect` exposes only
+whitelisted lifecycle/artifact metadata and context identity/mode/counts—never
+raw messages, candidates, errors/actions, context content, or provider fields.
 
-Provider-free is not exposure-free. Subjects, snippets, identities, errors,
-whitespace, and multiline content can reach the output callback and scrollback.
+Help, status, history, and inspection make no provider/network/binding call or
+story-data write. Directives are also provider-free but atomically update only
+validated session overrides. These commands otherwise preserve attachment,
+selection, target, thread, catalog, transcript, debate, artifact, and core data.
+
+Provider-free is not exposure-free. Subjects, snippets, identities, safe
+metadata, errors, whitespace, and multiline content can reach the output
+callback and scrollback.
 Terminal escaping is not redaction or anonymization. See
 [Conversation search](../reference/conversation-search.md) and
 [Terminal safety](terminal-safety.md).

@@ -319,6 +319,119 @@ def validate_conversation_context_window(
     return canonical_context
 
 
+def select_bounded_conversation_context(
+    events: tuple[ConversationEvent, ...],
+) -> ConversationContextWindow:
+    """Select the fixed-policy newest suffix of complete transcript turns.
+
+    ``events`` must be an exact tuple of canonical events from one transcript
+    in contiguous storage order starting at one. Unmatched user events remain
+    valid transcript history but are excluded from provider context. The pure
+    operation performs no I/O or mutation and raises ``TypeError`` or
+    ``ValueError`` when its snapshot violates the transcript contract.
+    """
+
+    if type(events) is not tuple:
+        raise TypeError("conversation events must be an exact tuple")
+
+    transcript_identity: tuple[str, str] | None = None
+    user_events: dict[str, ConversationEvent] = {}
+    outcomes: dict[str, ConversationEvent] = {}
+    for ordinal, event in enumerate(events, start=1):
+        if type(event) is not ConversationEvent:
+            raise TypeError("conversation events must be canonical events")
+        try:
+            canonical = ConversationEvent(
+                schema_version=event.schema_version,
+                session_id=event.session_id,
+                conversation_id=event.conversation_id,
+                turn_id=event.turn_id,
+                sequence=event.sequence,
+                timestamp=event.timestamp,
+                sender=event.sender,
+                recipient=event.recipient,
+                kind=event.kind,
+                content=event.content,
+            )
+        except (AttributeError, SessionIdError, TypeError, ValueError) as exc:
+            raise ValueError(
+                "conversation transcript contains an invalid event"
+            ) from exc
+        if canonical != event:
+            raise ValueError("conversation transcript contains a noncanonical event")
+
+        identity = (event.session_id, event.conversation_id)
+        if transcript_identity is None:
+            transcript_identity = identity
+        elif identity != transcript_identity:
+            raise ValueError("conversation events span multiple transcripts")
+        if event.sequence != ordinal:
+            raise ValueError(
+                "conversation event sequences must be contiguous from one"
+            )
+
+        if event.kind is ConversationEventKind.USER_MESSAGE:
+            if event.turn_id in user_events:
+                raise ValueError("conversation turn has duplicate user events")
+            user_events[event.turn_id] = event
+            continue
+        user_event = user_events.get(event.turn_id)
+        if user_event is None:
+            raise ValueError("conversation outcome precedes its user event")
+        if event.turn_id in outcomes:
+            raise ValueError("conversation turn has duplicate outcomes")
+        if (
+            event.kind is ConversationEventKind.AGENT_REPLY
+            and event.sender != user_event.recipient
+        ):
+            raise ValueError(
+                "conversation reply sender does not match the addressed agent"
+            )
+        outcomes[event.turn_id] = event
+
+    complete_turns = [
+        (event, outcomes[event.turn_id])
+        for event in events
+        if event.kind is ConversationEventKind.USER_MESSAGE
+        and event.turn_id in outcomes
+    ]
+    retained_reversed: list[tuple[ConversationEvent, ConversationEvent]] = []
+    retained_utf8_bytes = 0
+    for turn in reversed(complete_turns):
+        turn_utf8_bytes = sum(
+            len(event.content.encode("utf-8", errors="strict"))
+            for event in turn
+        )
+        if (
+            len(retained_reversed)
+            >= CONVERSATION_CONTEXT_POLICY.max_complete_turns
+            or retained_utf8_bytes + turn_utf8_bytes
+            > CONVERSATION_CONTEXT_POLICY.max_utf8_bytes
+        ):
+            break
+        retained_reversed.append(turn)
+        retained_utf8_bytes += turn_utf8_bytes
+
+    retained = tuple(reversed(retained_reversed))
+    retained_events = tuple(
+        sorted(
+            (event for turn in retained for event in turn),
+            key=lambda event: event.sequence,
+        )
+    )
+    total_complete_turns = len(complete_turns)
+    retained_turns = len(retained)
+    omitted_turns = total_complete_turns - retained_turns
+    return ConversationContextWindow(
+        events=retained_events,
+        total_complete_turns=total_complete_turns,
+        retained_turns=retained_turns,
+        omitted_turns=omitted_turns,
+        retained_utf8_bytes=retained_utf8_bytes,
+        truncated=omitted_turns > 0,
+    )
+
+
 class ConversationEventStore(Protocol):
     """Storage-neutral visible transcript operations."""
 
@@ -556,5 +669,6 @@ __all__ = [
     "ConversationMetadata",
     "ConversationStatus",
     "normalize_conversation_subject",
+    "select_bounded_conversation_context",
     "validate_conversation_context_window",
 ]

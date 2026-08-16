@@ -1,7 +1,7 @@
 # Terminal display safety
 
 > **Availability:** these rules protect the module-supported terminal and the
-> installed shell, including search hits and transcript events. They do not
+> installed shell, including management, search, and transcript records. They do not
 > make a terminal, callback, or scrollback private.
 
 Key terms: **TTY guard**—check for interactive streams; **typed error**—trusted
@@ -48,10 +48,11 @@ trailing LF remain lines under `[content] `, and the complete event is still
 one callback record. Events are never joined, trimmed, or split into storage
 records by the terminal.
 
-Search and transcript renderers validate exact primitive types, safe handles
-and turn IDs, positive sequences, nonblank metadata, and complete optional
-citation fields. They do not receive service objects, open files, retain a
-cursor, or infer trust from text. Exact templates live in the
+Search and history/transcript renderers validate primitive types, safe IDs,
+positive sequences, metadata, and complete citations. Management adds no
+renderer: controller-validated summaries use existing status/run primitives;
+raw inspection structures never reach the terminal. Renderers receive no
+service object, open no file, and retain no cursor. Exact templates live in the
 [terminal reference](../reference/interactive-terminal.md#exact-search-and-transcript-records).
 
 This is plain-text safety, not trusted rendering. Markdown is preserved but
@@ -86,7 +87,7 @@ Ctrl-C, or EOF returns counts but no text. This is not secure erasure because
 callbacks, the terminal, or process memory may retain copies.
 
 The component contacts no provider and stores no search index, transcript, or
-history. The controller passes validated results once to primitive writers.
+history. The controller passes each validated result once to primitive writers.
 Command-looking snippets, event content, and provider replies are displayed as
 content and never reparsed or executed.
 

@@ -1,12 +1,8 @@
 # Interactive command parser
 
-> **Availability:** this provider-free module owns command and route metadata and
-> parsing. The installed [shell](../guides/story-sessions.md) dispatches
-> `/search` and `/transcript`; `/history` is parsed but remains unavailable.
-
-Key terms: **registry**—immutable metadata; **action**—one typed parse result;
-**opaque remainder**—text preserved after one delimiter; **parse error**—an
-invalid result value, not an exception.
+> **Availability:** this provider-free module owns command/route metadata and
+> parsing. The installed [shell](../guides/story-sessions.md) dispatches its
+> documented management, conversation, retrieval, and consensus actions.
 
 ## Public contract
 
@@ -25,10 +21,8 @@ COMMANDS: tuple[CommandSpec, ...]
 parse_interactive_line(line: str) -> InteractiveAction
 ```
 
-Actions, command metadata, and the parser are package exports; route metadata
-is supported only from
-`story_writing_agents.interactive_commands`. Search and transcript are additive
-cases, so established import paths and payloads remain compatible.
+Actions, metadata, and parser are package exports; routes are module-supported.
+Management dispatch changes no parser, terminal, or facade surface.
 
 `ActionKind` values:
 
@@ -40,14 +34,9 @@ conversation_new conversation_list conversation_list_all conversation_use
 conversation_subject conversation_archive help quit parse_error
 ```
 
-Unused payload fields are rejected. `search` requires `text`; `transcript`
-requires `argument` and optionally carries positive `count` and
-`start_sequence` values.
-
 ## Registry
 
-`AGENT_ROUTES` follows roster order and owns IDs, prompt aliases, accepted
-aliases, and advisory-domain copy.
+`AGENT_ROUTES` follows roster order and owns IDs, aliases, and domain copy.
 
 | ID | Accepted aliases |
 | --- | --- |
@@ -66,9 +55,8 @@ aliases, and advisory-domain copy.
 | Inspection | `/search QUERY`; `/transcript ID [COUNT] [--from SEQUENCE]`; `/inspect [DEBATE\|last]`; `/history [COUNT]`; `/status`; `/help [COMMAND]` |
 | Exit | `/quit` |
 
-`/agent`, `/?`, and `/exit` alias `/to`, `/help`, and `/quit`. Capability flags
-describe possible provider or artifact use, not shell availability. Parsing
-performs no I/O.
+`/agent`, `/?`, and `/exit` alias `/to`, `/help`, and `/quit`. Flags describe
+possible provider/artifact use, not shell gates. Parsing performs no I/O.
 
 ## Line contract
 
@@ -76,16 +64,14 @@ One final `LF` or `CRLF` is framing; any other line break returns
 `parse_error`. Blank Unicode whitespace is `ignored`. At character zero, `/`
 means command, `@` means route, and anything else is a verbatim message.
 
-Keywords are case-sensitive. ASCII space and tab delimit grammar. Fixed
-commands reject arguments; tokens reject Unicode whitespace and `Cc` controls.
-There is no quoting, expansion, shell parsing, provider call, or file access.
+Keywords are case-sensitive; ASCII space/tab delimit grammar. Fixed commands
+reject arguments; tokens reject Unicode whitespace and `Cc` controls. There is
+no quoting, expansion, shell, provider, or file access.
 
 ## Search and transcript grammar
 
-`/search QUERY` requires an opaque query. The parser removes exactly one ASCII
-space or tab after `/search` and preserves every later character, including
-extra delimiters and trailing whitespace. Service-level query safety and
-normalization are defined by [Conversation search](conversation-search.md).
+`/search QUERY` removes exactly one ASCII delimiter and preserves the remaining
+opaque query. See [Conversation search](conversation-search.md).
 
 `/transcript ID [COUNT] [--from SEQUENCE]` follows this exact order:
 
@@ -94,22 +80,31 @@ normalization are defined by [Conversation search](conversation-search.md).
 3. `--from` may appear once, last, with exactly one `SEQUENCE`.
 4. `COUNT` and `SEQUENCE` are positive ASCII digits; leading zeros are valid.
 
-Omitted values remain `None`; the shell applies the read defaults. The parser
-accepts counts above 100 because the memory-service policy owns that maximum;
-the shell reports such a request as `transcript_invalid`. Identifier length,
-prefix uniqueness, archive status, and storage are not parser concerns.
+Omitted values stay `None`. Transcript counts above 100 parse because the
+memory service owns that maximum; the shell reports `transcript_invalid`.
+Identity resolution, archive status, and storage are not parser concerns.
+
+## Management grammar
+
+`/help [COMMAND]` and `/? [COMMAND]` accept a registered command or alias, with
+optional leading slash. Omission requests full grouped help; otherwise the
+action carries the canonical command.
+
+`/status` and `/reset` take no argument. `/language ARG` takes one control-free
+token; `/persona AGENT ARG` takes a route alias and token, returning the
+canonical ID. `/history [COUNT]` takes an optional positive ASCII integer;
+omission means all. `/inspect [ID|last]` takes at most one control-free token.
+Runtime [gates](cli.md#interactive-streams) are not parser concerns.
 
 ## Other grammar and failures
 
-Conversation `new` and `subject` preserve text after one delimiter. `list
-[--all] [QUERY]` strips delimiter runs; `--all` appears once at most and first.
-`use ID` takes one token; `archive [ID]` takes zero or one. See the
+Conversation `new` and `subject` preserve their remainder. `list [--all]
+[QUERY]`, `use ID`, and `archive [ID]` follow the
 [catalog contract](conversation-catalog.md).
 
 `/to` and `/agent` return `set_target`; `@ALIAS TEXT` returns
 `routed_message`; `/say TEXT` returns `message`. The parser does not enforce
 attachment or selection; the [CLI contract](cli.md#interactive-streams) does.
 
-Invalid or non-string input returns `parse_error` and never becomes provider
-input. A suggestion appears only for one unique case-sensitive Levenshtein
-match within distance two in the applicable namespace.
+Invalid/non-string input returns `parse_error`, never provider input. A
+suggestion requires one unique case-sensitive Levenshtein match within two.

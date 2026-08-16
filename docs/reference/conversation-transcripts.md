@@ -1,8 +1,8 @@
 # Conversation transcripts
 
 > **Availability:** interactive turns append transcripts and consume bounded
-> context. After attachment, `/transcript` reads fresh bounded pages and
-> `/search` can cite active transcript events. The storage APIs remain public.
+> context. `/transcript` reads bounded pages; selected `/history` shows one full
+> snapshot with context accounting; `/search` cites active events.
 
 Key terms: **event**—one visible stored record; **complete turn**—one user event
 plus one outcome; **unmatched turn**—a user event without an outcome;
@@ -41,6 +41,10 @@ read(session_id: str, conversation_id: str) -> tuple[ConversationEvent, ...]
 read_context(session_id: str, conversation_id: str) -> ConversationContextWindow
 ```
 
+`select_bounded_conversation_context(events)` is supported from
+`story_writing_agents.conversations`, not the package facade. It validates/selects
+from one exact tuple; the store protocol, facade exports, and schemas are unchanged.
+
 `append()` assigns schema version, a one-based contiguous `sequence`, and a
 canonical UTC timestamp. Sequence is authoritative ordering; wall-clock
 timestamps may be equal or move backward.
@@ -70,25 +74,26 @@ their own values; `StoryRuntime` applies the
 
 ## Interactive read bridge
 
-The controller gives the memory service the attached session and shared event
-store. A transcript command may explicitly read an active or archived catalog
-identity and does not require or change conversation selection. Every command
-obtains a fresh snapshot and returns chronological, whole events; the shell
-does not retain a cursor or write back to the transcript.
+`/transcript` reads a fresh bounded page from an attached active or archived
+identity without selecting it. `/history [COUNT]` requires an attached active
+selection and reads the authoritative store exactly once. Omission displays all
+events; a positive count displays the newest `min(count,total)` chronologically.
+User, reply, runtime-error, unmatched, and whitespace events remain visible;
+empty history is normal. Its summary derives context from that same tuple and
+reports displayed/total events, retained/total/omitted turns, bytes, truncation,
+and the fixed caps. It has no cursor, pager, search, provider, or write.
 
-Each event is passed once to the terminal's primitive renderer. Storage content
-remains exact while controls become visible and line structure remains within
-one output record. Exact presentation belongs to the
-[terminal reference](interactive-terminal.md), and page limits and stale-range
-rules belong to [Conversation search](conversation-search.md).
+Each event reaches the terminal renderer once. Storage remains exact while
+controls become visible. See [terminal presentation](interactive-terminal.md)
+and [page/search limits](conversation-search.md).
 
 ## Context selection and failure evidence
 
 A complete turn is one `user_message` plus one `agent_reply` or
-`runtime_error`. Context selection walks complete turns newest to oldest and
-retains at most 24 turns and 32,768 combined content bytes. It stops at the
-first turn that would exceed either cap, never splits a turn, and restores
-retained events to storage order.
+`runtime_error`. The store and pure selector walk complete turns newest to
+oldest and retain at most 24 turns and 32,768 combined content bytes. Selection
+stops at the first turn that would exceed either cap, never splits a turn, and
+restores retained events to storage order.
 
 If interruption or outcome-storage failure follows a durable user append, the
 user event remains unmatched. Full reads expose it; context excludes it and

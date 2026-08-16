@@ -6,12 +6,12 @@ A Python 3.11+ multi-agent runtime for drafting and reviewing long-form fiction.
 Four fixed roles work from editable project documents, audit the same revision,
 and write a manuscript only after all three voting specialists agree.
 
-> **Available now:** workspace setup, exact directives, prompt or draft consensus
-> runs, inspection, persistent Codex sessions, a provider-free smoke test, and an
-> interactive TTY shell. After attaching a story session, the shell searches and
-> reads conversations; a selected active conversation also supports routed
-> advisory turns with cited retrieval, plus prompt, fresh, and draft-file consensus
-> runs. History and standalone artifact commands remain unavailable there.
+> **Available now:** workspace setup, exact directives, consensus, inspection,
+> persistent Codex sessions, a provider-free smoke test, and an interactive TTY
+> shell. The shell provides global help/status; attached directives and safe run
+> inspection; conversation search; and selected history. A selected active
+> conversation also supports routed retrieval turns and prompt, fresh, or
+> draft-file consensus. Standalone artifact commands remain unavailable there.
 
 ## Quick start
 
@@ -62,8 +62,8 @@ initialized workspace and use its saved session selection. Scripts can pass
   each task, exact contract, design topic, and operational concern.
 - [Workspace guide](docs/guides/workspaces.md) explains the editable project
   files.
-- [Story sessions](docs/guides/story-sessions.md) shows the interactive shell,
-  conversation search, transcript reads, and cited agent retrieval.
+- [Story sessions](docs/guides/story-sessions.md) shows shell management,
+  conversation reads, cited retrieval, and consensus.
 - [Consensus-run guide](docs/guides/consensus-runs.md) covers prompts, drafts,
   outputs, and round limits.
 - [CLI reference](docs/reference/cli.md) is the exact installed command contract.
@@ -95,7 +95,7 @@ For Python integrations, start with the [runtime API](docs/reference/runtime-api
 - The interactive shell accepts one line per advisory turn; its multiline
   composer is used only by bare `/run`, and active advisory-turn cancellation is
   unavailable. Agent retrieval is current-session, active-only, and bounded;
-  `/history` and standalone artifact commands remain unavailable. See
+  standalone artifact commands remain unavailable. See
   [bounded conversation retrieval](docs/reference/conversation-retrieval.md).
 
 ## Development

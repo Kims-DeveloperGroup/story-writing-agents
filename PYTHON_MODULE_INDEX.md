@@ -320,12 +320,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ConversationEvent`, `ConversationEventAppend`, `ConversationEventKind`,
   `ConversationEventStore`, `ConversationMetadata`, `ConversationStatus`, and
   `normalize_conversation_subject`. The canonical
-  `validate_conversation_context_window` helper is module-supported rather than
-  facade-exported.
+  `select_bounded_conversation_context` and
+  `validate_conversation_context_window` helpers are module-supported rather
+  than facade-exported. The selector validates one exact chronological
+  transcript snapshot and derives its fixed-policy newest suffix of complete
+  turns without persistence access.
 - **Direct internal dependencies:** `agents` and `errors`.
 - **State, resources, and side effects:** Immutable value contracts plus
-  deterministic normalization and identity-bound context-window validation
-  only; owns no mutable state or external resource.
+  deterministic normalization, pure fixed-policy complete-turn context
+  selection, and identity-bound context-window validation only; owns no
+  mutable state or external resource.
 - **Primary verification/documentation:**
   `tests/conversation_event_store_contract.py`,
   `tests/test_conversation_catalog.py`,
@@ -404,16 +408,18 @@ every intermediate arrow. The current runtime graph is acyclic.
   collaborators plus an optional keyword-only `ConversationCatalog`, and whose
   single-use `run_session_lobby` operation returns process status 0 or 2. An
   omitted catalog uses `FilesystemConversationCatalog`. The shell dispatches
-  provider-free roster, sticky-target, current-session search, and bounded
-  transcript-read actions, selected-conversation advisory turns, and
-  selected-conversation consensus prompt, fresh-prompt, and draft-file actions
-  while retaining the established conversation and story-session commands.
-  Search and transcript reads require an attachment but no selected
-  conversation; every consensus action requires both an attachment and an
-  active selection. All transition, identity-resolution, routing, trusted
-  debate/retrieval progress and result validation, retrieval-source rendering,
-  and other presentation helpers are private, and the package facade does not
-  re-export this module.
+  provider-free global status, attached runtime directives and safe
+  session/debate inspection, selected-conversation history, roster,
+  sticky-target, current-session search, and bounded transcript-read actions;
+  selected-conversation advisory turns; and selected-conversation consensus
+  prompt, fresh-prompt, and draft-file actions while retaining the established
+  conversation and story-session commands. Search, transcript reads,
+  directives, and inspection require an attachment but no selected
+  conversation; history and every consensus action require both an attachment
+  and an active selection. All transition, identity-resolution, routing,
+  directive-result, inspection, trusted debate/retrieval progress and result,
+  retrieval-source, and other presentation validation helpers are private, and
+  the package facade does not re-export this module.
 - **Direct internal dependencies:** `agents`, `backend`, `cli_context`,
   `conversation_retrieval`, `conversation_search`, `conversations`, `errors`,
   `interactive_commands`, `interactive_terminal`, `models`, `orchestrator`,
@@ -428,16 +434,21 @@ every intermediate arrow. The current runtime graph is acyclic.
   constructed for a validated destination before attachment commit, rebound on
   a successful switch, and cleared on end, cleanup, and final close. The
   controller also owns its current attached-session identifier, selected
-  conversation metadata, sticky target, current CLI-context snapshot, and
+  conversation metadata, sticky target, current CLI-context snapshot,
+  process-local per-session latest accepted STARTED debate-ID map, and
   one-run/closed state. After the run starts, it owns orderly backend
   detach/close coordination while `AgentBackend` retains the actual lease,
   manifest, subprocess, and provider-thread resources. Through public
   collaborators the controller reads and parses terminal input, renders safe
   output, sequences session and nested conversation transitions, performs
   catalog create/list/get/rename/archive and compensating unarchive calls,
-  persists selections through `cli_context`, performs active-only search and
-  fresh bounded active-or-archived transcript reads through
-  `ConversationMemoryService`, and runs one synchronous
+  persists selections through `cli_context`, applies exact existing directives
+  and reads whitelisted session/debate inspection through `StoryRuntime`,
+  performs active-only search and fresh bounded active-or-archived transcript
+  reads through `ConversationMemoryService`, reads the authoritative event
+  store exactly once for each selected history or status snapshot, derives
+  canonical context facts through `select_bounded_conversation_context`, and
+  runs one synchronous
   `StoryRuntime.converse_with_retrieval` operation per accepted advisory content
   turn. It passes the exact attachment-scoped service plus a synchronous sink,
   validates trusted progress/results, and renders fixed progress and ordered
@@ -447,12 +458,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   capture, retrieval authorization and memory access, transcript/provider and
   consensus sequencing, validated results, artifact durability, and its async
   caches and locks; the event store, catalog, and `Workspace` retain persistence
-  ownership. The controller never calls event-store operations, dispatches a
-  backend provider directly, or persists retrieval controls/progress/sources,
-  debate context/results, or artifacts, and has no import-time operational side
-  effects.
+  ownership. The controller's only direct event-store operation is the public
+  read used for fixed selected history/status snapshots; it never appends or
+  calls `read_context`, dispatches a backend provider directly, or persists
+  retrieval controls/progress/sources, debate context/results, or artifacts,
+  and has no import-time operational side effects.
 - **Primary verification/documentation:** `tests/test_interactive_controller.py`,
-  `tests/test_interactive_consensus.py`,
+  `tests/test_interactive_management.py`, `tests/test_interactive_consensus.py`,
   `tests/test_interactive_conversation.py`, `tests/test_session_lifecycle.py`,
   `tests/test_cli_context.py`, `tests/test_interactive_commands.py`,
   `tests/test_interactive_terminal.py`, and
@@ -654,6 +666,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   the story-session lease remains the cross-process same-session write guard.
   Catalog and absent-transcript reads do not create storage. Transcript access
   validates catalog identity, and appends atomically replace the complete file.
+  `FilesystemConversationEventStore.read_context` retains its event lock across
+  catalog validation and one authoritative transcript read, then delegates the
+  pure fixed-policy selection to `conversations`.
 - **Primary verification/documentation:** `tests/test_workspace_and_config.py`,
   `tests/test_agent_state.py`, `tests/test_lifecycle_atomicity.py`,
   `tests/test_public_api_and_cli.py`, `tests/test_conversation_catalog.py`,
@@ -677,8 +692,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   terminal returns typed outcomes without dispatching them.
 - `interactive_controller` owns interactive shell action mapping, current
   in-memory attachment, selected-conversation and sticky-target state,
-  transition and compensation ordering, retained runtime and memory-service
-  wiring, and backend detach/close coordination after its one run starts.
+  process-local per-session latest accepted STARTED debate IDs, transition and
+  compensation ordering, retained runtime and memory-service wiring, and
+  backend detach/close coordination after its one run starts.
   `AgentBackend` retains actual session lease, manifest, subprocess, and
   provider-thread ownership; `ConversationCatalog` retains conversation
   metadata ownership; `cli_context` owns both session and per-session
@@ -689,9 +705,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   unchanged direct Python one-step calls retain `StoryRuntime.converse`.
   Provider-free `/search` and `/transcript` inspection crosses only public
   `ConversationMemoryService.search` and
-  `ConversationMemoryService.read_transcript` boundaries. The controller
-  performs no direct event-store or backend provider operation and performs no
-  direct context, result, retrieval-control, or artifact persistence.
+  `ConversationMemoryService.read_transcript` boundaries. Provider-free
+  selected `/history` and the transcript portion of `/status` each cross one
+  public `FilesystemConversationEventStore.read` boundary and derive context
+  facts from that exact immutable tuple through the pure module-supported
+  `select_bounded_conversation_context`; the controller never appends or calls
+  event-store `read_context`. Directives and safe inspection cross only public
+  `StoryRuntime` methods. The controller performs no direct backend provider,
+  context/result, retrieval-control, or artifact persistence.
   Selected-conversation consensus crosses only `StoryRuntime.run_prompt` or
   `run_draft`; draft-file bytes cross the internal
   `run_inputs.read_draft_file` boundary.
@@ -735,9 +756,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   `FilesystemConversationCatalog` owns the fixed metadata layout through
   `Workspace` without exposing paths through that protocol.
 - `ConversationEventStore` owns visible event append, authoritative read, and
-  fixed-policy complete-turn context contracts;
-  `FilesystemConversationEventStore` owns the fixed JSONL layout through
-  `Workspace` without exposing paths through that protocol.
+  fixed-policy complete-turn context contracts. The provider-neutral
+  `conversations.select_bounded_conversation_context` function owns pure
+  validation and fixed-policy selection from one immutable authoritative
+  snapshot; `FilesystemConversationEventStore` owns the fixed JSONL layout,
+  locks, catalog validation, and transcript I/O through `Workspace`, and its
+  locked `read_context` delegates only that pure selection.
 - `ReferenceConversationSearch` may call the event-store port's full `read`
   operation while enforcing deterministic logical scan and result bounds; it
   owns neither the filesystem layout nor persistence resources.
@@ -761,11 +785,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   and methods. Existing debate and one-step provider payloads remain unchanged;
   provider-private thread history remains scoped by session, backend, and agent
   and can therefore span conversations.
-- `models`, `conversations`, `workspace`, and `prompts` retain their prior
-  responsibilities, imports, public surfaces, and persistence/provider schemas.
-  Retrieval adds no dependency, migration, provider tool, streaming, retry,
-  whole-turn deadline, cross-session/archive authority, or direct provider
-  storage edge.
+- `models` and `prompts` retain their prior responsibilities, imports, public
+  surfaces, and persistence/provider schemas. The context-selector extraction
+  changes no persistence schema, dependency direction, event-store protocol,
+  or package-facade export. Retrieval adds no dependency, migration, provider
+  tool, streaming, retry, whole-turn deadline, cross-session/archive authority,
+  or direct provider storage edge.
 - `tests/conversation_event_store_contract.py` is reusable test-only adapter
   conformance support; it is not a production module or supported package API.
 - Direct imports of internal configuration, prompt, workspace-constant, or CLI

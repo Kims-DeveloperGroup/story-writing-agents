@@ -1,13 +1,9 @@
 # Interactive terminal component
 
 > **Availability:** this module-supported component presents shell input,
-> search/transcript records, retrieval progress/sources, and routed replies.
-> Composition remains a module API and is not shell-dispatched.
-
-Key terms: **callback**—borrowed synchronous I/O; **record**—one string passed
-to the writer; **primitive renderer**—presentation that accepts validated
-values but performs no search or storage; **visible escape**—safe text for a
-terminal control.
+> registry help, management status/run rows, search/transcript records,
+> retrieval progress/sources, and routed replies. Standalone `/compose` is not
+> dispatched; bare `/run` uses the existing run composer.
 
 ## Public API
 
@@ -62,8 +58,11 @@ f"compose[run:{line_number}]> "
 
 Canonical agents are required. Attached scope shows session, optional
 conversation, subject, and sticky target. Rows show handle, lifecycle,
-selection, and subject. Roster/help derive from parser metadata. Confirmation
-uses `[Y/n] ` or `[y/N] `; blank chooses the default. Ctrl-C/EOF are typed.
+selection, and subject. Roster/help derive from parser metadata. Management adds
+no terminal API: status/directive/history summaries use `write_status`, safe
+debate inspection uses `write_run`, and history events reuse the transcript
+renderer. Confirmation uses `[Y/n] ` or `[y/N] `; blank chooses the default.
+Ctrl-C/EOF are typed.
 
 ## Exact search and transcript records
 

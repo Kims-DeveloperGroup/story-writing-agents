@@ -2,7 +2,8 @@
 
 > **Availability:** bare `story` and `story chat` open the TTY shell. After
 > attachment, a selected active conversation supports retrieval-enabled turns
-> and consensus runs. Direct search/transcript reads need no selection.
+> and consensus runs. Global status/help, attached management, and local
+> conversation reads are also available.
 
 Key terms: **story session**—durable provider-work scope; **conversation**—one
 subject and visible transcript; **selection**—the active conversation used by
@@ -83,6 +84,25 @@ Ordinary lines and `/say TEXT` use the sticky target; `@AGENT TEXT` is one-shot.
 Changing conversations preserves the target. Attaching, switching, or ending a
 story session resets it to `lead`. All responders share the selected transcript;
 direct routing is not a private channel.
+
+## Manage and audit without provider work
+
+| Command | Scope |
+| --- | --- |
+| `/help [COMMAND]` or `/?` | Global, registry-derived help. |
+| `/status` | Global shell/session/conversation/context/last-run snapshot. |
+| `/language`, `/persona`, `/reset` | Attached; update only runtime overrides. |
+| `/inspect [ID\|last]` | Attached; safe debate metadata and context counts. |
+| `/history [COUNT]` | Attached active selection; one transcript/context snapshot. |
+
+History includes every visible event kind, unmatched users, and whitespace;
+count selects the newest events but displays them chronologically. Inspection
+never prints raw messages, candidates, errors, actions, context content, or
+provider fields. `last` means the latest accepted `started` run retained for
+this process and session, not the newest file. Commands preserve shell/story
+state except that successful directives atomically change overrides. See the
+[CLI management contract](../reference/cli.md#interactive-streams) and
+[Inspection and recovery](inspection-and-recovery.md).
 
 Exact shell grammar lives in the [CLI reference](../reference/cli.md), local
 search in [Conversation search](../reference/conversation-search.md), agent

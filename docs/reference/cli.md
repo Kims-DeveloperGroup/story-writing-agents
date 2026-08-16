@@ -1,25 +1,22 @@
 # CLI reference
 
-> **Availability:** bare `story` and `story chat` open the TTY shell for sessions,
-> conversations, advisory turns, local reads, and selected-context consensus.
+> **Availability:** bare `story` and `story chat` open the TTY shell for
+> sessions, conversations, management, advisory turns, local reads, and
+> selected-context consensus.
 
-Key terms: **attachment**—this process owns a story-session lease;
-**selection**—the active conversation; **safe output**—fixed typed copy.
-
-`story` and `story-writing-agents` are exact aliases for
+`story` and `story-writing-agents` are aliases for
 `story_writing_agents.cli:main`.
 
 ## Top-level syntax
 
 | Command | Exact syntax |
 | --- | --- |
-| Interactive shell | `story` |
-| Interactive with options | `story chat [SESSION] [--workspace PATH] [--backend AGENT=BACKEND]... [--codex-model MODEL] [--codex-timeout SECONDS]` |
+| Interactive | `story` or `story chat [SESSION] [--workspace PATH] [--backend AGENT=BACKEND]... [--codex-model MODEL] [--codex-timeout SECONDS]` |
 | Initialize | `story init [WORKSPACE] [--overwrite-prompts]` |
 | Directive | `story directive [--workspace PATH] [--session ID] TEXT` |
-| Noninteractive run | `story run [--workspace PATH] [--session ID] [--backend AGENT=BACKEND]... [--codex-model MODEL] [--codex-timeout SECONDS] [PROMPT | --prompt TEXT | --draft TEXT | --draft-file PATH] [--output PATH] [--debate-id ID] [--max-debate-rounds N]` |
+| Run | `story run [--workspace PATH] [--session ID] [--backend AGENT=BACKEND]... [--codex-model MODEL] [--codex-timeout SECONDS] [PROMPT \| --prompt TEXT \| --draft TEXT \| --draft-file PATH] [--output PATH] [--debate-id ID] [--max-debate-rounds N]` |
 | Inspect | `story inspect [--workspace PATH] [--session ID] [--debate ID]` |
-| Session lifecycle | `story session (start | end) [ID] [--workspace PATH] [--session ID]` |
+| Session | `story session (start \| end) [ID] [--workspace PATH] [--session ID]` |
 | Smoke | `story smoke [--workspace PATH]` |
 
 <a id="interactive-streams"></a>
@@ -28,84 +25,83 @@ Key terms: **attachment**—this process owns a story-session lease;
 interactive streams must be TTYs or the command exits `2` before workspace or
 backend access.
 
-## Interactive gates
+## Interactive management and gates
 
-Help, `/agents`, session navigation, and quit are global. Target changes,
-conversation management, `/search`, and `/transcript` require only attachment.
-Advisory messages and consensus also require a selected active conversation.
+`/help [COMMAND]` (alias `/?`) and `/status` are global; help comes from the
+registry. Lobby status shows normalized workspace, saved session,
+no attachment, unavailable conversation/context/search, and no last run.
+Attached status distinguishes saved and attached sessions; refreshes selected
+ID, subject, status, and revision or reports none; and reports sticky target;
+total events; canonical retained/total/omitted context turns, bytes, truncation,
+and 24-turn/32,768-byte caps; active-only search; and latest current-session run
+ID/status/input/revision/rounds/context
+conversation and mode or none.
 
-Ordinary lines and `/say TEXT` use the sticky target; `@AGENT TEXT` is one-shot.
-Search is active-only; `/transcript ID [COUNT] [--from SEQUENCE]` may name an
-active or archived record. Exact parsing is in the
-[interactive grammar](interactive-command-parser.md).
+Target, conversation, search, transcript, directive, and inspection commands
+require attachment. Messages, consensus, and `/history` require an active
+selection. `/transcript` may read active or archived data; `/search` is
+active-only.
+
+`/language ARG`, `/persona AGENT ARG`, and `/reset` pass respectively
+`[SYS: LANG=ARG]`, `[OVERRIDE: CANONICAL_ID Persona=ARG]`, and
+`[RESET: ALL]` to `StoryRuntime.apply_directive`. Agent aliases normalize to
+canonical IDs. Validated candidate overrides replace atomically; only success
+mutates them. Unknown persona agents report `agent_invalid`; configuration
+rejection reports `configuration_invalid`. No conversation is required.
+
+`/history [COUNT]` reads one fixed selected snapshot. Omitted count
+shows all; supplied positive ASCII count shows the newest
+`min(count,total)` events chronologically. User, reply, runtime-error,
+unmatched, and whitespace events remain visible. Empty is normal. Its summary
+reports displayed/total events and canonical retained/total/omitted turns,
+bytes, truncation, and caps. It has no pager, search, provider, or write.
+
+`/inspect` summarizes the attached session; `/inspect ID` reads the
+exact current-session debate and reports missing as `not_found`.
+`/inspect last` uses the process-local per-session latest accepted started
+run—success, deadlock, failure, or interruption—and reports no run normally. It
+does not persist or guess `last`. Output allows lifecycle/artifact metadata and
+context identity/mode/counts, never raw messages, candidates, errors, actions,
+context content, or provider fields. Noninteractive inspection JSON is unchanged.
+
+Management preserves attachment, selection, sticky target, transcript, catalog,
+artifact, and provider state; only successful directives change overrides.
+See the [grammar](interactive-command-parser.md), [transcript contract](conversation-transcripts.md),
+and [inspection guide](../guides/inspection-and-recovery.md).
 
 <a id="interactive-consensus"></a>
 
 ## Interactive consensus
 
-| Syntax | Input and selected-conversation behavior |
+| Syntax | Behavior |
 | --- | --- |
-| `/run PROMPT` | Prompt; captures one bounded snapshot. |
-| `/run` | Opens the run composer; only `/send` starts with a snapshot. |
-| `/run --fresh PROMPT` | Prompt; records selected identity but reads/sends no transcript. |
-| `/draft-file PATH` | Complete draft; captures one bounded snapshot. |
+| `/run PROMPT` or bare `/run` then `/send` | Prompt with one selected bounded snapshot. |
+| `/run --fresh PROMPT` | Records selected identity; sends no transcript. |
+| `/draft-file PATH` | Strict-UTF-8 draft with one selected snapshot. |
 
-Attachment and selection are revalidated before composition or file access.
-Runs may write debate records and artifacts, but never append the transcript or
-change target, selection, attachment, or conversation-memory service.
+Attachment and selection are revalidated before input access. Runs may write
+debates/artifacts, but not transcripts or shell scope. Draft paths use caller
+CWD, expand `~`, follow `pathlib` symlinks, and never invoke a
+shell. Invalid or empty text is `draft_input_invalid`.
 
-The draft loader expands `~`, keeps caller-CWD relative paths, and accepts
-absolute paths and symlinks with ordinary `pathlib` behavior. TTY filename
-metacharacters are literal; no shell is evaluated. Exact strict-UTF-8 text,
-including line endings, BOM, NUL, and whitespace, is preserved. Unreadable,
-invalid-UTF-8, or empty input reports `draft_input_invalid` before reservation.
+Deadlock is `consensus_deadlock`; failures map `preflight` to
+`provider_preflight_failed`, `protocol` to `provider_protocol_error`, `context`
+to `transcript_invalid`, `workspace` to `workspace_invalid`, artifact conflict
+to `artifact_conflict`, and artifact/internal failure to `consensus_failed`.
+Unexpected contracts are fatal `internal_error`. Output excludes raw exceptions
+and model/result prose.
+Standalone `/compose` and artifact commands remain unavailable; `/send` and
+`/cancel` still control only bare `/run` composition. Active-turn/run
+cancellation remains separate Issue #14.
 
-Output uses IDs, counts, fixed codes, and committed paths—never raw exceptions,
-model prose, candidates, critiques, or result error/action text.
+## Workspace, noninteractive behavior, and exits
 
-| Trusted outcome or failure | Shell code |
-| --- | --- |
-| Deadlock | `consensus_deadlock` |
-| `preflight` | `provider_preflight_failed` |
-| `protocol` | `provider_protocol_error` |
-| `context` | `transcript_invalid` |
-| `workspace`, including `WorkspaceSecurityError` | `workspace_invalid` |
-| `artifact_conflict` | `artifact_conflict` |
-| `artifact_failure` or `internal` | `consensus_failed` |
-| Empty loaded draft before progress | `draft_input_invalid` |
-| Nonempty selected-context validation before progress | `transcript_invalid` |
-| Unexpected controller/runtime contract | fatal `internal_error` |
+Except `init` and `smoke`, commands need the nearest initialized workspace.
+Session precedence is `--session`, lifecycle positional ID, then saved
+selection. Noninteractive `run` uses no conversation context and retains its
+JSON/stderr contract; `inspect` JSON is also unchanged.
 
-Handled mapped failures and deadlock return to the prompt. A workspace error
-does so only after proving the same session is active with an `OWNED` lease;
-failed proof instead exits through `cleanup_failed`.
-
-General `/compose`, `/history`, and standalone artifact commands remain
-unavailable. The Python runtime cancellation contract is documented separately;
-this page does not define active-run signal handling.
-
-## Workspace, session, and noninteractive run
-
-Except for `init` and `smoke`, commands need an initialized workspace; omission
-of `--workspace` selects the nearest ancestor. Session precedence is
-`--session`, lifecycle positional ID, then saved selection. Successful start or
-shell acquisition reselects; failure and end preserve selection.
-
-Noninteractive `story run` requires one input, uses no conversation context, and
-keeps established JSON/stderr behavior. Its draft loader is shared, though the
-invoking shell still needs quoting. `--backend` repeats, timeout is positive,
-and rounds are nonnegative. Omitted IDs/outputs are generated. Debate inspection
-is unchanged; context sidecars use a separate Python accessor.
-
-## Exit codes
-
-| Code | Meaning |
-| --- | --- |
-| `0` | Command succeeded, shell ended normally, run reached consensus, or smoke passed. |
-| `1` | Smoke completed but an invariant failed. |
-| `2` | Usage, TTY/setup, fatal shell/cleanup, or another caught failure. |
-| `3` | Noninteractive run returned `deadlock`. |
-| `4` | Noninteractive run returned `failed`. |
-
-See [Consensus runs](../guides/consensus-runs.md) for task guidance and
-[Terminal safety](../operations/terminal-safety.md) for display controls.
+Exit `0` means success or normal shell end, `1` a failed smoke invariant,
+`2` usage/setup/fatal shell failure, `3` noninteractive deadlock, and `4`
+noninteractive failure. See [Consensus runs](../guides/consensus-runs.md) and
+[Terminal safety](../operations/terminal-safety.md).

@@ -1,12 +1,8 @@
 # Session lifecycle design
 
 > **Availability:** the controller manages sessions, conversations, routed
-> turns, local reads, and selected-context consensus. History and standalone
-> artifact commands remain unavailable.
-
-Key terms: **active**—provider work allowed; **attached**—this process owns the
-lease; **selected conversation**—a saved record; **sticky target**—the
-default responder; **compensation**—restoring and proving earlier state.
+> turns, local/management reads, directives, history, and selected-context
+> consensus. Standalone artifact commands remain unavailable.
 
 <a id="three-independent-facts"></a>
 
@@ -26,24 +22,30 @@ inactive. Both retain saved selections.
 
 The single-use controller owns final detach and close. Explicit entry creates,
 attaches, or resumes the named session without confirmation. Bare entry opens
-the outer lobby with no saved session, attaches an active one, or asks to resume
-an inactive one with yes as default.
+the outer lobby, attaches an active selection, or asks to resume an inactive one
+with yes as default.
 
 After acquisition, missing, `null`, missing-record, or archived conversation
 selection enters the inner lobby; stale IDs are not rewritten. Malformed or
 unsafe selection storage is fatal on initial entry.
 
-Session acquisition preflights routes and executable discovery but starts no
-provider. Conversation commands, agent roster/target changes, session list,
-and session end are provider-free.
+Acquisition preflights routes/executable discovery but starts no provider.
 
-## Target and turn gates
+## Command gates and management state
 
-`/agents` is global. `/to` and `/agent` require attachment but not conversation
-selection; they set the sticky target. Ordinary and `/say` messages use that
-target, while `@AGENT` selects one responder without changing it. Content also
-requires a selected active conversation and blocks the command loop for one
-runtime turn. Conversation create, use, rename, and archive preserve the target.
+Registry `/help` (and `/?`) plus `/status` are global. Roster/session navigation
+is global; target, conversation, search/transcript, directive, and inspection
+actions require attachment. `/history`, advisory content, and consensus require
+an active selection. Ordinary and `/say` use the sticky target; `@AGENT` is
+one-shot. Conversation changes preserve the target.
+
+Status distinguishes saved from attached session and refreshes selected
+metadata before reporting shell, transcript/context, search, and last-run facts.
+The controller retains a process-local per-session latest accepted `started`
+debate ID; it survives session switches but not process restart. Management is
+provider-free and preserves attachment, selection, target, transcript, catalog,
+artifact, and provider state. Only successful directives replace overrides.
+See the [CLI management contract](../reference/cli.md#interactive-streams).
 
 ## Attach and switch ordering
 
@@ -55,9 +57,9 @@ For an initial attachment or switch to destination B, the controller:
 4. detaches source A when switching; and
 5. commits B in memory, resets the visible agent alias to `lead`, and renders.
 
-Failure before completing step 3 releases B and preserves A. If A cannot detach
-after B was saved, B stays selected, no B orientation appears, close is
-attempted, and the controller exits `2` with `cleanup_failed`.
+Failure before step 3 releases B and preserves A. If A cannot detach after B is
+saved, B stays selected, no B orientation appears, close is attempted, and the
+controller exits `2` with `cleanup_failed`.
 
 ## Conversation lifecycle and compensation
 
@@ -82,15 +84,13 @@ flowchart TD
     F -->|Uncertain| X[Exit 2 and close best effort]
 ```
 
-`new` writes exact display metadata, then selection; save failure leaves the new
-record and prior effective choice. `use` saves a resolved active ID before
-memory changes. `subject` renames the selected active record; `list` is read-only.
-None changes the sticky target.
+`new` writes metadata, then selection; save failure leaves the record and prior
+choice. `use` saves before memory changes. `subject` renames; `list` is read-only.
+None changes the target.
 
-Nonselected archive needs no confirmation and does not reselect. Selected
-archive defaults to no; yes selects the first other active catalog record or
-`null`. Save failure recovers only if unarchive, original durable selection,
-and the owned active lease are proved; otherwise it is fatal.
+Nonselected archive neither confirms nor reselects. Selected archive defaults
+to no; yes selects the first other active record or `null`. Save failure is
+recoverable only if unarchive, original selection, and lease are proved.
 
 ## End, detach, and close
 
