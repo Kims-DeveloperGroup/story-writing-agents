@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import tomllib
 import unittest
@@ -47,6 +47,7 @@ def _safe_relative_path(value: str) -> PurePosixPath:
     path = PurePosixPath(value)
     if (
         "\\" in value
+        or PureWindowsPath(value).drive
         or path.as_posix() != value
         or path.is_absolute()
         or not path.parts
@@ -67,7 +68,14 @@ class RepositoryEngineeringConsumerTests(unittest.TestCase):
             _safe_relative_path("skills/repository-engineering-bootstrap/SKILL.md"),
             PurePosixPath("skills/repository-engineering-bootstrap/SKILL.md"),
         )
-        for unsafe in ("../asset", "..\\..\\asset", "nested\\asset", "nested//asset"):
+        for unsafe in (
+            "../asset",
+            "..\\..\\asset",
+            "nested\\asset",
+            "nested//asset",
+            "C:asset",
+            "C:/asset",
+        ):
             with self.subTest(unsafe=unsafe), self.assertRaises(AssertionError):
                 _safe_relative_path(unsafe)
 
