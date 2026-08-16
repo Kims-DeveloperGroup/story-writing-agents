@@ -1,13 +1,13 @@
 # Story sessions and conversations
 
 > **Availability:** bare `story` and `story chat` open the TTY shell. After
-> attaching a story session, a selected active conversation supports advisory
-> turns and consensus runs. Search and transcript reads need no selection.
+> attachment, a selected active conversation supports retrieval-enabled turns
+> and consensus runs. Direct search/transcript reads need no selection.
 
 Key terms: **story session**—durable provider-work scope; **conversation**—one
 subject and visible transcript; **selection**—the active conversation used by
 writes and runs; **sticky target**—the responder for ordinary advisory lines;
-**included run**—a debate given one fixed transcript snapshot.
+**source**—the stable conversation or event cited beneath an answer.
 
 ## Scenario: discuss, then run
 
@@ -24,8 +24,11 @@ $ story chat draft
 Should the reveal happen before the midpoint?
 ```
 
-The advisory line appends a user event and one reply to the selected
-conversation. Now compose a consensus prompt:
+The advisory line needs no retrieval syntax. The responder may answer directly
+or ask the runtime to search active conversations in this session and read
+cited complete turns. The shell shows safe `[context]` progress, the reply, then
+ordered sources; only the user message and final outcome enter the transcript.
+Now compose a consensus prompt:
 
 ```text
 /run
@@ -74,13 +77,14 @@ conversation so its identity can be recorded.
 `/search QUERY` scans active subjects and visible user/reply text locally.
 `/transcript ID [COUNT] [--from SEQUENCE]` reads a fresh bounded page from an
 active or archived conversation. Neither command selects a conversation or
-calls the provider.
+calls the provider; they are explicit inspection, not agent retrieval.
 
 Ordinary lines and `/say TEXT` use the sticky target; `@AGENT TEXT` is one-shot.
 Changing conversations preserves the target. Attaching, switching, or ending a
 story session resets it to `lead`. All responders share the selected transcript;
 direct routing is not a private channel.
 
-Exact shell grammar lives in the [CLI reference](../reference/cli.md), search
-and paging in [Conversation search](../reference/conversation-search.md), and
-provider exposure in [Privacy and provider](../operations/privacy-and-provider.md).
+Exact shell grammar lives in the [CLI reference](../reference/cli.md), local
+search in [Conversation search](../reference/conversation-search.md), agent
+actions in [Bounded retrieval](../reference/conversation-retrieval.md), and
+provider exposure in [Privacy](../operations/privacy-and-provider.md).

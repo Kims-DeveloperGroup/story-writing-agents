@@ -1,8 +1,8 @@
 # Prompts and provider boundary
 
 > **Availability:** file-referenced definitions, Codex prompt staging, advisory
-> turns, debate requests with optional context, and compatible threads are
-> implemented.
+> turns with optional bounded retrieval, context-aware debates, and compatible
+> threads are implemented.
 
 Key terms: **definition**—stable context for one role; **fingerprint**—its
 hash-derived identity; **binding**—the provider object for a definition;
@@ -29,19 +29,21 @@ provider conversation state is still partitioned by story session and agent.
 
 ## Advisory context
 
-The controller passes its session, selected conversation, route, and input to
-`StoryRuntime.converse()`; it does not build context or call the backend.
-The runtime reads bounded pre-turn context, preflights and binds, saves the user
-event, makes one call, validates the reply, and saves the outcome.
+The shell passes its selected identity, route, input, and attachment-scoped
+memory service to `StoryRuntime.converse_with_retrieval()`. Runtime owns context,
+memory authorization, and transcript order. Backend holds one provider-thread
+lock across the action loop and calls only the synchronous runtime handler; it
+never receives a search, catalog, transcript, or filesystem collaborator.
 
-`BoundAgent.converse()` receives a validated `ConversationRequest` and projects
-its fields to JSON. Each context item exposes turn ID, sender, recipient, kind,
-and content, not storage metadata or window counts. It never reads or writes the
-local transcript. See [Runtime API](../reference/runtime-api.md#one-conversation-turn).
+The first provider call receives current input and bounded selected context.
+Later calls receive only runtime-authorized observations framed as untrusted
+story data. Exact payloads and action order live in
+[Bounded retrieval](../reference/conversation-retrieval.md). Direct Python
+`converse()` and its `ConversationRequest` payload remain one-step and unchanged.
 
-Conversation IDs scope visible events, not provider-private history. The same
-session-and-agent thread can have seen other subject conversations and debate
-calls. Direct routing chooses a responder; it is not a private provider channel.
+Conversation IDs scope visible events, not provider-private history. One
+session-and-agent thread can span subjects and debates. Direct routing chooses
+a responder; it is not a private provider channel.
 
 ## Debate context field
 
@@ -52,7 +54,7 @@ transcript between phases. Fresh and legacy requests omit the field entirely.
 
 This context is not concatenated into the bound prompt, phase `task`, original
 `user_payload`, current candidate, public blackboard, or owner state. There is
-no semantic retrieval, search result, or hidden memory injection. Exact request
+no debate-time retrieval, search result, or hidden memory injection. Exact request
 fields are in [Agent contracts](../reference/agent-contracts.md#debate-request).
 
 ## Codex process boundary

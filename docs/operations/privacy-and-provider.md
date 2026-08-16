@@ -1,8 +1,8 @@
 # Privacy and provider exposure
 
 > **Availability:** these controls cover local reads, advisory turns, and
-> selected-context consensus. They do not make Codex, its executable, workspace,
-> or terminal trusted.
+> retrieval-enabled advisory turns and selected-context consensus. They do not
+> make Codex, its executable, workspace, or terminal trusted.
 
 Key terms: **plaintext**—unencrypted content; **visible context**—events sent in
 a request; **provider-private history**—vendor thread state; **diagnostic**—
@@ -35,11 +35,16 @@ Terminal escaping is not redaction or anonymization. See
 
 ## Provider disclosure
 
-An advisory call sends current text and bounded complete turns from the selected
-conversation to one agent. It excludes other conversations, debates,
-manuscripts, core updates, and owner state. The agent definition separately
-provides that role's allowlisted core documents. Direct routing selects one
-responder in a shared transcript; it is not a private channel.
+A direct Python one-step call sends current text and bounded complete turns from
+its conversation. A retrieval turn begins with the same data, then may add
+runtime-authorized active-conversation search hits and complete user/reply pairs
+from the current story session. It cannot request archives, another session or
+workspace, arbitrary IDs, runtime errors, private state, tools, or native data
+access. Search/read observations are explicitly framed as untrusted story data.
+
+The agent definition separately supplies that role's allowlisted core documents.
+Debates, manuscripts, core updates, and owner state are not retrieval memory.
+Direct routing selects one responder in a shared transcript, not a private channel.
 
 Included consensus sends the captured selected-transcript event content in
 every agent request made across drafting, audits, proposals, synthesis, and
@@ -56,16 +61,19 @@ make the provider forget earlier content.
 
 ## Diagnostic redaction
 
-The backend treats included context content as sensitive when sanitizing
-process, timeout, and protocol diagnostics. Trusted progress and shell results
-show only typed metadata and fixed labels—never context, candidates, critiques,
-raw exceptions, result error/action text, or model prose.
+The backend redacts current context plus retrieval actions, queries, results,
+subjects, snippets, events, citations, canonical frames, and JSON-escaped
+variants from process, timeout, and protocol diagnostics. Retrieval progress
+shows only counts and fixed labels; source lines intentionally reveal subject
+and stable citation after the visible answer, never query, snippet, or event
+prose. Consensus progress still excludes candidates, critiques, raw exceptions,
+result errors/actions, and model prose.
 
 After an advisory user event is durable, `StoryRuntime` stores an ordinary
 failure as its type plus sanitized detail. The sanitizer:
 
-- replaces current/context variants with `<redacted>` and workspace-root forms
-  with `<workspace>`;
+- replaces current/context/retrieval variants with `<redacted>` and workspace
+  roots with `<workspace>`;
 - removes control/format characters, collapses whitespace, and trims;
 - falls back to `ExceptionType: unavailable diagnostic`; and
 - caps output at 4,096 characters with an in-limit truncation marker.

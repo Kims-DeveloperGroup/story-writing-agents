@@ -50,6 +50,11 @@ All exported runtime errors derive from `StoryWritingAgentsError`:
   use, unsupported provider, executable/preflight failure, invalid or
   mismatched replies, provider process errors/timeouts, thread ownership
   changes, and other backend protocol failures.
+- `ConversationRetrievalError` is the retrieval base;
+  `ConversationRetrievalSemanticError`, `ConversationRetrievalBudgetError`, and
+  `ConversationRetrievalObserverError` distinguish unauthorized actions,
+  exhausted whole-turn budgets, and progress delivery failure. See
+  [Bounded retrieval](../conversation-retrieval.md) for fixed messages.
 
 ## Failure behavior
 

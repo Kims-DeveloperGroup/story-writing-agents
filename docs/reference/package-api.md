@@ -48,6 +48,17 @@ The exact export inventory is:
   `ConversationSearch`, `ReferenceConversationSearch`,
   `ConversationMemoryService`, `ConversationTranscriptCursor`, and
   `ConversationTranscriptPage`;
+- bounded retrieval: `CONVERSATION_RETRIEVAL_POLICY`,
+  `ConversationRetrievalPolicy`, `ConversationRetrievalActionKind`,
+  `ConversationRetrievalAction`, `ConversationRetrievalSearchAction`,
+  `ConversationRetrievalReadAction`, `ConversationRetrievalAnswerAction`,
+  `ConversationRetrievalObservation`, `ConversationRetrievalSearchObservation`,
+  `ConversationRetrievalReadObservation`, `ConversationRetrievalSearchItem`,
+  `ConversationRetrievalTranscriptEvent`, `ConversationRetrievalSource`,
+  `ConversationRetrievalRequest`, `ConversationRetrievalReply`,
+  `ConversationRetrievalResult`, `ConversationRetrievalActionHandler`,
+  `ConversationRetrievalProgressPhase`, `ConversationRetrievalProgressEvent`,
+  and `ConversationRetrievalProgressSink`;
 - interactive parser: `ActionKind`, `InteractiveAction`, `CommandSpec`,
   `COMMANDS`, `parse_interactive_line`;
 - errors: `StoryWritingAgentsError`, `WorkspaceSecurityError`,
@@ -55,7 +66,9 @@ The exact export inventory is:
   `SessionIdError`, `ConversationNotFoundError`,
   `ConversationExistsError`, `ManuscriptExistsError`,
   `BackendProtocolError`, `SessionExistsError`, `SessionNotFoundError`,
-  `SessionInUseError`, `DebateExistsError`, and `ProgressObserverError`.
+  `SessionInUseError`, `DebateExistsError`, `ProgressObserverError`,
+  `ConversationRetrievalError`, `ConversationRetrievalSemanticError`,
+  `ConversationRetrievalBudgetError`, and `ConversationRetrievalObserverError`.
 
 `Runtime` is exactly an alias of `StoryRuntime`; `Session` is exactly an alias
 of `RuntimeSession`. They do not provide different behavior.
@@ -75,6 +88,8 @@ of `RuntimeSession`. They do not provide different behavior.
 | `SessionLeaseState` | `available`, `owned`, `in_use`, `unverified` |
 | `ConversationStatus` | `active`, `archived` |
 | `ConversationSearchMatchKind` | `exact_subject`, `subject_prefix`, `subject_substring`, `transcript` |
+| `ConversationRetrievalActionKind` | `search_conversations`, `read_transcript`, `answer` |
+| `ConversationRetrievalProgressPhase` | `search_started`, `search_completed`, `read_started`, `read_completed` |
 
 These are `StrEnum` values. Use members such as `Verdict.APPROVE`; a plain
 string like `"approve"` is not accepted where reply validation requires the
@@ -89,6 +104,7 @@ enum member.
 - [Conversation catalog](conversation-catalog.md)
 - [Conversation transcripts](conversation-transcripts.md)
 - [Conversation search and cited transcript pages](conversation-search.md)
+- [Bounded conversation retrieval](conversation-retrieval.md)
 - [Interactive command parser](interactive-command-parser.md)
 - [Identifiers and errors](configuration/identifiers-and-errors.md)
 

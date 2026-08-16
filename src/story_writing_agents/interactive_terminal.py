@@ -85,6 +85,8 @@ class InteractiveErrorCode(StrEnum):
     CONVERSATION_ARCHIVED = "conversation_archived"
     CONVERSATION_CREATE_FAILED = "conversation_create_failed"
     TRANSCRIPT_INVALID = "transcript_invalid"
+    RETRIEVAL_INVALID = "retrieval_invalid"
+    RETRIEVAL_BUDGET_EXHAUSTED = "retrieval_budget_exhausted"
     PROVIDER_PREFLIGHT_FAILED = "provider_preflight_failed"
     PROVIDER_EXITED = "provider_exited"
     PROVIDER_TIMED_OUT = "provider_timed_out"
@@ -285,6 +287,14 @@ INTERACTIVE_ERROR_SPECS: Mapping[
         InteractiveErrorCode.TRANSCRIPT_INVALID: InteractiveErrorSpec(
             "The conversation transcript is invalid.",
             "Inspect and repair the reported transcript before retrying.",
+        ),
+        InteractiveErrorCode.RETRIEVAL_INVALID: InteractiveErrorSpec(
+            "The agent returned an invalid retrieval action.",
+            "Start a new turn; if this repeats, check provider compatibility.",
+        ),
+        InteractiveErrorCode.RETRIEVAL_BUDGET_EXHAUSTED: InteractiveErrorSpec(
+            "The conversation retrieval budget was exhausted.",
+            "Ask a narrower question or use /search and /transcript directly.",
         ),
         InteractiveErrorCode.PROVIDER_PREFLIGHT_FAILED: InteractiveErrorSpec(
             "Provider preflight failed.",

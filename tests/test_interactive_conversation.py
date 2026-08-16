@@ -33,10 +33,25 @@ from story_writing_agents.conversations import (
     ConversationEventKind,
     ConversationMetadata,
 )
+from story_writing_agents.conversation_retrieval import (
+    ConversationRetrievalActionHandler,
+    ConversationRetrievalActionKind,
+    ConversationRetrievalAnswerAction,
+    ConversationRetrievalReply,
+    ConversationRetrievalRequest,
+    ConversationRetrievalResult,
+    ConversationRetrievalProgressEvent,
+    ConversationRetrievalProgressPhase,
+    ConversationRetrievalSource,
+)
+from story_writing_agents.conversation_search import ConversationCitation
 from story_writing_agents.errors import (
     BackendProtocolError,
     ConfigurationError,
     ConversationNotFoundError,
+    ConversationRetrievalBudgetError,
+    ConversationRetrievalObserverError,
+    ConversationRetrievalSemanticError,
     SessionExistsError,
     SessionIdError,
     SessionInUseError,
@@ -57,8 +72,6 @@ from story_writing_agents.interactive_terminal import (
 from story_writing_agents.models import (
     AgentDefinition,
     ConversationReply,
-    ConversationRequest,
-    ConversationResult,
 )
 from story_writing_agents.workspace import (
     FilesystemConversationCatalog,
@@ -107,18 +120,27 @@ class ScriptedRuntime:
         self.calls: list[tuple[str, str, str, str]] = []
         self.loops: list[asyncio.AbstractEventLoop] = []
         self.tasks: list[asyncio.Task[object] | None] = []
+        self.memory_services: list[object] = []
+        self.progress_sinks: list[object] = []
         self.on_call: Callable[[], None] | None = None
 
-    async def converse(
+    async def converse_with_retrieval(
         self,
         session_id: str,
         conversation_id: str,
         agent_id: str,
         text: str,
+        *,
+        memory_service: object,
+        progress_sink: object = None,
     ) -> object:
+        """Return one scripted retrieval outcome and record selected scope."""
+
         self.calls.append((session_id, conversation_id, agent_id, text))
         self.loops.append(asyncio.get_running_loop())
         self.tasks.append(asyncio.current_task())
+        self.memory_services.append(memory_service)
+        self.progress_sinks.append(progress_sink)
         if self.on_call is not None:
             self.on_call()
         outcome = self.outcomes.pop(0) if self.outcomes else "reply"
@@ -140,7 +162,7 @@ class ScriptedRuntime:
 
 
 ConversationHandler = Callable[
-    [ConversationRequest],
+    [ConversationRetrievalRequest],
     ConversationReply | BaseException | Awaitable[ConversationReply],
 ]
 
@@ -152,7 +174,7 @@ class RecordingConversationBound:
         self,
         definition: AgentDefinition,
         handler: ConversationHandler,
-        requests: list[ConversationRequest],
+        requests: list[ConversationRetrievalRequest],
         loops: list[asyncio.AbstractEventLoop],
         tasks: list[asyncio.Task[object] | None],
     ) -> None:
@@ -165,7 +187,13 @@ class RecordingConversationBound:
     async def invoke(self, _request: object) -> object:
         raise AssertionError("consensus invocation is outside this test boundary")
 
-    async def converse(self, request: ConversationRequest) -> ConversationReply:
+    async def converse_with_retrieval(
+        self,
+        request: ConversationRetrievalRequest,
+        action_handler: ConversationRetrievalActionHandler,
+    ) -> ConversationRetrievalReply:
+        """Translate one scripted terminal answer through the real handler."""
+
         if request.agent_id != self.definition.agent_id:
             raise AssertionError("conversation used the wrong bound agent")
         self.requests.append(request)
@@ -176,7 +204,22 @@ class RecordingConversationBound:
             outcome = await outcome
         if isinstance(outcome, BaseException):
             raise outcome
-        return outcome
+        if type(outcome) is not ConversationReply:
+            raise AssertionError("scripted bound handler returned an invalid reply")
+        result = action_handler.handle_conversation_retrieval_action(
+            ConversationRetrievalAnswerAction(
+                kind=ConversationRetrievalActionKind.ANSWER,
+                session_id=request.session_id,
+                conversation_id=request.conversation_id,
+                turn_id=request.turn_id,
+                action_index=1,
+                content=outcome.content,
+                citation_ids=(),
+            )
+        )
+        if type(result) is not ConversationRetrievalReply:
+            raise AssertionError("direct answer did not produce a retrieval reply")
+        return result
 
 
 def _error_record(code: InteractiveErrorCode) -> str:
@@ -206,14 +249,17 @@ def _conversation_result(
     *,
     turn_id: str = "current_turn",
     context: ConversationContextWindow | None = None,
-) -> ConversationResult:
-    return ConversationResult(
-        session_id,
-        conversation_id,
-        turn_id,
-        agent_id,
-        content,
-        _empty_context() if context is None else context,
+) -> ConversationRetrievalResult:
+    """Build one direct-answer retrieval result for controller fixtures."""
+
+    return ConversationRetrievalResult(
+        session_id=session_id,
+        conversation_id=conversation_id,
+        turn_id=turn_id,
+        agent_id=agent_id,
+        content=content,
+        context=_empty_context() if context is None else context,
+        sources=(),
     )
 
 
@@ -617,6 +663,10 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
                 ),
             ],
         )
+        self.assertEqual(len(runtime.memory_services), 4)
+        self.assertEqual(len({id(service) for service in runtime.memory_services}), 1)
+        self.assertEqual(runtime.memory_services[0].scope.session_id, "session")
+        self.assertTrue(all(callable(sink) for sink in runtime.progress_sinks))
         self.assertEqual(run_boundary.call_count, 4)
         self.assertEqual(len({id(loop) for loop in runtime.loops}), 4)
         self.assertTrue(all(loop.is_closed() for loop in runtime.loops))
@@ -666,7 +716,7 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
             conversation_id: str,
             agent_id: str,
             _text: str,
-        ) -> ConversationResult:
+        ) -> ConversationRetrievalResult:
             return _conversation_result(
                 session_id,
                 conversation_id,
@@ -714,6 +764,196 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
         )
         self.assertIn("lead> first line\nsecond\\x1bline\n", rendered)
         self.assertNotIn("\x1b", rendered)
+
+    def test_retrieval_progress_sources_and_selected_scope_render_exactly(self) -> None:
+        runtime = ScriptedRuntime()
+        turn_id = "retrieval_turn"
+
+        def outcome(
+            session_id: str,
+            conversation_id: str,
+            agent_id: str,
+            _text: str,
+        ) -> ConversationRetrievalResult:
+            """Emit one valid search/read sequence and return cited sources."""
+
+            sink = runtime.progress_sinks[-1]
+            assert callable(sink)
+            common = {
+                "session_id": session_id,
+                "conversation_id": conversation_id,
+                "turn_id": turn_id,
+                "agent_id": agent_id,
+            }
+            sink(
+                ConversationRetrievalProgressEvent(
+                    **common,
+                    action_index=1,
+                    phase=ConversationRetrievalProgressPhase.SEARCH_STARTED,
+                )
+            )
+            sink(
+                ConversationRetrievalProgressEvent(
+                    **common,
+                    action_index=1,
+                    phase=ConversationRetrievalProgressPhase.SEARCH_COMPLETED,
+                    search_hit_count=2,
+                    observation_utf8_bytes=321,
+                    truncated=True,
+                )
+            )
+            sink(
+                ConversationRetrievalProgressEvent(
+                    **common,
+                    action_index=2,
+                    phase=ConversationRetrievalProgressPhase.READ_STARTED,
+                )
+            )
+            sink(
+                ConversationRetrievalProgressEvent(
+                    **common,
+                    action_index=2,
+                    phase=ConversationRetrievalProgressPhase.READ_COMPLETED,
+                    transcript_turn_count=2,
+                    transcript_event_count=4,
+                    observation_utf8_bytes=654,
+                    truncated=False,
+                )
+            )
+            return ConversationRetrievalResult(
+                session_id=session_id,
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                agent_id=agent_id,
+                content="cited answer",
+                context=_empty_context(),
+                sources=(
+                    ConversationRetrievalSource(
+                        subject="Conversation source",
+                        citation=ConversationCitation(
+                            session_id,
+                            "source_conversation",
+                            None,
+                            None,
+                            None,
+                        ),
+                    ),
+                    ConversationRetrievalSource(
+                        subject="Event source",
+                        citation=ConversationCitation(
+                            session_id,
+                            "source_conversation",
+                            "source_turn",
+                            7,
+                            ConversationEventKind.AGENT_REPLY,
+                        ),
+                    ),
+                ),
+            )
+
+        runtime.outcomes.append(outcome)
+        (
+            _workspace,
+            _catalog,
+            _entries,
+            controller,
+            _backend,
+            callbacks,
+            _store,
+        ) = self.prepared_selected_controller(
+            "question",
+            "/quit",
+            runtime=runtime,
+        )
+        self.assertEqual(controller.run_session_lobby(), 0)
+
+        rendered = "".join(callbacks.records)
+        expected_records = (
+            "[context] Retrieval search action 1 started.\n",
+            "[context] Retrieval search action 1 completed: 2 hits; "
+            "321 observation bytes; truncated: yes.\n",
+            "[context] Retrieval read action 2 started.\n",
+            "[context] Retrieval read action 2 completed: 2 turns; 4 events; "
+            "654 observation bytes; truncated: no.\n",
+            "lead> cited answer\n",
+            "[context] Source 1: Subject: Conversation source | "
+            "Conversation: source_conversation\n",
+            "[context] Source 2: Subject: Event source | "
+            "Conversation: source_conversation | Turn: source_turn | "
+            "Sequence: 7 | Kind: agent_reply\n",
+        )
+        for record in expected_records:
+            self.assertIn(record, rendered)
+        self.assertEqual(
+            [rendered.index(record) for record in expected_records],
+            sorted(rendered.index(record) for record in expected_records),
+        )
+        self.assertEqual(runtime.memory_services[0].scope.session_id, "session")
+
+    def test_retrieval_progress_rejects_identity_phase_and_pair_order(self) -> None:
+        runtime = ScriptedRuntime()
+        (
+            _workspace,
+            _catalog,
+            entries,
+            controller,
+            _backend,
+            _callbacks,
+            _store,
+        ) = self.prepared_selected_controller(runtime=runtime)
+        conversation_id = entries[0].conversation_id
+        common = {
+            "session_id": "session",
+            "conversation_id": conversation_id,
+            "turn_id": "progress_turn",
+            "agent_id": LEAD_ORCHESTRATOR,
+            "action_index": 1,
+        }
+        events: list[ConversationRetrievalProgressEvent] = []
+        invalid_first = ConversationRetrievalProgressEvent(
+            **common,
+            phase=ConversationRetrievalProgressPhase.READ_STARTED,
+        )
+        with self.assertRaisesRegex(ValueError, "begin with search"):
+            controller._accept_conversation_retrieval_progress(
+                invalid_first,
+                expected_session_id="session",
+                expected_conversation_id=conversation_id,
+                expected_agent_id=LEAD_ORCHESTRATOR,
+                events=events,
+            )
+        wrong_identity = ConversationRetrievalProgressEvent(
+            **(common | {"session_id": "foreign_session"}),
+            phase=ConversationRetrievalProgressPhase.SEARCH_STARTED,
+        )
+        with self.assertRaisesRegex(ValueError, "identity"):
+            controller._accept_conversation_retrieval_progress(
+                wrong_identity,
+                expected_session_id="session",
+                expected_conversation_id=conversation_id,
+                expected_agent_id=LEAD_ORCHESTRATOR,
+                events=events,
+            )
+        started = ConversationRetrievalProgressEvent(
+            **common,
+            phase=ConversationRetrievalProgressPhase.SEARCH_STARTED,
+        )
+        controller._accept_conversation_retrieval_progress(
+            started,
+            expected_session_id="session",
+            expected_conversation_id=conversation_id,
+            expected_agent_id=LEAD_ORCHESTRATOR,
+            events=events,
+        )
+        with self.assertRaisesRegex(ValueError, "pair"):
+            controller._accept_conversation_retrieval_progress(
+                started,
+                expected_session_id="session",
+                expected_conversation_id=conversation_id,
+                expected_agent_id=LEAD_ORCHESTRATOR,
+                events=events,
+            )
+        self.assertEqual(events, [started])
 
     def test_parse_error_category_uses_original_shape_not_error_prose(self) -> None:
         workspace = self.make_workspace()
@@ -854,6 +1094,14 @@ class FailureAndResultTests(InteractiveConversationTestCase):
                 BackendProtocolError("provider exited and timed out secret"),
                 InteractiveErrorCode.PROVIDER_PROTOCOL_ERROR,
             ),
+            (
+                ConversationRetrievalSemanticError(),
+                InteractiveErrorCode.RETRIEVAL_INVALID,
+            ),
+            (
+                ConversationRetrievalBudgetError(),
+                InteractiveErrorCode.RETRIEVAL_BUDGET_EXHAUSTED,
+            ),
         )
         for failure, expected_code in cases:
             with self.subTest(failure=type(failure).__name__):
@@ -901,7 +1149,7 @@ class FailureAndResultTests(InteractiveConversationTestCase):
             conversation_id: str,
             agent_id: str,
             _text: str,
-        ) -> ConversationResult:
+        ) -> ConversationRetrievalResult:
             return _conversation_result(
                 "foreign_session",
                 conversation_id,
@@ -914,7 +1162,7 @@ class FailureAndResultTests(InteractiveConversationTestCase):
             _conversation_id: str,
             agent_id: str,
             _text: str,
-        ) -> ConversationResult:
+        ) -> ConversationRetrievalResult:
             return _conversation_result(
                 session_id,
                 "foreign_conversation",
@@ -927,7 +1175,7 @@ class FailureAndResultTests(InteractiveConversationTestCase):
             conversation_id: str,
             _agent_id: str,
             _text: str,
-        ) -> ConversationResult:
+        ) -> ConversationRetrievalResult:
             return _conversation_result(
                 session_id,
                 conversation_id,
@@ -940,6 +1188,7 @@ class FailureAndResultTests(InteractiveConversationTestCase):
             ("wrong session", wrong_session),
             ("wrong conversation", wrong_conversation),
             ("wrong agent", wrong_agent),
+            ("retrieval observer", ConversationRetrievalObserverError()),
         )
         for label, outcome in cases:
             with self.subTest(case=label):
@@ -995,7 +1244,7 @@ class RealRetainedRuntimeTests(InteractiveConversationTestCase):
         backend: AgentBackend,
         handler: ConversationHandler,
         definitions: list[AgentDefinition],
-        requests: list[ConversationRequest],
+        requests: list[ConversationRetrievalRequest],
         loops: list[asyncio.AbstractEventLoop],
         tasks: list[asyncio.Task[object] | None],
     ) -> Callable[[AgentDefinition], Awaitable[RecordingConversationBound]]:
@@ -1041,11 +1290,11 @@ class RealRetainedRuntimeTests(InteractiveConversationTestCase):
             runtime=_REAL_RUNTIME,
         )
         definitions: list[AgentDefinition] = []
-        requests: list[ConversationRequest] = []
+        requests: list[ConversationRetrievalRequest] = []
         loops: list[asyncio.AbstractEventLoop] = []
         tasks: list[asyncio.Task[object] | None] = []
 
-        def handler(request: ConversationRequest) -> ConversationReply:
+        def handler(request: ConversationRetrievalRequest) -> ConversationReply:
             return ConversationReply(
                 request.session_id,
                 request.conversation_id,
@@ -1190,12 +1439,14 @@ class RealRetainedRuntimeTests(InteractiveConversationTestCase):
             catalog=catalog,
             runtime=_REAL_RUNTIME,
         )
-        requests: list[ConversationRequest] = []
+        requests: list[ConversationRetrievalRequest] = []
         definitions: list[AgentDefinition] = []
         loops: list[asyncio.AbstractEventLoop] = []
         tasks: list[asyncio.Task[object] | None] = []
 
-        def handler(request: ConversationRequest) -> ConversationReply | BaseException:
+        def handler(
+            request: ConversationRetrievalRequest,
+        ) -> ConversationReply | BaseException:
             if request.content == "sensitive user text":
                 return BackendProtocolError(
                     f"{workspace.root}\x1b provider diagnostic"

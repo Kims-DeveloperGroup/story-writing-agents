@@ -1,14 +1,11 @@
 # Backend and session API
 
-> **Availability:** `AgentBackend`, `BoundAgent`, strict lifecycle methods, and
-> persisted `StoryRuntime.converse()` are implemented; Codex is the only provider.
-> The CLI retains compatibility `session start|end` and uses strict lifecycle
-> through its [session lobby](../guides/story-sessions.md).
+> **Availability:** `AgentBackend`, `BoundAgent`, one-step and retrieval calls,
+> and strict session lifecycle are implemented. Codex is the only provider.
 
 Key terms: **binding**—one immutable agent/provider pairing; **manifest**—the
-durable session and thread record; **lease sidecar**—temporary process ownership
-metadata; **thread**—a resumable provider conversation reference;
-**conversation turn**—one request and its correlated reply.
+durable session/thread record; **lease**—temporary process ownership;
+**thread**—a resumable provider conversation reference.
 
 ```python
 AgentBackend(
@@ -21,6 +18,8 @@ AgentBackend(
 )
 await AgentBackend.bind(definition: AgentDefinition) -> BoundAgent
 await BoundAgent.converse(request: ConversationRequest) -> ConversationReply
+await BoundAgent.converse_with_retrieval(request: ConversationRetrievalRequest,
+                                         handler: ConversationRetrievalActionHandler) -> ConversationRetrievalReply
 AgentBackend.prepare_session(session_id: str) -> None
 AgentBackend.get_session_summary(session_id: str, *, selected_session: str | None = None) -> SessionSummary
 AgentBackend.list_sessions(*, selected_session: str | None = None) -> tuple[SessionSummary, ...]
@@ -33,26 +32,24 @@ AgentBackend.end_session(session_id: str) -> dict[str, Any]
 AgentBackend.close() -> None
 ```
 
-`model=None` uses the Codex CLI default while the invocation ignores user
-configuration. Timeout must be positive. Overrides map canonical agent IDs to
-configured vendor names for this backend instance. `gemini` is recognized but
-rejected as unimplemented; there is no runtime-imported plugin loader.
+`model=None` uses the Codex CLI default; invocation ignores user configuration.
+Timeout is positive. Overrides map canonical agents to vendor names. Reserved
+`gemini` is unimplemented; there is no runtime-imported plugin loader.
 
-`bind()` verifies the definition and returns a `BoundAgent` with public
-`backend`, `definition`, `vendor`, and `staging_directory` attributes.
-`invoke()` runs a debate phase; `converse()` runs the provider-facing part of
-one visible conversation turn.
+`bind()` verifies a definition and returns a `BoundAgent` with public `backend`,
+`definition`, `vendor`, and `staging_directory`. `invoke()` runs a debate phase.
 
 ## Conversation calls
 
 | Concern | Contract |
 | --- | --- |
-| Request | Requires an exact, revalidated `ConversationRequest` addressed to the bound agent before provider work. |
-| Reply | Requires exactly four nonempty UTF-8 fields and matching session, conversation, and turn IDs; invalid JSON, fields, or correlation raise `BackendProtocolError`. |
-| Provider | Codex is implemented; unsupported configured vendors raise `ConfigurationError`. |
-| Lifecycle | Shares `invoke()` lease, timeout, cancellation, taint, and `(session_id, backend, agent_id)` lock rules; changed fingerprints and tainted threads start fresh. |
-| Thread scope | `conversation_id` is not a thread key: visible context stays in one conversation while provider-private history can span conversations and debate calls. See the [flow](../design/prompts-and-provider.md#conversation-turn-flow). |
-| Persistence | May update provider metadata, not local content. `StoryRuntime` owns the persisted flow; direct callers own their transcript. See [Runtime API](runtime-api.md#one-conversation-turn). |
+| One-step | Exact `ConversationRequest`; one correlated reply. Its signature and payload are unchanged. |
+| Retrieval | Exact request plus synchronous handler. One thread lock covers the loop; backend receives no memory service. |
+| Validation | Malformed JSON/schema or invalid/miscorrelated handler outcomes raise `BackendProtocolError`. Runtime maps provider action identity/index violations to `ConversationRetrievalSemanticError`; unsupported vendors raise `ConfigurationError`. |
+| Lifecycle | Both paths share lease, per-call timeout, cancellation, taint, and `(session, backend, agent)` serialization; changed fingerprints or taint start fresh. |
+| Scope and writes | Conversation ID is not a thread key. Private history may span conversations/debates. Only provider metadata may change. |
+
+Runtime owns transcript writes and retrieval authority. See [Runtime API](runtime-api.md#one-conversation-turn), [retrieval](conversation-retrieval.md), and [provider flow](../design/prompts-and-provider.md#conversation-turn-flow).
 
 ## Session status
 
@@ -69,9 +66,8 @@ SessionSummary(
 )
 ```
 
-This value is frozen and slotted. `active` is durable permission for provider
-work. `selected` only compares the caller-supplied name; the backend never
-reads or writes CLI context. Lease state is temporary attachment:
+This frozen value separates durable `active`, caller-computed `selected`, and
+temporary lease state. Backend never reads or writes CLI context.
 
 | State | Meaning at read time |
 | --- | --- |
@@ -80,47 +76,33 @@ reads or writes CLI context. Lease state is temporary attachment:
 | `in_use` | POSIX same-host unowned PID is demonstrably live. |
 | `unverified` | Remote host, ambiguous probe, permission failure, or any unowned non-POSIX sidecar; acquisition is blocked. |
 
-When a sidecar exists, its validated hostname and PID remain visible even if
-available. Both are `None` only without a sidecar.
-The optional selected-session value is validated but need not name a persisted
-provider session.
-
-This page is the normative lease-classification and reclamation contract.
-Status reads never acquire, reclaim, or remove a lease. On POSIX, same-host
-liveness uses the non-destructive `os.kill(pid, 0)` probe: a demonstrably gone
-owner is `available`, but only a later claim may reclaim its sidecar; a live
-owner is `in_use`. A permission failure or other ambiguous probe is
-`unverified`. A remote-host sidecar is also `unverified`. On non-POSIX systems,
-every unowned same-host sidecar is `unverified` and cannot be reclaimed.
-
-There is no remote or native non-POSIX owner probe, heartbeat, timeout,
-age-based expiry, or stale-remote reclamation. PID probing cannot distinguish
-PID reuse, and hostname equality is not a distributed identity guarantee.
+A sidecar's hostname/PID remain visible when `available`; both are `None` only
+without a sidecar. Selected input need not name a persisted session. Status
+reads never acquire, reclaim, or remove.
+POSIX same-host liveness uses non-destructive `os.kill(pid, 0)`; only a later
+claim reclaims a demonstrably dead sidecar. Permission/ambiguous probes, remote
+hosts, and every unowned non-POSIX sidecar are `unverified`. There is no remote
+probe, heartbeat, expiry, or stale-remote reclaim. PID reuse and hostname
+equality remain imperfect identity evidence.
 
 ## Lifecycle methods
 
 | Method | Exact lifecycle distinction |
 | --- | --- |
-| `get_session_summary` | Nonmutating, provider-free read; missing raises `SessionNotFoundError`. |
-| `list_sessions` | Nonmutating tuple, newest update first then ID; absent directory returns `()`. |
-| `prepare_session` | Preflights routes/executable, requires active, retains lease, returns `None`. |
-| `create_session` | Preflights, exclusively creates active, retains lease; any manifest raises `SessionExistsError`. |
-| `resume_session` | Preflights, retains existing lease, reactivates only if inactive; missing raises not found. |
-| `attach_session` | Preflights and retains an existing active session without rewriting manifest. |
-| `detach_session` | Releases this backend's lease without ending, deleting threads, or changing selection. |
-| `start_session` | Compatibility create/reactivate without executable preflight; preserves threads and releases transient lease. |
-| `end_session` | Writes inactive using owned/transient lease, preserves threads, then releases. |
-| `close` | Releases owned leases and prompt staging without deactivation; closed backends cannot be reused. |
+| `get_session_summary` | Provider-free read; missing raises `SessionNotFoundError`. |
+| `list_sessions` | Provider-free, newest update then ID; absent directory returns `()`. |
+| `prepare_session` | Preflight, require active, retain lease, return `None`. |
+| `create_session` | Preflight and exclusively create active; any manifest means exists. |
+| `resume_session` | Preflight, retain lease, reactivate only when inactive. |
+| `attach_session` | Preflight and retain existing active without manifest rewrite. |
+| `detach_session` | Release this lease; keep active state, threads, and selection. |
+| `start_session` | Compatibility create/reactivate without executable preflight; release transient lease. |
+| `end_session` | Write inactive, preserve threads, release lease. |
+| `close` | Release leases/staging without deactivation; prohibit reuse. |
 
-`prepare_session` and `attach_session` reject inactive state with
-`BackendProtocolError`; lifecycle methods validate IDs and persisted state.
-An acquisition blocked by a live or unverifiable owner raises
-`SessionInUseError` without its token. Changed ownership raises
-`BackendProtocolError` and is not deleted. A call releases a lease newly
-acquired before its failure; a previously owned lease stays attached after an
-owned read/write failure.
+Lifecycle methods validate IDs/state. Prepare/attach reject inactive state.
+Live or unverifiable ownership raises `SessionInUseError` without its token;
+changed ownership raises `BackendProtocolError` and is not deleted. Failure
+releases a newly acquired lease but retains a previously owned one.
 
-Detach, end, and close retain resumable thread metadata. Exact manifest and
-sidecar schemas are in
-[Session storage](configuration/session-storage.md); ordering and platform
-limits are in [Session lifecycle design](../design/session-lifecycle.md).
+Detach, end, and close retain threads. See [Session storage](configuration/session-storage.md) and [Session lifecycle](../design/session-lifecycle.md).

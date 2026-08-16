@@ -4,8 +4,8 @@ Use this index to find one canonical answer instead of searching a long manual.
 
 > **Availability:** bare `story` and `story chat` open the installed TTY shell.
 > It manages story sessions and subject conversations, routes single-line
-> advisory turns, searches and reads transcripts, and runs selected-conversation
-> consensus. `/history` and standalone artifact commands remain separate.
+> retrieval-enabled turns, searches and reads transcripts, and runs
+> selected-conversation consensus. `/history` and standalone artifact commands remain separate.
 
 ## Availability matrix
 
@@ -21,7 +21,8 @@ Use this index to find one canonical answer instead of searching a long manual.
 | Compose a prompt and render safe terminal records | Bare shell `/run`; module-supported terminal Python API |
 | Append/read transcripts; derive bounded complete-turn context | Shell turns append/consume context and `/transcript` reads fresh bounded pages; Python API |
 | Search one session and cite hits | Attached shell `/search` for active records; Python API can explicitly include archived records |
-| Persist and send one explicitly addressed conversation turn | Installed shell for its selected conversation; `StoryRuntime` for an explicit ID |
+| Ask an agent to retrieve cited conversation history | Selected shell conversation; additive Python runtime API; active records in the current session only |
+| Persist and send one explicitly addressed one-step turn | Existing `StoryRuntime.converse()` Python API |
 | Run consensus with included, fresh, or draft-file input | Selected active shell conversation; noninteractive CLI and Python API remain available |
 | History and standalone artifact commands | Not implemented in the shell |
 
@@ -50,6 +51,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 - [Conversation catalog](reference/conversation-catalog.md)
 - [Conversation transcripts](reference/conversation-transcripts.md)
 - [Conversation search and cited transcript pages](reference/conversation-search.md)
+- [Bounded agent-directed conversation retrieval](reference/conversation-retrieval.md)
 - [Interactive command parser](reference/interactive-command-parser.md)
 - [Interactive terminal component](reference/interactive-terminal.md)
 - [Backend and sessions](reference/backend-and-sessions.md)

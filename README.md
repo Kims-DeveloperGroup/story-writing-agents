@@ -10,8 +10,8 @@ and write a manuscript only after all three voting specialists agree.
 > runs, inspection, persistent Codex sessions, a provider-free smoke test, and an
 > interactive TTY shell. After attaching a story session, the shell searches and
 > reads conversations; a selected active conversation also supports routed
-> advisory turns plus prompt, fresh, and draft-file consensus runs. History and
-> standalone artifact commands remain unavailable there.
+> advisory turns with cited retrieval, plus prompt, fresh, and draft-file consensus
+> runs. History and standalone artifact commands remain unavailable there.
 
 ## Quick start
 
@@ -63,7 +63,7 @@ initialized workspace and use its saved session selection. Scripts can pass
 - [Workspace guide](docs/guides/workspaces.md) explains the editable project
   files.
 - [Story sessions](docs/guides/story-sessions.md) shows the interactive shell,
-  conversation search, transcript reads, and agent routing.
+  conversation search, transcript reads, and cited agent retrieval.
 - [Consensus-run guide](docs/guides/consensus-runs.md) covers prompts, drafts,
   outputs, and round limits.
 - [CLI reference](docs/reference/cli.md) is the exact installed command contract.
@@ -76,11 +76,11 @@ initialized workspace and use its saved session selection. Scripts can pass
 `AgentBackend` is the concrete provider coordinator; Codex is the only
 implemented provider. `gemini` is a reserved configuration value and fails
 preflight. `StoryRuntime` owns consensus and advisory-turn sequencing and
-persistence. See the [system design](docs/design/overview.md) for responsibilities.
+retrieval authorization. See the [system design](docs/design/overview.md).
 
 <a id="minimal-python-api"></a>
 
-For Python integrations, start with the [runtime API](docs/reference/runtime-api.md) and [agent contracts](docs/reference/agent-contracts.md).
+For Python integrations, start with the [runtime API](docs/reference/runtime-api.md), [agent contracts](docs/reference/agent-contracts.md), and [bounded retrieval](docs/reference/conversation-retrieval.md).
 
 <a id="current-limitations"></a>
 
@@ -94,9 +94,9 @@ For Python integrations, start with the [runtime API](docs/reference/runtime-api
   not a power-loss-safe transaction.
 - The interactive shell accepts one line per advisory turn; its multiline
   composer is used only by bare `/run`, and active advisory-turn cancellation is
-  unavailable. Search is active-only, transcript reads are bounded, and
+  unavailable. Agent retrieval is current-session, active-only, and bounded;
   `/history` and standalone artifact commands remain unavailable. See
-  [conversation search and reads](docs/reference/conversation-search.md).
+  [bounded conversation retrieval](docs/reference/conversation-retrieval.md).
 
 ## Development
 

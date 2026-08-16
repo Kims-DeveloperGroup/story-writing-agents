@@ -19,18 +19,53 @@ from .agents import (
 )
 from .backend import AgentBackend, BoundAgent
 from .config import ConfigManager
+from .conversation_retrieval import (
+    CONVERSATION_RETRIEVAL_POLICY,
+    ConversationRetrievalAction,
+    ConversationRetrievalActionKind,
+    ConversationRetrievalAnswerAction,
+    ConversationRetrievalObservation,
+    ConversationRetrievalProgressEvent,
+    ConversationRetrievalProgressPhase,
+    ConversationRetrievalProgressSink,
+    ConversationRetrievalReadAction,
+    ConversationRetrievalReadObservation,
+    ConversationRetrievalReply,
+    ConversationRetrievalRequest,
+    ConversationRetrievalResult,
+    ConversationRetrievalSearchAction,
+    ConversationRetrievalSearchItem,
+    ConversationRetrievalSearchObservation,
+    ConversationRetrievalSource,
+    ConversationRetrievalTranscriptEvent,
+    serialize_conversation_retrieval_observation,
+)
+from .conversation_search import (
+    ConversationCitation,
+    ConversationMemoryService,
+    ConversationSearchHit,
+    ConversationSearchQuery,
+    ConversationSearchResult,
+    ConversationSearchScope,
+    ConversationTranscriptCursor,
+    ConversationTranscriptPage,
+)
 from .conversations import (
     ConversationContextWindow,
     ConversationEvent,
     ConversationEventAppend,
     ConversationEventKind,
     ConversationEventStore,
+    ConversationStatus,
     validate_conversation_context_window,
 )
 from .directives import apply_directive as persist_directive
 from .errors import (
     BackendProtocolError,
     ConfigurationError,
+    ConversationRetrievalBudgetError,
+    ConversationRetrievalObserverError,
+    ConversationRetrievalSemanticError,
     ManuscriptExistsError,
     ProgressObserverError,
     WorkspaceFormatError,
@@ -96,6 +131,889 @@ class _ProgressEmitter:
         if outcome is not None:
             cause = TypeError("debate progress sink must return None")
             raise ProgressObserverError() from cause
+
+
+class _ConversationRetrievalProgressEmitter:
+    """Synchronously deliver prevalidated retrieval progress events."""
+
+    __slots__ = ("sink",)
+
+    def __init__(self, sink: ConversationRetrievalProgressSink | None) -> None:
+        """Retain one declared-synchronous optional sink without invoking it."""
+
+        self.sink = sink
+
+    def emit(self, event: ConversationRetrievalProgressEvent) -> None:
+        """Deliver one event or raise a fixed chained observer failure.
+
+        The event owns content-free schema validation. Synchronous exceptions,
+        non-``None`` returns, awaitables, and async generators become
+        ``ConversationRetrievalObserverError``; coroutine objects are closed
+        and no observer result is scheduled or persisted here.
+        """
+
+        if self.sink is None:
+            return
+        try:
+            outcome = self.sink(event)
+        except BaseException as exc:
+            raise ConversationRetrievalObserverError() from exc
+        if inspect.isawaitable(outcome):
+            if inspect.iscoroutine(outcome):
+                outcome.close()
+            del outcome
+            cause = TypeError(
+                "conversation retrieval progress sink must be synchronous"
+            )
+            raise ConversationRetrievalObserverError() from cause
+        if inspect.isasyncgen(outcome):
+            del outcome
+            cause = TypeError(
+                "conversation retrieval progress sink must be synchronous"
+            )
+            raise ConversationRetrievalObserverError() from cause
+        if outcome is not None:
+            cause = TypeError(
+                "conversation retrieval progress sink must return None"
+            )
+            raise ConversationRetrievalObserverError() from cause
+
+
+class _RuntimeConversationRetrievalHandler:
+    """Authorize one retrieval turn against an exact scoped memory service."""
+
+    __slots__ = (
+        "_completed",
+        "_diagnostic_values",
+        "_has_read",
+        "_has_searched",
+        "_memory_service",
+        "_next_action_index",
+        "_nonterminal_actions",
+        "_observation_utf8_bytes",
+        "_progress",
+        "_request",
+        "_search_hits",
+        "_search_sources",
+        "_supplied_sources",
+        "_transcript_events",
+        "_transcript_turns",
+        "_final_reply",
+    )
+
+    def __init__(
+        self,
+        request: ConversationRetrievalRequest,
+        memory_service: ConversationMemoryService,
+        progress: _ConversationRetrievalProgressEmitter,
+        diagnostic_values: set[str],
+    ) -> None:
+        """Retain validated collaborators and initialize call-local counters.
+
+        Construction performs no catalog, transcript, provider, or persistence
+        operation. Contract violations in the already validated inputs raise
+        before the user event is appended by the owning runtime.
+        """
+
+        self._request = request
+        self._memory_service = memory_service
+        self._progress = progress
+        self._diagnostic_values = diagnostic_values
+        self._next_action_index = 1
+        self._nonterminal_actions = 0
+        self._search_hits = 0
+        self._transcript_turns = 0
+        self._transcript_events = 0
+        self._observation_utf8_bytes = 0
+        self._has_searched = False
+        self._has_read = False
+        self._completed = False
+        self._search_sources: dict[str, ConversationRetrievalSource] = {}
+        self._supplied_sources: dict[str, ConversationRetrievalSource] = {}
+        self._final_reply: ConversationRetrievalReply | None = None
+
+    def handle_conversation_retrieval_action(
+        self,
+        action: ConversationRetrievalAction,
+    ) -> ConversationRetrievalObservation | ConversationRetrievalReply:
+        """Authorize exactly one decoded action and return its safe outcome.
+
+        Correlation and index are checked first, followed by phase, reference,
+        range, and budget authorization. Search/read operations emit started
+        progress, call the exact scoped service once, deeply revalidate its
+        result, build and charge one canonical frame, emit completed progress,
+        then commit counters and supplied-source maps. Answers resolve only
+        previously supplied IDs. Semantic, budget, memory, and observer
+        failures propagate without local durability.
+        """
+
+        canonical = self._canonical_action(action)
+        self._record_action_diagnostics(canonical)
+        self._validate_action_correlation(canonical)
+        if type(canonical) is ConversationRetrievalSearchAction:
+            return self._handle_search(canonical)
+        if type(canonical) is ConversationRetrievalReadAction:
+            return self._handle_read(canonical)
+        assert type(canonical) is ConversationRetrievalAnswerAction
+        return self._handle_answer(canonical)
+
+    def validate_returned_reply(
+        self,
+        value: object,
+    ) -> ConversationRetrievalReply:
+        """Return the exact reply previously authorized by this handler.
+
+        This pure post-provider check prevents a binding from fabricating or
+        altering terminal content or sources. Invalid types, correlation, or
+        divergence raise ``BackendProtocolError`` and no durability occurs.
+        """
+
+        if type(value) is not ConversationRetrievalReply:
+            raise BackendProtocolError(
+                "conversation retrieval binding returned an invalid reply"
+            )
+        try:
+            canonical = ConversationRetrievalReply(
+                session_id=value.session_id,
+                conversation_id=value.conversation_id,
+                turn_id=value.turn_id,
+                content=value.content,
+                sources=value.sources,
+            )
+        except Exception as exc:
+            raise BackendProtocolError(
+                "conversation retrieval reply is invalid"
+            ) from exc
+        if self._final_reply is None or canonical != self._final_reply:
+            raise BackendProtocolError(
+                "conversation retrieval reply was not authorized by its handler"
+            )
+        return canonical
+
+    def _canonical_action(
+        self,
+        action: ConversationRetrievalAction,
+    ) -> ConversationRetrievalAction:
+        """Reconstruct an exact action or raise the fixed semantic failure."""
+
+        try:
+            if type(action) is ConversationRetrievalSearchAction:
+                return ConversationRetrievalSearchAction(
+                    kind=action.kind,
+                    session_id=action.session_id,
+                    conversation_id=action.conversation_id,
+                    turn_id=action.turn_id,
+                    action_index=action.action_index,
+                    query=action.query,
+                )
+            if type(action) is ConversationRetrievalReadAction:
+                return ConversationRetrievalReadAction(
+                    kind=action.kind,
+                    session_id=action.session_id,
+                    conversation_id=action.conversation_id,
+                    turn_id=action.turn_id,
+                    action_index=action.action_index,
+                    citation_id=action.citation_id,
+                    start_sequence=action.start_sequence,
+                    end_sequence=action.end_sequence,
+                )
+            if type(action) is ConversationRetrievalAnswerAction:
+                return ConversationRetrievalAnswerAction(
+                    kind=action.kind,
+                    session_id=action.session_id,
+                    conversation_id=action.conversation_id,
+                    turn_id=action.turn_id,
+                    action_index=action.action_index,
+                    content=action.content,
+                    citation_ids=action.citation_ids,
+                )
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise ConversationRetrievalSemanticError() from exc
+        raise ConversationRetrievalSemanticError() from TypeError(
+            "unsupported conversation retrieval action"
+        )
+
+    def _validate_action_correlation(
+        self,
+        action: ConversationRetrievalAction,
+    ) -> None:
+        """Require current-turn identity and exact sequential action index."""
+
+        request = self._request
+        if self._completed or (
+            action.session_id != request.session_id
+            or action.conversation_id != request.conversation_id
+            or action.turn_id != request.turn_id
+            or action.action_index != self._next_action_index
+        ):
+            raise ConversationRetrievalSemanticError()
+
+    def _validate_nonterminal_budget(self) -> None:
+        """Reject a fifth nonterminal action before progress or memory access."""
+
+        if (
+            self._nonterminal_actions
+            >= CONVERSATION_RETRIEVAL_POLICY.max_nonterminal_actions
+            or self._next_action_index
+            >= CONVERSATION_RETRIEVAL_POLICY.max_provider_calls
+        ):
+            raise ConversationRetrievalBudgetError()
+
+    def _handle_search(
+        self,
+        action: ConversationRetrievalSearchAction,
+    ) -> ConversationRetrievalSearchObservation:
+        """Authorize, execute, frame, report, and commit one bounded search."""
+
+        if self._has_read:
+            raise ConversationRetrievalSemanticError()
+        self._validate_nonterminal_budget()
+        remaining_hits = (
+            CONVERSATION_RETRIEVAL_POLICY.max_search_hits_total
+            - self._search_hits
+        )
+        if remaining_hits < 1:
+            raise ConversationRetrievalBudgetError()
+        try:
+            query = ConversationSearchQuery(
+                text=action.query,
+                limit=min(
+                    CONVERSATION_RETRIEVAL_POLICY.max_search_hits_per_action,
+                    remaining_hits,
+                ),
+                include_archived=False,
+            )
+        except (TypeError, ValueError) as exc:
+            raise ConversationRetrievalSemanticError() from exc
+
+        self._progress.emit(
+            self._progress_event(
+                action.action_index,
+                ConversationRetrievalProgressPhase.SEARCH_STARTED,
+            )
+        )
+        raw_result = self._memory_service.search(query)
+        StoryRuntime._reject_async_result(
+            raw_result,
+            operation="conversation retrieval search",
+        )
+        self._record_search_result_diagnostics(raw_result)
+        result = self._canonical_search_result(raw_result, query=query)
+        items = tuple(
+            ConversationRetrievalSearchItem(
+                citation_id=f"s{action.action_index}h{ordinal}",
+                source=ConversationRetrievalSource(
+                    subject=hit.subject,
+                    citation=hit.citation,
+                ),
+                match_kind=hit.match_kind,
+                snippet=hit.snippet,
+            )
+            for ordinal, hit in enumerate(result.hits, start=1)
+        )
+        observation = ConversationRetrievalSearchObservation(
+            session_id=self._request.session_id,
+            conversation_id=self._request.conversation_id,
+            turn_id=self._request.turn_id,
+            action_index=action.action_index,
+            hits=items,
+            truncated=result.truncated,
+        )
+        frame, frame_bytes = self._charged_observation(observation)
+        self._record_observation_diagnostics(observation, frame)
+        self._progress.emit(
+            self._progress_event(
+                action.action_index,
+                ConversationRetrievalProgressPhase.SEARCH_COMPLETED,
+                search_hit_count=len(items),
+                observation_utf8_bytes=frame_bytes,
+                truncated=observation.truncated,
+            )
+        )
+
+        self._nonterminal_actions += 1
+        self._search_hits += len(items)
+        self._observation_utf8_bytes += frame_bytes
+        self._has_searched = True
+        self._next_action_index += 1
+        for item in items:
+            self._search_sources[item.citation_id] = item.source
+            self._supplied_sources[item.citation_id] = item.source
+        return observation
+
+    def _handle_read(
+        self,
+        action: ConversationRetrievalReadAction,
+    ) -> ConversationRetrievalReadObservation:
+        """Authorize, execute, filter, frame, report, and commit one read."""
+
+        if not self._has_searched:
+            raise ConversationRetrievalSemanticError()
+        source = self._search_sources.get(action.citation_id)
+        if source is None:
+            raise ConversationRetrievalSemanticError()
+        citation_sequence = source.citation.sequence
+        if citation_sequence is not None and (
+            citation_sequence < action.start_sequence
+            or (
+                action.end_sequence is not None
+                and citation_sequence > action.end_sequence
+            )
+        ):
+            raise ConversationRetrievalSemanticError()
+        self._validate_nonterminal_budget()
+        remaining_turns = (
+            CONVERSATION_RETRIEVAL_POLICY.max_transcript_turns
+            - self._transcript_turns
+        )
+        remaining_events = (
+            CONVERSATION_RETRIEVAL_POLICY.max_transcript_events
+            - self._transcript_events
+        )
+        if remaining_turns < 1 or remaining_events < 2:
+            raise ConversationRetrievalBudgetError()
+
+        self._progress.emit(
+            self._progress_event(
+                action.action_index,
+                ConversationRetrievalProgressPhase.READ_STARTED,
+            )
+        )
+        raw_page = self._memory_service.read_transcript(
+            source.citation.conversation_id,
+            start_sequence=action.start_sequence,
+            end_sequence=action.end_sequence,
+            max_events=remaining_events,
+            citation=source.citation,
+        )
+        StoryRuntime._reject_async_result(
+            raw_page,
+            operation="conversation retrieval transcript read",
+        )
+        self._record_transcript_page_diagnostics(raw_page, source=source)
+        page = self._canonical_transcript_page(
+            raw_page,
+            action=action,
+            source=source,
+            max_events=remaining_events,
+        )
+        visible_events, omitted_events = self._complete_visible_events(page.events)
+        if len(visible_events) // 2 > remaining_turns:
+            raise ConversationRetrievalBudgetError()
+        projected_events = tuple(
+            ConversationRetrievalTranscriptEvent(
+                citation_id=f"r{action.action_index}e{ordinal}",
+                citation=ConversationCitation(
+                    session_id=event.session_id,
+                    conversation_id=event.conversation_id,
+                    turn_id=event.turn_id,
+                    sequence=event.sequence,
+                    event_kind=event.kind,
+                ),
+                sender=event.sender,
+                recipient=event.recipient,
+                content=event.content,
+            )
+            for ordinal, event in enumerate(visible_events, start=1)
+        )
+        observation = ConversationRetrievalReadObservation(
+            session_id=self._request.session_id,
+            conversation_id=self._request.conversation_id,
+            turn_id=self._request.turn_id,
+            action_index=action.action_index,
+            source_citation_id=action.citation_id,
+            source=source,
+            events=projected_events,
+            truncated=page.truncated or omitted_events,
+        )
+        frame, frame_bytes = self._charged_observation(observation)
+        self._record_observation_diagnostics(observation, frame)
+        turn_count = len(projected_events) // 2
+        self._progress.emit(
+            self._progress_event(
+                action.action_index,
+                ConversationRetrievalProgressPhase.READ_COMPLETED,
+                transcript_turn_count=turn_count,
+                transcript_event_count=len(projected_events),
+                observation_utf8_bytes=frame_bytes,
+                truncated=observation.truncated,
+            )
+        )
+
+        self._nonterminal_actions += 1
+        self._transcript_turns += turn_count
+        self._transcript_events += len(projected_events)
+        self._observation_utf8_bytes += frame_bytes
+        self._has_read = True
+        self._next_action_index += 1
+        for event in projected_events:
+            event_source = ConversationRetrievalSource(
+                subject=source.subject,
+                citation=event.citation,
+            )
+            self._supplied_sources[event.citation_id] = event_source
+        return observation
+
+    def _handle_answer(
+        self,
+        action: ConversationRetrievalAnswerAction,
+    ) -> ConversationRetrievalReply:
+        """Resolve supplied citation IDs and complete the handler exactly once."""
+
+        sources: list[ConversationRetrievalSource] = []
+        seen_sources: set[ConversationRetrievalSource] = set()
+        for citation_id in action.citation_ids:
+            source = self._supplied_sources.get(citation_id)
+            if source is None:
+                raise ConversationRetrievalSemanticError()
+            if source in seen_sources:
+                continue
+            seen_sources.add(source)
+            sources.append(source)
+        reply = ConversationRetrievalReply(
+            session_id=self._request.session_id,
+            conversation_id=self._request.conversation_id,
+            turn_id=self._request.turn_id,
+            content=action.content,
+            sources=tuple(sources),
+        )
+        self._final_reply = reply
+        self._completed = True
+        self._next_action_index += 1
+        return reply
+
+    def _progress_event(
+        self,
+        action_index: int,
+        phase: ConversationRetrievalProgressPhase,
+        *,
+        search_hit_count: int = 0,
+        transcript_turn_count: int = 0,
+        transcript_event_count: int = 0,
+        observation_utf8_bytes: int = 0,
+        truncated: bool = False,
+    ) -> ConversationRetrievalProgressEvent:
+        """Build one exact trusted progress event without invoking its sink."""
+
+        return ConversationRetrievalProgressEvent(
+            session_id=self._request.session_id,
+            conversation_id=self._request.conversation_id,
+            turn_id=self._request.turn_id,
+            agent_id=self._request.agent_id,
+            action_index=action_index,
+            phase=phase,
+            search_hit_count=search_hit_count,
+            transcript_turn_count=transcript_turn_count,
+            transcript_event_count=transcript_event_count,
+            observation_utf8_bytes=observation_utf8_bytes,
+            truncated=truncated,
+        )
+
+    def _charged_observation(
+        self,
+        observation: ConversationRetrievalObservation,
+    ) -> tuple[str, int]:
+        """Return one canonical frame and enforce its cumulative UTF-8 budget."""
+
+        frame = serialize_conversation_retrieval_observation(observation)
+        frame_bytes = len(frame.encode("utf-8"))
+        if (
+            self._observation_utf8_bytes + frame_bytes
+            > CONVERSATION_RETRIEVAL_POLICY.max_observation_utf8_bytes
+        ):
+            raise ConversationRetrievalBudgetError()
+        return frame, frame_bytes
+
+    def _canonical_search_result(
+        self,
+        value: object,
+        *,
+        query: ConversationSearchQuery,
+    ) -> ConversationSearchResult:
+        """Deeply revalidate one exact active-only same-session search result."""
+
+        if type(value) is not ConversationSearchResult:
+            raise TypeError("conversation retrieval search returned an invalid result")
+        if type(value.hits) is not tuple:
+            raise TypeError("conversation retrieval search hits must be a tuple")
+        hits: list[ConversationSearchHit] = []
+        for hit in value.hits:
+            if type(hit) is not ConversationSearchHit:
+                raise TypeError("conversation retrieval search returned an invalid hit")
+            citation = ConversationCitation(
+                session_id=hit.citation.session_id,
+                conversation_id=hit.citation.conversation_id,
+                turn_id=hit.citation.turn_id,
+                sequence=hit.citation.sequence,
+                event_kind=hit.citation.event_kind,
+            )
+            hits.append(
+                ConversationSearchHit(
+                    citation=citation,
+                    subject=hit.subject,
+                    subject_revision=hit.subject_revision,
+                    status=hit.status,
+                    updated_at=hit.updated_at,
+                    match_kind=hit.match_kind,
+                    snippet=hit.snippet,
+                )
+            )
+        result = ConversationSearchResult(
+            query=value.query,
+            normalized_query=value.normalized_query,
+            hits=tuple(hits),
+            matched_conversations=value.matched_conversations,
+            scanned_conversations=value.scanned_conversations,
+            scanned_events=value.scanned_events,
+            scan_truncated=value.scan_truncated,
+            truncated=value.truncated,
+        )
+        if result.query != query:
+            raise ValueError("conversation retrieval search changed its query")
+        if len(result.hits) > query.limit:
+            raise ValueError("conversation retrieval search exceeded its hit limit")
+        for hit in result.hits:
+            if (
+                hit.citation.session_id != self._request.session_id
+                or hit.status is not ConversationStatus.ACTIVE
+            ):
+                raise ValueError(
+                    "conversation retrieval search crossed its active session scope"
+                )
+        return result
+
+    def _canonical_transcript_page(
+        self,
+        value: object,
+        *,
+        action: ConversationRetrievalReadAction,
+        source: ConversationRetrievalSource,
+        max_events: int,
+    ) -> ConversationTranscriptPage:
+        """Deeply revalidate one exact single-read transcript page and range."""
+
+        if type(value) is not ConversationTranscriptPage:
+            raise TypeError("conversation retrieval read returned an invalid page")
+        if type(value.events) is not tuple:
+            raise TypeError("conversation retrieval page events must be a tuple")
+        events: list[ConversationEvent] = []
+        for event in value.events:
+            if type(event) is not ConversationEvent:
+                raise TypeError("conversation retrieval page contains an invalid event")
+            events.append(
+                ConversationEvent(
+                    schema_version=event.schema_version,
+                    session_id=event.session_id,
+                    conversation_id=event.conversation_id,
+                    turn_id=event.turn_id,
+                    sequence=event.sequence,
+                    timestamp=event.timestamp,
+                    sender=event.sender,
+                    recipient=event.recipient,
+                    kind=event.kind,
+                    content=event.content,
+                )
+            )
+        cursor: ConversationTranscriptCursor | None = None
+        if value.next_cursor is not None:
+            if type(value.next_cursor) is not ConversationTranscriptCursor:
+                raise TypeError("conversation retrieval page cursor is invalid")
+            cursor_citation = value.next_cursor.citation
+            if cursor_citation is not None:
+                cursor_citation = ConversationCitation(
+                    session_id=cursor_citation.session_id,
+                    conversation_id=cursor_citation.conversation_id,
+                    turn_id=cursor_citation.turn_id,
+                    sequence=cursor_citation.sequence,
+                    event_kind=cursor_citation.event_kind,
+                )
+            cursor = ConversationTranscriptCursor(
+                session_id=value.next_cursor.session_id,
+                conversation_id=value.next_cursor.conversation_id,
+                next_sequence=value.next_cursor.next_sequence,
+                end_sequence=value.next_cursor.end_sequence,
+                snapshot_last_sequence=value.next_cursor.snapshot_last_sequence,
+                turn_id=value.next_cursor.turn_id,
+                max_events=value.next_cursor.max_events,
+                citation=cursor_citation,
+            )
+        page = ConversationTranscriptPage(
+            session_id=value.session_id,
+            conversation_id=value.conversation_id,
+            events=tuple(events),
+            requested_start_sequence=value.requested_start_sequence,
+            requested_end_sequence=value.requested_end_sequence,
+            snapshot_last_sequence=value.snapshot_last_sequence,
+            returned_utf8_bytes=value.returned_utf8_bytes,
+            next_cursor=cursor,
+            truncated=value.truncated,
+        )
+        resolved_end_sequence = (
+            page.snapshot_last_sequence
+            if action.end_sequence is None
+            else action.end_sequence
+        )
+        if (
+            page.session_id != self._request.session_id
+            or page.conversation_id != source.citation.conversation_id
+            or page.requested_start_sequence != action.start_sequence
+            or page.requested_end_sequence != resolved_end_sequence
+            or len(page.events) > max_events
+        ):
+            raise ValueError("conversation retrieval page changed its request")
+        if not page.events:
+            if (
+                action.end_sequence is not None
+                or page.requested_start_sequence
+                != page.snapshot_last_sequence + 1
+                or page.requested_end_sequence != page.snapshot_last_sequence
+                or page.returned_utf8_bytes != 0
+                or page.next_cursor is not None
+                or page.truncated
+            ):
+                raise ValueError(
+                    "conversation retrieval page returned an inconsistent empty range"
+                )
+            return page
+        for expected_sequence, event in enumerate(
+            page.events,
+            start=action.start_sequence,
+        ):
+            if event.sequence != expected_sequence:
+                raise ValueError(
+                    "conversation retrieval page returned non-contiguous events"
+                )
+        if page.next_cursor is None:
+            if page.events[-1].sequence != resolved_end_sequence:
+                raise ValueError(
+                    "conversation retrieval page ended before its requested range"
+                )
+        elif (
+            page.next_cursor.next_sequence != page.events[-1].sequence + 1
+            or page.next_cursor.max_events != max_events
+            or page.next_cursor.turn_id is not None
+            or page.next_cursor.citation != source.citation
+        ):
+            raise ValueError("conversation retrieval page cursor changed its request")
+        return page
+
+    @staticmethod
+    def _complete_visible_events(
+        events: tuple[ConversationEvent, ...],
+    ) -> tuple[tuple[ConversationEvent, ...], bool]:
+        """Keep only complete user/reply pairs and report any omission."""
+
+        turns: dict[str, list[ConversationEvent]] = {}
+        for event in events:
+            turns.setdefault(event.turn_id, []).append(event)
+        complete_turn_ids: set[str] = set()
+        for turn_id, turn_events in turns.items():
+            users = [
+                event
+                for event in turn_events
+                if event.kind is ConversationEventKind.USER_MESSAGE
+            ]
+            replies = [
+                event
+                for event in turn_events
+                if event.kind is ConversationEventKind.AGENT_REPLY
+            ]
+            if len(turn_events) != 2 or len(users) != 1 or len(replies) != 1:
+                continue
+            user, reply = users[0], replies[0]
+            if user.sequence < reply.sequence and reply.sender == user.recipient:
+                complete_turn_ids.add(turn_id)
+        visible = tuple(
+            event
+            for event in events
+            if event.turn_id in complete_turn_ids
+            and event.kind
+            in {
+                ConversationEventKind.USER_MESSAGE,
+                ConversationEventKind.AGENT_REPLY,
+            }
+        )
+        return visible, len(visible) != len(events)
+
+    def _record_action_diagnostics(
+        self,
+        action: ConversationRetrievalAction,
+    ) -> None:
+        """Add raw and canonical action values to runtime-error redactions."""
+
+        if type(action) is ConversationRetrievalSearchAction:
+            payload: dict[str, object] = {
+                "kind": action.kind.value,
+                "session_id": action.session_id,
+                "conversation_id": action.conversation_id,
+                "turn_id": action.turn_id,
+                "action_index": action.action_index,
+                "query": action.query,
+            }
+        elif type(action) is ConversationRetrievalReadAction:
+            payload = {
+                "kind": action.kind.value,
+                "session_id": action.session_id,
+                "conversation_id": action.conversation_id,
+                "turn_id": action.turn_id,
+                "action_index": action.action_index,
+                "citation_id": action.citation_id,
+                "start_sequence": action.start_sequence,
+                "end_sequence": action.end_sequence,
+            }
+        else:
+            assert type(action) is ConversationRetrievalAnswerAction
+            payload = {
+                "kind": action.kind.value,
+                "session_id": action.session_id,
+                "conversation_id": action.conversation_id,
+                "turn_id": action.turn_id,
+                "action_index": action.action_index,
+                "content": action.content,
+                "citation_ids": list(action.citation_ids),
+            }
+        self._record_mapping_diagnostics(payload)
+        self._record_text_diagnostics(repr(action))
+
+    def _record_search_result_diagnostics(self, value: object) -> None:
+        """Add returned search prose and citations before deep validation."""
+
+        if type(value) is not ConversationSearchResult:
+            return
+        result_payload: dict[str, object] = {
+            "query": {
+                "text": value.query.text,
+                "limit": value.query.limit,
+                "include_archived": value.query.include_archived,
+            },
+            "normalized_query": value.normalized_query,
+            "hits": [],
+            "matched_conversations": value.matched_conversations,
+            "scanned_conversations": value.scanned_conversations,
+            "scanned_events": value.scanned_events,
+            "scan_truncated": value.scan_truncated,
+            "truncated": value.truncated,
+        }
+        result_hits = result_payload["hits"]
+        assert isinstance(result_hits, list)
+        for hit in value.hits if type(value.hits) is tuple else ():
+            if type(hit) is not ConversationSearchHit:
+                continue
+            result_hits.append(
+                {
+                    "citation": {
+                        "session_id": hit.citation.session_id,
+                        "conversation_id": hit.citation.conversation_id,
+                        "turn_id": hit.citation.turn_id,
+                        "sequence": hit.citation.sequence,
+                        "event_kind": (
+                            None
+                            if hit.citation.event_kind is None
+                            else hit.citation.event_kind.value
+                        ),
+                    },
+                    "subject": hit.subject,
+                    "subject_revision": hit.subject_revision,
+                    "status": hit.status.value,
+                    "updated_at": hit.updated_at,
+                    "match_kind": hit.match_kind.value,
+                    "snippet": hit.snippet,
+                }
+            )
+        self._record_mapping_diagnostics(result_payload)
+        self._record_text_diagnostics(repr(value))
+
+    def _record_transcript_page_diagnostics(
+        self,
+        value: object,
+        *,
+        source: ConversationRetrievalSource,
+    ) -> None:
+        """Add source and returned event values before deep page validation."""
+
+        self._diagnostic_values.update(
+            {
+                source.subject,
+                source.citation.session_id,
+                source.citation.conversation_id,
+                source.citation.turn_id or "",
+            }
+        )
+        if type(value) is not ConversationTranscriptPage:
+            return
+        page_payload: dict[str, object] = {
+            "session_id": value.session_id,
+            "conversation_id": value.conversation_id,
+            "events": [],
+            "requested_start_sequence": value.requested_start_sequence,
+            "requested_end_sequence": value.requested_end_sequence,
+            "snapshot_last_sequence": value.snapshot_last_sequence,
+            "returned_utf8_bytes": value.returned_utf8_bytes,
+            "truncated": value.truncated,
+        }
+        page_events = page_payload["events"]
+        assert isinstance(page_events, list)
+        for event in value.events if type(value.events) is tuple else ():
+            if type(event) is not ConversationEvent:
+                continue
+            page_events.append(event.to_dict())
+        self._record_mapping_diagnostics(page_payload)
+        self._record_text_diagnostics(repr(value))
+
+    def _record_observation_diagnostics(
+        self,
+        observation: ConversationRetrievalObservation,
+        frame: str,
+    ) -> None:
+        """Add canonical observation, frame, prose, sources, and citations."""
+
+        self._record_mapping_diagnostics(observation.to_dict())
+        self._diagnostic_values.add(frame)
+
+    def _record_mapping_diagnostics(self, value: object) -> None:
+        """Recursively add strings plus canonical and escaped JSON spellings."""
+
+        def visit(candidate: object) -> None:
+            """Collect strings from built-in mappings and sequences only."""
+
+            if isinstance(candidate, str):
+                self._diagnostic_values.add(candidate)
+            elif isinstance(candidate, Mapping):
+                for item in candidate.values():
+                    visit(item)
+            elif isinstance(candidate, (list, tuple)):
+                for item in candidate:
+                    visit(item)
+
+        visit(value)
+        for ensure_ascii in (False, True):
+            try:
+                encoded = json.dumps(
+                    value,
+                    ensure_ascii=ensure_ascii,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            except (TypeError, ValueError):
+                continue
+            self._diagnostic_values.add(encoded)
+            self._diagnostic_values.add(
+                json.dumps(encoded, ensure_ascii=ensure_ascii)[1:-1]
+            )
+        self._diagnostic_values.discard("")
+
+    def _record_text_diagnostics(self, value: str) -> None:
+        """Add raw and JSON-escaped spellings of one sensitive text value."""
+
+        if not value:
+            return
+        self._diagnostic_values.update(
+            {
+                value,
+                json.dumps(value, ensure_ascii=False)[1:-1],
+                json.dumps(value, ensure_ascii=True)[1:-1],
+            }
+        )
 
 
 class _DebateContextPropagationError(Exception):
@@ -299,6 +1217,174 @@ class StoryRuntime:
                     recipient="user",
                     kind=ConversationEventKind.RUNTIME_ERROR,
                     content=self._conversation_error_text(exc, request),
+                )
+                try:
+                    self._append_conversation_event(append, failure)
+                except Exception as persistence_exc:
+                    raise persistence_exc from exc
+                raise
+
+            self._append_conversation_event(append, reply_event)
+            return result
+
+    async def converse_with_retrieval(
+        self,
+        session_id: str,
+        conversation_id: str,
+        agent_id: str,
+        text: str,
+        *,
+        memory_service: ConversationMemoryService,
+        progress_sink: ConversationRetrievalProgressSink | None = None,
+    ) -> ConversationRetrievalResult:
+        """Run one durable advisory turn with bounded agent-directed retrieval.
+
+        Identity, text, the exact session-scoped memory service, and a declared-
+        synchronous optional progress sink are validated before any context,
+        memory, provider, or transcript operation. One conversation lock covers
+        context capture, every provider/action step, and the single final outcome
+        append. Success persists exactly one user event and reply; provider,
+        memory, protocol, budget, semantic, observer, and cancellation failures
+        persist one safe runtime error after the user event and otherwise
+        propagate. A later reply-append failure propagates without provider-thread
+        taint or a second outcome append.
+        """
+
+        session = self.workspace.validate_identifier(session_id)
+        conversation = self.workspace.validate_identifier(
+            conversation_id,
+            label="conversation ID",
+        )
+        agent = self.workspace.validate_identifier(agent_id, label="agent ID")
+        if agent not in ROSTER:
+            raise ValueError(f"conversation agent is not canonical: {agent}")
+        content = self._validate_conversation_text(text)
+        scoped_memory = self._validate_conversation_retrieval_memory_service(
+            memory_service,
+            session_id=session,
+        )
+        progress = _ConversationRetrievalProgressEmitter(
+            self._validate_conversation_retrieval_progress_sink(progress_sink)
+        )
+        if self.backend is None:
+            raise BackendProtocolError(
+                "running a conversation requires an AgentBackend adapter"
+            )
+        read_context = self._conversation_store_method("read_context")
+        append = self._conversation_store_method("append")
+
+        lock_key = (session, conversation)
+        lock = self._conversation_locks.get(lock_key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._conversation_locks[lock_key] = lock
+        async with lock:
+            turn_id = self._new_conversation_turn_id()
+            context = read_context(session, conversation)
+            self._reject_async_result(context, operation="read_context")
+            try:
+                request = ConversationRetrievalRequest(
+                    session_id=session,
+                    conversation_id=conversation,
+                    turn_id=turn_id,
+                    agent_id=agent,
+                    content=content,
+                    context=context,
+                )
+            except Exception as exc:
+                raise BackendProtocolError(
+                    "conversation event store read_context() returned "
+                    "an invalid context"
+                ) from exc
+
+            self._prepare_conversation_session(session)
+            definition = self.prompts.build_definition(
+                session_id=session,
+                agent_id=agent,
+            )
+            bound_agent = await self._bound_agent(definition)
+            bound_converse = getattr(
+                bound_agent,
+                "converse_with_retrieval",
+                None,
+            )
+            if bound_converse is None or not callable(bound_converse):
+                raise BackendProtocolError(
+                    f"{agent} binding does not provide converse_with_retrieval()"
+                )
+            if not inspect.iscoroutinefunction(bound_converse):
+                raise BackendProtocolError(
+                    f"{agent} bound converse_with_retrieval() must be async"
+                )
+            self._verify_definition_files(definition)
+
+            diagnostic_values: set[str] = set()
+            handler = _RuntimeConversationRetrievalHandler(
+                request,
+                scoped_memory,
+                progress,
+                diagnostic_values,
+            )
+            user_event = ConversationEventAppend(
+                session_id=session,
+                conversation_id=conversation,
+                turn_id=turn_id,
+                sender="user",
+                recipient=agent,
+                kind=ConversationEventKind.USER_MESSAGE,
+                content=content,
+            )
+            self._append_conversation_event(append, user_event)
+
+            try:
+                raw_reply = await bound_converse(request, handler)
+                reply = handler.validate_returned_reply(raw_reply)
+                reply_event = ConversationEventAppend(
+                    session_id=session,
+                    conversation_id=conversation,
+                    turn_id=turn_id,
+                    sender=agent,
+                    recipient="user",
+                    kind=ConversationEventKind.AGENT_REPLY,
+                    content=reply.content,
+                )
+                result = ConversationRetrievalResult(
+                    session_id=session,
+                    conversation_id=conversation,
+                    turn_id=turn_id,
+                    agent_id=agent,
+                    content=reply.content,
+                    context=request.context,
+                    sources=reply.sources,
+                )
+            except asyncio.CancelledError:
+                cancellation = ConversationEventAppend(
+                    session_id=session,
+                    conversation_id=conversation,
+                    turn_id=turn_id,
+                    sender="runtime",
+                    recipient="user",
+                    kind=ConversationEventKind.RUNTIME_ERROR,
+                    content="CancelledError: conversation turn was cancelled",
+                )
+                try:
+                    self._append_conversation_event(append, cancellation)
+                except BaseException:
+                    pass
+                raise
+            except Exception as exc:
+                failure = ConversationEventAppend(
+                    session_id=session,
+                    conversation_id=conversation,
+                    turn_id=turn_id,
+                    sender="runtime",
+                    recipient="user",
+                    kind=ConversationEventKind.RUNTIME_ERROR,
+                    content=self._conversation_error_text(
+                        exc,
+                        request,
+                        sensitive_values=tuple(diagnostic_values),
+                    ),
                 )
                 try:
                     self._append_conversation_event(append, failure)
@@ -1436,6 +2522,64 @@ class StoryRuntime:
         return sink
 
     @staticmethod
+    def _validate_conversation_retrieval_progress_sink(
+        sink: ConversationRetrievalProgressSink | None,
+    ) -> ConversationRetrievalProgressSink | None:
+        """Return one declared-synchronous optional retrieval progress sink.
+
+        ``None`` and ordinary callables are accepted without invocation. A
+        non-callable, coroutine or async-generator function, or callable object
+        with an asynchronous ``__call__`` raises ``TypeError`` before context,
+        memory, provider, event-store, or transcript mutation.
+        """
+
+        if sink is None:
+            return None
+        if not callable(sink):
+            raise TypeError("progress_sink must be callable or None")
+        sink_call = getattr(sink, "__call__", None)
+        if (
+            inspect.iscoroutinefunction(sink)
+            or inspect.isasyncgenfunction(sink)
+            or inspect.iscoroutinefunction(sink_call)
+            or inspect.isasyncgenfunction(sink_call)
+        ):
+            raise TypeError("progress_sink must be synchronous")
+        return sink
+
+    @staticmethod
+    def _validate_conversation_retrieval_memory_service(
+        memory_service: ConversationMemoryService,
+        *,
+        session_id: str,
+    ) -> ConversationMemoryService:
+        """Return one exact same-session memory service without performing I/O.
+
+        Subclasses and non-services raise ``TypeError``. A missing, malformed,
+        or differently scoped immutable ``ConversationSearchScope`` raises the
+        fixed semantic failure before context, catalog, transcript, provider,
+        store, or user-event access.
+        """
+
+        if type(memory_service) is not ConversationMemoryService:
+            raise TypeError(
+                "memory_service must be an exact ConversationMemoryService"
+            )
+        try:
+            scope = memory_service.scope
+        except Exception as exc:
+            raise ConversationRetrievalSemanticError() from exc
+        if type(scope) is not ConversationSearchScope:
+            raise ConversationRetrievalSemanticError()
+        try:
+            canonical_scope = ConversationSearchScope(scope.session_id)
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise ConversationRetrievalSemanticError() from exc
+        if canonical_scope.session_id != session_id:
+            raise ConversationRetrievalSemanticError()
+        return memory_service
+
+    @staticmethod
     def _reject_async_result(value: Any, *, operation: str) -> None:
         """Reject awaitable or async-generator results without running them."""
 
@@ -1520,16 +2664,27 @@ class StoryRuntime:
     def _conversation_error_text(
         self,
         exc: Exception,
-        request: ConversationRequest,
+        request: ConversationRequest | ConversationRetrievalRequest,
+        *,
+        sensitive_values: tuple[str, ...] = (),
     ) -> str:
+        """Return one bounded redacted diagnostic for a persisted turn failure.
+
+        Current request/context prose, caller-supplied retrieval values and their
+        JSON spellings, and known workspace paths are replaced before strict UTF-8
+        normalization. The helper performs no I/O or persistence; hostile
+        exception stringification degrades to fixed safe text.
+        """
+
         exception_name = type(exc).__name__
         replacements: dict[str, str] = {}
         normalized_replacements: dict[str, str] = {}
-        sensitive_values = (
+        redacted_values = (
             request.content,
             *(event.content for event in request.context.events),
+            *sensitive_values,
         )
-        for value in sensitive_values:
+        for value in redacted_values:
             for variant in (
                 value,
                 json.dumps(value, ensure_ascii=False)[1:-1],
@@ -2064,6 +3219,32 @@ class RuntimeSession:
             conversation_id,
             agent_id,
             text,
+        )
+
+    async def converse_with_retrieval(
+        self,
+        conversation_id: str,
+        agent_id: str,
+        text: str,
+        *,
+        memory_service: ConversationMemoryService,
+        progress_sink: ConversationRetrievalProgressSink | None = None,
+    ) -> ConversationRetrievalResult:
+        """Delegate one bounded retrieval turn through this bound session.
+
+        The bound session ID is supplied unchanged; validation, whole-turn
+        locking, provider and memory access, progress delivery, transcript
+        durability, cancellation, and failures are owned by
+        ``StoryRuntime.converse_with_retrieval``.
+        """
+
+        return await self.runtime.converse_with_retrieval(
+            self.session_id,
+            conversation_id,
+            agent_id,
+            text,
+            memory_service=memory_service,
+            progress_sink=progress_sink,
         )
 
     async def run_prompt(

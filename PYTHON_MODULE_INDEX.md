@@ -16,7 +16,7 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 20.
+Importable production units indexed: 21.
 
 ## Current Dependency Direction
 
@@ -24,17 +24,21 @@ The current graph flows from entry points and orchestration toward provider,
 configuration, prompt, persistence, and stable contract modules:
 
 ```text
-__main__ -> cli -> interactive_controller -> agents/backend/cli_context/conversation_search
+__main__ -> cli -> interactive_controller -> agents/backend/cli_context
+                 |                         -> conversation_retrieval/conversation_search
                  |                         -> conversations/errors/interactive_commands
                  |                         -> interactive_terminal/models/orchestrator/run_inputs/workspace
                  -> interactive_terminal -> interactive_commands/agents
                  -> run_inputs -> errors
-                 -> orchestrator -> prompts -> config -> workspace
+                 -> orchestrator -> conversation_retrieval -> agents/conversation_search
+                 |               |                           -> conversations/errors
+                 |               -> conversation_search -> conversations/errors
+                 |               -> prompts -> config -> workspace
                  |               |         |         -> conversations/models/errors/agents
                  |               |         -> conversations
                  |               |         -> workspace
                  |               -> conversations/workspace/models/agents
-                 -> backend -> config/workspace/models/errors/agents
+                 -> backend -> config/conversation_retrieval/workspace/models/errors/agents
                  -> cli_context -> workspace/errors/agents
 
 smoke -> orchestrator/workspace/models/agents
@@ -42,6 +46,8 @@ directives -> config/workspace/errors/agents
 interactive_commands -> agents
 interactive_terminal -> interactive_commands/agents
 story_writing_agents facade -> interactive_commands
+                            -> conversation_retrieval -> agents/conversation_search
+                            |                          -> conversations/errors
                             -> conversation_search -> conversations/errors
 models -> conversations/agents/errors
 workspace -> conversations -> agents/errors
@@ -56,7 +62,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 - **Source:** `src/story_writing_agents/__init__.py`
 - **Responsibility:** Provide the intentional package-level API facade.
-- **Supported surface:** Exactly the names in `__all__`, grouped by owner:
+- **Supported surface:** Exactly 115 names in `__all__`, grouped by owner:
   `AGENT_SPECS`, `ROSTER`, `SPECIALIST_IDS`, `LEAD_ORCHESTRATOR`,
   `PLOT_ARCHITECT`, `CHARACTER_CUSTODIAN`, and `EXECUTION_SPECIALIST` from
   `agents`; `AgentBackend` and `BoundAgent` from `backend`; `DirectiveKind`,
@@ -65,8 +71,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ConfigurationError`, `DirectiveError`, `SessionIdError`,
   `ConversationNotFoundError`, `ConversationExistsError`,
   `ManuscriptExistsError`, `BackendProtocolError`, `SessionExistsError`,
-  `SessionNotFoundError`, `SessionInUseError`, `DebateExistsError`, and
-  `ProgressObserverError` from `errors`; `CONVERSATION_CONTEXT_POLICY`,
+  `SessionNotFoundError`, `SessionInUseError`, `DebateExistsError`,
+  `ProgressObserverError`, `ConversationRetrievalError`,
+  `ConversationRetrievalSemanticError`, `ConversationRetrievalBudgetError`, and
+  `ConversationRetrievalObserverError` from `errors`;
+  `CONVERSATION_CONTEXT_POLICY`,
   `CONVERSATION_EVENT_SCHEMA_VERSION`,
   `CONVERSATION_METADATA_SCHEMA_VERSION`,
   `CONVERSATION_SUBJECT_NORMALIZATION_VERSION`,
@@ -81,7 +90,18 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ConversationSearchMatchKind`, `ConversationSearchQuery`,
   `ConversationSearchResult`, `ConversationSearchScope`,
   `ConversationTranscriptCursor`, `ConversationTranscriptPage`, and
-  `ReferenceConversationSearch` from `conversation_search`; `ActionKind`,
+  `ReferenceConversationSearch` from `conversation_search`;
+  `CONVERSATION_RETRIEVAL_POLICY`, `ConversationRetrievalAction`,
+  `ConversationRetrievalActionHandler`, `ConversationRetrievalActionKind`,
+  `ConversationRetrievalAnswerAction`, `ConversationRetrievalObservation`,
+  `ConversationRetrievalPolicy`, `ConversationRetrievalProgressEvent`,
+  `ConversationRetrievalProgressPhase`, `ConversationRetrievalProgressSink`,
+  `ConversationRetrievalReadAction`, `ConversationRetrievalReadObservation`,
+  `ConversationRetrievalReply`, `ConversationRetrievalRequest`,
+  `ConversationRetrievalResult`, `ConversationRetrievalSearchAction`,
+  `ConversationRetrievalSearchItem`, `ConversationRetrievalSearchObservation`,
+  `ConversationRetrievalSource`, and `ConversationRetrievalTranscriptEvent`
+  from `conversation_retrieval`; `ActionKind`,
   `InteractiveAction`, `CommandSpec`, `COMMANDS`, and
   `parse_interactive_line` from `interactive_commands`; `InputKind`, `Phase`,
   `Verdict`, `DebateStatus`, `DebateContextMode`, `DebateContextRequest`,
@@ -96,9 +116,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   The re-exported `ActionKind` and `InteractiveAction` include additive search
   and transcript cases plus the optional positive `start_sequence` payload;
   their public names and import paths are unchanged.
-- **Direct internal dependencies:** `agents`, `backend`, `conversation_search`,
-  `conversations`, `directives`, `errors`, `interactive_commands`, `models`,
-  `orchestrator`, and `workspace`.
+- **Direct internal dependencies:** `agents`, `backend`,
+  `conversation_retrieval`, `conversation_search`, `conversations`,
+  `directives`, `errors`, `interactive_commands`, `models`, `orchestrator`, and
+  `workspace`.
 - **State, resources, and side effects:** Owns no state or external resource;
   importing the facade loads its exported modules.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
@@ -107,8 +128,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_session_lifecycle.py`, `tests/test_conversation_event_store.py`,
   `tests/test_interactive_commands.py`, `tests/test_conversation_search.py`,
   `docs/reference/package-api.md`, `docs/reference/runtime-api.md`,
-  `docs/reference/conversation-search.md`, and
-  `docs/reference/conversation-transcripts.md`.
+  `docs/reference/conversation-search.md`,
+  `docs/reference/conversation-transcripts.md`, and
+  `docs/reference/conversation-retrieval.md`.
 
 ### `story_writing_agents.__main__`
 
@@ -142,25 +164,33 @@ every intermediate arrow. The current runtime graph is acyclic.
   and own provider-session manifest, attachment, and lease lifecycles.
 - **Supported surface:** Package-supported `AgentBackend` and `BoundAgent`.
   `BoundAgent` exposes structured debate `invoke` and one-turn conversation
-  `converse` operations. `AgentBackend` exposes validated `get_session_summary`
-  and `list_sessions` reads; strict `create_session`, `resume_session`,
-  `attach_session`, and `detach_session` attachment operations; and the
-  compatible `prepare_session`, `start_session`, and `end_session` lifecycle
-  methods.
-- **Direct internal dependencies:** `agents`, `config`, `errors`, `models`, and
-  `workspace`.
+  `converse` operations plus additive bounded
+  `converse_with_retrieval(request, handler)`. `AgentBackend` exposes validated
+  `get_session_summary` and `list_sessions` reads; strict `create_session`,
+  `resume_session`, `attach_session`, and `detach_session` attachment
+  operations; and the compatible `prepare_session`, `start_session`, and
+  `end_session` lifecycle methods.
+- **Direct internal dependencies:** `agents`, `config`,
+  `conversation_retrieval`, `errors`, `models`, and `workspace`.
 - **State, resources, and side effects:** Owns Codex subprocesses, temporary
   prompt/output staging, provider-session manifests and process attachment
   leases, the lazily created persistent workspace-global `.lease-claims.lock`
   OS advisory guard that serializes lease-claim and stale-reclaim transactions,
-  persisted thread metadata, shared debate/conversation per-thread locks,
-  structured Codex process validation, timeout/cancellation taint handling,
-  cleanup, and per-instance `atexit` registration. Debate requests add the
-  canonical included-context event list to provider payloads only when present;
-  legacy and fresh requests retain the exact context-free payload, while
-  included event content participates in diagnostic redaction.
+  persisted thread metadata, shared debate/conversation/retrieval per-thread
+  locks, structured Codex process validation, timeout/cancellation taint
+  handling, cleanup, and per-instance `atexit` registration. One retrieval
+  thread lock covers the complete repeated-call action loop and synchronous
+  handler invocations. The backend owns the exact Codex action schema, initial
+  and continuation payloads, canonical observation framing handoff, provider
+  timeout/cancellation behavior, incomplete-history taint, and diagnostic
+  redaction; it receives no memory service and performs no retrieval search or
+  transcript-storage call. Debate requests add the canonical included-context
+  event list to provider payloads only when present; legacy and fresh requests
+  retain the exact context-free payload, while included event content
+  participates in diagnostic redaction.
 - **Primary verification/documentation:** `tests/test_codex_backend.py`,
   `tests/test_session_lifecycle.py`, `docs/reference/backend-and-sessions.md`,
+  `docs/reference/conversation-retrieval.md`,
   `docs/design/prompts-and-provider.md`, `docs/design/session-lifecycle.md`, and
   `docs/operations/privacy-and-provider.md`.
 
@@ -220,6 +250,36 @@ every intermediate arrow. The current runtime graph is acyclic.
   `docs/reference/configuration/agent-configuration.md`, and
   `docs/reference/configuration/runtime-overrides.md`.
 
+### `story_writing_agents.conversation_retrieval`
+
+- **Source:** `src/story_writing_agents/conversation_retrieval.py`
+- **Responsibility:** Define immutable provider-neutral bounded conversation-
+  retrieval actions, observations, results, progress, fixed policy, canonical
+  untrusted-data framing, and the synchronous runtime/backend handler port.
+- **Supported surface:** Module-supported `CONVERSATION_RETRIEVAL_POLICY`,
+  `ConversationRetrievalAction`, `ConversationRetrievalActionHandler`,
+  `ConversationRetrievalActionKind`, `ConversationRetrievalAnswerAction`,
+  `ConversationRetrievalObservation`, `ConversationRetrievalPolicy`,
+  `ConversationRetrievalProgressEvent`,
+  `ConversationRetrievalProgressPhase`, `ConversationRetrievalProgressSink`,
+  `ConversationRetrievalReadAction`, `ConversationRetrievalReadObservation`,
+  `ConversationRetrievalReply`, `ConversationRetrievalRequest`,
+  `ConversationRetrievalResult`, `ConversationRetrievalSearchAction`,
+  `ConversationRetrievalSearchItem`, `ConversationRetrievalSearchObservation`,
+  `ConversationRetrievalSource`, `ConversationRetrievalTranscriptEvent`, and
+  `serialize_conversation_retrieval_observation`. The package facade exports
+  every listed name except the serializer.
+- **Direct internal dependencies:** `agents`, `conversation_search`,
+  `conversations`, and `errors`.
+- **State, resources, and side effects:** Frozen, slotted contracts, immutable
+  policy metadata, exact validators, and pure canonical serialization only.
+  The module performs no I/O and owns no storage, provider, process, thread,
+  filesystem, or mutable runtime state and has no operational import side
+  effect.
+- **Primary verification/documentation:**
+  `tests/test_conversation_retrieval.py`, `tests/test_public_api_and_cli.py`,
+  and `docs/reference/conversation-retrieval.md`.
+
 ### `story_writing_agents.conversation_search`
 
 - **Source:** `src/story_writing_agents/conversation_search.py`
@@ -231,13 +291,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ConversationSearchMatchKind`, `ConversationSearchQuery`,
   `ConversationSearchResult`, `ConversationSearchScope`,
   `ConversationTranscriptCursor`, `ConversationTranscriptPage`, and
-  `ReferenceConversationSearch`.
+  `ReferenceConversationSearch`. `ConversationMemoryService.scope` is an
+  additive read-only projection of its immutable authorized session scope.
 - **Direct internal dependencies:** `conversations` and `errors`.
 - **State, resources, and side effects:** Immutable value contracts and fixed
   policy metadata own no mutable state or external resource. Service and
   reference-search instances retain explicitly supplied `ConversationCatalog`
   and `ConversationEventStore` collaborators, plus their validated scope and
-  optional search adapter; they perform reads only and have no import-time
+  optional search adapter; the scope property performs no catalog, store, or
+  search access. Instances perform reads only and have no import-time
   operational side effects.
 - **Primary verification/documentation:**
   `tests/conversation_search_contract.py`,
@@ -295,13 +357,17 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ConversationExistsError`, `ManuscriptExistsError`, `BackendProtocolError`,
   `SessionExistsError`, `SessionNotFoundError`, `SessionInUseError`, and
   `DebateExistsError`, plus `ProgressObserverError` for synchronous debate
-  progress-sink failures.
+  progress-sink failures; and `ConversationRetrievalError` with fixed-message
+  `ConversationRetrievalSemanticError`, `ConversationRetrievalBudgetError`, and
+  `ConversationRetrievalObserverError` subclasses for retrieval authorization,
+  whole-turn budget, and synchronous progress-observer failures.
 - **Direct internal dependencies:** None.
 - **State, resources, and side effects:** None.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
   `tests/test_conversation_catalog.py`, `tests/test_session_lifecycle.py`,
   `tests/test_interactive_commands.py`, failure-path tests, and
-  `docs/reference/configuration/identifiers-and-errors.md`.
+  `docs/reference/configuration/identifiers-and-errors.md` plus
+  `docs/reference/conversation-retrieval.md` for the retrieval hierarchy.
 
 ### `story_writing_agents.interactive_commands`
 
@@ -345,12 +411,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   Search and transcript reads require an attachment but no selected
   conversation; every consensus action requires both an attachment and an
   active selection. All transition, identity-resolution, routing, trusted
-  progress/result validation, and rendering helpers are private, and the
-  package facade does not re-export this module.
+  debate/retrieval progress and result validation, retrieval-source rendering,
+  and other presentation helpers are private, and the package facade does not
+  re-export this module.
 - **Direct internal dependencies:** `agents`, `backend`, `cli_context`,
-  `conversation_search`, `conversations`, `errors`, `interactive_commands`,
-  `interactive_terminal`, `models`, `orchestrator`, `run_inputs`, and
-  `workspace`.
+  `conversation_retrieval`, `conversation_search`, `conversations`, `errors`,
+  `interactive_commands`, `interactive_terminal`, `models`, `orchestrator`,
+  `run_inputs`, and `workspace`.
 - **State, resources, and side effects:** Instances retain borrowed workspace,
   CLI-context, backend, and terminal collaborators plus either a borrowed
   injected catalog or a controller-constructed default filesystem catalog. It
@@ -370,17 +437,20 @@ every intermediate arrow. The current runtime graph is acyclic.
   catalog create/list/get/rename/archive and compensating unarchive calls,
   persists selections through `cli_context`, performs active-only search and
   fresh bounded active-or-archived transcript reads through
-  `ConversationMemoryService`, and runs one synchronous `StoryRuntime.converse`
-  operation per accepted content turn. It also delegates draft reads to
-  `run_inputs` and invokes exactly one synchronous `asyncio.run` boundary for
-  each accepted consensus action, passing only a selected-conversation request
-  and synchronous trusted-progress sink to `StoryRuntime`. `StoryRuntime` owns
-  context capture, transcript/provider and consensus sequencing, validated
-  results, artifact durability, and its async caches and locks; the event store,
-  catalog, and `Workspace` retain persistence ownership. The controller never
-  calls event-store operations, dispatches a backend provider directly, or
-  persists debate context/results/artifacts, and has no import-time operational
-  side effects.
+  `ConversationMemoryService`, and runs one synchronous
+  `StoryRuntime.converse_with_retrieval` operation per accepted advisory content
+  turn. It passes the exact attachment-scoped service plus a synchronous sink,
+  validates trusted progress/results, and renders fixed progress and ordered
+  source copy through existing terminal status output. It also delegates draft
+  reads to `run_inputs` and invokes exactly one synchronous `asyncio.run`
+  boundary for each accepted consensus action. `StoryRuntime` owns context
+  capture, retrieval authorization and memory access, transcript/provider and
+  consensus sequencing, validated results, artifact durability, and its async
+  caches and locks; the event store, catalog, and `Workspace` retain persistence
+  ownership. The controller never calls event-store operations, dispatches a
+  backend provider directly, or persists retrieval controls/progress/sources,
+  debate context/results, or artifacts, and has no import-time operational side
+  effects.
 - **Primary verification/documentation:** `tests/test_interactive_controller.py`,
   `tests/test_interactive_consensus.py`,
   `tests/test_interactive_conversation.py`, `tests/test_session_lifecycle.py`,
@@ -388,8 +458,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_interactive_terminal.py`, and
   `tests/test_interactive_search.py` for real-filesystem shell search and
   transcript-read integration; `docs/design/session-lifecycle.md`,
-  `docs/reference/cli.md`, and `docs/reference/interactive-terminal.md` verify
-  the current collaborator and lifecycle contracts.
+  `docs/reference/cli.md`, `docs/reference/interactive-terminal.md`, and
+  `docs/reference/conversation-retrieval.md` verify the current collaborator,
+  lifecycle, and retrieval-presentation contracts.
 
 ### `story_writing_agents.interactive_terminal`
 
@@ -414,9 +485,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   `conversation_handle`, `sequence`, `turn_id`, `kind`, `sender`, `recipient`,
   and `content` values and preserves internal, empty, and trailing content lines
   in one output record.
-  The message-kind and immutable error registries include conversation
-  presentation and the six typed conversation failures; rendering and
-  validation helpers are private.
+  The unchanged message-kind registry covers conversation presentation. The
+  immutable error registry adds `retrieval_invalid` and
+  `retrieval_budget_exhausted` to the six existing typed conversation failures;
+  renderers and validation helpers are unchanged and private.
 - **Direct internal dependencies:** `agents` and `interactive_commands`.
 - **State, resources, and side effects:** Instances retain borrowed synchronous
   line-read and text-write callbacks plus an immutable display width; each
@@ -431,7 +503,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   structure with deterministic hanging indentation while remaining one
   callback record.
 - **Primary verification/documentation:** `tests/test_interactive_terminal.py`,
-  `docs/reference/interactive-terminal.md`, and
+  `docs/reference/interactive-terminal.md`,
+  `docs/reference/conversation-retrieval.md`, and
   `docs/operations/terminal-safety.md`; `tests/test_interactive_commands.py`
   and `docs/reference/interactive-command-parser.md` verify the consumed
   command registry contract.
@@ -464,10 +537,13 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Responsibility:** Coordinate provider-neutral runtime workflows across
   debates and advisory conversation turns.
 - **Supported surface:** Package-supported `StoryRuntime` and `RuntimeSession`,
-  including `converse()`, context-aware `run_prompt()` and `run_draft()`, and the
-  separate strict `inspect_debate_context()` accessor on both forms, plus
-  compatibility aliases `Runtime` and `Session`.
-- **Direct internal dependencies:** `agents`, `backend`, `config`, `directives`,
+  including unchanged one-step `converse()`, additive bounded
+  `converse_with_retrieval()` with required scoped memory service and optional
+  synchronous progress sink, context-aware `run_prompt()` and `run_draft()`,
+  and the separate strict `inspect_debate_context()` accessor on both forms,
+  plus compatibility aliases `Runtime` and `Session`.
+- **Direct internal dependencies:** `agents`, `backend`, `config`,
+  `conversation_retrieval`, `conversation_search`, `directives`,
   `conversations`, `errors`, `models`, `prompts`, and `workspace`.
 - **State, resources, and side effects:** Retains an injected or default
   `ConversationEventStore` collaborator and owns the in-memory binding cache,
@@ -476,19 +552,32 @@ every intermediate arrow. The current runtime graph is acyclic.
   context window before reservation, reuses that exact snapshot for every agent
   phase, and delegates create-only sidecar persistence to `Workspace`; fresh
   mode persists identity with no snapshot and an absent request remains legacy.
-  It synchronously emits typed provider-neutral progress in lifecycle order,
-  makes result and terminal state durable before terminal progress, preserves
-  typed observer failures, and retains external cancellation while best-effort
-  recording interruption. It also sequences ordinary debate persistence and
-  the advisory context-read, user-append, provider-call, and reply/error-append
-  flow while the event store, `Workspace`, and backend retain their persistence
-  and provider resources.
+  It synchronously emits typed provider-neutral debate progress in lifecycle
+  order, makes result and terminal state durable before terminal debate
+  progress, preserves typed observer failures, and retains external
+  cancellation while best-effort recording interruption. It also sequences
+  ordinary debate persistence and unchanged one-step advisory context-read,
+  user-append, provider-call, and reply/error-append flow.
+  For bounded retrieval it validates the exact current-session memory-service
+  scope and synchronous sink before context, provider, store, or user-event
+  access; then holds the existing `(session, conversation)` lock across context
+  capture, one user append, the complete provider action loop, and one final
+  reply or safe runtime-error append. A private synchronous handler owns action
+  correlation and ordering, active-only search and cited read authorization,
+  fixed cumulative budgets, complete-visible-turn filtering, deep memory-result
+  revalidation, canonical framed-observation charging, supplied-source
+  resolution, and content-free progress. Cancellation preserves the existing
+  transcript outcome and re-raises. The injected memory service owns search and
+  transcript reads; the event store, `Workspace`, and backend retain their
+  persistence and provider resources. Retrieval creates no debate, artifact,
+  catalog, owner-state, or control/progress/source persistence.
 - **Primary verification/documentation:** `tests/test_conversation_runtime.py`,
-  `tests/test_interactive_consensus.py`,
+  `tests/test_conversation_retrieval.py`, `tests/test_interactive_consensus.py`,
   `tests/test_interactive_conversation.py` for retained runtime use across
   separate interactive event loops, `tests/test_orchestration_workflow.py`,
   `tests/test_orchestration_safety.py`, `tests/test_lifecycle_atomicity.py`,
-  `tests/test_agent_state.py`, `docs/reference/runtime-api.md`, and
+  `tests/test_agent_state.py`, `docs/reference/runtime-api.md`,
+  `docs/reference/conversation-retrieval.md`, and
   `docs/design/consensus-workflow.md`.
 
 ### `story_writing_agents.prompts`
@@ -583,8 +672,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   `COMMANDS` and `AGENT_ROUTES` metadata plus canonical display names to own
   safe prompt, confirmation, help, roster, status, error, call-local
   composition, subject input, conversation scope, catalog-row, search-hit, and
-  transcript-event presentation. It returns typed terminal outcomes without
-  dispatching them.
+  transcript-event presentation. Issue #21 adds two immutable retrieval error
+  entries without changing message kinds, rendering, or dependencies. The
+  terminal returns typed outcomes without dispatching them.
 - `interactive_controller` owns interactive shell action mapping, current
   in-memory attachment, selected-conversation and sticky-target state,
   transition and compensation ordering, retained runtime and memory-service
@@ -593,14 +683,18 @@ every intermediate arrow. The current runtime graph is acyclic.
   provider-thread ownership; `ConversationCatalog` retains conversation
   metadata ownership; `cli_context` owns both session and per-session
   conversation-selection persistence; and `interactive_terminal` retains
-  synchronous I/O and presentation ownership. Advisory content crosses only
-  the public `StoryRuntime.converse` boundary. Provider-free inspection crosses
-  only public `ConversationMemoryService.search` and
-  `ConversationMemoryService.read_transcript` boundaries; the controller
+  synchronous I/O and presentation ownership. Interactive advisory content
+  crosses only the public `StoryRuntime.converse_with_retrieval` boundary with
+  the exact attachment-scoped memory service and a synchronous progress sink;
+  unchanged direct Python one-step calls retain `StoryRuntime.converse`.
+  Provider-free `/search` and `/transcript` inspection crosses only public
+  `ConversationMemoryService.search` and
+  `ConversationMemoryService.read_transcript` boundaries. The controller
   performs no direct event-store or backend provider operation and performs no
-  direct context, result, or artifact persistence. Selected-conversation
-  consensus crosses only `StoryRuntime.run_prompt` or `run_draft`; draft-file
-  bytes cross the internal `run_inputs.read_draft_file` boundary.
+  direct context, result, retrieval-control, or artifact persistence.
+  Selected-conversation consensus crosses only `StoryRuntime.run_prompt` or
+  `run_draft`; draft-file bytes cross the internal
+  `run_inputs.read_draft_file` boundary.
 - The controller wires its resolved `ConversationCatalog` and one retained
   `FilesystemConversationEventStore` into both `StoryRuntime` and the
   attachment-scoped `ConversationMemoryService`, so injected and default
@@ -609,19 +703,34 @@ every intermediate arrow. The current runtime graph is acyclic.
   with the committed attachment, and clears it on switch, end, cleanup, and
   final close; conversation selection does not rebind it. Search defaults to
   active conversations, while transcript identifiers resolve across active and
-  archived conversations and each invocation obtains a fresh bounded page.
-  `StoryRuntime` owns the advisory context read, user append, provider call,
-  validated result, and reply or sanitized-error append; the controller uses
-  only the returned result and performs no duplicate transcript read.
+  archived conversations for explicit provider-free terminal reads. For agent
+  retrieval, `StoryRuntime` first validates that service's exact current-session
+  scope, forces active-only search, authorizes each read through a citation
+  minted by an earlier same-turn search, and owns all memory-service calls. It
+  returns trusted ordered sources; the controller alone renders their subject
+  and stable conversation/turn/sequence/kind fields. Source and progress output
+  is terminal-only and never enters the transcript.
+- `conversation_retrieval` owns only immutable provider-neutral contracts,
+  fixed policy, exact validators, canonical untrusted observation framing, and
+  the synchronous `ConversationRetrievalActionHandler` protocol. Runtime owns
+  the implementing handler and memory authority; backend consumes the protocol
+  and never imports orchestration or a memory/storage port. This inversion keeps
+  the graph acyclic and prevents private runtime reach-through.
 - `Workspace` and `ConversationEventStore` implementations own persistence
   mechanics. `Workspace` exclusively owns the strict immutable debate-context
   sidecar schema and I/O. `StoryRuntime` captures included context once before
-  reservation, sequences sidecar/result/state durability and typed progress,
-  and, for advisory turns, sequences the validated context read, durable user
-  append, one provider call, and reply or sanitized-error append.
+  reservation and sequences sidecar/result/state durability and typed debate
+  progress. It sequences one-step advisory turns as before. For retrieval it
+  holds the existing conversation lock across validated context capture, one
+  durable user append, all provider/actions/memory calls, and exactly one final
+  reply or sanitized runtime-error append. Retrieval actions, observations,
+  progress, and sources have no persistence schema or artifact.
 - `AgentBackend` owns the shared structured Codex subprocess, thread,
-  timeout, cancellation, and taint lifecycle; `BoundAgent` is the immutable
-  per-definition dispatch handle for debate and one-turn conversation calls.
+  per-call timeout, cancellation, diagnostic redaction, and taint lifecycle;
+  `BoundAgent` is the immutable per-definition dispatch handle for debate,
+  one-step conversation, and retrieval calls. The backend owns retrieval
+  provider schemas, initial/continuation payloads, repeated calls, and framing
+  handoff, while runtime owns every semantic, scope, budget, and memory decision.
 - `ConversationCatalog` exposes logical identifiers and immutable metadata only;
   `FilesystemConversationCatalog` owns the fixed metadata layout through
   `Workspace` without exposing paths through that protocol.
@@ -640,11 +749,23 @@ every intermediate arrow. The current runtime graph is acyclic.
   proceed. This does not widen the event adapter's or story-session lease's
   cross-runtime guarantees.
 - Persisted provider-thread keys include the backend and agent ID. In-process
-  serialization additionally includes the session ID, so `invoke` and
-  `converse` cannot race one session/backend/agent thread.
-- `ConversationRequest` restricts the explicit visible payload context to its
-  conversation identity. Provider-private thread history remains scoped by
-  session, backend, and agent and can therefore span conversations.
+  serialization additionally includes the session ID. A retrieval turn takes
+  the runtime `(session, conversation)` lock before the backend
+  `(session, backend, agent)` lock, and the backend holds its lock across the
+  complete repeated-call loop and every handler invocation. Thus `invoke`,
+  `converse`, and `converse_with_retrieval` cannot interleave one provider
+  thread even when operations target different conversations.
+- Existing `ConversationRequest`, `ConversationReply`, `ConversationResult`,
+  `BoundAgent.converse`, and positional runtime/session `converse` contracts are
+  unchanged. Retrieval uses separate additive request/reply/result/action types
+  and methods. Existing debate and one-step provider payloads remain unchanged;
+  provider-private thread history remains scoped by session, backend, and agent
+  and can therefore span conversations.
+- `models`, `conversations`, `workspace`, and `prompts` retain their prior
+  responsibilities, imports, public surfaces, and persistence/provider schemas.
+  Retrieval adds no dependency, migration, provider tool, streaming, retry,
+  whole-turn deadline, cross-session/archive authority, or direct provider
+  storage edge.
 - `tests/conversation_event_store_contract.py` is reusable test-only adapter
   conformance support; it is not a production module or supported package API.
 - Direct imports of internal configuration, prompt, workspace-constant, or CLI

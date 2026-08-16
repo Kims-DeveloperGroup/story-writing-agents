@@ -52,9 +52,9 @@ attempt. See [Core concepts](concepts.md) for their relationships.
   pages](reference/conversation-search.md).
 
 - **Conversation search.** Bounded literal matching over current-session
-  subjects and visible messages, not semantic retrieval or a CLI command. See
-  [Conversation search and cited transcript
-  pages](reference/conversation-search.md).
+  subjects and visible messages. Direct `/search` is a provider-free CLI
+  command, not a provider call or tool; agent retrieval reaches memory only
+  through runtime authorization. See [Conversation search](reference/conversation-search.md).
 
 - **Core documents.** Editable outlines, character/world facts, and narrative
   rules; each role receives its allowed subset.

@@ -602,6 +602,7 @@ class ControllerContractTests(ControllerTestCase):
                 "agents",
                 "backend",
                 "cli_context",
+                "conversation_retrieval",
                 "conversation_search",
                 "conversations",
                 "errors",
@@ -703,7 +704,7 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 20)
+        self.assertEqual(len(modules), 21)
 
 
 class ControllerStartupTests(ControllerTestCase):
