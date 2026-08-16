@@ -188,7 +188,12 @@ class RepositoryEngineeringConsumerTests(unittest.TestCase):
         self.assertFalse((ROOT / ".agents" / "plugins" / "marketplace.json").exists())
         self.assertFalse((ROOT / "plugins" / "repository-engineering").exists())
         self.assertFalse((ROOT / "tests" / "test_repository_engineering_plugin.py").exists())
-        self.assertFalse(any(entry["asset"] == ".mcp.json" for entry in self.lock["files"]))
+        self.assertFalse(
+            any(
+                PurePosixPath(entry["asset"]).name == ".mcp.json"
+                for entry in self.lock["files"]
+            )
+        )
 
 
 if __name__ == "__main__":
