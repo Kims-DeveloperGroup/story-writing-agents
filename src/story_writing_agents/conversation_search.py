@@ -25,6 +25,12 @@ _SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 
 
 def _positive_integer(value: int, *, label: str, maximum: int | None = None) -> int:
+    """Return an exact positive integer within an optional inclusive maximum.
+
+    Booleans and non-integers raise ``TypeError``; range violations raise
+    ``ValueError`` without mutation.
+    """
+
     if type(value) is not int:
         raise TypeError(f"{label} must be an integer")
     if value < 1:
@@ -35,6 +41,12 @@ def _positive_integer(value: int, *, label: str, maximum: int | None = None) -> 
 
 
 def _non_negative_integer(value: int, *, label: str) -> int:
+    """Return an exact non-negative integer without mutation.
+
+    Booleans and non-integers raise ``TypeError``; negative values raise
+    ``ValueError``.
+    """
+
     if type(value) is not int:
         raise TypeError(f"{label} must be an integer")
     if value < 0:
@@ -43,12 +55,20 @@ def _non_negative_integer(value: int, *, label: str) -> int:
 
 
 def _boolean(value: bool, *, label: str) -> bool:
+    """Return an exact boolean or raise ``TypeError`` without mutation."""
+
     if type(value) is not bool:
         raise TypeError(f"{label} must be a boolean")
     return value
 
 
 def _identifier(value: str, *, label: str) -> str:
+    """Return an exact-string safe identifier without mutation.
+
+    Non-strings raise ``TypeError`` and syntax violations raise
+    ``SessionIdError``.
+    """
+
     if type(value) is not str:
         raise TypeError(f"{label} must be a string")
     if _SAFE_IDENTIFIER.fullmatch(value) is None:
@@ -59,6 +79,12 @@ def _identifier(value: str, *, label: str) -> str:
 
 
 def _strict_utf8(value: str, *, label: str) -> str:
+    """Return an exact string that encodes as strict UTF-8.
+
+    Non-strings raise ``TypeError`` and unencodable strings raise ``ValueError``;
+    no normalization or mutation is performed.
+    """
+
     if type(value) is not str:
         raise TypeError(f"{label} must be a string")
     try:
@@ -69,6 +95,12 @@ def _strict_utf8(value: str, *, label: str) -> str:
 
 
 def _canonical_utc_timestamp(value: str, *, label: str) -> datetime:
+    """Parse an exact canonical ISO-8601 UTC timestamp without mutation.
+
+    Invalid UTF-8, syntax, offset, or noncanonical spellings raise
+    ``TypeError`` or ``ValueError``.
+    """
+
     _strict_utf8(value, label=label)
     try:
         parsed = datetime.fromisoformat(value)
@@ -82,10 +114,14 @@ def _canonical_utc_timestamp(value: str, *, label: str) -> datetime:
 
 
 def _has_control_or_format(value: str) -> bool:
+    """Report whether any character belongs to a Unicode ``C`` category."""
+
     return any(unicodedata.category(character).startswith("C") for character in value)
 
 
 def _searchable_text(value: str) -> str:
+    """Return NFKC-casefolded text with Unicode ``C`` chars and spacing collapsed."""
+
     normalized = unicodedata.normalize("NFKC", value).casefold()
     without_controls = "".join(
         " " if unicodedata.category(character).startswith("C") else character
@@ -95,6 +131,14 @@ def _searchable_text(value: str) -> str:
 
 
 def _normalized_query(value: str) -> str:
+    """Return the bounded normalized literal used by conversation search.
+
+    The source must be strict UTF-8, nonblank, within policy, and free of
+    Unicode ``C`` characters; the normalized result is checked again for
+    content and length. Violations raise ``TypeError`` or ``ValueError``
+    without external reads or mutation.
+    """
+
     raw = _strict_utf8(value, label="conversation search query")
     if not raw.strip():
         raise ValueError("conversation search query must not be blank")
@@ -283,6 +327,8 @@ class ConversationSearchHit:
 
 
 def _hit_sort_key(hit: ConversationSearchHit) -> tuple[int, str, str]:
+    """Return the stable match-rank, normalized-subject, and identity key."""
+
     return (
         _MATCH_ORDER[hit.match_kind],
         normalize_conversation_subject(hit.subject),
@@ -520,6 +566,13 @@ class ConversationSearch(Protocol):
 
 
 def _bounded_snippet(searchable: str, normalized_query: str) -> str:
+    """Return a policy-bounded snippet around the query's first occurrence.
+
+    Up to 80 preceding characters are preferred, then the right edge expands
+    within character and UTF-8 byte limits; ellipses mark omitted text. Missing
+    or unfittable queries raise ``ValueError`` without external mutation.
+    """
+
     match_start = searchable.find(normalized_query)
     if match_start < 0:
         raise ValueError("snippet source does not contain the normalized query")
@@ -527,6 +580,8 @@ def _bounded_snippet(searchable: str, normalized_query: str) -> str:
     left_length = min(80, match_start)
 
     def render(start: int, end: int) -> str:
+        """Render one source slice with ellipses for omitted boundaries."""
+
         return (
             ("…" if start > 0 else "")
             + searchable[start:end]
@@ -534,6 +589,8 @@ def _bounded_snippet(searchable: str, normalized_query: str) -> str:
         )
 
     def fits(value: str) -> bool:
+        """Report whether text fits both fixed snippet limits."""
+
         return (
             len(value) <= CONVERSATION_MEMORY_POLICY.max_snippet_characters
             and len(value.encode("utf-8"))
@@ -562,6 +619,11 @@ def _subject_match_kind(
     normalized_subject: str,
     normalized_query: str,
 ) -> ConversationSearchMatchKind | None:
+    """Return the strongest literal subject match, or ``None`` when absent.
+
+    Exact, prefix, and substring matches are tested in that precedence order.
+    """
+
     if normalized_subject == normalized_query:
         return ConversationSearchMatchKind.EXACT_SUBJECT
     if normalized_subject.startswith(normalized_query):
@@ -576,6 +638,12 @@ def _validated_metadata(
     *,
     session_id: str,
 ) -> ConversationMetadata:
+    """Return exact metadata belonging to the requested session.
+
+    Wrong types raise ``TypeError`` and cross-session entries raise
+    ``ValueError`` without mutation.
+    """
+
     if type(metadata) is not ConversationMetadata:
         raise TypeError("catalog entries must be ConversationMetadata")
     if metadata.session_id != session_id:
@@ -590,6 +658,13 @@ def _iter_validated_events(
     conversation_id: str,
     maximum: int | None = None,
 ) -> Iterator[ConversationEvent]:
+    """Yield validated transcript events in contiguous storage order.
+
+    Exact tuple/type/identity and user-before-outcome pairing are enforced.
+    ``maximum`` stops before inspecting later events; malformed inspected data
+    raises ``TypeError`` or ``ValueError`` without mutation.
+    """
+
     if type(value) is not tuple:
         raise TypeError("event store read must return a tuple of ConversationEvent")
     user_events: dict[str, ConversationEvent] = {}
@@ -636,6 +711,8 @@ def _validated_events(
     session_id: str,
     conversation_id: str,
 ) -> tuple[ConversationEvent, ...]:
+    """Fully validate and return an identity-bound ordered event tuple."""
+
     return tuple(
         _iter_validated_events(
             value,
@@ -665,6 +742,16 @@ class ReferenceConversationSearch:
         scope: ConversationSearchScope,
         query: ConversationSearchQuery,
     ) -> ConversationSearchResult:
+        """Search one session with the supported deterministic reference behavior.
+
+        Normalized literal subject matches take precedence over a bounded scan
+        for the first visible transcript match per conversation. The result is
+        stably ordered, capped by ``query.limit``, and reports scan and result
+        truncation. This ``ConversationSearch``-compatible implementation only
+        reads its catalog and event-store ports; invalid adapter contracts raise
+        ``TypeError`` or ``ValueError``.
+        """
+
         if type(scope) is not ConversationSearchScope:
             raise TypeError(
                 "conversation search scope must be a ConversationSearchScope"
@@ -948,6 +1035,14 @@ class ConversationMemoryService:
         citation: ConversationCitation | None,
         expected_snapshot: int | None,
     ) -> ConversationTranscriptPage:
+        """Read, validate, and page one immutable transcript snapshot.
+
+        Catalog identity, complete event order, optional citation/turn, range,
+        cursor snapshot, event count, and UTF-8 byte limits are enforced. The
+        ports are read-only; stale or oversized references raise ``ValueError``
+        and invalid adapter data raises ``TypeError`` or ``ValueError``.
+        """
+
         metadata = _validated_metadata(
             self._catalog.get(self._scope.session_id, conversation_id),
             session_id=self._scope.session_id,
@@ -1047,6 +1142,12 @@ class ConversationMemoryService:
         conversation_id: str,
         events: tuple[ConversationEvent, ...],
     ) -> None:
+        """Validate an optional citation against identity and snapshot events.
+
+        Conversation-only citations are accepted after identity validation;
+        stale event coordinates raise ``ValueError`` without mutation.
+        """
+
         if citation is None:
             return
         self._validate_citation_identity(
@@ -1071,6 +1172,8 @@ class ConversationMemoryService:
         *,
         conversation_id: str,
     ) -> None:
+        """Reject citations outside the authorized session or conversation."""
+
         if citation.session_id != self._scope.session_id:
             raise ValueError("conversation citation is outside the authorized session")
         if citation.conversation_id != conversation_id:

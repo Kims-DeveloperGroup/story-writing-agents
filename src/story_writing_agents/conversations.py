@@ -22,6 +22,11 @@ _SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 
 
 def _validate_positive_integer(value: int, *, label: str) -> int:
+    """Return a positive non-boolean integer without mutation.
+
+    Other types raise ``TypeError`` and non-positive values raise ``ValueError``.
+    """
+
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError(f"{label} must be an integer")
     if value < 1:
@@ -30,6 +35,11 @@ def _validate_positive_integer(value: int, *, label: str) -> int:
 
 
 def _validate_non_negative_integer(value: int, *, label: str) -> int:
+    """Return a non-negative non-boolean integer without mutation.
+
+    Other types raise ``TypeError`` and negative values raise ``ValueError``.
+    """
+
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError(f"{label} must be an integer")
     if value < 0:
@@ -580,6 +590,8 @@ class ConversationCatalog(Protocol):
 
 
 def _validate_identifier(value: str, *, label: str) -> str:
+    """Return a safe identifier or raise ``SessionIdError`` without mutation."""
+
     if not isinstance(value, str) or _SAFE_IDENTIFIER.fullmatch(value) is None:
         raise SessionIdError(
             f"{label} must match [A-Za-z0-9][A-Za-z0-9_-]{{0,63}}"
@@ -594,6 +606,12 @@ def _validate_event_payload(
     kind: ConversationEventKind,
     content: str,
 ) -> None:
+    """Validate one visible event's kind, actor direction, and content.
+
+    Content must be nonempty strict UTF-8 and actors must match the event kind.
+    The helper performs no mutation and raises ``TypeError`` or ``ValueError``.
+    """
+
     if not isinstance(kind, ConversationEventKind):
         raise TypeError("conversation event kind must be a ConversationEventKind")
     if not isinstance(sender, str):
@@ -621,6 +639,13 @@ def _validate_event_payload(
 
 
 def _validate_subject(subject: str) -> str:
+    """Return an unchanged valid conversation display subject.
+
+    The subject must be strict UTF-8, nonblank, within the fixed character cap,
+    and free of Unicode control characters; invalid values raise ``TypeError``
+    or ``ValueError`` without normalization.
+    """
+
     if not isinstance(subject, str):
         raise TypeError("conversation subject must be a string")
     try:
@@ -640,6 +665,12 @@ def _validate_subject(subject: str) -> str:
 
 
 def _validate_utc_timestamp(value: str, *, label: str) -> datetime:
+    """Parse an exact canonical ISO-8601 UTC timestamp without mutation.
+
+    Wrong types raise ``TypeError``; invalid, offset-wrong, or noncanonical
+    values raise ``ValueError``.
+    """
+
     if not isinstance(value, str):
         raise TypeError(f"{label} must be a string")
     try:

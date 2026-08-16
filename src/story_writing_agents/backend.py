@@ -213,6 +213,13 @@ class BoundAgent:
         self,
         request: ConversationRequest,
     ) -> ConversationRequest:
+        """Return a canonical request compatible with this immutable binding.
+
+        Validation performs no I/O. A wrong caller type raises ``TypeError``;
+        malformed request or binding data and route mismatches raise
+        ``BackendProtocolError``.
+        """
+
         if type(request) is not ConversationRequest:
             raise TypeError("request must be a ConversationRequest")
         definition = self.definition
@@ -628,6 +635,12 @@ class AgentBackend:
         self._ensure_open()
 
         def decode(response_text: str) -> AgentReply:
+            """Decode and correlate one phase-specific reply without I/O.
+
+            Revision mismatch or missing phase-required content raises
+            ``BackendProtocolError``.
+            """
+
             reply = self._decode_reply(request.phase, response_text)
             if reply.revision_id != request.revision_id:
                 raise BackendProtocolError(
@@ -668,6 +681,12 @@ class AgentBackend:
         bound_agent: BoundAgent,
         request: ConversationRequest,
     ) -> ConversationReply:
+        """Run one Codex turn with the exact conversation payload and schema.
+
+        Provider-thread mutation, cancellation cleanup, and protocol failures
+        retain the behavior of the shared structured invocation path.
+        """
+
         self._ensure_open()
         return await self._invoke_codex_structured(
             bound_agent,
@@ -1242,6 +1261,8 @@ class AgentBackend:
     def _conversation_request_payload(
         request: ConversationRequest,
     ) -> dict[str, Any]:
+        """Project a request into the exact payload, preserving context order."""
+
         return {
             "session_id": request.session_id,
             "conversation_id": request.conversation_id,
@@ -1609,6 +1630,8 @@ class AgentBackend:
 
     @staticmethod
     def _conversation_output_schema() -> dict[str, Any]:
+        """Return the strict correlated conversation-reply JSON schema."""
+
         properties = {
             field: {"type": "string", "minLength": 1}
             for field in (
@@ -1640,6 +1663,8 @@ class AgentBackend:
         def reject_duplicate_fields(
             pairs: list[tuple[str, Any]],
         ) -> dict[str, Any]:
+            """Build a reply object or reject any duplicate JSON field."""
+
             result: dict[str, Any] = {}
             for key, value in pairs:
                 if key in result:
@@ -1845,6 +1870,8 @@ class AgentBackend:
             )
 
     def _validate_selected_session(self, value: str | None) -> str | None:
+        """Return a validated selection, or ``None`` when none is selected."""
+
         if value is None:
             return None
         return self.workspace.validate_identifier(value)
@@ -1855,6 +1882,12 @@ class AgentBackend:
         *,
         selected_session: str | None,
     ) -> SessionSummary:
+        """Build a summary from a validated manifest and current lease state.
+
+        The manifest is not mutated; lease reads and format or liveness errors
+        propagate from the persistence helpers.
+        """
+
         session = manifest["session_id"]
         lease = self._read_lease_if_present(session)
         if lease is None:
@@ -1877,6 +1910,12 @@ class AgentBackend:
         )
 
     def _lease_for_attachment(self, session_id: str) -> tuple[str, bool]:
+        """Return an owned or newly claimed lease token and its reuse flag.
+
+        An absent lease is claimed on disk; ownership and contention failures
+        propagate without installing the token in this backend.
+        """
+
         token = self._lease_tokens.get(session_id)
         if token is not None:
             self._assert_owned_lease(session_id)
@@ -1884,6 +1923,13 @@ class AgentBackend:
         return self._claim_lease(session_id), False
 
     def _ensure_session_lease(self, session_id: str) -> None:
+        """Ensure this backend owns a lease for an active provider session.
+
+        A new claim is followed by an active-state recheck and is released on
+        recheck failure. The owned-token map changes only after successful
+        validation; inactive, missing, contended, or malformed state raises.
+        """
+
         session = self.workspace.validate_identifier(session_id)
         manifest = self._read_manifest(session, missing_ok=False)
         assert manifest is not None
@@ -1909,6 +1955,13 @@ class AgentBackend:
         self._lease_tokens[session] = token
 
     def _claim_lease(self, session_id: str) -> str:
+        """Atomically create or safely reclaim a provider-session lease.
+
+        The claim guard serializes creation and stale replacement. A live or
+        changed lease raises ``SessionInUseError``; unsafe or failed storage
+        operations raise their bounded workspace or backend errors.
+        """
+
         session = self.workspace.validate_identifier(session_id)
         relative = self._lease_relative(session)
         token = uuid.uuid4().hex
@@ -2026,6 +2079,12 @@ class AgentBackend:
                 active_error.add_note(str(cleanup_error))
 
     def _open_lease_claim_guard(self) -> int:
+        """Open, secure, verify, and platform-initialize the claim guard.
+
+        The caller owns the returned descriptor. Setup failures close it before
+        propagating a bounded backend or workspace error.
+        """
+
         _, target = self._lease_claim_guard_paths()
         flags = os.O_CREAT | os.O_RDWR
         for flag_name in (
@@ -2066,6 +2125,11 @@ class AgentBackend:
             raise
 
     def _lease_claim_guard_paths(self) -> tuple[Path, Path]:
+        """Resolve safe guard parent and file paths without creating either.
+
+        Unsafe paths or a missing/non-directory parent raise workspace errors.
+        """
+
         try:
             parent = self.workspace.path(_SESSION_DIRECTORY)
             target = self.workspace.path(_LEASE_CLAIM_GUARD)
@@ -2080,6 +2144,12 @@ class AgentBackend:
         return parent, target
 
     def _verify_lease_claim_guard(self, descriptor: int) -> None:
+        """Verify both guard references are regular and, when meaningful, identical.
+
+        Inspection failures raise ``BackendProtocolError``; unsafe type or
+        identity changes raise ``WorkspaceFormatError``.
+        """
+
         _, target = self._lease_claim_guard_paths()
         try:
             opened = os.fstat(descriptor)
@@ -2103,6 +2173,12 @@ class AgentBackend:
 
     @staticmethod
     def _initialize_windows_lease_claim_guard(descriptor: int) -> None:
+        """Ensure a Windows one-byte lock region exists and rewind the file.
+
+        The guard is written only when empty; seek or write failures become
+        ``BackendProtocolError``.
+        """
+
         try:
             if os.fstat(descriptor).st_size == 0:
                 os.lseek(descriptor, 0, os.SEEK_SET)
@@ -2117,6 +2193,12 @@ class AgentBackend:
 
     @staticmethod
     def _lock_lease_claim_guard(descriptor: int) -> None:
+        """Acquire the platform advisory lock for a guard descriptor.
+
+        POSIX acquisition blocks; Windows contention is retried. Unsupported
+        platforms raise ``BackendProtocolError`` and other OS errors propagate.
+        """
+
         if _fcntl is not None:
             _fcntl.flock(descriptor, _fcntl.LOCK_EX)
             return
@@ -2141,6 +2223,12 @@ class AgentBackend:
 
     @staticmethod
     def _unlock_lease_claim_guard(descriptor: int) -> None:
+        """Release the platform advisory lock for a guard descriptor.
+
+        Unsupported platforms raise ``BackendProtocolError``; OS failures
+        propagate to the claim-guard cleanup policy.
+        """
+
         if _fcntl is not None:
             _fcntl.flock(descriptor, _fcntl.LOCK_UN)
             return
@@ -2169,6 +2257,8 @@ class AgentBackend:
 
     @staticmethod
     def _lease_is_stale(value: Mapping[str, Any]) -> bool:
+        """Report whether an unowned lease is conclusively available."""
+
         return AgentBackend._unowned_lease_state(value) is SessionLeaseState.AVAILABLE
 
     def _lease_state(
@@ -2176,6 +2266,8 @@ class AgentBackend:
         session_id: str,
         value: Mapping[str, Any],
     ) -> SessionLeaseState:
+        """Classify a lease as locally owned or derive its unowned state."""
+
         token = self._lease_tokens.get(session_id)
         if token is not None and value["token"] == token:
             return SessionLeaseState.OWNED
@@ -2183,6 +2275,12 @@ class AgentBackend:
 
     @staticmethod
     def _unowned_lease_state(value: Mapping[str, Any]) -> SessionLeaseState:
+        """Conservatively classify an unowned lease from host and PID liveness.
+
+        Only a missing local POSIX process is available; remote, unsupported,
+        inaccessible, or invalid probes remain unverified.
+        """
+
         if value["hostname"] != socket.gethostname():
             return SessionLeaseState.UNVERIFIED
         if os.name != "posix":
@@ -2200,18 +2298,33 @@ class AgentBackend:
 
     @staticmethod
     def _lease_hostname_diagnostic(hostname: str) -> str:
+        """Return a control-sanitized hostname diagnostic of at most 255 chars."""
+
         sanitized = _LEASE_DIAGNOSTIC_CHARACTERS.sub("?", hostname)
         if len(sanitized) > 255:
             sanitized = sanitized[:243] + " [truncated]"
         return sanitized
 
     def _read_lease_if_present(self, session_id: str) -> dict[str, Any] | None:
+        """Return a validated lease, or ``None`` when its path is absent.
+
+        The check and read do not mutate storage; races and malformed content
+        propagate through the strict lease reader.
+        """
+
         relative = self._lease_relative(session_id)
         if not self.workspace.path(relative).exists():
             return None
         return self._read_lease(session_id)
 
     def _read_lease(self, session_id: str) -> dict[str, Any]:
+        """Read and strictly validate one identity-bound lease record.
+
+        Exact schema, version, strings, timestamp, and positive PID are
+        required. A shallow copy is returned; malformed storage raises
+        ``WorkspaceFormatError``.
+        """
+
         value = self.workspace.read_json(self._lease_relative(session_id))
         expected = {
             "schema_version",
@@ -2327,6 +2440,13 @@ class AgentBackend:
         *,
         missing_ok: bool,
     ) -> dict[str, Any] | None:
+        """Read and strictly validate an identity-bound session manifest.
+
+        ``None`` is returned only for an absent path when ``missing_ok`` is
+        true. Exact schema, timestamp ordering, and every thread entry are
+        validated without mutation before copied mappings are returned.
+        """
+
         relative = self._manifest_relative(session_id)
         target = self.workspace.path(relative)
         if not target.exists():
@@ -2403,10 +2523,18 @@ class AgentBackend:
         return result
 
     def _manifest_exists(self, session_id: str) -> bool:
+        """Report whether the canonical manifest path exists without reading it."""
+
         return self.workspace.path(self._manifest_relative(session_id)).exists()
 
     @staticmethod
     def _validate_thread(value: Any) -> dict[str, Any]:
+        """Return a copied thread record after exact schema validation.
+
+        Required strings, boolean taint, safe thread identity, and timestamp
+        are checked without mutation; invalid data raises ``WorkspaceFormatError``.
+        """
+
         expected = {
             "backend",
             "agent_id",
@@ -2450,13 +2578,23 @@ class AgentBackend:
 
     @staticmethod
     def _manifest_relative(session_id: str) -> str:
+        """Return the manifest path for a previously validated session ID."""
+
         return f"{_SESSION_DIRECTORY}/{session_id}.json"
 
     @staticmethod
     def _lease_relative(session_id: str) -> str:
+        """Return the lease path for a previously validated session ID."""
+
         return f"{_SESSION_DIRECTORY}/{session_id}.lease.json"
 
 def _parse_timestamp(value: Any, *, label: str) -> datetime:
+    """Return an offset-aware timestamp or raise ``WorkspaceFormatError``.
+
+    Parsing performs no normalization or mutation; the supplied diagnostic
+    label identifies empty, malformed, or offset-free values.
+    """
+
     if not isinstance(value, str) or not value:
         raise WorkspaceFormatError(f"{label} must be a timestamp string")
     try:
@@ -2470,6 +2608,13 @@ def _parse_timestamp(value: Any, *, label: str) -> datetime:
 
 
 def _advanced_timestamp(previous: str, *, candidate: str | None = None) -> str:
+    """Return a timestamp strictly later than the validated previous value.
+
+    The candidate, or current UTC time when absent, is preserved if later;
+    otherwise the prior instant advances by one microsecond in UTC. Invalid or
+    unadvanceable timestamps raise ``WorkspaceFormatError``.
+    """
+
     prior = _parse_timestamp(previous, label="provider session updated_at")
     proposed_text = _now() if candidate is None else candidate
     proposed = _parse_timestamp(
@@ -2505,6 +2650,12 @@ def _text(value: Mapping[str, Any], field: str) -> str:
 
 
 def _strict_required_text(value: Mapping[str, Any], field: str) -> str:
+    """Return one nonempty strict-UTF-8 conversation response field.
+
+    Missing, non-string, empty, or unencodable values raise
+    ``BackendProtocolError`` without exposing the value.
+    """
+
     result = value.get(field)
     if not isinstance(result, str):
         raise BackendProtocolError(

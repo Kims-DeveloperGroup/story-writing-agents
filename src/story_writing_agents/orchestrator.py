@@ -2437,6 +2437,13 @@ class StoryRuntime:
         return method
 
     def _prepare_conversation_session(self, session_id: str) -> None:
+        """Invoke the optional synchronous backend session-preparation hook.
+
+        An absent compatibility hook is a no-op. Non-callable or asynchronous
+        hooks/results raise ``BackendProtocolError``; ordinary hook mutation and
+        failures retain backend behavior.
+        """
+
         assert self.backend is not None
         prepare_session = getattr(self.backend, "prepare_session", None)
         if prepare_session is None:
@@ -2594,6 +2601,13 @@ class StoryRuntime:
         append: Callable[[ConversationEventAppend], ConversationEvent],
         requested: ConversationEventAppend,
     ) -> ConversationEvent:
+        """Persist one event and return its validated canonical stored form.
+
+        The synchronous adapter may assign order metadata but may not change
+        caller-owned fields. Async or malformed results raise
+        ``BackendProtocolError`` after the adapter invocation.
+        """
+
         stored = append(requested)
         StoryRuntime._reject_async_result(stored, operation="append")
         if type(stored) is not ConversationEvent:
@@ -2640,6 +2654,12 @@ class StoryRuntime:
         reply: Any,
         request: ConversationRequest,
     ) -> ConversationReply:
+        """Return an exact canonical reply correlated to its request.
+
+        Wrong type, invalid values, or session/conversation/turn mismatches raise
+        ``BackendProtocolError`` without persistence or provider mutation.
+        """
+
         if type(reply) is not ConversationReply:
             raise BackendProtocolError(
                 f"{request.agent_id} returned {type(reply).__name__}, "
@@ -2751,6 +2771,12 @@ class StoryRuntime:
         replacements: Mapping[str, str],
         normalized_replacements: Mapping[str, str],
     ) -> str:
+        """Redact longest sensitive forms before and after safe normalization.
+
+        The replacement mappings are read without mutation; the returned text
+        has control/format characters and repeated whitespace normalized.
+        """
+
         for sensitive, replacement in sorted(
             replacements.items(),
             key=lambda item: (-len(item[0]), item[1] != "<redacted>", item[0]),
@@ -2766,6 +2792,8 @@ class StoryRuntime:
 
     @staticmethod
     def _normalize_conversation_diagnostic(value: str) -> str:
+        """Replace Unicode controls/formats with spaces and collapse whitespace."""
+
         normalized = "".join(
             " " if unicodedata.category(character) in {"Cc", "Cf"} else character
             for character in value
@@ -2774,6 +2802,8 @@ class StoryRuntime:
 
     @staticmethod
     def _bounded_conversation_error(value: str) -> str:
+        """Return at most 4096 characters, adding a fixed truncation suffix."""
+
         maximum = 4096
         suffix = " …[truncated]"
         if len(value) <= maximum:
@@ -2782,6 +2812,12 @@ class StoryRuntime:
 
     @staticmethod
     def _validate_conversation_text(value: str) -> str:
+        """Return nonempty strict-UTF-8 conversation text without mutation.
+
+        Non-strings raise ``TypeError``; empty or unencodable values raise
+        ``ValueError``.
+        """
+
         if not isinstance(value, str):
             raise TypeError("conversation text must be a string")
         if not value:
@@ -2794,6 +2830,8 @@ class StoryRuntime:
 
     @staticmethod
     def _new_conversation_turn_id() -> str:
+        """Return a new safe turn identifier using a random UUID hex value."""
+
         return f"t_{uuid.uuid4().hex}"
 
     async def _invoke(self, request: AgentRequest) -> AgentReply:
@@ -3214,6 +3252,14 @@ class RuntimeSession:
         agent_id: str,
         text: str,
     ) -> ConversationResult:
+        """Delegate the supported advisory turn through this bound session.
+
+        This compatibility convenience method supplies the session ID unchanged
+        and returns ``StoryRuntime.converse``'s ``ConversationResult``. Runtime
+        validation, whole-turn ordering, provider work, transcript mutation,
+        cancellation recording, and failures retain that public method's behavior.
+        """
+
         return await self.runtime.converse(
             self.session_id,
             conversation_id,
