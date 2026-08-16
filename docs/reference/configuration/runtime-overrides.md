@@ -1,0 +1,101 @@
+# Runtime overrides and directives
+
+> **Availability:** session-wide and per-agent language/persona overrides,
+> standalone directives, attached shell directive commands, backend run
+> overrides, and round limits are implemented.
+
+Key terms: **session override**—temporary configuration persisted for one story
+session; **precedence**—which source wins; **directive**—an exact message that
+changes overrides; **round limit**—the allowed replacement-revision count.
+
+## Override schema
+
+`StoryRuntime.set_runtime_overrides()` replaces the complete object for one
+session. Accepted input and normalized persisted shape are:
+
+```json
+{
+  "language": "EN",
+  "persona": null,
+  "agents": {
+    "plot_architect": {
+      "language": "FR",
+      "persona": "strict_plot_reviewer"
+    }
+  }
+}
+```
+
+The top level permits only `language`, `persona`, and `agents`. The first two
+may be valid strings or `null`. `agents` maps canonical IDs to objects that
+permit only `language` and `persona`, again strings or `null`. Validation
+normalizes all three top-level keys. Referenced personas must already exist.
+
+The object is atomically stored at
+`agent_states/orchestrator_state/sessions/<session_id>.json` and survives new
+runtime instances. No file means inheritance and an empty inspected runtime
+state.
+
+## Resolution precedence
+
+Language and persona resolve independently, first match winning:
+
+1. per-agent value in session runtime overrides;
+2. session-wide runtime value;
+3. value in that agent's `config/agent_configs.json` object;
+4. value in `config/system_defaults.json`.
+
+Backend routing is separate: `AgentBackend` one-run override, then per-agent
+configured backend, then `codex`. The repeatable CLI
+`--backend CANONICAL_AGENT_ID=BACKEND` supplies only the first level and never
+rewrites configuration.
+
+## Exact standalone directives
+
+Only these complete forms are directives:
+
+```text
+[SYS: LANG=<language-token>]
+[OVERRIDE: <canonical-agent-id> Persona=<persona-identifier>]
+[RESET: ALL]
+```
+
+Parsing does not trim. Leading/trailing whitespace, a newline, changed case, or
+a directive-looking substring returns no directive. The language form changes
+the session-wide runtime language. Persona changes one agent and preserves its
+other override values. Reset clears session-wide runtime language and persona
+and all per-agent runtime values; it does not edit configuration, templates,
+core documents, provider threads, histories, logs, or manuscripts.
+
+`parse_directive(text)` returns `RuntimeDirective | None`.
+`apply_directive(workspace, session_id, text)` validates the complete candidate
+state before atomic replacement and returns the normalized object. Invalid
+application raises `DirectiveError` and preserves prior state.
+
+## Interactive directive bridge
+
+After session attachment, no conversation selection is needed:
+
+| Shell syntax | Exact `StoryRuntime.apply_directive` text |
+| --- | --- |
+| `/language ARG` | `[SYS: LANG=ARG]` |
+| `/persona AGENT ARG` | `[OVERRIDE: CANONICAL_AGENT Persona=ARG]` |
+| `/reset` | `[RESET: ALL]` |
+
+Persona route aliases normalize to a canonical ID before application. An
+unknown agent reports `agent_invalid`; directive/configuration application
+failure reports `configuration_invalid`. Candidate validation and atomic
+replacement remain runtime-owned, so only validated success changes overrides.
+These commands call no provider and change no shell selection or routing state.
+
+## Debate round limit
+
+`max_debate_rounds` counts complete synthesized replacements, not audit passes.
+`0` runs the initial `r0` audit and deadlocks if conflict remains; default `1`
+also permits synthesis and audit of `r1`; `2` additionally permits `r2`.
+
+The default can be replaced per call with `max_debate_rounds=` or CLI
+`--max-debate-rounds`. It must be a nonnegative integer; Python booleans are
+rejected even though they subclass `int`.
+
+Formats and validation failures are in [Identifiers and errors](identifiers-and-errors.md).

@@ -1,0 +1,88 @@
+# Run the provider-free smoke test
+
+> **Availability:** `story smoke` is implemented and uses the ordinary runtime
+> with a private deterministic backend and synthetic data. It does not read
+> credentials or invoke Codex, a terminal, subprocesses, apps, the web, or the
+> network.
+
+Key terms: **deterministic backend**—fixed local replies with no provider;
+**temporary mode**—a check whose workspace is removed; **persistent mode**—a
+check that retains diagnostics; **invariant**—a condition the smoke run verifies.
+
+Use smoke immediately after installation:
+
+```bash
+story smoke
+```
+
+Temporary mode creates a uniquely named workspace, runs the check, prints one
+line of compact JSON, and removes the directory after normal success or a named
+invariant failure. A passing report contains `"status":"passed"`,
+`"provider_tested":false`, unique session and debate IDs, consensus on revision
+`r1`, one completed replacement round, and a disclaimer.
+
+## What a pass proves
+
+One run uses a single event loop and the ordinary runtime paths to:
+
+1. initialize the workspace and persist an `EN` session directive;
+2. create two active subject conversations with distinct IDs in stable catalog
+   order;
+3. route a lead turn and an explicitly targeted plot-specialist turn only to
+   the source transcript—the lead receives empty context and the specialist
+   receives the complete visible lead pair;
+4. prove source/retrieval transcript isolation and that conversation work has
+   not created debate, manuscript, agent-state, or core-document changes;
+5. find the source once by exact subject and once by literal visible content,
+   preserving match kinds and citations;
+6. reconstruct fresh workspace, catalog, event-store, runtime, backend, and
+   memory-service objects and observe the same directive, IDs, order,
+   transcripts, searches, and citations;
+7. run a typed, bounded `search(1) -> read(2) -> answer(3)` retrieval turn in
+   the second conversation, with trusted progress and answer sources equal to
+   the authorized complete-pair citations;
+8. supply the source's bounded two-turn snapshot as included consensus context,
+   without reading or changing CLI selection, and verify every debate request
+   plus the persisted context sidecar uses that exact snapshot; and
+9. retain the original conflict/revision workflow, unanimous `r1` consensus,
+   manuscript commit, exact phase/state counts, and unchanged core documents.
+
+The exact ordered `checks` array is part of the
+[CLI report contract](../reference/cli.md#smoke-report).
+
+## Keep diagnostic artifacts
+
+```bash
+story smoke --workspace ./smoke-workspace
+```
+
+Persistent mode initializes missing scaffold or reuses the directory. Every run
+uses unique session, conversation, debate, manuscript, and per-agent state
+identifiers, so repeated runs do not overwrite earlier diagnostics. The report
+identifies the retained workspace, session, and debate; inspect them with:
+
+```bash
+story inspect \
+  --workspace ./smoke-workspace \
+  --session SESSION_FROM_REPORT \
+  --debate DEBATE_FROM_REPORT
+```
+
+This mode writes ordinary plaintext session data, two conversation records and
+transcripts, owner-isolated agent state, debate lifecycle/log/result/context
+files, and a manuscript. It preserves pre-existing core-document bytes and CLI
+selection files, but the supplied workspace is not read-only.
+
+## Interpret failures
+
+Exit code `0` means every invariant passed. Code `1` means a named invariant
+failed; compact JSON includes the completed check prefix and `failed_check`.
+Code `2` covers argparse usage or a setup, configuration, or unexpected failure;
+non-usage failures print `ExceptionType: message` to standard error.
+
+A pass does **not** validate Codex installation, credentials, provider or model
+behavior, connectivity, terminal behavior, subprocess/app/web integration, or
+story quality. Use it to isolate local orchestration and persistence from those
+systems. Abrupt process or system termination can interrupt temporary cleanup.
+
+The exact report and exit contract is in the [CLI reference](../reference/cli.md).

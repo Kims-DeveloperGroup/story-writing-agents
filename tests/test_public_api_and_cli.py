@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import inspect
 import json
 import os
 import subprocess
@@ -11,23 +12,83 @@ import sys
 import tempfile
 import tomllib
 import unittest
+from dataclasses import MISSING, FrozenInstanceError, fields
 from pathlib import Path
+from typing import get_type_hints
+from unittest import mock
 
 import story_writing_agents
+from story_writing_agents import cli as cli_module
 from story_writing_agents import (
     AGENT_SPECS,
+    ConversationEventStore,
+    ConversationMemoryService,
+    ConversationRetrievalProgressSink,
+    ConversationRetrievalResult,
+    ConversationResult,
+    DebateContextMode,
+    DebateContextRequest,
+    DebateFailureKind,
+    DebateProgressEvent,
+    DebateProgressPhase,
+    DebateResult,
+    DebateStatus,
+    InputKind,
     PLOT_ARCHITECT,
+    ProgressObserverError,
     Runtime,
     RuntimeSession,
     Session,
     StoryRuntime,
     Workspace,
 )
-from story_writing_agents.cli import main
-from story_writing_agents.errors import WorkspaceFormatError
+from story_writing_agents.cli import build_parser, main
+from story_writing_agents.cli_context import CliContext
+from story_writing_agents.errors import (
+    BackendProtocolError,
+    ConfigurationError,
+    SessionIdError,
+    WorkspaceFormatError,
+    WorkspaceSecurityError,
+)
+from story_writing_agents.interactive_terminal import (
+    INTERACTIVE_ERROR_SPECS,
+    InteractiveErrorCode,
+    InteractiveTerminal,
+)
 from story_writing_agents.workspace import DEFAULT_AGENT_PROMPTS
 
 from tests.helpers import initialized_workspace
+
+
+class TtyStringIO(io.StringIO):
+    """In-memory stream with observable terminal capability and input reads."""
+
+    def __init__(self, *, is_terminal: bool, value: str = "") -> None:
+        super().__init__(value)
+        self.is_terminal = is_terminal
+        self.readline_calls = 0
+
+    def isatty(self) -> bool:
+        """Return the configured terminal capability without other effects."""
+
+        return self.is_terminal
+
+    def readline(self, *args, **kwargs) -> str:
+        """Record any attempted input read before delegating to StringIO."""
+
+        self.readline_calls += 1
+        return super().readline(*args, **kwargs)
+
+
+def expected_interactive_error(code: InteractiveErrorCode) -> str:
+    """Return the exact canonical two-line startup error record."""
+
+    spec = INTERACTIVE_ERROR_SPECS[code]
+    return (
+        f"[error {code.value}] {spec.summary}\n"
+        f"[hint] {spec.hint}\n"
+    )
 
 
 class PackagingTests(unittest.TestCase):
@@ -70,6 +131,9 @@ class PublicApiTests(unittest.TestCase):
             "AgentRequest",
             "AgentStateEntry",
             "BoundAgent",
+            "ConversationReply",
+            "ConversationRequest",
+            "ConversationResult",
             "DirectiveKind",
             "PromptFileReference",
             "StoryWritingAgentsError",
@@ -86,6 +150,17 @@ class PublicApiTests(unittest.TestCase):
         for name in required:
             with self.subTest(name=name):
                 self.assertIsNotNone(getattr(story_writing_agents, name))
+        from story_writing_agents import models
+
+        for name in (
+            "ConversationRequest",
+            "ConversationReply",
+            "ConversationResult",
+        ):
+            self.assertIs(
+                getattr(story_writing_agents, name),
+                getattr(models, name),
+            )
         base_error = story_writing_agents.StoryWritingAgentsError
         for name in required.difference(
             {
@@ -95,6 +170,9 @@ class PublicApiTests(unittest.TestCase):
                 "AgentRequest",
                 "AgentStateEntry",
                 "BoundAgent",
+                "ConversationReply",
+                "ConversationRequest",
+                "ConversationResult",
                 "DirectiveKind",
                 "PromptFileReference",
                 "StoryWritingAgentsError",
@@ -103,6 +181,564 @@ class PublicApiTests(unittest.TestCase):
             with self.subTest(error=name):
                 self.assertTrue(
                     issubclass(getattr(story_writing_agents, name), base_error)
+                )
+
+    def test_debate_context_and_progress_public_models_are_exact(self) -> None:
+        required = {
+            "DebateContextMode",
+            "DebateContextRequest",
+            "DebateFailureKind",
+            "DebateProgressEvent",
+            "DebateProgressPhase",
+            "DebateProgressSink",
+            "ProgressObserverError",
+        }
+        self.assertTrue(required.issubset(story_writing_agents.__all__))
+        self.assertEqual(
+            tuple((member.name, member.value) for member in DebateContextMode),
+            (("INCLUDED", "included"), ("FRESH", "fresh")),
+        )
+        self.assertEqual(
+            tuple((member.name, member.value) for member in DebateProgressPhase),
+            (
+                ("STARTED", "started"),
+                ("DRAFTED", "drafted"),
+                ("AUDIT_STARTED", "audit_started"),
+                ("AUDIT_COMPLETED", "audit_completed"),
+                ("SYNTHESIZED", "synthesized"),
+                ("ARTIFACTS_COMMITTED", "artifacts_committed"),
+                ("CONSENSUS", "consensus"),
+                ("DEADLOCK", "deadlock"),
+                ("FAILED", "failed"),
+                ("INTERRUPTED", "interrupted"),
+            ),
+        )
+        self.assertEqual(
+            tuple((member.name, member.value) for member in DebateFailureKind),
+            (
+                ("PREFLIGHT", "preflight"),
+                ("PROTOCOL", "protocol"),
+                ("CONTEXT", "context"),
+                ("WORKSPACE", "workspace"),
+                ("ARTIFACT_CONFLICT", "artifact_conflict"),
+                ("ARTIFACT_FAILURE", "artifact_failure"),
+                ("INTERNAL", "internal"),
+            ),
+        )
+
+        context_fields = fields(DebateContextRequest)
+        self.assertEqual(
+            tuple(field.name for field in context_fields),
+            ("conversation_id", "mode"),
+        )
+        self.assertTrue(all(field.default is MISSING for field in context_fields))
+        self.assertTrue(
+            all(
+                parameter.kind is inspect.Parameter.KEYWORD_ONLY
+                for parameter in inspect.signature(
+                    DebateContextRequest
+                ).parameters.values()
+            )
+        )
+        request = DebateContextRequest(
+            conversation_id="conversation_a",
+            mode=DebateContextMode.INCLUDED,
+        )
+        self.assertFalse(hasattr(request, "__dict__"))
+        with self.assertRaises(FrozenInstanceError):
+            request.mode = DebateContextMode.FRESH  # type: ignore[misc]
+        with self.assertRaises(TypeError):
+            DebateContextRequest(  # type: ignore[misc]
+                "conversation_a",
+                DebateContextMode.INCLUDED,
+            )
+
+        progress_fields = fields(DebateProgressEvent)
+        self.assertEqual(
+            tuple(field.name for field in progress_fields),
+            (
+                "session_id",
+                "debate_id",
+                "input_kind",
+                "phase",
+                "revision_id",
+                "round_number",
+                "context_mode",
+                "context_event_count",
+                "context_omitted_turns",
+                "conflicting_agents",
+                "manuscript_path",
+                "core_updates",
+                "failure_kind",
+            ),
+        )
+        self.assertEqual(
+            tuple(field.default for field in progress_fields),
+            (
+                MISSING,
+                MISSING,
+                MISSING,
+                MISSING,
+                None,
+                0,
+                None,
+                0,
+                0,
+                (),
+                None,
+                (),
+                None,
+            ),
+        )
+        self.assertTrue(
+            all(
+                parameter.kind is inspect.Parameter.KEYWORD_ONLY
+                for parameter in inspect.signature(
+                    DebateProgressEvent
+                ).parameters.values()
+            )
+        )
+        event = DebateProgressEvent(
+            session_id="session_a",
+            debate_id="debate_a",
+            input_kind=InputKind.PROMPT,
+            phase=DebateProgressPhase.STARTED,
+        )
+        self.assertFalse(hasattr(event, "__dict__"))
+        with self.assertRaises(FrozenInstanceError):
+            event.phase = DebateProgressPhase.DRAFTED  # type: ignore[misc]
+        self.assertEqual(tuple(inspect.signature(ProgressObserverError).parameters), ())
+        observer_error = ProgressObserverError()
+        self.assertEqual(str(observer_error), "debate progress observer failed")
+        self.assertFalse(hasattr(observer_error, "cause"))
+        self.assertIsNone(observer_error.__cause__)
+        self.assertNotIn("private observer prose", str(observer_error))
+        with self.assertRaises(TypeError):
+            ProgressObserverError(RuntimeError("private observer prose"))
+
+    def test_debate_progress_phase_invariants_are_exhaustive(self) -> None:
+        common = {
+            "session_id": "session_a",
+            "debate_id": "debate_a",
+            "input_kind": InputKind.PROMPT,
+        }
+        valid = (
+            {"phase": DebateProgressPhase.STARTED},
+            {
+                "phase": DebateProgressPhase.STARTED,
+                "context_mode": DebateContextMode.INCLUDED,
+                "context_event_count": 2,
+                "context_omitted_turns": 3,
+            },
+            {
+                "phase": DebateProgressPhase.DRAFTED,
+                "revision_id": "r0",
+            },
+            {
+                "phase": DebateProgressPhase.AUDIT_STARTED,
+                "revision_id": "r0",
+            },
+            {
+                "phase": DebateProgressPhase.AUDIT_COMPLETED,
+                "revision_id": "r0",
+                "conflicting_agents": ("plot_architect",),
+            },
+            {
+                "phase": DebateProgressPhase.SYNTHESIZED,
+                "revision_id": "r1",
+                "round_number": 1,
+            },
+            {
+                "phase": DebateProgressPhase.ARTIFACTS_COMMITTED,
+                "revision_id": "r1",
+                "round_number": 1,
+                "manuscript_path": "manuscript/chapter.md",
+                "core_updates": ("global_outline.md",),
+            },
+            {
+                "phase": DebateProgressPhase.CONSENSUS,
+                "revision_id": "r1",
+                "round_number": 1,
+            },
+            {
+                "phase": DebateProgressPhase.DEADLOCK,
+                "revision_id": "r1",
+                "round_number": 1,
+            },
+            {
+                "phase": DebateProgressPhase.FAILED,
+                "revision_id": None,
+                "round_number": 2,
+                "failure_kind": DebateFailureKind.INTERNAL,
+            },
+            {"phase": DebateProgressPhase.INTERRUPTED},
+        )
+        for values in valid:
+            with self.subTest(valid=values["phase"]):
+                self.assertIsInstance(
+                    DebateProgressEvent(**common, **values),  # type: ignore[arg-type]
+                    DebateProgressEvent,
+                )
+
+        invalid = (
+            {"phase": DebateProgressPhase.STARTED, "revision_id": "r0"},
+            {"phase": DebateProgressPhase.STARTED, "context_event_count": 1},
+            {
+                "phase": DebateProgressPhase.STARTED,
+                "context_mode": DebateContextMode.FRESH,
+                "context_omitted_turns": 1,
+            },
+            {"phase": DebateProgressPhase.DRAFTED, "revision_id": "r1"},
+            {
+                "phase": DebateProgressPhase.AUDIT_STARTED,
+                "revision_id": "r0",
+                "conflicting_agents": ("plot_architect",),
+            },
+            {
+                "phase": DebateProgressPhase.AUDIT_COMPLETED,
+                "revision_id": "r0",
+                "conflicting_agents": ("execution_specialist", "plot_architect"),
+            },
+            {
+                "phase": DebateProgressPhase.SYNTHESIZED,
+                "revision_id": "r1",
+            },
+            {
+                "phase": DebateProgressPhase.ARTIFACTS_COMMITTED,
+                "revision_id": "r0",
+            },
+            {
+                "phase": DebateProgressPhase.CONSENSUS,
+                "revision_id": None,
+            },
+            {
+                "phase": DebateProgressPhase.DEADLOCK,
+                "revision_id": "r0",
+                "context_mode": DebateContextMode.FRESH,
+            },
+            {"phase": DebateProgressPhase.FAILED},
+            {
+                "phase": DebateProgressPhase.INTERRUPTED,
+                "failure_kind": DebateFailureKind.INTERNAL,
+            },
+        )
+        for values in invalid:
+            with self.subTest(invalid=values):
+                with self.assertRaises((TypeError, ValueError)):
+                    DebateProgressEvent(**common, **values)  # type: ignore[arg-type]
+
+    def test_debate_run_signatures_are_additive_and_result_shape_is_unchanged(
+        self,
+    ) -> None:
+        method_cases = (
+            (
+                StoryRuntime.run_prompt,
+                (
+                    "self",
+                    "session_id",
+                    "prompt",
+                    "manuscript_name",
+                    "max_debate_rounds",
+                    "debate_id",
+                    "conversation_context",
+                    "progress_sink",
+                ),
+                3,
+            ),
+            (
+                StoryRuntime.run_draft,
+                (
+                    "self",
+                    "session_id",
+                    "draft",
+                    "manuscript_name",
+                    "max_debate_rounds",
+                    "debate_id",
+                    "conversation_context",
+                    "progress_sink",
+                ),
+                3,
+            ),
+            (
+                RuntimeSession.run_prompt,
+                (
+                    "self",
+                    "prompt",
+                    "manuscript_name",
+                    "max_debate_rounds",
+                    "debate_id",
+                    "conversation_context",
+                    "progress_sink",
+                ),
+                2,
+            ),
+            (
+                RuntimeSession.run_draft,
+                (
+                    "self",
+                    "draft",
+                    "manuscript_name",
+                    "max_debate_rounds",
+                    "debate_id",
+                    "conversation_context",
+                    "progress_sink",
+                ),
+                2,
+            ),
+        )
+        for method, names, positional_count in method_cases:
+            with self.subTest(method=method.__qualname__):
+                signature = inspect.signature(method)
+                self.assertEqual(tuple(signature.parameters), names)
+                parameters = tuple(signature.parameters.values())
+                self.assertTrue(
+                    all(
+                        parameter.kind
+                        is inspect.Parameter.POSITIONAL_OR_KEYWORD
+                        for parameter in parameters[:positional_count]
+                    )
+                )
+                self.assertTrue(
+                    all(
+                        parameter.kind is inspect.Parameter.KEYWORD_ONLY
+                        and parameter.default is None
+                        for parameter in parameters[positional_count:]
+                    )
+                )
+        for method, names in (
+            (
+                StoryRuntime.inspect_debate_context,
+                ("self", "session_id", "debate_id"),
+            ),
+            (RuntimeSession.inspect_debate_context, ("self", "debate_id")),
+        ):
+            signature = inspect.signature(method)
+            self.assertEqual(tuple(signature.parameters), names)
+
+        self.assertEqual(
+            tuple(field.name for field in fields(DebateResult)),
+            (
+                "session_id",
+                "debate_id",
+                "input_kind",
+                "status",
+                "revision_id",
+                "rounds_completed",
+                "final_candidate",
+                "latest_candidate",
+                "manuscript_path",
+                "core_updates",
+                "messages",
+                "error",
+                "action_required",
+            ),
+        )
+        legacy = DebateResult(
+            "session_a",
+            "debate_a",
+            InputKind.DRAFT,
+            DebateStatus.DEADLOCK,
+            "r1",
+            1,
+            None,
+            "candidate",
+            None,
+        )
+        self.assertEqual(
+            set(legacy.to_dict()),
+            {
+                "session_id",
+                "debate_id",
+                "input_kind",
+                "status",
+                "revision_id",
+                "rounds_completed",
+                "final_candidate",
+                "latest_candidate",
+                "manuscript_path",
+                "core_updates",
+                "messages",
+                "error",
+                "action_required",
+            },
+        )
+
+    def test_conversation_runtime_signatures_are_exact_and_compatible(self) -> None:
+        constructor = inspect.signature(StoryRuntime)
+        self.assertEqual(
+            tuple(constructor.parameters),
+            ("workspace", "backend", "conversation_event_store"),
+        )
+        self.assertIs(
+            constructor.parameters["workspace"].kind,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        )
+        self.assertIs(
+            constructor.parameters["backend"].kind,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        )
+        self.assertIsNone(constructor.parameters["backend"].default)
+        collaborator = constructor.parameters["conversation_event_store"]
+        self.assertIs(collaborator.kind, inspect.Parameter.KEYWORD_ONLY)
+        self.assertIsNone(collaborator.default)
+        self.assertEqual(
+            get_type_hints(StoryRuntime.__init__)["conversation_event_store"],
+            ConversationEventStore | None,
+        )
+
+        cases = (
+            (
+                StoryRuntime.converse,
+                ("self", "session_id", "conversation_id", "agent_id", "text"),
+            ),
+            (
+                RuntimeSession.converse,
+                ("self", "conversation_id", "agent_id", "text"),
+            ),
+        )
+        for method, names in cases:
+            with self.subTest(method=method.__qualname__):
+                signature = inspect.signature(method)
+                self.assertEqual(tuple(signature.parameters), names)
+                self.assertTrue(
+                    all(
+                        parameter.kind
+                        is inspect.Parameter.POSITIONAL_OR_KEYWORD
+                        and parameter.default is inspect.Parameter.empty
+                        for parameter in signature.parameters.values()
+                    )
+                )
+                self.assertIs(
+                    get_type_hints(method)["return"],
+                    ConversationResult,
+                )
+
+    def test_retrieval_runtime_signatures_exports_and_legacy_compatibility_are_exact(
+        self,
+    ) -> None:
+        cases = (
+            (
+                StoryRuntime.converse_with_retrieval,
+                (
+                    "self",
+                    "session_id",
+                    "conversation_id",
+                    "agent_id",
+                    "text",
+                    "memory_service",
+                    "progress_sink",
+                ),
+                5,
+            ),
+            (
+                RuntimeSession.converse_with_retrieval,
+                (
+                    "self",
+                    "conversation_id",
+                    "agent_id",
+                    "text",
+                    "memory_service",
+                    "progress_sink",
+                ),
+                4,
+            ),
+        )
+        for method, names, positional_count in cases:
+            with self.subTest(method=method.__qualname__):
+                signature = inspect.signature(method)
+                self.assertEqual(tuple(signature.parameters), names)
+                parameters = tuple(signature.parameters.values())
+                self.assertTrue(
+                    all(
+                        parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+                        and parameter.default is inspect.Parameter.empty
+                        for parameter in parameters[:positional_count]
+                    )
+                )
+                memory = signature.parameters["memory_service"]
+                self.assertIs(memory.kind, inspect.Parameter.KEYWORD_ONLY)
+                self.assertIs(memory.default, inspect.Parameter.empty)
+                progress = signature.parameters["progress_sink"]
+                self.assertIs(progress.kind, inspect.Parameter.KEYWORD_ONLY)
+                self.assertIsNone(progress.default)
+                hints = get_type_hints(method)
+                self.assertIs(hints["memory_service"], ConversationMemoryService)
+                self.assertEqual(
+                    hints["progress_sink"],
+                    ConversationRetrievalProgressSink | None,
+                )
+                self.assertIs(hints["return"], ConversationRetrievalResult)
+
+        required = {
+            "CONVERSATION_RETRIEVAL_POLICY",
+            "ConversationRetrievalAction",
+            "ConversationRetrievalActionHandler",
+            "ConversationRetrievalActionKind",
+            "ConversationRetrievalAnswerAction",
+            "ConversationRetrievalObservation",
+            "ConversationRetrievalPolicy",
+            "ConversationRetrievalProgressEvent",
+            "ConversationRetrievalProgressPhase",
+            "ConversationRetrievalProgressSink",
+            "ConversationRetrievalReadAction",
+            "ConversationRetrievalReadObservation",
+            "ConversationRetrievalReply",
+            "ConversationRetrievalRequest",
+            "ConversationRetrievalResult",
+            "ConversationRetrievalSearchAction",
+            "ConversationRetrievalSearchItem",
+            "ConversationRetrievalSearchObservation",
+            "ConversationRetrievalSource",
+            "ConversationRetrievalTranscriptEvent",
+            "ConversationRetrievalError",
+            "ConversationRetrievalSemanticError",
+            "ConversationRetrievalBudgetError",
+            "ConversationRetrievalObserverError",
+        }
+        self.assertTrue(required.issubset(story_writing_agents.__all__))
+        self.assertFalse(
+            hasattr(
+                story_writing_agents,
+                "serialize_conversation_retrieval_observation",
+            )
+        )
+        self.assertNotIn(
+            "serialize_conversation_retrieval_observation",
+            story_writing_agents.__all__,
+        )
+
+    def test_interactive_parser_exports_use_the_supported_package_facade(
+        self,
+    ) -> None:
+        from story_writing_agents import interactive_commands
+
+        required = {
+            "ActionKind",
+            "InteractiveAction",
+            "CommandSpec",
+            "COMMANDS",
+            "parse_interactive_line",
+        }
+        self.assertTrue(required.issubset(story_writing_agents.__all__))
+        for name in required:
+            with self.subTest(name=name):
+                self.assertIs(
+                    getattr(story_writing_agents, name),
+                    getattr(interactive_commands, name),
+                )
+
+    def test_conversation_search_exports_use_the_supported_package_facade(
+        self,
+    ) -> None:
+        from story_writing_agents import conversation_search
+
+        required = set(conversation_search.__all__)
+        self.assertTrue(required.issubset(story_writing_agents.__all__))
+        for name in required:
+            with self.subTest(name=name):
+                self.assertIs(
+                    getattr(story_writing_agents, name),
+                    getattr(conversation_search, name),
                 )
 
 
@@ -149,9 +785,494 @@ class CliTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("story-writing-agents", completed.stdout)
-        for command in ("init", "directive", "run", "inspect", "session", "smoke"):
+        for command in (
+            "chat",
+            "init",
+            "directive",
+            "run",
+            "inspect",
+            "session",
+            "smoke",
+        ):
             with self.subTest(command=command):
                 self.assertIn(command, completed.stdout)
+
+    def test_bare_and_chat_parser_shapes_preserve_legacy_help(self) -> None:
+        parser = build_parser()
+        self.assertEqual(vars(parser.parse_args([])), {"command": None})
+        parsed = parser.parse_args(
+            [
+                "chat",
+                "chapter_one",
+                "--workspace",
+                "/stories/example",
+                "--backend",
+                "lead_orchestrator=codex",
+                "--codex-model",
+                "model-name",
+                "--codex-timeout",
+                "12.5",
+            ]
+        )
+        self.assertEqual(
+            vars(parsed),
+            {
+                "command": "chat",
+                "session_name": "chapter_one",
+                "workspace": "/stories/example",
+                "backend": ["lead_orchestrator=codex"],
+                "codex_model": "model-name",
+                "codex_timeout": "12.5",
+            },
+        )
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as raised:
+                parser.parse_args(["--workspace", "/not-a-bare-option"])
+        self.assertEqual(raised.exception.code, 2)
+
+        repository_root = Path(__file__).resolve().parents[1]
+        environment = os.environ.copy()
+        source_path = str(repository_root / "src")
+        environment["PYTHONPATH"] = source_path
+        for arguments in (
+            ["--help"],
+            ["chat", "--help"],
+            ["run", "--help"],
+            ["session", "start", "--help"],
+        ):
+            with self.subTest(arguments=arguments):
+                completed = subprocess.run(
+                    [sys.executable, "-m", "story_writing_agents", *arguments],
+                    cwd=repository_root,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                self.assertIn("usage:", completed.stdout)
+
+    def test_non_tty_guard_precedes_input_options_workspace_and_backend(self) -> None:
+        cases = (
+            ([], False, True),
+            (["chat", "--codex-timeout", "not-a-number"], True, False),
+            (
+                [
+                    "chat",
+                    "target",
+                    "--workspace",
+                    "/missing",
+                    "--backend",
+                    "unsafe override",
+                ],
+                False,
+                False,
+            ),
+        )
+        for arguments, stdin_tty, stdout_tty in cases:
+            with self.subTest(arguments=arguments):
+                stdin = TtyStringIO(is_terminal=stdin_tty, value="/quit\n")
+                stdout = TtyStringIO(is_terminal=stdout_tty)
+                stderr = io.StringIO()
+                with (
+                    mock.patch.object(sys, "stdin", stdin),
+                    mock.patch.object(sys, "stdout", stdout),
+                    mock.patch.object(sys, "stderr", stderr),
+                    mock.patch.object(
+                        cli_module,
+                        "_parse_backend_overrides",
+                        side_effect=AssertionError("parsed overrides before TTY"),
+                    ) as parse_overrides,
+                    mock.patch.object(
+                        cli_module,
+                        "resolve_workspace",
+                        side_effect=AssertionError("resolved workspace before TTY"),
+                    ) as resolve_workspace,
+                    mock.patch.object(
+                        cli_module,
+                        "load_cli_context",
+                        side_effect=AssertionError("loaded context before TTY"),
+                    ) as load_context,
+                    mock.patch.object(cli_module, "AgentBackend") as backend,
+                    mock.patch.object(
+                        cli_module,
+                        "InteractiveController",
+                    ) as controller,
+                ):
+                    exit_code = main(arguments)
+                self.assertEqual(exit_code, 2)
+                self.assertEqual(stdout.getvalue(), "")
+                self.assertEqual(
+                    stderr.getvalue(),
+                    expected_interactive_error(InteractiveErrorCode.TTY_REQUIRED),
+                )
+                self.assertEqual(stdin.readline_calls, 0)
+                parse_overrides.assert_not_called()
+                resolve_workspace.assert_not_called()
+                load_context.assert_not_called()
+                backend.assert_not_called()
+                controller.assert_not_called()
+
+    def test_module_non_tty_entry_is_exact_and_does_not_touch_cwd(self) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = str(repository_root / "src")
+        environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        invocations = (
+            [],
+            [
+                "chat",
+                "target",
+                "--workspace",
+                "missing",
+                "--backend",
+                "invalid",
+                "--codex-timeout",
+                "invalid",
+            ],
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for arguments in invocations:
+                with self.subTest(arguments=arguments):
+                    before = tuple(root.iterdir())
+                    completed = subprocess.run(
+                        [
+                            sys.executable,
+                            "-m",
+                            "story_writing_agents",
+                            *arguments,
+                        ],
+                        cwd=root,
+                        env=environment,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    self.assertEqual(completed.returncode, 2)
+                    self.assertEqual(completed.stdout, "")
+                    self.assertEqual(
+                        completed.stderr,
+                        expected_interactive_error(
+                            InteractiveErrorCode.TTY_REQUIRED
+                        ),
+                    )
+                    self.assertEqual(tuple(root.iterdir()), before)
+
+    def test_interactive_adapter_passes_exact_chat_and_bare_configuration(self) -> None:
+        workspace = initialized_workspace(self)
+        contexts = (
+            (
+                [
+                    "chat",
+                    "chapter_one",
+                    "--workspace",
+                    str(workspace.root),
+                    "--backend",
+                    "lead_orchestrator=codex",
+                    "--codex-model",
+                    "model-name",
+                    "--codex-timeout",
+                    "12.5",
+                ],
+                "chapter_one",
+                "model-name",
+                12.5,
+                {"lead_orchestrator": "codex"},
+            ),
+            ([], None, None, 300.0, {}),
+        )
+        for arguments, requested, model, timeout, overrides in contexts:
+            with self.subTest(arguments=arguments):
+                stdin = TtyStringIO(is_terminal=True)
+                stdout = TtyStringIO(is_terminal=True)
+                stderr = io.StringIO()
+                cli_context = CliContext(selected_session="saved")
+                backend_value = mock.Mock()
+                controller_value = mock.Mock()
+                controller_value.run_session_lobby.return_value = 7
+                with (
+                    mock.patch.object(sys, "stdin", stdin),
+                    mock.patch.object(sys, "stdout", stdout),
+                    mock.patch.object(sys, "stderr", stderr),
+                    mock.patch.object(
+                        cli_module,
+                        "resolve_workspace",
+                        return_value=workspace,
+                    ) as resolve_workspace,
+                    mock.patch.object(
+                        cli_module,
+                        "load_cli_context",
+                        return_value=cli_context,
+                    ) as load_context,
+                    mock.patch.object(
+                        cli_module,
+                        "AgentBackend",
+                        return_value=backend_value,
+                    ) as backend_factory,
+                    mock.patch.object(
+                        cli_module,
+                        "InteractiveController",
+                        return_value=controller_value,
+                    ) as controller_factory,
+                ):
+                    self.assertEqual(main(arguments), 7)
+
+                expected_workspace_option = (
+                    str(workspace.root) if arguments else None
+                )
+                resolve_workspace.assert_called_once_with(
+                    expected_workspace_option
+                )
+                load_context.assert_called_once_with(workspace)
+                backend_factory.assert_called_once_with(
+                    workspace,
+                    model=model,
+                    timeout_seconds=timeout,
+                    backend_overrides=overrides,
+                )
+                controller_args = controller_factory.call_args.args
+                self.assertEqual(
+                    controller_args[:3],
+                    (workspace, cli_context, backend_value),
+                )
+                self.assertIsInstance(controller_args[3], InteractiveTerminal)
+                controller_value.run_session_lobby.assert_called_once_with(
+                    requested_session=requested
+                )
+                backend_value.close.assert_not_called()
+                self.assertEqual(stdout.getvalue(), "")
+                self.assertEqual(stderr.getvalue(), "")
+
+    def test_backend_cleanup_ownership_transfers_only_when_run_begins(self) -> None:
+        workspace = initialized_workspace(self)
+        context = CliContext()
+
+        def invoke_with(
+            backend_value: mock.Mock,
+            controller_factory: mock.Mock,
+        ) -> tuple[int, str]:
+            """Invoke a TTY chat with supplied backend/controller doubles."""
+
+            stdin = TtyStringIO(is_terminal=True)
+            stdout = TtyStringIO(is_terminal=True)
+            stderr = io.StringIO()
+            with (
+                mock.patch.object(sys, "stdin", stdin),
+                mock.patch.object(sys, "stdout", stdout),
+                mock.patch.object(sys, "stderr", stderr),
+                mock.patch.object(
+                    cli_module,
+                    "resolve_workspace",
+                    return_value=workspace,
+                ),
+                mock.patch.object(
+                    cli_module,
+                    "load_cli_context",
+                    return_value=context,
+                ),
+                mock.patch.object(
+                    cli_module,
+                    "AgentBackend",
+                    return_value=backend_value,
+                ),
+                mock.patch.object(
+                    cli_module,
+                    "InteractiveController",
+                    controller_factory,
+                ),
+            ):
+                return main(["chat"]), stderr.getvalue()
+
+        unstarted_backend = mock.Mock()
+        constructor_failure = mock.Mock(
+            side_effect=RuntimeError("constructor-secret")
+        )
+        exit_code, stderr = invoke_with(
+            unstarted_backend,
+            constructor_failure,
+        )
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(
+            stderr,
+            expected_interactive_error(InteractiveErrorCode.INTERNAL_ERROR),
+        )
+        self.assertNotIn("constructor-secret", stderr)
+        unstarted_backend.close.assert_called_once_with()
+
+        transferred_backend = mock.Mock()
+        running_controller = mock.Mock()
+        running_controller.run_session_lobby.side_effect = RuntimeError(
+            "controller-secret"
+        )
+        exit_code, stderr = invoke_with(
+            transferred_backend,
+            mock.Mock(return_value=running_controller),
+        )
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(
+            stderr,
+            expected_interactive_error(InteractiveErrorCode.INTERNAL_ERROR),
+        )
+        self.assertNotIn("controller-secret", stderr)
+        transferred_backend.close.assert_not_called()
+
+    def test_setup_failures_are_phase_typed_and_never_expose_prose(self) -> None:
+        workspace = initialized_workspace(self)
+        workspace_cases = (
+            (
+                ConfigurationError("workspace-secret"),
+                InteractiveErrorCode.WORKSPACE_NOT_INITIALIZED,
+            ),
+            (
+                WorkspaceSecurityError("workspace-secret"),
+                InteractiveErrorCode.WORKSPACE_UNSAFE,
+            ),
+            (
+                WorkspaceFormatError("workspace-secret"),
+                InteractiveErrorCode.WORKSPACE_INVALID,
+            ),
+            (OSError("workspace-secret"), InteractiveErrorCode.WORKSPACE_INVALID),
+            (RuntimeError("workspace-secret"), InteractiveErrorCode.INTERNAL_ERROR),
+        )
+        for failure, code in workspace_cases:
+            with self.subTest(phase="workspace", failure=type(failure).__name__):
+                stdin = TtyStringIO(is_terminal=True)
+                stdout = TtyStringIO(is_terminal=True)
+                stderr = io.StringIO()
+                with (
+                    mock.patch.object(sys, "stdin", stdin),
+                    mock.patch.object(sys, "stdout", stdout),
+                    mock.patch.object(sys, "stderr", stderr),
+                    mock.patch.object(
+                        cli_module,
+                        "resolve_workspace",
+                        side_effect=failure,
+                    ),
+                ):
+                    self.assertEqual(main(["chat"]), 2)
+                self.assertEqual(stderr.getvalue(), expected_interactive_error(code))
+                self.assertEqual(stdout.getvalue(), "")
+                self.assertNotIn("workspace-secret", stderr.getvalue())
+
+        context_cases = (
+            (ConfigurationError, InteractiveErrorCode.CONFIGURATION_INVALID),
+            (SessionIdError, InteractiveErrorCode.CONFIGURATION_INVALID),
+            (BackendProtocolError, InteractiveErrorCode.CONFIGURATION_INVALID),
+            (WorkspaceSecurityError, InteractiveErrorCode.WORKSPACE_UNSAFE),
+            (WorkspaceFormatError, InteractiveErrorCode.WORKSPACE_INVALID),
+            (OSError, InteractiveErrorCode.WORKSPACE_INVALID),
+            (RuntimeError, InteractiveErrorCode.INTERNAL_ERROR),
+        )
+        for failure_type, code in context_cases:
+            with self.subTest(phase="context", failure=failure_type.__name__):
+                stdin = TtyStringIO(is_terminal=True)
+                stdout = TtyStringIO(is_terminal=True)
+                stderr = io.StringIO()
+                with (
+                    mock.patch.object(sys, "stdin", stdin),
+                    mock.patch.object(sys, "stdout", stdout),
+                    mock.patch.object(sys, "stderr", stderr),
+                    mock.patch.object(
+                        cli_module,
+                        "resolve_workspace",
+                        return_value=workspace,
+                    ),
+                    mock.patch.object(
+                        cli_module,
+                        "load_cli_context",
+                        side_effect=failure_type("context-secret"),
+                    ),
+                ):
+                    self.assertEqual(main(["chat"]), 2)
+                self.assertEqual(stderr.getvalue(), expected_interactive_error(code))
+                self.assertEqual(stdout.getvalue(), "")
+                self.assertNotIn("context-secret", stderr.getvalue())
+
+        backend_cases = (
+            (ConfigurationError, InteractiveErrorCode.CONFIGURATION_INVALID),
+            (WorkspaceSecurityError, InteractiveErrorCode.WORKSPACE_UNSAFE),
+            (OSError, InteractiveErrorCode.WORKSPACE_INVALID),
+            (RuntimeError, InteractiveErrorCode.INTERNAL_ERROR),
+        )
+        for failure_type, code in backend_cases:
+            with self.subTest(phase="backend", failure=failure_type.__name__):
+                stdin = TtyStringIO(is_terminal=True)
+                stdout = TtyStringIO(is_terminal=True)
+                stderr = io.StringIO()
+                with (
+                    mock.patch.object(sys, "stdin", stdin),
+                    mock.patch.object(sys, "stdout", stdout),
+                    mock.patch.object(sys, "stderr", stderr),
+                    mock.patch.object(
+                        cli_module,
+                        "resolve_workspace",
+                        return_value=workspace,
+                    ),
+                    mock.patch.object(
+                        cli_module,
+                        "load_cli_context",
+                        return_value=CliContext(),
+                    ),
+                    mock.patch.object(
+                        cli_module,
+                        "AgentBackend",
+                        side_effect=failure_type("backend-secret"),
+                    ),
+                ):
+                    self.assertEqual(main(["chat"]), 2)
+                self.assertEqual(stderr.getvalue(), expected_interactive_error(code))
+                self.assertEqual(stdout.getvalue(), "")
+                self.assertNotIn("backend-secret", stderr.getvalue())
+
+        for arguments in (
+            ["chat", "--backend", "invalid-secret"],
+            ["chat", "--codex-timeout", "nan-secret"],
+        ):
+            with self.subTest(phase="options", arguments=arguments):
+                stdin = TtyStringIO(is_terminal=True)
+                stdout = TtyStringIO(is_terminal=True)
+                stderr = io.StringIO()
+                with (
+                    mock.patch.object(sys, "stdin", stdin),
+                    mock.patch.object(sys, "stdout", stdout),
+                    mock.patch.object(sys, "stderr", stderr),
+                    mock.patch.object(
+                        cli_module,
+                        "resolve_workspace",
+                    ) as resolve_workspace,
+                ):
+                    self.assertEqual(main(arguments), 2)
+                self.assertEqual(
+                    stderr.getvalue(),
+                    expected_interactive_error(
+                        InteractiveErrorCode.CONFIGURATION_INVALID
+                    ),
+                )
+                self.assertEqual(stdout.getvalue(), "")
+                resolve_workspace.assert_not_called()
+
+    def test_changed_cli_callables_have_specification_docstrings(self) -> None:
+        names = (
+            "build_parser",
+            "_parse_backend_overrides",
+            "_parse_positive_timeout_seconds",
+            "_resolve_run_input",
+            "_interactive_streams_are_terminals",
+            "_reject_unexpected_startup_input",
+            "_write_interactive_cli_error",
+            "_classify_workspace_entry_failure",
+            "_classify_interactive_configuration_failure",
+            "_close_unstarted_interactive_backend",
+            "_run_interactive_cli",
+            "main",
+        )
+        for name in names:
+            with self.subTest(callable=name):
+                value = getattr(cli_module, name)
+                self.assertTrue(inspect.getdoc(value))
 
     def test_init_inspect_and_expected_error_exit_codes(self) -> None:
         temporary = tempfile.TemporaryDirectory()
