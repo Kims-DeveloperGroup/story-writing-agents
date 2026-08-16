@@ -179,7 +179,7 @@ exact approved base object, and branch name at runtime:
 
 ```bash
 issue_number=<issue-number>
-branch=issue-<number>-<slug>
+branch=issue-<issue-number>-<slug>
 base_oid=<approved-base-oid>
 repo_id="$(gh repo view "$repo_slug" --json id --jq .id)"
 issue_id="$(gh issue view "$issue_number" --repo "$repo_slug" --json id --jq .id)"

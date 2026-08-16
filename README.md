@@ -204,7 +204,7 @@ records the immutable source commit and is the authoritative installed
 baseline. The projected repository-development agents under `.codex/agents/`
 are distinct from the four editable story-runtime roles under `config/agents/`;
 only the latter participate in story-writing debates. Consult the canonical
-[package documentation](https://github.com/Kims-DeveloperGroup/AI-engineering-kit/blob/c19213d182f91de06447bbf632c7dab0e5a898f6/plugins/repository-engineering/README.md)
+[package documentation](https://github.com/Kims-DeveloperGroup/AI-engineering-kit/blob/2cab4e6a2d0d7f693c4a65a9021622410bf23966/plugins/repository-engineering/README.md)
 for installation, ownership, upgrade, and MCP guidance.
 
 ## Project Structure

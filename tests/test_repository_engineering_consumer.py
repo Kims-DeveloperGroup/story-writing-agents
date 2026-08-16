@@ -59,7 +59,7 @@ class RepositoryEngineeringConsumerTests(unittest.TestCase):
     def test_lock_is_deterministic_and_pins_the_remote_distribution(self) -> None:
         self.assertEqual(
             _sha256(self.lock_bytes),
-            "41cf47164b7e863157608e19d06a9038d1bfd03a5091ee09a8f1317459147fc6",
+            "8c95eda2079fc20e4bba6d94b630c71b246c8f1cc1f0a82011316261adb12c03",
         )
         self.assertEqual(
             self.lock_bytes,
@@ -98,7 +98,7 @@ class RepositoryEngineeringConsumerTests(unittest.TestCase):
                 "marketplaceSource": (
                     "https://github.com/Kims-DeveloperGroup/AI-engineering-kit.git"
                 ),
-                "immutableRef": "c19213d182f91de06447bbf632c7dab0e5a898f6",
+                "immutableRef": "2cab4e6a2d0d7f693c4a65a9021622410bf23966",
             },
         )
         self.assertEqual(
@@ -109,7 +109,7 @@ class RepositoryEngineeringConsumerTests(unittest.TestCase):
                     "distribution-manifest.json"
                 ),
                 "sha256": (
-                    "33e7a2a557160463064ebbd2736142f09152ab2235012982e1a7f326f09d20cd"
+                    "71696a46bf80bfd733e52cbc9baca62eabfe584df4dc0c61bbf3ac5806b9813c"
                 ),
             },
         )

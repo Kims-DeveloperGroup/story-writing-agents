@@ -10,11 +10,11 @@
     "marketplaceManifestSha256": "6e0f44e7cf797eff7cdc73c06b25271f33c49915a1bc37dc0c554df06537b7db",
     "pluginSource": "plugins/repository-engineering",
     "marketplaceSource": "https://github.com/Kims-DeveloperGroup/AI-engineering-kit.git",
-    "immutableRef": "c19213d182f91de06447bbf632c7dab0e5a898f6"
+    "immutableRef": "2cab4e6a2d0d7f693c4a65a9021622410bf23966"
   },
   "installedDistributionManifest": {
     "path": "skills/repository-engineering-bootstrap/assets/distribution-manifest.json",
-    "sha256": "33e7a2a557160463064ebbd2736142f09152ab2235012982e1a7f326f09d20cd"
+    "sha256": "71696a46bf80bfd733e52cbc9baca62eabfe584df4dc0c61bbf3ac5806b9813c"
   },
   "profiles": [
     "core",
@@ -84,8 +84,8 @@
       "asset": "skills/repository-engineering-bootstrap/assets/profiles/github/AGENT_TASK_RUNBOOK.md",
       "target": "AGENT_TASK_RUNBOOK.md",
       "ownership": "managed",
-      "installedAssetSha256": "60c590e67ca7c2ff3734adb1df3f9842543edd94159bbee2365ca2d2b840034b",
-      "installedTargetSha256": "60c590e67ca7c2ff3734adb1df3f9842543edd94159bbee2365ca2d2b840034b"
+      "installedAssetSha256": "77f4d24b814cfced855f2b558bb9fe3c5b0544551fdf2695697a9992aebcfe4d",
+      "installedTargetSha256": "77f4d24b814cfced855f2b558bb9fe3c5b0544551fdf2695697a9992aebcfe4d"
     },
     {
       "asset": "skills/repository-engineering-bootstrap/assets/core/COMMIT_POLICY.md",
