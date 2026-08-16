@@ -27,46 +27,40 @@ backend access.
 
 ## Interactive management and gates
 
-`/help [COMMAND]` (alias `/?`) and `/status` are global; help comes from the
-registry. Lobby status shows normalized workspace, saved session,
-no attachment, unavailable conversation/context/search, and no last run.
-Attached status distinguishes saved and attached sessions; refreshes selected
-ID, subject, status, and revision or reports none; and reports sticky target;
-total events; canonical retained/total/omitted context turns, bytes, truncation,
-and 24-turn/32,768-byte caps; active-only search; and latest current-session run
-ID/status/input/revision/rounds/context
-conversation and mode or none.
+Global commands are registry-derived `/help [COMMAND]` (alias `/?`) and
+`/status`. Lobby status has normalized workspace, saved session, no attachment,
+unavailable conversation/context/search, and no last run. Attached status shows
+saved/attached sessions; refreshed selected ID/subject/status/revision or none;
+target; total events; retained/total/omitted context turns, bytes, truncation,
+and 24-turn/32,768-byte caps; active-only search; and latest current-session
+run ID/status/input/revision/rounds/context conversation/mode or none.
 
-Target, conversation, search, transcript, directive, and inspection commands
-require attachment. Messages, consensus, and `/history` require an active
-selection. `/transcript` may read active or archived data; `/search` is
-active-only.
+Target/conversation/search/transcript/directive/inspection require attachment;
+messages/consensus/history also require active selection. Transcript includes
+archives; search is active-only.
 
-`/language ARG`, `/persona AGENT ARG`, and `/reset` pass respectively
-`[SYS: LANG=ARG]`, `[OVERRIDE: CANONICAL_ID Persona=ARG]`, and
-`[RESET: ALL]` to `StoryRuntime.apply_directive`. Agent aliases normalize to
-canonical IDs. Validated candidate overrides replace atomically; only success
-mutates them. Unknown persona agents report `agent_invalid`; configuration
-rejection reports `configuration_invalid`. No conversation is required.
+Attached `/language ARG`, `/persona AGENT ARG`, and `/reset` apply
+`[SYS: LANG=ARG]`, `[OVERRIDE: CANONICAL_ID Persona=ARG]`, and `[RESET: ALL]`
+through `StoryRuntime.apply_directive`; no conversation is required. Agents
+normalize canonically. Only validated atomic success mutates overrides. Unknown
+agents are `agent_invalid`; configuration rejection is `configuration_invalid`.
 
-`/history [COUNT]` reads one fixed selected snapshot. Omitted count
-shows all; supplied positive ASCII count shows the newest
-`min(count,total)` events chronologically. User, reply, runtime-error,
-unmatched, and whitespace events remain visible. Empty is normal. Its summary
-reports displayed/total events and canonical retained/total/omitted turns,
-bytes, truncation, and caps. It has no pager, search, provider, or write.
+`/history [COUNT]` reads one selected snapshot: omission means all; positive
+ASCII count means newest `min(count,total)`, chronologically. Every kind,
+unmatched user, and whitespace stays; empty is normal. Summary: displayed/total
+events plus canonical context turns/bytes/truncation/caps. No pager, search,
+provider, or write.
 
-`/inspect` summarizes the attached session; `/inspect ID` reads the
-exact current-session debate and reports missing as `not_found`.
-`/inspect last` uses the process-local per-session latest accepted started
-run—success, deadlock, failure, or interruption—and reports no run normally. It
-does not persist or guess `last`. Output allows lifecycle/artifact metadata and
-context identity/mode/counts, never raw messages, candidates, errors, actions,
-context content, or provider fields. Noninteractive inspection JSON is unchanged.
+`/inspect` summarizes attachment; `/inspect ID` reads that current-session
+debate (`not_found` if missing); `/inspect last` uses this process's per-session
+latest accepted `started`, never storage. None is normal. It whitelists
+lifecycle/artifact/context identity/mode/count metadata, never messages,
+candidates, errors, actions, content, or provider fields. Noninteractive JSON
+is unchanged.
 
-Management preserves attachment, selection, sticky target, transcript, catalog,
-artifact, and provider state; only successful directives change overrides.
-See the [grammar](interactive-command-parser.md), [transcript contract](conversation-transcripts.md),
+Management preserves attachment, selection, target, transcript, catalog,
+artifacts, and provider state except successful directives. See the
+[grammar](interactive-command-parser.md), [transcripts](conversation-transcripts.md),
 and [inspection guide](../guides/inspection-and-recovery.md).
 
 <a id="interactive-consensus"></a>
@@ -79,27 +73,41 @@ and [inspection guide](../guides/inspection-and-recovery.md).
 | `/run --fresh PROMPT` | Records selected identity; sends no transcript. |
 | `/draft-file PATH` | Strict-UTF-8 draft with one selected snapshot. |
 
-Attachment and selection are revalidated before input access. Runs may write
-debates/artifacts, but not transcripts or shell scope. Draft paths use caller
-CWD, expand `~`, follow `pathlib` symlinks, and never invoke a
-shell. Invalid or empty text is `draft_input_invalid`.
+Attachment/selection are revalidated before input access. Runs may write
+debates/artifacts, never transcripts/shell scope. Draft paths use caller CWD,
+expand `~`, follow symlinks, and invoke no shell; invalid/empty is
+`draft_input_invalid`.
 
-Deadlock is `consensus_deadlock`; failures map `preflight` to
-`provider_preflight_failed`, `protocol` to `provider_protocol_error`, `context`
-to `transcript_invalid`, `workspace` to `workspace_invalid`, artifact conflict
-to `artifact_conflict`, and artifact/internal failure to `consensus_failed`.
-Unexpected contracts are fatal `internal_error`. Output excludes raw exceptions
-and model/result prose.
+Fixed codes are `consensus_deadlock`, `provider_preflight_failed`,
+`provider_protocol_error`, `transcript_invalid`, `workspace_invalid`,
+`artifact_conflict`, or `consensus_failed`. Unexpected contracts are fatal
+`internal_error`; output omits exception/model/result prose.
 Standalone `/compose` and artifact commands remain unavailable; `/send` and
-`/cancel` still control only bare `/run` composition. Active-turn/run
-cancellation remains separate Issue #14.
+`/cancel` control only bare `/run` composition.
+
+## Interactive cancellation
+
+One controller Runner/loop serves advisory/consensus. Main Ctrl-C does
+nothing; composer Ctrl-C or `/cancel` discards the buffer; either EOF cleans up.
+
+Before entry, a first SIGINT recovers only with a quiescent Runner—
+provider-free, with no runtime call or durable mutation. After entry, recovery
+requires runtime `CancelledError` and join. Both return attached via
+cancelled/hint copy. Only entered cancellation may append fixed `runtime_error`
+or taint; nonquiescent pre-entry, unjoined, or bare cancellation is fatal.
+
+Consensus pre-entry cancellation creates nothing and is provider-free. After
+entry, only trusted terminal `INTERRUPTED` proves nonresumable recovery; missing
+proof fatally abandons attachment. Cancelling `/search`, `/transcript`, or
+`/history` keeps completed output, with no final result/hint/provider/write.
+Exact records and failure mapping are in the [terminal reference](interactive-terminal.md)
+and [recovery guide](../operations/recovery-and-limitations.md).
 
 ## Workspace, noninteractive behavior, and exits
 
-Except `init` and `smoke`, commands need the nearest initialized workspace.
-Session precedence is `--session`, lifecycle positional ID, then saved
-selection. Noninteractive `run` uses no conversation context and retains its
-JSON/stderr contract; `inspect` JSON is also unchanged.
+Except `init`/`smoke`, commands need the nearest workspace. Session precedence:
+`--session`, lifecycle positional ID, saved selection. Noninteractive `run` has
+no conversation context; its JSON/stderr and `inspect` JSON stay unchanged.
 
 Exit `0` means success or normal shell end, `1` a failed smoke invariant,
 `2` usage/setup/fatal shell failure, `3` noninteractive deadlock, and `4`

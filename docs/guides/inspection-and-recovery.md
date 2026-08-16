@@ -36,10 +36,10 @@ After attachment, no conversation selection is required:
 | `/inspect ID` | The exact current-session debate; a missing ID reports `not_found`. |
 | `/inspect last` | This process's latest accepted started debate for that session; none is normal. |
 
-`last` is process-local and per session. It is updated from accepted `started`
-progress and therefore covers eventual consensus, deadlock, failure, and
-interruption. It is not persisted, restored, or guessed from filesystem order.
-Switching sessions preserves each process-local value.
+`last` is process-local and per session. Accepted `STARTED` updates it, so it
+covers any later consensus, deadlock, failure, or interruption. A trusted
+`INTERRUPTED`-first cancellation has no `last` entry. Nothing is persisted,
+restored, or guessed; switching preserves each process-local value.
 
 Shell inspection whitelists identity, lifecycle, input, revision, rounds,
 artifact path, and context conversation/mode/counts. It never emits blackboard
@@ -86,9 +86,14 @@ be available, a new path makes provenance clearer.
 
 A `failed` result describes a handled backend, reply-protocol, finalization, or
 artifact problem. It may retain the latest candidate, but never resume it under
-the same ID. Fix the cause and choose a new ID. An external coroutine
-cancellation is re-raised after a best-effort transition to `interrupted`; it
-may leave state and blackboard data without result JSON.
+the same ID. Fix the cause and choose a new ID. Runtime cancellation is re-raised
+after a best-effort `interrupted` transition and may leave no result JSON.
+
+In the shell, Ctrl-C before consensus entry creates no debate. After entry, only
+a trusted terminal `INTERRUPTED` proves recoverable cancellation; inspect that
+terminal attempt and use a new ID. Missing proof is fatal
+`operation_interrupted`, abandons known attachment state, and runs cleanup. See
+the [cancellation recovery contract](../operations/recovery-and-limitations.md#controller-cancellation-proof).
 
 `DebateExistsError` happens during preflight before the backend runs.
 `ManuscriptExistsError` can occur after a new debate reaches finalization; that

@@ -76,16 +76,16 @@ their own values; `StoryRuntime` applies the
 
 `/transcript` reads a fresh bounded page from an attached active or archived
 identity without selecting it. `/history [COUNT]` requires an attached active
-selection and reads the authoritative store exactly once. Omission displays all
-events; a positive count displays the newest `min(count,total)` chronologically.
-User, reply, runtime-error, unmatched, and whitespace events remain visible;
-empty history is normal. Its summary derives context from that same tuple and
-reports displayed/total events, retained/total/omitted turns, bytes, truncation,
-and the fixed caps. It has no cursor, pager, search, provider, or write.
+selection and reads the store once. Omission displays all; a positive count
+displays newest `min(count,total)` chronologically. Every kind, unmatched user,
+and whitespace stays visible; empty is normal. Its same-tuple summary reports
+displayed/total events, canonical turns/bytes/truncation, and fixed caps. It has
+no cursor, pager, search, provider, or write.
 
-Each event reaches the terminal renderer once. Storage remains exact while
-controls become visible. See [terminal presentation](interactive-terminal.md)
-and [page/search limits](conversation-search.md).
+Each event renders once while storage stays exact. Ctrl-C during history stops
+after completed event records, emits its fixed cancellation instead of the
+summary, and performs no second read or write. See
+[terminal presentation](interactive-terminal.md) and [page/search limits](conversation-search.md).
 
 ## Context selection and failure evidence
 
@@ -95,11 +95,12 @@ oldest and retain at most 24 turns and 32,768 combined content bytes. Selection
 stops at the first turn that would exceed either cap, never splits a turn, and
 restores retained events to storage order.
 
-If interruption or outcome-storage failure follows a durable user append, the
-user event remains unmatched. Full reads expose it; context excludes it and
-does not retry or repair it. The window reports total, retained, and omitted
-complete turns, retained bytes, and truncation. It never compacts, rewrites, or
-deletes events.
+After an advisory user append, cancellation best-effort adds `runtime_error`
+content `CancelledError: conversation turn was cancelled`; other failures use
+the safe diagnostic policy. Failed outcome storage leaves the user unmatched.
+Full reads expose it; context excludes it without retry or repair. The window
+reports total/retained/omitted complete turns, bytes, and truncation. It never
+compacts, rewrites, or deletes events.
 
 ## Storage and validation boundary
 

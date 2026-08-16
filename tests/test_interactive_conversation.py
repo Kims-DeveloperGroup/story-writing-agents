@@ -529,14 +529,12 @@ class RuntimeWiringAndGateTests(InteractiveConversationTestCase):
             "/quit",
             runtime=runtime,
         )
-        real_run = asyncio.run
         with (
             mock.patch.object(backend, "prepare_session") as prepare,
             mock.patch.object(backend, "bind") as bind,
             mock.patch.object(
                 controller_module.asyncio,
                 "run",
-                side_effect=real_run,
             ) as run_boundary,
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
@@ -667,8 +665,8 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
         self.assertEqual(len({id(service) for service in runtime.memory_services}), 1)
         self.assertEqual(runtime.memory_services[0].scope.session_id, "session")
         self.assertTrue(all(callable(sink) for sink in runtime.progress_sinks))
-        self.assertEqual(run_boundary.call_count, 4)
-        self.assertEqual(len({id(loop) for loop in runtime.loops}), 4)
+        run_boundary.assert_not_called()
+        self.assertEqual(len({id(loop) for loop in runtime.loops}), 1)
         self.assertTrue(all(loop.is_closed() for loop in runtime.loops))
         self.assertTrue(all(task is not None and task.done() for task in runtime.tasks))
         read_context.assert_not_called()
@@ -747,7 +745,8 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
         self.assertTrue(records_at_call[0][-2].startswith("[routing] "))
         self.assertEqual(
             records_at_call[0][-1],
-            "[waiting] Waiting for lead_orchestrator.\n",
+            "[waiting] Lead Orchestrator is responding; Ctrl-C cancels "
+            "this turn.\n",
         )
         rendered = "".join(callbacks.records)
         routing_index = rendered.index("[routing] ")
@@ -1237,7 +1236,7 @@ class FailureAndResultTests(InteractiveConversationTestCase):
 
 
 class RealRetainedRuntimeTests(InteractiveConversationTestCase):
-    """Exercise real StoryRuntime persistence across separate asyncio.run calls."""
+    """Exercise real StoryRuntime persistence on one retained Runner loop."""
 
     def bind_recording_agents(
         self,
@@ -1316,20 +1315,18 @@ class RealRetainedRuntimeTests(InteractiveConversationTestCase):
             for path in workspace.path("manuscript").rglob("*")
             if path.is_file()
         }
-        real_run = asyncio.run
         with (
             mock.patch.object(backend, "bind", new=bind),
             mock.patch.object(
                 controller_module.asyncio,
                 "run",
-                side_effect=real_run,
             ) as run_boundary,
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
 
-        self.assertEqual(run_boundary.call_count, 4)
+        run_boundary.assert_not_called()
         self.assertEqual(len(requests), 4)
-        self.assertEqual(len({id(loop) for loop in loops}), 4)
+        self.assertEqual(len({id(loop) for loop in loops}), 1)
         self.assertTrue(all(loop.is_closed() for loop in loops))
         self.assertTrue(all(task is not None and task.done() for task in tasks))
         self.assertEqual(
@@ -1497,7 +1494,7 @@ class RealRetainedRuntimeTests(InteractiveConversationTestCase):
         )
         self.assertNotIn("provider diagnostic", rendered)
         self.assertIn("lead> recovered\n", rendered)
-        self.assertEqual(len({id(loop) for loop in loops}), 2)
+        self.assertEqual(len({id(loop) for loop in loops}), 1)
         self.assertTrue(all(loop.is_closed() for loop in loops))
         self.assertTrue(all(task is not None and task.done() for task in tasks))
 

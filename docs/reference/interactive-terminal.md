@@ -1,14 +1,12 @@
 # Interactive terminal component
 
 > **Availability:** this module-supported component presents shell input,
-> registry help, management status/run rows, search/transcript records,
-> retrieval progress/sources, and routed replies. Standalone `/compose` is not
-> dispatched; bare `/run` uses the existing run composer.
+> help, management, search/transcript, retrieval, and routed-reply records;
+> bare `/run` uses its composer.
 
 ## Public API
 
-Import from `story_writing_agents.interactive_terminal`, not the package facade. Its exact `__all__` is `AttachmentKind`, `ComposeMode`, `ConfirmationResult`, `TerminalActionKind`, `TerminalMessageKind`, `InteractiveErrorCode`,
-`TerminalAction`, `InteractiveErrorSpec`, `INTERACTIVE_ERROR_SPECS`, `InteractiveError`, `sanitize_terminal_text`, and `InteractiveTerminal`.
+Import from `story_writing_agents.interactive_terminal`, not the facade. Its exact `__all__` is `AttachmentKind`, `ComposeMode`, `ConfirmationResult`, `TerminalActionKind`, `TerminalMessageKind`, `InteractiveErrorCode`, `TerminalAction`, `InteractiveErrorSpec`, `INTERACTIVE_ERROR_SPECS`, `InteractiveError`, `sanitize_terminal_text`, and `InteractiveTerminal`.
 
 ```python
 InteractiveTerminal(read_line, write_text, *, width: int = 80)
@@ -20,8 +18,7 @@ write_lobby_orientation(workspace: str) -> None
 write_session_orientation(workspace, session_id, attachment, agent_id, history_count=None) -> None
 write_conversation_scope(*, session_id, conversation_handle, conversation_subject, agent_id) -> None
 write_conversation_list_entry(conversation_handle, conversation_subject, *, archived, selected) -> None
-write_conversation_search_hit(conversation_handle, conversation_subject, match_kind, snippet, *, archived,
-                              citation_turn_id=None, citation_sequence=None, citation_kind=None) -> None
+write_conversation_search_hit(conversation_handle, conversation_subject, match_kind, snippet, *, archived, citation_turn_id=None, citation_sequence=None, citation_kind=None) -> None
 write_conversation_transcript_event(conversation_handle, *, sequence, turn_id, kind, sender, recipient, content) -> None
 write_agent_roster() -> None
 write_status(kind: TerminalMessageKind, text: str) -> None
@@ -32,9 +29,8 @@ write_error(error: InteractiveError, *, secrets=()) -> None
 sanitize_terminal_text(text: str) -> str
 ```
 
-Value objects are frozen and slotted; width is at least 20. Callback failures
-propagate. The component owns no parser dispatch, TTY detection, provider,
-filesystem, catalog, transcript, cursor, or resource lifecycle.
+Values are frozen/slotted; minimum width is 20. Callback failures propagate.
+It owns no dispatch, provider, storage, or lifecycle.
 
 | Enum | Exact values |
 | --- | --- |
@@ -56,13 +52,11 @@ f"compose[chat:{alias}:{line_number}]> "
 f"compose[run:{line_number}]> "
 ```
 
-Canonical agents are required. Attached scope shows session, optional
-conversation, subject, and sticky target. Rows show handle, lifecycle,
-selection, and subject. Roster/help derive from parser metadata. Management adds
-no terminal API: status/directive/history summaries use `write_status`, safe
-debate inspection uses `write_run`, and history events reuse the transcript
-renderer. Confirmation uses `[Y/n] ` or `[y/N] `; blank chooses the default.
-Ctrl-C/EOF are typed.
+Canonical agents are required. Scope shows session, optional conversation,
+subject, and target; rows show handle/lifecycle/selection/subject. Roster/help
+derive from parser metadata. Management reuses status, run, and transcript
+writers. Confirmation is `[Y/n] ` or `[y/N] `; blank chooses the default.
+Ctrl-C/EOF return typed outcomes.
 
 ## Exact search and transcript records
 
@@ -83,35 +77,39 @@ width-wrapping. Each hit and each event is one callback record.
 [content] {CONTENT}
 [result] Transcript page returned {EVENTS} events.
 [hint] Continue with /transcript {HANDLE} {COUNT} --from {NEXT}.
-
-[cancelled] Search cancelled; attached state is unchanged.
-[cancelled] Transcript read cancelled; attached state is unchanged.
 ```
 
-Subject matches use the conversation-only citation; transcript matches require
-the complete turn/sequence/kind trio. Primitive renderers require exact safe
-IDs, positive integer sequences, nonblank metadata, and nonempty content.
+Subject hits cite conversations; transcript hits require turn/sequence/kind.
+Renderers validate IDs, sequences, metadata, and content.
 
-Transcript content may be whitespace-only. Empty lines and trailing LF remain
-in one event record under `[content] `. Controls become visible escapes, such
-as tab `\x09` and escape `\x1b`; events are neither trimmed nor combined. See
+Whitespace content, empty lines, and trailing LF remain in one record. Controls
+become visible; events are not trimmed or joined. See
 [Terminal safety](../operations/terminal-safety.md).
+
+## Exact cancellation records
+
+| Boundary | Exact records in order |
+| --- | --- |
+| Main prompt / end confirmation | `[cancelled] No action was taken.` / `[cancelled] Session end cancelled.` |
+| Recoverable advisory | `[waiting] {DISPLAY_NAME} is responding; Ctrl-C cancels this turn.`<br>`[cancelled] {DISPLAY_NAME} turn was interrupted.`<br>`[hint] The story session remains attached; the affected provider thread may restart on the next message.` |
+| Consensus before entry | `[cancelled] Consensus run was cancelled before start.` |
+| Consensus with trusted durable proof | `[run {DEBATE_ID}] Run interrupted after durable state transition.`<br>`[cancelled] Debate {DEBATE_ID} was marked interrupted.`<br>`[hint] It cannot resume. Use /run to create a new debate.`<br>`[session] "{SESSION_ID}" remains active and attached.` |
+| Partial local render | `[cancelled] Search cancelled; attached state is unchanged.` / `[cancelled] Transcript read cancelled; attached state is unchanged.` / `[cancelled] History cancelled; attached state is unchanged.` |
+
+These controller records use validated placeholders. Composer cancellation is
+a typed buffer discard.
 
 ## Errors and other output
 
-The immutable 33-code registry covers terminal/workspace, session,
-conversation/transcript/retrieval, provider, consensus/artifact, and cleanup.
-Retrieval adds `retrieval_invalid` and `retrieval_budget_exhausted`; observer
-failure maps to `internal_error`. Progress and source records reuse
-`write_status(TerminalMessageKind.CONTEXT, ...)`. Exact copy and recovery live in
-[Bounded retrieval](conversation-retrieval.md).
+The 33-code registry spans terminal/workspace, session, conversation/retrieval,
+provider, consensus/artifact, and cleanup. Retrieval
+uses `retrieval_invalid`/`retrieval_budget_exhausted`; observer failure is
+`internal_error`. Retrieval copy is in [Bounded retrieval](conversation-retrieval.md).
 
-The controller chooses categories; the terminal never accepts or classifies an
-exception. `write_error()` redacts supplied secret variants, limits summary and
-hint to 512/256 characters, sanitizes, and writes trusted `[error CODE]` and
-`[hint]` records. Exact recovery mapping is in
+The controller classifies; the terminal never accepts exceptions. `write_error()`
+redacts supplied secrets, caps summary/hint at 512/256 characters, sanitizes,
+and writes trusted `[error CODE]`/`[hint]` records. Mapping is in
 [Recovery and limitations](../operations/recovery-and-limitations.md).
 
-Composition keeps an exact call-local LF-joined buffer. `/send` and `/cancel`
-control that buffer only; discard outcomes carry counts but no text. Routed
-reply content is sanitized and displayed once, never reparsed.
+Composition keeps one exact LF-joined buffer; discard outcomes contain counts,
+not text. Routed replies are sanitized once and never reparsed.

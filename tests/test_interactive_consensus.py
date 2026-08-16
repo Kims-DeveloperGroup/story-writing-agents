@@ -376,7 +376,7 @@ class InteractiveConsensusGateTests(InteractiveConversationTestCase):
 class InteractiveConsensusDispatchTests(InteractiveConversationTestCase):
     """Verify run routing, composition, shared loading, and nonmutation."""
 
-    def test_run_fresh_draft_and_bare_send_use_sequential_asyncio_runs(
+    def test_run_fresh_draft_and_bare_send_share_one_runner_loop(
         self,
     ) -> None:
         runtime = ScriptedConsensusRuntime()
@@ -409,7 +409,6 @@ class InteractiveConsensusDispatchTests(InteractiveConversationTestCase):
                 controller._conversation_memory_service,
             )
         )
-        real_run = asyncio.run
         with (
             mock.patch.object(
                 controller_module,
@@ -419,12 +418,11 @@ class InteractiveConsensusDispatchTests(InteractiveConversationTestCase):
             mock.patch.object(
                 controller_module.asyncio,
                 "run",
-                side_effect=real_run,
             ) as run_boundary,
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
 
-        self.assertEqual(run_boundary.call_count, 4)
+        run_boundary.assert_not_called()
         loader.assert_called_once_with("literal.md")
         self.assertEqual(
             [call["payload"] for call in runtime.calls],
@@ -455,7 +453,7 @@ class InteractiveConsensusDispatchTests(InteractiveConversationTestCase):
                 for call in runtime.calls
             )
         )
-        self.assertEqual(len({id(loop) for loop in runtime.loops}), 4)
+        self.assertEqual(len({id(loop) for loop in runtime.loops}), 1)
         self.assertTrue(all(loop.is_closed() for loop in runtime.loops))
         self.assertTrue(all(task is not None and task.done() for task in runtime.tasks))
         self.assertEqual(file_bytes(workspace), before)
@@ -922,7 +920,7 @@ class RecordingMixedBoundAgent:
 
 
 class RealRetainedConsensusRuntimeTests(InteractiveConversationTestCase):
-    """Exercise chat and consensus on one runtime across distinct event loops."""
+    """Exercise chat and consensus on one runtime and retained Runner loop."""
 
     def test_malformed_system_defaults_before_run_require_owned_proof(
         self,
@@ -1135,7 +1133,6 @@ class RealRetainedConsensusRuntimeTests(InteractiveConversationTestCase):
             )
 
         store = controller._conversation_event_store
-        real_run = asyncio.run
         with (
             mock.patch.object(backend, "bind", new=bind),
             mock.patch.object(
@@ -1146,12 +1143,11 @@ class RealRetainedConsensusRuntimeTests(InteractiveConversationTestCase):
             mock.patch.object(
                 controller_module.asyncio,
                 "run",
-                side_effect=real_run,
             ) as run_boundary,
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
 
-        self.assertEqual(run_boundary.call_count, 4)
+        run_boundary.assert_not_called()
         self.assertEqual(read_context.call_count, 3)
         self.assertEqual(len(conversation_requests), 1)
         transcript = FilesystemConversationEventStore(
@@ -1198,7 +1194,7 @@ class RealRetainedConsensusRuntimeTests(InteractiveConversationTestCase):
             )
             for debate_id in grouped
         )
-        self.assertEqual(len({id(loop) for loop in action_loops}), 4)
+        self.assertEqual(len({id(loop) for loop in action_loops}), 1)
         self.assertTrue(all(loop.is_closed() for loop in action_loops))
         self.assertTrue(definitions)
 

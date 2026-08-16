@@ -25,10 +25,9 @@ $ story chat draft
 Should the reveal happen before the midpoint?
 ```
 
-The advisory line needs no retrieval syntax. The responder may answer directly
-or ask the runtime to search active conversations in this session and read
-cited complete turns. The shell shows safe `[context]` progress, the reply, then
-ordered sources; only the user message and final outcome enter the transcript.
+The responder may answer directly or retrieve active same-session conversations
+and cited complete turns. The shell shows safe `[context]` progress, reply, then
+ordered sources; only the user and final outcome enter the transcript.
 Now compose a consensus prompt:
 
 ```text
@@ -72,6 +71,15 @@ debate records and approved artifacts, but they do not append the conversation
 transcript or change its selection, sticky target, session attachment, or
 conversation-memory binding. Fresh mode still requires a selected active
 conversation so its identity can be recorded.
+
+During `[waiting]`, the first Ctrl-C recovers before entry only when the Runner is
+quiescent—without a runtime/provider call or durable mutation—or after entry when
+runtime cancellation joins. Both preserve scope and fixed copy;
+only entered cancellation may store fixed runtime error or restart a
+provider thread. Consensus Ctrl-C cancels before start without a debate or
+reports a durable, nonresumable interruption; retry with `/run`. Cancelling a
+search/transcript/history leaves only completed rows. See the
+[exact records](../reference/interactive-terminal.md#exact-cancellation-records).
 
 ## Find or route conversation work
 

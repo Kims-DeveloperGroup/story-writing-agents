@@ -1867,6 +1867,35 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             any(item.get("terminated") is True for item in self.invocations())
         )
 
+    async def test_process_stop_escalates_from_terminate_to_kill(self) -> None:
+        events: list[str] = []
+        first_wait = asyncio.Future()
+        final_wait = asyncio.Future()
+        final_wait.set_result(None)
+        process = mock.Mock(returncode=None)
+        process.terminate.side_effect = lambda: events.append("terminate")
+        process.kill.side_effect = lambda: events.append("kill")
+        waits = iter((first_wait, final_wait))
+
+        def wait():
+            events.append("wait")
+            return next(waits)
+
+        process.wait.side_effect = wait
+
+        async def time_out(awaitable, *, timeout):
+            self.assertEqual(timeout, 2)
+            awaitable.cancel()
+            raise TimeoutError
+
+        with mock.patch(
+            "story_writing_agents.backend.asyncio.wait_for",
+            new=time_out,
+        ):
+            await AgentBackend._stop_process(process)
+
+        self.assertEqual(events, ["terminate", "wait", "kill", "wait"])
+
     async def test_unsupported_vendor_fails_during_binding(self) -> None:
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)

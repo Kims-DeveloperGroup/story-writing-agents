@@ -1,107 +1,103 @@
 # Recovery and limitations
 
-> **Availability:** debate inspection, interactive consensus, conversation
-> management, safe status/history/inspection, directives, retrieval-enabled
-> turns, and local search/read are implemented. Automatic retry, stale-owner
-> cleanup, and event deletion are not.
+> **Available:** cancellation, inspection, consensus, management, retrieval,
+> and local reads. Automatic retry, stale-owner cleanup, event repair/deletion,
+> and PTY signal delivery are not.
 
-Key terms: **terminal**—an attempt that cannot resume; **lease proof**—the same
-session is active and `OWNED`; **taint**—discarding incomplete provider history;
-**unmatched turn**—a user event without an outcome.
+Key terms: **terminal**—nonresumable; **lease proof**—same session active and
+`OWNED`; **taint**—discard incomplete provider history; **durable proof**—trusted
+post-persistence progress.
 
-## Debate and interactive-consensus recovery
+## Debate and shell-run recovery
 
-A debate ID is reserved before provider work and cannot resume or be reused.
-`active` is not liveness. Inspect, repair, and use a new ID; deadlock also needs
-a revised instruction or draft.
+A debate ID reserves before provider work and cannot resume/reuse. `active` is
+not liveness. Inspect, fix, and choose a new ID; deadlock also needs revised
+input. Context sidecars evidence included/fresh/legacy mode, never replay.
 
-Consensus, deadlock, and handled failure return to the prompt with fixed codes,
-never candidate, critique, model, result-error, action-required, or exception
-prose. Mappings belong to the [CLI reference](../reference/cli.md#interactive-consensus).
+Expected outcomes return fixed codes, never candidate, critique,
+result-error/action, model, or exception prose. A workspace failure returns
+safely only with the same active `OWNED` session; failed proof clears uncertain
+state and exits. See the
+[CLI mappings](../reference/cli.md#interactive-consensus).
 
-After a consensus workspace error, safe return requires the same active `OWNED`
-session; failed proof clears uncertain state and exits through fatal cleanup.
+Runtime observer failure raises `ProgressObserverError`; before durability it
+best-effort marks `interrupted`, while later failure cannot rewrite results.
+Python cancellation remains `asyncio.CancelledError`, joins work, and emits
+`INTERRUPTED` only after confirming persistence. Observer failure is only its
+cause.
 
-The context sidecar distinguishes included, fresh, and legacy runs. It is
-inspection evidence, never replay or resume state.
+## Controller cancellation proof
 
-## Observer failure and cancellation
+One lifecycle `asyncio.Runner` serves advisory/consensus coroutines and survives
+confirmed session end until controller cleanup. `KeyboardInterrupt` must reach
+the controller; end-to-end PTY signal delivery remains Issue #15.
 
-Debate sink failure raises fixed `ProgressObserverError`; before terminal state
-it best-effort marks `interrupted`, while later failure never rewrites durable
-results/artifacts. Python cancellation remains `asyncio.CancelledError`, joins
-current work, and best-effort records interruption. Observer failure is only
-its cause. Active-run TTY signal handling is not promised.
+Advisory Ctrl-C has two recoverable proofs. Before entry, the first SIGINT
+returns attached only when Runner task inspection proves quiescence, using fixed
+cancelled/hint copy with unchanged selection/target and no runtime/provider call
+or durable mutation. After entry, runtime must receive
+`CancelledError` and join. Only that path can append fixed
+`CancelledError: conversation turn was cancelled`, leave an unmatched user on
+failed storage, or taint incomplete history. Nonquiescent pre-entry, unjoined,
+or bare cancellation is fatal `operation_interrupted`. Exact records are in the
+[terminal reference](../reference/interactive-terminal.md#exact-cancellation-records).
 
-## Session, selection, and advisory recovery
+Consensus Ctrl-C before entry is provider-free/nonmutating when the Runner is
+quiescent. After entry, recovery requires joined cancellation and trusted
+terminal `INTERRUPTED`; retry gets a new ID. `INTERRUPTED` may precede `STARTED`
+and need not update `/inspect last`. Missing proof writes best-effort
+`operation_interrupted`, abandons attachment bookkeeping, then exits `2` with
+`cleanup_failed` through backend-close cleanup.
+
+Cancelling `/search`, `/transcript`, or `/history` is provider-free/read-only.
+Completed rows remain; final result/hint is omitted, with no second read/write.
+
+## Input, EOF, terminal, and cleanup
+
+Main-prompt Ctrl-C reports no action and continues. Composer Ctrl-C or `/cancel`
+discards only its local buffer. A no/blank/Ctrl-C end confirmation remains
+attached; confirmation EOF requests normal exit without ending. Confirmed end
+deactivates/releases the lease, retains saved selections, clears in-process
+scope, resets target to lead, and returns to the outer lobby. Main/compose EOF,
+`/quit`, and `/exit` also request normal cleanup without deactivation.
+
+Terminal input/output `OSError` maps to `operation_interrupted`, exit `2`, and
+cleanup; input `RuntimeError` maps to `internal_error`. Progress-output
+`OSError` or `KeyboardInterrupt` maps to `operation_interrupted`; other callback
+failure maps to `internal_error`. Diagnostic output is best effort and never
+skips cleanup.
+
+Cleanup always attempts `Runner.close()` → known detach → `backend.close()` in
+that order. Runner close first finalizes residual tasks/async generators.
+Ordinary stage failure still attempts later stages, clears process-only
+attachment/selection/memory state, exits `2`, and emits at most one best-effort
+`cleanup_failed`. If Runner close is interrupted by a `BaseException`, later
+stages still run and process-only scope clears, but the unproved Runner reference
+is retained before propagation. Durable sessions, selections, threads,
+transcripts, debates, and artifacts remain according to normal lifecycle rules.
+
+## Session, management, and current limits
 
 A lease proves ownership, not remote health. Another or uncertain owner blocks
-attachment regardless of age; never delete coordination files. End retains
-threads, selections, state, artifacts, and transcripts.
-
-Restart restores only an active saved conversation. Missing/archived records
-open unselected without rewriting the stale ID. Create/use save failure keeps
-the prior selection, though a new record can remain. Selected archive uses
+attachment regardless of age; never delete coordination files. Restart restores
+only an active saved conversation. Missing/archived selections open unselected
+without rewriting. Selected archive recovery uses
 [bounded compensation](../design/session-lifecycle.md#conversation-lifecycle-and-compensation).
 
-<a id="conversation-turn-recovery"></a>
-
-Failure before user append leaves no event. Later failure normally stores one
-safe runtime error. Hard interruption or outcome-write failure can leave an
-unmatched user event; reads expose it, context excludes it, and no repair exists.
-
-Invalid agent actions show `retrieval_invalid`: start a new turn and check
-provider compatibility if repeated. Exhaustion shows
-`retrieval_budget_exhausted`: ask a narrower question or use direct `/search`
-and `/transcript`. Retrieval observer failure is fatal `internal_error`.
-
-After any nonterminal action, failure or cancellation taints the incomplete
-provider thread; the next compatible call starts fresh. A valid answer completes
-provider history, so later reply-persistence failure does not taint it.
-Cancellation stores the fixed transcript error and re-raises
-`asyncio.CancelledError`. See [Bounded retrieval](../reference/conversation-retrieval.md).
-
-## Search and transcript-read failures
-
-Local search/read errors use fixed parser, conversation, transcript, workspace,
-or cleanup categories. Workspace recovery requires the active owned lease.
-Ctrl-C preserves scope/data; displayed rows remain in scrollback.
-
-Each transcript command reads fresh; its hint is not a saved cursor. Python
-cursors stale after append, and truncated search is not exhaustive. See
-[Conversation search](../reference/conversation-search.md).
-
-## Management failures and restart behavior
-
-`/history` uses one authoritative snapshot; a concurrent later append appears
-only on the next command. Empty history is normal. Transcript/catalog corruption
-fails closed; no management read repairs it.
-
-An explicit missing `/inspect ID` reports `not_found`. `/inspect last` with no
-accepted run is normal, not an error. Its per-session mapping is
-process-local: switching preserves it, restart resets it, and persisted debate
-IDs are never guessed. Malformed inspection data is fatal `internal_error`
-without echoing raw fields.
-
-Unknown `/persona` agents are `agent_invalid`. Directive/configuration rejection
-is `configuration_invalid`; validation occurs before atomic override
-replacement, so failure preserves prior bytes. Successful management otherwise
-preserves all other shell/story/provider state.
-
-## Current product limits
+History is one snapshot; later appends appear next time. Corrupt transcript,
+catalog, or inspection data fails closed. Explicit missing inspect is
+`not_found`; absent `last` is normal, and restart forgets its process-local map.
+Failed directives preserve prior override bytes; successful management changes
+only overrides.
 
 - Codex is the only provider; reserved `gemini` fails preflight.
 - Provider calls have a timeout but no retry or rate-limit manager.
 - Owner history has no compaction, expiry, or retention policy.
-- Artifact rollback is best effort across files, not a database transaction.
-- Advisory turns are single-line and have no active-turn cancellation.
-- `/search` is active-only; there is no RAG, semantic retrieval, or saved index.
-- `/transcript` retains no cursor; there is no event repair or deletion.
-- Standalone `/compose` and artifact shell commands are unavailable; `/send`
-  and `/cancel` remain scoped to bare `/run` composition. Active cancellation
-  remains separate Issue #14.
+- Artifact rollback is best effort across files, not one transaction.
+- Advisory input is single-line; bare `/run` alone has multiline composition.
+- Search is active-only; transcript reads retain no cursor.
+- Standalone compose/artifact commands are unavailable.
 
 For provider failure, check executable, login/key, model, timeout, session, and
-lease. Persisted format errors fail closed; never skip damaged records. See
-[Inspection and recovery](../guides/inspection-and-recovery.md) and
-[Filesystem safety](filesystem-safety.md).
+lease. Never skip damaged records. See [Inspection and recovery](../guides/inspection-and-recovery.md)
+and [Filesystem safety](filesystem-safety.md).

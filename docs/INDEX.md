@@ -6,7 +6,8 @@ Use this index to find one canonical answer instead of searching a long manual.
 > It manages story sessions and subject conversations, routes single-line
 > retrieval-enabled turns, searches and reads transcripts, and runs
 > selected-conversation consensus. It also provides global help/status,
-> attached directives and safe inspection, and selected history.
+> attached directives and safe inspection, selected history, and controller-
+> boundary cancellation for active operations and local reads.
 
 ## Availability matrix
 
@@ -27,6 +28,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 | Ask an agent to retrieve cited conversation history | Selected shell conversation; additive Python runtime API; active records in the current session only |
 | Persist and send one explicitly addressed one-step turn | Existing `StoryRuntime.converse()` Python API |
 | Run consensus with included, fresh, or draft-file input | Selected active shell conversation; noninteractive CLI and Python API remain available |
+| Cancel active advisory/consensus work or partial local rendering | Installed shell after `KeyboardInterrupt` reaches the controller; PTY signal delivery remains Issue #15 |
 | Show one selected transcript snapshot and context accounting | Attached shell `/history`; active selection required |
 | Standalone artifact commands | Not implemented in the shell |
 
