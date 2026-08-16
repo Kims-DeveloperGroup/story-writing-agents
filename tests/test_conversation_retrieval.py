@@ -464,7 +464,7 @@ class ConversationRetrievalContractTests(unittest.TestCase):
                 )
                 self.assertFalse(hasattr(value, "__dict__"))
                 with self.assertRaises((FrozenInstanceError, AttributeError)):
-                    value.session_id = "changed"  # type: ignore[attr-defined,misc]
+                    setattr(value, value_fields[0].name, "changed")
 
         end = inspect.signature(ConversationRetrievalReadAction).parameters[
             "end_sequence"
