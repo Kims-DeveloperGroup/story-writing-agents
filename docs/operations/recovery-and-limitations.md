@@ -28,17 +28,18 @@ cause.
 
 ## Controller cancellation proof
 
-One lifecycle `asyncio.Runner` serves all advisory and consensus coroutines and
-survives confirmed session end until controller cleanup.
-These rules apply after `KeyboardInterrupt` reaches the controller; end-to-end
-PTY operating-system signal delivery remains Issue #15.
+One lifecycle `asyncio.Runner` serves advisory/consensus coroutines and survives
+confirmed session end until controller cleanup. `KeyboardInterrupt` must reach
+the controller; end-to-end PTY signal delivery remains Issue #15.
 
-Advisory Ctrl-C is friendly only after entry, `CancelledError`, and join. Scope
-stays attached/selected with its target. After user append, runtime best-effort stores
-`CancelledError: conversation turn was cancelled`; failed storage leaves an
-unmatched user. Incomplete provider history is tainted, so the next compatible
-turn starts fresh. Bare cancellation or missing join proof is fatal
-`operation_interrupted`. Exact waiting/cancelled/hint records are in the
+Advisory Ctrl-C has two recoverable proofs. Before entry, the first SIGINT
+returns attached only when Runner task inspection proves quiescence, using fixed
+cancelled/hint copy with unchanged selection/target and no runtime/provider call
+or durable mutation. After entry, runtime must receive
+`CancelledError` and join. Only that path can append fixed
+`CancelledError: conversation turn was cancelled`, leave an unmatched user on
+failed storage, or taint incomplete history. Nonquiescent pre-entry, unjoined,
+or bare cancellation is fatal `operation_interrupted`. Exact records are in the
 [terminal reference](../reference/interactive-terminal.md#exact-cancellation-records).
 
 Consensus Ctrl-C before entry is provider-free/nonmutating when the Runner is

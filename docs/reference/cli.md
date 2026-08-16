@@ -87,19 +87,19 @@ Standalone `/compose` and artifact commands remain unavailable; `/send` and
 
 ## Interactive cancellation
 
-One controller-owned `asyncio.Runner`/loop serves advisory and consensus work.
-Main Ctrl-C takes no action; composer Ctrl-C or `/cancel` discards its buffer.
-Either EOF requests normal cleanup.
+One controller Runner/loop serves advisory/consensus. Main Ctrl-C does
+nothing; composer Ctrl-C or `/cancel` discards the buffer; either EOF cleans up.
 
-Advisory Ctrl-C is recoverable only after `CancelledError` reached and joined
-the operation. A durable user event normally gets fixed `runtime_error`; failed
-storage leaves it unmatched. Scope remains; taint forces a fresh provider thread.
+Before entry, a first SIGINT recovers only with a quiescent Runner—
+provider-free, with no runtime call or durable mutation. After entry, recovery
+requires runtime `CancelledError` and join. Both return attached via
+cancelled/hint copy. Only entered cancellation may append fixed `runtime_error`
+or taint; nonquiescent pre-entry, unjoined, or bare cancellation is fatal.
 
-Pre-entry consensus cancellation is provider-free and creates no debate. After
-entry, only trusted terminal `INTERRUPTED` proves recovery; it cannot resume. Missing
-proof is fatal `operation_interrupted` and abandons attachment. Cancelling
-`/search`, `/transcript`, or `/history` keeps completed output but emits no
-final result/hint, provider call, or write.
+Consensus pre-entry cancellation creates nothing and is provider-free. After
+entry, only trusted terminal `INTERRUPTED` proves nonresumable recovery; missing
+proof fatally abandons attachment. Cancelling `/search`, `/transcript`, or
+`/history` keeps completed output, with no final result/hint/provider/write.
 Exact records and failure mapping are in the [terminal reference](interactive-terminal.md)
 and [recovery guide](../operations/recovery-and-limitations.md).
 

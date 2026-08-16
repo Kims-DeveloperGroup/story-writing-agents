@@ -439,8 +439,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   one-run/closed state. Once its single-use run starts, it constructs and owns
   one private `asyncio.Runner` for the rest of that lifecycle. Repeated
   `Runner.run` calls execute every accepted advisory and consensus coroutine on
-  that Runner; controller-local entered/cancelled/joined evidence distinguishes
-  a completed first interruption from an unjoined or otherwise uncertain
+  that Runner; controller-local entry/cancellation/join evidence and public
+  Runner task inspection distinguish a quiescent pre-entry interruption, a
+  completed entered cancellation, and an unjoined or otherwise uncertain
   operation. Final cleanup closes the Runner and its residual asynchronous
   work, detaches any still-known attachment, and then closes the backend. Later
   cleanup stages remain attempted after an earlier failure; ordinary cleanup
@@ -463,8 +464,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   turn through the retained Runner. It passes the exact attachment-scoped
   service plus a synchronous sink, validates trusted progress/results, and
   renders fixed progress and ordered source copy through existing terminal
-  status output. A joined advisory cancellation returns attached only after the
-  runtime receives `CancelledError`; provider-free search, transcript, and
+  status output. Before advisory coroutine entry, the established fixed
+  cancelled/hint copy returns attached only when public Runner task inspection
+  proves quiescence; that path calls no provider and mutates no controller or
+  persistent state. After entry, returning attached requires the runtime to
+  receive `CancelledError` and the operation to join; every other advisory
+  cancellation state fails closed. Provider-free search, transcript, and
   selected-history interruption stops further rendering and returns to the
   same prompt without persistence mutation. The controller also delegates draft
   reads to `run_inputs` and submits each accepted consensus action through the
@@ -727,7 +732,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   repeated interactive advisory and consensus operations use the controller's
   one Runner, while unchanged direct Python one-step calls retain
   `StoryRuntime.converse` and noninteractive loop ownership remains outside the
-  controller.
+  controller. Before an advisory coroutine enters, fixed attached cancellation
+  requires public Runner quiescence proof and performs no provider or state/
+  persistence mutation; after entry, it requires runtime `CancelledError` and
+  operation join, while every uncertain state fails closed.
   Provider-free `/search` and `/transcript` inspection crosses only public
   `ConversationMemoryService.search` and
   `ConversationMemoryService.read_transcript` boundaries. Provider-free

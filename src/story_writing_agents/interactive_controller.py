@@ -1735,7 +1735,8 @@ class InteractiveController:
         scoped memory service, validates and renders content-free progress,
         and submits exactly one coroutine to the controller-owned Runner before
         rendering the validated answer and sources. A first Ctrl-C is successful
-        only after cancellation reaches and joins the runtime coroutine.
+        before coroutine entry only when the Runner is quiescent, or after entry
+        only when cancellation reaches and joins the runtime coroutine.
         ``StoryRuntime`` remains the sole durability owner. Typed semantic and
         budget failures return to the prompt; observer, invalid-result, or
         uncertain ownership failures abort into the ordered cleanup boundary.
@@ -1838,11 +1839,13 @@ class InteractiveController:
         except KeyboardInterrupt:
             if progress_callback_failure is not None:
                 self._raise_progress_callback_abort(progress_callback_failure)
-            if (
-                not operation_entered
-                or not cancellation_reached_operation
-                or not operation_joined
-            ):
+            if not operation_entered:
+                cancellation_is_safe = self._interactive_runner_is_quiescent()
+            else:
+                cancellation_is_safe = (
+                    cancellation_reached_operation and operation_joined
+                )
+            if not cancellation_is_safe:
                 raise _ControllerAbort(
                     InteractiveError(
                         InteractiveErrorCode.OPERATION_INTERRUPTED

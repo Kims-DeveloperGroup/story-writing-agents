@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import signal
 import tempfile
 import unittest
 from collections.abc import Callable, Coroutine
@@ -123,6 +124,18 @@ class RecordingRunner:
         self.loop_ids.append(id(self._delegate.get_loop()))
         behavior = self.interruptions.get(call_number)
         if behavior == "before_entry":
+            raise KeyboardInterrupt
+        if behavior == "before_entry_nonquiescent":
+            async def remain_pending() -> None:
+                """Remain visible to public task inspection until cleanup."""
+
+                await asyncio.Event().wait()
+
+            task = self._delegate.get_loop().create_task(
+                remain_pending(),
+                name="issue14-pre-entry-residual",
+            )
+            self.operation_tasks.append(task)
             raise KeyboardInterrupt
         if behavior == "bare_cancelled":
             raise asyncio.CancelledError
@@ -420,6 +433,10 @@ class ConversationBound:
         requests = self.state["requests"]
         assert isinstance(requests, list)
         requests.append(request)
+        loops = self.state.get("loops")
+        if loops is not None:
+            assert isinstance(loops, list)
+            loops.append(asyncio.get_running_loop())
         if self.state["block"]:
             self.state["entered"] = True
             try:
@@ -608,6 +625,235 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
         self.assertTrue(runtime.generator_finalized)
         self.assertTrue(all(loop.is_closed() for loop in runtime.loops))
         self.assertFalse(workspace.path(_LEASE_RELATIVE).exists())
+
+    def test_real_runner_preentry_sigint_recovers_and_reuses_the_loop(
+        self,
+    ) -> None:
+        state: dict[str, object] = {
+            "block": False,
+            "requests": [],
+            "loops": [],
+        }
+        retained: dict[str, object] = {}
+        bound_definitions: list[AgentDefinition] = []
+        invoked_handlers: list[Callable[[int, object], None]] = []
+        cancelled = (
+            "[cancelled] Plot & Structure Architect turn was interrupted.\n"
+        )
+        hint = (
+            "[hint] The story session remains attached; the affected provider "
+            "thread may restart on the next message.\n"
+        )
+
+        def first_turn(_prompt: str) -> str:
+            """Capture attached state before the pre-entry interruption."""
+
+            controller = retained["controller"]
+            workspace = retained["workspace"]
+            assert isinstance(controller, InteractiveController)
+            assert isinstance(workspace, Workspace)
+            runner = controller._runner
+            assert isinstance(runner, asyncio.Runner)
+            retained.update(
+                runner=runner,
+                loop=runner.get_loop(),
+                memory=controller._conversation_memory_service,
+                selection=controller._selected_conversation,
+                selection_id=load_conversation_selection(workspace, "session"),
+                durable=_file_bytes(workspace),
+                manifest=workspace.read_json(_MANIFEST_RELATIVE),
+            )
+            return "cancel before entry"
+
+        def next_turn(_prompt: str) -> str:
+            """Verify the quiescent first cancellation before continuing."""
+
+            controller = retained["controller"]
+            workspace = retained["workspace"]
+            callbacks = retained["callbacks"]
+            store = retained["store"]
+            assert isinstance(controller, InteractiveController)
+            assert isinstance(workspace, Workspace)
+            assert isinstance(callbacks, ScriptedTerminalCallbacks)
+            assert isinstance(store, FilesystemConversationEventStore)
+            self.assertEqual(len(invoked_handlers), 1)
+            self.assertIs(controller._runner, retained["runner"])
+            self.assertIs(controller._runner.get_loop(), retained["loop"])
+            self.assertEqual(asyncio.all_tasks(retained["loop"]), set())
+            self.assertEqual(controller._attached_session_id, "session")
+            self.assertEqual(
+                controller._selected_conversation,
+                retained["selection"],
+            )
+            self.assertIs(
+                controller._conversation_memory_service,
+                retained["memory"],
+            )
+            self.assertEqual(controller._target_agent_id, PLOT_ARCHITECT)
+            self.assertEqual(
+                load_conversation_selection(workspace, "session"),
+                retained["selection_id"],
+            )
+            self.assertEqual(_file_bytes(workspace), retained["durable"])
+            self.assertEqual(
+                workspace.read_json(_MANIFEST_RELATIVE),
+                retained["manifest"],
+            )
+            self.assertEqual(state["requests"], [])
+            self.assertEqual(state["loops"], [])
+            self.assertEqual(bound_definitions, [])
+            runtime_request = retained["runtime_request"]
+            assert isinstance(runtime_request, mock.AsyncMock)
+            runtime_request.assert_not_called()
+            self.assertEqual(store.read("session", retained["selection_id"]), ())
+            rendered = "".join(callbacks.records)
+            self.assertEqual(rendered.count(cancelled), 1)
+            self.assertEqual(rendered.count(hint), 1)
+            self.assertNotIn("operation_interrupted", rendered)
+            self.assertNotIn("Retrieval search action", rendered)
+            self.assertNotIn("Retrieval read action", rendered)
+            return "after cancellation"
+
+        callbacks = ScriptedTerminalCallbacks(
+            "/to plot",
+            first_turn,
+            next_turn,
+            "/quit",
+        )
+        (
+            workspace,
+            catalog,
+            entries,
+            controller,
+            backend,
+            store,
+        ) = self.selected_controller_with_callbacks(callbacks)
+        retained.update(
+            workspace=workspace,
+            controller=controller,
+            callbacks=callbacks,
+            store=store,
+        )
+        core_before = core_snapshot(workspace)
+
+        async def bind(definition: AgentDefinition) -> ConversationBound:
+            """Return a direct-answer binding only after cancellation recovery."""
+
+            bound_definitions.append(definition)
+            return ConversationBound(definition, state)
+
+        real_signal = signal.signal
+        original_sigint_handler = signal.getsignal(signal.SIGINT)
+        self.addCleanup(real_signal, signal.SIGINT, original_sigint_handler)
+        real_signal(signal.SIGINT, signal.default_int_handler)
+        real_run_until_complete = asyncio.BaseEventLoop.run_until_complete
+        interruption_injected = False
+        runtime = controller._runtime
+
+        def invoke_installed_handler_before_first_step(
+            loop: asyncio.BaseEventLoop,
+            future: object,
+        ) -> object:
+            """Invoke the installed handler before the loop starts its task."""
+
+            nonlocal interruption_injected
+            if (
+                not interruption_injected
+                and loop is retained["loop"]
+            ):
+                installed = signal.getsignal(signal.SIGINT)
+                assert callable(installed)
+                self.assertIsNot(installed, signal.default_int_handler)
+                interruption_injected = True
+                invoked_handlers.append(installed)
+                installed(signal.SIGINT, None)
+            return real_run_until_complete(loop, future)
+
+        with (
+            mock.patch.object(
+                asyncio.BaseEventLoop,
+                "run_until_complete",
+                new=invoke_installed_handler_before_first_step,
+            ),
+            mock.patch.object(
+                runtime,
+                "converse_with_retrieval",
+                wraps=runtime.converse_with_retrieval,
+            ) as runtime_request,
+            mock.patch.object(backend, "bind", new=bind),
+            mock.patch.object(
+                StoryRuntime,
+                "_new_conversation_turn_id",
+                return_value="t_after",
+            ),
+            mock.patch.object(
+                backend,
+                "detach_session",
+                wraps=backend.detach_session,
+            ) as detach,
+            mock.patch.object(
+                backend,
+                "close",
+                wraps=backend.close,
+            ) as close,
+        ):
+            retained["runtime_request"] = runtime_request
+            exit_code = controller.run_session_lobby()
+            self.assertEqual(exit_code, 0, callbacks.records)
+
+        real_signal(signal.SIGINT, original_sigint_handler)
+        self.assertTrue(interruption_injected)
+        self.assertEqual(len(invoked_handlers), 1)
+        runtime_request.assert_awaited_once()
+        self.assertEqual(len(bound_definitions), 1)
+        self.assertEqual(bound_definitions[0].agent_id, PLOT_ARCHITECT)
+        requests = state["requests"]
+        loops = state["loops"]
+        assert isinstance(requests, list)
+        assert isinstance(loops, list)
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0].content, "after cancellation")
+        self.assertEqual(loops, [retained["loop"]])
+        loop = retained["loop"]
+        assert isinstance(loop, asyncio.AbstractEventLoop)
+        self.assertTrue(loop.is_closed())
+        transcript = FilesystemConversationEventStore(
+            workspace,
+            catalog=catalog,
+        ).read("session", entries[0].conversation_id)
+        self.assertEqual(
+            tuple((event.turn_id, event.kind) for event in transcript),
+            (
+                ("t_after", ConversationEventKind.USER_MESSAGE),
+                ("t_after", ConversationEventKind.AGENT_REPLY),
+            ),
+        )
+        self.assertEqual(
+            tuple(event.content for event in transcript),
+            ("after cancellation", "reply:after cancellation"),
+        )
+        self.assertEqual(core_snapshot(workspace), core_before)
+        self.assertEqual(all_manuscripts(workspace), [])
+        self.assertEqual(
+            workspace.read_json(_MANIFEST_RELATIVE)["threads"],
+            {},
+        )
+        self.assertEqual(
+            load_conversation_selection(workspace, "session"),
+            entries[0].conversation_id,
+        )
+        rendered = "".join(callbacks.records)
+        self.assertEqual(rendered.count(cancelled), 1)
+        self.assertEqual(rendered.count(hint), 1)
+        self.assertNotIn("operation_interrupted", rendered)
+        self.assertIn("plot> reply:after cancellation\n", rendered)
+        detach.assert_called_once_with("session")
+        close.assert_called_once_with()
+        self.assertFalse(workspace.path(_LEASE_RELATIVE).exists())
+        self.assertIsNone(controller._runner)
+        self.assertIsNone(controller._attached_session_id)
+        self.assertIsNone(controller._selected_conversation)
+        self.assertIsNone(controller._conversation_memory_service)
 
     def test_advisory_interrupt_joins_persists_taints_and_restarts_fresh(
         self,
@@ -968,10 +1214,14 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
         )
         self.assertIn("lead> reply:after cancellation\n", rendered)
 
-    def test_unjoined_second_interrupt_and_bare_cancelled_error_are_fatal(
+    def test_nonquiescent_preentry_unjoined_and_bare_cancelled_are_fatal(
         self,
     ) -> None:
-        cases = ("unjoined", "bare_cancelled")
+        cases = (
+            "before_entry_nonquiescent",
+            "unjoined",
+            "bare_cancelled",
+        )
         for behavior in cases:
             with self.subTest(behavior=behavior):
                 runtime = BlockingAdvisoryRuntime()
@@ -1016,6 +1266,10 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
                     self.assertTrue(all(task.done() for task in runner.operation_tasks))
                 else:
                     self.assertFalse(runtime.entered)
+                if behavior == "before_entry_nonquiescent":
+                    self.assertEqual(len(runner.operation_tasks), 1)
+                    self.assertTrue(runner.operation_tasks[0].done())
+                    self.assertTrue(runner.operation_tasks[0].cancelled())
 
 
 class ConsensusCancellationTests(InteractiveCancellationTestCase):
