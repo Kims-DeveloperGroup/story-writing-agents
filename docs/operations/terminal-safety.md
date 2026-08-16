@@ -1,8 +1,8 @@
 # Terminal display safety
 
 > **Availability:** these rules protect the module-supported terminal and the
-> installed shell, including management, search, and transcript records. They do not
-> make a terminal, callback, or scrollback private.
+> installed shell, including management, search, and transcript records. They
+> do not make callbacks or scrollback private.
 
 Key terms: **TTY guard**—check for interactive streams; **typed error**—trusted
 public code instead of exception prose; **display escaping**—showing a control
@@ -35,11 +35,9 @@ U+2028/U+2029 with a visible lowercase escape:
 For example, `ESC[31m` displays as `\x1b[31m` and cannot act as an ANSI escape.
 The result is strict UTF-8, and sanitizing it again changes nothing.
 
-Every terminal writer sends one sanitized string to its borrowed callback and
-adds one final LF. A record may retain internal LFs. Workspace names and
-conversation subjects are forced inline, so their input LF displays as
-`\x0a`. Search snippets are also inline. Width wrapping uses stable hanging
-indentation and never turns content into a command.
+Every writer sends one sanitized string and final LF. Records may retain
+internal LFs. Workspace names, subjects, and snippets are forced inline, so an
+input LF displays as `\x0a`. Stable wrapping never creates commands.
 
 Transcript content follows a stricter primitive boundary: it must be an exact
 nonempty string, but whitespace-only content is valid. Sanitization makes
@@ -62,10 +60,14 @@ may retain or transform everything displayed.
 
 ## Typed errors, never raw diagnostics
 
-CLI and controller boundaries classify failures by exception type and public
-session state. They never display exception messages, owner tokens, paths, or
-other raw diagnostics. Parser errors may supply parser-owned command-token copy
-and suggestions.
+Terminal input or action-output `OSError` maps to `operation_interrupted`; input
+`RuntimeError` maps to `internal_error`. Both exit `2` after cleanup.
+Progress-output `OSError` or
+`KeyboardInterrupt` maps to `operation_interrupted`; other callback failure maps
+to `internal_error`. Failed diagnostic output never skips cleanup.
+
+Other failures are classified by type and public state, never raw exception,
+owner-token, or path text. Parser errors may show parser-owned token copy.
 
 `write_error()` accepts a trusted error and explicit secret strings. It builds
 raw, JSON, visible-escape, collapsed, and control-normalized variants; replaces

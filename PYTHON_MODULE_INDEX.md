@@ -436,9 +436,19 @@ every intermediate arrow. The current runtime graph is acyclic.
   controller also owns its current attached-session identifier, selected
   conversation metadata, sticky target, current CLI-context snapshot,
   process-local per-session latest accepted STARTED debate-ID map, and
-  one-run/closed state. After the run starts, it owns orderly backend
-  detach/close coordination while `AgentBackend` retains the actual lease,
-  manifest, subprocess, and provider-thread resources. Through public
+  one-run/closed state. Once its single-use run starts, it constructs and owns
+  one private `asyncio.Runner` for the rest of that lifecycle. Repeated
+  `Runner.run` calls execute every accepted advisory and consensus coroutine on
+  that Runner; controller-local entered/cancelled/joined evidence distinguishes
+  a completed first interruption from an unjoined or otherwise uncertain
+  operation. Final cleanup closes the Runner and its residual asynchronous
+  work, detaches any still-known attachment, and then closes the backend. Later
+  cleanup stages remain attempted after an earlier failure; ordinary cleanup
+  failures force status 2 and one best-effort `cleanup_failed` diagnostic,
+  while a cleanup `BaseException` propagates after later stages run and an
+  unsuccessfully interrupted Runner close retains its private reference.
+  `AgentBackend` retains the actual lease, manifest, subprocess, and
+  provider-thread resources. Through public
   collaborators the controller reads and parses terminal input, renders safe
   output, sequences session and nested conversation transitions, performs
   catalog create/list/get/rename/archive and compensating unarchive calls,
@@ -450,11 +460,19 @@ every intermediate arrow. The current runtime graph is acyclic.
   canonical context facts through `select_bounded_conversation_context`, and
   runs one synchronous
   `StoryRuntime.converse_with_retrieval` operation per accepted advisory content
-  turn. It passes the exact attachment-scoped service plus a synchronous sink,
-  validates trusted progress/results, and renders fixed progress and ordered
-  source copy through existing terminal status output. It also delegates draft
-  reads to `run_inputs` and invokes exactly one synchronous `asyncio.run`
-  boundary for each accepted consensus action. `StoryRuntime` owns context
+  turn through the retained Runner. It passes the exact attachment-scoped
+  service plus a synchronous sink, validates trusted progress/results, and
+  renders fixed progress and ordered source copy through existing terminal
+  status output. A joined advisory cancellation returns attached only after the
+  runtime receives `CancelledError`; provider-free search, transcript, and
+  selected-history interruption stops further rendering and returns to the
+  same prompt without persistence mutation. The controller also delegates draft
+  reads to `run_inputs` and submits each accepted consensus action through the
+  same Runner. A trusted `INTERRUPTED` progress event, which may be first after
+  reservation, is its sole durable-interruption proof; only `STARTED` updates
+  the process-local latest-debate map, pre-entry cancellation remains
+  provider-free, and an entered cancellation without proof fails closed through
+  `operation_interrupted` and `cleanup_failed`. `StoryRuntime` owns context
   capture, retrieval authorization and memory access, transcript/provider and
   consensus sequencing, validated results, artifact durability, and its async
   caches and locks; the event store, catalog, and `Workspace` retain persistence
@@ -465,7 +483,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   and has no import-time operational side effects.
 - **Primary verification/documentation:** `tests/test_interactive_controller.py`,
   `tests/test_interactive_management.py`, `tests/test_interactive_consensus.py`,
-  `tests/test_interactive_conversation.py`, `tests/test_session_lifecycle.py`,
+  `tests/test_interactive_conversation.py`,
+  `tests/test_interactive_cancellation.py`, `tests/test_session_lifecycle.py`,
   `tests/test_cli_context.py`, `tests/test_interactive_commands.py`,
   `tests/test_interactive_terminal.py`, and
   `tests/test_interactive_search.py` for real-filesystem shell search and
@@ -585,8 +604,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   catalog, owner-state, or control/progress/source persistence.
 - **Primary verification/documentation:** `tests/test_conversation_runtime.py`,
   `tests/test_conversation_retrieval.py`, `tests/test_interactive_consensus.py`,
-  `tests/test_interactive_conversation.py` for retained runtime use across
-  separate interactive event loops, `tests/test_orchestration_workflow.py`,
+  `tests/test_interactive_conversation.py` for retained runtime use through the
+  controller-owned persistent Runner and its single lifecycle event loop,
+  `tests/test_orchestration_workflow.py`,
   `tests/test_orchestration_safety.py`, `tests/test_lifecycle_atomicity.py`,
   `tests/test_agent_state.py`, `docs/reference/runtime-api.md`,
   `docs/reference/conversation-retrieval.md`, and
@@ -693,8 +713,10 @@ every intermediate arrow. The current runtime graph is acyclic.
 - `interactive_controller` owns interactive shell action mapping, current
   in-memory attachment, selected-conversation and sticky-target state,
   process-local per-session latest accepted STARTED debate IDs, transition and
-  compensation ordering, retained runtime and memory-service wiring, and
-  backend detach/close coordination after its one run starts.
+  compensation ordering, retained runtime and memory-service wiring, one
+  private lifecycle `asyncio.Runner`, controller-local interruption/progress
+  proof, and ordered Runner-close, known-detach, and backend-close coordination
+  after its one run starts.
   `AgentBackend` retains actual session lease, manifest, subprocess, and
   provider-thread ownership; `ConversationCatalog` retains conversation
   metadata ownership; `cli_context` owns both session and per-session
@@ -702,7 +724,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   synchronous I/O and presentation ownership. Interactive advisory content
   crosses only the public `StoryRuntime.converse_with_retrieval` boundary with
   the exact attachment-scoped memory service and a synchronous progress sink;
-  unchanged direct Python one-step calls retain `StoryRuntime.converse`.
+  repeated interactive advisory and consensus operations use the controller's
+  one Runner, while unchanged direct Python one-step calls retain
+  `StoryRuntime.converse` and noninteractive loop ownership remains outside the
+  controller.
   Provider-free `/search` and `/transcript` inspection crosses only public
   `ConversationMemoryService.search` and
   `ConversationMemoryService.read_transcript` boundaries. Provider-free
@@ -710,7 +735,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   public `FilesystemConversationEventStore.read` boundary and derive context
   facts from that exact immutable tuple through the pure module-supported
   `select_bounded_conversation_context`; the controller never appends or calls
-  event-store `read_context`. Directives and safe inspection cross only public
+  event-store `read_context`. Ctrl-C during provider-free search, transcript,
+  or history rendering stops further output without mutating those boundaries.
+  Directives and safe inspection cross only public
   `StoryRuntime` methods. The controller performs no direct backend provider,
   context/result, retrieval-control, or artifact persistence.
   Selected-conversation consensus crosses only `StoryRuntime.run_prompt` or

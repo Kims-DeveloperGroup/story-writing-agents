@@ -87,9 +87,9 @@ failure as its type plus sanitized detail. The sanitizer:
 - falls back to `ExceptionType: unavailable diagnostic`; and
 - caps output at 4,096 characters with an in-limit truncation marker.
 
-Cancellation uses a fixed diagnostic. Replies are unchanged, and sanitization
-is not a general secret detector. Terminal summaries use a separate shorter
-boundary and are not transcript events.
+Cancellation stores fixed `CancelledError: conversation turn was cancelled`.
+Replies are unchanged, and sanitization is not a general secret detector.
+Terminal summaries use a separate boundary and are not transcript events.
 
 ## Codex and credentials
 

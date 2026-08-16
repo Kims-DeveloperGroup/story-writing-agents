@@ -91,6 +91,16 @@ joins its execution task, best-effort persists `interrupted`, and emits
 `INTERRUPTED` only after that transition is confirmed. If that observer call
 fails, cancellation remains primary and the observer error is its cause.
 
+The interactive controller adds proof boundaries around that runtime contract.
+Ctrl-C before coroutine entry, with the shared Runner quiescent, is provider-free:
+no reservation, run row, or `last` update occurs. Once entered, friendly recovery
+requires a joined cancellation and trusted terminal `INTERRUPTED`; that event may
+be first after reservation and proves only the durable terminal state. Only
+`STARTED` updates `/inspect last`. An entered cancellation without trusted proof
+is fatal `operation_interrupted`; known attachment state is abandoned before
+ordered cleanup. An interrupted debate cannot resume; `/run` creates a new ID.
+Exact shell records are in the [terminal reference](../reference/interactive-terminal.md#exact-cancellation-records).
+
 Exact types are in [Runtime API](../reference/runtime-api.md); artifact and
 sidecar storage are in [Persistence](persistence.md); operator response is in
 [Recovery and limitations](../operations/recovery-and-limitations.md).

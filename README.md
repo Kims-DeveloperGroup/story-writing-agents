@@ -11,7 +11,7 @@ and write a manuscript only after all three voting specialists agree.
 > shell. The shell provides global help/status; attached directives and safe run
 > inspection; conversation search; and selected history. A selected active
 > conversation also supports routed retrieval turns and prompt, fresh, or
-> draft-file consensus. Standalone artifact commands remain unavailable there.
+> draft-file consensus, with cancellation at controller boundaries. Standalone artifact commands remain unavailable there.
 
 ## Quick start
 
@@ -93,9 +93,10 @@ For Python integrations, start with the [runtime API](docs/reference/runtime-api
 - Artifact replacement is atomic per file with best-effort multi-file rollback,
   not a power-loss-safe transaction.
 - The interactive shell accepts one line per advisory turn; its multiline
-  composer is used only by bare `/run`, and active advisory-turn cancellation is
-  unavailable. Agent retrieval is current-session, active-only, and bounded;
-  standalone artifact commands remain unavailable. See
+  composer is used only by bare `/run`. Controller cancellation is implemented
+  once `KeyboardInterrupt` reaches that boundary; end-to-end PTY signal delivery
+  remains tracked separately. Agent retrieval is current-session, active-only,
+  and bounded; standalone artifact commands remain unavailable. See
   [bounded conversation retrieval](docs/reference/conversation-retrieval.md).
 
 ## Development
@@ -116,5 +117,4 @@ Contributors should read [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md),
 
 <a id="project-structure"></a>
 
-The Python package is under `src/story_writing_agents/`; tests are under `tests/`;
-role prompts are under `config/agents/`; and [PYTHON_MODULE_INDEX.md](PYTHON_MODULE_INDEX.md) is the module navigation map.
+The Python package is under `src/story_writing_agents/`; tests are under `tests/`; role prompts are under `config/agents/`; and [PYTHON_MODULE_INDEX.md](PYTHON_MODULE_INDEX.md) is the module navigation map.

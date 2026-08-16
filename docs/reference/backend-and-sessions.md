@@ -1,9 +1,9 @@
 # Backend and session API
 
-> **Availability:** `AgentBackend`, `BoundAgent`, one-step and retrieval calls,
-> and strict session lifecycle are implemented. Codex is the only provider.
+> **Availability:** `AgentBackend`, `BoundAgent`, one-step/retrieval calls, and
+> strict session lifecycle are implemented; Codex alone is supported.
 
-Key terms: **binding**—one immutable agent/provider pairing; **manifest**—the
+Key terms: **binding**—immutable agent/provider pairing; **manifest**—the
 durable session/thread record; **lease**—temporary process ownership;
 **thread**—a resumable provider conversation reference.
 
@@ -32,9 +32,9 @@ AgentBackend.end_session(session_id: str) -> dict[str, Any]
 AgentBackend.close() -> None
 ```
 
-`model=None` uses the Codex CLI default; invocation ignores user configuration.
-Timeout is positive. Overrides map canonical agents to vendor names. Reserved
-`gemini` is unimplemented; there is no runtime-imported plugin loader.
+`model=None` uses Codex's default; invocation ignores user configuration.
+Timeout is positive. Overrides map canonical agents to vendors. Reserved
+`gemini` is unimplemented; no runtime plugin loader exists.
 
 `bind()` verifies a definition and returns a `BoundAgent` with public `backend`,
 `definition`, `vendor`, and `staging_directory`. `invoke()` runs a debate phase.
@@ -44,9 +44,10 @@ Timeout is positive. Overrides map canonical agents to vendor names. Reserved
 | Concern | Contract |
 | --- | --- |
 | One-step | Exact `ConversationRequest`; one correlated reply. Its signature and payload are unchanged. |
-| Retrieval | Exact request plus synchronous handler. One thread lock covers the loop; backend receives no memory service. |
+| Retrieval | Exact request plus synchronous handler. Thread lock covers the loop; backend receives no memory service. |
 | Validation | Malformed JSON/schema or invalid/miscorrelated handler outcomes raise `BackendProtocolError`. Runtime maps provider action identity/index violations to `ConversationRetrievalSemanticError`; unsupported vendors raise `ConfigurationError`. |
-| Lifecycle | Both paths share lease, per-call timeout, cancellation, taint, and `(session, backend, agent)` serialization; changed fingerprints or taint start fresh. |
+| Lifecycle | Both paths share lease, timeout, and `(session, backend, agent)` serialization; changed fingerprints or taint start fresh. |
+| Cancellation | Terminate the active process, wait at most two seconds, then kill/wait if needed. Incomplete history is tainted, forcing the next compatible call fresh; a completed answer stays compatible if reply storage later fails. |
 | Scope and writes | Conversation ID is not a thread key. Private history may span conversations/debates. Only provider metadata may change. |
 
 Runtime owns transcript writes and retrieval authority. See [Runtime API](runtime-api.md#one-conversation-turn), [retrieval](conversation-retrieval.md), and [provider flow](../design/prompts-and-provider.md#conversation-turn-flow).
@@ -76,14 +77,12 @@ temporary lease state. Backend never reads or writes CLI context.
 | `in_use` | POSIX same-host unowned PID is demonstrably live. |
 | `unverified` | Remote host, ambiguous probe, permission failure, or any unowned non-POSIX sidecar; acquisition is blocked. |
 
-A sidecar's hostname/PID remain visible when `available`; both are `None` only
-without a sidecar. Selected input need not name a persisted session. Status
-reads never acquire, reclaim, or remove.
-POSIX same-host liveness uses non-destructive `os.kill(pid, 0)`; only a later
-claim reclaims a demonstrably dead sidecar. Permission/ambiguous probes, remote
-hosts, and every unowned non-POSIX sidecar are `unverified`. There is no remote
-probe, heartbeat, expiry, or stale-remote reclaim. PID reuse and hostname
-equality remain imperfect identity evidence.
+Available sidecars retain hostname/PID; both are `None` only when absent.
+Selected input need not exist. Status reads never acquire/reclaim/remove.
+POSIX same-host liveness uses `os.kill(pid, 0)`; only a later claim reclaims
+proved-dead ownership. Ambiguous/permission/remote/non-POSIX ownership is
+`unverified`. No remote probe, heartbeat, expiry, or stale-remote reclaim exists;
+PID reuse and hostname equality remain imperfect evidence.
 
 ## Lifecycle methods
 

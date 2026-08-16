@@ -78,7 +78,7 @@ reads are framed: zero turns/events.
 | Transcript turns / visible events | 12 / 24 |
 | Cumulative framed observation bytes | 32,768 UTF-8 bytes |
 
-There is no clipping, retry, sixth-call grace, or whole-turn deadline.
+No clipping, retry, sixth-call grace, or whole-turn deadline exists.
 
 ## Short sequence
 
@@ -87,8 +87,7 @@ There is no clipping, retry, sixth-call grace, or whole-turn deadline.
 3. It reads through `s1h1`, receiving pair `r2e1`, `r2e2`.
 4. It answers with supplied IDs; sources retain subject and citation.
 
-A direct answer stops at step one, performs no memory operation, and has no
-sources.
+A direct answer stops at step one without memory or sources.
 
 ## Progress, durability, and failures
 
@@ -111,9 +110,10 @@ say `conversation retrieval semantic validation failed`, `conversation retrieval
 budget exhausted`, and `conversation retrieval progress observer failed`.
 Malformed JSON remains `BackendProtocolError`; memory/storage errors retain type.
 
-Runtime locks the conversation across context, user append, loop, and outcome;
-backend locks the provider thread across calls/handler invocations. Failure
-after a nonterminal action taints incomplete history; later reply-write failure
-does not. Cancellation stores `CancelledError: conversation turn was cancelled` and re-raises
-`asyncio.CancelledError`. Only one user plus reply/error is stored;
-provider-thread metadata is the sole other mutation.
+Runtime locks conversation through context/user/loop/outcome; backend locks the
+provider thread through calls/actions. After user append, cancellation
+best-effort stores `CancelledError: conversation turn was cancelled`, then
+re-raises `asyncio.CancelledError`; failure leaves the user unmatched.
+Incomplete failed/cancelled history is tainted, so the next compatible call
+starts fresh. A completed answer stays untainted if reply storage fails. Only
+the transcript pair and provider metadata mutate.

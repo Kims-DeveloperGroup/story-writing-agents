@@ -1,8 +1,8 @@
 # Session lifecycle design
 
 > **Availability:** the controller manages sessions, conversations, routed
-> turns, local/management reads, directives, history, and selected-context
-> consensus. Standalone artifact commands remain unavailable.
+> turns, local/management reads, directives, history, and context
+> consensus. Artifact commands remain unavailable.
 
 <a id="three-independent-facts"></a>
 
@@ -20,10 +20,11 @@ inactive. Both retain saved selections.
 
 ## Entering the lobby
 
-The single-use controller owns final detach and close. Explicit entry creates,
-attaches, or resumes the named session without confirmation. Bare entry opens
-the outer lobby, attaches an active selection, or asks to resume an inactive one
-with yes as default.
+The single-use controller installs an `asyncio.Runner` before the lobby; its
+shared event loop serves advisory/consensus operations. It owns final cleanup.
+Explicit entry creates, attaches, or resumes a named session without
+confirmation. Bare entry opens the lobby, attaches an active selection, or asks
+to resume an inactive one with yes as default.
 
 After acquisition, missing, `null`, missing-record, or archived conversation
 selection enters the inner lobby; stale IDs are not rewritten. Malformed or
@@ -33,23 +34,19 @@ Acquisition preflights routes/executable discovery but starts no provider.
 
 ## Command gates and management state
 
-Registry `/help` (and `/?`) plus `/status` are global. Roster/session navigation
-is global; target, conversation, search/transcript, directive, and inspection
-actions require attachment. `/history`, advisory content, and consensus require
-an active selection. Ordinary and `/say` use the sticky target; `@AGENT` is
-one-shot. Conversation changes preserve the target.
+Help/status and roster/session navigation are global. Target, conversation,
+search/transcript, directives, and inspection require attachment; history,
+advisory, and consensus also require active selection. Ordinary and `/say` use
+the sticky target; `@AGENT` is one-shot. Conversation changes preserve it.
 
-Status distinguishes saved from attached session and refreshes selected
-metadata before reporting shell, transcript/context, search, and last-run facts.
-The controller retains a process-local per-session latest accepted `started`
-debate ID; it survives session switches but not process restart. Management is
-provider-free and preserves attachment, selection, target, transcript, catalog,
-artifact, and provider state. Only successful directives replace overrides.
-See the [CLI management contract](../reference/cli.md#interactive-streams).
+Status refreshes selected metadata and distinguishes saved/attached state. The
+per-session latest accepted `started` debate ID is process-local. Provider-free
+management preserves all scope/story/provider state except successful directive
+overrides. See the [CLI contract](../reference/cli.md#interactive-streams).
 
 ## Attach and switch ordering
 
-For an initial attachment or switch to destination B, the controller:
+For an initial attachment or switch to B, the controller:
 
 1. acquires and validates B's active owned lease;
 2. loads and validates B's saved conversation, if any;
@@ -84,9 +81,9 @@ flowchart TD
     F -->|Uncertain| X[Exit 2 and close best effort]
 ```
 
-`new` writes metadata, then selection; save failure leaves the record and prior
-choice. `use` saves before memory changes. `subject` renames; `list` is read-only.
-None changes the target.
+`new` writes metadata then selection; save failure leaves the record and prior
+choice. `use` saves before memory changes; `subject` renames; `list` reads only.
+None changes target.
 
 Nonselected archive neither confirms nor reselects. Selected archive defaults
 to no; yes selects the first other active record or `null`. Save failure is
@@ -94,12 +91,18 @@ recoverable only if unarchive, original selection, and lease are proved.
 
 ## End, detach, and close
 
-`/session end` defaults to no. Yes deactivates, releases the lease, retains both
-selections, clears in-process conversation state, resets the target to lead,
-and returns to the outer lobby. No, blank, or Ctrl-C keeps the attachment; EOF
-exits without ending.
+`/session end` defaults to no. Yes deactivates/releases the lease, retains saved
+session/conversation selections, clears in-process attachment/selection/memory,
+resets target to lead, and returns to outer lobby. No/blank/Ctrl-C stays attached; EOF
+exits without ending. `/quit`, `/exit`, main EOF, and compose EOF also request
+normal cleanup without deactivation.
 
-`/quit`, `/exit`, and main-prompt EOF detach without deactivation, then close
-the backend. Detach or close failure changes the final status to `2`. Exact
-lease rules are in [Backend and sessions](../reference/backend-and-sessions.md);
-schemas are in [Session storage](../reference/configuration/session-storage.md).
+Cleanup order is `Runner.close()` → known detach → `backend.close()`;
+ordinary failure never skips a later stage. Runner close first finalizes residual
+tasks and async generators. Normal cleanup clears process-only state while
+durable sessions, selections, threads, transcripts, debates, and artifacts stay.
+Any ordinary cleanup failure exits `2` with one best-effort `cleanup_failed`.
+An interrupted Runner close still attempts detach/backend close, clears attached
+conversation/memory state, retains the unproved Runner reference, then
+propagates. See [Backend and sessions](../reference/backend-and-sessions.md) and
+[Session storage](../reference/configuration/session-storage.md).

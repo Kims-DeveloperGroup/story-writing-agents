@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-from .agents import LEAD_ORCHESTRATOR, ROSTER
+from .agents import AGENT_SPECS, LEAD_ORCHESTRATOR, ROSTER
 from .backend import AgentBackend
 from .cli_context import (
     CliContext,
@@ -169,6 +169,7 @@ class InteractiveController:
         "_conversation_memory_service",
         "_context",
         "_last_started_debate_by_session",
+        "_runner",
         "_runtime",
         "_selected_conversation",
         "_started",
@@ -237,6 +238,7 @@ class InteractiveController:
         self._selected_conversation: ConversationMetadata | None = None
         self._target_agent_id = LEAD_ORCHESTRATOR
         self._last_started_debate_by_session: dict[str, str] = {}
+        self._runner: asyncio.Runner | None = None
         self._started = False
         self._closed = False
 
@@ -250,8 +252,10 @@ class InteractiveController:
         ``requested_session`` selects explicit create/attach/resume behavior;
         ``None`` uses saved selection. Commands may mutate owned process state,
         established session/conversation persistence, or runtime-owned turn
-        transcripts. Every started exit detaches known ownership and closes the
-        borrowed backend; fatal uncertainty returns 2, and a second run raises
+        transcripts. One controller-owned ``asyncio.Runner`` serves every
+        accepted provider coroutine and closes before session/backend cleanup.
+        Every started exit detaches known ownership and closes the borrowed
+        backend; fatal uncertainty returns 2, and a second run raises
         ``RuntimeError`` without reacquiring resources.
         """
 
@@ -264,6 +268,7 @@ class InteractiveController:
         exit_code = 2
         cleanup_error_reported = False
         try:
+            self._runner = asyncio.Runner()
             startup_requested_exit = self._enter_initial_session(
                 requested_session
             )
@@ -274,13 +279,19 @@ class InteractiveController:
                     self._write_lobby_orientation()
                 exit_code = self._read_session_lobby_commands()
         except _ControllerAbort as abort:
-            self._terminal.write_error(abort.error)
+            diagnostic_written = self._write_error_best_effort(abort.error)
             cleanup_error_reported = (
                 abort.error.code is InteractiveErrorCode.CLEANUP_FAILED
+                and diagnostic_written
+            )
+            exit_code = 2
+        except (asyncio.CancelledError, KeyboardInterrupt, OSError):
+            self._write_error_best_effort(
+                InteractiveError(InteractiveErrorCode.OPERATION_INTERRUPTED)
             )
             exit_code = 2
         except Exception:
-            self._terminal.write_error(
+            self._write_error_best_effort(
                 InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
             )
             exit_code = 2
@@ -1097,8 +1108,23 @@ class InteractiveController:
         authoritative event store exactly once, derives bounded context from
         that exact tuple, and displays either all events or the requested newest
         suffix in chronological order. No cursor, mutation, search, or provider
-        operation occurs.
+        operation occurs. Ctrl-C stops rendering after any completed rows and
+        returns to the same attached prompt.
         """
+
+        try:
+            self._write_selected_conversation_history_rows(action)
+        except KeyboardInterrupt:
+            self._terminal.write_status(
+                TerminalMessageKind.CANCELLED,
+                "History cancelled; attached state is unchanged.",
+            )
+
+    def _write_selected_conversation_history_rows(
+        self,
+        action: InteractiveAction,
+    ) -> None:
+        """Read once and render history rows until completion or interruption."""
 
         assert action.kind is ActionKind.HISTORY
         if self._attached_session_id is None:
@@ -1707,11 +1733,12 @@ class InteractiveController:
         one-shot canonical agent without changing sticky state. The method
         revalidates attachment and selection, passes the retained attachment-
         scoped memory service, validates and renders content-free progress,
-        performs exactly one synchronous ``asyncio.run`` boundary, then renders
-        the validated answer and sources. ``StoryRuntime`` remains the sole
-        durability owner. Typed semantic and budget failures return to the
-        prompt; observer, invalid-result, or uncertain ownership failures abort
-        into the existing detach/close cleanup boundary.
+        and submits exactly one coroutine to the controller-owned Runner before
+        rendering the validated answer and sources. A first Ctrl-C is successful
+        only after cancellation reaches and joins the runtime coroutine.
+        ``StoryRuntime`` remains the sole durability owner. Typed semantic and
+        budget failures return to the prompt; observer, invalid-result, or
+        uncertain ownership failures abort into the ordered cleanup boundary.
         """
 
         if self._attached_session_id is None:
@@ -1737,6 +1764,7 @@ class InteractiveController:
             assert action.kind is ActionKind.MESSAGE
             agent_id = self._target_agent_id
             routing = f"Routing this turn to {agent_id}. "
+        display_name = AGENT_SPECS[agent_id].display_name
         routing += (
             "Direct routing selects the responder in this shared room; "
             "it does not make the turn private."
@@ -1744,7 +1772,7 @@ class InteractiveController:
         self._terminal.write_status(TerminalMessageKind.ROUTING, routing)
         self._terminal.write_status(
             TerminalMessageKind.WAITING,
-            f"Waiting for {agent_id}.",
+            f"{display_name} is responding; Ctrl-C cancels this turn.",
         )
 
         memory_service = self._conversation_memory_service
@@ -1753,23 +1781,39 @@ class InteractiveController:
                 InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
             )
         progress_events: list[ConversationRetrievalProgressEvent] = []
+        progress_callback_failure: BaseException | None = None
 
         def accept_and_render_progress(
             event: ConversationRetrievalProgressEvent,
         ) -> None:
-            """Validate, render, and retain one retrieval progress event."""
+            """Retain callback failure identity while accepting one event."""
 
-            self._accept_conversation_retrieval_progress(
-                event,
-                expected_session_id=session_id,
-                expected_conversation_id=selected.conversation_id,
-                expected_agent_id=agent_id,
-                events=progress_events,
-            )
+            nonlocal progress_callback_failure
+            try:
+                self._accept_conversation_retrieval_progress(
+                    event,
+                    expected_session_id=session_id,
+                    expected_conversation_id=selected.conversation_id,
+                    expected_agent_id=agent_id,
+                    events=progress_events,
+                )
+            except BaseException as exc:
+                progress_callback_failure = exc
+                raise
 
-        try:
-            result = asyncio.run(
-                self._runtime.converse_with_retrieval(
+        operation_entered = False
+        cancellation_reached_operation = False
+        operation_joined = False
+
+        async def run_joined_advisory_operation() -> ConversationRetrievalResult:
+            """Await the turn while recording cancellation and final joining."""
+
+            nonlocal operation_entered
+            nonlocal cancellation_reached_operation
+            nonlocal operation_joined
+            operation_entered = True
+            try:
+                return await self._runtime.converse_with_retrieval(
                     session_id,
                     selected.conversation_id,
                     agent_id,
@@ -1777,14 +1821,61 @@ class InteractiveController:
                     memory_service=memory_service,
                     progress_sink=accept_and_render_progress,
                 )
-            )
-        except ConversationRetrievalObserverError:
+            except asyncio.CancelledError:
+                cancellation_reached_operation = True
+                raise
+            finally:
+                operation_joined = True
+
+        runner = self._runner
+        if runner is None:
             raise _ControllerAbort(
                 InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            )
+        operation_coroutine = run_joined_advisory_operation()
+        try:
+            result = runner.run(operation_coroutine)
+        except KeyboardInterrupt:
+            if progress_callback_failure is not None:
+                self._raise_progress_callback_abort(progress_callback_failure)
+            if (
+                not operation_entered
+                or not cancellation_reached_operation
+                or not operation_joined
+            ):
+                raise _ControllerAbort(
+                    InteractiveError(
+                        InteractiveErrorCode.OPERATION_INTERRUPTED
+                    )
+                ) from None
+            self._terminal.write_status(
+                TerminalMessageKind.CANCELLED,
+                f"{display_name} turn was interrupted.",
+            )
+            self._terminal.write_status(
+                TerminalMessageKind.HINT,
+                (
+                    "The story session remains attached; the affected "
+                    "provider thread may restart on the next message."
+                )
+            )
+            return
+        except asyncio.CancelledError:
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.OPERATION_INTERRUPTED)
             ) from None
+        except ConversationRetrievalObserverError as exc:
+            self._raise_progress_callback_abort(
+                progress_callback_failure or exc.__cause__ or exc
+            )
         except Exception as exc:
+            if progress_callback_failure is not None:
+                self._raise_progress_callback_abort(progress_callback_failure)
             self._present_advisory_turn_failure(exc)
             return
+        finally:
+            if not operation_entered:
+                operation_coroutine.close()
 
         try:
             result = self._validated_conversation_retrieval_result(
@@ -2044,9 +2135,10 @@ class InteractiveController:
         before composition or file access. Bare ``/run`` submits only a terminal
         ``SEND`` result; cancel and interrupt discard locally, while compose EOF
         requests normal shell exit. Draft files use the shared strict loader.
-        Accepted input reaches one ``asyncio.run`` boundary, and runtime context,
+        Accepted input reaches the controller-owned Runner, and runtime context,
         sidecar, progress, provider, result, and artifact durability remain owned
-        by ``StoryRuntime``. Expected terminal outcomes return to the shell.
+        by ``StoryRuntime``. A joined cancellation returns to the shell only with
+        trusted interruption proof or confirmed pre-start state.
         """
 
         if self._attached_session_id is None:
@@ -2104,45 +2196,106 @@ class InteractiveController:
             mode=context_mode,
         )
         progress_events: list[DebateProgressEvent] = []
+        progress_callback_failure: BaseException | None = None
 
         def accept_and_render_progress(event: DebateProgressEvent) -> None:
-            """Validate, render, and retain one progress event for this run."""
+            """Retain callback failure identity while accepting one event."""
 
-            self._accept_debate_progress(
-                event,
-                expected_session_id=session_id,
-                expected_input_kind=input_kind,
-                expected_context_mode=context_mode,
-                events=progress_events,
-            )
+            nonlocal progress_callback_failure
+            try:
+                self._accept_debate_progress(
+                    event,
+                    expected_session_id=session_id,
+                    expected_input_kind=input_kind,
+                    expected_context_mode=context_mode,
+                    events=progress_events,
+                )
+            except BaseException as exc:
+                progress_callback_failure = exc
+                raise
 
-        try:
-            result = asyncio.run(
-                self._runtime.run_prompt(
+        operation_entered = False
+        cancellation_reached_operation = False
+        operation_joined = False
+
+        async def run_joined_consensus_operation() -> DebateResult:
+            """Await the debate while recording cancellation and final joining."""
+
+            nonlocal operation_entered
+            nonlocal cancellation_reached_operation
+            nonlocal operation_joined
+            operation_entered = True
+            try:
+                if input_kind is InputKind.PROMPT:
+                    return await self._runtime.run_prompt(
+                        session_id,
+                        payload,
+                        conversation_context=request,
+                        progress_sink=accept_and_render_progress,
+                    )
+                return await self._runtime.run_draft(
                     session_id,
                     payload,
                     conversation_context=request,
                     progress_sink=accept_and_render_progress,
                 )
-                if input_kind is InputKind.PROMPT
-                else self._runtime.run_draft(
-                    session_id,
-                    payload,
-                    conversation_context=request,
-                    progress_sink=accept_and_render_progress,
-                )
-            )
-        except ProgressObserverError:
+            except asyncio.CancelledError:
+                cancellation_reached_operation = True
+                raise
+            finally:
+                operation_joined = True
+
+        runner = self._runner
+        if runner is None:
             raise _ControllerAbort(
                 InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            )
+        operation_coroutine = run_joined_consensus_operation()
+        try:
+            result = runner.run(operation_coroutine)
+        except KeyboardInterrupt:
+            if progress_callback_failure is not None:
+                self._raise_progress_callback_abort(progress_callback_failure)
+            if not operation_entered:
+                if not self._interactive_runner_is_quiescent():
+                    raise _ControllerAbort(
+                        InteractiveError(
+                            InteractiveErrorCode.OPERATION_INTERRUPTED
+                        )
+                    ) from None
+                self._write_consensus_cancelled_before_start()
+                return False
+            if not cancellation_reached_operation or not operation_joined:
+                raise _ControllerAbort(
+                    InteractiveError(
+                        InteractiveErrorCode.OPERATION_INTERRUPTED
+                    )
+                ) from None
+            self._present_joined_consensus_cancellation(
+                session_id,
+                progress_events,
+            )
+            return False
+        except asyncio.CancelledError:
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.OPERATION_INTERRUPTED)
             ) from None
+        except ProgressObserverError as exc:
+            self._raise_progress_callback_abort(
+                progress_callback_failure or exc.__cause__ or exc
+            )
         except Exception as exc:
+            if progress_callback_failure is not None:
+                self._raise_progress_callback_abort(progress_callback_failure)
             self._present_consensus_execution_failure(
                 exc,
                 draft_payload_was_empty=draft_payload_was_empty,
                 progress_events=progress_events,
             )
             return False
+        finally:
+            if not operation_entered:
+                operation_coroutine.close()
 
         terminal_event, artifact_event = self._validated_consensus_result(
             result,
@@ -2152,6 +2305,74 @@ class InteractiveController:
         )
         self._present_consensus_result(result, terminal_event, artifact_event)
         return False
+
+    def _present_joined_consensus_cancellation(
+        self,
+        session_id: str,
+        progress_events: list[DebateProgressEvent],
+    ) -> None:
+        """Render a joined cancellation or fail closed without durable proof.
+
+        A trusted terminal ``INTERRUPTED`` event proves the immutable persisted
+        outcome and has already rendered its sole run row. An entered operation
+        with no event is still unproven because reservation may precede progress.
+        Every entered run without that terminal proof fails closed rather than
+        treating Runner quiescence or a retained lease as durability evidence.
+        """
+
+        terminal_event = progress_events[-1] if progress_events else None
+        if (
+            terminal_event is not None
+            and terminal_event.phase is DebateProgressPhase.INTERRUPTED
+        ):
+            self._terminal.write_status(
+                TerminalMessageKind.CANCELLED,
+                f"Debate {terminal_event.debate_id} was marked interrupted.",
+            )
+            self._terminal.write_status(
+                TerminalMessageKind.HINT,
+                "It cannot resume. Use /run to create a new debate.",
+            )
+            self._terminal.write_status(
+                TerminalMessageKind.SESSION,
+                f'"{session_id}" remains active and attached.',
+            )
+            return
+
+        self._write_error_best_effort(
+            InteractiveError(InteractiveErrorCode.OPERATION_INTERRUPTED)
+        )
+        self._abandon_known_attachment_for_cleanup_abort()
+
+    def _write_consensus_cancelled_before_start(self) -> None:
+        """Render the fixed pre-reservation cancellation acknowledgement."""
+
+        self._terminal.write_status(
+            TerminalMessageKind.CANCELLED,
+            "Consensus run was cancelled before start.",
+        )
+
+    def _interactive_runner_is_quiescent(self) -> bool:
+        """Return whether the owned Runner has no unfinished public tasks."""
+
+        runner = self._runner
+        if runner is None:
+            return False
+        try:
+            return not asyncio.all_tasks(runner.get_loop())
+        except (Exception, KeyboardInterrupt):
+            return False
+
+    @staticmethod
+    def _raise_progress_callback_abort(failure: BaseException) -> None:
+        """Raise the fixed fatal code for one synchronous progress failure."""
+
+        code = (
+            InteractiveErrorCode.OPERATION_INTERRUPTED
+            if isinstance(failure, (OSError, KeyboardInterrupt))
+            else InteractiveErrorCode.INTERNAL_ERROR
+        )
+        raise _ControllerAbort(InteractiveError(code)) from None
 
     def _accept_debate_progress(
         self,
@@ -2165,8 +2386,9 @@ class InteractiveController:
         """Validate, render, and retain one trusted runtime progress event.
 
         Only exact built-in events with matching run identity and legal phase
-        succession are accepted. The first accepted STARTED event also updates
-        the controller's process-local per-session ``last`` inspection mapping.
+        succession are accepted. ``INTERRUPTED`` may be first when cancellation
+        follows reservation but precedes ``STARTED``; only an accepted
+        ``STARTED`` updates the process-local per-session ``last`` mapping.
         Rendering uses typed fields and fixed copy only; invalid events or
         terminal writer failures propagate to the runtime sink boundary, which
         owns interruption and observer-error semantics.
@@ -2199,9 +2421,17 @@ class InteractiveController:
             raise ValueError("progress event identity does not match the run")
         previous = events[-1] if events else None
         if previous is None:
-            if canonical.phase is not DebateProgressPhase.STARTED:
-                raise ValueError("the first progress event must be started")
-            if canonical.context_mode is not expected_context_mode:
+            if canonical.phase not in {
+                DebateProgressPhase.STARTED,
+                DebateProgressPhase.INTERRUPTED,
+            }:
+                raise ValueError(
+                    "the first progress event must be started or interrupted"
+                )
+            if (
+                canonical.phase is DebateProgressPhase.STARTED
+                and canonical.context_mode is not expected_context_mode
+            ):
                 raise ValueError("started progress context mode does not match")
         else:
             if canonical.debate_id != previous.debate_id:
@@ -2635,42 +2865,37 @@ class InteractiveController:
                 self._present_search_service_failure(exc)
                 return
 
-            try:
-                for handle, hit in zip(handles, result.hits, strict=True):
-                    citation = hit.citation
-                    self._terminal.write_conversation_search_hit(
-                        handle,
-                        hit.subject,
-                        hit.match_kind.value,
-                        hit.snippet,
-                        archived=(hit.status is ConversationStatus.ARCHIVED),
-                        citation_turn_id=citation.turn_id,
-                        citation_sequence=citation.sequence,
-                        citation_kind=(
-                            None
-                            if citation.event_kind is None
-                            else citation.event_kind.value
-                        ),
-                    )
-                self._terminal.write_status(
-                    TerminalMessageKind.RESULT,
-                    (
-                        f"Search returned {len(result.hits)} of "
-                        f"{result.matched_conversations} matching conversations."
+            for handle, hit in zip(handles, result.hits, strict=True):
+                citation = hit.citation
+                self._terminal.write_conversation_search_hit(
+                    handle,
+                    hit.subject,
+                    hit.match_kind.value,
+                    hit.snippet,
+                    archived=(hit.status is ConversationStatus.ARCHIVED),
+                    citation_turn_id=citation.turn_id,
+                    citation_sequence=citation.sequence,
+                    citation_kind=(
+                        None
+                        if citation.event_kind is None
+                        else citation.event_kind.value
                     ),
                 )
-                if result.truncated:
-                    self._terminal.write_status(
-                        TerminalMessageKind.HINT,
-                        (
-                            "Search was truncated by fixed scan or result "
-                            "limits; refine the query."
-                        ),
-                    )
-            except Exception:
-                raise _ControllerAbort(
-                    InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
-                ) from None
+            self._terminal.write_status(
+                TerminalMessageKind.RESULT,
+                (
+                    f"Search returned {len(result.hits)} of "
+                    f"{result.matched_conversations} matching conversations."
+                ),
+            )
+            if result.truncated:
+                self._terminal.write_status(
+                    TerminalMessageKind.HINT,
+                    (
+                        "Search was truncated by fixed scan or result "
+                        "limits; refine the query."
+                    ),
+                )
         except KeyboardInterrupt:
             self._terminal.write_status(
                 TerminalMessageKind.CANCELLED,
@@ -2731,34 +2956,29 @@ class InteractiveController:
                 return
 
             handle = self._visible_conversation_handle(metadata, entries)
-            try:
-                for event in page.events:
-                    self._terminal.write_conversation_transcript_event(
-                        handle,
-                        sequence=event.sequence,
-                        turn_id=event.turn_id,
-                        kind=event.kind.value,
-                        sender=event.sender,
-                        recipient=event.recipient,
-                        content=event.content,
-                    )
-                self._terminal.write_status(
-                    TerminalMessageKind.RESULT,
-                    f"Transcript page returned {len(page.events)} events.",
+            for event in page.events:
+                self._terminal.write_conversation_transcript_event(
+                    handle,
+                    sequence=event.sequence,
+                    turn_id=event.turn_id,
+                    kind=event.kind.value,
+                    sender=event.sender,
+                    recipient=event.recipient,
+                    content=event.content,
                 )
-                if page.next_cursor is not None:
-                    self._terminal.write_status(
-                        TerminalMessageKind.HINT,
-                        (
-                            f"Continue with /transcript {handle} "
-                            f"{page.next_cursor.max_events} --from "
-                            f"{page.next_cursor.next_sequence}."
-                        ),
-                    )
-            except Exception:
-                raise _ControllerAbort(
-                    InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
-                ) from None
+            self._terminal.write_status(
+                TerminalMessageKind.RESULT,
+                f"Transcript page returned {len(page.events)} events.",
+            )
+            if page.next_cursor is not None:
+                self._terminal.write_status(
+                    TerminalMessageKind.HINT,
+                    (
+                        f"Continue with /transcript {handle} "
+                        f"{page.next_cursor.max_events} --from "
+                        f"{page.next_cursor.next_sequence}."
+                    ),
+                )
         except KeyboardInterrupt:
             self._terminal.write_status(
                 TerminalMessageKind.CANCELLED,
@@ -4177,41 +4397,75 @@ class InteractiveController:
             InteractiveError(InteractiveErrorCode.CLEANUP_FAILED)
         )
 
+    def _write_error_best_effort(self, error: InteractiveError) -> bool:
+        """Attempt one diagnostic without delaying lifecycle cleanup.
+
+        Ordinary callback failures are suppressed after the attempted write.
+        ``KeyboardInterrupt`` and every other ``BaseException`` retain their
+        fatal process semantics while the caller's cleanup ``finally`` runs.
+        """
+
+        try:
+            self._terminal.write_error(error)
+        except Exception:
+            return False
+        return True
+
     def _release_attachment_and_close_backend(
         self,
         exit_code: int,
         *,
         cleanup_error_reported: bool,
     ) -> int:
-        """Detach known state, close the backend, and apply cleanup precedence.
+        """Close Runner, detach, close backend, and apply failure precedence.
 
-        Normal quit/EOF explicitly detaches without deactivation. Memory scope
-        is always cleared. Either detach or close failure forces status 2;
-        backend close is still tried, and one cleanup error is added as needed.
+        Normal quit/EOF detaches without deactivation. Each cleanup stage runs
+        after the preceding stage even when that stage fails. Runner, detach,
+        backend, attachment, selection, and memory state are cleared before the
+        method returns; one best-effort cleanup diagnostic accompanies status 2.
+        A ``BaseException`` from any stage propagates only after later stages
+        run. If Runner close is interrupted, its private reference is retained
+        because successful close was not established.
         """
 
         if self._closed:
             return exit_code
         cleanup_failed = False
+        runner = self._runner
+        discard_runner_state_after_cleanup = runner is None
         attached_session = self._attached_session_id
-        if attached_session is not None:
-            try:
-                self._backend.detach_session(attached_session)
-            except Exception:
-                cleanup_failed = True
-            finally:
-                self._attached_session_id = None
-                self._selected_conversation = None
         try:
-            self._backend.close()
-        except Exception:
-            cleanup_failed = True
+            if runner is not None:
+                try:
+                    runner.close()
+                except Exception:
+                    cleanup_failed = True
+                    discard_runner_state_after_cleanup = True
+                else:
+                    discard_runner_state_after_cleanup = True
         finally:
-            self._conversation_memory_service = None
-            self._closed = True
+            try:
+                if attached_session is not None:
+                    try:
+                        self._backend.detach_session(attached_session)
+                    except Exception:
+                        cleanup_failed = True
+            finally:
+                try:
+                    try:
+                        self._backend.close()
+                    except Exception:
+                        cleanup_failed = True
+                finally:
+                    if discard_runner_state_after_cleanup:
+                        self._runner = None
+                    self._attached_session_id = None
+                    self._selected_conversation = None
+                    self._conversation_memory_service = None
+                    self._closed = True
 
         if cleanup_failed and not cleanup_error_reported:
-            self._terminal.write_error(
+            self._write_error_best_effort(
                 InteractiveError(InteractiveErrorCode.CLEANUP_FAILED)
             )
         return 2 if cleanup_failed else exit_code
