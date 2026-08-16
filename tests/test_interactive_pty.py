@@ -57,12 +57,14 @@ _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 _SOURCE_ROOT = _REPOSITORY_ROOT / "src"
 _SESSION_DIRECTORY = "agent_states/orchestrator_state/provider_sessions"
 _PROCESS_DEADLINE_SECONDS = 12.0
+_PROCESS_POLL_QUANTUM_SECONDS = 0.02
 _TEARDOWN_DEADLINE_SECONDS = 3.0
 
 
 _FAKE_CODEX = r'''#!/usr/bin/env python3
 """Deterministic local Codex protocol stand-in used only by POSIX PTY tests."""
 
+import fcntl
 import json
 import os
 import signal
@@ -75,7 +77,7 @@ CONTROL_PATH = Path(os.environ["STORY_PTY_CODEX_CONTROL"])
 
 
 def append_record(value):
-    """Append one complete UTF-8 JSONL record with an atomic OS write."""
+    """Append one locked, complete UTF-8 JSONL record."""
 
     payload = (json.dumps(value, ensure_ascii=False) + "\n").encode("utf-8")
     descriptor = os.open(
@@ -84,7 +86,13 @@ def append_record(value):
         0o600,
     )
     try:
-        os.write(descriptor, payload)
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        remaining = memoryview(payload)
+        while remaining:
+            written = os.write(descriptor, remaining)
+            if written == 0:
+                raise OSError("fake provider log write made no progress")
+            remaining = remaining[written:]
     finally:
         os.close(descriptor)
 
@@ -409,12 +417,14 @@ class PtyCliProcess:
                 "CLI process exceeded its output deadline; "
                 f"captured={self.normalized_text!r}"
             )
-        readable, _, _ = select.select((self.master_fd,), (), (), remaining)
+        readable, _, _ = select.select(
+            (self.master_fd,),
+            (),
+            (),
+            min(remaining, _PROCESS_POLL_QUANTUM_SECONDS),
+        )
         if not readable:
-            raise AssertionError(
-                "CLI process exceeded its output deadline; "
-                f"captured={self.normalized_text!r}"
-            )
+            return
         self._read_available_terminal_bytes()
 
     def _read_available_terminal_bytes(self) -> None:
