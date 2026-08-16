@@ -984,6 +984,52 @@ class SmokeFailureTests(unittest.TestCase):
         self.assertIs(report["workspace"]["retained"], False)
         self.assertFalse(Path(report["workspace"]["path"]).exists())
 
+    def test_bind_invariant_uses_active_conversation_stage(self) -> None:
+        """Attribute real bind invariants to routing or retrieval as active."""
+
+        real_bind = smoke_module._SmokeBackend.bind
+        selected_failed_check = ""
+        observed_binding_checks: list[str] = []
+
+        async def fail_bind_during_selected_stage(
+            backend: smoke_module._SmokeBackend,
+            definition: object,
+        ) -> object:
+            """Run the real bind while invalidating only the selected stage."""
+
+            observed_binding_checks.append(backend._binding_failed_check)
+            if backend._binding_failed_check != selected_failed_check:
+                return await real_bind(
+                    backend,
+                    definition,  # type: ignore[arg-type]
+                )
+            with mock.patch.object(smoke_module, "ROSTER", ()):
+                return await real_bind(
+                    backend,
+                    definition,  # type: ignore[arg-type]
+                )
+
+        cases = (
+            ("conversation_routing", EXPECTED_CHECKS[:3]),
+            ("conversation_retrieval", EXPECTED_CHECKS[:6]),
+        )
+        for failed_check, completed_checks in cases:
+            with self.subTest(failed_check=failed_check):
+                selected_failed_check = failed_check
+                observed_binding_checks.clear()
+                with mock.patch.object(
+                    smoke_module._SmokeBackend,
+                    "bind",
+                    new=fail_bind_during_selected_stage,
+                ):
+                    report, exit_code = smoke_module.run_smoke()
+
+                self.assertEqual(exit_code, 1)
+                self.assertEqual(report["status"], "failed")
+                self.assertEqual(report["failed_check"], failed_check)
+                self.assertEqual(report["checks"], completed_checks)
+                self.assertIn(failed_check, observed_binding_checks)
+
 
 class ExistingRunExitCodeTests(unittest.TestCase):
     def test_run_deadlock_and_failed_codes_remain_three_and_four(self) -> None:

@@ -41,7 +41,7 @@ workspace; an explicit workspace retains unique plaintext diagnostics and is
 not read-only. Exit `0` passes, `1` returns failed JSON with the completed check
 prefix and `failed_check`, and `2` covers usage, setup, or unexpected failure.
 Pre-debate failure keeps `debate_status:"not_run"`, null revision, and zero
-rounds. See the [smoke guide](../guides/smoke-test.md).
+rounds. See [smoke guide](../guides/smoke-test.md).
 
 <a id="interactive-streams"></a>
 
@@ -59,7 +59,7 @@ messages/consensus/history also require active selection. Transcript includes
 archives; search is active-only.
 
 Attached `/language ARG`, `/persona AGENT ARG`, and `/reset` use runtime
-directives without selection. Agent IDs canonicalize; only valid atomic success
+directives without selection. Agent IDs canonicalize; only atomic success
 mutates. Errors are `agent_invalid` or `configuration_invalid`.
 
 `/history [COUNT]` reads one selected snapshot: omitted means all; positive ASCII
@@ -115,6 +115,6 @@ Except `init`/`smoke`, commands need the nearest workspace. Session precedence:
 `--session`, lifecycle positional ID, saved selection. Noninteractive `run` has
 no conversation context; its JSON/stderr and `inspect` JSON remain unchanged.
 
-Other exits are `0` success/shell end, `2` usage/setup/fatal shell, `3` deadlock,
-and `4` failure. See [Consensus runs](../guides/consensus-runs.md) and
+Exits: `0` success/shell end; `1` failed smoke invariant; `2` usage/setup/fatal
+shell; `3` noninteractive deadlock; `4` noninteractive failure. See [Consensus runs](../guides/consensus-runs.md) and
 [Terminal safety](../operations/terminal-safety.md).

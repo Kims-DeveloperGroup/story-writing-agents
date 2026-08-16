@@ -135,10 +135,11 @@ class _SmokeBackend:
     """Strict provider-free backend for conversation, retrieval, and consensus."""
 
     def __init__(self, session_id: str, debate_id: str) -> None:
-        """Given run IDs, initialize empty observations without I/O or validation."""
+        """Given run IDs, initialize revision-stage checks and empty observations."""
 
         self.session_id = session_id
         self.debate_id = debate_id
+        self._binding_failed_check = "revision_workflow"
         self.definitions: list[AgentDefinition] = []
         self.requests: list[AgentRequest] = []
         self.conversation_requests: list[ConversationRequest] = []
@@ -155,7 +156,7 @@ class _SmokeBackend:
         """Read and record one definition, returning a local validated binding.
 
         Prompt-file read failures propagate; an invalid definition raises the
-        stable revision invariant, and no provider or durable state is touched.
+        active workflow invariant, and no provider or durable state is touched.
         """
 
         for reference in definition.file_references():
@@ -165,7 +166,8 @@ class _SmokeBackend:
             and definition.language == "EN"
             and definition.system_prompt_file.path.name == "AGENTS.md"
             and definition.system_prompt_file.path.parent.name
-            == definition.agent_id
+            == definition.agent_id,
+            self._binding_failed_check,
         )
         self.definitions.append(definition)
         return _SmokeBoundAgent(self, definition)
@@ -655,6 +657,7 @@ async def _exercise_provider_free_conversation_and_consensus(
     catalog = FilesystemConversationCatalog(workspace)
     event_store = FilesystemConversationEventStore(workspace, catalog=catalog)
     conversation_backend = _SmokeBackend(session_id, debate_id)
+    conversation_backend._binding_failed_check = _CHECK_NAMES[3]
     conversation_runtime = StoryRuntime(
         workspace,
         conversation_backend,
@@ -718,6 +721,7 @@ async def _exercise_provider_free_conversation_and_consensus(
         catalog=resumed_catalog,
     )
     resumed_backend = _SmokeBackend(session_id, debate_id)
+    resumed_backend._binding_failed_check = _CHECK_NAMES[6]
     resumed_runtime = StoryRuntime(
         resumed_workspace,
         resumed_backend,
@@ -784,6 +788,7 @@ async def _exercise_provider_free_conversation_and_consensus(
         _CHECK_NAMES[7],
     )
     resumed_backend.expected_consensus_context = context_snapshot
+    resumed_backend._binding_failed_check = _CHECK_NAMES[8]
     debate_result = await resumed_runtime.run_prompt(
         session_id,
         _PROMPT,
