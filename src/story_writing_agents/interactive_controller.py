@@ -14,11 +14,18 @@ from .cli_context import (
 )
 from .conversation_search import (
     CONVERSATION_MEMORY_POLICY,
+    ConversationCitation,
     ConversationMemoryService,
     ConversationSearchQuery,
     ConversationSearchResult,
     ConversationSearchScope,
     ConversationTranscriptPage,
+)
+from .conversation_retrieval import (
+    ConversationRetrievalProgressEvent,
+    ConversationRetrievalProgressPhase,
+    ConversationRetrievalResult,
+    ConversationRetrievalSource,
 )
 from .conversations import (
     ConversationCatalog,
@@ -31,6 +38,9 @@ from .errors import (
     ConfigurationError,
     ConversationExistsError,
     ConversationNotFoundError,
+    ConversationRetrievalBudgetError,
+    ConversationRetrievalObserverError,
+    ConversationRetrievalSemanticError,
     ProgressObserverError,
     SessionExistsError,
     SessionIdError,
@@ -55,7 +65,6 @@ from .interactive_terminal import (
     TerminalMessageKind,
 )
 from .models import (
-    ConversationResult,
     DebateContextMode,
     DebateContextRequest,
     DebateFailureKind,
@@ -839,15 +848,17 @@ class InteractiveController:
         )
 
     def _run_advisory_turn(self, action: InteractiveAction) -> None:
-        """Run one selected-conversation turn through the retained runtime.
+        """Run one selected-conversation retrieval turn through the runtime.
 
         ``MESSAGE`` uses the sticky target and ``ROUTED_MESSAGE`` uses its
         one-shot canonical agent without changing sticky state. The method
-        revalidates attachment and selection, renders safe progress, performs
-        exactly one synchronous ``asyncio.run`` boundary, and delegates durable
-        turn outcome ownership to ``StoryRuntime``. Typed expected failures
-        return to the prompt; invalid results or uncertain ownership abort into
-        the controller's existing detach/close cleanup boundary.
+        revalidates attachment and selection, passes the retained attachment-
+        scoped memory service, validates and renders content-free progress,
+        performs exactly one synchronous ``asyncio.run`` boundary, then renders
+        the validated answer and sources. ``StoryRuntime`` remains the sole
+        durability owner. Typed semantic and budget failures return to the
+        prompt; observer, invalid-result, or uncertain ownership failures abort
+        into the existing detach/close cleanup boundary.
         """
 
         if self._attached_session_id is None:
@@ -883,28 +894,57 @@ class InteractiveController:
             f"Waiting for {agent_id}.",
         )
 
+        memory_service = self._conversation_memory_service
+        if type(memory_service) is not ConversationMemoryService:
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            )
+        progress_events: list[ConversationRetrievalProgressEvent] = []
+
+        def accept_and_render_progress(
+            event: ConversationRetrievalProgressEvent,
+        ) -> None:
+            """Validate, render, and retain one retrieval progress event."""
+
+            self._accept_conversation_retrieval_progress(
+                event,
+                expected_session_id=session_id,
+                expected_conversation_id=selected.conversation_id,
+                expected_agent_id=agent_id,
+                events=progress_events,
+            )
+
         try:
             result = asyncio.run(
-                self._runtime.converse(
+                self._runtime.converse_with_retrieval(
                     session_id,
                     selected.conversation_id,
                     agent_id,
                     action.text,
+                    memory_service=memory_service,
+                    progress_sink=accept_and_render_progress,
                 )
             )
+        except ConversationRetrievalObserverError:
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            ) from None
         except Exception as exc:
             self._present_advisory_turn_failure(exc)
             return
 
-        if (
-            type(result) is not ConversationResult
-            or result.session_id != session_id
-            or result.conversation_id != selected.conversation_id
-            or result.agent_id != agent_id
-        ):
+        try:
+            result = self._validated_conversation_retrieval_result(
+                result,
+                expected_session_id=session_id,
+                expected_conversation_id=selected.conversation_id,
+                expected_agent_id=agent_id,
+                progress_events=progress_events,
+            )
+        except (AttributeError, TypeError, ValueError):
             raise _ControllerAbort(
                 InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
-            )
+            ) from None
         if result.context.truncated:
             event_count = len(result.context.events)
             retained_turns = result.context.retained_turns
@@ -921,6 +961,228 @@ class InteractiveController:
                 ),
             )
         self._terminal.write_agent(agent_id, result.content)
+        self._render_conversation_retrieval_sources(result.sources)
+
+    def _accept_conversation_retrieval_progress(
+        self,
+        event: ConversationRetrievalProgressEvent,
+        *,
+        expected_session_id: str,
+        expected_conversation_id: str,
+        expected_agent_id: str,
+        events: list[ConversationRetrievalProgressEvent],
+    ) -> None:
+        """Validate, render, and retain one trusted retrieval progress fact.
+
+        The exact event is reconstructed and correlated with this advisory turn.
+        Search/read started-completed pairs and their action indexes must follow
+        the bounded phase order. Rendering mutates terminal output only; invalid
+        input or writer failure propagates through the runtime observer boundary
+        and cannot add transcript events here.
+        """
+
+        if type(event) is not ConversationRetrievalProgressEvent:
+            raise TypeError(
+                "retrieval progress sink requires a "
+                "ConversationRetrievalProgressEvent"
+            )
+        try:
+            canonical = ConversationRetrievalProgressEvent(
+                session_id=event.session_id,
+                conversation_id=event.conversation_id,
+                turn_id=event.turn_id,
+                agent_id=event.agent_id,
+                action_index=event.action_index,
+                phase=event.phase,
+                search_hit_count=event.search_hit_count,
+                transcript_turn_count=event.transcript_turn_count,
+                transcript_event_count=event.transcript_event_count,
+                observation_utf8_bytes=event.observation_utf8_bytes,
+                truncated=event.truncated,
+            )
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise TypeError("retrieval progress event is invalid") from exc
+        if (
+            canonical.session_id != expected_session_id
+            or canonical.conversation_id != expected_conversation_id
+            or canonical.agent_id != expected_agent_id
+        ):
+            raise ValueError("retrieval progress identity does not match the turn")
+
+        previous = events[-1] if events else None
+        if previous is None:
+            if (
+                canonical.phase
+                is not ConversationRetrievalProgressPhase.SEARCH_STARTED
+                or canonical.action_index != 1
+            ):
+                raise ValueError("retrieval progress must begin with search action 1")
+        elif canonical.turn_id != previous.turn_id:
+            raise ValueError("retrieval progress turn identity changed")
+        elif previous.phase is ConversationRetrievalProgressPhase.SEARCH_STARTED:
+            if (
+                canonical.phase
+                is not ConversationRetrievalProgressPhase.SEARCH_COMPLETED
+                or canonical.action_index != previous.action_index
+            ):
+                raise ValueError("retrieval search progress pair is invalid")
+        elif previous.phase is ConversationRetrievalProgressPhase.READ_STARTED:
+            if (
+                canonical.phase
+                is not ConversationRetrievalProgressPhase.READ_COMPLETED
+                or canonical.action_index != previous.action_index
+            ):
+                raise ValueError("retrieval read progress pair is invalid")
+        else:
+            expected_index = previous.action_index + 1
+            if canonical.action_index != expected_index:
+                raise ValueError("retrieval progress action index is not sequential")
+            if previous.phase is ConversationRetrievalProgressPhase.SEARCH_COMPLETED:
+                allowed = {
+                    ConversationRetrievalProgressPhase.SEARCH_STARTED,
+                    ConversationRetrievalProgressPhase.READ_STARTED,
+                }
+            else:
+                assert (
+                    previous.phase
+                    is ConversationRetrievalProgressPhase.READ_COMPLETED
+                )
+                allowed = {ConversationRetrievalProgressPhase.READ_STARTED}
+            if canonical.phase not in allowed:
+                raise ValueError("retrieval progress phase order is invalid")
+
+        self._render_conversation_retrieval_progress(canonical)
+        events.append(canonical)
+
+    def _render_conversation_retrieval_progress(
+        self,
+        event: ConversationRetrievalProgressEvent,
+    ) -> None:
+        """Render one validated content-free fact with the fixed context copy.
+
+        Only decimal typed counters, the fixed phase wording, and ``yes``/``no``
+        truncation are written through the existing sanitized status renderer.
+        No conversation transcript, controller state, or provider resource is
+        mutated; terminal writer failures propagate unchanged.
+        """
+
+        phase = event.phase
+        if phase is ConversationRetrievalProgressPhase.SEARCH_STARTED:
+            text = f"Retrieval search action {event.action_index} started."
+        elif phase is ConversationRetrievalProgressPhase.SEARCH_COMPLETED:
+            text = (
+                f"Retrieval search action {event.action_index} completed: "
+                f"{event.search_hit_count} hits; "
+                f"{event.observation_utf8_bytes} observation bytes; "
+                f"truncated: {'yes' if event.truncated else 'no'}."
+            )
+        elif phase is ConversationRetrievalProgressPhase.READ_STARTED:
+            text = f"Retrieval read action {event.action_index} started."
+        else:
+            assert phase is ConversationRetrievalProgressPhase.READ_COMPLETED
+            text = (
+                f"Retrieval read action {event.action_index} completed: "
+                f"{event.transcript_turn_count} turns; "
+                f"{event.transcript_event_count} events; "
+                f"{event.observation_utf8_bytes} observation bytes; "
+                f"truncated: {'yes' if event.truncated else 'no'}."
+            )
+        self._terminal.write_status(TerminalMessageKind.CONTEXT, text)
+
+    @staticmethod
+    def _validated_conversation_retrieval_result(
+        value: object,
+        *,
+        expected_session_id: str,
+        expected_conversation_id: str,
+        expected_agent_id: str,
+        progress_events: list[ConversationRetrievalProgressEvent],
+    ) -> ConversationRetrievalResult:
+        """Return one exact correlated result after pure deep reconstruction.
+
+        Sources and citations are copied into exact built-in contracts, progress
+        must end on a completed pair when present, and its turn must match the
+        result. No output, provider state, controller state, or transcript is
+        mutated; invalid collaborator values raise ``TypeError`` or ``ValueError``.
+        """
+
+        if type(value) is not ConversationRetrievalResult:
+            raise TypeError("runtime returned an invalid retrieval result")
+        sources: list[ConversationRetrievalSource] = []
+        if type(value.sources) is not tuple:
+            raise TypeError("retrieval result sources must be a tuple")
+        for source in value.sources:
+            if type(source) is not ConversationRetrievalSource:
+                raise TypeError("retrieval result source is invalid")
+            citation = source.citation
+            if type(citation) is not ConversationCitation:
+                raise TypeError("retrieval result citation is invalid")
+            sources.append(
+                ConversationRetrievalSource(
+                    subject=source.subject,
+                    citation=ConversationCitation(
+                        session_id=citation.session_id,
+                        conversation_id=citation.conversation_id,
+                        turn_id=citation.turn_id,
+                        sequence=citation.sequence,
+                        event_kind=citation.event_kind,
+                    ),
+                )
+            )
+        canonical = ConversationRetrievalResult(
+            session_id=value.session_id,
+            conversation_id=value.conversation_id,
+            turn_id=value.turn_id,
+            agent_id=value.agent_id,
+            content=value.content,
+            context=value.context,
+            sources=tuple(sources),
+        )
+        if (
+            canonical.session_id != expected_session_id
+            or canonical.conversation_id != expected_conversation_id
+            or canonical.agent_id != expected_agent_id
+        ):
+            raise ValueError("retrieval result identity does not match its turn")
+        if canonical.sources and not progress_events:
+            raise ValueError("retrieval sources require completed search progress")
+        if progress_events:
+            final_progress = progress_events[-1]
+            if final_progress.phase not in {
+                ConversationRetrievalProgressPhase.SEARCH_COMPLETED,
+                ConversationRetrievalProgressPhase.READ_COMPLETED,
+            }:
+                raise ValueError("retrieval progress ended before completion")
+            if final_progress.turn_id != canonical.turn_id:
+                raise ValueError("retrieval progress turn does not match its result")
+        return canonical
+
+    def _render_conversation_retrieval_sources(
+        self,
+        sources: tuple[ConversationRetrievalSource, ...],
+    ) -> None:
+        """Render validated ordered sources through existing sanitized status I/O.
+
+        Subject-only citations omit event fields; exact event citations include
+        turn, sequence, and event-kind values. Rendering is non-durable and does
+        not mutate selection, routing, memory, or transcripts. Invalid sources
+        and terminal writer failures propagate to fatal controller cleanup.
+        """
+
+        for ordinal, source in enumerate(sources, start=1):
+            citation = source.citation
+            text = (
+                f"Source {ordinal}: Subject: {source.subject} | "
+                f"Conversation: {citation.conversation_id}"
+            )
+            if citation.sequence is not None:
+                assert citation.turn_id is not None
+                assert citation.event_kind is not None
+                text += (
+                    f" | Turn: {citation.turn_id} | Sequence: "
+                    f"{citation.sequence} | Kind: {citation.event_kind.value}"
+                )
+            self._terminal.write_status(TerminalMessageKind.CONTEXT, text)
 
     def _run_consensus_action(self, action: InteractiveAction) -> bool:
         """Execute one interactive prompt, fresh prompt, or draft-file debate.
@@ -1429,6 +1691,12 @@ class InteractiveController:
 
         if isinstance(failure, SessionIdError):
             code = InteractiveErrorCode.SESSION_INVALID
+        elif isinstance(failure, ConversationRetrievalSemanticError):
+            code = InteractiveErrorCode.RETRIEVAL_INVALID
+        elif isinstance(failure, ConversationRetrievalBudgetError):
+            code = InteractiveErrorCode.RETRIEVAL_BUDGET_EXHAUSTED
+        elif isinstance(failure, ConversationRetrievalObserverError):
+            code = InteractiveErrorCode.INTERNAL_ERROR
         elif isinstance(failure, SessionExistsError):
             code = InteractiveErrorCode.SESSION_EXISTS
         elif isinstance(failure, SessionNotFoundError):

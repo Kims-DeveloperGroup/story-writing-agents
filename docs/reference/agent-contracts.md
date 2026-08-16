@@ -1,7 +1,8 @@
 # Agent contracts
 
 > **Availability:** these models are Python APIs. Debate requests can carry an
-> optional conversation snapshot; advisory turns retain their separate request.
+> optional conversation snapshot; one-step and retrieval turns use separate,
+> compatible request families.
 
 Key terms: **definition**—stable context bound to one agent; **request**—dynamic
 data for one provider call; **blackboard**—public debate messages;
@@ -76,14 +77,19 @@ ConversationRequest(session_id: str, conversation_id: str, turn_id: str,
                     context: ConversationContextWindow)
 ConversationReply(session_id: str, conversation_id: str,
                   turn_id: str, content: str)
+ConversationRetrievalRequest(*, session_id: str, conversation_id: str,
+    turn_id: str, agent_id: str, content: str, context: ConversationContextWindow)
+ConversationRetrievalReply(*, session_id: str, conversation_id: str,
+    turn_id: str, content: str, sources: tuple[ConversationRetrievalSource, ...])
 ```
 
-Both are frozen and slotted with no defaults. IDs are safe, request agents are
+The one-step pair is frozen and slotted with no defaults. IDs are safe, agents are
 canonical, and content is nonempty exact strict UTF-8. `context` must be a
 bounded, increasing window of complete turns from the same session and
-conversation and must exclude the current turn. The reply correlates all IDs.
-See [Conversation transcripts](conversation-transcripts.md) for the window and
-[Runtime API](runtime-api.md#results-and-advisory-turns) for persistence.
+conversation and exclude the current turn. Retrieval values are keyword-only;
+their reply adds ordered validated sources without changing the one-step pair.
+See [Conversation transcripts](conversation-transcripts.md) for windows and
+[Bounded retrieval](conversation-retrieval.md) for actions and persistence.
 
 ## Debate reply
 

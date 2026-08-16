@@ -17,6 +17,7 @@ The workspace uses separate inspectable files rather than a database:
 | Provider manifest and lease | `AgentBackend` |
 | Session/conversation selections | CLI context helpers |
 | Conversation metadata and transcript | Catalog and event-store adapters |
+| Retrieval actions, observations, progress, sources | Process/terminal only |
 | Sticky interactive target | Controller memory only |
 | Approved manuscript | Workspace artifact commit |
 
@@ -98,10 +99,12 @@ in fixed order, then exclusively creates the manuscript; cross-file rollback is
 best effort. No sidecar, log, selection, transcript, result, state, and artifact
 set forms one database transaction.
 
-Advisory turns separately append a user event before provider work and then a
-reply or sanitized runtime error. An unmatched user event can remain after hard
-interruption and is excluded from later complete-turn context. Consensus runs
-read a snapshot but never append the transcript.
+One-step and retrieval turns append exactly one user event before provider work,
+then one reply or sanitized runtime error. Retrieval adds no control, source,
+sidecar, catalog, selection, debate, state, or artifact record; compatible
+provider-thread metadata may update. Hard interruption can leave an unmatched
+user event, which later context excludes. Consensus snapshots never append the
+transcript.
 
 The canonical path tree is in [Session storage](../reference/configuration/session-storage.md).
 Accessor signatures are in [Workspace API](../reference/workspace-api.md),

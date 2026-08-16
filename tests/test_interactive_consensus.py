@@ -14,6 +14,11 @@ from story_writing_agents import (
     AgentRequest,
     ConversationReply,
     ConversationRequest,
+    ConversationRetrievalActionHandler,
+    ConversationRetrievalActionKind,
+    ConversationRetrievalAnswerAction,
+    ConversationRetrievalReply,
+    ConversationRetrievalRequest,
     DebateContextMode,
     DebateFailureKind,
     DebateProgressEvent,
@@ -855,7 +860,7 @@ class RecordingMixedBoundAgent:
     def __init__(
         self,
         definition: AgentDefinition,
-        conversation_requests: list[ConversationRequest],
+        conversation_requests: list[ConversationRetrievalRequest],
         debate_requests: list[AgentRequest],
         loops: list[asyncio.AbstractEventLoop],
     ) -> None:
@@ -867,7 +872,7 @@ class RecordingMixedBoundAgent:
     async def converse(self, request: ConversationRequest) -> ConversationReply:
         """Return one correlated visible advisory reply."""
 
-        self.conversation_requests.append(request)
+        self.conversation_requests.append(request)  # type: ignore[arg-type]
         self.loops.append(asyncio.get_running_loop())
         return ConversationReply(
             request.session_id,
@@ -875,6 +880,30 @@ class RecordingMixedBoundAgent:
             request.turn_id,
             f"reply:{request.content}",
         )
+
+    async def converse_with_retrieval(
+        self,
+        request: ConversationRetrievalRequest,
+        handler: ConversationRetrievalActionHandler,
+    ) -> ConversationRetrievalReply:
+        """Resolve one direct answer through the runtime retrieval handler."""
+
+        self.conversation_requests.append(request)
+        self.loops.append(asyncio.get_running_loop())
+        outcome = handler.handle_conversation_retrieval_action(
+            ConversationRetrievalAnswerAction(
+                kind=ConversationRetrievalActionKind.ANSWER,
+                session_id=request.session_id,
+                conversation_id=request.conversation_id,
+                turn_id=request.turn_id,
+                action_index=1,
+                content=f"reply:{request.content}",
+                citation_ids=(),
+            )
+        )
+        if type(outcome) is not ConversationRetrievalReply:
+            raise AssertionError("direct answer did not produce a retrieval reply")
+        return outcome
 
     async def invoke(self, request: AgentRequest) -> AgentReply:
         """Approve one debate immediately while retaining request evidence."""
@@ -1091,7 +1120,7 @@ class RealRetainedConsensusRuntimeTests(InteractiveConversationTestCase):
             catalog=catalog,
             runtime=_REAL_RUNTIME,
         )
-        conversation_requests: list[ConversationRequest] = []
+        conversation_requests: list[ConversationRetrievalRequest] = []
         debate_requests: list[AgentRequest] = []
         loops: list[asyncio.AbstractEventLoop] = []
         definitions: list[AgentDefinition] = []

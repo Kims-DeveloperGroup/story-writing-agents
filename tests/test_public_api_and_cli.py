@@ -22,6 +22,9 @@ from story_writing_agents import cli as cli_module
 from story_writing_agents import (
     AGENT_SPECS,
     ConversationEventStore,
+    ConversationMemoryService,
+    ConversationRetrievalProgressSink,
+    ConversationRetrievalResult,
     ConversationResult,
     DebateContextMode,
     DebateContextRequest,
@@ -609,6 +612,100 @@ class PublicApiTests(unittest.TestCase):
                     get_type_hints(method)["return"],
                     ConversationResult,
                 )
+
+    def test_retrieval_runtime_signatures_exports_and_legacy_compatibility_are_exact(
+        self,
+    ) -> None:
+        cases = (
+            (
+                StoryRuntime.converse_with_retrieval,
+                (
+                    "self",
+                    "session_id",
+                    "conversation_id",
+                    "agent_id",
+                    "text",
+                    "memory_service",
+                    "progress_sink",
+                ),
+                5,
+            ),
+            (
+                RuntimeSession.converse_with_retrieval,
+                (
+                    "self",
+                    "conversation_id",
+                    "agent_id",
+                    "text",
+                    "memory_service",
+                    "progress_sink",
+                ),
+                4,
+            ),
+        )
+        for method, names, positional_count in cases:
+            with self.subTest(method=method.__qualname__):
+                signature = inspect.signature(method)
+                self.assertEqual(tuple(signature.parameters), names)
+                parameters = tuple(signature.parameters.values())
+                self.assertTrue(
+                    all(
+                        parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+                        and parameter.default is inspect.Parameter.empty
+                        for parameter in parameters[:positional_count]
+                    )
+                )
+                memory = signature.parameters["memory_service"]
+                self.assertIs(memory.kind, inspect.Parameter.KEYWORD_ONLY)
+                self.assertIs(memory.default, inspect.Parameter.empty)
+                progress = signature.parameters["progress_sink"]
+                self.assertIs(progress.kind, inspect.Parameter.KEYWORD_ONLY)
+                self.assertIsNone(progress.default)
+                hints = get_type_hints(method)
+                self.assertIs(hints["memory_service"], ConversationMemoryService)
+                self.assertEqual(
+                    hints["progress_sink"],
+                    ConversationRetrievalProgressSink | None,
+                )
+                self.assertIs(hints["return"], ConversationRetrievalResult)
+
+        required = {
+            "CONVERSATION_RETRIEVAL_POLICY",
+            "ConversationRetrievalAction",
+            "ConversationRetrievalActionHandler",
+            "ConversationRetrievalActionKind",
+            "ConversationRetrievalAnswerAction",
+            "ConversationRetrievalObservation",
+            "ConversationRetrievalPolicy",
+            "ConversationRetrievalProgressEvent",
+            "ConversationRetrievalProgressPhase",
+            "ConversationRetrievalProgressSink",
+            "ConversationRetrievalReadAction",
+            "ConversationRetrievalReadObservation",
+            "ConversationRetrievalReply",
+            "ConversationRetrievalRequest",
+            "ConversationRetrievalResult",
+            "ConversationRetrievalSearchAction",
+            "ConversationRetrievalSearchItem",
+            "ConversationRetrievalSearchObservation",
+            "ConversationRetrievalSource",
+            "ConversationRetrievalTranscriptEvent",
+            "ConversationRetrievalError",
+            "ConversationRetrievalSemanticError",
+            "ConversationRetrievalBudgetError",
+            "ConversationRetrievalObserverError",
+        }
+        self.assertTrue(required.issubset(story_writing_agents.__all__))
+        self.assertFalse(
+            hasattr(
+                story_writing_agents,
+                "serialize_conversation_retrieval_observation",
+            )
+        )
+        self.assertNotIn(
+            "serialize_conversation_retrieval_observation",
+            story_writing_agents.__all__,
+        )
 
     def test_interactive_parser_exports_use_the_supported_package_facade(
         self,

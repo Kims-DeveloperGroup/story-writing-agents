@@ -17,10 +17,9 @@ writing approved story text; the runtime never invokes Git.
 
 `StoryRuntime` owns workflow validation, sequencing, concurrency, and reply
 validation. For debates it also owns reservation, consensus, blackboard,
-owner-isolated history, and final artifact coordination. For one advisory turn
-it owns preflight, a per-conversation lock, context read, user-before-provider
-append, and one reply or safe error append. Exact rules belong to the
-[Runtime API](../reference/runtime-api.md#one-conversation-turn).
+owner-isolated history, and artifacts. For advisory turns it owns conversation
+locking, context and transcript order, retrieval scope/actions/budgets, and the
+final reply or safe error. See the [Runtime API](../reference/runtime-api.md#one-conversation-turn).
 
 `AgentBackend` owns provider routes, Codex preflight, prompt staging,
 story-session leases, provider processes, and resumable thread metadata. A
@@ -50,18 +49,21 @@ provider calls finish in another order.
 | `cli_context` | Saved session and per-session conversation selections |
 | `ConversationCatalog` | Conversation identity, subject, archive status, and ordered metadata |
 | `ConversationMemoryService` | One attachment-scoped search/read authorization |
+| `conversation_retrieval` | Immutable actions, observations, policy, and runtime/backend handler port |
 | `ConversationEventStore` | Authoritative events and complete-turn context |
 | `InteractiveTerminal` | Synchronous input and safe primitive presentation |
-| `StoryRuntime` | Debate orchestration and advisory provider/transcript sequence |
-| `AgentBackend` | Session leases, provider routes, threads, and processes |
+| `StoryRuntime` | Debate/advisory orchestration and retrieval authority |
+| `AgentBackend` | Sessions, threads, provider processes, and retrieval call loop |
 
 ```mermaid
 flowchart LR
     accTitle: Interactive conversation ownership
-    accDescr: The controller shares one event store with the retained runtime and the memory service scoped to the attached session.
+    accDescr: The controller passes its attached-session memory service to the runtime, which alone authorizes provider-requested reads.
     C[Interactive controller] --> R[Retained StoryRuntime]
     C --> M[Attachment-scoped memory service]
     C --> K[Conversation catalog]
+    R -->|authorized search and read| M
+    R --> B[Agent backend]
     R --> E[One shared event store]
     M --> E
     M --> K
@@ -79,22 +81,23 @@ Conversation create, use, rename, and archive do not replace it; their
 consequence is simply that later reads observe current catalog and transcript
 data in the same attached-session scope.
 
-The controller calls only `StoryRuntime.converse()` for accepted content and
-delegates result data to `ConversationMemoryService.search()` or
-`read_transcript()`. Catalog reads resolve and validate identities. The
-controller never calls the event store directly, invokes a bound agent, or
-duplicates a transcript read.
+For advisory content the controller passes its exact memory service to
+`StoryRuntime.converse_with_retrieval()`. Runtime alone calls its search/read
+methods; backend receives only the handler protocol and framed observations.
+Direct `/search` and `/transcript` remain controller-to-service local reads.
+Controller never calls the event store or a bound agent directly.
 
 ## Dependency direction
 
-The CLI creates terminal, backend, and controller. The controller depends
-downward on backend, context, catalog, parser, terminal, runtime, memory, model,
-and workspace contracts; parser and terminal do not depend back on it.
-Orchestration depends on provider-neutral models, event contracts, and
-workspace operations. The production graph remains acyclic.
+The CLI creates terminal, backend, and controller. Controller depends downward
+on runtime and presentation/storage contracts. Runtime and backend both depend
+on provider-neutral retrieval contracts; only runtime depends on memory search.
+The handler port prevents backend-to-orchestrator access, keeping the graph
+acyclic.
 
 This supports deterministic test collaborators but is not a dynamically
 loaded plugin system. Exact public imports live in
 [Package API](../reference/package-api.md); conversation contracts live in
-[Conversation search](../reference/conversation-search.md) and
-[Conversation transcripts](../reference/conversation-transcripts.md).
+[Conversation search](../reference/conversation-search.md),
+[Conversation transcripts](../reference/conversation-transcripts.md), and
+[Bounded retrieval](../reference/conversation-retrieval.md).

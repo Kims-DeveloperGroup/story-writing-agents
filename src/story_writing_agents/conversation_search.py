@@ -836,6 +836,12 @@ class ConversationMemoryService:
             else search
         )
 
+    @property
+    def scope(self) -> ConversationSearchScope:
+        """Return the immutable authorized scope without I/O or mutation."""
+
+        return self._scope
+
     def search(self, query: ConversationSearchQuery) -> ConversationSearchResult:
         """Return bounded cited hits from the authorized current session."""
 

@@ -1,7 +1,7 @@
 # Interactive terminal component
 
 > **Availability:** this module-supported component presents shell input,
-> search hits, transcript events, roster data, and routed-turn output.
+> search/transcript records, retrieval progress/sources, and routed replies.
 > Composition remains a module API and is not shell-dispatched.
 
 Key terms: **callback**—borrowed synchronous I/O; **record**—one string passed
@@ -60,12 +60,10 @@ f"compose[chat:{alias}:{line_number}]> "
 f"compose[run:{line_number}]> "
 ```
 
-Canonical agent IDs are required. Attached scope shows session, optional
-conversation handle and subject, and sticky target. Conversation rows show
-handle, lifecycle, selection, and subject. The roster derives four entries
-from parser-owned route metadata. Help derives from parser-owned `COMMANDS`.
-Confirmation uses `[Y/n] ` or `[y/N] ` and accepts `y/yes/n/no`; blank chooses
-the default. Ctrl-C and EOF return typed results.
+Canonical agents are required. Attached scope shows session, optional
+conversation, subject, and sticky target. Rows show handle, lifecycle,
+selection, and subject. Roster/help derive from parser metadata. Confirmation
+uses `[Y/n] ` or `[y/N] `; blank chooses the default. Ctrl-C/EOF are typed.
 
 ## Exact search and transcript records
 
@@ -95,19 +93,19 @@ Subject matches use the conversation-only citation; transcript matches require
 the complete turn/sequence/kind trio. Primitive renderers require exact safe
 IDs, positive integer sequences, nonblank metadata, and nonempty content.
 
-Transcript content may consist only of whitespace. Internal empty lines and a
-trailing LF remain visible lines in the same event record; later source lines
-use hanging indentation under `[content] `. Controls become visible escapes,
-so tab is `\x09` and escape is `\x1b`. The terminal neither trims content nor
-combines events. See [Terminal safety](../operations/terminal-safety.md).
+Transcript content may be whitespace-only. Empty lines and trailing LF remain
+in one event record under `[content] `. Controls become visible escapes, such
+as tab `\x09` and escape `\x1b`; events are neither trimmed nor combined. See
+[Terminal safety](../operations/terminal-safety.md).
 
 ## Errors and other output
 
-The immutable 31-code registry covers terminal/workspace, session,
-conversation/transcript, provider, consensus/artifact, and cleanup failures.
-Search/query parsing uses `command_invalid`; transcript reads can use
-`conversation_invalid`, `conversation_not_found`, `conversation_ambiguous`,
-`workspace_invalid`, `workspace_unsafe`, or `transcript_invalid`.
+The immutable 33-code registry covers terminal/workspace, session,
+conversation/transcript/retrieval, provider, consensus/artifact, and cleanup.
+Retrieval adds `retrieval_invalid` and `retrieval_budget_exhausted`; observer
+failure maps to `internal_error`. Progress and source records reuse
+`write_status(TerminalMessageKind.CONTEXT, ...)`. Exact copy and recovery live in
+[Bounded retrieval](conversation-retrieval.md).
 
 The controller chooses categories; the terminal never accepts or classifies an
 exception. `write_error()` redacts supplied secret variants, limits summary and

@@ -427,6 +427,17 @@ class ConversationSearchBehaviorTests(unittest.TestCase):
             self.store,
         )
 
+    def test_memory_service_scope_is_exact_immutable_and_io_free(self) -> None:
+        reads_before = list(self.store.read_calls)
+        appends_before = self.store.append_calls
+        self.assertIs(self.service.scope, self.scope)
+        self.assertIs(type(self.service.scope), ConversationSearchScope)
+        self.assertEqual(self.service.scope.session_id, "session_a")
+        self.assertEqual(self.store.read_calls, reads_before)
+        self.assertEqual(self.store.append_calls, appends_before)
+        with self.assertRaises(AttributeError):
+            self.service.scope = ConversationSearchScope("other")  # type: ignore[misc]
+
     def test_unicode_literal_matching_and_adapter_order_are_deterministic(self) -> None:
         first = self.catalog.create("session_a", "ＣＯＵＮＣＩＬ\u3000Vessel")
         second = self.catalog.create("session_a", "Council vessel notes")

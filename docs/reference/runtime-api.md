@@ -1,13 +1,11 @@
 # Runtime API
 
-> **Availability:** `StoryRuntime` runs advisory turns and debates. Debate calls
-> optionally capture selected-conversation context and synchronously report typed
-> progress; the result shape is unchanged.
+> **Availability:** `StoryRuntime` provides unchanged one-step and additive
+> bounded-retrieval turns, plus context-aware debates.
 
-Key terms: **legacy run**—a call without `conversation_context`; **included
+Key terms: **legacy run**—no `conversation_context`; **included
 snapshot**—one transcript window reused for a debate; **progress
-sink**—a synchronous observer; **terminal durability**—result and state saved
-before terminal progress is delivered.
+sink**—a synchronous observer; **retrieval turn**—one bounded answer.
 
 ## Construction and entry points
 
@@ -23,6 +21,7 @@ StoryRuntime.inspect_debate(session_id: str, debate_id: str) -> dict[str, Any]
 StoryRuntime.inspect_debate_context(session_id: str, debate_id: str) -> dict[str, Any] | None
 await StoryRuntime.converse(session_id: str, conversation_id: str,
                             agent_id: str, text: str) -> ConversationResult
+await StoryRuntime.converse_with_retrieval(session_id, conversation_id, agent_id, text, *, memory_service, progress_sink=None) -> ConversationRetrievalResult
 await StoryRuntime.run_prompt(session_id: str, prompt: str, *,
     manuscript_name: str | None = None,
     max_debate_rounds: int | None = None, debate_id: str | None = None,
@@ -35,9 +34,9 @@ await StoryRuntime.run_draft(session_id: str, draft: str, *,
     progress_sink: DebateProgressSink | None = None) -> DebateResult
 ```
 
-`RuntimeSession` binds the session ID. Its `run_prompt()` and `run_draft()` use
-the same keyword-only options, defaults, and result type; it also exposes
-`converse()`, `inspect_debate()`, and `inspect_debate_context(debate_id)`.
+`RuntimeSession` binds the session ID. Its `run_prompt()` and `run_draft()` share
+options, defaults, and result type; it also exposes
+both conversation methods, `inspect_debate()`, and `inspect_debate_context()`.
 `Runtime` and `Session` are exact aliases.
 
 ## Debate context
@@ -98,23 +97,24 @@ interruption-observer failure is its cause.
 
 ```python
 DebateResult(session_id: str, debate_id: str, input_kind: InputKind,
-             status: DebateStatus, revision_id: str | None,
-             rounds_completed: int, final_candidate: str | None,
-             latest_candidate: str | None, manuscript_path: str | None,
-             core_updates: tuple[str, ...] = (),
-             messages: tuple[DebateMessage, ...] = (),
+             status: DebateStatus, revision_id: str | None, rounds_completed: int,
+             final_candidate: str | None, latest_candidate: str | None, manuscript_path: str | None,
+             core_updates: tuple[str, ...] = (), messages: tuple[DebateMessage, ...] = (),
              error: str | None = None, action_required: str | None = None)
 ConversationResult(session_id: str, conversation_id: str, turn_id: str,
                    agent_id: str, content: str,
                    context: ConversationContextWindow)
+ConversationRetrievalResult(*, session_id: str, conversation_id: str,
+    turn_id: str, agent_id: str, content: str,
+    context: ConversationContextWindow, sources: tuple[ConversationRetrievalSource, ...])
 ```
 
 Validation, observer errors, cancellation, and uncertain persistence raise.
 Expected debate failures normally return a terminal `failed`
 result. `DebateResult`, its JSON, legacy calls, and CLI exits are unchanged.
 
-`converse()` still reads pre-turn context, appends one user event, makes one
-provider call, and appends one reply or safe runtime error. Debate context does
-not append or modify a transcript. See [Agent contracts](agent-contracts.md)
-for request fields and [Recovery](../operations/recovery-and-limitations.md) for
-operator consequences.
+`converse()` remains one provider call with one user and reply/error pair.
+`converse_with_retrieval()` requires an exact same-session memory service and
+optional synchronous sink. Its actions, sources, locking, and durability are in
+[Bounded conversation retrieval](conversation-retrieval.md). Debate context
+never appends or modifies a transcript.
