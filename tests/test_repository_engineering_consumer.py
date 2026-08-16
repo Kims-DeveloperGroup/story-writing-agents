@@ -45,7 +45,13 @@ def _sha256(data: bytes) -> str:
 
 def _safe_relative_path(value: str) -> PurePosixPath:
     path = PurePosixPath(value)
-    if path.is_absolute() or not path.parts or ".." in path.parts:
+    if (
+        "\\" in value
+        or path.as_posix() != value
+        or path.is_absolute()
+        or not path.parts
+        or ".." in path.parts
+    ):
         raise AssertionError(f"unsafe relative path: {value}")
     return path
 
@@ -55,6 +61,15 @@ class RepositoryEngineeringConsumerTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.lock_bytes = LOCK_PATH.read_bytes()
         cls.lock = json.loads(cls.lock_bytes)
+
+    def test_path_guard_rejects_cross_platform_traversal(self) -> None:
+        self.assertEqual(
+            _safe_relative_path("skills/repository-engineering-bootstrap/SKILL.md"),
+            PurePosixPath("skills/repository-engineering-bootstrap/SKILL.md"),
+        )
+        for unsafe in ("../asset", "..\\..\\asset", "nested\\asset", "nested//asset"):
+            with self.subTest(unsafe=unsafe), self.assertRaises(AssertionError):
+                _safe_relative_path(unsafe)
 
     def test_lock_is_deterministic_and_pins_the_remote_distribution(self) -> None:
         self.assertEqual(
