@@ -41,7 +41,7 @@ __main__ -> cli -> interactive_controller -> agents/backend/cli_context
                  -> backend -> config/conversation_retrieval/workspace/models/errors/agents
                  -> cli_context -> workspace/errors/agents
 
-smoke -> orchestrator/workspace/models/agents
+smoke -> agents/conversation_retrieval/conversation_search/conversations/models/orchestrator/workspace
 directives -> config/workspace/errors/agents
 interactive_commands -> agents
 interactive_terminal -> interactive_commands/agents
@@ -658,12 +658,21 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.smoke`
 
 - **Source:** `src/story_writing_agents/smoke.py`
-- **Responsibility:** Run the provider-free deterministic CLI diagnostic.
+- **Responsibility:** Run the provider-free deterministic CLI diagnostic across
+  subject catalog, transcript, search, retrieval, fresh-runtime continuity, and
+  selected-context consensus behavior.
 - **Supported surface:** Internal `run_smoke`; no package-supported API.
-- **Direct internal dependencies:** `agents`, `models`, `orchestrator`, and
+- **Direct internal dependencies:** `agents`, `conversation_retrieval`,
+  `conversation_search`, `conversations`, `models`, `orchestrator`, and
   `workspace`.
-- **State, resources, and side effects:** Creates a temporary or explicitly
-  retained workspace and exercises normal runtime persistence.
+- **State, resources, and side effects:** Creates a unique temporary or
+  explicitly retained workspace diagnostic with a session directive, two
+  conversation metadata and transcript sets, bounded search, transcript-read,
+  and retrieval activity, trusted in-memory nonpersistent retrieval progress,
+  an immutable included-context sidecar, debate and agent state, a result, and
+  a manuscript; verifies core-document bytes. Temporary mode removes the
+  workspace after normal return, while explicit mode retains plaintext
+  diagnostics.
 - **Primary verification/documentation:** `tests/test_smoke_cli.py`,
   `docs/guides/smoke-test.md`, and `docs/reference/cli.md`.
 
