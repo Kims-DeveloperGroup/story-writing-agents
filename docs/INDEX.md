@@ -5,7 +5,8 @@ Use this index to find one canonical answer instead of searching a long manual.
 > **Availability:** bare `story` and `story chat` open the installed TTY shell.
 > It manages story sessions and subject conversations, routes single-line
 > retrieval-enabled turns, searches and reads transcripts, and runs
-> selected-conversation consensus. `/history` and standalone artifact commands remain separate.
+> selected-conversation consensus. It also provides global help/status,
+> attached directives and safe inspection, and selected history.
 
 ## Availability matrix
 
@@ -14,6 +15,8 @@ Use this index to find one canonical answer instead of searching a long manual.
 | Initialize a workspace; run or inspect a debate | Installed CLI and Python API |
 | Start or end a provider session | Installed CLI and Python API |
 | Open the TTY shell; list, create, resume, switch, or end sessions | Bare `story` or `story chat` |
+| Show registry help or shell status | Global in the installed shell |
+| Apply runtime directives; safely inspect sessions or debates | Attached shell; no conversation selection required |
 | Create, list, select, rename, or archive subject conversations | Installed shell after session attachment; catalog Python API |
 | List or target agents; send ordinary, `@AGENT`, or `/say` turns | Installed shell; a selected active conversation is required for turns |
 | Strict create/resume/attach/detach session lifecycle | Python API; used by the installed shell |
@@ -24,7 +27,8 @@ Use this index to find one canonical answer instead of searching a long manual.
 | Ask an agent to retrieve cited conversation history | Selected shell conversation; additive Python runtime API; active records in the current session only |
 | Persist and send one explicitly addressed one-step turn | Existing `StoryRuntime.converse()` Python API |
 | Run consensus with included, fresh, or draft-file input | Selected active shell conversation; noninteractive CLI and Python API remain available |
-| History and standalone artifact commands | Not implemented in the shell |
+| Show one selected transcript snapshot and context accounting | Attached shell `/history`; active selection required |
+| Standalone artifact commands | Not implemented in the shell |
 
 ## Start and concepts
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-from .agents import LEAD_ORCHESTRATOR
+from .agents import LEAD_ORCHESTRATOR, ROSTER
 from .backend import AgentBackend
 from .cli_context import (
     CliContext,
@@ -28,10 +28,14 @@ from .conversation_retrieval import (
     ConversationRetrievalSource,
 )
 from .conversations import (
+    CONVERSATION_CONTEXT_POLICY,
     ConversationCatalog,
+    ConversationContextWindow,
+    ConversationEvent,
     ConversationMetadata,
     ConversationStatus,
     normalize_conversation_subject,
+    select_bounded_conversation_context,
 )
 from .errors import (
     BackendProtocolError,
@@ -41,6 +45,7 @@ from .errors import (
     ConversationRetrievalBudgetError,
     ConversationRetrievalObserverError,
     ConversationRetrievalSemanticError,
+    DirectiveError,
     ProgressObserverError,
     SessionExistsError,
     SessionIdError,
@@ -50,6 +55,7 @@ from .errors import (
     WorkspaceSecurityError,
 )
 from .interactive_commands import (
+    AGENT_ROUTES,
     ActionKind,
     InteractiveAction,
     parse_interactive_line,
@@ -91,6 +97,9 @@ _LOBBY_COMMAND_HINT = (
     "/session end, or /quit."
 )
 _MINIMUM_CONVERSATION_PREFIX_LENGTH = 12
+_AGENT_ROUTE_ALIASES = frozenset(
+    alias for route in AGENT_ROUTES for alias in route.aliases
+)
 _CONVERSATION_CATALOG_OPERATIONS = (
     "create",
     "get",
@@ -159,6 +168,7 @@ class InteractiveController:
         "_conversation_event_store",
         "_conversation_memory_service",
         "_context",
+        "_last_started_debate_by_session",
         "_runtime",
         "_selected_conversation",
         "_started",
@@ -226,6 +236,7 @@ class InteractiveController:
         self._attached_session_id: str | None = None
         self._selected_conversation: ConversationMetadata | None = None
         self._target_agent_id = LEAD_ORCHESTRATOR
+        self._last_started_debate_by_session: dict[str, str] = {}
         self._started = False
         self._closed = False
 
@@ -721,12 +732,12 @@ class InteractiveController:
         """Execute one parser action and return whether the loop should exit.
 
         ``original_line`` is used only to choose the trusted parse-error
-        category. Global help, roster, story-session navigation, search, and
-        transcript reads remain provider-free; routed and consensus content use
-        the retained runtime, while other later-feature actions preserve
-        selection-aware rejection. The returned boolean signals loop exit;
-        command-specific state changes are delegated to their owners, and fatal
-        failures reach outer cleanup without local resource acquisition.
+        category. Global help/status, directives, inspection, selected history,
+        roster, story-session navigation, search, and transcript reads remain
+        provider-free; routed and consensus content use the retained runtime.
+        The returned boolean signals loop exit; command-specific state changes
+        are delegated to their owners, and fatal failures reach outer cleanup
+        without local resource acquisition.
         """
 
         if action.kind is ActionKind.IGNORED:
@@ -753,6 +764,22 @@ class InteractiveController:
             return True
         if action.kind is ActionKind.PARSE_ERROR:
             self._write_parser_error(action, original_line)
+            return False
+        if action.kind is ActionKind.STATUS:
+            self._write_runtime_status()
+            return False
+        if action.kind in {
+            ActionKind.SET_LANGUAGE,
+            ActionKind.SET_PERSONA,
+            ActionKind.RESET,
+        }:
+            self._apply_attached_runtime_directive(action)
+            return False
+        if action.kind is ActionKind.INSPECT:
+            self._inspect_attached_runtime(action)
+            return False
+        if action.kind is ActionKind.HISTORY:
+            self._write_selected_conversation_history(action)
             return False
         if action.kind is ActionKind.SET_TARGET:
             self._set_target_agent(action)
@@ -825,6 +852,837 @@ class InteractiveController:
             return False
         self._write_unavailable_lobby_command_error()
         return False
+
+    def _write_runtime_status(self) -> None:
+        """Render one provider-free snapshot of the current shell state.
+
+        Lobby output distinguishes the saved selection from the absent
+        attachment and marks attachment-only capabilities unavailable. An
+        attached selected conversation is read exactly once; the same immutable
+        event tuple supplies transcript totals and canonical bounded-context
+        facts. The operation never mutates session, conversation, or run state.
+        """
+
+        saved_session = self._context.selected_session or "none"
+        attached_session = self._attached_session_id
+        workspace_status = (
+            f"Workspace: {self._workspace.root} | Saved session: "
+            f"{saved_session} | Attached session: "
+            f"{attached_session or 'none'}."
+        )
+        if attached_session is None:
+            self._terminal.write_status(
+                TerminalMessageKind.SESSION,
+                workspace_status,
+            )
+            self._terminal.write_status(
+                TerminalMessageKind.CONTEXT,
+                (
+                    "Conversation: unavailable | Context: unavailable | "
+                    "Search: unavailable | Last run: none."
+                ),
+            )
+            return
+        if type(self._conversation_memory_service) is not ConversationMemoryService:
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            )
+
+        selected = self._selected_conversation
+        transcript_status = "Context: unavailable (no selected conversation)."
+        if selected is None:
+            conversation_status = "Selected conversation: none."
+        else:
+            try:
+                current = self._conversation_catalog.get(
+                    attached_session,
+                    selected.conversation_id,
+                )
+                selected = self._validated_catalog_metadata(
+                    current,
+                    attached_session,
+                    expected_conversation_id=selected.conversation_id,
+                )
+            except ConversationNotFoundError as exc:
+                self._selected_conversation = None
+                self._present_conversation_failure(exc)
+                return
+            except Exception as exc:
+                self._present_conversation_failure(exc)
+                return
+            if selected.status is ConversationStatus.ARCHIVED:
+                self._selected_conversation = None
+                self._terminal.write_error(
+                    InteractiveError(InteractiveErrorCode.CONVERSATION_ARCHIVED)
+                )
+                return
+            self._selected_conversation = selected
+            try:
+                events, context = self._read_selected_transcript_snapshot(selected)
+            except _ControllerAbort:
+                raise
+            except Exception as exc:
+                if isinstance(exc, ConversationNotFoundError):
+                    self._selected_conversation = None
+                self._present_transcript_service_failure(exc)
+                return
+            conversation_status = (
+                f"Selected conversation: {selected.conversation_id} | "
+                f"Subject: {selected.subject} | Status: {selected.status.value} | "
+                f"Revision: {selected.subject_revision}."
+            )
+            transcript_status = self._format_transcript_context_status(
+                displayed_events=len(events),
+                total_events=len(events),
+                context=context,
+            )
+
+        last_debate = self._last_started_debate_by_session.get(attached_session)
+        if last_debate is None:
+            last_run_status = "none."
+        else:
+            try:
+                last_run_lines = self._read_safe_debate_inspection(
+                    attached_session,
+                    last_debate,
+                    include_context=True,
+                )
+            except Exception as exc:
+                self._present_runtime_inspection_failure(exc)
+                return
+            last_run_status = f"{last_debate} | {' | '.join(last_run_lines)}"
+
+        self._terminal.write_status(TerminalMessageKind.SESSION, workspace_status)
+        self._terminal.write_status(
+            TerminalMessageKind.ROUTING,
+            f"Sticky target: {self._target_agent_id}.",
+        )
+        self._terminal.write_status(
+            TerminalMessageKind.CONVERSATION,
+            conversation_status,
+        )
+        self._terminal.write_status(TerminalMessageKind.CONTEXT, transcript_status)
+        self._terminal.write_status(
+            TerminalMessageKind.RESULT,
+            f"Search: available, active-only | Last interactive run: {last_run_status}",
+        )
+
+    def _apply_attached_runtime_directive(
+        self,
+        action: InteractiveAction,
+    ) -> None:
+        """Persist one parsed directive and acknowledge only its changed field.
+
+        Language, canonical per-agent persona, and full reset actions require an
+        attachment but never a selected conversation or provider. A malformed
+        runtime return fails closed; typed configuration and workspace failures
+        retain their established safe interactive categories.
+        """
+
+        if self._attached_session_id is None:
+            self._terminal.write_error(
+                InteractiveError(InteractiveErrorCode.SESSION_INACTIVE)
+            )
+            return
+        if action.kind is ActionKind.SET_LANGUAGE:
+            assert action.argument is not None
+            directive = f"[SYS: LANG={action.argument}]"
+            acknowledgement = f"Language override set to {action.argument}."
+        elif action.kind is ActionKind.SET_PERSONA:
+            assert action.agent_id is not None
+            assert action.argument is not None
+            directive = (
+                f"[OVERRIDE: {action.agent_id} Persona={action.argument}]"
+            )
+            acknowledgement = (
+                f"Persona override for {action.agent_id} set to "
+                f"{action.argument}."
+            )
+        else:
+            assert action.kind is ActionKind.RESET
+            directive = "[RESET: ALL]"
+            acknowledgement = "Runtime overrides reset."
+
+        try:
+            updated = self._runtime.apply_directive(
+                self._attached_session_id,
+                directive,
+            )
+        except (DirectiveError, ConfigurationError):
+            self._terminal.write_error(
+                InteractiveError(InteractiveErrorCode.CONFIGURATION_INVALID)
+            )
+            return
+        except WorkspaceSecurityError:
+            self._present_memory_error(
+                InteractiveError(InteractiveErrorCode.WORKSPACE_UNSAFE)
+            )
+            return
+        except (WorkspaceFormatError, OSError):
+            self._present_memory_error(
+                InteractiveError(InteractiveErrorCode.WORKSPACE_INVALID)
+            )
+            return
+        except Exception:
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            ) from None
+        if not self._directive_result_matches_action(updated, action):
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            )
+        self._terminal.write_status(TerminalMessageKind.RESULT, acknowledgement)
+
+    @staticmethod
+    def _directive_result_matches_action(
+        result: object,
+        action: InteractiveAction,
+    ) -> bool:
+        """Return whether a runtime directive result confirms the exact action.
+
+        The validation accepts only the canonical override mapping shape and
+        never renders or retains unrelated override values. It performs no I/O
+        and treats malformed collaborator data as an internal protocol failure.
+        """
+
+        if type(result) is not dict or set(result) != {
+            "language",
+            "persona",
+            "agents",
+        }:
+            return False
+        if result["language"] is not None and not isinstance(
+            result["language"], str
+        ):
+            return False
+        if result["persona"] is not None and not isinstance(
+            result["persona"], str
+        ):
+            return False
+        agents = result["agents"]
+        if type(agents) is not dict or set(agents).difference(ROSTER):
+            return False
+        for agent_id, values in agents.items():
+            if (
+                type(agent_id) is not str
+                or type(values) is not dict
+                or set(values) != {"language", "persona"}
+                or any(
+                    value is not None and not isinstance(value, str)
+                    for value in values.values()
+                )
+            ):
+                return False
+
+        if action.kind is ActionKind.SET_LANGUAGE:
+            return result["language"] == action.argument
+        if action.kind is ActionKind.SET_PERSONA:
+            assert action.agent_id is not None
+            values = agents.get(action.agent_id)
+            return type(values) is dict and values["persona"] == action.argument
+        return (
+            action.kind is ActionKind.RESET
+            and result["language"] is None
+            and result["persona"] is None
+            and not agents
+        )
+
+    def _write_selected_conversation_history(
+        self,
+        action: InteractiveAction,
+    ) -> None:
+        """Render one selected transcript snapshot and its context accounting.
+
+        The command requires an attached active selection. It reads the
+        authoritative event store exactly once, derives bounded context from
+        that exact tuple, and displays either all events or the requested newest
+        suffix in chronological order. No cursor, mutation, search, or provider
+        operation occurs.
+        """
+
+        assert action.kind is ActionKind.HISTORY
+        if self._attached_session_id is None:
+            self._terminal.write_error(
+                InteractiveError(InteractiveErrorCode.SESSION_INACTIVE)
+            )
+            return
+        selected = self._require_active_selected_conversation()
+        if selected is None:
+            return
+        try:
+            events, context = self._read_selected_transcript_snapshot(selected)
+        except _ControllerAbort:
+            raise
+        except Exception as exc:
+            if isinstance(exc, ConversationNotFoundError):
+                self._selected_conversation = None
+            self._present_transcript_service_failure(exc)
+            return
+
+        displayed = events if action.count is None else events[-action.count :]
+        for event in displayed:
+            self._terminal.write_conversation_transcript_event(
+                selected.conversation_id,
+                sequence=event.sequence,
+                turn_id=event.turn_id,
+                kind=event.kind.value,
+                sender=event.sender,
+                recipient=event.recipient,
+                content=event.content,
+            )
+        self._terminal.write_status(
+            TerminalMessageKind.RESULT,
+            self._format_transcript_context_status(
+                displayed_events=len(displayed),
+                total_events=len(events),
+                context=context,
+            ),
+        )
+
+    def _read_selected_transcript_snapshot(
+        self,
+        selected: ConversationMetadata,
+    ) -> tuple[tuple[ConversationEvent, ...], ConversationContextWindow]:
+        """Read one selected transcript once and derive its canonical context.
+
+        The retained filesystem adapter remains the authoritative read owner;
+        the pure selector consumes the exact immutable tuple it returns. The
+        method performs no append, provider call, search, or private reach-through.
+        """
+
+        session_id = self._attached_session_id
+        assert session_id is not None
+        events = self._conversation_event_store.read(
+            session_id,
+            selected.conversation_id,
+        )
+        try:
+            context = select_bounded_conversation_context(events)
+        except (TypeError, ValueError):
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            ) from None
+        return events, context
+
+    @staticmethod
+    def _format_transcript_context_status(
+        *,
+        displayed_events: int,
+        total_events: int,
+        context: ConversationContextWindow,
+    ) -> str:
+        """Format exact transcript and fixed-policy context counts without I/O."""
+
+        return (
+            f"History displayed: {displayed_events}/{total_events} events | "
+            f"Complete turns: {context.total_complete_turns} | "
+            f"Context retained: {context.retained_turns} turns, "
+            f"{len(context.events)} events | Omitted turns: "
+            f"{context.omitted_turns} | UTF-8 bytes: "
+            f"{context.retained_utf8_bytes}/"
+            f"{CONVERSATION_CONTEXT_POLICY.max_utf8_bytes} | Turn cap: "
+            f"{CONVERSATION_CONTEXT_POLICY.max_complete_turns} | Truncated: "
+            f"{'yes' if context.truncated else 'no'}."
+        )
+
+    def _inspect_attached_runtime(self, action: InteractiveAction) -> None:
+        """Render a safe attached-session or debate inspection projection.
+
+        Bare inspection lists only whitelisted persisted debate summaries.
+        Explicit IDs are read exactly as supplied, while ``last`` resolves the
+        process-local latest accepted STARTED run for this attached session.
+        Inspection never updates that mapping or renders persisted content,
+        errors, raw state, provider data, or candidate text.
+        """
+
+        assert action.kind is ActionKind.INSPECT
+        session_id = self._attached_session_id
+        if session_id is None:
+            self._terminal.write_error(
+                InteractiveError(InteractiveErrorCode.SESSION_INACTIVE)
+            )
+            return
+        if action.argument is None:
+            try:
+                value = self._runtime.inspect_session(session_id)
+                summaries = self._validated_session_inspection_summaries(
+                    value,
+                    session_id=session_id,
+                )
+            except Exception as exc:
+                self._present_runtime_inspection_failure(exc)
+                return
+            self._terminal.write_status(
+                TerminalMessageKind.RESULT,
+                (
+                    f"Session {session_id}: {len(summaries)} persisted "
+                    f"{'debate' if len(summaries) == 1 else 'debates'}."
+                ),
+            )
+            for debate_id, summary in summaries:
+                self._terminal.write_run(debate_id, summary)
+            return
+
+        if action.argument == "last":
+            debate_id = self._last_started_debate_by_session.get(session_id)
+            if debate_id is None:
+                self._terminal.write_status(
+                    TerminalMessageKind.RESULT,
+                    (
+                        "No interactive consensus run has started in "
+                        f"session {session_id} during this process."
+                    ),
+                )
+                return
+        else:
+            debate_id = action.argument
+
+        try:
+            lines = self._read_safe_debate_inspection(
+                session_id,
+                debate_id,
+                include_context=True,
+            )
+        except Exception as exc:
+            self._present_runtime_inspection_failure(exc)
+            return
+        for line in lines:
+            self._terminal.write_run(debate_id, line)
+
+    def _read_safe_debate_inspection(
+        self,
+        session_id: str,
+        debate_id: str,
+        *,
+        include_context: bool,
+    ) -> tuple[str, ...]:
+        """Read and whitelist one debate plus optional context-sidecar facts.
+
+        The returned lines contain only identity, lifecycle, input, revision,
+        round, artifact, and context identity/mode/count fields. Raw messages,
+        candidate/error/action values, state dictionaries, event content, and
+        provider data are validated by their owners but never copied to output.
+        """
+
+        inspected = self._runtime.inspect_debate(session_id, debate_id)
+        summary, status = self._validated_debate_inspection_summary(
+            inspected,
+            session_id=session_id,
+            debate_id=debate_id,
+        )
+        if not include_context or status == "not_found":
+            return (summary,)
+        context = self._runtime.inspect_debate_context(session_id, debate_id)
+        context_summary = self._validated_debate_context_summary(
+            context,
+            session_id=session_id,
+            debate_id=debate_id,
+        )
+        return (summary, context_summary)
+
+    def _validated_debate_inspection_summary(
+        self,
+        value: object,
+        *,
+        session_id: str,
+        debate_id: str,
+    ) -> tuple[str, str]:
+        """Validate one full runtime inspection and return safe summary text."""
+
+        expected = {
+            "session_id",
+            "debate_id",
+            "status",
+            "terminal",
+            "state",
+            "result",
+            "messages",
+        }
+        if type(value) is not dict or set(value) != expected:
+            raise ValueError("runtime debate inspection has an invalid shape")
+        if (
+            value["session_id"] != session_id
+            or value["debate_id"] != debate_id
+            or type(value["messages"]) is not list
+            or any(type(message) is not dict for message in value["messages"])
+        ):
+            raise ValueError("runtime debate inspection identity is invalid")
+        status = value["status"]
+        terminal = value["terminal"]
+        if status not in {
+            "not_found",
+            "active",
+            "consensus",
+            "deadlock",
+            "failed",
+            "interrupted",
+        } or type(terminal) is not bool:
+            raise ValueError("runtime debate inspection lifecycle is invalid")
+
+        state = value["state"]
+        result = value["result"]
+        input_kind: object = None
+        revision_id: object = None
+        rounds_completed: object = 0
+        artifact: object = None
+        if result is not None:
+            result_fields = {
+                "session_id",
+                "debate_id",
+                "input_kind",
+                "status",
+                "revision_id",
+                "rounds_completed",
+                "final_candidate",
+                "latest_candidate",
+                "manuscript_path",
+                "core_updates",
+                "error",
+                "action_required",
+            }
+            if type(result) is not dict or set(result) != result_fields:
+                raise ValueError("runtime debate result has an invalid shape")
+            if terminal is not True:
+                raise ValueError("runtime terminal debate sources are inconsistent")
+            if (
+                result["session_id"] != session_id
+                or result["debate_id"] != debate_id
+                or result["status"] != status
+            ):
+                raise ValueError("runtime debate result identity is invalid")
+            if state is not None:
+                state_fields = {
+                    "schema_version",
+                    "session_id",
+                    "debate_id",
+                    "input_kind",
+                    "status",
+                    "terminal",
+                    "created_at",
+                    "updated_at",
+                    "revision_id",
+                    "rounds_completed",
+                    "error",
+                }
+                if type(state) is not dict or set(state) != state_fields:
+                    raise ValueError("runtime debate state has an invalid shape")
+                if (
+                    state["session_id"] != session_id
+                    or state["debate_id"] != debate_id
+                    or state["status"] != status
+                    or state["terminal"] is not True
+                    or state["input_kind"] != result["input_kind"]
+                    or state["revision_id"] != result["revision_id"]
+                    or state["rounds_completed"] != result["rounds_completed"]
+                ):
+                    raise ValueError("runtime debate state identity is invalid")
+            input_kind = result["input_kind"]
+            revision_id = result["revision_id"]
+            rounds_completed = result["rounds_completed"]
+            artifact = result["manuscript_path"]
+        elif state is not None:
+            state_fields = {
+                "schema_version",
+                "session_id",
+                "debate_id",
+                "input_kind",
+                "status",
+                "terminal",
+                "created_at",
+                "updated_at",
+                "revision_id",
+                "rounds_completed",
+                "error",
+            }
+            if type(state) is not dict or set(state) != state_fields:
+                raise ValueError("runtime debate state has an invalid shape")
+            if (
+                state["session_id"] != session_id
+                or state["debate_id"] != debate_id
+                or state["status"] != status
+                or state["terminal"] is not terminal
+            ):
+                raise ValueError("runtime debate state identity is invalid")
+            input_kind = state["input_kind"]
+            revision_id = state["revision_id"]
+            rounds_completed = state["rounds_completed"]
+        elif status == "not_found":
+            if terminal or value["messages"]:
+                raise ValueError("not-found debate inspection is inconsistent")
+        elif status != "interrupted" or terminal is not True or not value["messages"]:
+            raise ValueError("runtime debate inspection has no lifecycle source")
+
+        summary = self._format_validated_debate_summary(
+            session_id=session_id,
+            status=status,
+            terminal=terminal,
+            input_kind=input_kind,
+            revision_id=revision_id,
+            rounds_completed=rounds_completed,
+            artifact=artifact,
+        )
+        return summary, status
+
+    def _validated_session_inspection_summaries(
+        self,
+        value: object,
+        *,
+        session_id: str,
+    ) -> tuple[tuple[str, str], ...]:
+        """Validate a session inspection and project ordered safe debate rows."""
+
+        if type(value) is not dict or set(value) != {
+            "session_id",
+            "overrides",
+            "debates",
+        }:
+            raise ValueError("runtime session inspection has an invalid shape")
+        if (
+            value["session_id"] != session_id
+            or type(value["overrides"]) is not dict
+            or type(value["debates"]) is not list
+        ):
+            raise ValueError("runtime session inspection is invalid")
+
+        summaries: list[tuple[str, str]] = []
+        previous_debate_id: str | None = None
+        for row in value["debates"]:
+            if type(row) is not dict:
+                raise ValueError("runtime session debate summary is invalid")
+            result_fields = {
+                "session_id",
+                "debate_id",
+                "input_kind",
+                "status",
+                "revision_id",
+                "rounds_completed",
+                "final_candidate",
+                "latest_candidate",
+                "manuscript_path",
+                "core_updates",
+                "error",
+                "action_required",
+                "terminal",
+            }
+            state_fields = {
+                "session_id",
+                "debate_id",
+                "input_kind",
+                "status",
+                "terminal",
+                "revision_id",
+                "rounds_completed",
+                "error",
+            }
+            fields = set(row)
+            if fields == result_fields:
+                if row["terminal"] is not True:
+                    raise ValueError(
+                        "runtime session terminal summary is inconsistent"
+                    )
+                artifact = row["manuscript_path"]
+            elif fields == state_fields:
+                artifact = None
+            else:
+                raise ValueError("runtime session debate summary has an invalid shape")
+            if row["session_id"] != session_id:
+                raise ValueError("runtime session debate identity is invalid")
+            debate_id = row["debate_id"]
+            self._validate_safe_inspection_identifier(
+                debate_id,
+                label="debate ID",
+            )
+            if previous_debate_id is not None and debate_id <= previous_debate_id:
+                raise ValueError("runtime session debates are not uniquely ordered")
+            previous_debate_id = debate_id
+            summary = self._format_validated_debate_summary(
+                session_id=session_id,
+                status=row["status"],
+                terminal=row["terminal"],
+                input_kind=row["input_kind"],
+                revision_id=row["revision_id"],
+                rounds_completed=row["rounds_completed"],
+                artifact=artifact,
+            )
+            summaries.append((debate_id, summary))
+        return tuple(summaries)
+
+    def _format_validated_debate_summary(
+        self,
+        *,
+        session_id: str,
+        status: object,
+        terminal: object,
+        input_kind: object,
+        revision_id: object,
+        rounds_completed: object,
+        artifact: object,
+    ) -> str:
+        """Validate whitelisted lifecycle fields and format one safe summary."""
+
+        if status not in {
+            "not_found",
+            "active",
+            "consensus",
+            "deadlock",
+            "failed",
+            "interrupted",
+        }:
+            raise ValueError("runtime debate status is invalid")
+        if type(terminal) is not bool:
+            raise ValueError("runtime debate terminal flag is invalid")
+        if input_kind is not None and input_kind not in {
+            InputKind.PROMPT.value,
+            InputKind.DRAFT.value,
+        }:
+            raise ValueError("runtime debate input kind is invalid")
+        if revision_id is not None:
+            self._validate_safe_inspection_identifier(
+                revision_id,
+                label="revision ID",
+            )
+        if (
+            isinstance(rounds_completed, bool)
+            or not isinstance(rounds_completed, int)
+            or rounds_completed < 0
+        ):
+            raise ValueError("runtime debate round count is invalid")
+        if artifact is not None and not isinstance(artifact, str):
+            raise ValueError("runtime debate artifact is invalid")
+        return (
+            f"Session: {session_id} | Status: {status} | Terminal: "
+            f"{'yes' if terminal else 'no'} | Input: {input_kind or 'none'} | "
+            f"Revision: {revision_id or 'none'} | Rounds: {rounds_completed} | "
+            f"Artifact: {artifact or 'none'}."
+        )
+
+    def _validated_debate_context_summary(
+        self,
+        value: object,
+        *,
+        session_id: str,
+        debate_id: str,
+    ) -> str:
+        """Project a strict sidecar to identity, mode, and count facts only."""
+
+        if value is None:
+            return "Context sidecar: none."
+        if type(value) is not dict or set(value) != {
+            "schema_version",
+            "session_id",
+            "debate_id",
+            "conversation_id",
+            "mode",
+            "snapshot",
+        }:
+            raise ValueError("runtime debate context has an invalid shape")
+        if (
+            value["schema_version"] != 1
+            or value["session_id"] != session_id
+            or value["debate_id"] != debate_id
+        ):
+            raise ValueError("runtime debate context identity is invalid")
+        conversation_id = value["conversation_id"]
+        self._validate_safe_inspection_identifier(
+            conversation_id,
+            label="conversation ID",
+        )
+        mode = value["mode"]
+        snapshot = value["snapshot"]
+        if mode == DebateContextMode.FRESH.value:
+            if snapshot is not None:
+                raise ValueError("fresh debate context has a snapshot")
+            return (
+                f"Context: conversation {conversation_id} | Mode: fresh | "
+                "Events: 0 | Complete turns: 0 | Retained turns: 0 | "
+                "Omitted turns: 0 | UTF-8 bytes: 0 | Truncated: no."
+            )
+        if mode != DebateContextMode.INCLUDED.value or type(snapshot) is not dict:
+            raise ValueError("runtime debate context mode is invalid")
+        if set(snapshot) != {
+            "events",
+            "total_complete_turns",
+            "retained_turns",
+            "omitted_turns",
+            "retained_utf8_bytes",
+            "truncated",
+        } or type(snapshot["events"]) is not list:
+            raise ValueError("runtime debate context snapshot is invalid")
+        event_fields = {
+            "schema_version",
+            "session_id",
+            "conversation_id",
+            "turn_id",
+            "sequence",
+            "timestamp",
+            "sender",
+            "recipient",
+            "kind",
+            "content",
+        }
+        if any(
+            type(event) is not dict or set(event) != event_fields
+            for event in snapshot["events"]
+        ):
+            raise ValueError("runtime debate context events are invalid")
+        total = snapshot["total_complete_turns"]
+        retained = snapshot["retained_turns"]
+        omitted = snapshot["omitted_turns"]
+        retained_bytes = snapshot["retained_utf8_bytes"]
+        truncated = snapshot["truncated"]
+        if any(
+            isinstance(count, bool) or not isinstance(count, int) or count < 0
+            for count in (total, retained, omitted, retained_bytes)
+        ) or type(truncated) is not bool:
+            raise ValueError("runtime debate context counts are invalid")
+        if (
+            total != retained + omitted
+            or len(snapshot["events"]) != retained * 2
+            or truncated is not (omitted > 0)
+        ):
+            raise ValueError("runtime debate context counts are inconsistent")
+        return (
+            f"Context: conversation {conversation_id} | Mode: included | "
+            f"Events: {len(snapshot['events'])} | Complete turns: {total} | "
+            f"Retained turns: {retained} | Omitted turns: {omitted} | "
+            f"UTF-8 bytes: {retained_bytes} | Truncated: "
+            f"{'yes' if truncated else 'no'}."
+        )
+
+    def _validate_safe_inspection_identifier(
+        self,
+        value: object,
+        *,
+        label: str,
+    ) -> str:
+        """Return a canonical safe identifier or convert tampering to ValueError."""
+
+        try:
+            return self._workspace.validate_identifier(value, label=label)
+        except (SessionIdError, TypeError, ValueError) as exc:
+            raise ValueError(f"runtime inspection {label} is invalid") from exc
+
+    def _present_runtime_inspection_failure(self, failure: Exception) -> None:
+        """Render typed inspection failures or abort on collaborator tampering."""
+
+        if isinstance(failure, SessionIdError):
+            self._terminal.write_error(
+                InteractiveError(InteractiveErrorCode.COMMAND_INVALID)
+            )
+            return
+        if isinstance(failure, WorkspaceSecurityError):
+            self._present_memory_error(
+                InteractiveError(InteractiveErrorCode.WORKSPACE_UNSAFE)
+            )
+            return
+        if isinstance(failure, (WorkspaceFormatError, OSError)):
+            self._present_memory_error(
+                InteractiveError(InteractiveErrorCode.WORKSPACE_INVALID)
+            )
+            return
+        raise _ControllerAbort(
+            InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+        ) from None
 
     def _set_target_agent(self, action: InteractiveAction) -> None:
         """Set one attached process's sticky responder without provider work.
@@ -1312,9 +2170,11 @@ class InteractiveController:
         """Validate, render, and retain one trusted runtime progress event.
 
         Only exact built-in events with matching run identity and legal phase
-        succession are accepted. Rendering uses typed fields and fixed copy only;
-        invalid events or terminal writer failures propagate to the runtime sink
-        boundary, which owns interruption and observer-error semantics.
+        succession are accepted. The first accepted STARTED event also updates
+        the controller's process-local per-session ``last`` inspection mapping.
+        Rendering uses typed fields and fixed copy only; invalid events or
+        terminal writer failures propagate to the runtime sink boundary, which
+        owns interruption and observer-error semantics.
         """
 
         if type(event) is not DebateProgressEvent:
@@ -1358,6 +2218,10 @@ class InteractiveController:
                 raise ValueError("progress phase order is invalid")
         self._render_debate_progress(canonical)
         events.append(canonical)
+        if canonical.phase is DebateProgressPhase.STARTED:
+            self._last_started_debate_by_session[
+                canonical.session_id
+            ] = canonical.debate_id
 
     @staticmethod
     def _debate_progress_transition_is_valid(
@@ -3159,11 +4023,12 @@ class InteractiveController:
 
     @staticmethod
     def _parse_error_targets_agent(original_line: str) -> bool:
-        """Return whether raw input begins an exact agent-routing form.
+        """Return whether a parse failure identifies an invalid agent route.
 
-        The original line is inspected only at character zero and its first
-        ASCII space/tab boundary. It is not mutated, no failure prose is read,
-        and the pure classification owns no resource or cleanup.
+        Direct routing forms are always agent-scoped. For ``/persona``, only an
+        explicitly supplied unknown first argument is agent-scoped; missing or
+        malformed persona syntax remains ``command_invalid``. The pure check
+        uses exact ASCII delimiters and never inspects parser failure prose.
         """
 
         if original_line.startswith("@"):
@@ -3176,7 +4041,19 @@ class InteractiveController:
             ),
             len(original_line),
         )
-        return original_line[:first_delimiter] in {"/to", "/agent"}
+        command = original_line[:first_delimiter]
+        if command in {"/to", "/agent"}:
+            return True
+        if command != "/persona" or first_delimiter == len(original_line):
+            return False
+        arguments = tuple(
+            token
+            for token in original_line[first_delimiter:]
+            .replace("\t", " ")
+            .split(" ")
+            if token
+        )
+        return bool(arguments) and arguments[0] not in _AGENT_ROUTE_ALIASES
 
     def _present_session_failure(
         self,

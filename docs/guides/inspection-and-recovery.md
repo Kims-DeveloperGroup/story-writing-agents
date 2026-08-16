@@ -1,8 +1,8 @@
 # Inspect and recover work
 
-> **Availability:** session and debate inspection are implemented. Debate IDs
-> are immutable; there is no same-ID resume, deadlock continuation, or stale
-> owner cleanup command.
+> **Availability:** full noninteractive and safe interactive inspection are
+> implemented. Debate IDs are immutable; there is no same-ID resume, deadlock
+> continuation, or stale-owner cleanup command.
 
 Key terms: **blackboard**—the public persisted debate history; **terminal
 result**—a completed consensus, deadlock, or failure record; **deadlock**—
@@ -25,6 +25,33 @@ Use explicit `--workspace` and `--session` in automation. Session summaries are
 sorted by debate ID. A debate inspection can report `not_found`, `active`,
 `consensus`, `deadlock`, `failed`, or `interrupted`. `active` only proves the
 ID was reserved; it does not prove the creating process is alive.
+
+## Inspect safely in the interactive shell
+
+After attachment, no conversation selection is required:
+
+| Command | Result |
+| --- | --- |
+| `/inspect` | Persisted debate summaries for the attached session. |
+| `/inspect ID` | The exact current-session debate; a missing ID reports `not_found`. |
+| `/inspect last` | This process's latest accepted started debate for that session; none is normal. |
+
+`last` is process-local and per session. It is updated from accepted `started`
+progress and therefore covers eventual consensus, deadlock, failure, and
+interruption. It is not persisted, restored, or guessed from filesystem order.
+Switching sessions preserves each process-local value.
+
+Shell inspection whitelists identity, lifecycle, input, revision, rounds,
+artifact path, and context conversation/mode/counts. It never emits blackboard
+messages, candidates, stored errors/actions, context event content, raw state,
+or provider-private fields. Malformed collaborator data fails closed. These
+reads are provider-free and preserve attachment, selection, target, transcript,
+catalog, artifacts, and provider state. The established `story inspect` and
+Python inspection JSON shapes remain unchanged.
+
+Use global `/status` for the current shell snapshot and selected `/history`
+for one visible transcript snapshot plus canonical context accounting. Their
+exact gates are in the [CLI reference](../reference/cli.md#interactive-streams).
 
 ## Recover from a deadlock
 

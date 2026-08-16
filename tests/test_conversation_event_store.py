@@ -10,7 +10,7 @@ import tempfile
 import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import FrozenInstanceError, fields
+from dataclasses import FrozenInstanceError, fields, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import get_type_hints
@@ -385,6 +385,170 @@ class ConversationEventModelTests(unittest.TestCase):
                     ConversationContextWindow(**values)  # type: ignore[arg-type]
 
 
+class ConversationContextSelectorTests(unittest.TestCase):
+    """Verify pure canonical context selection from one transcript snapshot."""
+
+    @staticmethod
+    def event(
+        sequence: int,
+        turn_id: str,
+        kind: ConversationEventKind,
+        content: str,
+    ) -> ConversationEvent:
+        """Build one canonical event with actors derived from its visible kind."""
+
+        if kind is ConversationEventKind.USER_MESSAGE:
+            sender, recipient = "user", LEAD_ORCHESTRATOR
+        elif kind is ConversationEventKind.AGENT_REPLY:
+            sender, recipient = LEAD_ORCHESTRATOR, "user"
+        else:
+            sender, recipient = "runtime", "user"
+        return make_stored_event(
+            turn_id=turn_id,
+            sequence=sequence,
+            sender=sender,
+            recipient=recipient,
+            kind=kind,
+            content=content,
+        )
+
+    def test_empty_unmatched_and_runtime_error_completion_are_exact(self) -> None:
+        select = conversations_module.select_bounded_conversation_context
+        self.assertEqual(
+            select(()),
+            ConversationContextWindow((), 0, 0, 0, 0, False),
+        )
+
+        user = self.event(
+            1,
+            "turn_complete",
+            ConversationEventKind.USER_MESSAGE,
+            "question",
+        )
+        runtime_error = self.event(
+            2,
+            "turn_complete",
+            ConversationEventKind.RUNTIME_ERROR,
+            "safe failure",
+        )
+        unmatched = self.event(
+            3,
+            "turn_unmatched",
+            ConversationEventKind.USER_MESSAGE,
+            "still visible",
+        )
+        selected = select((user, runtime_error, unmatched))
+        self.assertEqual(selected.events, (user, runtime_error))
+        self.assertEqual(selected.total_complete_turns, 1)
+        self.assertEqual(selected.retained_turns, 1)
+        self.assertEqual(selected.omitted_turns, 0)
+        self.assertEqual(
+            selected.retained_utf8_bytes,
+            len("questionsafe failure".encode("utf-8")),
+        )
+        self.assertFalse(selected.truncated)
+
+        incomplete = select((replace(unmatched, sequence=1),))
+        self.assertEqual(incomplete.events, ())
+        self.assertEqual(incomplete.total_complete_turns, 0)
+
+    def test_turn_and_utf8_caps_keep_the_newest_whole_suffix(self) -> None:
+        select = conversations_module.select_bounded_conversation_context
+        events: list[ConversationEvent] = []
+        for turn_number in range(1, 26):
+            events.extend(
+                (
+                    self.event(
+                        len(events) + 1,
+                        f"turn_{turn_number}",
+                        ConversationEventKind.USER_MESSAGE,
+                        "q",
+                    ),
+                    self.event(
+                        len(events) + 2,
+                        f"turn_{turn_number}",
+                        ConversationEventKind.AGENT_REPLY,
+                        "r",
+                    ),
+                )
+            )
+        turn_bounded = select(tuple(events))
+        self.assertEqual(turn_bounded.total_complete_turns, 25)
+        self.assertEqual(turn_bounded.retained_turns, 24)
+        self.assertEqual(turn_bounded.omitted_turns, 1)
+        self.assertEqual(
+            tuple(event.sequence for event in turn_bounded.events),
+            tuple(range(3, 51)),
+        )
+        self.assertEqual(turn_bounded.retained_utf8_bytes, 48)
+        self.assertTrue(turn_bounded.truncated)
+
+        older = (
+            self.event(1, "older", ConversationEventKind.USER_MESSAGE, "o"),
+            self.event(2, "older", ConversationEventKind.AGENT_REPLY, "o"),
+        )
+        newest = (
+            self.event(
+                3,
+                "newest",
+                ConversationEventKind.USER_MESSAGE,
+                "x" * (CONVERSATION_CONTEXT_POLICY.max_utf8_bytes - 1),
+            ),
+            self.event(4, "newest", ConversationEventKind.AGENT_REPLY, "y"),
+        )
+        byte_bounded = select((*older, *newest))
+        self.assertEqual(byte_bounded.events, newest)
+        self.assertEqual(
+            byte_bounded.retained_utf8_bytes,
+            CONVERSATION_CONTEXT_POLICY.max_utf8_bytes,
+        )
+        self.assertEqual(byte_bounded.omitted_turns, 1)
+        self.assertTrue(byte_bounded.truncated)
+
+        oversized = (
+            self.event(
+                1,
+                "oversized",
+                ConversationEventKind.USER_MESSAGE,
+                "x" * CONVERSATION_CONTEXT_POLICY.max_utf8_bytes,
+            ),
+            self.event(
+                2,
+                "oversized",
+                ConversationEventKind.RUNTIME_ERROR,
+                "y",
+            ),
+        )
+        self.assertEqual(select(oversized).events, ())
+        self.assertEqual(select(oversized).omitted_turns, 1)
+
+    def test_non_tuple_identity_pairing_and_contiguous_tampering_fail(self) -> None:
+        select = conversations_module.select_bounded_conversation_context
+        user = self.event(
+            1,
+            "turn_a",
+            ConversationEventKind.USER_MESSAGE,
+            "question",
+        )
+        reply = self.event(
+            2,
+            "turn_a",
+            ConversationEventKind.AGENT_REPLY,
+            "reply",
+        )
+        cases = (
+            [user, reply],
+            (replace(user, sequence=2),),
+            (user, replace(reply, conversation_id="conversation_b")),
+            (replace(reply, sequence=1), replace(user, sequence=2)),
+            (user, replace(user, sequence=2)),
+        )
+        for events in cases:
+            with self.subTest(events=events):
+                with self.assertRaises((TypeError, ValueError)):
+                    select(events)  # type: ignore[arg-type]
+
+
 class InMemoryConversationEventStoreContractTests(
     ConversationEventStoreContractMixin,
     unittest.TestCase,
@@ -590,6 +754,54 @@ class FilesystemConversationEventStorePersistenceTests(
         )
         self.assertEqual(_tree_snapshot(self.workspace.root), before)
         self.assertFalse(self.transcript.exists())
+
+    def test_read_context_delegates_one_locked_snapshot_to_the_pure_selector(
+        self,
+    ) -> None:
+        user = self.store.append(self.request("turn_a", content="question"))
+        reply = self.store.append(
+            self.request(
+                "turn_a",
+                kind=ConversationEventKind.AGENT_REPLY,
+                content="reply",
+            )
+        )
+        sentinel = ConversationContextWindow(
+            events=(user, reply),
+            total_complete_turns=1,
+            retained_turns=1,
+            omitted_turns=0,
+            retained_utf8_bytes=len("questionreply".encode("utf-8")),
+            truncated=False,
+        )
+        before = _tree_snapshot(self.workspace.root)
+
+        def select_while_transcript_lock_is_held(
+            events: tuple[ConversationEvent, ...],
+        ) -> ConversationContextWindow:
+            """Prove delegation occurs before the fixed snapshot lock is released."""
+
+            event_lock = self.store._event_lock(
+                self.session_id,
+                self.conversation_id,
+            )
+            self.assertTrue(event_lock.lock.locked())
+            self.assertEqual(events, (user, reply))
+            return sentinel
+
+        with mock.patch.object(
+            workspace_module,
+            "select_bounded_conversation_context",
+            side_effect=select_while_transcript_lock_is_held,
+        ) as select:
+            returned = self.store.read_context(
+                self.session_id,
+                self.conversation_id,
+            )
+
+        self.assertIs(returned, sentinel)
+        select.assert_called_once_with((user, reply))
+        self.assertEqual(_tree_snapshot(self.workspace.root), before)
 
     def test_workspace_path_and_string_constructors_share_the_same_identity(self) -> None:
         for root in (self.workspace, self.workspace.root, str(self.workspace.root)):

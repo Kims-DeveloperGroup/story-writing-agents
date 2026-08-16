@@ -24,7 +24,6 @@ from .agents import (
     ROSTER,
 )
 from .conversations import (
-    CONVERSATION_CONTEXT_POLICY,
     CONVERSATION_EVENT_SCHEMA_VERSION,
     CONVERSATION_METADATA_SCHEMA_VERSION,
     ConversationCatalog,
@@ -34,6 +33,7 @@ from .conversations import (
     ConversationEventKind,
     ConversationMetadata,
     ConversationStatus,
+    select_bounded_conversation_context,
     validate_conversation_context_window,
 )
 from .errors import (
@@ -1751,7 +1751,7 @@ class FilesystemConversationEventStore:
         with event_lock.lock:
             self._verify_catalog_identity(session, conversation)
             events = self._read_events(session, conversation)
-            return self._select_context(events)
+            return select_bounded_conversation_context(events)
 
     def _verify_catalog_identity(
         self,
@@ -1955,57 +1955,6 @@ class FilesystemConversationEventStore:
                     f"{logical_artifact} at sequence {event.sequence}"
                 )
             completed_turn_ids.add(event.turn_id)
-
-    @staticmethod
-    def _select_context(
-        events: tuple[ConversationEvent, ...],
-    ) -> ConversationContextWindow:
-        outcomes = {
-            event.turn_id: event
-            for event in events
-            if event.kind is not ConversationEventKind.USER_MESSAGE
-        }
-        complete_turns = [
-            (event, outcomes[event.turn_id])
-            for event in events
-            if event.kind is ConversationEventKind.USER_MESSAGE
-            and event.turn_id in outcomes
-        ]
-        retained_reversed: list[tuple[ConversationEvent, ConversationEvent]] = []
-        retained_utf8_bytes = 0
-        for turn in reversed(complete_turns):
-            turn_utf8_bytes = sum(
-                len(event.content.encode("utf-8", errors="strict"))
-                for event in turn
-            )
-            if (
-                len(retained_reversed)
-                >= CONVERSATION_CONTEXT_POLICY.max_complete_turns
-                or retained_utf8_bytes + turn_utf8_bytes
-                > CONVERSATION_CONTEXT_POLICY.max_utf8_bytes
-            ):
-                break
-            retained_reversed.append(turn)
-            retained_utf8_bytes += turn_utf8_bytes
-
-        retained = tuple(reversed(retained_reversed))
-        retained_events = tuple(
-            sorted(
-                (event for turn in retained for event in turn),
-                key=lambda event: event.sequence,
-            )
-        )
-        total_complete_turns = len(complete_turns)
-        retained_turns = len(retained)
-        omitted_turns = total_complete_turns - retained_turns
-        return ConversationContextWindow(
-            events=retained_events,
-            total_complete_turns=total_complete_turns,
-            retained_turns=retained_turns,
-            omitted_turns=omitted_turns,
-            retained_utf8_bytes=retained_utf8_bytes,
-            truncated=omitted_turns > 0,
-        )
 
     def _event_lock(
         self,

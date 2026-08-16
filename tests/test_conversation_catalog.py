@@ -898,7 +898,14 @@ class ConversationPackageBoundaryTests(unittest.TestCase):
                     "FilesystemConversationEventStore",
                 }
             )
-            | {"validate_conversation_context_window"},
+            | {
+                "select_bounded_conversation_context",
+                "validate_conversation_context_window",
+            },
+        )
+        self.assertNotIn(
+            "select_bounded_conversation_context",
+            story_writing_agents.__all__,
         )
         self.assertIs(
             story_writing_agents.ConversationMetadata,

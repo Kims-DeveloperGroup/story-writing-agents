@@ -1,8 +1,9 @@
 # Recovery and limitations
 
 > **Availability:** debate inspection, interactive consensus, conversation
-> management, retrieval-enabled turns, and local search/read are implemented.
-> Automatic retry, stale-owner cleanup, and event deletion are not.
+> management, safe status/history/inspection, directives, retrieval-enabled
+> turns, and local search/read are implemented. Automatic retry, stale-owner
+> cleanup, and event deletion are not.
 
 Key terms: **terminal**—an attempt that cannot resume; **lease proof**—the same
 session is active and `OWNED`; **taint**—discarding incomplete provider history;
@@ -70,6 +71,23 @@ Each transcript command reads fresh; its hint is not a saved cursor. Python
 cursors stale after append, and truncated search is not exhaustive. See
 [Conversation search](../reference/conversation-search.md).
 
+## Management failures and restart behavior
+
+`/history` uses one authoritative snapshot; a concurrent later append appears
+only on the next command. Empty history is normal. Transcript/catalog corruption
+fails closed; no management read repairs it.
+
+An explicit missing `/inspect ID` reports `not_found`. `/inspect last` with no
+accepted run is normal, not an error. Its per-session mapping is
+process-local: switching preserves it, restart resets it, and persisted debate
+IDs are never guessed. Malformed inspection data is fatal `internal_error`
+without echoing raw fields.
+
+Unknown `/persona` agents are `agent_invalid`. Directive/configuration rejection
+is `configuration_invalid`; validation occurs before atomic override
+replacement, so failure preserves prior bytes. Successful management otherwise
+preserves all other shell/story/provider state.
+
 ## Current product limits
 
 - Codex is the only provider; reserved `gemini` fails preflight.
@@ -79,8 +97,9 @@ cursors stale after append, and truncated search is not exhaustive. See
 - Advisory turns are single-line and have no active-turn cancellation.
 - `/search` is active-only; there is no RAG, semantic retrieval, or saved index.
 - `/transcript` retains no cursor; there is no event repair or deletion.
-- General `/compose`, `/history`, and standalone artifact shell commands are
-  unavailable.
+- Standalone `/compose` and artifact shell commands are unavailable; `/send`
+  and `/cancel` remain scoped to bare `/run` composition. Active cancellation
+  remains separate Issue #14.
 
 For provider failure, check executable, login/key, model, timeout, session, and
 lease. Persisted format errors fail closed; never skip damaged records. See

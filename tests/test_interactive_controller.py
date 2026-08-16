@@ -1438,8 +1438,8 @@ class ControllerCommandTests(ControllerTestCase):
             "[error command_invalid] This command is not available in the "
             "session lobby.\n"
         )
-        self.assertEqual(rendered.count(unavailable), 1)
-        self.assertEqual(rendered.count("[error session_inactive]"), 4)
+        self.assertEqual(rendered.count(unavailable), 0)
+        self.assertEqual(rendered.count("[error session_inactive]"), 5)
         self.assertIn("[session] No story sessions found.\n", rendered)
         self.assertIn(_error_record(InteractiveErrorCode.SESSION_INACTIVE), rendered)
 
@@ -2900,12 +2900,6 @@ class ControllerConversationCommandTests(ControllerTestCase):
             "/compose",
             "/send",
             "/cancel",
-            "/inspect last",
-            "/history 20",
-            "/status",
-            "/language ko-KR",
-            "/persona plot meticulous.v2",
-            "/reset",
         )
 
         def protected_outputs(workspace: Workspace) -> dict[str, bytes]:

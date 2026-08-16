@@ -1,7 +1,8 @@
 # Runtime overrides and directives
 
 > **Availability:** session-wide and per-agent language/persona overrides,
-> exact directives, backend run overrides, and round limits are implemented.
+> standalone directives, attached shell directive commands, backend run
+> overrides, and round limits are implemented.
 
 Key terms: **session override**—temporary configuration persisted for one story
 session; **precedence**—which source wins; **directive**—an exact message that
@@ -70,6 +71,22 @@ core documents, provider threads, histories, logs, or manuscripts.
 `apply_directive(workspace, session_id, text)` validates the complete candidate
 state before atomic replacement and returns the normalized object. Invalid
 application raises `DirectiveError` and preserves prior state.
+
+## Interactive directive bridge
+
+After session attachment, no conversation selection is needed:
+
+| Shell syntax | Exact `StoryRuntime.apply_directive` text |
+| --- | --- |
+| `/language ARG` | `[SYS: LANG=ARG]` |
+| `/persona AGENT ARG` | `[OVERRIDE: CANONICAL_AGENT Persona=ARG]` |
+| `/reset` | `[RESET: ALL]` |
+
+Persona route aliases normalize to a canonical ID before application. An
+unknown agent reports `agent_invalid`; directive/configuration application
+failure reports `configuration_invalid`. Candidate validation and atomic
+replacement remain runtime-owned, so only validated success changes overrides.
+These commands call no provider and change no shell selection or routing state.
 
 ## Debate round limit
 
