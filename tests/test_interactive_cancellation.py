@@ -14,7 +14,7 @@ from typing import Any
 from unittest import mock
 
 from story_writing_agents import backend as backend_module
-from story_writing_agents import interactive_controller as controller_module
+from story_writing_agents.interactive_controller import _core as controller_core_module
 from story_writing_agents.agents import (
     LEAD_ORCHESTRATOR,
     PLOT_ARCHITECT,
@@ -538,7 +538,7 @@ class InteractiveCancellationTestCase(InteractiveConversationTestCase):
             )
         else:
             with mock.patch.object(
-                controller_module,
+                controller_core_module,
                 "StoryRuntime",
                 return_value=runtime,
             ):
@@ -599,8 +599,8 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
         self.assertEqual(runner_factory.instances, [])
         self.assertIsNone(controller._runner)
         with (
-            mock.patch.object(controller_module.asyncio, "Runner", runner_factory),
-            mock.patch.object(controller_module.asyncio, "run") as legacy_run,
+            mock.patch.object(controller_core_module.asyncio, "Runner", runner_factory),
+            mock.patch.object(controller_core_module.asyncio, "run") as legacy_run,
             mock.patch.object(backend, "release_session_access", side_effect=detach),
             mock.patch.object(backend, "close", side_effect=close),
         ):
@@ -994,7 +994,7 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
                 },
                 clear=False,
             ),
-            mock.patch.object(controller_module.asyncio, "Runner", runner_factory),
+            mock.patch.object(controller_core_module.asyncio, "Runner", runner_factory),
             mock.patch.object(
                 StoryRuntime,
                 "_new_conversation_turn_id",
@@ -1156,7 +1156,7 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
         )
         core_before = core_snapshot(workspace)
         with (
-            mock.patch.object(controller_module.asyncio, "Runner", runner_factory),
+            mock.patch.object(controller_core_module.asyncio, "Runner", runner_factory),
             mock.patch.object(backend, "bind", new=bind),
             mock.patch.object(store, "append", side_effect=append),
             mock.patch.object(
@@ -1244,7 +1244,7 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
                     predicates={1: lambda: runtime.entered},
                 )
                 with mock.patch.object(
-                    controller_module.asyncio,
+                    controller_core_module.asyncio,
                     "Runner",
                     runner_factory,
                 ):
@@ -1295,7 +1295,7 @@ class ConsensusCancellationTests(InteractiveCancellationTestCase):
             interruptions={1: "before_entry"},
         )
         with mock.patch.object(
-            controller_module.asyncio,
+            controller_core_module.asyncio,
             "Runner",
             runner_factory,
         ):
@@ -1334,7 +1334,7 @@ class ConsensusCancellationTests(InteractiveCancellationTestCase):
             predicates={1: lambda: runtime.entered},
         )
         with mock.patch.object(
-            controller_module.asyncio,
+            controller_core_module.asyncio,
             "Runner",
             runner_factory,
         ):
@@ -1410,7 +1410,7 @@ class ConsensusCancellationTests(InteractiveCancellationTestCase):
             predicates={1: audits_started},
         )
         with (
-            mock.patch.object(controller_module.asyncio, "Runner", runner_factory),
+            mock.patch.object(controller_core_module.asyncio, "Runner", runner_factory),
             mock.patch.object(backend, "bind", new=bind),
             mock.patch.object(
                 StoryRuntime,
@@ -1477,7 +1477,7 @@ class ConsensusCancellationTests(InteractiveCancellationTestCase):
             predicates={1: lambda: runtime.entered},
         )
         with (
-            mock.patch.object(controller_module.asyncio, "Runner", runner_factory),
+            mock.patch.object(controller_core_module.asyncio, "Runner", runner_factory),
             mock.patch.object(
                 backend,
                 "release_session_access",
@@ -1738,7 +1738,7 @@ class TerminalAndCleanupFailureTests(InteractiveCancellationTestCase):
             raise RuntimeError("backend close failed")
 
         with (
-            mock.patch.object(controller_module.asyncio, "Runner", runner_factory),
+            mock.patch.object(controller_core_module.asyncio, "Runner", runner_factory),
             mock.patch.object(backend, "release_session_access", side_effect=detach),
             mock.patch.object(backend, "close", side_effect=close),
         ):
@@ -1789,7 +1789,7 @@ class TerminalAndCleanupFailureTests(InteractiveCancellationTestCase):
             original_close()
 
         with (
-            mock.patch.object(controller_module.asyncio, "Runner", runner_factory),
+            mock.patch.object(controller_core_module.asyncio, "Runner", runner_factory),
             mock.patch.object(backend, "release_session_access", side_effect=detach),
             mock.patch.object(backend, "close", side_effect=close),
         ):

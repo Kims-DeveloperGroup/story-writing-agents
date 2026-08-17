@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-from story_writing_agents import interactive_controller as controller_module
 from story_writing_agents.agents import LEAD_ORCHESTRATOR, PLOT_ARCHITECT
 from story_writing_agents.cli_context import (
     load_default_conversation,
@@ -22,6 +21,7 @@ from story_writing_agents.conversations import (
     ConversationEventKind,
     ConversationMetadata,
 )
+from story_writing_agents.interactive_controller import _core as controller_core_module
 from story_writing_agents.interactive_terminal import InteractiveErrorCode
 from story_writing_agents.models import (
     DebateContextMode,
@@ -288,7 +288,7 @@ class InteractiveManagementGateAndDirectiveTests(
             mock.patch.object(subprocess, "Popen") as popen,
             mock.patch.object(subprocess, "run") as run,
             mock.patch.object(socket, "create_connection") as connect,
-            mock.patch.object(controller_module.asyncio, "run") as async_run,
+            mock.patch.object(controller_core_module.asyncio, "run") as async_run,
             mock.patch.object(
                 controller._conversation_event_store,
                 "read",
@@ -636,7 +636,7 @@ class InteractiveHistoryAndStatusTests(InteractiveConversationTestCase):
                 "unarchive",
             ) as unarchive,
             mock.patch.object(
-                controller_module,
+                controller_core_module,
                 "save_default_conversation",
             ) as save_selection,
         ):
@@ -882,7 +882,7 @@ class InteractiveHistoryAndStatusTests(InteractiveConversationTestCase):
                         ) as store_calls,
                         mock.patch.object(backend, "bind") as bind,
                         mock.patch.object(
-                            controller_module.asyncio,
+                            controller_core_module.asyncio,
                             "run",
                         ) as async_run,
                     ):
@@ -996,7 +996,7 @@ class InteractiveInspectionTests(InteractiveConversationTestCase):
             mock.patch.object(subprocess, "Popen") as popen,
             mock.patch.object(subprocess, "run") as run,
             mock.patch.object(socket, "create_connection") as connect,
-            mock.patch.object(controller_module.asyncio, "run") as async_run,
+            mock.patch.object(controller_core_module.asyncio, "run") as async_run,
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
 

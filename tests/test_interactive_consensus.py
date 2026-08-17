@@ -34,13 +34,13 @@ from story_writing_agents import (
     WorkspaceFormatError,
     WorkspaceSecurityError,
 )
-from story_writing_agents import interactive_controller as controller_module
 from story_writing_agents.cli_context import (
     load_default_conversation,
     save_default_conversation,
     save_default_session,
 )
 from story_writing_agents.conversations import ConversationMetadata
+from story_writing_agents.interactive_controller import _core as controller_core_module
 from story_writing_agents.interactive_terminal import InteractiveErrorCode
 from story_writing_agents.workspace import (
     FilesystemConversationCatalog,
@@ -300,9 +300,9 @@ class InteractiveConsensusGateTests(InteractiveConversationTestCase):
         )
         real_run = asyncio.run
         with (
-            mock.patch.object(controller_module, "read_draft_file") as loader,
+            mock.patch.object(controller_core_module, "read_draft_file") as loader,
             mock.patch.object(
-                controller_module.asyncio,
+                controller_core_module.asyncio,
                 "run",
                 side_effect=real_run,
             ) as run_boundary,
@@ -332,7 +332,7 @@ class InteractiveConsensusGateTests(InteractiveConversationTestCase):
             catalog=catalog,
             runtime=runtime,  # type: ignore[arg-type]
         )
-        with mock.patch.object(controller_module, "read_draft_file") as loader:
+        with mock.patch.object(controller_core_module, "read_draft_file") as loader:
             self.assertEqual(controller.run_session_lobby(), 0)
         self.assertEqual(runtime.calls, [])
         loader.assert_not_called()
@@ -412,12 +412,12 @@ class InteractiveConsensusDispatchTests(InteractiveConversationTestCase):
         )
         with (
             mock.patch.object(
-                controller_module,
+                controller_core_module,
                 "read_draft_file",
                 return_value="exact loaded draft\r\n\x00",
             ) as loader,
             mock.patch.object(
-                controller_module.asyncio,
+                controller_core_module.asyncio,
                 "run",
             ) as run_boundary,
         ):
@@ -592,7 +592,7 @@ class InteractiveConsensusResultTests(InteractiveConversationTestCase):
             runtime=runtime,  # type: ignore[arg-type]
         )
         with mock.patch.object(
-            controller_module,
+            controller_core_module,
             "read_draft_file",
             side_effect=("", "", "nonempty draft", "nonempty draft"),
         ) as loader:
@@ -1144,7 +1144,7 @@ class RealRetainedConsensusRuntimeTests(InteractiveConversationTestCase):
                 wraps=store.read_context,
             ) as read_context,
             mock.patch.object(
-                controller_module.asyncio,
+                controller_core_module.asyncio,
                 "run",
             ) as run_boundary,
         ):
