@@ -10,12 +10,12 @@ Key terms: **terminal**—nonresumable; **lease proof**—session active and `OW
 ## Debate and shell-run recovery
 
 Debate IDs reserve before providers and cannot resume/reuse; `active` is not
-liveness. Inspect, fix, and choose a new ID; deadlock needs revised input.
-Context sidecars evidence included/fresh/legacy mode, not replay.
+liveness. Inspect, fix, and choose a new ID. Context sidecars evidence context
+mode, not replay.
 
-Expected outcomes use fixed codes, not candidate, critique, result-action,
-model, or exception prose. Workspace failure returns safely only with the same
-active `OWNED` session; failed proof clears state and exits. See
+Expected outcomes use fixed codes, not result/model/exception prose. Workspace
+failure returns safely only with the same active `OWNED` session; failed proof
+clears state and exits. See
 [CLI mappings](../reference/cli.md#interactive-consensus).
 
 Observer failure raises `ProgressObserverError`; before durability it
@@ -28,14 +28,13 @@ observer failure remains its cause.
 One lifecycle `asyncio.Runner` serves advisory/consensus until cleanup. Delivery
 must first produce `KeyboardInterrupt`; controller proof then decides recovery.
 
-Advisory first SIGINT returns attached pre-entry only if Runner task inspection
-proves quiescence; fixed copy appears without selection/target/durable mutation
-or runtime/provider call. Entered recovery requires runtime `CancelledError`
-and join. Only then can runtime append
+Advisory first SIGINT returns attached pre-entry only when Runner inspection
+proves quiescence, without state/provider work. Entered recovery requires
+runtime `CancelledError` and join. Only then can runtime append
 `CancelledError: conversation turn was cancelled`, failed storage leave an
 unmatched user, or incomplete history become tainted.
-Nonquiescent pre-entry, unjoined, or bare cancellation is fatal
-`operation_interrupted`. See
+Nonquiescent, unjoined, or bare cancellation is fatal `operation_interrupted`.
+See
 [exact records](../reference/interactive-terminal.md#exact-cancellation-records).
 
 Consensus Ctrl-C before entry is provider-free/nonmutating when the Runner is
@@ -49,40 +48,37 @@ remain; final result/hint is omitted, with no second read/write.
 
 ## POSIX PTY boundary
 
-On supported POSIX, process tests give the CLI a real controlling PTY and send
-its configured VINTR/VEOF bytes rather than injecting controller exceptions.
-VINTR becomes process SIGINT/`KeyboardInterrupt`; the proof rules above then
-apply. VEOF exercises actual terminal EOF input paths.
+On supported POSIX, process tests use a controlling PTY and configured
+VINTR/VEOF bytes. VINTR becomes SIGINT/`KeyboardInterrupt`; VEOF exercises real
+terminal EOF paths.
 
-The suite covers TTY/non-TTY guards, prompts, subject/search/retrieval/consensus,
-composition, cancellation, and partial rendering under
-`NO_COLOR=1` and `TERM=dumb`. It confirms provider termination/taint, interrupted
-debate durability, lease release, and Runner/backend cleanup. The shell creates
-no terminal history.
+The `TERM=dumb` journey proves unchanged line-input fallback without suggestions
+or ANSI. A capable `TERM=xterm-256color` case shows the full panel before Enter,
+prefix editing and clearing, no provider/durable mutation, and exact attribute
+restoration. The wider suite covers shell workflows, cancellation, provider
+taint, debate durability, leases, and cleanup. The shell creates no history.
 
-Unavailable POSIX modules, PTY setup, or byte VINTR/VEOF skips explicitly.
-Windows console emulation is unverified and out of scope.
+Unavailable POSIX modules, PTY setup, or VINTR/VEOF bytes skip explicitly.
+Windows console emulation remains unverified.
 
 ## Input, EOF, terminal, and cleanup
 
-Main-prompt Ctrl-C reports no action. Composer Ctrl-C or `/cancel` discards its
-buffer. No/blank/Ctrl-C end confirmation stays attached; confirmation EOF exits
-without ending. Confirmed end deactivates/releases the lease, retains saved
-selections, clears process scope, resets target to lead, and returns to the
-lobby. Main/compose EOF, `/quit`, and `/exit` clean up without deactivation.
+Main Ctrl-C reports no action; composer Ctrl-C or `/cancel` discards. Negative,
+blank, or interrupted end confirmation stays attached; its EOF exits. Confirmed
+end deactivates/releases, retains selections, clears scope, resets lead, and
+returns to lobby. Main/compose EOF and quit aliases clean up without deactivation.
 
-Terminal input/output `OSError` is `operation_interrupted`; input `RuntimeError`
-is `internal_error`. Both exit `2` through cleanup. Progress-output `OSError` or
-`KeyboardInterrupt` is `operation_interrupted`; other callback failure is
-`internal_error`. Diagnostic output is best effort and never skips cleanup.
+The capable editor restores captured attributes after submit, control events,
+and active failure. Unsupported or recoverable pre-input setup uses fallback;
+unproved restoration is fatal `internal_error`. Terminal I/O `OSError` is
+`operation_interrupted`; input `RuntimeError` and other callback failure are
+`internal_error`. Both exit `2` through cleanup; diagnostics remain best effort.
 
-Cleanup attempts `Runner.close()` → known detach → `backend.close()`. Runner
-close finalizes residual tasks/async generators. Failure still attempts later
-stages, clears process-only attachment/selection/memory, exits
-`2`, and emits at most one best-effort `cleanup_failed`. If Runner close gets a
-`BaseException`, later stages run and process scope clears, but its unproved
-reference remains before propagation. Durable sessions, selections, threads,
-transcripts, debates, and artifacts follow normal lifecycle rules.
+Cleanup attempts `Runner.close()` → detach → `backend.close()`, including later
+stages after failure. It clears process scope, exits `2`, and emits at most one
+best-effort `cleanup_failed`. A Runner-close `BaseException` propagates after
+later cleanup, retaining its unproved reference. Durable state follows normal
+lifecycle rules.
 
 ## Session, management, and current limits
 

@@ -51,7 +51,8 @@ provider calls finish in another order.
 | `ConversationMemoryService` | One attachment-scoped search/read authorization |
 | `conversation_retrieval` | Immutable actions, observations, policy, and runtime/backend handler port |
 | `ConversationEventStore` | Authoritative events and complete-turn context |
-| `InteractiveTerminal` | Synchronous input and safe primitive presentation |
+| `InteractiveMainLineEditor` | Call-local POSIX main-input editing, suggestions, fallback, and restoration |
+| `InteractiveTerminal` | Typed input facade and safe primitive presentation |
 | `StoryRuntime` | Debate/advisory orchestration and retrieval authority |
 | `AgentBackend` | Sessions, threads, provider processes, and retrieval call loop |
 
@@ -92,11 +93,12 @@ never appends, calls `read_context`, or calls a bound agent.
 
 ## Dependency direction
 
-The CLI creates terminal, backend, and controller. Controller depends downward
-on runtime and presentation/storage contracts. Runtime and backend both depend
-on provider-neutral retrieval contracts; only runtime depends on memory search.
-The handler port prevents backend-to-orchestrator access, keeping the graph
-acyclic.
+The CLI injects the editor's main-read callback into the terminal before
+creating backend/controller. The editor uses only command metadata and terminal
+sanitization. Controller construction is unchanged and receives completed
+actions; it depends downward on runtime and presentation/storage. Runtime and
+backend use provider-neutral retrieval contracts; the handler port prevents
+backend-to-orchestrator access, keeping the graph acyclic.
 
 This supports deterministic test collaborators but is not a dynamically
 loaded plugin system. Exact public imports live in

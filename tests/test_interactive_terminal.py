@@ -557,9 +557,18 @@ class PublicContractTests(unittest.TestCase):
 class PromptAndRenderingTests(unittest.TestCase):
     def test_constructor_requires_callbacks_and_width_at_least_twenty(self) -> None:
         signature = inspect.signature(InteractiveTerminal)
+        self.assertEqual(
+            tuple(signature.parameters),
+            ("read_line", "write_text", "width", "main_read_line"),
+        )
         self.assertEqual(signature.parameters["width"].default, 80)
         self.assertEqual(
             signature.parameters["width"].kind,
+            inspect.Parameter.KEYWORD_ONLY,
+        )
+        self.assertIsNone(signature.parameters["main_read_line"].default)
+        self.assertEqual(
+            signature.parameters["main_read_line"].kind,
             inspect.Parameter.KEYWORD_ONLY,
         )
         subject_signature = inspect.signature(
@@ -681,6 +690,12 @@ class PromptAndRenderingTests(unittest.TestCase):
                         write_text,
                         width=width,
                     )
+        with self.assertRaises(TypeError):
+            InteractiveTerminal(
+                lambda prompt: "",
+                lambda text: None,
+                main_read_line=object(),  # type: ignore[arg-type]
+            )
 
     def test_main_prompts_are_exact_and_return_unparsed_lines(self) -> None:
         self.assertEqual(
@@ -717,6 +732,31 @@ class PromptAndRenderingTests(unittest.TestCase):
                     callbacks.prompts,
                     [f"story[SESSION:{alias}]> "],
                 )
+
+    def test_optional_main_reader_is_used_only_for_the_main_prompt(self) -> None:
+        general_callbacks = ScriptedCallbacks("subject")
+        main_callbacks = ScriptedCallbacks("/status")
+        terminal = InteractiveTerminal(
+            general_callbacks.read_line,
+            general_callbacks.write_text,
+            main_read_line=main_callbacks.read_line,
+        )
+
+        self.assertEqual(
+            terminal.read_main(),
+            TerminalAction(TerminalActionKind.LINE, text="/status"),
+        )
+        self.assertEqual(
+            terminal.request_conversation_subject(),
+            TerminalAction(TerminalActionKind.LINE, text="subject"),
+        )
+        self.assertEqual(main_callbacks.prompts, ["story[lobby]> "])
+        self.assertEqual(
+            general_callbacks.prompts,
+            ["conversation[subject]> "],
+        )
+        self.assertEqual(main_callbacks.records, [])
+        self.assertEqual(general_callbacks.records, [])
 
     def test_main_read_maps_terminal_events_and_propagates_bad_collaborators(
         self,

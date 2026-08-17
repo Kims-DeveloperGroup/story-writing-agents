@@ -22,58 +22,58 @@
 
 ## Smoke report
 
-`story smoke` writes one-line compact key-sorted JSON. Success keys are exactly
+`story smoke` writes compact key-sorted JSON. Success keys are exactly
 `checks`, `command`, `debate_id`, `debate_status`,
 `note`, `provider_tested`, `revision_id`, `rounds_completed`, `session_id`,
 `status`, and `workspace`; a named invariant failure adds only `failed_check`.
 `workspace` contains only `mode`, `path`, and `retained`.
 
-On a pass, `provider_tested:false` and `checks` is exactly, in order:
+On a pass, `provider_tested:false`; `checks` is exactly, in order:
 `workspace_initialized`,
 `directive_persisted`, `conversation_catalog_persisted`, `conversation_routing`,
 `conversation_search`, `conversation_resumed`, `conversation_retrieval`,
 `consensus_context`, `revision_workflow`, `consensus_persisted`,
-`manuscript_committed`, `core_documents_unchanged`. No top-level conversation ID
-or provider detail is added.
+`manuscript_committed`, `core_documents_unchanged`. No top-level conversation ID or
+provider detail appears.
 
-Without `--workspace`, normal success or invariant failure removes the temporary
-workspace; an explicit workspace retains unique plaintext diagnostics and is
-not read-only. Exit `0` passes, `1` returns failed JSON with the completed check
-prefix and `failed_check`, and `2` covers usage, setup, or unexpected failure.
-Pre-debate failure keeps `debate_status:"not_run"`, null revision, and zero
-rounds. See [smoke guide](../guides/smoke-test.md).
+Implicit workspaces are removed after success or invariant failure; explicit
+ones retain mutable plaintext diagnostics. Exit `0` passes, `1` includes the
+completed check prefix and `failed_check`, and `2` covers usage/setup/unexpected
+failure. Pre-debate failure reports `debate_status:"not_run"`, null revision, and zero rounds.
+See the [smoke guide](../guides/smoke-test.md).
 
 <a id="interactive-streams"></a>
 
-`argparse` owns help and syntax. Bare entry takes no options. Both streams must
-be TTYs before workspace or backend access; failure exits `2`.
+`argparse` owns syntax; bare entry takes no options. Both streams must be TTYs
+before workspace/backend access or exit `2`. The guarded CLI adds main-prompt
+live editing only on capable POSIX with nonempty, non-`dumb` `TERM`. Unsupported
+or safely restored pre-input failure uses `input()` without ANSI. Other reads
+are unchanged; the editor neither parses nor dispatches. See the
+[exact contract](interactive-terminal.md#main-prompt-live-suggestions).
 
 ## Interactive management and gates
 
-`/help [COMMAND]` (alias `/?`) and `/status` are global. Lobby status reports
-workspace/saved session; attached status adds selected conversation, target,
-context/search accounting, and latest current-session run.
+`/help [COMMAND]` (`/?`) and `/status` are global. Status reports lobby or
+attached scope, target, context/search, and latest-run facts.
 
-Target/conversation/search/transcript/directive/inspection require attachment;
-messages/consensus/history also require active selection. Transcript includes
-archives; search is active-only.
+Target, conversation, local-read, directive, and inspection actions require
+attachment; messages, consensus, and history also require active selection.
+Transcript includes archives; search is active-only.
 
 Attached `/language ARG`, `/persona AGENT ARG`, and `/reset` use runtime
 directives without selection. Agent IDs canonicalize; only atomic success
 mutates. Errors are `agent_invalid` or `configuration_invalid`.
 
 `/history [COUNT]` reads one selected snapshot: omitted means all; positive ASCII
-means newest events chronologically. It preserves kinds, unmatched user events,
-and whitespace; empty is normal. Summary includes event/context accounting. No
-pager, provider, or write.
+means newest events chronologically. It preserves kinds, unmatched users, and
+whitespace; its summary accounts for events/context. No pager, provider, or
+write exists.
 
-`/inspect` summarizes attachment; `/inspect ID` reads a current-session debate;
-`/inspect last` uses this process's latest accepted `started`. Output whitelists
-lifecycle/artifact/context metadata, never content/provider fields. Missing is
-normal or `not_found` as documented.
+`/inspect` summarizes attachment; `ID` reads a current-session debate and `last`
+uses this process's latest accepted `started`. Output whitelists metadata, never
+content/provider fields. Missing is normal or `not_found`.
 
-Management preserves scope, transcripts, catalog, artifacts, and provider state
-except successful directives. See [grammar](interactive-command-parser.md),
+See [grammar](interactive-command-parser.md),
 [transcripts](conversation-transcripts.md), and [inspection](../guides/inspection-and-recovery.md).
 
 <a id="interactive-consensus"></a>
@@ -86,35 +86,35 @@ except successful directives. See [grammar](interactive-command-parser.md),
 | `/run --fresh PROMPT` | Records selected identity; sends no transcript. |
 | `/draft-file PATH` | Strict-UTF-8 draft with one selected snapshot. |
 
-Runs revalidate scope and may write debate artifacts, never transcripts. Draft
-paths use caller CWD, expand `~`, follow symlinks, and invoke no shell;
-invalid/empty is `draft_input_invalid`.
+Runs revalidate scope and may write artifacts, never transcripts. Draft paths
+use caller CWD, expand `~`, follow symlinks, and invoke no shell; invalid/empty
+is `draft_input_invalid`.
 
 Fixed codes are `consensus_deadlock`, `provider_preflight_failed`,
 `provider_protocol_error`, `transcript_invalid`, `workspace_invalid`,
 `artifact_conflict`, and `consensus_failed`; unexpected contracts are fatal
-`internal_error`. Output omits exception/model/result prose. `/send` and
+`internal_error`. Output omits exception/model/result prose; `/send` and
 `/cancel` only compose bare `/run`; artifact commands remain unavailable.
 
 ## Interactive cancellation
 
-One controller loop serves advisory and consensus. Main Ctrl-C does nothing;
-composer Ctrl-C or `/cancel` discards its buffer; either EOF cleans up.
+Main Ctrl-C takes no action; composer Ctrl-C or `/cancel` discards its buffer;
+EOF cleans up.
 
 Pre-entry first SIGINT recovers only from a quiescent Runner, without runtime,
 provider, or durable mutation. Entered recovery requires `CancelledError` and
 join; consensus also requires terminal `INTERRUPTED` proof.
 
 Missing proof, nonquiescence, or join failure is fatal. Cancelled local reads
-keep completed output without final result or write. See the
+keep completed output without result/write. See the
 [terminal reference](interactive-terminal.md) and [recovery guide](../operations/recovery-and-limitations.md).
 
 ## Workspace, noninteractive behavior, and exits
 
-Except `init`/`smoke`, commands need the nearest workspace. Session precedence:
-`--session`, lifecycle positional ID, saved selection. Noninteractive `run` has
-no conversation context; its JSON/stderr and `inspect` JSON remain unchanged.
+Except `init`/`smoke`, commands need the nearest workspace. Session precedence
+is `--session`, lifecycle positional ID, then saved selection. Noninteractive
+`run` has no conversation context; its JSON/stderr and `inspect` JSON are
+unchanged.
 
 Exits: `0` success/shell end; `1` failed smoke invariant; `2` usage/setup/fatal
-shell; `3` noninteractive deadlock; `4` noninteractive failure. See [Consensus runs](../guides/consensus-runs.md) and
-[Terminal safety](../operations/terminal-safety.md).
+shell; `3` noninteractive deadlock; `4` noninteractive failure. See [Consensus runs](../guides/consensus-runs.md) and [Terminal safety](../operations/terminal-safety.md).

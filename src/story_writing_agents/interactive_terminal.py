@@ -382,7 +382,7 @@ def sanitize_terminal_text(text: str) -> str:
 class InteractiveTerminal:
     """Render plain terminal records and collect one input operation at a time."""
 
-    __slots__ = ("_read_line", "_width", "_write_text")
+    __slots__ = ("_main_read_line", "_read_line", "_width", "_write_text")
 
     def __init__(
         self,
@@ -390,18 +390,30 @@ class InteractiveTerminal:
         write_text: Callable[[str], None],
         *,
         width: int = 80,
+        main_read_line: Callable[[str], str] | None = None,
     ) -> None:
-        """Bind borrowed synchronous I/O callbacks and a fixed wrap width."""
+        """Bind borrowed synchronous I/O callbacks and a fixed wrap width.
+
+        The established ``read_line`` callback remains responsible for subject,
+        confirmation, and composition input. An optional keyword-only
+        ``main_read_line`` handles only completed main-prompt lines and defaults
+        to ``read_line``. Construction performs no I/O or resource acquisition.
+        """
 
         if not callable(read_line):
             raise TypeError("read_line must be callable")
         if not callable(write_text):
             raise TypeError("write_text must be callable")
+        if main_read_line is not None and not callable(main_read_line):
+            raise TypeError("main_read_line must be callable or None")
         if not isinstance(width, int) or isinstance(width, bool):
             raise TypeError("width must be an integer")
         if width < 20:
             raise ValueError("width must be at least 20")
         self._read_line = read_line
+        self._main_read_line = (
+            read_line if main_read_line is None else main_read_line
+        )
         self._write_text = write_text
         self._width = width
 
@@ -411,11 +423,17 @@ class InteractiveTerminal:
         session_id: str | None = None,
         agent_id: str | None = None,
     ) -> TerminalAction:
-        """Read one unparsed main-prompt line or terminal control event."""
+        """Return one unparsed completed main line or typed terminal event.
+
+        The validated scope selects the exact prompt. The borrowed main reader
+        owns any live-editing resources and cleanup; this facade only maps
+        ``KeyboardInterrupt`` and ``EOFError`` and validates the returned line.
+        Other collaborator failures propagate without parsing or mutation.
+        """
 
         prompt = _main_prompt(session_id=session_id, agent_id=agent_id)
         try:
-            line = self._read_line(prompt)
+            line = self._main_read_line(prompt)
         except KeyboardInterrupt:
             return TerminalAction(TerminalActionKind.INTERRUPT)
         except EOFError:

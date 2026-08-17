@@ -898,6 +898,10 @@ class CliTests(unittest.TestCase):
                     mock.patch.object(cli_module, "AgentBackend") as backend,
                     mock.patch.object(
                         cli_module,
+                        "InteractiveMainLineEditor",
+                    ) as line_editor,
+                    mock.patch.object(
+                        cli_module,
                         "InteractiveController",
                     ) as controller,
                 ):
@@ -913,6 +917,7 @@ class CliTests(unittest.TestCase):
                 resolve_workspace.assert_not_called()
                 load_context.assert_not_called()
                 backend.assert_not_called()
+                line_editor.assert_not_called()
                 controller.assert_not_called()
 
     def test_module_non_tty_entry_is_exact_and_does_not_touch_cwd(self) -> None:
@@ -993,6 +998,8 @@ class CliTests(unittest.TestCase):
                 backend_value = mock.Mock()
                 controller_value = mock.Mock()
                 controller_value.run_session_lobby.return_value = 7
+                main_line_editor = mock.Mock()
+                main_line_editor.read_line.return_value = "/status"
                 with (
                     mock.patch.object(sys, "stdin", stdin),
                     mock.patch.object(sys, "stdout", stdout),
@@ -1014,6 +1021,11 @@ class CliTests(unittest.TestCase):
                     ) as backend_factory,
                     mock.patch.object(
                         cli_module,
+                        "InteractiveMainLineEditor",
+                        return_value=main_line_editor,
+                    ) as line_editor_factory,
+                    mock.patch.object(
+                        cli_module,
                         "InteractiveController",
                         return_value=controller_value,
                     ) as controller_factory,
@@ -1033,12 +1045,20 @@ class CliTests(unittest.TestCase):
                     timeout_seconds=timeout,
                     backend_overrides=overrides,
                 )
+                line_editor_factory.assert_called_once_with(input, stdin, stdout)
                 controller_args = controller_factory.call_args.args
                 self.assertEqual(
                     controller_args[:3],
                     (workspace, cli_context, backend_value),
                 )
-                self.assertIsInstance(controller_args[3], InteractiveTerminal)
+                terminal = controller_args[3]
+                self.assertIsInstance(terminal, InteractiveTerminal)
+                action = terminal.read_main()
+                self.assertEqual((action.kind.value, action.text), ("line", "/status"))
+                main_line_editor.read_line.assert_called_once_with(
+                    "story[lobby]> "
+                )
+                self.assertEqual(stdin.readline_calls, 0)
                 controller_value.run_session_lobby.assert_called_once_with(
                     requested_session=requested
                 )
@@ -1190,6 +1210,39 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(stderr.getvalue(), expected_interactive_error(code))
                 self.assertEqual(stdout.getvalue(), "")
                 self.assertNotIn("context-secret", stderr.getvalue())
+
+        stdin = TtyStringIO(is_terminal=True)
+        stdout = TtyStringIO(is_terminal=True)
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(sys, "stdin", stdin),
+            mock.patch.object(sys, "stdout", stdout),
+            mock.patch.object(sys, "stderr", stderr),
+            mock.patch.object(
+                cli_module,
+                "resolve_workspace",
+                return_value=workspace,
+            ),
+            mock.patch.object(
+                cli_module,
+                "load_cli_context",
+                return_value=CliContext(),
+            ),
+            mock.patch.object(
+                cli_module,
+                "InteractiveMainLineEditor",
+                side_effect=RuntimeError("editor-constructor-secret"),
+            ),
+            mock.patch.object(cli_module, "AgentBackend") as backend,
+        ):
+            self.assertEqual(main(["chat"]), 2)
+        self.assertEqual(
+            stderr.getvalue(),
+            expected_interactive_error(InteractiveErrorCode.INTERNAL_ERROR),
+        )
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertNotIn("editor-constructor-secret", stderr.getvalue())
+        backend.assert_not_called()
 
         backend_cases = (
             (ConfigurationError, InteractiveErrorCode.CONFIGURATION_INVALID),

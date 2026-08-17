@@ -4,9 +4,9 @@
 > session supports subject management and local reads; advisory turns and
 > consensus additionally require one selected active conversation.
 
-Key terms: **story session**—durable provider-work scope; **conversation**—one
-subject and visible transcript; **selection**—the active conversation used by
-writes and runs; **sticky target**—the responder for ordinary advisory lines.
+Key terms: **story session**—durable provider-work scope; **conversation**—subject plus
+transcript; **selection**—the active conversation used by writes/runs; **sticky
+target**—the ordinary advisory responder.
 
 ## Enter and attach
 
@@ -18,11 +18,18 @@ Run `story` from an initialized workspace. With no saved session it opens
 /session new draft
 ```
 
-`/session resume [NAME]` attaches an active session or resumes an inactive one.
-`story chat draft` is the explicit startup equivalent. Attachment resets the
-sticky target to `lead`. `/quit`, `/exit`, or EOF releases the lease without
-deactivating the session. `/session end` asks for confirmation, deactivates it,
-and returns to the lobby while retaining saved selections.
+`/session resume [NAME]` attaches active or resumes inactive; `story chat draft` is its explicit
+startup equivalent. Attachment resets target to `lead`. `/quit`, `/exit`, or
+EOF releases the lease without deactivation. Confirmed `/session end`
+deactivates and returns to the lobby while retaining saved selections.
+
+At a capable POSIX main prompt, type `/` to open `[suggestions]`; keep typing an
+exact, case-sensitive prefix to narrow it. The panel shows tokens, not
+completion, arguments, or whether current scope permits a command; use `/help`
+and press Enter to submit the exact buffer. It clears when matching stops or
+input completes. Unsupported terminals and subject, confirmation, or composer
+prompts keep ordinary line input. See the
+[exact token contract](../reference/interactive-terminal.md#main-prompt-live-suggestions).
 
 ## Manage subjects and routing
 
@@ -34,14 +41,13 @@ and returns to the lobby while retaining saved selections.
 | `/conversation subject SUBJECT` | Rename the selected identity. |
 | `/conversation archive [ID]` | Confirm selected archive, or archive another identity directly. |
 
-Copy handles shown by creation, list, search, or transcript output; a subject can
-change but its generated identity cannot. All responders share the selected
-transcript—direct routing is not a private channel.
+Copy handles from creation, list, search, or transcript output. Subjects can
+change; generated identities cannot. All responders share the selected
+transcript—routing is not private.
 
-At the main prompt, an ordinary line or `/say TEXT` uses the sticky target.
-`@plot TEXT` is one-shot; `/to character` changes later ordinary turns. Advisory
-input is exactly one line. Conversation changes preserve the target; session
-attach, switch, or end resets it to `lead`.
+At the main prompt, ordinary text or `/say TEXT` uses the sticky target.
+`@plot TEXT` is one-shot; `/to character` changes later turns. Advisory input is
+one line. Conversation changes preserve target; attach/switch/end reset `lead`.
 
 ## Choose the right memory operation
 

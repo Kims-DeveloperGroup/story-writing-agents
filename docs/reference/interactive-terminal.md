@@ -1,15 +1,15 @@
 # Interactive terminal component
 
-> **Availability:** this module-supported component presents shell input,
-> help, management, search/transcript, retrieval, and routed-reply records;
-> bare `/run` uses its composer.
+> **Availability:** this module-supported component owns shell input, safe
+> records, and bare `/run` composition.
 
 ## Public API
 
 Import from `story_writing_agents.interactive_terminal`, not the facade. Its exact `__all__` is `AttachmentKind`, `ComposeMode`, `ConfirmationResult`, `TerminalActionKind`, `TerminalMessageKind`, `InteractiveErrorCode`, `TerminalAction`, `InteractiveErrorSpec`, `INTERACTIVE_ERROR_SPECS`, `InteractiveError`, `sanitize_terminal_text`, and `InteractiveTerminal`.
 
 ```python
-InteractiveTerminal(read_line, write_text, *, width: int = 80)
+InteractiveTerminal(read_line, write_text, *, width: int = 80,
+                    main_read_line: Callable[[str], str] | None = None)
 read_main(*, session_id=None, agent_id=None) -> TerminalAction
 request_conversation_subject() -> TerminalAction
 request_confirmation(message: str, *, default: bool) -> ConfirmationResult
@@ -29,8 +29,9 @@ write_error(error: InteractiveError, *, secrets=()) -> None
 sanitize_terminal_text(text: str) -> str
 ```
 
-Values are frozen/slotted; minimum width is 20. Callback failures propagate.
-It owns no dispatch, provider, storage, or lifecycle.
+Optional `main_read_line` defaults to `read_line` and serves only `read_main`;
+existing positional calls and other input are unchanged. Record width starts at
+20. No dispatch, provider, storage, or lifecycle is owned.
 
 | Enum | Exact values |
 | --- | --- |
@@ -52,16 +53,30 @@ f"compose[chat:{alias}:{line_number}]> "
 f"compose[run:{line_number}]> "
 ```
 
-Canonical agents are required. Scope shows session, optional conversation,
-subject, and target; rows show handle/lifecycle/selection/subject. Roster/help
-derive from parser metadata. Management reuses status, run, and transcript
-writers. Confirmation is `[Y/n] ` or `[y/N] `; blank chooses the default.
-Ctrl-C/EOF return typed outcomes.
+Confirmation shows `[Y/n] ` or `[y/N] `; blank selects its default. Ctrl-C/EOF
+return typed outcomes.
+
+## Main-prompt live suggestions
+
+The CLI injects it only at main prompts. On capable POSIX, buffer `/` displays
+`[suggestions]` followed by one token per row. Compact
+registry order (not output layout):
+
+```text
+/say /to /agent /agents /language /persona /reset /run /draft-file /session
+/conversation /search /transcript /inspect /history /status /help /? /quit /exit
+```
+
+Case-sensitive whole-buffer prefixes filter; whitespace, no match, submission,
+or control clears it. Tokens neither complete nor reflect scope gates; `/help`
+remains authoritative.
+The main-invalid `/compose`, `/send`, and `/cancel` are excluded. Other prompts
+and unsupported terminals keep ordinary line reads. Editing, control keys, and
+restoration are in [Terminal safety](../operations/terminal-safety.md#live-editor-boundary).
 
 ## Exact search and transcript records
 
-The following are unwrapped templates; values replace braces before safe
-width-wrapping. Each hit and each event is one callback record.
+These templates are safely wrapped after substitution; each remains one record.
 
 ```text
 [search {HANDLE}] Status: {active|archived} | Match: {MATCH} | Subject: {SUBJECT} | Citation: conversation {HANDLE}
@@ -79,12 +94,7 @@ width-wrapping. Each hit and each event is one callback record.
 [hint] Continue with /transcript {HANDLE} {COUNT} --from {NEXT}.
 ```
 
-Subject hits cite conversations; transcript hits require turn/sequence/kind.
-Renderers validate IDs, sequences, metadata, and content.
-
-Whitespace content, empty lines, and trailing LF remain in one record. Controls
-become visible; events are not trimmed or joined. See
-[Terminal safety](../operations/terminal-safety.md).
+Whitespace/LF remain; controls are visible and never joined.
 
 ## Exact cancellation records
 
@@ -96,20 +106,11 @@ become visible; events are not trimmed or joined. See
 | Consensus with trusted durable proof | `[run {DEBATE_ID}] Run interrupted after durable state transition.`<br>`[cancelled] Debate {DEBATE_ID} was marked interrupted.`<br>`[hint] It cannot resume. Use /run to create a new debate.`<br>`[session] "{SESSION_ID}" remains active and attached.` |
 | Partial local render | `[cancelled] Search cancelled; attached state is unchanged.` / `[cancelled] Transcript read cancelled; attached state is unchanged.` / `[cancelled] History cancelled; attached state is unchanged.` |
 
-These controller records use validated placeholders. Composer cancellation is
-a typed buffer discard.
-
 ## Errors and other output
 
-The 33-code registry spans terminal/workspace, session, conversation/retrieval,
-provider, consensus/artifact, and cleanup. Retrieval
-uses `retrieval_invalid`/`retrieval_budget_exhausted`; observer failure is
-`internal_error`. Retrieval copy is in [Bounded retrieval](conversation-retrieval.md).
-
-The controller classifies; the terminal never accepts exceptions. `write_error()`
-redacts supplied secrets, caps summary/hint at 512/256 characters, sanitizes,
-and writes trusted `[error CODE]`/`[hint]` records. Mapping is in
-[Recovery and limitations](../operations/recovery-and-limitations.md).
-
-Composition keeps one exact LF-joined buffer; discard outcomes contain counts,
-not text. Routed replies are sanitized once and never reparsed.
+The controller classifies 33 codes; the terminal accepts no exceptions.
+`write_error()` redacts secrets, caps summary/hint at 512/256 characters, and
+writes sanitized records. See
+[recovery mappings](../operations/recovery-and-limitations.md) and
+[retrieval copy](conversation-retrieval.md). Composition retains exact LF;
+discards expose only counts. Routed replies are never reparsed.

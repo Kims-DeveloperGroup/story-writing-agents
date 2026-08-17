@@ -1,8 +1,7 @@
 # Terminal display safety
 
-> **Availability:** these rules protect the module-supported terminal and the
-> installed shell, including management, search, and transcript records. They
-> do not make callbacks or scrollback private.
+> **Availability:** these rules protect shell live editing and
+> module-supported terminal records. They do not make scrollback private.
 
 Key terms: **TTY guard**—check for interactive streams; **typed error**—trusted
 public code instead of exception prose; **display escaping**—showing a control
@@ -11,11 +10,10 @@ storage; **redaction**—replacing caller-supplied secrets.
 
 ## The TTY guard comes first
 
-After `argparse` accepts bare or `chat` entry, standard input and output must
-both report that they are TTYs. A missing, false, or failing `isatty()` result
-writes one sanitized `tty_required` record to standard error and exits `2`.
-It reads no input and performs no interactive option validation, workspace or
-CLI-context access, backend construction, or controller work.
+After `argparse` accepts bare or `chat`, standard input/output must report TTYs.
+Missing, false, or failing `isatty()` writes sanitized `tty_required` to stderr
+and exits `2`, before input, interactive option validation, workspace/context,
+backend, or controller work.
 
 Help and syntax errors finish in `argparse` before this guard. Standard error
 need not be a TTY. See the [CLI stream contract](../reference/cli.md#interactive-streams).
@@ -35,9 +33,9 @@ U+2028/U+2029 with a visible lowercase escape:
 For example, `ESC[31m` displays as `\x1b[31m` and cannot act as an ANSI escape.
 The result is strict UTF-8, and sanitizing it again changes nothing.
 
-Every writer sends one sanitized string and final LF. Records may retain
-internal LFs. Workspace names, subjects, and snippets are forced inline, so an
-input LF displays as `\x0a`. Stable wrapping never creates commands.
+Primitive record writers send one sanitized string and final LF. Records may
+retain internal LF; inline values display it as `\x0a`. Wrapping never creates
+commands.
 
 Transcript content follows a stricter primitive boundary: it must be an exact
 nonempty string, but whitespace-only content is valid. Sanitization makes
@@ -46,28 +44,27 @@ trailing LF remain lines under `[content] `, and the complete event is still
 one callback record. Events are never joined, trimmed, or split into storage
 records by the terminal.
 
-Search and history/transcript renderers validate primitive types, safe IDs,
-positive sequences, metadata, and complete citations. Management adds no
-renderer: controller-validated summaries use existing status/run primitives;
-raw inspection structures never reach the terminal. Renderers receive no
-service object, open no file, and retain no cursor. Exact templates live in the
+Search/history/transcript renderers validate IDs, sequences, metadata, and
+citations. Controller-validated management summaries reuse primitives; raw
+structures never reach the terminal. Renderers open no file and retain no
+cursor. Exact templates live in the
 [terminal reference](../reference/interactive-terminal.md#exact-search-and-transcript-records).
 
-This is plain-text safety, not trusted rendering. Markdown is preserved but
-not interpreted. The component does not detect color, width, or terminal
-features. The callback, emulator, multiplexer, remote session, or scrollback
-may retain or transform everything displayed.
+Record presentation remains feature-blind plain text. The live editor instead
+checks terminal capability/width and emits only fixed carriage-return,
+cursor-up/right, and clear-to-end controls. Prompt, buffer, and suggestion text
+is sanitized first, with embedded LF visible. No untrusted text becomes ANSI.
+Emulators, multiplexers, remote sessions, and scrollback may still retain or
+transform display.
 
 ## Typed errors, never raw diagnostics
 
-Terminal input or action-output `OSError` maps to `operation_interrupted`; input
-`RuntimeError` maps to `internal_error`. Both exit `2` after cleanup.
-Progress-output `OSError` or
-`KeyboardInterrupt` maps to `operation_interrupted`; other callback failure maps
-to `internal_error`. Failed diagnostic output never skips cleanup.
+Input/action-output `OSError` maps to `operation_interrupted`; input
+`RuntimeError` maps to `internal_error`. Both exit `2` after cleanup. Progress
+`OSError`/`KeyboardInterrupt` maps to the former; other callback failure to the
+latter. Failed diagnostics never skip cleanup.
 
-Other failures are classified by type and public state, never raw exception,
-owner-token, or path text. Parser errors may show parser-owned token copy.
+Other failures use type/public state, never raw exception, token, or path text.
 
 `write_error()` accepts a trusted error and explicit secret strings. It builds
 raw, JSON, visible-escape, collapsed, and control-normalized variants; replaces
@@ -76,22 +73,39 @@ caps them at 512 and 256 characters; then sanitizes and wraps the record.
 Redaction covers supplied variants, not unknown credentials.
 
 Conversation failures distinguish invalid, missing, ambiguous, archived, and
-transcript-invalid input from unsafe or invalid workspace state. The terminal
-never accepts an exception or chooses among those categories. Shell mapping
-and lease-confirmation consequences belong to
+transcript-invalid input from workspace state. The terminal never classifies
+exceptions. Shell and lease consequences belong to
 [Recovery](recovery-and-limitations.md).
 
-## Input and process-local state
+<a id="live-editor-boundary"></a>
 
-Display escaping does not change text returned in a `TerminalAction`.
-Composition keeps exact LF-joined lines only for one `compose()` call; cancel,
-Ctrl-C, or EOF returns counts but no text. This is not secure erasure because
-callbacks, the terminal, or process memory may retain copies.
+## Live-editor boundary
 
-The component contacts no provider and stores no search index, transcript, or
-history. The controller passes each validated result once to primitive writers.
-Command-looking snippets, event content, and provider replies are displayed as
-content and never reparsed or executed.
+Live mode requires POSIX `termios`, capable TTY streams/descriptors and size,
+and nonempty, non-`dumb` `TERM`. Missing capability switches to the existing
+reader before editor I/O or terminal mutation. Recoverable activation
+failure restores first, then falls back.
+
+An active read disables canonical input and echo, keeps a Unicode
+code-point buffer, and supports insertion, Left/Right, Home/End,
+Backspace/Delete, Enter, and configured VINTR/VEOF. Enter submits; VEOF submits
+nonempty text or returns EOF when empty; VINTR returns interrupt. Submission
+clears the panel; failure attempts it; both restore captured attributes.
+Active failures propagate after restoration; restoration uncertainty is fatal
+`internal_error`. See the [exact tokens](../reference/interactive-terminal.md#main-prompt-live-suggestions).
+
+Preview calls no parser, provider, filesystem, persistence, subprocess, or
+network. It changes only call-local editor/terminal state; the exact buffer is
+passed once to the terminal/controller boundary.
+
+## Other input and process-local state
+
+Escaping does not change a returned `TerminalAction`. Composition keeps exact
+LF-joined lines per call; discard returns counts, not text. This is not secure
+erasure because terminal/process memory may retain copies.
+
+The component stores no search index, transcript, or history. Command-looking
+content and replies are never reparsed or executed.
 
 Terminal errors are presentation-only, not transcript `runtime_error` events.
 Stored runtime diagnostics use separate redaction and a 4096-character cap;

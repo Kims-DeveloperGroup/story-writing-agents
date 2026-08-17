@@ -16,7 +16,7 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 21.
+Importable production units indexed: 22.
 
 ## Current Dependency Direction
 
@@ -28,6 +28,7 @@ __main__ -> cli -> interactive_controller -> agents/backend/cli_context
                  |                         -> conversation_retrieval/conversation_search
                  |                         -> conversations/errors/interactive_commands
                  |                         -> interactive_terminal/models/orchestrator/run_inputs/workspace
+                 -> interactive_line_editor -> interactive_commands/interactive_terminal
                  -> interactive_terminal -> interactive_commands/agents
                  -> run_inputs -> errors
                  -> orchestrator -> conversation_retrieval -> agents/conversation_search
@@ -204,16 +205,18 @@ every intermediate arrow. The current runtime graph is acyclic.
   both `story` and `story-writing-agents`. `build_parser` and other helpers are
   not package-supported APIs.
 - **Direct internal dependencies:** `agents`, `backend`, `cli_context`, `config`,
-  `errors`, `interactive_controller`, `interactive_terminal`, `models`,
-  `orchestrator`, `run_inputs`, and `workspace`; imports `smoke` lazily for the
-  diagnostic command.
+  `errors`, `interactive_controller`, `interactive_line_editor`,
+  `interactive_terminal`, `models`, `orchestrator`, `run_inputs`, and
+  `workspace`; imports `smoke` lazily for the diagnostic command.
 - **State, resources, and side effects:** Reads terminal input and delegates
   caller-selected draft-file reads to `run_inputs`; writes JSON, plain-text
-  interaction, or errors to standard streams; creates backends; constructs the
-  interactive controller after a stdin/stdout TTY guard; and runs the async
-  event loop. The controller owns interactive backend cleanup after its
-  session-lobby run begins, while the CLI closes a backend if construction
-  fails before that ownership transfer.
+  interaction, or errors to standard streams; creates backends; constructs one
+  main-only live line editor and injects it into the terminal after a
+  stdin/stdout TTY guard; constructs the interactive controller; and runs the
+  async event loop. The editor retains the existing `input` callback as its
+  unsupported-terminal fallback. The controller owns interactive backend
+  cleanup after its session-lobby run begins, while the CLI closes a backend if
+  construction fails before that ownership transfer.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
   `tests/test_cli_context.py`, `tests/test_smoke_cli.py`, and
   `tests/test_interactive_pty.py` for primary process-level POSIX PTY
@@ -503,6 +506,38 @@ every intermediate arrow. The current runtime graph is acyclic.
   `docs/reference/conversation-retrieval.md` verify the current collaborator,
   lifecycle, and retrieval-presentation contracts.
 
+### `story_writing_agents.interactive_line_editor`
+
+- **Source:** `src/story_writing_agents/interactive_line_editor.py`
+- **Responsibility:** Own one live interactive main-prompt editing operation.
+- **Supported surface:** Module-supported frozen, slotted
+  `SlashCommandSuggestion`, pure `slash_command_suggestions`, and
+  `InteractiveMainLineEditor`. Suggestions project canonical tokens and aliases
+  directly from `interactive_commands.COMMANDS` in registry order, retain each
+  alias's canonical identity, exclude the three main-unavailable composition
+  tokens, and match exact case-sensitive whole-buffer prefixes without parsing.
+  `InteractiveMainLineEditor.read_line` returns one unchanged Python Unicode
+  code-point buffer or raises the established interrupt/EOF events.
+- **Direct internal dependencies:** `interactive_commands` and
+  `interactive_terminal`.
+- **State, resources, and side effects:** Instances retain borrowed fallback,
+  input-stream, and output-stream collaborators but acquire no resource during
+  construction or import. A capable POSIX read owns call-local terminal
+  attributes, Unicode buffer/cursor state, escape-sequence state, terminal
+  width, and one transient sanitized `[suggestions]` panel. It supports fixed
+  insertion, deletion, and cursor controls, submits nonempty Ctrl-D buffers,
+  and restores the exact captured terminal configuration after normal or
+  exceptional completion; restoration uncertainty is fatal. Unsupported,
+  `TERM=dumb`, or safely restored pre-consumption setup paths call the existing
+  line-input fallback without ANSI output. The module performs no provider,
+  filesystem, persistence, subprocess, network, or import-time operational
+  side effect.
+- **Primary verification/documentation:** `tests/test_interactive_line_editor.py`,
+  `tests/test_interactive_terminal.py`, `tests/test_public_api_and_cli.py`, and
+  `tests/test_interactive_pty.py`;
+  `docs/reference/interactive-terminal.md`, `docs/reference/cli.md`, and
+  `docs/operations/terminal-safety.md`.
+
 ### `story_writing_agents.interactive_terminal`
 
 - **Source:** `src/story_writing_agents/interactive_terminal.py`
@@ -512,8 +547,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ConfirmationResult`, `TerminalActionKind`, `TerminalMessageKind`,
   `InteractiveErrorCode`, `TerminalAction`, `InteractiveErrorSpec`,
   `INTERACTIVE_ERROR_SPECS`, `InteractiveError`, `sanitize_terminal_text`, and
-  `InteractiveTerminal`. `InteractiveTerminal.request_confirmation` returns a
-  typed yes/no/interrupt/EOF result, and `write_session_orientation` accepts an
+  `InteractiveTerminal`. Its established two positional callbacks and
+  keyword-only width remain compatible; additive keyword-only `main_read_line`
+  defaults to `read_line` and is used only by `read_main`.
+  `InteractiveTerminal.request_confirmation` returns a typed
+  yes/no/interrupt/EOF result, and `write_session_orientation` accepts an
   optional history count whose absence omits history claims.
   `request_conversation_subject` performs one typed line/interrupt/EOF read;
   `write_conversation_scope` and `write_conversation_list_entry` render bounded
@@ -532,11 +570,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   renderers and validation helpers are unchanged and private.
 - **Direct internal dependencies:** `agents` and `interactive_commands`.
 - **State, resources, and side effects:** Instances retain borrowed synchronous
-  line-read and text-write callbacks plus an immutable display width; each
-  composition call and subject request own only call-local input state. Methods
-  read through the supplied callback and write sanitized, newline-terminated
-  plain-text blocks, including adjacent conversation scope, listing rows, and
-  the metadata-derived agent roster. Prompt aliases derive from
+  general-line-read, main-line-read, and text-write callbacks plus an immutable
+  display width; each composition call and subject request own only call-local
+  input state. `read_main` maps completed input or terminal events from its
+  dedicated callback without owning editor resources, while every other input
+  operation retains the established general reader. Methods write sanitized,
+  newline-terminated plain-text blocks, including adjacent conversation scope,
+  listing rows, and the metadata-derived agent roster. Prompt aliases derive from
   `AGENT_ROUTES`; the module owns immutable display metadata, no persistent or
   external resource, and performs no provider, filesystem, persistence,
   environment, or import-time operational side effects. Search-hit and
@@ -722,13 +762,19 @@ every intermediate arrow. The current runtime graph is acyclic.
 ## Consistency Notes
 
 - `interactive_commands` owns canonical command and agent-route metadata, parse
-  rules, and typed parsed actions. `interactive_terminal` consumes its public
-  `COMMANDS` and `AGENT_ROUTES` metadata plus canonical display names to own
-  safe prompt, confirmation, help, roster, status, error, call-local
-  composition, subject input, conversation scope, catalog-row, search-hit, and
-  transcript-event presentation. Issue #21 adds two immutable retrieval error
+  rules, and typed parsed actions. `interactive_line_editor` projects the
+  main-eligible canonical tokens and declared aliases directly from `COMMANDS`,
+  owns call-local POSIX editing and transient sanitized suggestion redraw, and
+  reaches the existing public terminal sanitizer without creating a registry
+  or parser edge. `interactive_terminal` consumes public `COMMANDS` and
+  `AGENT_ROUTES` metadata plus canonical display names to own safe prompt,
+  confirmation, help, roster, status, error, call-local composition, subject
+  input, conversation scope, catalog-row, search-hit, and transcript-event
+  presentation. Its additive main-reader callback delegates editor resources
+  without changing typed outcomes. Issue #21 adds two immutable retrieval error
   entries without changing message kinds, rendering, or dependencies. The
-  terminal returns typed outcomes without dispatching them.
+  controller still receives only completed terminal outcomes and alone passes
+  exact lines to the parser.
 - `interactive_controller` owns interactive shell action mapping, current
   in-memory attachment, selected-conversation and sticky-target state,
   process-local per-session latest accepted STARTED debate IDs, transition and
