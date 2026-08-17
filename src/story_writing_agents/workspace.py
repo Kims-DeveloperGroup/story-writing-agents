@@ -167,6 +167,7 @@ WORKSPACE_DIRECTORIES: tuple[str, ...] = (
     "config/agents/execution_specialist",
     "config/persona_templates/alternative_templates",
     "core_documents",
+    "agent_states/orchestrator_state/conversation_defaults",
     "agent_states/orchestrator_state/sessions",
     "agent_states/orchestrator_state/provider_sessions",
     "agent_states/plot_architect_state",
@@ -238,6 +239,7 @@ class Workspace:
             self._ensure_text(f"core_documents/{filename}", content)
         for state_dir in (
             "agent_states/orchestrator_state",
+            "agent_states/orchestrator_state/conversation_defaults",
             "agent_states/orchestrator_state/sessions",
             "agent_states/plot_architect_state",
             "agent_states/character_custodian_state",

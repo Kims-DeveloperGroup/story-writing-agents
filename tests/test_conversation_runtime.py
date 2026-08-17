@@ -34,7 +34,10 @@ from story_writing_agents import (
     FilesystemConversationEventStore,
     PLOT_ARCHITECT,
     RuntimeSession,
+    SessionAccessState,
+    SessionDurableState,
     SessionIdError,
+    SessionLifecycleState,
     StoryRuntime,
     Workspace,
     WorkspaceFormatError,
@@ -186,7 +189,7 @@ class _ConversationBackend:
         handler: ConversationHandler | None = None,
         *,
         trace: list[str] | None = None,
-        prepare_error: BaseException | None = None,
+        configuration_error: BaseException | None = None,
         bind_error: BaseException | None = None,
         bind_hook: Callable[[AgentDefinition], None] | None = None,
         bound_factory: Callable[
@@ -195,11 +198,12 @@ class _ConversationBackend:
     ) -> None:
         self.handler = handler or self._default_handler
         self.trace = trace if trace is not None else []
-        self.prepare_error = prepare_error
+        self.configuration_error = configuration_error
         self.bind_error = bind_error
         self.bind_hook = bind_hook
         self.bound_factory = bound_factory or _ConversationBoundAgent
-        self.prepared_sessions: list[str] = []
+        self.lifecycle_sessions: list[str] = []
+        self.access_held: set[str] = set()
         self.definitions: list[AgentDefinition] = []
         self.requests: list[ConversationRequest] = []
 
@@ -212,11 +216,42 @@ class _ConversationBackend:
             f"reply to {request.content}",
         )
 
-    def prepare_session(self, session_id: str) -> None:
-        self.trace.append("prepare_session")
-        self.prepared_sessions.append(session_id)
-        if self.prepare_error is not None:
-            raise self.prepare_error
+    def validate_provider_configuration(self, session_id: str) -> bool:
+        self.trace.append("validate_provider_configuration")
+        self.lifecycle_sessions.append(session_id)
+        if self.configuration_error is not None:
+            raise self.configuration_error
+        return True
+
+    def get_session_lifecycle(self, session_id: str) -> SessionLifecycleState:
+        self.trace.append("get_session_lifecycle")
+        return self._lifecycle(session_id)
+
+    def acquire_session_access(self, session_id: str) -> SessionLifecycleState:
+        self.trace.append("acquire_session_access")
+        self.access_held.add(session_id)
+        return self._lifecycle(session_id)
+
+    def release_session_access(self, session_id: str) -> SessionLifecycleState:
+        self.trace.append("release_session_access")
+        self.access_held.discard(session_id)
+        return self._lifecycle(session_id)
+
+    def _lifecycle(self, session_id: str) -> SessionLifecycleState:
+        held = session_id in self.access_held
+        return SessionLifecycleState(
+            session_id=session_id,
+            durable_state=SessionDurableState.READY,
+            access_state=(
+                SessionAccessState.HELD_HERE
+                if held
+                else SessionAccessState.CLAIMABLE
+            ),
+            owner_hostname="conversation-test" if held else None,
+            owner_pid=1 if held else None,
+            created_at="2026-01-01T00:00:00+00:00",
+            updated_at="2026-01-01T00:00:00+00:00",
+        )
 
     async def bind(self, definition: AgentDefinition) -> object:
         self.trace.append("bind")
@@ -485,7 +520,10 @@ class ConversationRuntimeSuccessTests(_ConversationRuntimeCase):
             trace,
             [
                 "read_context",
-                "prepare_session",
+                "validate_provider_configuration",
+                "get_session_lifecycle",
+                "acquire_session_access",
+                "get_session_lifecycle",
                 "bind",
                 "append:user_message",
                 "converse",
@@ -966,7 +1004,7 @@ class ConversationRuntimePreflightTests(_ConversationRuntimeCase):
                     store=store,
                     error=BackendProtocolError,
                 )
-        self.assertEqual(backend.prepared_sessions, [])
+        self.assertEqual(backend.lifecycle_sessions, [])
         self.assertEqual(backend.requests, [])
 
     async def test_read_context_errors_and_invalid_values_are_pre_user_failures(
@@ -985,7 +1023,7 @@ class ConversationRuntimePreflightTests(_ConversationRuntimeCase):
         )
         self.assertIs(caught, storage_error)
         self.assertEqual(raising_store.append_calls, [])
-        self.assertEqual(backend.prepared_sessions, [])
+        self.assertEqual(backend.lifecycle_sessions, [])
 
         wrong_session_id = "session_b"
         wrong_conversation_id = catalog.create(
@@ -1028,7 +1066,7 @@ class ConversationRuntimePreflightTests(_ConversationRuntimeCase):
                     error=BackendProtocolError,
                 )
                 self.assertEqual(store.append_calls, [])
-                self.assertEqual(candidate_backend.prepared_sessions, [])
+                self.assertEqual(candidate_backend.lifecycle_sessions, [])
 
         class AwaitableReadStore(_TracingStore):
             def read_context(self, session_id: str, conversation_id: str) -> Any:
@@ -1050,7 +1088,7 @@ class ConversationRuntimePreflightTests(_ConversationRuntimeCase):
         workspace, _, memory, conversation_id = self.memory_fixture()
         preflight_error = ConfigurationError("configuration unavailable")
         store = _TracingStore(memory)
-        backend = _ConversationBackend(prepare_error=preflight_error)
+        backend = _ConversationBackend(configuration_error=preflight_error)
         caught = await self.assert_runtime_failure(
             workspace=workspace,
             backend=backend,
@@ -1062,16 +1100,19 @@ class ConversationRuntimePreflightTests(_ConversationRuntimeCase):
         self.assertEqual(store.append_calls, [])
         self.assertEqual(backend.requests, [])
 
-        class AsyncPrepareBackend(_ConversationBackend):
-            async def prepare_session(self, session_id: str) -> None:
-                raise AssertionError("async preflight must not be called")
+        class AsyncLifecycleBackend(_ConversationBackend):
+            async def validate_provider_configuration(
+                self,
+                session_id: str,
+            ) -> bool:
+                raise AssertionError("async lifecycle hook must not be called")
 
         for malformed_backend in (
-            AsyncPrepareBackend(),
+            AsyncLifecycleBackend(),
             _ConversationBackend(),
         ):
             if type(malformed_backend) is _ConversationBackend:
-                malformed_backend.prepare_session = 1  # type: ignore[method-assign]
+                malformed_backend.acquire_session_access = 1  # type: ignore[method-assign]
             malformed_store = _TracingStore(memory)
             with self.subTest(backend=type(malformed_backend).__name__):
                 await self.assert_runtime_failure(
@@ -1113,7 +1154,7 @@ class ConversationRuntimePreflightTests(_ConversationRuntimeCase):
                 )
                 self.assertEqual(malformed_store.append_calls, [])
 
-    async def test_async_generator_prepare_result_is_sync_preflight_failure(
+    async def test_async_generator_lifecycle_result_is_sync_preflight_failure(
         self,
     ) -> None:
         workspace, _, memory, conversation_id = self.memory_fixture()
@@ -1121,15 +1162,17 @@ class ConversationRuntimePreflightTests(_ConversationRuntimeCase):
         store = _TracingStore(memory)
         returned_generators = []
 
-        async def deferred_prepare():
+        async def deferred_validation():
             yield None
 
-        def prepare_session(_session_id: str) -> object:
-            result = deferred_prepare()
+        def validate_provider_configuration(_session_id: str) -> object:
+            result = deferred_validation()
             returned_generators.append(result)
             return result
 
-        backend.prepare_session = prepare_session  # type: ignore[method-assign]
+        backend.validate_provider_configuration = (  # type: ignore[method-assign]
+            validate_provider_configuration
+        )
         caught = await self.assert_runtime_failure(
             workspace=workspace,
             backend=backend,
@@ -1140,7 +1183,7 @@ class ConversationRuntimePreflightTests(_ConversationRuntimeCase):
 
         self.assertEqual(
             str(caught),
-            "backend prepare_session() must be synchronous",
+            "backend validate_provider_configuration() must be synchronous",
         )
         self.assertEqual(
             store.read_calls,
@@ -1933,7 +1976,7 @@ class ConversationRuntimeArtifactTests(_ConversationRuntimeCase):
             )
 
         self.assertEqual(_tree_snapshot(workspace.root), before)
-        self.assertEqual(backend.prepared_sessions, [])
+        self.assertEqual(backend.lifecycle_sessions, [])
         self.assertEqual(backend.requests, [])
 
 

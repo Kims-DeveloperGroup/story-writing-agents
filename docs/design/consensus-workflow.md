@@ -1,7 +1,7 @@
 # Consensus workflow
 
 > **Availability:** `StoryRuntime` implements prompt and supplied-draft debates,
-> optional selected-conversation context, trusted progress, terminal results,
+> optional focused-conversation context, trusted progress, terminal results,
 > and approved artifact commits.
 
 Key terms: **reservation**—the immutable claim on one debate ID; **snapshot**—
@@ -12,8 +12,8 @@ progress; **observer**—the optional synchronous progress sink.
 ```mermaid
 flowchart TD
     P[Validate input, observer, session, and options] --> C{Context mode}
-    C -->|included| R[Read and canonicalize selected context once]
-    C -->|fresh or legacy| V[Reserve debate ID]
+    C -->|included| R[Read and canonicalize focused context once]
+    C -->|fresh or omitted| V[Reserve debate ID]
     R --> V
     V --> S[Save requested sidecar and initiation log]
     S --> ST[STARTED]
@@ -44,7 +44,7 @@ flowchart TD
 The runtime validates the backend, nonempty input, IDs, round limit, optional
 context request, and observer, then prepares the story session. Included mode
 performs exactly one synchronous context read and canonical validation before
-reservation. Fresh and legacy modes perform no context read. Any failure here
+reservation. Fresh and context-omitted modes perform no context read. Any failure here
 emits nothing and leaves the debate ID unreserved.
 
 Reservation exclusively creates lifecycle state. A requested included or fresh

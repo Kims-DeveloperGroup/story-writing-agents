@@ -64,7 +64,7 @@ names are errors.
 Each role owns static strict-UTF-8 Markdown at
 `config/agents/<agent-id>/AGENTS.md`. The files have no required placeholders
 and are not interpolated into requests. Runtime definitions instead carry a
-content-addressed reference to the role prompt, selected persona, language, and
+content-addressed reference to the role prompt, configured persona, language, and
 allowlisted core documents.
 
 Normal `story init` creates a missing prompt and preserves existing content.
@@ -82,7 +82,7 @@ config/persona_templates/<identifier>.md
 config/persona_templates/alternative_templates/<identifier>.md
 ```
 
-The top-level directory wins when both contain the same identifier. A selected
+The top-level directory wins when both contain the same identifier. A configured
 template must exist when configuration or a directive is validated.
 
 Exact language and persona identifier formats are in

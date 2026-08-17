@@ -1,7 +1,7 @@
 # Conversation catalog
 
 > **Availability:** the provider-neutral catalog and filesystem adapter serve
-> the installed TTY lobby's subject metadata. The lobby adds selection and
+> the installed TTY lobby's subject metadata. The lobby adds defaults/focus and
 > display handles; `StoryRuntime` does not depend on the catalog.
 
 Key terms: **conversation ID**—an immutable identity scoped to one session;
@@ -100,11 +100,11 @@ The immutable catalog ID is the durable identity; subject text may change.
 `/conversation use` and explicit archive accept an exact full ID or a
 case-sensitive unique prefix. An exact ID wins; a nonexact prefix must be at
 least 12 characters. Resolution includes active and archived records, so an
-archived match is found and then rejected for selection.
+archived match is found and then rejected for current focus.
 
 For display, the lobby uses the first 12 ID characters only when that prefix is
 unique across all active and archived records. Otherwise it prints the full ID.
-Copy the shown handle back into commands. Conversation selection itself is a
+Copy the shown handle back into commands. Conversation default/focus is a
 separate per-session record; see [Session storage](configuration/session-storage.md).
 
 An absent catalog lists as `()` without creating or migrating data. Reads
@@ -114,6 +114,6 @@ validate UTF-8, schema, values, timestamps, and path ownership. Failures use
 
 Creation is exclusive and never overwrites an identity. Later mutations
 atomically replace only the complete metadata file. The catalog never invokes
-a provider or changes CLI selection, sessions, transcripts, debates,
+a provider or changes CLI defaults/focus, sessions, transcripts, debates,
 manuscripts, core documents, or agent state. Metadata is plaintext; archive is
 reversible status, not deletion.

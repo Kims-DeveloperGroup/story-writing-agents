@@ -1,40 +1,46 @@
-"""Context-aware CLI workspace, session, and run-input shorthand tests."""
+"""Workspace defaults, lifecycle automation, and run-input tests."""
 
 from __future__ import annotations
 
 import contextlib
-import io
 import inspect
+import io
 import json
 import os
 import tempfile
 import unittest
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 from story_writing_agents import (
-    AgentBackend,
     AgentReply,
+    BackendProtocolError,
     DebateStatus,
     Phase,
-    StoryRuntime,
+    SessionAccessState,
+    SessionDurableState,
+    SessionLifecycleState,
     Workspace,
     initialize_workspace,
 )
 from story_writing_agents import cli as cli_module
 from story_writing_agents.cli_context import (
+    CliContext,
     load_cli_context,
-    load_conversation_selection,
+    load_default_conversation,
+    resolve_session,
     resolve_workspace,
-    save_conversation_selection,
-    select_session,
+    save_default_conversation,
+    save_default_session,
 )
 from story_writing_agents.errors import (
     ConfigurationError,
     SessionIdError,
     WorkspaceFormatError,
     WorkspaceSecurityError,
+    WorkspaceVersionUnsupportedError,
 )
 from story_writing_agents.run_inputs import read_draft_file
 
@@ -42,19 +48,24 @@ from tests.helpers import ScriptedBackend, phase_requests
 
 
 CLI_CONTEXT_PATH = "agent_states/orchestrator_state/cli_context.json"
-CONVERSATION_SELECTION_DIRECTORY = (
+CONVERSATION_DEFAULT_DIRECTORY = (
+    "agent_states/orchestrator_state/conversation_defaults"
+)
+V1_CONVERSATION_DIRECTORY = (
     "agent_states/orchestrator_state/conversation_selections"
 )
+_CREATED = "2026-01-01T00:00:00+00:00"
+_UPDATED = "2026-01-02T00:00:00+00:00"
 
 
-def conversation_selection_path(workspace: Workspace, session_id: str) -> Path:
-    """Return one test-owned path for a safe conversation selection file."""
+def conversation_default_path(workspace: Workspace, session_id: str) -> Path:
+    """Return one safe test path for a V2 conversation default."""
 
-    return workspace.root / CONVERSATION_SELECTION_DIRECTORY / f"{session_id}.json"
+    return workspace.root / CONVERSATION_DEFAULT_DIRECTORY / f"{session_id}.json"
 
 
 def tree_snapshot(root: Path) -> dict[str, tuple[bytes, int, int]]:
-    """Capture file bytes, modes, and timestamps for no-mutation assertions."""
+    """Capture file bytes, modes, and timestamps for purity assertions."""
 
     return {
         str(path.relative_to(root)): (
@@ -68,21 +79,18 @@ def tree_snapshot(root: Path) -> dict[str, tuple[bytes, int, int]]:
 
 
 def invoke_cli(arguments: list[str]) -> tuple[int, str, str]:
-    """Invoke the CLI in-process and capture its public streams."""
+    """Invoke the CLI in process and capture its public streams."""
 
     stdout = io.StringIO()
     stderr = io.StringIO()
-    with (
-        contextlib.redirect_stdout(stdout),
-        contextlib.redirect_stderr(stderr),
-    ):
+    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
         exit_code = cli_module.main(arguments)
     return exit_code, stdout.getvalue(), stderr.getvalue()
 
 
 @contextlib.contextmanager
 def working_directory(path: Path) -> Iterator[None]:
-    """Temporarily switch cwd and always restore it."""
+    """Temporarily switch the caller directory and always restore it."""
 
     previous = Path.cwd()
     os.chdir(path)
@@ -97,10 +105,7 @@ def successful_backend() -> ScriptedBackend:
 
     def respond(request):
         if request.phase is Phase.DRAFT:
-            return AgentReply.candidate(
-                request.revision_id,
-                "generated neutral candidate",
-            )
+            return AgentReply.candidate(request.revision_id, "neutral candidate")
         if request.phase is Phase.AUDIT:
             return AgentReply.approval(request.revision_id)
         if request.phase is Phase.FINALIZE:
@@ -110,201 +115,155 @@ def successful_backend() -> ScriptedBackend:
     return ScriptedBackend(respond)
 
 
+class LifecycleCommandBackend:
+    """Provide correlated lifecycle facts for CLI automation tests."""
+
+    def __init__(self, *_args: Any, fail_at: str | None = None, **_kwargs: Any) -> None:
+        self.fail_at = fail_at
+        self.calls: list[tuple[str, str | None]] = []
+        self._states: dict[str, SessionLifecycleState] = {}
+
+    @staticmethod
+    def state(
+        session_id: str,
+        *,
+        durable: SessionDurableState,
+        access: SessionAccessState,
+    ) -> SessionLifecycleState:
+        """Build one exact lifecycle command result."""
+
+        held = access is SessionAccessState.HELD_HERE
+        return SessionLifecycleState(
+            session_id=session_id,
+            durable_state=durable,
+            access_state=access,
+            owner_hostname="test-host" if held else None,
+            owner_pid=123 if held else None,
+            created_at=_CREATED,
+            updated_at=_UPDATED,
+        )
+
+    def _record(self, method: str, session_id: str) -> None:
+        self.calls.append((method, session_id))
+        if self.fail_at == method:
+            raise BackendProtocolError(f"{method} failed")
+
+    def validate_provider_configuration(self, session_id: str) -> bool:
+        self._record("validate", session_id)
+        return True
+
+    def create_session_with_access(self, session_id: str) -> SessionLifecycleState:
+        self._record("create", session_id)
+        state = self.state(session_id, durable=SessionDurableState.READY, access=SessionAccessState.HELD_HERE)
+        self._states[session_id] = state
+        return state
+
+    def reopen_session_with_access(self, session_id: str) -> SessionLifecycleState:
+        self._record("reopen", session_id)
+        state = self.state(session_id, durable=SessionDurableState.READY, access=SessionAccessState.HELD_HERE)
+        self._states[session_id] = state
+        return state
+
+    def pause_session_and_release_access(self, session_id: str) -> SessionLifecycleState:
+        self._record("pause", session_id)
+        state = self.state(session_id, durable=SessionDurableState.PAUSED, access=SessionAccessState.CLAIMABLE)
+        self._states[session_id] = state
+        return state
+
+    def get_session_lifecycle(self, session_id: str) -> SessionLifecycleState:
+        self._record("get", session_id)
+        return self._states[session_id]
+
+    def release_session_access(self, session_id: str) -> SessionLifecycleState:
+        self._record("release", session_id)
+        durable = self._states[session_id].durable_state
+        state = self.state(session_id, durable=durable, access=SessionAccessState.CLAIMABLE)
+        self._states[session_id] = state
+        return state
+
+    def close(self) -> None:
+        self.calls.append(("close", None))
+
+
 class WorkspaceDiscoveryTests(unittest.TestCase):
+    """Verify explicit and nearest-ancestor workspace resolution."""
+
     def setUp(self) -> None:
-        self.temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temporary.cleanup)
-        self.base = Path(self.temporary.name)
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.base = Path(temporary.name)
 
-    def test_root_and_nested_paths_discover_nearest_initialized_workspace(
-        self,
-    ) -> None:
-        workspace = initialize_workspace(self.base / "workspace")
-        nested = workspace.root / "one" / "two"
-        nested.mkdir(parents=True)
-
-        self.assertEqual(
-            resolve_workspace(None, start=workspace.root).root,
-            workspace.root,
-        )
-        self.assertEqual(
-            resolve_workspace(None, start=nested).root,
-            workspace.root,
-        )
-
-    def test_nested_workspace_wins_over_initialized_outer_workspace(self) -> None:
+    def test_nearest_initialized_workspace_and_explicit_precedence(self) -> None:
         outer = initialize_workspace(self.base / "outer")
         inner = initialize_workspace(outer.root / "projects" / "inner")
-        inner_child = inner.root / "nested" / "child"
-        inner_child.mkdir(parents=True)
-        outer_child = outer.root / "outside_inner"
-        outer_child.mkdir()
+        nested = inner.root / "one" / "two"
+        nested.mkdir(parents=True)
+        self.assertEqual(resolve_workspace(None, start=nested).root, inner.root)
+        self.assertEqual(resolve_workspace(str(outer.root), start=nested).root, outer.root)
 
-        self.assertEqual(
-            resolve_workspace(None, start=inner_child).root,
-            inner.root,
-        )
-        self.assertEqual(
-            resolve_workspace(None, start=outer_child).root,
-            outer.root,
-        )
-
-    def test_explicit_workspace_precedes_discovery_and_errors_are_actionable(
-        self,
-    ) -> None:
-        outer = initialize_workspace(self.base / "outer")
-        inner = initialize_workspace(outer.root / "inner")
-        inner_child = inner.root / "child"
-        inner_child.mkdir()
-
-        self.assertEqual(
-            resolve_workspace(str(outer.root), start=inner_child).root,
-            outer.root,
-        )
-
-        uninitialized = self.base / "not_initialized"
+    def test_uninitialized_and_absent_discovery_are_actionable(self) -> None:
+        uninitialized = self.base / "plain"
         uninitialized.mkdir()
-        with self.assertRaisesRegex(
-            ConfigurationError,
-            "workspace is not initialized",
-        ):
-            resolve_workspace(str(uninitialized), start=inner_child)
-
-        isolated = tempfile.TemporaryDirectory()
-        self.addCleanup(isolated.cleanup)
-        with self.assertRaisesRegex(
-            ConfigurationError,
-            "no initialized story workspace found",
-        ):
-            resolve_workspace(None, start=Path(isolated.name))
+        with self.assertRaisesRegex(ConfigurationError, "workspace is not initialized"):
+            resolve_workspace(str(uninitialized), start=uninitialized)
+        with self.assertRaisesRegex(ConfigurationError, "no initialized story workspace"):
+            resolve_workspace(None, start=uninitialized)
 
 
-class CliContextValidationTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temporary.cleanup)
-        self.workspace = initialize_workspace(
-            Path(self.temporary.name) / "workspace"
-        )
-
-    def test_context_schema_version_and_selected_session_are_strict(self) -> None:
-        cases = (
-            ("not_object", [], ConfigurationError, "invalid schema"),
-            (
-                "missing_field",
-                {"schema_version": 1},
-                ConfigurationError,
-                "invalid schema",
-            ),
-            (
-                "extra_field",
-                {
-                    "schema_version": 1,
-                    "selected_session": "session_a",
-                    "extra": True,
-                },
-                ConfigurationError,
-                "invalid schema",
-            ),
-            (
-                "boolean_version",
-                {"schema_version": True, "selected_session": "session_a"},
-                ConfigurationError,
-                "schema version",
-            ),
-            (
-                "future_version",
-                {"schema_version": 2, "selected_session": "session_a"},
-                ConfigurationError,
-                "schema version",
-            ),
-            (
-                "null_session",
-                {"schema_version": 1, "selected_session": None},
-                ConfigurationError,
-                "must be a session ID",
-            ),
-            (
-                "integer_session",
-                {"schema_version": 1, "selected_session": 7},
-                ConfigurationError,
-                "must be a session ID",
-            ),
-            (
-                "unsafe_session",
-                {"schema_version": 1, "selected_session": "../escape"},
-                SessionIdError,
-                "must match",
-            ),
-        )
-        for label, value, error_type, message in cases:
-            with self.subTest(label=label):
-                self.workspace.write_json(CLI_CONTEXT_PATH, value)
-                with self.assertRaisesRegex(error_type, message):
-                    load_cli_context(self.workspace)
-
-
-class ConversationSelectionTests(unittest.TestCase):
-    """Verify exact lazy per-session conversation selection persistence."""
+class CliDefaultPersistenceTests(unittest.TestCase):
+    """Verify strict V2 default schemas and clean-break rejection."""
 
     def setUp(self) -> None:
-        self.temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temporary.cleanup)
-        self.workspace = initialize_workspace(
-            Path(self.temporary.name) / "workspace"
-        )
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.workspace = initialize_workspace(Path(temporary.name) / "workspace")
 
-    def write_raw(self, session_id: str, content: bytes) -> Path:
-        """Write one deliberately untrusted persisted selection payload."""
-
-        target = conversation_selection_path(self.workspace, session_id)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(content)
-        return target
-
-    def test_public_signatures_docstrings_and_missing_file_are_exact(self) -> None:
+    def test_default_session_missing_save_load_and_resolve_are_exact(self) -> None:
+        self.assertEqual(tuple(inspect.signature(CliContext).parameters), ("default_session_id",))
+        self.assertEqual(tuple(inspect.signature(save_default_session).parameters), ("workspace", "session_id"))
         self.assertEqual(
-            tuple(inspect.signature(load_conversation_selection).parameters),
-            ("workspace", "session_id"),
+            tuple(inspect.signature(resolve_session).parameters),
+            ("workspace", "context", "option_session"),
         )
-        self.assertEqual(
-            tuple(inspect.signature(save_conversation_selection).parameters),
-            ("workspace", "session_id", "selected_conversation_id"),
-        )
-        self.assertTrue(inspect.getdoc(load_conversation_selection))
-        self.assertTrue(inspect.getdoc(save_conversation_selection))
-
+        for public_callable in (
+            load_cli_context,
+            save_default_session,
+            load_default_conversation,
+            save_default_conversation,
+            resolve_session,
+        ):
+            with self.subTest(public_callable=public_callable.__name__):
+                self.assertTrue(inspect.getdoc(public_callable))
         before = tree_snapshot(self.workspace.root)
-        self.assertIsNone(
-            load_conversation_selection(self.workspace, "chapter_one")
-        )
+        self.assertEqual(load_cli_context(self.workspace), CliContext())
         self.assertEqual(tree_snapshot(self.workspace.root), before)
-        self.assertFalse(
-            conversation_selection_path(
-                self.workspace,
-                "chapter_one",
-            ).exists()
+        saved = save_default_session(self.workspace, "story_session")
+        self.assertEqual(saved, CliContext(default_session_id="story_session"))
+        self.assertEqual(
+            self.workspace.read_json(CLI_CONTEXT_PATH),
+            {"schema_version": 2, "default_session_id": "story_session"},
         )
-
-    def test_read_time_disappearance_is_absent_but_other_io_propagates(
-        self,
-    ) -> None:
-        """Treat only a direct read-time FileNotFoundError as absence."""
-
-        session_id = "chapter_one"
-        conversation_id = "c_0123456789abcdef0123456789abcdef"
-        save_conversation_selection(
-            self.workspace,
-            session_id,
-            conversation_id,
+        context = load_cli_context(self.workspace)
+        self.assertEqual(
+            resolve_session(workspace=self.workspace, context=context, option_session=None),
+            "story_session",
         )
-        target = conversation_selection_path(self.workspace, session_id)
-        before = tree_snapshot(self.workspace.root)
-        expected_after = dict(before)
-        expected_after.pop(str(target.relative_to(self.workspace.root)))
+        self.assertEqual(
+            resolve_session(workspace=self.workspace, context=context, option_session="explicit"),
+            "explicit",
+        )
+        self.assertEqual(load_cli_context(self.workspace), context)
+        with self.assertRaisesRegex(ConfigurationError, "no default session"):
+            resolve_session(workspace=self.workspace, context=CliContext(), option_session=None)
+
+    def test_read_time_disappearance_is_absent_but_other_io_propagates(self) -> None:
+        save_default_conversation(self.workspace, "chapter", "conversation")
+        target = conversation_default_path(self.workspace, "chapter")
         original_read_text = self.workspace.read_text
 
         def disappear_then_read(relative: str | os.PathLike[str]) -> str:
+            """Remove the target immediately before the guarded read."""
+
             target.unlink()
             return original_read_text(relative)
 
@@ -313,28 +272,22 @@ class ConversationSelectionTests(unittest.TestCase):
             "read_text",
             side_effect=disappear_then_read,
         ) as read_text:
-            self.assertIsNone(
-                load_conversation_selection(self.workspace, session_id)
-            )
+            self.assertIsNone(load_default_conversation(self.workspace, "chapter"))
         read_text.assert_called_once_with(
-            f"{CONVERSATION_SELECTION_DIRECTORY}/{session_id}.json"
+            f"{CONVERSATION_DEFAULT_DIRECTORY}/chapter.json"
         )
         self.assertFalse(target.exists())
-        self.assertEqual(tree_snapshot(self.workspace.root), expected_after)
-        self.assertEqual(list(target.parent.iterdir()), [])
 
-        save_conversation_selection(
-            self.workspace,
-            session_id,
-            conversation_id,
-        )
-        persisted_before = (target.read_bytes(), target.stat().st_mtime_ns)
+        save_default_conversation(self.workspace, "chapter", "conversation")
+        before = (target.read_bytes(), target.stat().st_mtime_ns)
 
         def deny_read(_relative: str | os.PathLike[str]) -> str:
+            """Expose a wrapped non-absence I/O failure to the loader."""
+
             try:
                 raise PermissionError("read-secret")
             except PermissionError as exc:
-                raise WorkspaceFormatError("cannot read selection") from exc
+                raise WorkspaceFormatError("cannot read default") from exc
 
         with mock.patch.object(
             self.workspace,
@@ -342,334 +295,450 @@ class ConversationSelectionTests(unittest.TestCase):
             side_effect=deny_read,
         ):
             with self.assertRaises(WorkspaceFormatError) as raised:
-                load_conversation_selection(self.workspace, session_id)
+                load_default_conversation(self.workspace, "chapter")
         self.assertIsInstance(raised.exception.__cause__, PermissionError)
-        self.assertEqual(
-            (target.read_bytes(), target.stat().st_mtime_ns),
-            persisted_before,
-        )
+        self.assertEqual((target.read_bytes(), target.stat().st_mtime_ns), before)
 
-    def test_save_load_and_explicit_null_use_exact_independent_v1_files(
-        self,
-    ) -> None:
-        select_session(self.workspace, "story_session")
-        cli_context = self.workspace.path(CLI_CONTEXT_PATH)
-        cli_before = (cli_context.read_bytes(), cli_context.stat().st_mtime_ns)
-
-        selections = {
-            "chapter_one": "c_0123456789abcdef0123456789abcdef",
-            "chapter_two": "c_fedcba9876543210fedcba9876543210",
-        }
-        for session_id, conversation_id in selections.items():
-            save_conversation_selection(
-                self.workspace,
-                session_id,
-                conversation_id,
-            )
-            target = conversation_selection_path(self.workspace, session_id)
-            expected = {
-                "schema_version": 1,
-                "session_id": session_id,
-                "selected_conversation_id": conversation_id,
-            }
-            self.assertEqual(
-                target.read_text(encoding="utf-8"),
-                json.dumps(
-                    expected,
-                    ensure_ascii=False,
-                    indent=2,
-                    sort_keys=True,
-                )
-                + "\n",
-            )
-            self.assertEqual(
-                load_conversation_selection(self.workspace, session_id),
-                conversation_id,
-            )
-
-        save_conversation_selection(self.workspace, "chapter_one", None)
-        self.assertIsNone(
-            load_conversation_selection(self.workspace, "chapter_one")
+    def test_default_session_schema_is_strict_and_v1_is_unchanged(self) -> None:
+        valid = {"schema_version": 2, "default_session_id": "story_session"}
+        rows = (
+            ([], WorkspaceFormatError),
+            ({"schema_version": 2}, WorkspaceFormatError),
+            ({**valid, "extra": True}, WorkspaceFormatError),
+            ({**valid, "schema_version": True}, WorkspaceFormatError),
+            ({**valid, "schema_version": 1}, WorkspaceVersionUnsupportedError),
+            ({**valid, "default_session_id": None}, WorkspaceFormatError),
+            ({**valid, "default_session_id": "../escape"}, WorkspaceFormatError),
         )
-        self.assertEqual(
-            load_conversation_selection(self.workspace, "chapter_two"),
-            selections["chapter_two"],
-        )
-        self.assertIsNone(
-            self.workspace.read_json(
-                f"{CONVERSATION_SELECTION_DIRECTORY}/chapter_one.json"
-            )["selected_conversation_id"]
-        )
-        self.assertEqual(
-            (cli_context.read_bytes(), cli_context.stat().st_mtime_ns),
-            cli_before,
-        )
-
-    def test_load_strictly_rejects_schema_version_identity_and_id_values(
-        self,
-    ) -> None:
-        valid = {
-            "schema_version": 1,
-            "session_id": "chapter_one",
-            "selected_conversation_id": (
-                "c_0123456789abcdef0123456789abcdef"
-            ),
-        }
-        cases = (
-            ("not_object", []),
-            (
-                "missing_field",
-                {
-                    "schema_version": 1,
-                    "session_id": "chapter_one",
-                },
-            ),
-            ("extra_field", {**valid, "extra": True}),
-            ("boolean_version", {**valid, "schema_version": True}),
-            ("future_version", {**valid, "schema_version": 2}),
-            ("string_version", {**valid, "schema_version": "1"}),
-            ("integer_session", {**valid, "session_id": 7}),
-            ("unsafe_session", {**valid, "session_id": "../escape"}),
-            ("wrong_session", {**valid, "session_id": "chapter_two"}),
-            (
-                "boolean_conversation",
-                {**valid, "selected_conversation_id": True},
-            ),
-            (
-                "integer_conversation",
-                {**valid, "selected_conversation_id": 7},
-            ),
-            (
-                "unsafe_conversation",
-                {**valid, "selected_conversation_id": "../escape"},
-            ),
-        )
-        for label, value in cases:
-            with self.subTest(label=label):
-                self.write_raw(
-                    "chapter_one",
-                    (json.dumps(value, ensure_ascii=False) + "\n").encode(
-                        "utf-8"
-                    ),
-                )
-                with self.assertRaises(WorkspaceFormatError):
-                    load_conversation_selection(
-                        self.workspace,
-                        "chapter_one",
-                    )
-
-        self.write_raw(
-            "chapter_one",
-            (
-                b'{"schema_version":1,"schema_version":1,'
-                b'"session_id":"chapter_one",'
-                b'"selected_conversation_id":null}\n'
-            ),
+        target = self.workspace.path(CLI_CONTEXT_PATH)
+        for index, (value, exception) in enumerate(rows):
+            with self.subTest(index=index):
+                self.workspace.write_json(CLI_CONTEXT_PATH, value)
+                before = (target.read_bytes(), target.stat().st_mtime_ns)
+                with self.assertRaises(exception):
+                    load_cli_context(self.workspace)
+                self.assertEqual((target.read_bytes(), target.stat().st_mtime_ns), before)
+        self.workspace.write_text(
+            CLI_CONTEXT_PATH,
+            '{"schema_version":2,"schema_version":2,"default_session_id":"story"}',
         )
         with self.assertRaises(WorkspaceFormatError):
-            load_conversation_selection(self.workspace, "chapter_one")
+            load_cli_context(self.workspace)
 
-    def test_load_rejects_malformed_json_and_non_utf8_without_rewriting(self) -> None:
-        for label, content in (
-            ("malformed", b"{not-json}\n"),
-            ("non_utf8", b"\xff\n"),
-        ):
-            with self.subTest(label=label):
-                target = self.write_raw("chapter_one", content)
-                before = (target.read_bytes(), target.stat().st_mtime_ns)
-                with self.assertRaises(WorkspaceFormatError):
-                    load_conversation_selection(
-                        self.workspace,
-                        "chapter_one",
-                    )
-                self.assertEqual(
-                    (target.read_bytes(), target.stat().st_mtime_ns),
-                    before,
-                )
-
-    def test_call_identifiers_and_symlinked_storage_are_rejected_safely(
-        self,
-    ) -> None:
-        for session_id, conversation_id in (
-            ("../session", "conversation"),
-            ("session", "../conversation"),
-            ("session", 7),
-        ):
-            with self.subTest(
-                session_id=session_id,
-                conversation_id=conversation_id,
-            ):
-                with self.assertRaises(SessionIdError):
-                    save_conversation_selection(
-                        self.workspace,
-                        session_id,
-                        conversation_id,  # type: ignore[arg-type]
-                    )
-        with self.assertRaises(SessionIdError):
-            load_conversation_selection(self.workspace, "../session")
-
-        with tempfile.TemporaryDirectory() as external:
-            selection_directory = (
-                self.workspace.root / CONVERSATION_SELECTION_DIRECTORY
-            )
-            selection_directory.symlink_to(
-                Path(external),
-                target_is_directory=True,
-            )
-            for operation in (
-                lambda: load_conversation_selection(
-                    self.workspace,
-                    "chapter_one",
-                ),
-                lambda: save_conversation_selection(
-                    self.workspace,
-                    "chapter_one",
-                    "conversation_one",
-                ),
-            ):
-                with self.assertRaises(WorkspaceSecurityError):
-                    operation()
-
-        self.workspace = initialize_workspace(
-            Path(self.temporary.name) / "second_workspace"
+    def test_conversation_defaults_are_independent_exact_v2_records(self) -> None:
+        self.assertEqual(tuple(inspect.signature(load_default_conversation).parameters), ("workspace", "session_id"))
+        self.assertEqual(
+            tuple(inspect.signature(save_default_conversation).parameters),
+            ("workspace", "session_id", "default_conversation_id"),
         )
-        target = conversation_selection_path(self.workspace, "chapter_one")
+        before = tree_snapshot(self.workspace.root)
+        self.assertIsNone(load_default_conversation(self.workspace, "chapter_one"))
+        self.assertEqual(tree_snapshot(self.workspace.root), before)
+        save_default_session(self.workspace, "story_session")
+        context_before = self.workspace.path(CLI_CONTEXT_PATH).read_bytes()
+        values = {"chapter_one": "conversation_one", "chapter_two": "conversation_two"}
+        for session, conversation in values.items():
+            save_default_conversation(self.workspace, session, conversation)
+            self.assertEqual(load_default_conversation(self.workspace, session), conversation)
+            self.assertEqual(
+                self.workspace.read_json(f"{CONVERSATION_DEFAULT_DIRECTORY}/{session}.json"),
+                {
+                    "schema_version": 2,
+                    "session_id": session,
+                    "default_conversation_id": conversation,
+                },
+            )
+        save_default_conversation(self.workspace, "chapter_one", None)
+        self.assertIsNone(load_default_conversation(self.workspace, "chapter_one"))
+        self.assertEqual(load_default_conversation(self.workspace, "chapter_two"), "conversation_two")
+        self.assertEqual(self.workspace.path(CLI_CONTEXT_PATH).read_bytes(), context_before)
+
+    def test_conversation_default_schema_and_v1_artifact_fail_unchanged(self) -> None:
+        valid = {
+            "schema_version": 2,
+            "session_id": "chapter_one",
+            "default_conversation_id": "conversation_one",
+        }
+        target = conversation_default_path(self.workspace, "chapter_one")
+        rows = (
+            ([], WorkspaceFormatError),
+            ({**valid, "schema_version": 1}, WorkspaceVersionUnsupportedError),
+            ({**valid, "schema_version": True}, WorkspaceFormatError),
+            ({**valid, "session_id": "chapter_two"}, WorkspaceFormatError),
+            ({**valid, "default_conversation_id": 7}, WorkspaceFormatError),
+            ({**valid, "extra": True}, WorkspaceFormatError),
+        )
+        for index, (value, exception) in enumerate(rows):
+            self.workspace.write_json(
+                f"{CONVERSATION_DEFAULT_DIRECTORY}/chapter_one.json",
+                value,
+            )
+            before = (target.read_bytes(), target.stat().st_mtime_ns)
+            with self.subTest(index=index), self.assertRaises(exception):
+                load_default_conversation(self.workspace, "chapter_one")
+            self.assertEqual((target.read_bytes(), target.stat().st_mtime_ns), before)
+
+        target.unlink()
+        v1 = self.workspace.write_json(
+            f"{V1_CONVERSATION_DIRECTORY}/chapter_one.json",
+            {"schema_version": 1},
+        )
+        before = (v1.read_bytes(), v1.stat().st_mtime_ns)
+        with self.assertRaises(WorkspaceVersionUnsupportedError):
+            load_default_conversation(self.workspace, "chapter_one")
+        with self.assertRaises(WorkspaceVersionUnsupportedError):
+            save_default_conversation(self.workspace, "chapter_one", "conversation")
+        self.assertEqual((v1.read_bytes(), v1.stat().st_mtime_ns), before)
+
+    def test_malformed_and_non_utf8_defaults_reject_without_rewriting(self) -> None:
+        targets = (
+            (self.workspace.path(CLI_CONTEXT_PATH), load_cli_context),
+            (
+                conversation_default_path(self.workspace, "chapter"),
+                lambda _workspace: load_default_conversation(
+                    self.workspace,
+                    "chapter",
+                ),
+            ),
+        )
+        for target, loader in targets:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            for label, content in (
+                ("malformed", b"{not-json}\n"),
+                ("non_utf8", b"\xff\n"),
+            ):
+                with self.subTest(target=target.name, content=label):
+                    target.write_bytes(content)
+                    before = (target.read_bytes(), target.stat().st_mtime_ns)
+                    with self.assertRaises(WorkspaceFormatError):
+                        loader(self.workspace)
+                    self.assertEqual(
+                        (target.read_bytes(), target.stat().st_mtime_ns),
+                        before,
+                    )
+
+    def test_identifier_symlink_and_atomic_write_failures_are_safe(self) -> None:
+        for operation in (
+            lambda: save_default_session(self.workspace, "../session"),
+            lambda: load_default_conversation(self.workspace, "../session"),
+            lambda: save_default_conversation(self.workspace, "session", "../conversation"),
+        ):
+            with self.assertRaises(SessionIdError):
+                operation()
+
+        save_default_conversation(self.workspace, "chapter", "first")
+        target = conversation_default_path(self.workspace, "chapter")
+        before = (target.read_bytes(), target.stat().st_mtime_ns)
+        with mock.patch("story_writing_agents.workspace.os.replace", side_effect=OSError("replace failed")):
+            with self.assertRaises(OSError):
+                save_default_conversation(self.workspace, "chapter", "second")
+        self.assertEqual((target.read_bytes(), target.stat().st_mtime_ns), before)
+        self.assertEqual(list(target.parent.glob("*.tmp")), [])
+
+        second = initialize_workspace(self.workspace.root.parent / "second")
+        external = self.workspace.root.parent / "external"
+        external.mkdir()
+        directory = second.root / CONVERSATION_DEFAULT_DIRECTORY
+        for child in directory.iterdir():
+            child.unlink()
+        directory.rmdir()
+        try:
+            directory.symlink_to(external, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("symbolic links unavailable")
+        with self.assertRaises(WorkspaceSecurityError):
+            save_default_conversation(second, "chapter", "conversation")
+
+    def test_symlinked_default_directory_and_file_are_rejected_safely(self) -> None:
+        external = self.workspace.root.parent / "external-defaults"
+        external.mkdir()
+        directory = self.workspace.root / CONVERSATION_DEFAULT_DIRECTORY
+        if directory.exists():
+            for child in directory.iterdir():
+                child.unlink()
+            directory.rmdir()
+        try:
+            directory.symlink_to(external, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("symbolic links unavailable")
+        for operation in (
+            lambda: load_default_conversation(self.workspace, "chapter"),
+            lambda: save_default_conversation(
+                self.workspace,
+                "chapter",
+                "conversation",
+            ),
+        ):
+            with self.subTest(kind="directory"), self.assertRaises(
+                WorkspaceSecurityError
+            ):
+                operation()
+
+        second = initialize_workspace(self.workspace.root.parent / "symlink-file")
+        target = conversation_default_path(second, "chapter")
         target.parent.mkdir(parents=True, exist_ok=True)
-        external_file = Path(self.temporary.name) / "outside.json"
+        external_file = self.workspace.root.parent / "outside-default.json"
         external_file.write_text("{}\n", encoding="utf-8")
         target.symlink_to(external_file)
         for operation in (
-            lambda: load_conversation_selection(
-                self.workspace,
-                "chapter_one",
-            ),
-            lambda: save_conversation_selection(
-                self.workspace,
-                "chapter_one",
-                "conversation_one",
-            ),
+            lambda: load_default_conversation(second, "chapter"),
+            lambda: save_default_conversation(second, "chapter", "conversation"),
         ):
-            with self.assertRaises(WorkspaceSecurityError):
+            with self.subTest(kind="file"), self.assertRaises(
+                WorkspaceSecurityError
+            ):
                 operation()
         self.assertEqual(external_file.read_text(encoding="utf-8"), "{}\n")
 
-    def test_failed_atomic_replace_preserves_previous_bytes_and_cleans_temp(
-        self,
-    ) -> None:
-        save_conversation_selection(
-            self.workspace,
-            "chapter_one",
-            "conversation_one",
-        )
-        target = conversation_selection_path(self.workspace, "chapter_one")
-        before = (target.read_bytes(), target.stat().st_mtime_ns)
-        with mock.patch(
-            "story_writing_agents.workspace.os.replace",
-            side_effect=OSError("selection-secret"),
-        ):
-            with self.assertRaises(OSError):
-                save_conversation_selection(
-                    self.workspace,
-                    "chapter_one",
-                    "conversation_two",
-                )
-        self.assertEqual(
-            (target.read_bytes(), target.stat().st_mtime_ns),
-            before,
-        )
-        self.assertEqual(list(target.parent.glob("*.tmp")), [])
 
+class LifecycleAutomationTests(unittest.TestCase):
+    """Verify exact create/reopen/pause grammar, output, and defaults."""
 
-class SessionSelectionTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temporary.cleanup)
-        self.workspace = initialize_workspace(
-            Path(self.temporary.name) / "workspace"
-        )
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.workspace = initialize_workspace(Path(temporary.name) / "workspace")
 
-    def test_successful_start_selects_and_bare_end_start_preserve_selection(
+    def invoke_with(self, backend: LifecycleCommandBackend, *arguments: str) -> tuple[int, str, str]:
+        """Invoke one lifecycle command with a deterministic backend."""
+
+        with mock.patch.object(cli_module, "AgentBackend", return_value=backend):
+            return invoke_cli(["session", *arguments, "--workspace", str(self.workspace.root)])
+
+    def test_create_requires_target_saves_default_after_success_and_formats_json(self) -> None:
+        backend = LifecycleCommandBackend()
+        code, stdout, stderr = self.invoke_with(backend, "create", "created")
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertEqual(
+            stdout,
+            '{\n  "access_state": "claimable",\n  "durable_state": "ready",\n  "session_id": "created"\n}\n',
+        )
+        self.assertEqual(
+            backend.calls,
+            [("validate", "created"), ("create", "created"), ("get", "created"), ("release", "created"), ("close", None)],
+        )
+        self.assertEqual(load_cli_context(self.workspace).default_session_id, "created")
+
+    def test_reopen_explicit_and_default_save_only_after_success(self) -> None:
+        save_default_session(self.workspace, "original")
+        backend = LifecycleCommandBackend()
+        code, stdout, stderr = self.invoke_with(backend, "reopen", "replacement")
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertEqual(json.loads(stdout), {"access_state": "claimable", "durable_state": "ready", "session_id": "replacement"})
+        self.assertEqual(load_cli_context(self.workspace).default_session_id, "replacement")
+
+        backend = LifecycleCommandBackend()
+        code, stdout, stderr = self.invoke_with(backend, "reopen")
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertEqual(json.loads(stdout)["session_id"], "replacement")
+        self.assertEqual(backend.calls[0:2], [("validate", "replacement"), ("reopen", "replacement")])
+
+        save_default_session(self.workspace, "retained")
+        failing = LifecycleCommandBackend(fail_at="reopen")
+        code, stdout, stderr = self.invoke_with(failing, "reopen", "failed")
+        self.assertEqual((code, stdout), (2, ""))
+        self.assertIn("BackendProtocolError", stderr)
+        self.assertEqual(load_cli_context(self.workspace).default_session_id, "retained")
+
+    def test_pause_uses_optional_default_and_always_retains_it(self) -> None:
+        save_default_session(self.workspace, "default_session")
+        backend = LifecycleCommandBackend()
+        code, stdout, stderr = self.invoke_with(backend, "pause", "other_session")
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertEqual(
+            stdout,
+            '{\n  "access_state": "claimable",\n  "durable_state": "paused",\n  "session_id": "other_session"\n}\n',
+        )
+        self.assertEqual(load_cli_context(self.workspace).default_session_id, "default_session")
+        self.assertEqual(backend.calls, [("pause", "other_session"), ("close", None)])
+
+        backend = LifecycleCommandBackend()
+        code, stdout, stderr = self.invoke_with(backend, "pause")
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertEqual(json.loads(stdout)["session_id"], "default_session")
+        self.assertEqual(load_cli_context(self.workspace).default_session_id, "default_session")
+
+    def test_lifecycle_grammar_has_no_session_option_or_legacy_actions(self) -> None:
+        invalid = (
+            ["session", "create", "--workspace", str(self.workspace.root)],
+            ["session", "reopen", "one", "two", "--workspace", str(self.workspace.root)],
+            ["session", "pause", "one", "two", "--workspace", str(self.workspace.root)],
+            ["session", "create", "one", "--session", "two", "--workspace", str(self.workspace.root)],
+            ["session", "start", "one", "--workspace", str(self.workspace.root)],
+        )
+        for arguments in invalid:
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with (
+                self.subTest(arguments=arguments),
+                contextlib.redirect_stdout(stdout),
+                contextlib.redirect_stderr(stderr),
+                self.assertRaises(SystemExit) as caught,
+            ):
+                cli_module.main(arguments)
+            self.assertEqual(caught.exception.code, 2)
+
+        code, stdout, stderr = invoke_cli(["session", "reopen", "--workspace", str(self.workspace.root)])
+        self.assertEqual((code, stdout), (2, ""))
+        self.assertIn("no default session", stderr)
+
+
+class RunInputTests(unittest.TestCase):
+    """Verify shared input selection and default-session run routing."""
+
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.base = Path(temporary.name)
+        self.workspace = initialize_workspace(self.base / "workspace")
+
+    def run_with(self, arguments: list[str], backend: ScriptedBackend) -> tuple[int, str, str]:
+        """Invoke a run command with one provider-free backend."""
+
+        with mock.patch.object(cli_module, "AgentBackend", return_value=backend):
+            return invoke_cli(arguments)
+
+    def test_prompt_draft_and_draft_file_are_exact(self) -> None:
+        draft_path = self.base / "draft.md"
+        exact = "\ufefffirst\r\nsecond\x00  \n"
+        draft_path.write_bytes(exact.encode("utf-8"))
+        rows = (
+            (["positional prompt"], "prompt", "positional prompt"),
+            (["--prompt", "option prompt"], "prompt", "option prompt"),
+            (["--draft", "option draft"], "draft", "option draft"),
+            (["--draft-file", str(draft_path)], "draft", exact),
+        )
+        for index, (input_args, kind, payload) in enumerate(rows):
+            backend = successful_backend()
+            code, stdout, stderr = self.run_with(
+                [
+                    "run",
+                    "--workspace",
+                    str(self.workspace.root),
+                    "--session",
+                    f"session_{index}",
+                    *input_args,
+                    "--debate-id",
+                    f"debate_{index}",
+                    "--output",
+                    f"result_{index}.md",
+                ],
+                backend,
+            )
+            self.assertEqual((code, stderr), (0, ""))
+            report = json.loads(stdout)
+            self.assertEqual((report["status"], report["input_kind"]), (DebateStatus.CONSENSUS.value, kind))
+            requests = phase_requests(backend, Phase.DRAFT if kind == "prompt" else Phase.AUDIT)
+            self.assertTrue(requests)
+            self.assertTrue(all(request.user_payload == payload for request in requests))
+
+    def test_shared_draft_loader_preserves_full_path_semantics(self) -> None:
+        caller = self.base / "caller"
+        caller.mkdir()
+        exact = "\ufefffirst\r\nsecond\x00  \n"
+        relative = caller / "neutral.md"
+        relative.write_bytes(exact.encode("utf-8"))
+        absolute = caller / "absolute.md"
+        absolute.write_text("absolute draft", encoding="utf-8")
+        metachar = caller / 'literal ;$(touch marker) [*] "quoted".md'
+        metachar.write_text("literal metacharacters", encoding="utf-8")
+        empty = caller / "empty.md"
+        empty.write_bytes(b"")
+        linked = caller / "linked.md"
+        try:
+            linked.symlink_to(absolute)
+        except (OSError, NotImplementedError):
+            linked = None
+
+        with working_directory(caller):
+            self.assertEqual(read_draft_file("neutral.md"), exact)
+            self.assertEqual(read_draft_file(absolute), "absolute draft")
+            self.assertEqual(
+                read_draft_file(metachar.name),
+                "literal metacharacters",
+            )
+            self.assertEqual(read_draft_file(empty), "")
+            if linked is not None:
+                self.assertEqual(read_draft_file(linked.name), "absolute draft")
+        self.assertFalse((caller / "marker").exists())
+
+        backend = successful_backend()
+        with (
+            working_directory(caller),
+            mock.patch.object(
+                cli_module,
+                "read_draft_file",
+                wraps=read_draft_file,
+            ) as shared_loader,
+        ):
+            code, stdout, stderr = self.run_with(
+                [
+                    "run",
+                    "--workspace",
+                    str(self.workspace.root),
+                    "--session",
+                    "relative_file",
+                    "--draft-file",
+                    "neutral.md",
+                    "--debate-id",
+                    "relative_file",
+                    "--output",
+                    "relative_file.md",
+                ],
+                backend,
+            )
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertEqual(json.loads(stdout)["input_kind"], "draft")
+        shared_loader.assert_called_once_with("neutral.md")
+
+    def test_draft_loader_errors_precede_backend_and_input_is_exclusive(self) -> None:
+        invalid = self.base / "invalid.md"
+        invalid.write_bytes(b"\xff")
+        with self.assertRaisesRegex(ConfigurationError, "not valid UTF-8"):
+            read_draft_file(invalid)
+        with mock.patch.object(cli_module, "AgentBackend") as backend_class:
+            code, stdout, stderr = invoke_cli(
+                [
+                    "run",
+                    "--workspace",
+                    str(self.workspace.root),
+                    "--session",
+                    "invalid_file",
+                    "--draft-file",
+                    str(invalid),
+                ]
+            )
+        self.assertEqual((code, stdout), (2, ""))
+        self.assertIn("not valid UTF-8", stderr)
+        backend_class.assert_not_called()
+
+        for suffix in (["run"], ["run", "positional", "--prompt", "option"]):
+            with mock.patch.object(cli_module, "AgentBackend") as backend_class:
+                code, stdout, stderr = invoke_cli(
+                    [*suffix, "--workspace", str(self.workspace.root), "--session", "invalid"]
+                )
+            self.assertEqual((code, stdout), (2, ""))
+            self.assertIn("exactly one run input", stderr)
+            backend_class.assert_not_called()
+
+    def test_nested_cwd_uses_saved_default_without_changing_it(self) -> None:
+        save_default_session(self.workspace, "default_session")
+        nested = self.workspace.root / "caller" / "nested"
+        nested.mkdir(parents=True)
+        backend = successful_backend()
+        with working_directory(nested), mock.patch.object(cli_module, "AgentBackend", return_value=backend):
+            code, stdout, stderr = invoke_cli(
+                ["run", "inferred prompt", "--debate-id", "inferred", "--output", "inferred.md"]
+            )
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertEqual(json.loads(stdout)["session_id"], "default_session")
+        self.assertEqual(load_cli_context(self.workspace).default_session_id, "default_session")
+
+    def test_explicit_non_lifecycle_session_never_changes_default_or_falls_back(
         self,
     ) -> None:
-        exit_code, stdout, stderr = invoke_cli(
-            [
-                "session",
-                "start",
-                "selected_session",
-                "--workspace",
-                str(self.workspace.root),
-            ]
-        )
-        self.assertEqual(exit_code, 0)
-        self.assertEqual(stderr, "")
-        self.assertEqual(
-            json.loads(stdout),
-            {"session_id": "selected_session", "active": True},
-        )
-        self.assertEqual(
-            self.workspace.read_json(CLI_CONTEXT_PATH),
-            {
-                "schema_version": 1,
-                "selected_session": "selected_session",
-            },
-        )
-
-        exit_code, stdout, stderr = invoke_cli(
-            [
-                "session",
-                "end",
-                "--workspace",
-                str(self.workspace.root),
-            ]
-        )
-        self.assertEqual(exit_code, 0)
-        self.assertEqual(stderr, "")
-        self.assertEqual(
-            json.loads(stdout),
-            {"session_id": "selected_session", "active": False},
-        )
-        self.assertEqual(
-            load_cli_context(self.workspace).selected_session,
-            "selected_session",
-        )
-
-        exit_code, stdout, stderr = invoke_cli(
-            [
-                "session",
-                "start",
-                "--workspace",
-                str(self.workspace.root),
-            ]
-        )
-        self.assertEqual(exit_code, 0)
-        self.assertEqual(stderr, "")
-        self.assertEqual(
-            json.loads(stdout),
-            {"session_id": "selected_session", "active": True},
-        )
-        self.assertEqual(
-            load_cli_context(self.workspace).selected_session,
-            "selected_session",
-        )
-
-    def test_explicit_other_session_on_non_start_commands_never_reselects(
-        self,
-    ) -> None:
-        exit_code, _, _ = invoke_cli(
-            [
-                "session",
-                "start",
-                "selected_session",
-                "--workspace",
-                str(self.workspace.root),
-            ]
-        )
-        self.assertEqual(exit_code, 0)
-        provider = AgentBackend(self.workspace)
-        provider.start_session("other_session")
-        provider.close()
-
-        commands = (
+        save_default_session(self.workspace, "default_session")
+        for arguments in (
             [
                 "directive",
                 "--workspace",
@@ -685,73 +754,39 @@ class SessionSelectionTests(unittest.TestCase):
                 "--session",
                 "other_session",
             ],
-            [
-                "session",
-                "end",
-                "other_session",
-                "--workspace",
-                str(self.workspace.root),
-            ],
-        )
-        for arguments in commands:
-            with self.subTest(command=arguments[0:2]):
-                exit_code, _, stderr = invoke_cli(arguments)
-                self.assertEqual(exit_code, 0, stderr)
+        ):
+            with self.subTest(command=arguments[0]):
+                code, _stdout, stderr = invoke_cli(arguments)
+                self.assertEqual((code, stderr), (0, ""))
                 self.assertEqual(
-                    load_cli_context(self.workspace).selected_session,
-                    "selected_session",
+                    load_cli_context(self.workspace).default_session_id,
+                    "default_session",
                 )
 
         backend = successful_backend()
-        with mock.patch.object(
-            cli_module,
-            "AgentBackend",
-            return_value=backend,
-        ):
-            exit_code, stdout, stderr = invoke_cli(
-                [
-                    "run",
-                    "--workspace",
-                    str(self.workspace.root),
-                    "--session",
-                    "other_session",
-                    "--prompt",
-                    "explicit other prompt",
-                    "--debate-id",
-                    "other_debate",
-                    "--output",
-                    "other.md",
-                ]
-            )
-        self.assertEqual(exit_code, 0, stderr)
-        self.assertEqual(json.loads(stdout)["session_id"], "other_session")
-        self.assertEqual(
-            load_cli_context(self.workspace).selected_session,
-            "selected_session",
-        )
-
-    def test_positional_and_option_session_conflict_returns_code_two(self) -> None:
-        exit_code, stdout, stderr = invoke_cli(
+        code, stdout, stderr = self.run_with(
             [
-                "session",
-                "start",
-                "positional_session",
-                "--session",
-                "option_session",
+                "run",
                 "--workspace",
                 str(self.workspace.root),
-            ]
+                "--session",
+                "other_session",
+                "explicit prompt",
+                "--debate-id",
+                "other_debate",
+                "--output",
+                "other.md",
+            ],
+            backend,
         )
-        self.assertEqual(exit_code, 2)
-        self.assertEqual(stdout, "")
-        self.assertIn("ConfigurationError", stderr)
-        self.assertIn("provide a session once", stderr)
-        self.assertFalse(self.workspace.path(CLI_CONTEXT_PATH).exists())
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertEqual(json.loads(stdout)["session_id"], "other_session")
+        self.assertEqual(
+            load_cli_context(self.workspace).default_session_id,
+            "default_session",
+        )
 
-    def test_invalid_explicit_session_does_not_fall_back_to_selection(self) -> None:
-        select_session(self.workspace, "selected_session")
-
-        exit_code, stdout, stderr = invoke_cli(
+        code, stdout, stderr = invoke_cli(
             [
                 "inspect",
                 "--workspace",
@@ -760,313 +795,29 @@ class SessionSelectionTests(unittest.TestCase):
                 "",
             ]
         )
-
-        self.assertEqual(exit_code, 2)
-        self.assertEqual(stdout, "")
+        self.assertEqual((code, stdout), (2, ""))
         self.assertIn("SessionIdError", stderr)
-        self.assertIn("must match", stderr)
-
-
-class RunInputTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temporary.cleanup)
-        self.workspace = initialize_workspace(
-            Path(self.temporary.name) / "workspace"
+        self.assertEqual(
+            load_cli_context(self.workspace).default_session_id,
+            "default_session",
         )
 
-    def _run(
-        self,
-        arguments: list[str],
-        backend: ScriptedBackend,
-    ) -> tuple[int, str, str]:
-        with mock.patch.object(
-            cli_module,
-            "AgentBackend",
-            return_value=backend,
-        ):
-            return invoke_cli(arguments)
-
-    def test_positional_prompt_and_existing_prompt_draft_options_remain_compatible(
-        self,
-    ) -> None:
-        cases = (
-            ("positional", ["positional prompt"], "prompt", "positional prompt"),
-            ("prompt_option", ["--prompt", "option prompt"], "prompt", "option prompt"),
-            ("draft_option", ["--draft", "option draft"], "draft", "option draft"),
-        )
-        for label, input_arguments, expected_kind, expected_payload in cases:
-            with self.subTest(label=label):
-                backend = successful_backend()
-                exit_code, stdout, stderr = self._run(
-                    [
-                        "run",
-                        "--workspace",
-                        str(self.workspace.root),
-                        "--session",
-                        f"{label}_session",
-                        *input_arguments,
-                        "--debate-id",
-                        f"{label}_debate",
-                        "--output",
-                        f"{label}.md",
-                    ],
-                    backend,
-                )
-                self.assertEqual(exit_code, 0, stderr)
-                report = json.loads(stdout)
-                self.assertEqual(report["status"], DebateStatus.CONSENSUS.value)
-                self.assertEqual(report["input_kind"], expected_kind)
-                if expected_kind == "prompt":
-                    drafts = phase_requests(backend, Phase.DRAFT)
-                    self.assertEqual(len(drafts), 1)
-                    self.assertEqual(drafts[0].user_payload, expected_payload)
-                else:
-                    self.assertEqual(phase_requests(backend, Phase.DRAFT), [])
-                    audits = phase_requests(backend, Phase.AUDIT)
-                    self.assertTrue(
-                        all(
-                            request.user_payload == expected_payload
-                            and request.candidate_payload == expected_payload
-                            for request in audits
-                        )
-                    )
-
-    def test_shared_draft_loader_preserves_path_semantics_and_exact_text(
-        self,
-    ) -> None:
-        cwd = Path(self.temporary.name) / "caller"
-        cwd.mkdir()
-        exact = "\ufefffirst\r\nsecond\x00  \n"
-        relative = cwd / "neutral.md"
-        relative.write_bytes(exact.encode("utf-8"))
-        absolute = cwd / "absolute.md"
-        absolute.write_text("absolute draft", encoding="utf-8")
-        metachar = cwd / 'literal ;$(touch marker) [*] "quoted".md'
-        metachar.write_text("literal metacharacters", encoding="utf-8")
-        empty = cwd / "empty.md"
-        empty.write_bytes(b"")
-        home = cwd / "home"
-        home.mkdir()
-        (home / "tilde.md").write_text("expanded home", encoding="utf-8")
-        symlink = cwd / "linked.md"
-        try:
-            symlink.symlink_to(absolute)
-        except (OSError, NotImplementedError) as exc:
-            self.skipTest(f"symbolic links unavailable: {exc}")
-
-        with (
-            working_directory(cwd),
-            mock.patch.dict(os.environ, {"HOME": str(home)}),
-        ):
-            self.assertEqual(read_draft_file("neutral.md"), exact)
-            self.assertEqual(read_draft_file(absolute), "absolute draft")
-            self.assertEqual(read_draft_file("linked.md"), "absolute draft")
-            self.assertEqual(read_draft_file(metachar.name), "literal metacharacters")
-            self.assertEqual(read_draft_file("~/tilde.md"), "expanded home")
-            self.assertEqual(read_draft_file(empty), "")
-        self.assertFalse((cwd / "marker").exists())
-
-        backend = successful_backend()
-        with (
-            working_directory(cwd),
-            mock.patch.object(
-                cli_module,
-                "read_draft_file",
-                wraps=read_draft_file,
-            ) as shared_loader,
-        ):
-            exit_code, stdout, stderr = self._run(
-                [
-                    "run",
-                    "--workspace",
-                    str(self.workspace.root),
-                    "--session",
-                    "file_session",
-                    "--draft-file",
-                    "neutral.md",
-                    "--debate-id",
-                    "file_debate",
-                    "--output",
-                    "file.md",
-                ],
-                backend,
-            )
-        shared_loader.assert_called_once_with("neutral.md")
-        self.assertEqual(exit_code, 0, stderr)
-        self.assertEqual(json.loads(stdout)["input_kind"], "draft")
-        self.assertTrue(
-            all(
-                request.user_payload == exact
-                for request in phase_requests(backend, Phase.AUDIT)
-            )
-        )
-
-    def test_shared_draft_loader_errors_are_strict_and_precede_backend(self) -> None:
-        cwd = Path(self.temporary.name) / "caller-errors"
-        cwd.mkdir()
-        invalid = cwd / "invalid.md"
-        invalid.write_bytes(b"\xff")
-        directory = cwd / "directory"
-        directory.mkdir()
-
-        with working_directory(cwd):
-            with self.assertRaises(ConfigurationError) as invalid_error:
-                read_draft_file("invalid.md")
-            self.assertEqual(
-                str(invalid_error.exception),
-                "draft file is not valid UTF-8: invalid.md",
-            )
-            for path in ("missing.md", "directory"):
-                with self.subTest(path=path):
-                    with self.assertRaises(ConfigurationError) as read_error:
-                        read_draft_file(path)
-                    self.assertTrue(
-                        str(read_error.exception).startswith(
-                            f"cannot read draft file {path}: "
-                        )
-                    )
-            with mock.patch.object(
-                Path,
-                "read_bytes",
-                side_effect=PermissionError("denied"),
-            ):
-                with self.assertRaisesRegex(
-                    ConfigurationError,
-                    r"^cannot read draft file blocked\.md: denied$",
-                ):
-                    read_draft_file("blocked.md")
-
-        with mock.patch.object(cli_module, "AgentBackend") as backend_class:
-            with working_directory(cwd):
-                exit_code, stdout, stderr = invoke_cli(
-                    [
-                        "run",
-                        "--workspace",
-                        str(self.workspace.root),
-                        "--session",
-                        "invalid_file_session",
-                        "--draft-file",
-                        "invalid.md",
-                    ]
-                )
-        self.assertEqual(exit_code, 2)
-        self.assertEqual(stdout, "")
-        self.assertIn("draft file is not valid UTF-8", stderr)
-        backend_class.assert_not_called()
-
-    def test_run_requires_exactly_one_input(self) -> None:
-        invalid_cases = (
-            ["run"],
-            ["run", "positional", "--prompt", "option prompt"],
-            ["run", "positional", "--draft", "option draft"],
-        )
-        for index, suffix in enumerate(invalid_cases):
-            with self.subTest(suffix=suffix):
-                with mock.patch.object(cli_module, "AgentBackend") as backend_class:
-                    exit_code, stdout, stderr = invoke_cli(
-                        [
-                            *suffix,
-                            "--workspace",
-                            str(self.workspace.root),
-                            "--session",
-                            f"invalid_{index}",
-                        ]
-                    )
-                self.assertEqual(exit_code, 2)
-                self.assertEqual(stdout, "")
-                self.assertIn("exactly one run input is required", stderr)
-                backend_class.assert_not_called()
-
-        stdout = io.StringIO()
-        stderr = io.StringIO()
-        with (
-            contextlib.redirect_stdout(stdout),
-            contextlib.redirect_stderr(stderr),
-            self.assertRaises(SystemExit) as raised,
-        ):
-            cli_module.main(
-                [
-                    "run",
-                    "--workspace",
-                    str(self.workspace.root),
-                    "--session",
-                    "argparse_invalid",
-                    "--prompt",
-                    "prompt",
-                    "--draft",
-                    "draft",
-                ]
-            )
-        self.assertEqual(raised.exception.code, 2)
-        self.assertIn("not allowed with argument", stderr.getvalue())
-
-
-class InferredCommandTests(unittest.TestCase):
-    def test_nested_cwd_infers_workspace_and_selected_session_for_commands(
-        self,
-    ) -> None:
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
-        workspace = initialize_workspace(
-            Path(temporary.name) / "workspace"
-        )
-        nested = workspace.root / "caller" / "nested"
+    def test_nested_cwd_infers_default_for_directive_and_inspect(self) -> None:
+        save_default_session(self.workspace, "default_session")
+        nested = self.workspace.root / "caller" / "commands"
         nested.mkdir(parents=True)
-
         with working_directory(nested):
-            exit_code, stdout, stderr = invoke_cli(
-                ["session", "start", "inferred_session"]
-            )
-            self.assertEqual(exit_code, 0, stderr)
-            self.assertEqual(
-                json.loads(stdout)["session_id"],
-                "inferred_session",
-            )
+            code, stdout, stderr = invoke_cli(["directive", "[SYS: LANG=KO]"])
+            self.assertEqual((code, stderr), (0, ""))
+            self.assertEqual(json.loads(stdout)["language"], "KO")
 
-            exit_code, stdout, stderr = invoke_cli(
-                ["directive", "[SYS: LANG=EN]"]
-            )
-            self.assertEqual(exit_code, 0, stderr)
-            self.assertEqual(json.loads(stdout)["language"], "EN")
-
-            exit_code, stdout, stderr = invoke_cli(["inspect"])
-            self.assertEqual(exit_code, 0, stderr)
-            self.assertEqual(
-                json.loads(stdout)["session_id"],
-                "inferred_session",
-            )
-
-            backend = successful_backend()
-            with mock.patch.object(
-                cli_module,
-                "AgentBackend",
-                return_value=backend,
-            ):
-                exit_code, stdout, stderr = invoke_cli(
-                    [
-                        "run",
-                        "inferred positional prompt",
-                        "--debate-id",
-                        "inferred_debate",
-                        "--output",
-                        "inferred.md",
-                    ]
-                )
-            self.assertEqual(exit_code, 0, stderr)
-            report = json.loads(stdout)
-            self.assertEqual(report["session_id"], "inferred_session")
-            self.assertEqual(report["input_kind"], "prompt")
-            self.assertEqual(
-                phase_requests(backend, Phase.DRAFT)[0].user_payload,
-                "inferred positional prompt",
-            )
-
-        inspected = StoryRuntime(workspace).inspect_debate(
-            "inferred_session",
-            "inferred_debate",
+            code, stdout, stderr = invoke_cli(["inspect"])
+            self.assertEqual((code, stderr), (0, ""))
+            self.assertEqual(json.loads(stdout)["session_id"], "default_session")
+        self.assertEqual(
+            load_cli_context(self.workspace).default_session_id,
+            "default_session",
         )
-        self.assertEqual(inspected["status"], "consensus")
 
 
 if __name__ == "__main__":

@@ -82,7 +82,7 @@ but is not authentication and is omitted by normal inspection.
 `save_debate_context()` exclusively creates an identity-bound sidecar: included
 mode requires a canonical snapshot, while fresh mode requires `None`.
 `inspect_debate_context()` is a separate strict read and returns `None` for an
-absent legacy sidecar. It does not change `inspect_debate()` or
+absent context sidecar. It does not change `inspect_debate()` or
 `inspect_session()`. The schema is owned by
 [Persistence](../design/persistence.md#debate-context-sidecar).
 

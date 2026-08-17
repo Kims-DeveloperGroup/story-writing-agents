@@ -11,7 +11,7 @@ event reference; **snapshot**—the transcript end observed for one read;
 
 ## Shell bridge
 
-Neither command needs a selected conversation. `/search` constructs the
+Neither command needs current conversation focus. `/search` constructs the
 default `ConversationSearchQuery`: active records only, up to 10 hits. The
 controller preserves the service's deterministic order and renders a
 conversation-only citation for subject matches or a turn/sequence/event
@@ -24,7 +24,7 @@ returning at most 24 events unless the command supplies other values. The
 maximum is 100. A continuation hint exposes the next sequence and a copyable
 visible handle, but the controller stores no cursor.
 
-Search/read never changes selection, routing, provider state, or durable data.
+Search/read never changes defaults, either focus, provider state, or durable data.
 See the [parser](interactive-command-parser.md) for grammar, the
 [terminal](interactive-terminal.md) for records, and
 [Story sessions](../guides/story-sessions.md) for the beginner flow.

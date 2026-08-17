@@ -17,7 +17,6 @@ from .conversations import (
     validate_conversation_context_window,
 )
 from .errors import SessionIdError, WorkspaceFormatError
-from .session_lifecycle import SessionLeaseState, SessionSummary
 
 
 _SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
@@ -48,7 +47,7 @@ class DebateStatus(StrEnum):
 
 
 class DebateContextMode(StrEnum):
-    """Whether one debate includes or excludes its selected conversation."""
+    """Whether one debate includes or excludes its supplied conversation."""
 
     INCLUDED = "included"
     FRESH = "fresh"
@@ -56,7 +55,7 @@ class DebateContextMode(StrEnum):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class DebateContextRequest:
-    """Immutable selected-conversation request for one debate run."""
+    """Immutable supplied-conversation request for one debate run."""
 
     conversation_id: str
     mode: DebateContextMode

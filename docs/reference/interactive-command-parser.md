@@ -29,7 +29,7 @@ Management dispatch changes no parser, terminal, or facade surface.
 ```text
 ignored message routed_message set_target list_agents compose send cancel
 run run_fresh draft_file search transcript inspect history status set_language
-set_persona reset session_list session_new session_resume session_end
+    set_persona reset session_list session_create session_open session_pause
 conversation_new conversation_list conversation_list_all conversation_use
 conversation_subject conversation_archive help quit parse_error
 ```
@@ -50,7 +50,7 @@ conversation_subject conversation_archive help quit parse_error
 | Conversation | `/compose`; `/send`; `/cancel`; `/say TEXT` |
 | Agents | `/to NAME`; `/agents`; `/language LANG`; `/persona AGENT NAME`; `/reset` |
 | Consensus | `/run [PROMPT] \| /run --fresh PROMPT`; `/draft-file PATH` |
-| Sessions | `/session list \| new NAME \| resume [NAME] \| end` |
+| Sessions | `/session list \| create NAME \| open [NAME] \| pause` |
 | Conversations | `/conversation new [SUBJECT] \| list [--all] [QUERY] \| use ID \| subject SUBJECT \| archive [ID]` |
 | Inspection | `/search QUERY`; `/transcript ID [COUNT] [--from SEQUENCE]`; `/inspect [DEBATE\|last]`; `/history [COUNT]`; `/status`; `/help [COMMAND]` |
 | Exit | `/quit` |
@@ -109,7 +109,7 @@ Conversation `new` and `subject` preserve their remainder. `list [--all]
 
 `/to` and `/agent` return `set_target`; `@ALIAS TEXT` returns
 `routed_message`; `/say TEXT` returns `message`. The parser does not enforce
-attachment or selection; the [CLI contract](cli.md#interactive-streams) does.
+current attachment or conversation focus; the [CLI contract](cli.md#interactive-streams) does.
 
 Invalid/non-string input returns `parse_error`, never provider input. A
 suggestion requires one unique case-sensitive Levenshtein match within two.

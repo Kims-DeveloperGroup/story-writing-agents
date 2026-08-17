@@ -1,103 +1,105 @@
 # Session lifecycle design
 
-> **Availability:** the controller manages sessions, conversations, routed
-> turns, local/management reads, directives, history, and context consensus.
-> Artifact commands remain unavailable.
+<a id="canonical-lifecycle-state"></a>
 
-Key terms: **durable state** is `absent`, `ready`, or `paused`; **access state**
-records claimability or lease ownership; **saved default** is the persisted CLI
-pointer; **attachment** is this backend's lease; **focus** is the controller's
-selected conversation. These are separate facts.
+| Durable ↓ / process access → | `claimable` | `held_here` | `blocked_by_live_local_owner` | `ownership_unknown` |
+| --- | --- | --- | --- | --- |
+| `absent` | Create it. | Invalid | Invalid | Invalid |
+| `ready` | Open it. | Work when configured. | Close the local owner. | Verify; preserve claim. |
+| `paused` | Open to ready. | Valid, but work is paused. | Close the local owner. | Verify; preserve claim. |
 
-After confirmed `/session end`, `draft` remains the saved default while the
-shell has no attachment or focus. Legacy `selected=True` therefore proves
-neither `held_here` access nor a focused conversation.
+**Durable state** says missing, ready, or paused. **Process access** says
+claimable, held here, blocked locally, or unknown. The axes are independent;
+`absent` means neither manifest nor claim. Conversation and debate states differ.
 
-## Canonical lifecycle state
+`SessionLifecycleState` is frozen, slotted, keyword-only, with fields
+`session_id`, `durable_state`, `access_state`, `owner_hostname`, `owner_pid`,
+`created_at`, `updated_at`. Owner fields pair; persisted timestamps are ordered
+and offset-aware. A dead-local claim can be claimable while retaining owner facts.
 
-`SessionLifecycleState` is frozen, slotted, and keyword-only. It carries a safe
-ID, durable/access states, an owner host/PID pair, and timestamp pair. Exactly
-these combinations are valid:
+## Defaults, process scope, and readiness
 
-| Durable state | Valid access states | Owner host and PID | Timestamps |
-| --- | --- | --- | --- |
-| `absent` | `claimable` only | Both absent | Both absent |
-| `ready` | Any access state | Optional pair for `claimable`; required pair otherwise | Required, offset-aware, ordered pair |
-| `paused` | Any access state | Optional pair for `claimable`; required pair otherwise | Required, offset-aware, ordered pair |
+The **default session** is a command fallback; **current attachment** is held by
+this shell. **Default conversation** persists per session. **Current focus** is
+the conversation used now; **agent focus** is its responder. Defaults prove no
+current scope.
 
-Access values are `claimable`, `held_here`, `blocked_by_live_local_owner`, and
-`ownership_unknown`. Paused sessions permit all four. An update timestamp
-cannot precede creation.
+`provider_work_is_ready()` is pure: exact `True` configuration + `ready` +
+`held_here`. Ready plus claimable reports readiness `no`.
 
-## Facts and provider readiness
+## Transition mechanism
 
 ```mermaid
-flowchart LR
-    accTitle: Pure session facts and provider readiness
-    accDescr: Provider work requires ready state, locally held access, and ready configuration. Saved defaults and focus remain separate.
-    D[Durable fact] --> S[Validated lifecycle state]
-    A[Access fact] --> S
-    S --> G{ready and held_here?}
-    C[Configuration exactly True] --> G
-    G -->|All true| R[Provider work ready]
-    G -->|Otherwise| N[Not ready]
-    X[Saved default: outside lifecycle value]
-    F[Conversation focus: outside lifecycle value]
+sequenceDiagram
+    participant C as Controller/runtime
+    participant B as AgentBackend
+    participant G as Claim guard
+    participant M as V2 manifest
+    C->>B: validate configuration
+    C->>B: lifecycle pre-read
+    B->>G: lock; inspect claim
+    alt absent or proved-dead local claim
+        G->>G: create/replace this process claim
+    else live local or unknown owner
+        G-->>C: typed failure; preserve claim
+    end
+    B->>M: re-read under access
+    opt create, reopen, or pause
+        B->>M: create/replace manifest
+    end
+    C->>B: correlated lifecycle post-read
+    alt normal release
+        B->>G: compare token; remove own claim
+    else failure after new claim
+        B->>G: compensate only that new claim
+    end
 ```
 
-`provider_work_is_ready()` is true only for validated `ready` + `held_here` +
-exact `True` configuration readiness. It performs no I/O or acquisition.
+Every runtime provider-work preparation requires synchronous validation →
+pre-read → acquire → post-read. Results must correlate, preserve identity, and
+end `ready` + `held_here`. Failure compensates only newly acquired access.
 
-Users can import, validate, project, and query facts. They cannot thereby claim,
-attach, detach, mutate selections/focus, read storage/configuration, start a
-provider, or gain shell behavior. Issue #53 does not yet drive Issue #54
-backend transitions or Issue #55 shell copy/navigation. Exact APIs are in
-[Backend and sessions](../reference/backend-and-sessions.md#lifecycle-value-contracts).
+## Commands, errors, and exact next actions
 
-## Entering and command gates
+| Facts or need | Command / stable failure | Exact next action |
+| --- | --- | --- |
+| Missing | `/session create NAME`; `story session create SESSION` | `Create a session.` |
+| Ready + claimable | `/session open [NAME]`; `story session reopen [SESSION]` | `Open the session.` |
+| Paused + claimable/held here | `SessionPausedError` / `session_paused` | `Open the session to make it ready.` |
+| Live local owner | `SessionAccessBlockedError` / `session_access_blocked` | `Close the owning local process normally, then retry.` |
+| Unknown owner | `SessionOwnershipUnknownError` / `session_ownership_unknown` | `Verify ownership; do not remove the access claim.` |
+| Invalid provider setup | `ConfigurationError` or `BackendProtocolError` / `provider_preflight_failed` | `Repair provider configuration, then retry.` |
+| Held, configured, no focus | `conversation_required` | `Create or choose a conversation.` |
+| Held, configured, focused | Continue discussion/run | `Continue with the current focus.` |
 
-The controller installs one `asyncio.Runner` before the lobby and owns cleanup.
-Explicit entry creates, attaches, or resumes a name. Bare entry opens the
-lobby, attaches an active saved default, or asks to resume a paused one.
+`/status` fields are exactly `Session`, `Durable state`, `Process access`,
+`Default session`, `Current attachment`, `Default conversation`, `Current
+focus`, `Agent focus`, `Provider readiness`, `Next action`. `/session list`
+uses `Session`, `Durable state`, `Process access`, `Default session`, `Provider
+readiness`, `Next action`. Both are read-only and omit owner host, PID, and token.
+`session_not_attached` gates attached commands;
+`workspace_version_unsupported` reports rejected V1 data.
 
-An absent, `null`, missing, or archived conversation selection enters the inner
-lobby without rewriting stale IDs; malformed initial selection is fatal.
-Help/status and navigation are global. Content requires attachment; provider
-work also requires an active focused conversation.
+Automation create/reopen saves the default, releases, then prints only sorted,
+indented `access_state`, `durable_state`, `session_id`. Pause retains the
+default. Lifecycle commands have no `--session`.
 
-## Attach and switch ordering
+## Shell transitions and compensation
 
-For initial attachment or a switch to B, the controller:
+Bare `story` opens a ready default and asks before reopening paused state.
+`story chat SESSION` creates or opens; `/session open` never creates. Switching
+acquires the destination, loads/saves defaults, releases the source, then commits
+attachment/focus and resets agent focus to `lead`.
 
-1. acquires and validates B's active owned lease;
-2. loads and validates B's saved conversation, if any;
-3. saves B as the session default when changed;
-4. detaches source A when switching; then
-5. commits B in memory, resets the visible alias to `lead`, and renders.
+<a id="conversation-lifecycle-and-compensation"></a>
 
-Failure before step 3 releases B and preserves A. If A cannot detach afterward,
-B stays saved, no B orientation appears, close is attempted, and exit is `2`
-with `cleanup_failed`.
+Conversation create/use saves its default before changing current focus.
+Archiving focused content saves another active default or `null`; save failure
+restores archive state only while ready access remains proved.
 
-## Conversation lifecycle and compensation
-
-Attachment restores an active saved conversation or opens the inner lobby.
-`new` writes metadata before selection; save failure leaves the record and
-prior choice. `use` saves before memory changes; rename/list do not retarget.
-
-Archiving another record neither confirms nor reselects. Focused archive
-defaults to no; yes saves the first other active ID or `null`. Save failure must
-unarchive and prove the original selection and lease or exit `2`.
-
-## End, detach, and close
-
-Confirmed `/session end` pauses/releases, retains saved defaults, clears process
-scope, resets `lead`, and returns to the lobby. No, blank, or Ctrl-C stays
-attached; confirmation EOF exits without ending. `/quit`, `/exit`, and
-main/compose EOF clean up without pausing.
-
-Cleanup attempts `Runner.close()` → detach → `backend.close()` without skipping
-later stages. Durable data remains. Ordinary failure exits `2` with one
-best-effort `cleanup_failed`; interrupted Runner close attempts later cleanup,
-retains its unproved reference, and propagates. See
-[Session storage](../reference/configuration/session-storage.md).
+Confirmed `/session pause` retains defaults, clears attachment and both focuses,
+and releases. Quit/EOF releases without pausing. A later process establishes a
+new attachment and restores only an active default conversation. See
+[Backend API](../reference/backend-and-sessions.md#lifecycle-value-contracts),
+[storage](../reference/configuration/session-storage.md), and
+[recovery](../operations/recovery-and-limitations.md).

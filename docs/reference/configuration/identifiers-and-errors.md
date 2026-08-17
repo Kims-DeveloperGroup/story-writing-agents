@@ -1,78 +1,79 @@
 # Identifiers and errors
 
-> **Availability:** the validation rules and public exception types on this
-> page are implemented. Persisted malformed data fails closed; it is not
-> repaired or migrated automatically.
+> **Availability:** these validation rules and public exception types are
+> implemented. Malformed persisted data fails closed and is not repaired.
 
-Key terms: **safe ID**—a validated logical name that cannot traverse paths;
-**format error**—invalid persisted bytes or schema; **security error**—an unsafe
-filesystem operation; **collision**—an attempted reuse of reserved identity.
+Key terms: **safe ID**—a logical name that cannot traverse paths; **format
+error**—invalid persisted bytes or schema; **security error**—an unsafe
+filesystem operation; **collision**—attempted reuse of reserved identity.
 
 ## Exact token formats
 
 | Value | Pattern and limits |
 | --- | --- |
-| Session, debate, conversation ID | `[A-Za-z0-9][A-Za-z0-9_-]{0,63}`: 1–64 ASCII letters, digits, `_`, or `-`, starting alphanumeric. |
-| Persona identifier | `[A-Za-z0-9][A-Za-z0-9_.-]{0,63}`: 1–64 ASCII letters, digits, `_`, `.`, or `-`, starting alphanumeric; no `.md`, slash, whitespace, traversal, or absolute path. |
-| Language token | `[A-Za-z][A-Za-z0-9-]{0,15}`: 1–16 ASCII characters, starting with a letter; case preserved and no fixed language registry. |
+| Session, debate, conversation ID | `[A-Za-z0-9][A-Za-z0-9_-]{0,63}`; 1–64 ASCII characters, starting alphanumeric. |
+| Persona identifier | `[A-Za-z0-9][A-Za-z0-9_.-]{0,63}`; no `.md`, slash, whitespace, traversal, or absolute path. |
+| Language token | `[A-Za-z][A-Za-z0-9-]{0,15}`; case preserved. |
 | Provider thread ID | `[A-Za-z0-9][A-Za-z0-9_-]{0,127}`. |
 
-Conversation display subjects have a separate Unicode contract in the
-[conversation catalog](../conversation-catalog.md). Manuscript names may use
-safe relative subdirectories, but not absolute paths, traversal, or symlinks.
+Conversation subjects have a separate Unicode contract. Manuscript names may
+use safe relative subdirectories, but not absolute paths, traversal, or symlinks.
 
 ## Public exception hierarchy
 
-All exported runtime errors derive from `StoryWritingAgentsError`:
+All exported errors derive from `StoryWritingAgentsError`:
 
-- `WorkspaceSecurityError` rejects absolute/traversing/escaping paths,
-  symlinks, and unsafe direct workspace operations.
-- `WorkspaceFormatError` rejects invalid UTF-8, malformed JSON or JSONL,
-  unexpected exact-schema fields or types, path/embedded-ID mismatch, changed
-  prompt-reference bytes, invalid timestamps, and other persisted corruption.
-- `ConfigurationError` rejects unknown configuration keys or agents, invalid
-  configuration values, missing persona templates, CLI context/resolution
-  errors, input selection errors, and invalid backend overrides.
-- `DirectiveError` rejects non-standalone, invalid, unknown-agent, or otherwise
-  unappliable directives.
+- `WorkspaceSecurityError` rejects escaping paths and symlinks.
+- `WorkspaceFormatError` rejects invalid UTF-8, malformed JSON/JSONL, invalid
+  exact schemas, mismatched embedded IDs, timestamps, and other corruption.
+- `WorkspaceVersionUnsupportedError` is a `WorkspaceFormatError` for detected
+  V1 session/default state or another unsupported persisted schema version.
+- `ConfigurationError` rejects unknown keys/agents, invalid values, missing
+  persona templates, unresolved defaults/input, and invalid backend overrides.
+- `DirectiveError` rejects invalid or unappliable directives.
 - `SessionIdError` rejects unsafe session, debate, or conversation IDs.
-- `ConversationNotFoundError` reports an unknown conversation within its
-  session; `ConversationExistsError` reports exhausted collision-safe ID
-  allocation instead of overwriting.
-- `SessionNotFoundError` and `SessionExistsError` enforce strict provider
-  lifecycle preconditions.
-- `SessionInUseError` reports a live or unverifiable lease owner without
-  exposing the opaque ownership token.
-- `DebateExistsError` reports an already reserved session/debate pair before
-  provider work begins.
-- `ManuscriptExistsError` prevents overwriting an existing manuscript.
-- `BackendProtocolError` reports missing execution backend, inactive-session
-  use, unsupported provider, executable/preflight failure, invalid or
-  mismatched replies, provider process errors/timeouts, thread ownership
-  changes, and other backend protocol failures.
-- `ConversationRetrievalError` is the retrieval base;
-  `ConversationRetrievalSemanticError`, `ConversationRetrievalBudgetError`, and
-  `ConversationRetrievalObserverError` distinguish unauthorized actions,
-  exhausted whole-turn budgets, and progress delivery failure. See
-  [Bounded retrieval](../conversation-retrieval.md) for fixed messages.
+- `ConversationNotFoundError` and `ConversationExistsError` enforce
+  conversation identity; `ManuscriptExistsError` prevents replacement.
+- `BackendProtocolError` is the provider/backend contract base.
+- `SessionExistsError` and `SessionNotFoundError` enforce durable preconditions.
+- `SessionPausedError` rejects provider work while durable state is paused.
+- `SessionAccessBlockedError` reports another live local process.
+- `SessionOwnershipUnknownError` reports ownership that cannot be proved safe.
+- `DebateExistsError` reports a reserved session/debate pair.
+- `ProgressObserverError` reports invalid debate-progress delivery.
+- `ConversationRetrievalError` is the retrieval base; its semantic, budget, and
+  observer subclasses distinguish invalid actions, exhausted budgets, and
+  progress failure.
+
+Lifecycle errors expose no claim token. Concrete Python diagnostics may contain
+the safe session ID and, for a live local conflict, bounded hostname/PID facts.
+Shell errors use trusted fixed copy and never reproduce exception messages.
+
+## Interactive lifecycle error mapping
+
+| Condition | Stable code | User effect |
+| --- | --- | --- |
+| A command needs current attachment | `session_not_attached` | Create or open a session first. |
+| Durable state is paused | `session_paused` | Open it before provider work. |
+| Another live local process owns access | `session_access_blocked` | Close that process normally, then retry. |
+| Ownership cannot be verified | `session_ownership_unknown` | Preserve the claim and inspect recovery guidance. |
+| V1 state is detected | `workspace_version_unsupported` | Use the nondestructive manual reset procedure. |
+
+Invalid/missing/existing IDs and provider configuration retain their established
+`session_invalid`, `session_not_found`, `session_exists`, and
+`provider_preflight_failed` codes. Conversation and debate errors remain
+separate domains.
 
 ## Failure behavior
 
-Validation is completed before directive-state replacement, debate provider
-construction where possible, and approved artifact mutation. Rejected
-directives preserve prior overrides. A duplicate debate ID raises before a
-backend call. A manuscript collision can occur after finalization and returns a
-failed debate; its new debate ID remains consumed.
+Validation precedes directive replacement, provider work where possible, and
+approved artifact mutation. Lifecycle reads validate complete logical records
+instead of skipping malformed files. Unsupported V1 data is left unchanged.
+Catalog reads reject duplicate, missing, or extra fields. A duplicate debate ID
+raises before providers; a manuscript collision after finalization returns a
+failed debate and consumes the new debate ID.
 
-Catalog reads reject duplicate, missing, or extra JSON fields. Provider-session
-status reads validate every encountered logical manifest and lease rather than
-skipping malformed files. Workspace reads do not silently rewrite legacy data.
-
-The CLI catches ordinary exceptions, writes `ExceptionType: message` to
-standard error, and exits `2`. Debate deadlock and handled failure are returned
-results with distinct exit codes; see the [CLI reference](../cli.md).
-
-Never use exception messages as an access-control mechanism. Lease diagnostics
-may include the safe session ID, PID, and a control-sanitized length-limited
-hostname, but not the token. Debate owner and lease tokens coordinate
-cooperating processes; they are not authentication secrets.
+Automation catches expected exceptions, writes `ExceptionType: message` to
+standard error, and exits `2`. Debate deadlock and handled failure have distinct
+result exits. Never use diagnostic text as access control; claim and debate
+tokens coordinate cooperating processes and are not authentication secrets.

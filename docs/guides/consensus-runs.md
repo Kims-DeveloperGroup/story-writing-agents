@@ -1,10 +1,10 @@
 # Run a consensus debate
 
 > **Availability:** prompt and complete-draft debates are available through the
-> noninteractive CLI, selected-conversation TTY shell, and `StoryRuntime`.
+> noninteractive CLI, focused-conversation TTY shell, and `StoryRuntime`.
 
 Key terms: **prompt**—instructions used to create revision `r0`; **draft**—a
-supplied complete `r0`; **context mode**—whether selected transcript events are
+supplied complete `r0`; **context mode**—whether focused transcript events are
 included; **round limit**—maximum replacement count; **debate ID**—an immutable
 attempt key.
 
@@ -13,13 +13,13 @@ attempt key.
 | Entry | Conversation context | Best for |
 | --- | --- | --- |
 | `story run ...` | None; established noninteractive behavior | Scripts, explicit IDs, outputs, and round limits |
-| Shell `/run [PROMPT]` | One selected-conversation snapshot | Turning a discussion into a manuscript |
-| Shell `/run --fresh PROMPT` | Selected identity only; no transcript read | Starting without prior conversation content |
-| Shell `/draft-file PATH` | One selected-conversation snapshot | Auditing a complete local draft |
+| Shell `/run [PROMPT]` | One current-focus snapshot | Turning a discussion into a manuscript |
+| Shell `/run --fresh PROMPT` | Focused identity only; no transcript read | Starting without prior conversation content |
+| Shell `/draft-file PATH` | One current-focus snapshot | Auditing a complete local draft |
 
-The shell forms require an attached session and selected active conversation.
+The shell forms require current attachment and focus on an active conversation.
 Bare `/run` opens the multiline composer and starts only on `/send`. See the
-[selected-discussion guide](story-sessions.md#turn-a-selected-discussion-into-consensus).
+[focused-discussion guide](story-sessions.md#turn-the-current-focus-into-consensus).
 
 ## Run noninteractively
 

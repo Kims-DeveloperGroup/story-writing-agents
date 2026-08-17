@@ -3,12 +3,13 @@
 > **Availability:** these remedies cover the CLI, conversations, Codex,
 > workspace persistence, and Python APIs.
 
-Key terms: **preflight**—pre-debate checks; **strict UTF-8**—rejects invalid
-bytes; **immutable ID**—cannot be reused; **lease**—temporary attachment metadata.
+Key terms: **preflight**—checks before provider work; **strict UTF-8**—rejects
+invalid bytes; **immutable ID**—cannot be reused; **access claim**—temporary
+exclusive process ownership.
 
 ## The command is not found
 
-Activate the installed environment, reinstall, and refresh its command cache:
+Activate the environment, reinstall, and refresh the command cache:
 
 ```bash
 python -m pip install --editable .
@@ -17,40 +18,34 @@ story --help
 ```
 
 Editable changes appear immediately; new script names require reinstalling.
-Both aliases share a parser.
 
 ## Interactive mode requires a terminal
 
-`story` and `story chat` require TTY stdin and stdout. A missing, false, or
-failed `isatty()` emits `tty_required` on stderr and exits `2` before input,
-option validation, workspace/context access, backend construction, or mutation.
-Pipes and scripts must use `story run`.
+`story` and `story chat` require TTY stdin/stdout. Failed `isatty()` emits
+`tty_required` and exits `2` before workspace access. Scripts use `story run`.
 
 ## Slash suggestions do not appear
 
-The live panel appears only at a lobby or attached main prompt on capable POSIX
-TTY streams with usable terminal size and nonempty, non-`dumb` `TERM`. Missing
-capability uses line input without ANSI; commands still work. Subject,
-confirmation, and composer prompts never show it. The panel
-filters exact case-sensitive tokens, not completion or scope gates; use
+The live panel appears only at main prompts on capable POSIX TTYs. Otherwise,
+commands still use line input. Other prompts never show it. The panel filters
+exact case-sensitive tokens, not completion or scope gates; use
 `/help`. See [terminal safety](../operations/terminal-safety.md#live-editor-boundary).
 
-## No workspace or session is selected
+## No workspace, default session, or current focus
 
-Run from an initialized workspace or descendant, or pass `--workspace PATH`;
-discovery chooses the nearest initialized ancestor. Start a session to save its
-selection, or pass `--session SESSION`; only successful start changes
-`cli_context.json`.
+Run from an initialized workspace or pass `--workspace PATH`. Use `story session
+create SESSION` to save a default, or pass `--session SESSION` to `run`,
+`directive`, or `inspect`. Successful create/reopen saves it; pause retains it.
 
-For `session_inactive`, create `/session new NEW_ID` or reactivate with
-`/session resume EXISTING_ID`. For `conversation_required`, create
-`/conversation new` or select `/conversation use`.
+For `session_paused`, use `/session open NAME` or `story session reopen NAME`.
+For `session_not_attached`, create/open in the shell. For
+`conversation_required`, create `/conversation new` or focus one with
+`/conversation use`.
 
 ## A shell command is unavailable
 
-`/help [COMMAND]` shows syntax; `/status` shows scope. Management/local reads
-need attachment; advisory, `/history`, `/run`, and `/draft-file` also need an
-active selection.
+`/help [COMMAND]` shows syntax; `/status` shows scope. Management/reads need an
+attachment; advisory, `/history`, `/run`, and `/draft-file` also need focus.
 
 The main prompt rejects standalone `/compose`, `/send`, and `/cancel`. Bare
 `/run` alone opens the composer, where `/send` submits and `/cancel` discards.
@@ -58,27 +53,25 @@ Advisory input remains one line.
 
 ## An answer did not search conversation memory
 
-An agent may answer without retrieval. `/search QUERY` is provider-free
-inspection and does not force retrieval. Use a hit's handle with
-`/transcript ID` for a bounded page. Search covers active conversations; transcript also
-reads archives, which agent retrieval excludes.
+An agent may answer without retrieval. `/search QUERY` is provider-free. Use a
+hit's handle with `/transcript ID`; it can also read archives.
 
 ## Smoke exits with 1 or 2
 
-Code `1` includes `failed_check`; repeat with
-`story smoke --workspace ./smoke-debug` to retain artifacts. Code `2` uses the normal error channel;
-validate configuration as strict UTF-8 JSON.
+Code `1` includes `failed_check`; repeat with `story smoke --workspace
+./smoke-debug` to retain artifacts. Code `2` uses the normal error channel.
 
-## `BackendProtocolError` or session contention
+## Provider configuration or session contention
 
-Confirm Codex installation/login or `CODEX_API_KEY`, active session, model, and
-timeout. Timeout, cancellation, malformed response, or ambiguous provider
-failure may taint a thread; the next compatible call starts fresh.
+Confirm Codex login or `CODEX_API_KEY`, ready session, model, and timeout.
+Ambiguous provider failure may taint a thread; the next call starts fresh.
 
-`SessionInUseError` means a live or unverifiable lease blocks attachment. Stop
-its owner normally. Never delete uncertain lease state or `.lease-claims.lock`;
-status cannot prove staleness. See the
-[lease contract](../reference/backend-and-sessions.md).
+`provider_preflight_failed` reports readiness `no` and next action
+`Repair provider configuration, then retry.`
+
+`session_access_blocked` means a live local process owns access; close it and
+retry. For `session_ownership_unknown`, preserve the claim and guard; inspect
+[access recovery](../operations/recovery-and-limitations.md#session-access-recovery).
 
 ## A prompt or draft file fails
 
@@ -110,11 +103,10 @@ documents if needed, and start a new debate. `active` proves only reservation;
 A recoverable advisory Ctrl-C reports `[cancelled]` and keeps attachment; an
 entered turn must cancel and join, and its provider thread may restart. Fatal
 `operation_interrupted` means proof or terminal I/O failed and exits `2` through
-cleanup. `cleanup_failed` forces exit `2` and means Runner close, detach, or backend close may be
-incomplete. Before retrying, inspect retained temporary or lease state, stop a
-known owner normally, and never delete uncertain lease state.
+cleanup. `cleanup_failed` forces exit `2` and means Runner close, access release,
+or backend close may be incomplete. Before retrying, inspect retained temporary
+or claim state, stop a known owner normally, and preserve uncertain ownership.
 
-Malformed JSON/JSONL raises instead of being skipped or repaired. Preserve it
-before manual intervention.
-See [Inspection and recovery](inspection-and-recovery.md) and the
+Malformed JSON/JSONL raises; preserve it before intervention. See
+[Inspection and recovery](inspection-and-recovery.md) and the
 [error reference](../reference/configuration/identifiers-and-errors.md).

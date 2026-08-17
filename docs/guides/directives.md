@@ -1,7 +1,7 @@
 # Apply session directives
 
 > **Availability:** exact standalone language, persona, and reset directives are
-> implemented in the installed CLI and Python API. Attached shell commands map
+> implemented in the installed CLI and Python API. Current-attachment commands map
 > to those same exact directives.
 
 Key terms: **directive**—one exact standalone override message; **language
@@ -44,7 +44,7 @@ story directive \
   '[RESET: ALL]'
 ```
 
-In an attached interactive shell, no conversation selection is needed:
+With a current attachment, no conversation focus is needed:
 
 | Enter | Runtime receives |
 | --- | --- |
@@ -56,9 +56,9 @@ Persona aliases normalize to canonical agents. The shell calls
 `StoryRuntime.apply_directive`; an unknown agent is `agent_invalid`, while a
 missing/unsafe persona or other directive/configuration rejection is
 `configuration_invalid`.
-Only validated success changes the override file. Attachment, selected
-conversation, sticky target, transcripts, artifacts, and provider state remain
-unchanged.
+Only validated success changes the override file. Current attachment, defaults,
+conversation focus, agent focus, transcripts, artifacts, and provider state
+remain unchanged.
 
 Reset clears the session-wide language and persona plus all per-agent language
 and persona overrides. It does not modify system defaults, per-agent

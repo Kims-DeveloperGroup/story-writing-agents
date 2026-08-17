@@ -19,6 +19,11 @@ from typing import get_args, get_type_hints
 from unittest import mock
 
 import story_writing_agents
+from story_writing_agents import (
+    SessionAccessState,
+    SessionDurableState,
+    SessionLifecycleState,
+)
 from story_writing_agents import conversation_retrieval as retrieval_module
 from story_writing_agents.agents import PLOT_ARCHITECT
 from story_writing_agents.conversation_retrieval import (
@@ -866,16 +871,53 @@ class _ScriptedRetrievalBackend:
     ) -> None:
         self.scripts = list(scripts)
         self.bound_factory = bound_factory
-        self.prepared: list[str] = []
+        self.lifecycle_sessions: list[str] = []
+        self.access_held: set[str] = set()
         self.definitions: list[AgentDefinition] = []
         self.requests: list[ConversationRetrievalRequest] = []
         self.actions: list[ConversationRetrievalAction] = []
         self.outcomes: list[ConversationRetrievalObservation | ConversationRetrievalReply] = []
 
-    def prepare_session(self, session_id: str) -> None:
-        """Record one synchronous provider-session preflight."""
+    def validate_provider_configuration(self, session_id: str) -> bool:
+        """Record one exact provider-configuration validation."""
 
-        self.prepared.append(session_id)
+        self.lifecycle_sessions.append(session_id)
+        return True
+
+    def get_session_lifecycle(self, session_id: str) -> SessionLifecycleState:
+        """Return deterministic ready lifecycle facts."""
+
+        return self._lifecycle(session_id)
+
+    def acquire_session_access(self, session_id: str) -> SessionLifecycleState:
+        """Acquire deterministic in-memory access for one test session."""
+
+        self.access_held.add(session_id)
+        return self._lifecycle(session_id)
+
+    def release_session_access(self, session_id: str) -> SessionLifecycleState:
+        """Release deterministic in-memory access for one test session."""
+
+        self.access_held.discard(session_id)
+        return self._lifecycle(session_id)
+
+    def _lifecycle(self, session_id: str) -> SessionLifecycleState:
+        """Build one exact immutable lifecycle state."""
+
+        held = session_id in self.access_held
+        return SessionLifecycleState(
+            session_id=session_id,
+            durable_state=SessionDurableState.READY,
+            access_state=(
+                SessionAccessState.HELD_HERE
+                if held
+                else SessionAccessState.CLAIMABLE
+            ),
+            owner_hostname="retrieval-test" if held else None,
+            owner_pid=1 if held else None,
+            created_at="2026-01-01T00:00:00+00:00",
+            updated_at="2026-01-01T00:00:00+00:00",
+        )
 
     async def bind(self, definition: AgentDefinition) -> object:
         """Return one provider-free bound collaborator for the definition."""
@@ -1534,7 +1576,11 @@ class ConversationRetrievalRuntimeFailureTests(ConversationRetrievalRuntimeTestC
                 with (
                     mock.patch.object(self.store, "read_context", wraps=self.store.read_context) as read,
                     mock.patch.object(self.store, "append", wraps=self.store.append) as append,
-                    mock.patch.object(backend, "prepare_session", wraps=backend.prepare_session) as prepare,
+                    mock.patch.object(
+                        backend,
+                        "validate_provider_configuration",
+                        wraps=backend.validate_provider_configuration,
+                    ) as validate,
                 ):
                     with self.assertRaises(ConversationRetrievalSemanticError):
                         await self.run_turn(
@@ -1544,7 +1590,7 @@ class ConversationRetrievalRuntimeFailureTests(ConversationRetrievalRuntimeTestC
                         )
                 read.assert_not_called()
                 append.assert_not_called()
-                prepare.assert_not_called()
+                validate.assert_not_called()
 
         async def async_sink(_event: ConversationRetrievalProgressEvent) -> None:
             """Represent a forbidden declared-asynchronous observer."""
@@ -1553,7 +1599,11 @@ class ConversationRetrievalRuntimeFailureTests(ConversationRetrievalRuntimeTestC
         with (
             mock.patch.object(self.store, "read_context", wraps=self.store.read_context) as read,
             mock.patch.object(self.store, "append", wraps=self.store.append) as append,
-            mock.patch.object(backend, "prepare_session", wraps=backend.prepare_session) as prepare,
+            mock.patch.object(
+                backend,
+                "validate_provider_configuration",
+                wraps=backend.validate_provider_configuration,
+            ) as validate,
         ):
             with self.assertRaisesRegex(TypeError, "synchronous"):
                 await self.run_turn(
@@ -1562,7 +1612,7 @@ class ConversationRetrievalRuntimeFailureTests(ConversationRetrievalRuntimeTestC
                 )
         read.assert_not_called()
         append.assert_not_called()
-        prepare.assert_not_called()
+        validate.assert_not_called()
 
     async def test_deep_search_and_page_tampering_is_rejected_and_persisted_safely(self) -> None:
         query = ConversationSearchQuery(_SOURCE_SUBJECT, limit=10)

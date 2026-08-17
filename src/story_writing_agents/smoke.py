@@ -64,6 +64,11 @@ from .models import (
     Phase,
 )
 from .orchestrator import StoryRuntime
+from .session_lifecycle import (
+    SessionAccessState,
+    SessionDurableState,
+    SessionLifecycleState,
+)
 from .workspace import (
     WORKSPACE_DIRECTORIES,
     FilesystemConversationCatalog,
@@ -94,7 +99,7 @@ _CHECK_NAMES = (
     "conversation_catalog_persisted",
     "conversation_routing",
     "conversation_search",
-    "conversation_resumed",
+    "conversation_continuity",
     "conversation_retrieval",
     "consensus_context",
     "revision_workflow",
@@ -151,6 +156,50 @@ class _SmokeBackend:
         self.expected_consensus_context: ConversationContextWindow | None = None
         self.audit_active = 0
         self.maximum_audit_active = 0
+        self._access_held = False
+
+    def validate_provider_configuration(self, session_id: str) -> bool:
+        """Validate the fixed smoke session without provider or storage access."""
+
+        self._expect(session_id == self.session_id)
+        return True
+
+    def get_session_lifecycle(self, session_id: str) -> SessionLifecycleState:
+        """Return deterministic ready facts for the in-memory smoke session."""
+
+        self._expect(session_id == self.session_id)
+        return self._lifecycle_state()
+
+    def acquire_session_access(self, session_id: str) -> SessionLifecycleState:
+        """Mark deterministic in-memory smoke access held and return its facts."""
+
+        self._expect(session_id == self.session_id)
+        self._access_held = True
+        return self._lifecycle_state()
+
+    def release_session_access(self, session_id: str) -> SessionLifecycleState:
+        """Clear deterministic in-memory smoke access and return its facts."""
+
+        self._expect(session_id == self.session_id)
+        self._access_held = False
+        return self._lifecycle_state()
+
+    def _lifecycle_state(self) -> SessionLifecycleState:
+        """Build one exact lifecycle value without external side effects."""
+
+        return SessionLifecycleState(
+            session_id=self.session_id,
+            durable_state=SessionDurableState.READY,
+            access_state=(
+                SessionAccessState.HELD_HERE
+                if self._access_held
+                else SessionAccessState.CLAIMABLE
+            ),
+            owner_hostname="provider-free-smoke" if self._access_held else None,
+            owner_pid=1 if self._access_held else None,
+            created_at="2026-01-01T00:00:00+00:00",
+            updated_at="2026-01-01T00:00:00+00:00",
+        )
 
     async def bind(self, definition: AgentDefinition) -> _SmokeBoundAgent:
         """Read and record one definition, returning a local validated binding.
@@ -714,29 +763,29 @@ async def _exercise_provider_free_conversation_and_consensus(
     )
     completed_checks.append(_CHECK_NAMES[4])
 
-    resumed_workspace = Workspace(workspace.root)
-    resumed_catalog = FilesystemConversationCatalog(resumed_workspace)
-    resumed_store = FilesystemConversationEventStore(
-        resumed_workspace,
-        catalog=resumed_catalog,
+    fresh_workspace = Workspace(workspace.root)
+    fresh_catalog = FilesystemConversationCatalog(fresh_workspace)
+    fresh_store = FilesystemConversationEventStore(
+        fresh_workspace,
+        catalog=fresh_catalog,
     )
-    resumed_backend = _SmokeBackend(session_id, debate_id)
-    resumed_backend._binding_failed_check = _CHECK_NAMES[6]
-    resumed_runtime = StoryRuntime(
-        resumed_workspace,
-        resumed_backend,
-        conversation_event_store=resumed_store,
+    fresh_backend = _SmokeBackend(session_id, debate_id)
+    fresh_backend._binding_failed_check = _CHECK_NAMES[6]
+    fresh_runtime = StoryRuntime(
+        fresh_workspace,
+        fresh_backend,
+        conversation_event_store=fresh_store,
     )
-    resumed_memory = ConversationMemoryService(
+    fresh_memory = ConversationMemoryService(
         ConversationSearchScope(session_id),
-        resumed_catalog,
-        resumed_store,
+        fresh_catalog,
+        fresh_store,
     )
-    _verify_resumed_conversation_state(
-        resumed_runtime,
-        resumed_catalog,
-        resumed_store,
-        resumed_memory,
+    _verify_persisted_conversation_state(
+        fresh_runtime,
+        fresh_catalog,
+        fresh_store,
+        fresh_memory,
         session_id=session_id,
         source=source,
         retrieval=retrieval,
@@ -747,17 +796,17 @@ async def _exercise_provider_free_conversation_and_consensus(
     completed_checks.append(_CHECK_NAMES[5])
 
     progress: list[ConversationRetrievalProgressEvent] = []
-    retrieval_result = await resumed_runtime.converse_with_retrieval(
+    retrieval_result = await fresh_runtime.converse_with_retrieval(
         session_id,
         retrieval.conversation_id,
         PLOT_ARCHITECT,
         _RETRIEVAL_QUESTION,
-        memory_service=resumed_memory,
+        memory_service=fresh_memory,
         progress_sink=progress.append,
     )
     _verify_conversation_retrieval(
-        resumed_backend,
-        resumed_store,
+        fresh_backend,
+        fresh_store,
         retrieval_result,
         progress,
         session_id=session_id,
@@ -766,7 +815,7 @@ async def _exercise_provider_free_conversation_and_consensus(
         source_events=source_events,
     )
     _verify_preconsensus_artifact_isolation(
-        resumed_workspace,
+        fresh_workspace,
         session_id=session_id,
         debate_id=debate_id,
         core_before=core_before,
@@ -775,7 +824,7 @@ async def _exercise_provider_free_conversation_and_consensus(
     )
     completed_checks.append(_CHECK_NAMES[6])
 
-    context_snapshot = resumed_store.read_context(
+    context_snapshot = fresh_store.read_context(
         session_id,
         source.conversation_id,
     )
@@ -787,9 +836,9 @@ async def _exercise_provider_free_conversation_and_consensus(
         and context_snapshot.truncated is False,
         _CHECK_NAMES[7],
     )
-    resumed_backend.expected_consensus_context = context_snapshot
-    resumed_backend._binding_failed_check = _CHECK_NAMES[8]
-    debate_result = await resumed_runtime.run_prompt(
+    fresh_backend.expected_consensus_context = context_snapshot
+    fresh_backend._binding_failed_check = _CHECK_NAMES[8]
+    debate_result = await fresh_runtime.run_prompt(
         session_id,
         _PROMPT,
         debate_id=debate_id,
@@ -801,7 +850,7 @@ async def _exercise_provider_free_conversation_and_consensus(
     )
     return _SmokeWorkflowResult(
         debate_result=debate_result,
-        backend=resumed_backend,
+        backend=fresh_backend,
         context_snapshot=context_snapshot,
     )
 
@@ -1041,7 +1090,7 @@ def _search_source_conversation(
     return _SmokeSearchEvidence(subject_hit, transcript_hit)
 
 
-def _verify_resumed_conversation_state(
+def _verify_persisted_conversation_state(
     runtime: StoryRuntime,
     catalog: FilesystemConversationCatalog,
     event_store: FilesystemConversationEventStore,
@@ -1057,11 +1106,11 @@ def _verify_resumed_conversation_state(
     """Validate supplied fresh collaborators see identical persisted state.
 
     The operation performs only supported reads and returns ``None``; a mismatch
-    raises the resume invariant and collaborator failures propagate.
+    raises the persistence invariant and collaborator failures propagate.
     """
 
     _verify_directive(runtime, session_id)
-    resumed_search = _search_source_conversation(
+    persisted_search = _search_source_conversation(
         memory,
         source,
         failed_check=_CHECK_NAMES[5],
@@ -1073,9 +1122,9 @@ def _verify_resumed_conversation_state(
         and event_store.read(session_id, source.conversation_id) == source_events
         and event_store.read(session_id, retrieval.conversation_id)
         == retrieval_events
-        and resumed_search.subject_hit.citation
+        and persisted_search.subject_hit.citation
         == search_evidence.subject_hit.citation
-        and resumed_search.transcript_hit.citation
+        and persisted_search.transcript_hit.citation
         == search_evidence.transcript_hit.citation
         and runtime.inspect_session(session_id)["debates"] == [],
         _CHECK_NAMES[5],

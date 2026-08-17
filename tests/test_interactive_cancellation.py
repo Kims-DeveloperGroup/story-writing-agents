@@ -23,9 +23,9 @@ from story_writing_agents.agents import (
 from story_writing_agents.backend import AgentBackend
 from story_writing_agents.cli_context import (
     load_cli_context,
-    load_conversation_selection,
-    save_conversation_selection,
-    select_session,
+    load_default_conversation,
+    save_default_conversation,
+    save_default_session,
 )
 from story_writing_agents.conversation_retrieval import (
     ConversationRetrievalActionHandler,
@@ -75,7 +75,7 @@ from tests.test_interactive_conversation import (
 
 
 _SESSION_DIRECTORY = "agent_states/orchestrator_state/provider_sessions"
-_LEASE_RELATIVE = f"{_SESSION_DIRECTORY}/session.lease.json"
+_ACCESS_RELATIVE = f"{_SESSION_DIRECTORY}/session.access.json"
 _MANIFEST_RELATIVE = f"{_SESSION_DIRECTORY}/session.json"
 
 
@@ -85,7 +85,7 @@ def _file_bytes(workspace: Workspace) -> dict[str, bytes]:
     return {
         path.relative_to(workspace.root).as_posix(): path.read_bytes()
         for path in sorted(workspace.root.rglob("*"))
-        if path.is_file() and not path.name.endswith(".lease.json")
+        if path.is_file() and not path.name.endswith(".access.json")
     }
 
 
@@ -514,10 +514,10 @@ class InteractiveCancellationTestCase(InteractiveConversationTestCase):
 
         workspace = self.make_workspace()
         self.seed_session(workspace, "session")
-        select_session(workspace, "session")
+        save_default_session(workspace, "session")
         catalog = FilesystemConversationCatalog(workspace)
         entries = tuple(catalog.create("session", subject) for subject in subjects)
-        save_conversation_selection(
+        save_default_conversation(
             workspace,
             "session",
             entries[0].conversation_id,
@@ -585,7 +585,7 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
             real_runner,
             cleanup_events=cleanup_events,
         )
-        original_detach = backend.detach_session
+        original_detach = backend.release_session_access
         original_close = backend.close
 
         def detach(session_id: str) -> object:
@@ -601,7 +601,7 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
         with (
             mock.patch.object(controller_module.asyncio, "Runner", runner_factory),
             mock.patch.object(controller_module.asyncio, "run") as legacy_run,
-            mock.patch.object(backend, "detach_session", side_effect=detach),
+            mock.patch.object(backend, "release_session_access", side_effect=detach),
             mock.patch.object(backend, "close", side_effect=close),
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
@@ -624,7 +624,7 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
         self.assertTrue(runtime.pending_task_finalized)
         self.assertTrue(runtime.generator_finalized)
         self.assertTrue(all(loop.is_closed() for loop in runtime.loops))
-        self.assertFalse(workspace.path(_LEASE_RELATIVE).exists())
+        self.assertFalse(workspace.path(_ACCESS_RELATIVE).exists())
 
     def test_real_runner_preentry_sigint_recovers_and_reuses_the_loop(
         self,
@@ -658,8 +658,8 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
                 runner=runner,
                 loop=runner.get_loop(),
                 memory=controller._conversation_memory_service,
-                selection=controller._selected_conversation,
-                selection_id=load_conversation_selection(workspace, "session"),
+                selection=controller._focused_conversation,
+                selection_id=load_default_conversation(workspace, "session"),
                 durable=_file_bytes(workspace),
                 manifest=workspace.read_json(_MANIFEST_RELATIVE),
             )
@@ -682,7 +682,7 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
             self.assertEqual(asyncio.all_tasks(retained["loop"]), set())
             self.assertEqual(controller._attached_session_id, "session")
             self.assertEqual(
-                controller._selected_conversation,
+                controller._focused_conversation,
                 retained["selection"],
             )
             self.assertIs(
@@ -691,7 +691,7 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
             )
             self.assertEqual(controller._target_agent_id, PLOT_ARCHITECT)
             self.assertEqual(
-                load_conversation_selection(workspace, "session"),
+                load_default_conversation(workspace, "session"),
                 retained["selection_id"],
             )
             self.assertEqual(_file_bytes(workspace), retained["durable"])
@@ -788,8 +788,8 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
             ),
             mock.patch.object(
                 backend,
-                "detach_session",
-                wraps=backend.detach_session,
+                "release_session_access",
+                wraps=backend.release_session_access,
             ) as detach,
             mock.patch.object(
                 backend,
@@ -835,11 +835,11 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
         self.assertEqual(core_snapshot(workspace), core_before)
         self.assertEqual(all_manuscripts(workspace), [])
         self.assertEqual(
-            workspace.read_json(_MANIFEST_RELATIVE)["threads"],
+            workspace.read_json(_MANIFEST_RELATIVE)["provider_threads"],
             {},
         )
         self.assertEqual(
-            load_conversation_selection(workspace, "session"),
+            load_default_conversation(workspace, "session"),
             entries[0].conversation_id,
         )
         rendered = "".join(callbacks.records)
@@ -849,10 +849,10 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
         self.assertIn("plot> reply:after cancellation\n", rendered)
         detach.assert_called_once_with("session")
         close.assert_called_once_with()
-        self.assertFalse(workspace.path(_LEASE_RELATIVE).exists())
+        self.assertFalse(workspace.path(_ACCESS_RELATIVE).exists())
         self.assertIsNone(controller._runner)
         self.assertIsNone(controller._attached_session_id)
-        self.assertIsNone(controller._selected_conversation)
+        self.assertIsNone(controller._focused_conversation)
         self.assertIsNone(controller._conversation_memory_service)
 
     def test_advisory_interrupt_joins_persists_taints_and_restarts_fresh(
@@ -860,10 +860,10 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
     ) -> None:
         workspace = self.make_workspace()
         self.seed_session(workspace, "session")
-        select_session(workspace, "session")
+        save_default_session(workspace, "session")
         catalog = FilesystemConversationCatalog(workspace)
         selected = catalog.create("session", "Provider cancellation")
-        save_conversation_selection(workspace, "session", selected.conversation_id)
+        save_default_conversation(workspace, "session", selected.conversation_id)
 
         provider_temporary = tempfile.TemporaryDirectory()
         self.addCleanup(provider_temporary.cleanup)
@@ -916,7 +916,7 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
             """Observe taint, then configure the subsequent fresh invocation."""
 
             manifest = workspace.read_json(_MANIFEST_RELATIVE)
-            thread = manifest["threads"][f"codex:{PLOT_ARCHITECT}"]
+            thread = manifest["provider_threads"][f"codex:{PLOT_ARCHITECT}"]
             taint_before_retry.append(thread["tainted"])
             os.environ["STORY_FAKE_CODEX_MODE"] = "ok"
             os.environ["STORY_FAKE_CODEX_OUTPUTS"] = json.dumps(
@@ -1046,7 +1046,7 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
         self.assertEqual(taint_before_retry, [True])
         manifest = workspace.read_json(_MANIFEST_RELATIVE)
         self.assertIs(
-            manifest["threads"][f"codex:{PLOT_ARCHITECT}"]["tainted"],
+            manifest["provider_threads"][f"codex:{PLOT_ARCHITECT}"]["tainted"],
             False,
         )
         invocation_lines = (
@@ -1070,11 +1070,11 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
         self.assertTrue(temporary_directories)
         self.assertTrue(all(not path.exists() for path in temporary_directories))
         self.assertEqual(backend._staging_directories, set())
-        self.assertFalse(workspace.path(_LEASE_RELATIVE).exists())
+        self.assertFalse(workspace.path(_ACCESS_RELATIVE).exists())
         self.assertEqual(core_snapshot(workspace), core_before)
         self.assertEqual(all_manuscripts(workspace), [])
         self.assertEqual(
-            load_conversation_selection(workspace, "session"),
+            load_default_conversation(workspace, "session"),
             selected.conversation_id,
         )
         self.assertEqual(controller._target_agent_id, PLOT_ARCHITECT)
@@ -1198,7 +1198,7 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
         )
         self.assertEqual(core_snapshot(workspace), core_before)
         self.assertEqual(all_manuscripts(workspace), [])
-        self.assertFalse(workspace.path(_LEASE_RELATIVE).exists())
+        self.assertFalse(workspace.path(_ACCESS_RELATIVE).exists())
         runner = runner_factory.instances[0]
         self.assertEqual(runner.run_calls, 2)
         self.assertEqual(len(set(runner.loop_ids)), 1)
@@ -1258,7 +1258,7 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
                 self.assertNotIn("turn was interrupted", rendered)
                 runner = runner_factory.instances[0]
                 self.assertTrue(runner.closed)
-                self.assertFalse(workspace.path(_LEASE_RELATIVE).exists())
+                self.assertFalse(workspace.path(_ACCESS_RELATIVE).exists())
                 if behavior == "unjoined":
                     self.assertTrue(runtime.entered)
                     self.assertTrue(runtime.cancelled)
@@ -1355,7 +1355,7 @@ class ConsensusCancellationTests(InteractiveCancellationTestCase):
         for record in (
             f"[cancelled] Debate {debate_id} was marked interrupted.\n",
             "[hint] It cannot resume. Use /run to create a new debate.\n",
-            '[session] "session" remains active and attached.\n',
+            '[session] "session" remains ready and attached.\n',
         ):
             self.assertIn(record, rendered)
         self.assertNotIn("operation_interrupted", rendered)
@@ -1456,7 +1456,7 @@ class ConsensusCancellationTests(InteractiveCancellationTestCase):
             "[cancelled] Debate cancelled_debate was marked interrupted.\n",
             rendered,
         )
-        self.assertFalse(workspace.path(_LEASE_RELATIVE).exists())
+        self.assertFalse(workspace.path(_ACCESS_RELATIVE).exists())
 
     def test_started_without_interrupted_proof_fails_closed_once(self) -> None:
         runtime = BlockingConsensusRuntime("started_no_proof", "unproved_debate")
@@ -1480,8 +1480,8 @@ class ConsensusCancellationTests(InteractiveCancellationTestCase):
             mock.patch.object(controller_module.asyncio, "Runner", runner_factory),
             mock.patch.object(
                 backend,
-                "detach_session",
-                wraps=backend.detach_session,
+                "release_session_access",
+                wraps=backend.release_session_access,
             ) as detach,
             mock.patch.object(
                 backend,
@@ -1500,7 +1500,7 @@ class ConsensusCancellationTests(InteractiveCancellationTestCase):
         )
         self.assertEqual(_file_bytes(workspace), before)
         self.assertEqual(all_manuscripts(workspace), [])
-        self.assertFalse(workspace.path(_LEASE_RELATIVE).exists())
+        self.assertFalse(workspace.path(_ACCESS_RELATIVE).exists())
         rendered = "".join(callbacks.records)
         operation = _error_record(InteractiveErrorCode.OPERATION_INTERRUPTED)
         cleanup = _error_record(InteractiveErrorCode.CLEANUP_FAILED)
@@ -1607,7 +1607,7 @@ class ProviderFreeCancellationTests(InteractiveCancellationTestCase):
                     else f"/transcript {entries[0].conversation_id}"
                 )
                 before = _file_bytes(workspace)
-                selection_before = load_conversation_selection(
+                selection_before = load_default_conversation(
                     workspace,
                     "session",
                 )
@@ -1632,7 +1632,7 @@ class ProviderFreeCancellationTests(InteractiveCancellationTestCase):
                     )
                 self.assertEqual(_file_bytes(workspace), before)
                 self.assertEqual(
-                    load_conversation_selection(workspace, "session"),
+                    load_default_conversation(workspace, "session"),
                     selection_before,
                 )
                 self.assertEqual(controller._target_agent_id, LEAD_ORCHESTRATOR)
@@ -1644,7 +1644,7 @@ class ProviderFreeCancellationTests(InteractiveCancellationTestCase):
                 )
                 self.assertIn(cancelled, rendered)
                 self.assertNotIn(result_prefix, rendered)
-                self.assertFalse(workspace.path(_LEASE_RELATIVE).exists())
+                self.assertFalse(workspace.path(_ACCESS_RELATIVE).exists())
                 self.assertEqual(all_manuscripts(workspace), [])
 
 
@@ -1690,8 +1690,8 @@ class TerminalAndCleanupFailureTests(InteractiveCancellationTestCase):
                 with (
                     mock.patch.object(
                         backend,
-                        "detach_session",
-                        wraps=backend.detach_session,
+                        "release_session_access",
+                        wraps=backend.release_session_access,
                     ) as detach,
                     mock.patch.object(
                         backend,
@@ -1704,7 +1704,7 @@ class TerminalAndCleanupFailureTests(InteractiveCancellationTestCase):
                 detach.assert_called_once_with("session")
                 close.assert_called_once_with()
                 self.assertIn(_error_record(expected_code), "".join(callbacks.records))
-                self.assertFalse(workspace.path(_LEASE_RELATIVE).exists())
+                self.assertFalse(workspace.path(_ACCESS_RELATIVE).exists())
                 self.assertIsNone(controller._runner)
 
     def test_combined_cleanup_failures_keep_order_and_one_diagnostic(self) -> None:
@@ -1724,7 +1724,7 @@ class TerminalAndCleanupFailureTests(InteractiveCancellationTestCase):
             cleanup_events=cleanup_events,
             close_failure=OSError("runner close failed"),
         )
-        original_detach = backend.detach_session
+        original_detach = backend.release_session_access
         original_close = backend.close
 
         def detach(session_id: str) -> object:
@@ -1739,7 +1739,7 @@ class TerminalAndCleanupFailureTests(InteractiveCancellationTestCase):
 
         with (
             mock.patch.object(controller_module.asyncio, "Runner", runner_factory),
-            mock.patch.object(backend, "detach_session", side_effect=detach),
+            mock.patch.object(backend, "release_session_access", side_effect=detach),
             mock.patch.object(backend, "close", side_effect=close),
         ):
             self.assertEqual(controller.run_session_lobby(), 2)
@@ -1752,10 +1752,10 @@ class TerminalAndCleanupFailureTests(InteractiveCancellationTestCase):
             "".join(callbacks.records).count("[error cleanup_failed]"),
             1,
         )
-        self.assertFalse(workspace.path(_LEASE_RELATIVE).exists())
+        self.assertFalse(workspace.path(_ACCESS_RELATIVE).exists())
         self.assertIsNone(controller._runner)
         self.assertIsNone(controller._attached_session_id)
-        self.assertIsNone(controller._selected_conversation)
+        self.assertIsNone(controller._focused_conversation)
         self.assertIsNone(controller._conversation_memory_service)
 
     def test_interrupted_runner_close_runs_later_cleanup_and_retains_runner(
@@ -1777,7 +1777,7 @@ class TerminalAndCleanupFailureTests(InteractiveCancellationTestCase):
             cleanup_events=cleanup_events,
             close_failure=KeyboardInterrupt("second interrupt"),
         )
-        original_detach = backend.detach_session
+        original_detach = backend.release_session_access
         original_close = backend.close
 
         def detach(session_id: str) -> object:
@@ -1790,7 +1790,7 @@ class TerminalAndCleanupFailureTests(InteractiveCancellationTestCase):
 
         with (
             mock.patch.object(controller_module.asyncio, "Runner", runner_factory),
-            mock.patch.object(backend, "detach_session", side_effect=detach),
+            mock.patch.object(backend, "release_session_access", side_effect=detach),
             mock.patch.object(backend, "close", side_effect=close),
         ):
             with self.assertRaises(KeyboardInterrupt):
@@ -1802,9 +1802,9 @@ class TerminalAndCleanupFailureTests(InteractiveCancellationTestCase):
         )
         self.assertIs(controller._runner, runner_factory.instances[0])
         self.assertIsNone(controller._attached_session_id)
-        self.assertIsNone(controller._selected_conversation)
+        self.assertIsNone(controller._focused_conversation)
         self.assertIsNone(controller._conversation_memory_service)
-        self.assertFalse(workspace.path(_LEASE_RELATIVE).exists())
+        self.assertFalse(workspace.path(_ACCESS_RELATIVE).exists())
 
 
 if __name__ == "__main__":

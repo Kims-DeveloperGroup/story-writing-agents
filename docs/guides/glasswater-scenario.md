@@ -1,44 +1,30 @@
 # The Glasswater interactive journey
-
 > **Availability:** every command is implemented. Advisory/consensus uses Codex;
 > management, history, search, transcript reads, and `story smoke` do not.
 
-This is one sequential journey through *The Bell Beneath Glasswater*. Copy each
-generated handle; replace `A_HANDLE` below rather than typing it literally.
+This journey uses *The Bell Beneath Glasswater*. Copy each generated conversation handle; replace `A_HANDLE` rather than typing it literally.
 
 ## Prepare the project
 
 ```bash
 story init ./glasswater-workspace
 cd ./glasswater-workspace
-```
-
-Edit the four `core_documents/` files with these durable facts:
-
-- `global_outline.md`: Mara finds a bell that communicates only through salt patterns and metal vibrations.
-- `part_outlines.md`: Chapter 1 finds it; Chapter 2 takes a rubbing to Tovin; a council-vessel mark links to Mara's missing brother.
-- `character_sheets.md`: Mara risks her job, never another diver; Tovin knows harbor acoustics but avoids deep water.
-- `narrative_rules.md`: close third past from Mara, understated maritime mood, physical revelation, and one concrete discovery per chapter.
-
-Verify local orchestration, then open the human workflow:
-
-```bash
 story smoke
 story
 ```
 
-Smoke uses a separate temporary synthetic workspace. Bare `story` opens the
-initialized Glasswater workspace in the current directory.
+Before entering the shell, edit the four `core_documents/` files: Mara finds a bell communicating through salt and vibration; Tovin understands harbor acoustics but avoids deep water; prose stays close-third past; and each chapter ends with one physical discovery.
 
-## Attach a session and discuss subject A
+## Create a session and focus subject A
 
 ```text
-/session new glasswater_novel
+/session create glasswater_novel
+/status
 /language EN
 /conversation new Bell continuity
 ```
 
-Copy the handle after `Created and selected` as `A_HANDLE`. The default sticky target is `lead`:
+`/status` distinguishes ready durable state, access held here, defaults, current attachment and focus, `lead` agent focus, provider readiness, and next action. Copy the handle as `A_HANDLE`, then route turns:
 
 ```text
 Summarize the rule that governs how the bell communicates.
@@ -47,7 +33,7 @@ Summarize the rule that governs how the bell communicates.
 How should Mara react without risking another diver?
 ```
 
-`@plot` is one-shot; `/to character` makes the final ordinary line use the character custodian.
+`@plot` is one-shot; `/to character` changes agent focus for later ordinary text.
 
 ## Create subject B and inspect memory
 
@@ -59,51 +45,42 @@ Track what Tovin knows about the council-vessel mark.
 /transcript A_HANDLE 6
 ```
 
-The new conversation is selected while the sticky target stays. `/history` locally reads B plus context accounting. `/search` returns bounded active-session hits; `/transcript` reads a fresh bounded A page without selecting it. All three are provider-free.
+The new conversation is default/current focus; agent focus stays `character`. `/history` reads B. Search covers active conversations; transcript reads A without changing focus. All are provider-free.
 
 ```text
 Which earlier conversation constrains whether the bell can speak? Cite sources if you retrieve it.
-```
-
-The agent may answer directly. Only chosen bounded retrieval shows `[context]`
-search/read progress and sources; it differs from explicit local reads above.
-
-```text
 /conversation use A_HANDLE
 /history 6
 /to lead
 ```
 
-## Run consensus with and without A
+Only chosen bounded retrieval shows `[context]` search/read progress and sources.
+
+## Switch sessions and return
+
+```text
+/session create glasswater_notes
+/conversation new Loose research
+/session open glasswater_novel
+/status
+/history 6
+```
+
+Creating `glasswater_notes` switches after acquiring it. Opening ready `glasswater_novel` reports `opened`, makes it default/current, restores active `A_HANDLE`, and resets agent focus to `lead`. The source remains ready but claimable.
+
+## Run consensus, quit, and restart
 
 ```text
 /run
-Draft Chapter 1 from the core documents and selected Bell continuity discussion.
+Draft Chapter 1 from the core documents and the focused Bell continuity discussion.
 End with the first unexplained salt pattern.
 /send
-```
-
-The runtime gives one bounded A snapshot to every phase. Main-prompt advisory
-input stays single-line; standalone `/compose`, `/send`, and `/cancel` are
-unavailable. Only inside bare `/run` does `/send` submit or `/cancel` discard.
-
-```text
 /run --fresh Draft a separate harbor opening without conversation history.
 /inspect last
 /quit
 ```
 
-Fresh mode records selected A's identity but sends none of its transcript. `/inspect last` reports this process's latest accepted run; `/quit` releases the lease but keeps session and selections.
-
-## Use one explicit automation call, then end
-
-```bash
-story run --workspace . --session glasswater_novel \
-  --prompt 'Draft a council-vessel transition from core documents.' \
-  --debate-id glasswater_automation_01 --output glasswater/automation-01.md
-```
-
-Noninteractive `story run` never reads selected conversation context. Re-enter the active saved session, verify restored A, then end it:
+Included mode gives every phase one bounded A snapshot. Fresh mode records A's identity without its transcript. Quit releases access without pausing; defaults remain. Restart to open the ready default and restore A:
 
 ```bash
 story
@@ -112,9 +89,32 @@ story
 ```text
 /status
 /history 6
-/session end
+/quit
+```
+
+## Use one explicit automation call, then pause
+
+`story run` uses an explicit/default session, never conversation focus:
+
+```bash
+story run --workspace . --session glasswater_novel \
+  --prompt 'Draft a council-vessel transition from core documents.' \
+  --debate-id glasswater_automation_01 --output glasswater/automation-01.md
+story session pause glasswater_novel --workspace .
+```
+
+Pause prints final `paused` plus `claimable` JSON and retains the default. Bare `story` asks to open it; accepting makes it ready, acquires access, reports `reopened`, and restores the active default conversation:
+
+```bash
+story
+```
+
+```text
+y
+/status
+/session pause
 y
 /quit
 ```
 
-Ending deactivates the provider session but retains selections; later resume starts a new lease.
+The final pause clears process scope but preserves defaults and provider threads. See [Story sessions](story-sessions.md) and [Recovery](../operations/recovery-and-limitations.md).

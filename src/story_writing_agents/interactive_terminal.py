@@ -19,8 +19,8 @@ class AttachmentKind(StrEnum):
     """How the current process obtained a story-session attachment."""
 
     CREATED = "created"
-    ATTACHED = "attached"
-    RESUMED = "resumed"
+    OPENED = "opened"
+    REOPENED = "reopened"
 
 
 class ComposeMode(StrEnum):
@@ -64,20 +64,23 @@ class TerminalMessageKind(StrEnum):
 
 
 class InteractiveErrorCode(StrEnum):
-    """Stable user-visible categories selected by trusted controller code."""
+    """Stable user-visible categories chosen by trusted controller code."""
 
     TTY_REQUIRED = "tty_required"
     WORKSPACE_NOT_INITIALIZED = "workspace_not_initialized"
     WORKSPACE_INVALID = "workspace_invalid"
     WORKSPACE_UNSAFE = "workspace_unsafe"
+    WORKSPACE_VERSION_UNSUPPORTED = "workspace_version_unsupported"
     CONFIGURATION_INVALID = "configuration_invalid"
     COMMAND_INVALID = "command_invalid"
     AGENT_INVALID = "agent_invalid"
     SESSION_INVALID = "session_invalid"
     SESSION_EXISTS = "session_exists"
     SESSION_NOT_FOUND = "session_not_found"
-    SESSION_IN_USE = "session_in_use"
-    SESSION_INACTIVE = "session_inactive"
+    SESSION_NOT_ATTACHED = "session_not_attached"
+    SESSION_PAUSED = "session_paused"
+    SESSION_ACCESS_BLOCKED = "session_access_blocked"
+    SESSION_OWNERSHIP_UNKNOWN = "session_ownership_unknown"
     CONVERSATION_REQUIRED = "conversation_required"
     CONVERSATION_INVALID = "conversation_invalid"
     CONVERSATION_NOT_FOUND = "conversation_not_found"
@@ -225,6 +228,10 @@ INTERACTIVE_ERROR_SPECS: Mapping[
             "The requested workspace path is unsafe.",
             "Use a path inside the initialized workspace.",
         ),
+        InteractiveErrorCode.WORKSPACE_VERSION_UNSUPPORTED: InteractiveErrorSpec(
+            "This workspace uses an unsupported older session format.",
+            "Use a new workspace or follow the documented manual reset procedure.",
+        ),
         InteractiveErrorCode.CONFIGURATION_INVALID: InteractiveErrorSpec(
             "Runtime configuration is invalid.",
             "Correct the reported configuration value and retry.",
@@ -243,23 +250,31 @@ INTERACTIVE_ERROR_SPECS: Mapping[
         ),
         InteractiveErrorCode.SESSION_EXISTS: InteractiveErrorSpec(
             "The story session already exists.",
-            "Resume it or choose a different session name.",
+            "Open it or choose a different session name.",
         ),
         InteractiveErrorCode.SESSION_NOT_FOUND: InteractiveErrorSpec(
             "The story session was not found.",
             "List sessions or create a new one.",
         ),
-        InteractiveErrorCode.SESSION_IN_USE: InteractiveErrorSpec(
-            "The story session is in use.",
-            "Choose another session or wait for its owner to detach.",
+        InteractiveErrorCode.SESSION_NOT_ATTACHED: InteractiveErrorSpec(
+            "No story session is attached to this shell.",
+            "Create or open a session before using this command.",
         ),
-        InteractiveErrorCode.SESSION_INACTIVE: InteractiveErrorSpec(
-            "The story session is inactive.",
-            "Resume the session before starting provider work.",
+        InteractiveErrorCode.SESSION_PAUSED: InteractiveErrorSpec(
+            "The story session is paused.",
+            "Open the session to make it ready before provider work.",
+        ),
+        InteractiveErrorCode.SESSION_ACCESS_BLOCKED: InteractiveErrorSpec(
+            "Story-session access is held by another live local process.",
+            "Wait for that process to release access, then open the session.",
+        ),
+        InteractiveErrorCode.SESSION_OWNERSHIP_UNKNOWN: InteractiveErrorSpec(
+            "Story-session access ownership cannot be verified.",
+            "Do not remove the claim; inspect recovery guidance before retrying.",
         ),
         InteractiveErrorCode.CONVERSATION_REQUIRED: InteractiveErrorSpec(
-            "No conversation is selected.",
-            "Create, list, or use a conversation first.",
+            "No conversation has current focus.",
+            "Create or choose a conversation first.",
         ),
         InteractiveErrorCode.CONVERSATION_INVALID: InteractiveErrorSpec(
             "The conversation input is invalid.",
@@ -338,7 +353,7 @@ INTERACTIVE_ERROR_SPECS: Mapping[
         ),
         InteractiveErrorCode.CLEANUP_FAILED: InteractiveErrorSpec(
             "Cleanup did not complete.",
-            "Inspect retained temporary or lease state before retrying.",
+            "Inspect retained temporary or access-claim state before retrying.",
         ),
         InteractiveErrorCode.INTERNAL_ERROR: InteractiveErrorSpec(
             "An internal error occurred.",
@@ -445,7 +460,7 @@ class InteractiveTerminal:
 
         The call owns no buffer and performs one synchronous read using the
         fixed subject prompt. Callback and line-framing failures propagate;
-        no catalog, selection, or cleanup resource is mutated here.
+        no catalog, default, focus, or cleanup resource is mutated here.
         """
 
         try:
@@ -581,7 +596,7 @@ class InteractiveTerminal:
                     "Session: lobby",
                     (
                         "Provider calls are unavailable in the lobby. Use "
-                        "/session new NAME, /session resume [NAME], or "
+                        "/session create NAME, /session open [NAME], or "
                         "/session list."
                     ),
                     "Type /help for commands; /quit exits.",
@@ -601,7 +616,7 @@ class InteractiveTerminal:
 
         Integer counts preserve the established history disclosure. ``None``
         omits both history lines for callers that do not yet own conversation
-        selection; rendering performs no persistence or resource mutation.
+        focus; rendering performs no persistence or resource mutation.
         """
 
         workspace_text = _inline_text(_required_text("workspace", workspace))
@@ -636,7 +651,7 @@ class InteractiveTerminal:
                 )
             )
         lines.append(
-            "Type /help for commands; /quit leaves the story session active."
+            "Type /help for commands; /quit releases access without pausing."
         )
         self._write_block("\n".join(lines))
 
@@ -651,7 +666,7 @@ class InteractiveTerminal:
         """Render one bounded attached-prompt scope without changing state.
 
         A nullable handle and subject must be absent together for the explicit
-        conversation-lobby form. Selected values are validated, sanitized,
+        conversation-lobby form. Supplied focus values are validated, sanitized,
         and width-wrapped with the stable short agent alias before one terminal
         record is written; writer failures propagate without cleanup here.
         """
@@ -689,13 +704,13 @@ class InteractiveTerminal:
         conversation_subject: str,
         *,
         archived: bool,
-        selected: bool,
+        focused: bool,
     ) -> None:
         """Render one bounded catalog row from validated display metadata.
 
-        ``archived`` selects the lifecycle label and ``selected`` marks the
-        current in-memory choice; an archived selected row is rejected. Values
-        are sanitized and written once, with no catalog or selection mutation.
+        ``archived`` chooses the lifecycle label and ``focused`` marks the
+        current in-memory focus; an archived focused row is rejected. Values
+        are sanitized and written once, with no catalog, default, or focus mutation.
         """
 
         safe_handle = _safe_identifier(
@@ -707,14 +722,14 @@ class InteractiveTerminal:
         )
         if type(archived) is not bool:
             raise TypeError("archived must be a bool")
-        if type(selected) is not bool:
-            raise TypeError("selected must be a bool")
-        if archived and selected:
-            raise ValueError("an archived conversation cannot be selected")
+        if type(focused) is not bool:
+            raise TypeError("focused must be a bool")
+        if archived and focused:
+            raise ValueError("an archived conversation cannot be focused")
         status = "archived" if archived else "active"
-        selection = "selected" if selected else "not selected"
+        focus = "focused" if focused else "not focused"
         entry = (
-            f"{safe_handle} | {status} | {selection} | Subject: {safe_subject}"
+            f"{safe_handle} | {status} | {focus} | Subject: {safe_subject}"
         )
         self._write_block(
             "\n".join(

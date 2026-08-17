@@ -1,119 +1,106 @@
 # Backend and session API
 
-> **Availability:** `AgentBackend`, `BoundAgent`, one-step/retrieval calls,
-> strict legacy session operations, and pure lifecycle contracts are
-> implemented; Codex alone is supported.
+> **Availability:** `AgentBackend`, `BoundAgent`, the exact lifecycle API, and
+> pure lifecycle contracts are implemented. Codex is the only supported provider.
 
-Key terms: **binding**—agent/provider pairing; **manifest**—durable session/thread
-record; **lease**—temporary ownership; **lifecycle value**—pure validated facts.
+Key terms: **binding**—agent/provider pairing; **manifest**—durable session and
+thread state; **access claim**—temporary exclusive process ownership;
+**lifecycle value**—validated provider-neutral facts.
 
 ## Backend surface
 
 ```python
 AgentBackend(workspace: Workspace | str | pathlib.Path, *, executable: str = "codex",
-             model: str | None = None, timeout_seconds: float = 300, backend_overrides: Mapping[str, str] | None = None)
+             model: str | None = None, timeout_seconds: float = 300,
+             backend_overrides: Mapping[str, str] | None = None)
 await AgentBackend.bind(definition: AgentDefinition) -> BoundAgent
+await BoundAgent.invoke(request: AgentRequest) -> AgentReply
 await BoundAgent.converse(request: ConversationRequest) -> ConversationReply
-await BoundAgent.converse_with_retrieval(request: ConversationRetrievalRequest, handler: ConversationRetrievalActionHandler) -> ConversationRetrievalReply
-AgentBackend.prepare_session(session_id: str) -> None
-AgentBackend.get_session_summary(session_id: str, *, selected_session: str | None = None) -> SessionSummary
-AgentBackend.list_sessions(*, selected_session: str | None = None) -> tuple[SessionSummary, ...]
-AgentBackend.create_session(session_id: str) -> SessionSummary
-AgentBackend.resume_session(session_id: str) -> SessionSummary
-AgentBackend.attach_session(session_id: str) -> SessionSummary
-AgentBackend.detach_session(session_id: str) -> SessionSummary
-AgentBackend.start_session(session_id: str) -> dict[str, Any]
-AgentBackend.end_session(session_id: str) -> dict[str, Any]
+await BoundAgent.converse_with_retrieval(request, handler) -> ConversationRetrievalReply
 AgentBackend.close() -> None
 ```
 
-`model=None` uses Codex's default; invocation ignores user configuration.
-Timeout is positive. Overrides map canonical agents to vendors; reserved
-`gemini` is unimplemented. `bind()` verifies a definition and returns a
-`BoundAgent` with public `backend`, `definition`, `vendor`, and
-`staging_directory`.
-
-One-step accepts an exact `ConversationRequest`; retrieval adds an exact request
-and synchronous handler. Both share lease, timeout, and
-`(session, backend, agent)` serialization. Runtime owns transcripts/retrieval;
-backend owns provider metadata. Exact payload, validation, and cancellation
-contracts live in [retrieval](conversation-retrieval.md) and [provider flow](../design/prompts-and-provider.md#conversation-turn-flow).
+`model=None` uses Codex's default. Timeout is positive. Overrides map canonical
+agents to providers; reserved `gemini` fails configuration validation. A bound
+agent exposes `backend`, `definition`, `vendor`, and `staging_directory`.
+Provider calls require ready access already held by the backend. Runtime owns
+transcripts and retrieval authorization; backend owns provider metadata,
+processes, access claims, and per-thread serialization.
 
 ## Lifecycle value contracts
-
-The package facade supports these additive imports:
 
 ```python
 from story_writing_agents import (
     SessionAccessState, SessionDurableState, SessionLifecycleState,
     provider_work_is_ready,
 )
-```
-
-The owning module also supports two projections absent from the package facade:
-
-```python
-from story_writing_agents.session_lifecycle import (
-    lifecycle_from_session_summary, session_summary_from_lifecycle,
-)
 
 SessionLifecycleState(*, session_id: str, durable_state: SessionDurableState,
-    access_state: SessionAccessState, access_hostname: str | None,
-    access_pid: int | None, created_at: str | None,
-    updated_at: str | None)
-lifecycle_from_session_summary(summary: SessionSummary) -> SessionLifecycleState
-session_summary_from_lifecycle(state: SessionLifecycleState, *, selected: bool) -> SessionSummary
-provider_work_is_ready(state: SessionLifecycleState, *, provider_configuration_ready: bool) -> bool
+    access_state: SessionAccessState, owner_hostname: str | None,
+    owner_pid: int | None, created_at: str | None, updated_at: str | None)
+provider_work_is_ready(state: SessionLifecycleState, *,
+                       provider_configuration_ready: bool) -> bool
 ```
 
-`SessionLifecycleState` is frozen, slotted, keyword-only, and validated without
-I/O. Its exact valid combinations are in the
-[canonical state table](../design/session-lifecycle.md#canonical-lifecycle-state).
-Legacy `active=True/False` maps to `ready/paused`; lease values
-`available/owned/in_use/unverified` map respectively to
-`claimable/held_here/blocked_by_live_local_owner/ownership_unknown`.
-Both projections are deterministic and perform no I/O, acquisition, or mutation.
-
-Forward projection validates but omits `summary.selected`; selection is the
-saved CLI default, never current attachment or conversation focus. Reverse
-projection requires the caller's exact `selected` bool. `absent` has no legacy
-summary projection. All three functions raise `TypeError` for wrong exact
-contracts/scalars and `ValueError` for invalid IDs, pairs, states, or timestamps.
+The value is frozen, slotted, keyword-only, and validates without I/O. Wrong
+exact types raise `TypeError`; unsafe IDs, incomplete owner/timestamp pairs,
+impossible absent facts, and unordered or offset-free timestamps raise
+`ValueError`. Valid combinations are in the
+[state matrix](../design/session-lifecycle.md#canonical-lifecycle-state).
 
 Readiness is true only for a valid `ready` state, `held_here` access, and exact
-`True` configuration readiness. The query never reads configuration/storage,
-claims access, starts a provider, or mutates state.
+`True` configuration readiness. It never reads configuration or storage,
+acquires access, invokes a provider, or mutates state.
 
-## Legacy status and operations
+## Exact lifecycle methods
 
-`SessionLeaseState` and `SessionSummary` now live in `session_lifecycle`, but
-imports from `story_writing_agents` and `story_writing_agents.models` remain the
-same exact objects. `SessionSummary` remains frozen/slotted with eight positional
-fields and annotations: `session_id: str`, `active: bool`, `selected: bool`,
-`lease_state: SessionLeaseState`, `lease_hostname: str | None`,
-`lease_pid: int | None`, `created_at: str`, `updated_at: str`.
+```python
+AgentBackend.get_session_lifecycle(session_id: str) -> SessionLifecycleState
+AgentBackend.list_session_lifecycles() -> tuple[SessionLifecycleState, ...]
+AgentBackend.validate_provider_configuration(session_id: str) -> bool
+AgentBackend.acquire_session_access(session_id: str) -> SessionLifecycleState
+AgentBackend.release_session_access(session_id: str) -> SessionLifecycleState
+AgentBackend.create_session_with_access(session_id: str) -> SessionLifecycleState
+AgentBackend.reopen_session_with_access(session_id: str) -> SessionLifecycleState
+AgentBackend.pause_session_and_release_access(session_id: str) -> SessionLifecycleState
+```
 
-Legacy meanings remain `available` (absent or proved-dead local lease), `owned`
-(this backend), `in_use` (live local owner), and `unverified` (remote or
-ambiguous owner). Reads never acquire, reclaim, remove, or remotely probe.
-Dead sidecars may retain owner metadata; absent sidecars report none.
+These are the complete lifecycle surface:
 
-| Method | Unchanged behavior |
+| Method | Contract |
 | --- | --- |
-| `get_session_summary` | Provider-free read; missing raises `SessionNotFoundError`. |
-| `list_sessions` | Provider-free, newest update then ID; absent directory returns `()`. |
-| `prepare_session` | Preflight, require active, retain lease, return `None`. |
-| `create_session` | Preflight and exclusively create active; any manifest means exists. |
-| `resume_session` | Preflight, retain lease, reactivate only when inactive. |
-| `attach_session` | Preflight and retain existing active without manifest rewrite. |
-| `detach_session` | Release this lease; retain active state, threads, and selections. |
-| `start_session` | Compatibility create/reactivate without executable preflight; release transient lease. |
-| `end_session` | Write inactive, preserve threads, release lease. |
-| `close` | Release leases/staging without deactivation; prohibit reuse. |
+| `get_session_lifecycle` | Provider-free read; missing returns `absent` only when manifest and claim are both absent. |
+| `list_session_lifecycles` | Provider-free, newest durable update then ID; validates all encountered lifecycle files. |
+| `validate_provider_configuration` | No claim or provider call; exact `True` or a typed failure. |
+| `acquire_session_access` | Claim an existing session without changing durable bytes. |
+| `release_session_access` | Release only this backend's exact claim; otherwise read-only. |
+| `create_session_with_access` | Exclusively create a ready V2 manifest and retain access. |
+| `reopen_session_with_access` | Acquire and make paused state ready; ready state is byte-preserving. |
+| `pause_session_and_release_access` | Acquire, make paused, and release access. |
 
-Prepare/attach reject inactive state. Live/unverifiable ownership raises
-`SessionInUseError` without its token; changed ownership raises
-`BackendProtocolError` and is not deleted. Failure releases a new lease but
-retains a prior one. Backends do not return `absent`; missing manifests retain
-`SessionNotFoundError`. No transition, schema, provider, controller, terminal
-copy, or shell output changes. See [Session storage](configuration/session-storage.md).
+Create and reopen deliberately do not perform configuration validation; their
+caller does so first. Provider work uses the mandatory synchronous sequence
+validation → lifecycle pre-read → acquisition → correlated lifecycle post-read.
+Missing is `SessionNotFoundError`, paused provider work is
+`SessionPausedError`, live local ownership is `SessionAccessBlockedError`, and
+unprovable ownership is `SessionOwnershipUnknownError`.
+
+## Ownership, correlation, and cleanup
+
+Claims are serialized by `.access-claims.lock`. A missing local POSIX process
+is `claimable`; guarded acquisition re-reads and replaces that unchanged claim.
+A live local process blocks. A remote host, unsupported platform, inaccessible
+process, failed probe, or changed claim is `ownership_unknown` and is preserved.
+No remote probe occurs.
+
+Release compares the opaque token under the guard and removes only the claim
+recorded by this backend. Failed create/access/reopen compensates only a claim
+newly acquired by that operation. A caller that already held access keeps it on
+later failure. `close()` best-effort releases its recorded claims and removes
+prompt staging; it never pauses durable state or permits backend reuse.
+
+V1 manifests, access sidecars, and guards raise
+`WorkspaceVersionUnsupportedError` without migration, deletion, or rewriting.
+Malformed, orphaned, path-mismatched, or changed V2 data fails closed. Exact
+paths and schemas are in [Session storage](configuration/session-storage.md);
+user-visible transitions are in [Session lifecycle](../design/session-lifecycle.md).

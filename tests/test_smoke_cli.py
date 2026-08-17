@@ -53,7 +53,7 @@ EXPECTED_CHECKS = [
     "conversation_catalog_persisted",
     "conversation_routing",
     "conversation_search",
-    "conversation_resumed",
+    "conversation_continuity",
     "conversation_retrieval",
     "consensus_context",
     "revision_workflow",
@@ -776,7 +776,7 @@ class SmokePersistentTests(unittest.TestCase):
         self.assertEqual(len(search_evidence), 2)
         self.assertEqual(
             [entry[1] for entry in search_evidence],
-            ["conversation_search", "conversation_resumed"],
+            ["conversation_search", "conversation_continuity"],
         )
         self.assertIsNot(search_evidence[0][0], search_evidence[1][0])
         self.assertEqual(

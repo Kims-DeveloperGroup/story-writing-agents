@@ -1,4 +1,4 @@
-"""Workspace discovery and workspace-local CLI selection state."""
+"""Workspace discovery and workspace-local CLI default state."""
 
 from __future__ import annotations
 
@@ -13,15 +13,19 @@ from .errors import (
     SessionIdError,
     WorkspaceFormatError,
     WorkspaceSecurityError,
+    WorkspaceVersionUnsupportedError,
 )
 from .workspace import Workspace
 
 
 _CONTEXT_PATH = "agent_states/orchestrator_state/cli_context.json"
-_CONTEXT_SCHEMA_VERSION = 1
-_CONVERSATION_SELECTION_SCHEMA_VERSION = 1
-_CONVERSATION_SELECTION_FIELDS = frozenset(
-    {"schema_version", "session_id", "selected_conversation_id"}
+_CONTEXT_SCHEMA_VERSION = 2
+_CONVERSATION_DEFAULT_SCHEMA_VERSION = 2
+_CONVERSATION_DEFAULT_FIELDS = frozenset(
+    {"schema_version", "session_id", "default_conversation_id"}
+)
+_UNSUPPORTED_V1_CONVERSATION_DEFAULT_DIRECTORY = (
+    "agent_states/orchestrator_state/conversation_selections"
 )
 
 _FILE_SENTINELS = (
@@ -40,9 +44,9 @@ _DIRECTORY_SENTINELS = (
 
 @dataclass(frozen=True, slots=True)
 class CliContext:
-    """Validated CLI state local to one initialized workspace."""
+    """Validated saved defaults local to one initialized workspace."""
 
-    selected_session: str | None = None
+    default_session_id: str | None = None
 
 
 def resolve_workspace(
@@ -75,70 +79,191 @@ def resolve_workspace(
 
 
 def load_cli_context(workspace: Workspace) -> CliContext:
-    """Load and strictly validate the workspace-local selected session."""
+    """Load the exact V2 default-session record without mutation."""
 
+    _reject_unsupported_conversation_artifacts(workspace, None)
     target = workspace.path(_CONTEXT_PATH)
     if not target.exists():
         return CliContext()
-    value = workspace.read_json(_CONTEXT_PATH)
-    expected = {"schema_version", "selected_session"}
+    value = _read_json_without_duplicate_fields(workspace, _CONTEXT_PATH)
+    if isinstance(value, dict):
+        schema_version = value.get("schema_version")
+        if (
+            isinstance(schema_version, int)
+            and not isinstance(schema_version, bool)
+            and schema_version != _CONTEXT_SCHEMA_VERSION
+        ):
+            raise WorkspaceVersionUnsupportedError(
+                "unsupported CLI context schema version"
+            )
+    expected = {"schema_version", "default_session_id"}
     if not isinstance(value, dict) or set(value) != expected:
-        raise ConfigurationError("CLI context has an invalid schema")
+        raise WorkspaceFormatError("CLI context has an invalid schema")
     schema_version = value["schema_version"]
-    if (
-        isinstance(schema_version, bool)
-        or not isinstance(schema_version, int)
-        or schema_version != _CONTEXT_SCHEMA_VERSION
-    ):
-        raise ConfigurationError(
-            f"unsupported CLI context schema version: {schema_version!r}"
+    if isinstance(schema_version, bool) or not isinstance(schema_version, int):
+        raise WorkspaceFormatError("CLI context has an invalid schema version")
+    if schema_version != _CONTEXT_SCHEMA_VERSION:
+        raise WorkspaceVersionUnsupportedError(
+            "unsupported CLI context schema version"
         )
-    selected = value["selected_session"]
-    if not isinstance(selected, str):
-        raise ConfigurationError(
-            "CLI context selected_session must be a session ID"
+    default_session_id = value["default_session_id"]
+    if not isinstance(default_session_id, str):
+        raise WorkspaceFormatError(
+            "CLI context default_session_id must be a session ID"
         )
-    workspace.validate_identifier(selected)
-    return CliContext(selected_session=selected)
+    try:
+        workspace.validate_identifier(default_session_id)
+    except SessionIdError as exc:
+        raise WorkspaceFormatError(
+            "CLI context default_session_id must be a session ID"
+        ) from exc
+    return CliContext(default_session_id=default_session_id)
 
 
-def select_session(workspace: Workspace, session_id: str) -> CliContext:
-    """Atomically replace the selected session after a successful start."""
+def save_default_session(workspace: Workspace, session_id: str) -> CliContext:
+    """Atomically save the default session after a successful transition."""
 
-    selected = workspace.validate_identifier(session_id)
+    if workspace.path(_CONTEXT_PATH).exists():
+        load_cli_context(workspace)
+    else:
+        _reject_unsupported_conversation_artifacts(workspace, None)
+    default_session_id = workspace.validate_identifier(session_id)
     value: dict[str, Any] = {
         "schema_version": _CONTEXT_SCHEMA_VERSION,
-        "selected_session": selected,
+        "default_session_id": default_session_id,
     }
     workspace.write_json(_CONTEXT_PATH, value)
-    return CliContext(selected_session=selected)
+    return CliContext(default_session_id=default_session_id)
 
 
-def load_conversation_selection(
+def load_default_conversation(
     workspace: Workspace,
     session_id: str,
 ) -> str | None:
-    """Load one session's selected conversation, returning ``None`` if absent.
-
-    The session and exact version-1 JSON object are validated before the
-    nullable conversation ID is returned. Reads have no mutation or cleanup
-    effect; unsafe paths and malformed storage propagate as typed workspace
-    failures.
-    """
+    """Load one session's exact V2 conversation default when present."""
 
     session = workspace.validate_identifier(session_id)
-    relative = _conversation_selection_path(session)
+    _reject_unsupported_conversation_artifacts(workspace, session)
+    relative = _conversation_default_path(session)
     try:
-        text = workspace.read_text(relative)
+        value = _read_json_without_duplicate_fields(workspace, relative)
     except WorkspaceFormatError as exc:
         if isinstance(exc.__cause__, FileNotFoundError):
             return None
         raise
+    if isinstance(value, dict):
+        schema_version = value.get("schema_version")
+        if (
+            isinstance(schema_version, int)
+            and not isinstance(schema_version, bool)
+            and schema_version != _CONVERSATION_DEFAULT_SCHEMA_VERSION
+        ):
+            raise WorkspaceVersionUnsupportedError(
+                f"unsupported conversation-default schema: {session}"
+            )
+    if not isinstance(value, dict) or set(value) != _CONVERSATION_DEFAULT_FIELDS:
+        raise WorkspaceFormatError(
+            f"conversation default has an invalid schema: {session}"
+        )
+    schema_version = value["schema_version"]
+    if isinstance(schema_version, bool) or not isinstance(schema_version, int):
+        raise WorkspaceFormatError(
+            f"conversation default has an invalid schema version: {session}"
+        )
+    if schema_version != _CONVERSATION_DEFAULT_SCHEMA_VERSION:
+        raise WorkspaceVersionUnsupportedError(
+            f"unsupported conversation-default schema: {session}"
+        )
+    embedded_session = value["session_id"]
+    if not isinstance(embedded_session, str):
+        raise WorkspaceFormatError(
+            f"conversation default has an invalid session ID: {session}"
+        )
+    try:
+        embedded_session = workspace.validate_identifier(embedded_session)
+    except SessionIdError as exc:
+        raise WorkspaceFormatError(
+            f"conversation default has an invalid session ID: {session}"
+        ) from exc
+    if embedded_session != session:
+        raise WorkspaceFormatError(
+            f"conversation default does not match its session: {session}"
+        )
 
-    def reject_duplicate_fields(
-        pairs: list[tuple[str, Any]],
-    ) -> dict[str, Any]:
-        """Build one object while rejecting duplicate persisted field names."""
+    default_conversation_id = value["default_conversation_id"]
+    if default_conversation_id is None:
+        return None
+    if not isinstance(default_conversation_id, str):
+        raise WorkspaceFormatError(
+            f"conversation default has an invalid conversation ID: {session}"
+        )
+    try:
+        return workspace.validate_identifier(
+            default_conversation_id,
+            label="conversation ID",
+        )
+    except SessionIdError as exc:
+        raise WorkspaceFormatError(
+            f"conversation default has an invalid conversation ID: {session}"
+        ) from exc
+
+
+def save_default_conversation(
+    workspace: Workspace,
+    session_id: str,
+    default_conversation_id: str | None,
+) -> None:
+    """Atomically save or clear one session's V2 conversation default."""
+
+    session = workspace.validate_identifier(session_id)
+    _reject_unsupported_conversation_artifacts(workspace, session)
+    default_id = (
+        None
+        if default_conversation_id is None
+        else workspace.validate_identifier(
+            default_conversation_id,
+            label="conversation ID",
+        )
+    )
+    value: dict[str, Any] = {
+        "schema_version": _CONVERSATION_DEFAULT_SCHEMA_VERSION,
+        "session_id": session,
+        "default_conversation_id": default_id,
+    }
+    workspace.write_json(_conversation_default_path(session), value)
+
+
+def resolve_session(
+    *,
+    workspace: Workspace,
+    context: CliContext,
+    option_session: str | None,
+) -> str:
+    """Resolve one explicit option or default without changing that default."""
+
+    resolved = (
+        option_session
+        if option_session is not None
+        else context.default_session_id
+    )
+    if resolved is None:
+        raise ConfigurationError(
+            "no default session; run 'story session create SESSION' or pass "
+            "--session SESSION"
+        )
+    return workspace.validate_identifier(resolved)
+
+
+def _read_json_without_duplicate_fields(
+    workspace: Workspace,
+    relative: str,
+) -> Any:
+    """Read strict JSON while rejecting repeated object field names."""
+
+    text = workspace.read_text(relative)
+
+    def reject_duplicate_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        """Build one object or reject a repeated persisted field name."""
 
         result: dict[str, Any] = {}
         for key, value in pairs:
@@ -148,133 +273,60 @@ def load_conversation_selection(
         return result
 
     try:
-        value = json.loads(text, object_pairs_hook=reject_duplicate_fields)
+        return json.loads(text, object_pairs_hook=reject_duplicate_fields)
     except (json.JSONDecodeError, ValueError) as exc:
         raise WorkspaceFormatError(
-            f"conversation selection is not valid JSON: {session}"
-        ) from exc
-    if (
-        not isinstance(value, dict)
-        or set(value) != _CONVERSATION_SELECTION_FIELDS
-    ):
-        raise WorkspaceFormatError(
-            f"conversation selection has an invalid schema: {session}"
-        )
-    schema_version = value["schema_version"]
-    if (
-        isinstance(schema_version, bool)
-        or not isinstance(schema_version, int)
-        or schema_version != _CONVERSATION_SELECTION_SCHEMA_VERSION
-    ):
-        raise WorkspaceFormatError(
-            f"conversation selection has an unsupported schema: {session}"
-        )
-    embedded_session = value["session_id"]
-    if not isinstance(embedded_session, str):
-        raise WorkspaceFormatError(
-            f"conversation selection has an invalid session ID: {session}"
-        )
-    try:
-        validated_embedded_session = workspace.validate_identifier(
-            embedded_session
-        )
-    except SessionIdError as exc:
-        raise WorkspaceFormatError(
-            f"conversation selection has an invalid session ID: {session}"
-        ) from exc
-    if validated_embedded_session != session:
-        raise WorkspaceFormatError(
-            f"conversation selection does not match its session: {session}"
-        )
-
-    selected = value["selected_conversation_id"]
-    if selected is None:
-        return None
-    if not isinstance(selected, str):
-        raise WorkspaceFormatError(
-            f"conversation selection has an invalid conversation ID: {session}"
-        )
-    try:
-        return workspace.validate_identifier(
-            selected,
-            label="conversation ID",
-        )
-    except SessionIdError as exc:
-        raise WorkspaceFormatError(
-            f"conversation selection has an invalid conversation ID: {session}"
+            f"workspace file is not valid JSON: {relative}"
         ) from exc
 
 
-def save_conversation_selection(
+def _reject_unsupported_conversation_artifacts(
     workspace: Workspace,
-    session_id: str,
-    selected_conversation_id: str | None,
+    session_id: str | None,
 ) -> None:
-    """Atomically save or explicitly clear one session's conversation choice.
+    """Reject version-1 conversation-choice files without changing them."""
 
-    Safe identifiers are validated before the exact version-1 object replaces
-    its lazy session-scoped file through ``Workspace``. Failed validation or
-    replacement leaves controller memory to the caller and propagates without
-    an additional cleanup action here.
-    """
-
-    session = workspace.validate_identifier(session_id)
-    selected = (
-        None
-        if selected_conversation_id is None
-        else workspace.validate_identifier(
-            selected_conversation_id,
-            label="conversation ID",
+    directory = workspace.path(_UNSUPPORTED_V1_CONVERSATION_DEFAULT_DIRECTORY)
+    if not directory.exists():
+        return
+    if not directory.is_dir():
+        raise WorkspaceFormatError(
+            "version-1 conversation-choice path is not a directory"
         )
-    )
-    value: dict[str, Any] = {
-        "schema_version": _CONVERSATION_SELECTION_SCHEMA_VERSION,
-        "session_id": session,
-        "selected_conversation_id": selected,
-    }
-    workspace.write_json(_conversation_selection_path(session), value)
-
-
-def resolve_session(
-    *,
-    workspace: Workspace,
-    context: CliContext,
-    option_session: str | None,
-    positional_session: str | None = None,
-) -> str:
-    """Resolve one explicit or selected session without changing selection."""
-
-    if option_session is not None and positional_session is not None:
-        raise ConfigurationError(
-            "provide a session once, either positionally or with --session"
+    if session_id is not None:
+        if workspace.path(
+            f"{_UNSUPPORTED_V1_CONVERSATION_DEFAULT_DIRECTORY}/{session_id}.json"
+        ).exists():
+            raise WorkspaceVersionUnsupportedError(
+                "workspace contains an unsupported version-1 conversation default"
+            )
+        return
+    try:
+        has_unsupported_file = any(
+            entry.name.endswith(".json") for entry in directory.iterdir()
         )
-    selected = (
-        option_session
-        if option_session is not None
-        else (
-            positional_session
-            if positional_session is not None
-            else context.selected_session
+    except OSError as exc:
+        raise WorkspaceFormatError(
+            "cannot enumerate version-1 conversation-choice files"
+        ) from exc
+    if has_unsupported_file:
+        raise WorkspaceVersionUnsupportedError(
+            "workspace contains an unsupported version-1 conversation default"
         )
-    )
-    if selected is None:
-        raise ConfigurationError(
-            "no session selected; run 'story session start SESSION' "
-            "or pass --session SESSION"
-        )
-    return workspace.validate_identifier(selected)
 
 
-def _conversation_selection_path(session_id: str) -> str:
-    """Return the fixed safe relative selection path for a validated session."""
+def _conversation_default_path(session_id: str) -> str:
+    """Return the fixed V2 conversation-default path for a safe session ID."""
 
     return (
-        "agent_states/orchestrator_state/conversation_selections/"
+        "agent_states/orchestrator_state/conversation_defaults/"
         f"{session_id}.json"
     )
 
 
 def _is_initialized(workspace: Workspace) -> bool:
+    """Return whether the supplied workspace has every required sentinel."""
+
     try:
         return all(
             workspace.path(relative).is_file()
