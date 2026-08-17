@@ -10,7 +10,6 @@ from pathlib import Path
 from unittest import mock
 from uuid import UUID
 
-from story_writing_agents import interactive_controller as controller_module
 from story_writing_agents import workspace as workspace_module
 from story_writing_agents.backend import AgentBackend
 from story_writing_agents.cli_context import (
@@ -18,6 +17,7 @@ from story_writing_agents.cli_context import (
     save_default_session,
 )
 from story_writing_agents.interactive_controller import InteractiveController
+from story_writing_agents.interactive_controller import _core as controller_core_module
 from story_writing_agents.interactive_terminal import (
     INTERACTIVE_ERROR_SPECS,
     InteractiveErrorCode,
@@ -184,15 +184,15 @@ class InteractiveSearchFilesystemTests(unittest.TestCase):
             mock.patch.object(subprocess, "Popen") as popen,
             mock.patch.object(subprocess, "run") as run,
             mock.patch.object(socket, "create_connection") as connect,
-            mock.patch.object(controller_module.asyncio, "run") as async_run,
+            mock.patch.object(controller_core_module.asyncio, "run") as async_run,
             mock.patch.object(backend, "bind") as bind,
             mock.patch.object(
-                controller_module,
+                controller_core_module,
                 "save_default_session",
                 wraps=save_default_session,
             ) as persist_session,
             mock.patch.object(
-                controller_module,
+                controller_core_module,
                 "save_default_conversation",
             ) as persist_conversation,
             mock.patch.object(

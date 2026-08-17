@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import importlib.util
 import inspect
 import os
 import socket
@@ -17,7 +18,7 @@ from typing import get_type_hints
 from unittest import mock
 
 import story_writing_agents
-from story_writing_agents import interactive_controller as controller_module
+from story_writing_agents import interactive_controller as controller_package
 from story_writing_agents.backend import AgentBackend
 from story_writing_agents.cli_context import (
     CliContext,
@@ -61,6 +62,16 @@ from story_writing_agents.errors import (
     WorkspaceVersionUnsupportedError,
 )
 from story_writing_agents.interactive_controller import InteractiveController
+from story_writing_agents.interactive_controller import (
+    _conversation_policy as conversation_policy_module,
+)
+from story_writing_agents.interactive_controller import _core as controller_core_module
+from story_writing_agents.interactive_controller import (
+    _runtime_policy as runtime_policy_module,
+)
+from story_writing_agents.interactive_controller import (
+    _session_policy as session_policy_module,
+)
 from story_writing_agents.interactive_terminal import (
     INTERACTIVE_ERROR_SPECS,
     InteractiveErrorCode,
@@ -500,7 +511,17 @@ class ControllerContractTests(ControllerTestCase):
     """Verify the module-supported surface and approved dependency boundary."""
 
     def test_surface_signatures_non_facade_and_single_use_cleanup(self) -> None:
-        self.assertEqual(controller_module.__all__, ["InteractiveController"])
+        self.assertEqual(controller_package.__all__, ["InteractiveController"])
+        self.assertEqual(controller_core_module.__all__, ["InteractiveController"])
+        self.assertIs(controller_package.InteractiveController, InteractiveController)
+        self.assertIs(
+            controller_core_module.InteractiveController,
+            InteractiveController,
+        )
+        self.assertEqual(
+            InteractiveController.__module__,
+            "story_writing_agents.interactive_controller",
+        )
         self.assertNotIn("InteractiveController", story_writing_agents.__all__)
         self.assertFalse(hasattr(story_writing_agents, "InteractiveController"))
 
@@ -588,22 +609,47 @@ class ControllerContractTests(ControllerTestCase):
                 controller.run_session_lobby()
             close.assert_called_once_with()
 
-    def test_dependency_docstring_and_descriptive_name_boundary(self) -> None:
-        source_path = (
+    def test_five_unit_responsibilities_dependencies_and_policy_state(self) -> None:
+        source_root = (
             Path(__file__).resolve().parents[1]
             / "src"
             / "story_writing_agents"
-            / "interactive_controller.py"
         )
-        tree = ast.parse(source_path.read_text(encoding="utf-8"))
-        dependencies = {
-            node.module
-            for node in ast.walk(tree)
-            if isinstance(node, ast.ImportFrom) and node.level > 0
+        controller_root = source_root / "interactive_controller"
+        sources = {
+            "interactive_controller": controller_root / "__init__.py",
+            "interactive_controller._core": controller_root / "_core.py",
+            "interactive_controller._session_policy": (
+                controller_root / "_session_policy.py"
+            ),
+            "interactive_controller._conversation_policy": (
+                controller_root / "_conversation_policy.py"
+            ),
+            "interactive_controller._runtime_policy": (
+                controller_root / "_runtime_policy.py"
+            ),
         }
-        self.assertEqual(
-            dependencies,
-            {
+        expected_docstrings = {
+            "interactive_controller": (
+                "Stable import boundary for synchronous interactive coordination."
+            ),
+            "interactive_controller._core": (
+                "Stateful synchronous interactive shell coordination."
+            ),
+            "interactive_controller._session_policy": (
+                "Pure lifecycle interpretation for the interactive controller."
+            ),
+            "interactive_controller._conversation_policy": (
+                "Pure conversation fact interpretation for the interactive "
+                "controller."
+            ),
+            "interactive_controller._runtime_policy": (
+                "Pure runtime fact interpretation for the interactive controller."
+            ),
+        }
+        expected_dependencies = {
+            "interactive_controller": {"interactive_controller._core"},
+            "interactive_controller._core": {
                 "agents",
                 "backend",
                 "cli_context",
@@ -612,6 +658,9 @@ class ControllerContractTests(ControllerTestCase):
                 "conversations",
                 "errors",
                 "interactive_commands",
+                "interactive_controller._conversation_policy",
+                "interactive_controller._runtime_policy",
+                "interactive_controller._session_policy",
                 "interactive_terminal",
                 "models",
                 "orchestrator",
@@ -619,7 +668,143 @@ class ControllerContractTests(ControllerTestCase):
                 "session_lifecycle",
                 "workspace",
             },
-        )
+            "interactive_controller._session_policy": {
+                "errors",
+                "interactive_terminal",
+                "session_lifecycle",
+            },
+            "interactive_controller._conversation_policy": {
+                "conversation_search",
+                "conversations",
+                "errors",
+                "interactive_terminal",
+                "workspace",
+            },
+            "interactive_controller._runtime_policy": {
+                "conversation_retrieval",
+                "conversation_search",
+                "errors",
+                "interactive_terminal",
+                "models",
+                "workspace",
+            },
+        }
+        trees: dict[str, ast.Module] = {}
+        for module_name, source_path in sources.items():
+            tree = ast.parse(source_path.read_text(encoding="utf-8"))
+            trees[module_name] = tree
+            package_name = (
+                f"story_writing_agents.{module_name}"
+                if source_path.name == "__init__.py"
+                else f"story_writing_agents.{module_name.rpartition('.')[0]}"
+            )
+            dependencies = {
+                importlib.util.resolve_name(
+                    "." * node.level + (node.module or ""),
+                    package_name,
+                ).removeprefix("story_writing_agents.")
+                for node in ast.walk(tree)
+                if isinstance(node, ast.ImportFrom) and node.level > 0
+            }
+            with self.subTest(module=module_name):
+                self.assertEqual(ast.get_docstring(tree), expected_docstrings[module_name])
+                self.assertEqual(dependencies, expected_dependencies[module_name])
+
+        expected_policy_exports = {
+            session_policy_module: [
+                "RECOVERABLE_SESSION_ERROR_CODES",
+                "classify_session_failure",
+                "next_session_action",
+                "require_correlated_state",
+                "require_lifecycle_state",
+                "require_ready_access_state",
+                "require_released_state",
+            ],
+            conversation_policy_module: [
+                "ConversationCatalogProtocolFailure",
+                "ConversationInputFailure",
+                "ConversationResolutionFailure",
+                "classify_conversation_failure",
+                "classify_memory_catalog_or_reference_failure",
+                "classify_search_service_failure",
+                "classify_transcript_service_failure",
+                "format_transcript_context_status",
+                "normalize_conversation_input",
+                "resolve_conversation_reference",
+                "validate_catalog_entries",
+                "validate_catalog_metadata",
+                "validate_conversation_reference",
+                "validate_search_result_handles",
+                "validate_transcript_page",
+                "visible_conversation_handle",
+            ],
+            runtime_policy_module: [
+                "classify_advisory_turn_failure",
+                "classify_consensus_execution_failure",
+                "classify_inspection_failure",
+                "classify_progress_callback_failure",
+                "interactive_code_for_debate_failure",
+                "validate_consensus_result",
+                "validate_conversation_retrieval_progress",
+                "validate_conversation_retrieval_result",
+                "validate_debate_context_inspection",
+                "validate_debate_inspection",
+                "validate_debate_progress",
+                "validate_session_inspection",
+            ],
+        }
+        for policy_module, expected_exports in expected_policy_exports.items():
+            with self.subTest(policy=policy_module.__name__):
+                self.assertEqual(policy_module.__all__, expected_exports)
+
+        expected_policy_assignments = {
+            "interactive_controller._session_policy": {
+                "RECOVERABLE_SESSION_ERROR_CODES",
+                "__all__",
+            },
+            "interactive_controller._conversation_policy": {
+                "_MINIMUM_CONVERSATION_PREFIX_LENGTH",
+                "__all__",
+            },
+            "interactive_controller._runtime_policy": {"__all__"},
+        }
+        expected_policy_classes = {
+            "interactive_controller._session_policy": set(),
+            "interactive_controller._conversation_policy": {
+                "ConversationCatalogProtocolFailure",
+                "ConversationInputFailure",
+                "ConversationResolutionFailure",
+            },
+            "interactive_controller._runtime_policy": set(),
+        }
+        for module_name in expected_policy_assignments:
+            tree = trees[module_name]
+            assignments = {
+                target.id
+                for node in tree.body
+                if isinstance(node, ast.Assign)
+                for target in node.targets
+                if isinstance(target, ast.Name)
+            }
+            classes = {
+                node.name for node in tree.body if isinstance(node, ast.ClassDef)
+            }
+            with self.subTest(policy_state=module_name):
+                self.assertEqual(assignments, expected_policy_assignments[module_name])
+                self.assertEqual(classes, expected_policy_classes[module_name])
+                self.assertFalse(
+                    [node for node in ast.walk(tree) if isinstance(node, ast.AsyncFunctionDef)]
+                )
+                self.assertFalse(
+                    [node for node in ast.walk(tree) if isinstance(node, (ast.Global, ast.Nonlocal))]
+                )
+                self.assertFalse(
+                    {
+                        dependency
+                        for dependency in expected_dependencies[module_name]
+                        if dependency.startswith("interactive_controller.")
+                    }
+                )
 
         generic_names = {
             "confirm",
@@ -630,23 +815,24 @@ class ControllerContractTests(ControllerTestCase):
             "process",
             "run",
         }
-        callable_nodes: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
-        for node in tree.body:
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                callable_nodes.append(node)
-            elif isinstance(node, ast.ClassDef):
-                callable_nodes.extend(
-                    member
-                    for member in node.body
-                    if isinstance(
-                        member,
-                        (ast.FunctionDef, ast.AsyncFunctionDef),
+        for module_name, tree in trees.items():
+            callable_nodes: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+            for node in tree.body:
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    callable_nodes.append(node)
+                elif isinstance(node, ast.ClassDef):
+                    callable_nodes.extend(
+                        member
+                        for member in node.body
+                        if isinstance(
+                            member,
+                            (ast.FunctionDef, ast.AsyncFunctionDef),
+                        )
                     )
-                )
-        for node in callable_nodes:
-            with self.subTest(callable=node.name):
-                self.assertTrue(ast.get_docstring(node))
-                self.assertNotIn(node.name.strip("_"), generic_names)
+            for node in callable_nodes:
+                with self.subTest(module=module_name, callable=node.name):
+                    self.assertTrue(ast.get_docstring(node))
+                    self.assertNotIn(node.name.strip("_"), generic_names)
 
     def test_direct_import_is_clean_and_package_graph_is_acyclic(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
@@ -657,8 +843,16 @@ class ControllerContractTests(ControllerTestCase):
         script = (
             "import story_writing_agents as facade; "
             "from story_writing_agents import interactive_controller as module; "
+            "from story_writing_agents.interactive_controller import "
+            "InteractiveController; "
+            "from story_writing_agents.interactive_controller import _core; "
             "from story_writing_agents import run_inputs; "
             "assert module.__all__ == ['InteractiveController']; "
+            "assert _core.__all__ == ['InteractiveController']; "
+            "assert module.InteractiveController is InteractiveController; "
+            "assert _core.InteractiveController is InteractiveController; "
+            "assert InteractiveController.__module__ == "
+            "'story_writing_agents.interactive_controller'; "
             "assert run_inputs.__all__ == ['read_draft_file']; "
             "assert 'read_draft_file' not in facade.__all__; "
             "assert not hasattr(facade, 'read_draft_file'); "
@@ -680,17 +874,39 @@ class ControllerContractTests(ControllerTestCase):
             self.assertEqual(list(Path(temporary).iterdir()), [])
 
         package = repository_root / "src" / "story_writing_agents"
-        modules = {path.stem for path in package.glob("*.py")}
+        module_paths = tuple(sorted(package.rglob("*.py")))
+
+        def import_name(path: Path) -> str:
+            """Return the canonical import name for one production source."""
+
+            relative_parts = list(path.relative_to(package).with_suffix("").parts)
+            if relative_parts[-1] == "__init__":
+                relative_parts.pop()
+            suffix = ".".join(relative_parts)
+            return "story_writing_agents" + (f".{suffix}" if suffix else "")
+
+        module_names = {path: import_name(path) for path in module_paths}
+        modules = set(module_names.values())
         graph: dict[str, set[str]] = {name: set() for name in modules}
-        for path in package.glob("*.py"):
+        for path, module_name in module_names.items():
             parsed = ast.parse(path.read_text(encoding="utf-8"))
             for node in ast.walk(parsed):
-                if (
-                    isinstance(node, ast.ImportFrom)
-                    and node.level == 1
-                    and node.module in modules
-                ):
-                    graph[path.stem].add(node.module)
+                if isinstance(node, ast.ImportFrom) and node.level > 0:
+                    package_name = (
+                        module_name
+                        if path.name == "__init__.py"
+                        else module_name.rpartition(".")[0]
+                    )
+                    dependency = importlib.util.resolve_name(
+                        "." * node.level + (node.module or ""),
+                        package_name,
+                    )
+                    if dependency in modules:
+                        graph[module_name].add(dependency)
+                elif isinstance(node, ast.Import):
+                    graph[module_name].update(
+                        alias.name for alias in node.names if alias.name in modules
+                    )
 
         visiting: set[str] = set()
         visited: set[str] = set()
@@ -710,7 +926,7 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 23)
+        self.assertEqual(len(modules), 27)
 
 
 class ControllerStartupTests(ControllerTestCase):
@@ -1222,8 +1438,8 @@ class ControllerConversationStartupTests(ControllerTestCase):
         events: list[str] = []
         original_attach = backend.acquire_session_access
         original_detach = backend.release_session_access
-        original_load = controller_module.load_default_conversation
-        original_select = controller_module.save_default_session
+        original_load = controller_core_module.load_default_conversation
+        original_select = controller_core_module.save_default_session
         original_get = catalog.get
 
         def attach(session_id: str):
@@ -1250,12 +1466,12 @@ class ControllerConversationStartupTests(ControllerTestCase):
             mock.patch.object(backend, "acquire_session_access", side_effect=attach),
             mock.patch.object(backend, "release_session_access", side_effect=detach),
             mock.patch.object(
-                controller_module,
+                controller_core_module,
                 "load_default_conversation",
                 side_effect=load_selection,
             ),
             mock.patch.object(
-                controller_module,
+                controller_core_module,
                 "save_default_session",
                 side_effect=select_story_session,
             ),
@@ -1576,7 +1792,7 @@ class ControllerCommandTests(ControllerTestCase):
                 wraps=backend.release_session_access,
             ) as detach,
             mock.patch.object(
-                controller_module,
+                controller_core_module,
                 "save_default_session",
                 wraps=save_default_session,
             ) as persist,
@@ -1709,7 +1925,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
         )
 
         with mock.patch.object(
-            controller_module,
+            controller_core_module,
             "ConversationMemoryService",
             return_value=memory,
         ) as memory_factory:
@@ -1770,11 +1986,11 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
 
         with (
             mock.patch.object(
-                controller_module,
+                controller_core_module,
                 "ConversationMemoryService",
                 return_value=memory,
             ),
-            mock.patch.object(controller_module.asyncio, "run") as async_run,
+            mock.patch.object(controller_core_module.asyncio, "run") as async_run,
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
 
@@ -1863,7 +2079,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
 
                 with (
                     mock.patch.object(
-                        controller_module,
+                        controller_core_module,
                         "ConversationMemoryService",
                         return_value=memory,
                     ),
@@ -1878,7 +2094,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                         wraps=backend.release_session_access,
                     ) as detach,
                     mock.patch.object(
-                        controller_module.asyncio,
+                        controller_core_module.asyncio,
                         "run",
                     ) as async_run,
                     mock.patch.object(
@@ -1886,11 +2102,11 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                         "converse",
                     ) as converse,
                     mock.patch.object(
-                        controller_module,
+                        controller_core_module,
                         "save_default_session",
                     ) as persist_session,
                     mock.patch.object(
-                        controller_module,
+                        controller_core_module,
                         "save_default_conversation",
                     ) as persist_conversation,
                     mock.patch.object(
@@ -2013,7 +2229,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
         )
 
         with mock.patch.object(
-            controller_module,
+            controller_core_module,
             "ConversationMemoryService",
             return_value=memory,
         ):
@@ -2149,7 +2365,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                     )
                 )
                 with mock.patch.object(
-                    controller_module,
+                    controller_core_module,
                     "ConversationMemoryService",
                     return_value=memory,
                 ):
@@ -2182,7 +2398,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
         )
 
         with mock.patch.object(
-            controller_module,
+            controller_core_module,
             "ConversationMemoryService",
             return_value=memory,
         ) as memory_factory:
@@ -2245,7 +2461,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
 
                 with (
                     mock.patch.object(
-                        controller_module,
+                        controller_core_module,
                         "ConversationMemoryService",
                         side_effect=build_memory_service,
                     ),
@@ -2316,7 +2532,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
         )
         holder["controller"] = controller
         with mock.patch.object(
-            controller_module,
+            controller_core_module,
             "ConversationMemoryService",
             return_value=memory,
         ):
@@ -2489,7 +2705,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
         )
         with (
             mock.patch.object(
-                controller_module,
+                controller_core_module,
                 "save_default_conversation",
                 side_effect=OSError("selection-secret"),
             ),
@@ -2626,7 +2842,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
             selection_path.stat().st_mtime_ns,
         )
         with mock.patch.object(
-            controller_module,
+            controller_core_module,
             "save_default_conversation",
             side_effect=OSError("selection-secret"),
         ):
@@ -2715,7 +2931,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
             )
         )
         with mock.patch.object(
-            controller_module,
+            controller_core_module,
             "save_default_conversation",
             side_effect=OSError("selection-secret"),
         ):
@@ -2748,7 +2964,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
         )
         with (
             mock.patch.object(
-                controller_module,
+                controller_core_module,
                 "save_default_conversation",
                 side_effect=OSError("selection-secret"),
             ),
@@ -3383,7 +3599,7 @@ class ControllerSwitchTests(ControllerTestCase):
             mock.patch.object(backend, "release_session_access", side_effect=record_detach),
             mock.patch.object(backend, "close", side_effect=record_close),
             mock.patch.object(
-                controller_module,
+                controller_core_module,
                 "save_default_session",
                 side_effect=record_select,
             ),
@@ -3477,7 +3693,7 @@ class ControllerSwitchTests(ControllerTestCase):
 
                 with (
                     mock.patch.object(
-                        controller_module,
+                        controller_core_module,
                         "save_default_session",
                         side_effect=fail_destination_selection,
                     ),
@@ -3535,7 +3751,7 @@ class ControllerSwitchTests(ControllerTestCase):
 
         with (
             mock.patch.object(
-                controller_module,
+                controller_core_module,
                 "save_default_session",
                 side_effect=fail_selection,
             ),
@@ -3576,7 +3792,7 @@ class ControllerSwitchTests(ControllerTestCase):
 
         with (
             mock.patch.object(
-                controller_module,
+                controller_core_module,
                 "save_default_session",
                 side_effect=record_select,
             ),

@@ -18,7 +18,6 @@ from story_writing_agents import (
     PLOT_ARCHITECT,
     SessionDurableState,
 )
-from story_writing_agents import interactive_controller as controller_module
 from story_writing_agents.backend import AgentBackend
 from story_writing_agents.cli_context import (
     CliContext,
@@ -65,6 +64,7 @@ from story_writing_agents.interactive_commands import (
     InteractiveAction,
 )
 from story_writing_agents.interactive_controller import InteractiveController
+from story_writing_agents.interactive_controller import _core as controller_core_module
 from story_writing_agents.interactive_terminal import (
     INTERACTIVE_ERROR_SPECS,
     InteractiveErrorCode,
@@ -387,7 +387,7 @@ class InteractiveConversationTestCase(unittest.TestCase):
             return controller, selected_backend, callbacks, None, None
 
         with mock.patch.object(
-            controller_module,
+            controller_core_module,
             "StoryRuntime",
             return_value=runtime,
         ) as runtime_factory:
@@ -461,12 +461,12 @@ class RuntimeWiringAndGateTests(InteractiveConversationTestCase):
         before = tuple(workspace.root.rglob("*"))
         with (
             mock.patch.object(
-                controller_module,
+                controller_core_module,
                 "FilesystemConversationCatalog",
                 return_value=default_catalog,
             ) as catalog_factory,
             mock.patch.object(
-                controller_module,
+                controller_core_module,
                 "StoryRuntime",
                 return_value=runtime,
             ) as runtime_factory,
@@ -490,11 +490,11 @@ class RuntimeWiringAndGateTests(InteractiveConversationTestCase):
         runtime = ScriptedRuntime()
         with (
             mock.patch.object(
-                controller_module,
+                controller_core_module,
                 "FilesystemConversationCatalog",
             ) as catalog_factory,
             mock.patch.object(
-                controller_module,
+                controller_core_module,
                 "StoryRuntime",
                 return_value=runtime,
             ) as runtime_factory,
@@ -534,7 +534,7 @@ class RuntimeWiringAndGateTests(InteractiveConversationTestCase):
             mock.patch.object(backend, "validate_provider_configuration") as validate_configuration,
             mock.patch.object(backend, "bind") as bind,
             mock.patch.object(
-                controller_module.asyncio,
+                controller_core_module.asyncio,
                 "run",
             ) as run_boundary,
         ):
@@ -569,7 +569,7 @@ class RuntimeWiringAndGateTests(InteractiveConversationTestCase):
         )
         real_run = asyncio.run
         with mock.patch.object(
-            controller_module.asyncio,
+            controller_core_module.asyncio,
             "run",
             side_effect=real_run,
         ) as run_boundary:
@@ -644,7 +644,7 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
             ) as validate_configuration,
             mock.patch.object(backend, "bind") as bind,
             mock.patch.object(
-                controller_module.asyncio,
+                controller_core_module.asyncio,
                 "run",
                 side_effect=real_run,
             ) as run_boundary,
@@ -986,7 +986,7 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
             )
 
         with mock.patch.object(
-            controller_module,
+            controller_core_module,
             "parse_interactive_line",
             side_effect=opaque_parser,
         ):
@@ -1323,7 +1323,7 @@ class RealRetainedRuntimeTests(InteractiveConversationTestCase):
         with (
             mock.patch.object(backend, "bind", new=bind),
             mock.patch.object(
-                controller_module.asyncio,
+                controller_core_module.asyncio,
                 "run",
             ) as run_boundary,
         ):

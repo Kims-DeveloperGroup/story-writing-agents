@@ -16,7 +16,7 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 23.
+Importable production units indexed: 27.
 
 ## Current Dependency Direction
 
@@ -24,11 +24,7 @@ The current graph flows from entry points and orchestration toward provider,
 configuration, prompt, persistence, and stable contract modules:
 
 ```text
-__main__ -> cli -> interactive_controller -> agents/backend/cli_context
-                 |                         -> conversation_retrieval/conversation_search
-                 |                         -> conversations/errors/interactive_commands
-                 |                         -> interactive_terminal/models/orchestrator/run_inputs/workspace
-                 |                         -> session_lifecycle
+__main__ -> cli -> interactive_controller -> interactive_controller._core
                  -> interactive_line_editor -> interactive_commands/interactive_terminal
                  -> interactive_terminal -> interactive_commands/agents
                  -> run_inputs -> errors
@@ -44,6 +40,20 @@ __main__ -> cli -> interactive_controller -> agents/backend/cli_context
                  -> backend -> config/conversation_retrieval/workspace/models/errors/agents
                  |          -> session_lifecycle
                  -> cli_context -> workspace/errors/agents
+
+interactive_controller._core -> interactive_controller._session_policy
+                             -> interactive_controller._conversation_policy
+                             -> interactive_controller._runtime_policy
+                             -> agents/backend/cli_context
+                             -> conversation_retrieval/conversation_search
+                             -> conversations/errors/interactive_commands
+                             -> interactive_terminal/models/orchestrator/run_inputs
+                             -> session_lifecycle/workspace
+interactive_controller._session_policy -> errors/interactive_terminal/session_lifecycle
+interactive_controller._conversation_policy -> conversation_search/conversations
+                                            -> errors/interactive_terminal/workspace
+interactive_controller._runtime_policy -> conversation_retrieval/conversation_search
+                                       -> errors/interactive_terminal/models/workspace
 
 smoke -> agents/conversation_retrieval/conversation_search/conversations/models/orchestrator/session_lifecycle/workspace
 directives -> config/workspace/errors/agents
@@ -453,10 +463,27 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 ### `story_writing_agents.interactive_controller`
 
-- **Source:** `src/story_writing_agents/interactive_controller.py`
-- **Responsibility:** Coordinate one synchronous interactive
-  story-session/conversation shell lifecycle.
-- **Supported surface:** Module-supported `InteractiveController`, whose
+- **Source:** `src/story_writing_agents/interactive_controller/__init__.py`
+- **Responsibility:** Provide the stable interactive-controller import boundary.
+- **Supported surface:** Exactly `InteractiveController` in `__all__`, re-exported
+  from `_core` as the same class object. Its canonical `__module__` remains
+  `story_writing_agents.interactive_controller`; the project-root package
+  facade does not export it or any private controller unit.
+- **Direct internal dependencies:** `interactive_controller._core`.
+- **State, resources, and side effects:** Owns no runtime state or external
+  resource. Import deterministically canonicalizes the defining class's
+  `__module__` and performs no filesystem, provider, environment, thread, or
+  application-startup operation.
+- **Primary verification/documentation:** `tests/test_interactive_controller.py`,
+  `tests/test_public_api_and_cli.py`, and `docs/design/overview.md`.
+
+### `story_writing_agents.interactive_controller._core`
+
+- **Source:** `src/story_writing_agents/interactive_controller/_core.py`
+- **Responsibility:** Own one synchronous interactive shell's state and
+  orchestration lifecycle.
+- **Supported surface:** Package-internal defining `InteractiveController`,
+  re-exported only through `story_writing_agents.interactive_controller`, whose
   constructor accepts explicit workspace, CLI-context, backend, and terminal
   collaborators plus an optional keyword-only `ConversationCatalog`, and whose
   single-use `run_session_lobby` operation returns process status 0 or 2. An
@@ -481,12 +508,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   through `Default session`, then `Provider readiness` and `Next action`.
   All transition, identity-resolution, routing,
   directive-result, inspection, trusted debate/retrieval progress and result,
-  retrieval-source, and other presentation validation helpers are private, and
-  the package facade does not re-export this module.
+  retrieval-source, and other presentation validation helpers are package
+  internal, and the project-root facade does not re-export this class or module.
 - **Direct internal dependencies:** `agents`, `backend`, `cli_context`,
   `conversation_retrieval`, `conversation_search`, `conversations`, `errors`,
-  `interactive_commands`, `interactive_terminal`, `models`, `orchestrator`,
-  `run_inputs`, `session_lifecycle`, and `workspace`.
+  `interactive_commands`, `interactive_controller._conversation_policy`,
+  `interactive_controller._runtime_policy`,
+  `interactive_controller._session_policy`, `interactive_terminal`, `models`,
+  `orchestrator`, `run_inputs`, `session_lifecycle`, and `workspace`.
 - **State, resources, and side effects:** Instances retain borrowed workspace,
   CLI-context, backend, and terminal collaborators plus either a borrowed
   injected catalog or a controller-constructed default filesystem catalog. It
@@ -571,6 +600,84 @@ every intermediate arrow. The current runtime graph is acyclic.
   `docs/reference/cli.md`, `docs/reference/interactive-terminal.md`, and
   `docs/reference/conversation-retrieval.md` verify the current collaborator,
   lifecycle, and retrieval-presentation contracts.
+
+### `story_writing_agents.interactive_controller._session_policy`
+
+- **Source:** `src/story_writing_agents/interactive_controller/_session_policy.py`
+- **Responsibility:** Interpret lifecycle facts for interactive session
+  decisions.
+- **Supported surface:** No project-public import. Its exact package-internal
+  `__all__` contains immutable `RECOVERABLE_SESSION_ERROR_CODES` plus
+  `classify_session_failure`, `next_session_action`,
+  `require_correlated_state`, `require_lifecycle_state`,
+  `require_ready_access_state`, and `require_released_state`. These pure
+  functions validate exact lifecycle identities, transition correlations,
+  access release, fixed next-action copy, and safe exception-to-error mapping.
+- **Direct internal dependencies:** `errors`, `interactive_terminal`, and
+  `session_lifecycle`.
+- **State, resources, and side effects:** Immutable policy metadata only; owns
+  no process state or resource and performs no I/O, lifecycle transition,
+  mutation of supplied values, or import-time operational side effect.
+- **Primary verification/documentation:** `tests/test_interactive_controller.py`,
+  `tests/test_session_lifecycle.py`, `docs/design/session-lifecycle.md`, and
+  `docs/design/overview.md`.
+
+### `story_writing_agents.interactive_controller._conversation_policy`
+
+- **Source:** `src/story_writing_agents/interactive_controller/_conversation_policy.py`
+- **Responsibility:** Interpret conversation catalog and memory-service facts.
+- **Supported surface:** No project-public import. Its exact package-internal
+  `__all__` contains the typed `ConversationCatalogProtocolFailure`,
+  `ConversationInputFailure`, and `ConversationResolutionFailure` markers plus
+  `classify_conversation_failure`,
+  `classify_memory_catalog_or_reference_failure`,
+  `classify_search_service_failure`, `classify_transcript_service_failure`,
+  `format_transcript_context_status`, `normalize_conversation_input`,
+  `resolve_conversation_reference`, `validate_catalog_entries`,
+  `validate_catalog_metadata`, `validate_conversation_reference`,
+  `validate_search_result_handles`, `validate_transcript_page`, and
+  `visible_conversation_handle`. Reference validation remains pure and
+  precedes the core-owned catalog read; all collection/result inputs are
+  interpreted without mutation.
+- **Direct internal dependencies:** `conversation_search`, `conversations`,
+  `errors`, `interactive_terminal`, and `workspace`.
+- **State, resources, and side effects:** Immutable minimum-prefix policy and
+  export metadata only; owns no catalog, memory service, process state, cache,
+  or external resource and performs no filesystem, terminal, provider, or
+  import-time operational I/O.
+- **Primary verification/documentation:** `tests/test_interactive_controller.py`,
+  `tests/test_interactive_conversation.py`,
+  `tests/test_interactive_management.py`, `tests/test_interactive_search.py`,
+  `docs/reference/interactive-terminal.md`, and `docs/design/overview.md`.
+
+### `story_writing_agents.interactive_controller._runtime_policy`
+
+- **Source:** `src/story_writing_agents/interactive_controller/_runtime_policy.py`
+- **Responsibility:** Interpret runtime progress, result, and inspection facts.
+- **Supported surface:** No project-public import. Its exact package-internal
+  `__all__` contains `classify_advisory_turn_failure`,
+  `classify_consensus_execution_failure`, `classify_inspection_failure`,
+  `classify_progress_callback_failure`,
+  `interactive_code_for_debate_failure`, `validate_consensus_result`,
+  `validate_conversation_retrieval_progress`,
+  `validate_conversation_retrieval_result`,
+  `validate_debate_context_inspection`, `validate_debate_inspection`,
+  `validate_debate_progress`, and `validate_session_inspection`. Validators
+  reconstruct exact immutable contracts, consume only a previous event or
+  immutable progress tuple, and return canonical facts or whitelisted safe
+  summaries; they never render, append, retain, or call the runtime.
+- **Direct internal dependencies:** `conversation_retrieval`,
+  `conversation_search`, `errors`, `interactive_terminal`, `models`, and
+  `workspace`.
+- **State, resources, and side effects:** Export metadata only; owns no runtime,
+  progress collection, controller state, cache, or external resource and
+  performs no terminal, filesystem, provider, lifecycle, or import-time
+  operational I/O.
+- **Primary verification/documentation:** `tests/test_interactive_controller.py`,
+  `tests/test_interactive_consensus.py`,
+  `tests/test_interactive_cancellation.py`,
+  `tests/test_interactive_search.py`,
+  `docs/reference/conversation-retrieval.md`, and `docs/design/overview.md`.
 
 ### `story_writing_agents.interactive_line_editor`
 
@@ -886,8 +993,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   entries without changing message kinds, rendering, or dependencies. The
   controller still receives only completed terminal outcomes and alone passes
   exact lines to the parser.
-- `interactive_controller` owns interactive shell action mapping, current
-  in-memory attachment, current-focus conversation and sticky-target state,
+- `interactive_controller` is the stable one-class import boundary and owns no
+  shell state or resource. Its `_core` owns interactive shell action mapping,
+  current in-memory attachment, current-focus conversation and sticky-target state,
   process-local per-session latest accepted STARTED debate IDs, transition and
   compensation ordering, retained runtime and memory-service wiring, one
   private lifecycle `asyncio.Runner`, controller-local interruption/progress
@@ -907,6 +1015,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   requires public Runner quiescence proof and performs no provider or state/
   persistence mutation; after entry, it requires runtime `CancelledError` and
   operation join, while every uncertain state fails closed.
+  The `_session_policy`, `_conversation_policy`, and `_runtime_policy` leaves
+  interpret immutable collaborator facts and safe failure categories without
+  retaining state, performing I/O, mutating progress collections, importing
+  `_core`, or depending on one another; `_core` alone renders and commits their
+  canonical results to controller-owned process state.
   Provider-free `/search` and `/transcript` inspection crosses only public
   `ConversationMemoryService.search` and
   `ConversationMemoryService.read_transcript` boundaries. Provider-free

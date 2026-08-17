@@ -1,34 +1,30 @@
-"""Synchronous interactive session, conversation, and advisory coordination."""
+"""Stateful synchronous interactive shell coordination."""
 
 from __future__ import annotations
 
 import asyncio
 
-from .agents import AGENT_SPECS, LEAD_ORCHESTRATOR, ROSTER
-from .backend import AgentBackend
-from .cli_context import (
+from ..agents import AGENT_SPECS, LEAD_ORCHESTRATOR, ROSTER
+from ..backend import AgentBackend
+from ..cli_context import (
     CliContext,
     load_default_conversation,
     save_default_conversation,
     save_default_session,
 )
-from .conversation_search import (
+from ..conversation_search import (
     CONVERSATION_MEMORY_POLICY,
-    ConversationCitation,
     ConversationMemoryService,
     ConversationSearchQuery,
-    ConversationSearchResult,
     ConversationSearchScope,
-    ConversationTranscriptPage,
 )
-from .conversation_retrieval import (
+from ..conversation_retrieval import (
     ConversationRetrievalProgressEvent,
     ConversationRetrievalProgressPhase,
     ConversationRetrievalResult,
     ConversationRetrievalSource,
 )
-from .conversations import (
-    CONVERSATION_CONTEXT_POLICY,
+from ..conversations import (
     ConversationCatalog,
     ConversationContextWindow,
     ConversationEvent,
@@ -37,33 +33,26 @@ from .conversations import (
     normalize_conversation_subject,
     select_bounded_conversation_context,
 )
-from .errors import (
+from ..errors import (
     BackendProtocolError,
     ConfigurationError,
-    ConversationExistsError,
     ConversationNotFoundError,
-    ConversationRetrievalBudgetError,
     ConversationRetrievalObserverError,
-    ConversationRetrievalSemanticError,
     DirectiveError,
     ProgressObserverError,
-    SessionAccessBlockedError,
     SessionExistsError,
-    SessionIdError,
     SessionNotFoundError,
-    SessionOwnershipUnknownError,
-    SessionPausedError,
     WorkspaceFormatError,
     WorkspaceSecurityError,
     WorkspaceVersionUnsupportedError,
 )
-from .interactive_commands import (
+from ..interactive_commands import (
     AGENT_ROUTES,
     ActionKind,
     InteractiveAction,
     parse_interactive_line,
 )
-from .interactive_terminal import (
+from ..interactive_terminal import (
     AttachmentKind,
     ComposeMode,
     ConfirmationResult,
@@ -73,28 +62,66 @@ from .interactive_terminal import (
     TerminalActionKind,
     TerminalMessageKind,
 )
-from .models import (
+from ..models import (
     DebateContextMode,
     DebateContextRequest,
-    DebateFailureKind,
     DebateProgressEvent,
     DebateProgressPhase,
     DebateResult,
     DebateStatus,
     InputKind,
 )
-from .orchestrator import StoryRuntime
-from .run_inputs import read_draft_file
-from .session_lifecycle import (
+from ..orchestrator import StoryRuntime
+from ..run_inputs import read_draft_file
+from ..session_lifecycle import (
     SessionAccessState,
     SessionDurableState,
     SessionLifecycleState,
     provider_work_is_ready,
 )
-from .workspace import (
+from ..workspace import (
     FilesystemConversationCatalog,
     FilesystemConversationEventStore,
     Workspace,
+)
+from ._conversation_policy import (
+    ConversationCatalogProtocolFailure,
+    classify_conversation_failure,
+    classify_memory_catalog_or_reference_failure,
+    classify_search_service_failure,
+    classify_transcript_service_failure,
+    format_transcript_context_status,
+    normalize_conversation_input,
+    resolve_conversation_reference,
+    validate_catalog_entries,
+    validate_catalog_metadata,
+    validate_conversation_reference,
+    validate_search_result_handles,
+    validate_transcript_page,
+    visible_conversation_handle,
+)
+from ._runtime_policy import (
+    classify_advisory_turn_failure,
+    classify_consensus_execution_failure,
+    classify_inspection_failure,
+    classify_progress_callback_failure,
+    interactive_code_for_debate_failure,
+    validate_consensus_result,
+    validate_conversation_retrieval_progress,
+    validate_conversation_retrieval_result,
+    validate_debate_context_inspection,
+    validate_debate_inspection,
+    validate_debate_progress,
+    validate_session_inspection,
+)
+from ._session_policy import (
+    RECOVERABLE_SESSION_ERROR_CODES,
+    classify_session_failure,
+    next_session_action,
+    require_correlated_state,
+    require_lifecycle_state,
+    require_ready_access_state,
+    require_released_state,
 )
 
 
@@ -103,7 +130,6 @@ _LOBBY_COMMAND_HINT = (
     "Use /help, /session list, /session create NAME, /session open [NAME], "
     "/session pause, or /quit."
 )
-_MINIMUM_CONVERSATION_PREFIX_LENGTH = 12
 _AGENT_ROUTE_ALIASES = frozenset(
     alias for route in AGENT_ROUTES for alias in route.aliases
 )
@@ -115,20 +141,6 @@ _CONVERSATION_CATALOG_OPERATIONS = (
     "archive",
     "unarchive",
 )
-_RECOVERABLE_SESSION_ERRORS = frozenset(
-    {
-        InteractiveErrorCode.SESSION_INVALID,
-        InteractiveErrorCode.SESSION_EXISTS,
-        InteractiveErrorCode.SESSION_NOT_FOUND,
-        InteractiveErrorCode.SESSION_PAUSED,
-        InteractiveErrorCode.SESSION_ACCESS_BLOCKED,
-        InteractiveErrorCode.SESSION_OWNERSHIP_UNKNOWN,
-        InteractiveErrorCode.WORKSPACE_VERSION_UNSUPPORTED,
-        InteractiveErrorCode.PROVIDER_PREFLIGHT_FAILED,
-    }
-)
-
-
 class _ControllerAbort(Exception):
     """Carry one trusted fatal error to the controller's cleanup boundary."""
 
@@ -137,24 +149,6 @@ class _ControllerAbort(Exception):
 
         super().__init__(error.code.value)
         self.error = error
-
-
-class _ConversationResolutionFailure(Exception):
-    """Carry one trusted lookup error code without retaining input prose."""
-
-    def __init__(self, code: InteractiveErrorCode) -> None:
-        """Store a typed resolution category without external side effects."""
-
-        super().__init__(code.value)
-        self.code = code
-
-
-class _ConversationInputFailure(Exception):
-    """Mark a failure from controller-owned subject or query validation."""
-
-
-class _ConversationCatalogProtocolFailure(Exception):
-    """Mark an injected catalog return that violates its public protocol."""
 
 
 class InteractiveController:
@@ -328,7 +322,7 @@ class InteractiveController:
             return False
         try:
             state = self._backend.get_session_lifecycle(default_session)
-            self._require_lifecycle_state(state, default_session)
+            require_lifecycle_state(state, default_session)
         except Exception as exc:
             self._present_session_failure(exc, default_session)
             return False
@@ -357,7 +351,7 @@ class InteractiveController:
 
         try:
             state = self._backend.get_session_lifecycle(session_id)
-            self._require_lifecycle_state(state, session_id)
+            require_lifecycle_state(state, session_id)
         except Exception as exc:
             self._present_session_failure(exc, session_id)
             return
@@ -382,14 +376,14 @@ class InteractiveController:
                     "provider configuration validation returned a non-true value"
                 )
             before = self._backend.get_session_lifecycle(session_id)
-            self._require_lifecycle_state(before, session_id)
+            require_lifecycle_state(before, session_id)
             if before.durable_state is not SessionDurableState.ABSENT:
                 raise SessionExistsError(f"session already exists: {session_id}")
             acquired = self._backend.create_session_with_access(session_id)
             access_acquired = True
-            self._require_ready_access_state(acquired, session_id)
+            require_ready_access_state(acquired, session_id)
             observed = self._backend.get_session_lifecycle(session_id)
-            self._require_correlated_state(
+            require_correlated_state(
                 None,
                 acquired,
                 observed,
@@ -440,7 +434,7 @@ class InteractiveController:
                     "provider configuration validation returned a non-true value"
                 )
             before = self._backend.get_session_lifecycle(session_id)
-            self._require_lifecycle_state(before, session_id)
+            require_lifecycle_state(before, session_id)
             if before.durable_state is SessionDurableState.ABSENT:
                 raise SessionNotFoundError(f"session not found: {session_id}")
             newly_acquired = before.access_state is not SessionAccessState.HELD_HERE
@@ -450,9 +444,9 @@ class InteractiveController:
             else:
                 acquired = self._backend.acquire_session_access(session_id)
                 attachment = AttachmentKind.OPENED
-            self._require_ready_access_state(acquired, session_id)
+            require_ready_access_state(acquired, session_id)
             observed = self._backend.get_session_lifecycle(session_id)
-            self._require_correlated_state(
+            require_correlated_state(
                 before,
                 acquired,
                 observed,
@@ -474,7 +468,7 @@ class InteractiveController:
 
         session_id = state.session_id
         try:
-            self._require_ready_access_state(state, session_id)
+            require_ready_access_state(state, session_id)
         except (TypeError, ValueError, BackendProtocolError):
             self._release_uncommitted_destination(session_id)
             self._abandon_known_attachment_for_cleanup_abort()
@@ -529,7 +523,7 @@ class InteractiveController:
             metadata = self._conversation_catalog.get(session_id, default_id)
         except ConversationNotFoundError:
             return None
-        validated = self._validated_catalog_metadata(
+        validated = validate_catalog_metadata(
             metadata,
             session_id,
             expected_conversation_id=default_id,
@@ -550,7 +544,7 @@ class InteractiveController:
         aborts so the outer boundary releases any known source and closes.
         """
 
-        error = self._classify_conversation_failure(failure)
+        error = classify_conversation_failure(failure)
         if (
             error.code is InteractiveErrorCode.INTERNAL_ERROR
             or self._attached_session_id is None
@@ -607,7 +601,7 @@ class InteractiveController:
             return
         try:
             released = self._backend.release_session_access(source_session)
-            self._require_released_state(released, source_session)
+            require_released_state(released, source_session)
         except Exception:
             self._abandon_known_attachment_for_cleanup_abort()
         self._conversation_memory_service = None
@@ -649,7 +643,7 @@ class InteractiveController:
 
         try:
             released = self._backend.release_session_access(session_id)
-            self._require_released_state(released, session_id)
+            require_released_state(released, session_id)
         except Exception:
             self._abandon_known_attachment_for_cleanup_abort()
 
@@ -658,10 +652,10 @@ class InteractiveController:
 
         try:
             state = self._backend.get_session_lifecycle(session_id)
-            self._require_lifecycle_state(state, session_id)
+            require_lifecycle_state(state, session_id)
             if state.access_state is SessionAccessState.HELD_HERE:
                 released = self._backend.release_session_access(session_id)
-                self._require_released_state(released, session_id)
+                require_released_state(released, session_id)
         except (SessionNotFoundError, WorkspaceVersionUnsupportedError):
             return
         except Exception:
@@ -695,103 +689,6 @@ class InteractiveController:
             history_count=None,
         )
 
-    @staticmethod
-    def _require_lifecycle_state(
-        state: object,
-        expected_session: str,
-    ) -> SessionLifecycleState:
-        """Return an exact correlated lifecycle value or raise protocol error."""
-
-        if type(state) is not SessionLifecycleState:
-            raise BackendProtocolError(
-                "backend returned an invalid session lifecycle value"
-            )
-        try:
-            provider_work_is_ready(
-                state,
-                provider_configuration_ready=False,
-            )
-        except (TypeError, ValueError) as exc:
-            raise BackendProtocolError(
-                "backend returned malformed session lifecycle facts"
-            ) from exc
-        if state.session_id != expected_session:
-            raise BackendProtocolError(
-                "backend returned lifecycle facts for another session"
-            )
-        return state
-
-    @classmethod
-    def _require_ready_access_state(
-        cls,
-        state: object,
-        expected_session: str,
-    ) -> SessionLifecycleState:
-        """Require exact ready durable state with access held by this process."""
-
-        value = cls._require_lifecycle_state(state, expected_session)
-        if (
-            value.durable_state is not SessionDurableState.READY
-            or value.access_state is not SessionAccessState.HELD_HERE
-        ):
-            raise BackendProtocolError(
-                "backend did not return ready access held by this process"
-            )
-        return value
-
-    @classmethod
-    def _require_correlated_state(
-        cls,
-        initial: SessionLifecycleState | None,
-        transition: object,
-        observed: object,
-        expected_session: str,
-    ) -> SessionLifecycleState:
-        """Require the transition result and immediate post-read to be identical."""
-
-        first = cls._require_ready_access_state(transition, expected_session)
-        second = cls._require_ready_access_state(observed, expected_session)
-        if initial is not None:
-            before = cls._require_lifecycle_state(initial, expected_session)
-            if first.created_at != before.created_at:
-                raise BackendProtocolError(
-                    "session creation identity changed during access acquisition"
-                )
-            if (
-                before.durable_state is SessionDurableState.READY
-                and first.updated_at != before.updated_at
-            ):
-                raise BackendProtocolError(
-                    "ready session changed during access acquisition"
-                )
-            if (
-                before.durable_state is SessionDurableState.PAUSED
-                and first.updated_at == before.updated_at
-            ):
-                raise BackendProtocolError(
-                    "reopened session did not advance its durable timestamp"
-                )
-        if second != first:
-            raise BackendProtocolError(
-                "session lifecycle changed during access acquisition"
-            )
-        return second
-
-    @classmethod
-    def _require_released_state(
-        cls,
-        state: object,
-        expected_session: str,
-    ) -> SessionLifecycleState:
-        """Require a valid post-release state no longer held by this process."""
-
-        value = cls._require_lifecycle_state(state, expected_session)
-        if value.access_state is SessionAccessState.HELD_HERE:
-            raise BackendProtocolError(
-                "backend retained process access after release"
-            )
-        return value
-
     def _provider_work_is_ready(self, state: SessionLifecycleState) -> bool:
         """Derive readiness from a read-only configuration validation and state."""
 
@@ -809,37 +706,6 @@ class InteractiveController:
             state,
             provider_configuration_ready=configured,
         )
-
-    @staticmethod
-    def _next_session_action(
-        state: SessionLifecycleState | None,
-        *,
-        attached: bool,
-        focused: bool,
-        provider_ready: bool,
-    ) -> str:
-        """Return the fixed next action for one read-only lifecycle snapshot."""
-
-        if state is None or state.durable_state is SessionDurableState.ABSENT:
-            return "Create a session."
-        if (
-            state.access_state
-            is SessionAccessState.BLOCKED_BY_LIVE_LOCAL_OWNER
-        ):
-            return "Close the owning local process normally, then retry."
-        if state.access_state is SessionAccessState.OWNERSHIP_UNKNOWN:
-            return "Verify ownership; do not remove the access claim."
-        if state.durable_state is SessionDurableState.PAUSED:
-            return "Open the session to make it ready."
-        if state.access_state is SessionAccessState.CLAIMABLE:
-            return "Open the session."
-        if not provider_ready:
-            return "Repair provider configuration, then retry."
-        if attached and not focused:
-            return "Create or choose a conversation."
-        if attached and focused:
-            return "Continue with the current focus."
-        return "Open the session."
 
     def _read_session_lobby_commands(self) -> int:
         """Read and dispatch interactive actions until normal exit status 0.
@@ -1027,7 +893,7 @@ class InteractiveController:
         else:
             try:
                 state = self._backend.get_session_lifecycle(candidate)
-                self._require_lifecycle_state(state, candidate)
+                require_lifecycle_state(state, candidate)
                 provider_ready = self._provider_work_is_ready(state)
                 default_conversation = load_default_conversation(
                     self._workspace,
@@ -1043,7 +909,7 @@ class InteractiveController:
             if attached_session is not None and focus is not None
             else None
         )
-        next_action = self._next_session_action(
+        next_action = next_session_action(
             state if candidate is not None else None,
             attached=(attached_session == candidate and candidate is not None),
             focused=(focused_id is not None),
@@ -1081,7 +947,7 @@ class InteractiveController:
                 attached_session,
                 focus.conversation_id,
             )
-            current = self._validated_catalog_metadata(
+            current = validate_catalog_metadata(
                 current,
                 attached_session,
                 expected_conversation_id=focus.conversation_id,
@@ -1110,7 +976,7 @@ class InteractiveController:
         )
         self._terminal.write_status(
             TerminalMessageKind.CONTEXT,
-            self._format_transcript_context_status(
+            format_transcript_context_status(
                 displayed_events=len(events),
                 total_events=len(events),
                 context=context,
@@ -1322,7 +1188,7 @@ class InteractiveController:
             )
         self._terminal.write_status(
             TerminalMessageKind.RESULT,
-            self._format_transcript_context_status(
+            format_transcript_context_status(
                 displayed_events=len(displayed),
                 total_events=len(events),
                 context=context,
@@ -1349,27 +1215,6 @@ class InteractiveController:
         context = select_bounded_conversation_context(events)
         return events, context
 
-    @staticmethod
-    def _format_transcript_context_status(
-        *,
-        displayed_events: int,
-        total_events: int,
-        context: ConversationContextWindow,
-    ) -> str:
-        """Format exact transcript and fixed-policy context counts without I/O."""
-
-        return (
-            f"History displayed: {displayed_events}/{total_events} events | "
-            f"Complete turns: {context.total_complete_turns} | "
-            f"Context retained: {context.retained_turns} turns, "
-            f"{len(context.events)} events | Omitted turns: "
-            f"{context.omitted_turns} | UTF-8 bytes: "
-            f"{context.retained_utf8_bytes}/"
-            f"{CONVERSATION_CONTEXT_POLICY.max_utf8_bytes} | Turn cap: "
-            f"{CONVERSATION_CONTEXT_POLICY.max_complete_turns} | Truncated: "
-            f"{'yes' if context.truncated else 'no'}."
-        )
-
     def _inspect_attached_runtime(self, action: InteractiveAction) -> None:
         """Render a safe attached-session or debate inspection projection.
 
@@ -1390,7 +1235,7 @@ class InteractiveController:
         if action.argument is None:
             try:
                 value = self._runtime.inspect_session(session_id)
-                summaries = self._validated_session_inspection_summaries(
+                summaries = validate_session_inspection(
                     value,
                     session_id=session_id,
                 )
@@ -1450,7 +1295,7 @@ class InteractiveController:
         """
 
         inspected = self._runtime.inspect_debate(session_id, debate_id)
-        summary, status = self._validated_debate_inspection_summary(
+        summary, status = validate_debate_inspection(
             inspected,
             session_id=session_id,
             debate_id=debate_id,
@@ -1458,423 +1303,17 @@ class InteractiveController:
         if not include_context or status == "not_found":
             return (summary,)
         context = self._runtime.inspect_debate_context(session_id, debate_id)
-        context_summary = self._validated_debate_context_summary(
+        context_summary = validate_debate_context_inspection(
             context,
             session_id=session_id,
             debate_id=debate_id,
         )
         return (summary, context_summary)
 
-    def _validated_debate_inspection_summary(
-        self,
-        value: object,
-        *,
-        session_id: str,
-        debate_id: str,
-    ) -> tuple[str, str]:
-        """Validate one full runtime inspection and return safe summary text."""
-
-        expected = {
-            "session_id",
-            "debate_id",
-            "status",
-            "terminal",
-            "state",
-            "result",
-            "messages",
-        }
-        if type(value) is not dict or set(value) != expected:
-            raise ValueError("runtime debate inspection has an invalid shape")
-        if (
-            value["session_id"] != session_id
-            or value["debate_id"] != debate_id
-            or type(value["messages"]) is not list
-            or any(type(message) is not dict for message in value["messages"])
-        ):
-            raise ValueError("runtime debate inspection identity is invalid")
-        status = value["status"]
-        terminal = value["terminal"]
-        if status not in {
-            "not_found",
-            "active",
-            "consensus",
-            "deadlock",
-            "failed",
-            "interrupted",
-        } or type(terminal) is not bool:
-            raise ValueError("runtime debate inspection lifecycle is invalid")
-
-        state = value["state"]
-        result = value["result"]
-        input_kind: object = None
-        revision_id: object = None
-        rounds_completed: object = 0
-        artifact: object = None
-        if result is not None:
-            result_fields = {
-                "session_id",
-                "debate_id",
-                "input_kind",
-                "status",
-                "revision_id",
-                "rounds_completed",
-                "final_candidate",
-                "latest_candidate",
-                "manuscript_path",
-                "core_updates",
-                "error",
-                "action_required",
-            }
-            if type(result) is not dict or set(result) != result_fields:
-                raise ValueError("runtime debate result has an invalid shape")
-            if terminal is not True:
-                raise ValueError("runtime terminal debate sources are inconsistent")
-            if (
-                result["session_id"] != session_id
-                or result["debate_id"] != debate_id
-                or result["status"] != status
-            ):
-                raise ValueError("runtime debate result identity is invalid")
-            if state is not None:
-                state_fields = {
-                    "schema_version",
-                    "session_id",
-                    "debate_id",
-                    "input_kind",
-                    "status",
-                    "terminal",
-                    "created_at",
-                    "updated_at",
-                    "revision_id",
-                    "rounds_completed",
-                    "error",
-                }
-                if type(state) is not dict or set(state) != state_fields:
-                    raise ValueError("runtime debate state has an invalid shape")
-                if (
-                    state["session_id"] != session_id
-                    or state["debate_id"] != debate_id
-                    or state["status"] != status
-                    or state["terminal"] is not True
-                    or state["input_kind"] != result["input_kind"]
-                    or state["revision_id"] != result["revision_id"]
-                    or state["rounds_completed"] != result["rounds_completed"]
-                ):
-                    raise ValueError("runtime debate state identity is invalid")
-            input_kind = result["input_kind"]
-            revision_id = result["revision_id"]
-            rounds_completed = result["rounds_completed"]
-            artifact = result["manuscript_path"]
-        elif state is not None:
-            state_fields = {
-                "schema_version",
-                "session_id",
-                "debate_id",
-                "input_kind",
-                "status",
-                "terminal",
-                "created_at",
-                "updated_at",
-                "revision_id",
-                "rounds_completed",
-                "error",
-            }
-            if type(state) is not dict or set(state) != state_fields:
-                raise ValueError("runtime debate state has an invalid shape")
-            if (
-                state["session_id"] != session_id
-                or state["debate_id"] != debate_id
-                or state["status"] != status
-                or state["terminal"] is not terminal
-            ):
-                raise ValueError("runtime debate state identity is invalid")
-            input_kind = state["input_kind"]
-            revision_id = state["revision_id"]
-            rounds_completed = state["rounds_completed"]
-        elif status == "not_found":
-            if terminal or value["messages"]:
-                raise ValueError("not-found debate inspection is inconsistent")
-        elif status != "interrupted" or terminal is not True or not value["messages"]:
-            raise ValueError("runtime debate inspection has no lifecycle source")
-
-        summary = self._format_validated_debate_summary(
-            session_id=session_id,
-            status=status,
-            terminal=terminal,
-            input_kind=input_kind,
-            revision_id=revision_id,
-            rounds_completed=rounds_completed,
-            artifact=artifact,
-        )
-        return summary, status
-
-    def _validated_session_inspection_summaries(
-        self,
-        value: object,
-        *,
-        session_id: str,
-    ) -> tuple[tuple[str, str], ...]:
-        """Validate a session inspection and project ordered safe debate rows."""
-
-        if type(value) is not dict or set(value) != {
-            "session_id",
-            "overrides",
-            "debates",
-        }:
-            raise ValueError("runtime session inspection has an invalid shape")
-        if (
-            value["session_id"] != session_id
-            or type(value["overrides"]) is not dict
-            or type(value["debates"]) is not list
-        ):
-            raise ValueError("runtime session inspection is invalid")
-
-        summaries: list[tuple[str, str]] = []
-        previous_debate_id: str | None = None
-        for row in value["debates"]:
-            if type(row) is not dict:
-                raise ValueError("runtime session debate summary is invalid")
-            result_fields = {
-                "session_id",
-                "debate_id",
-                "input_kind",
-                "status",
-                "revision_id",
-                "rounds_completed",
-                "final_candidate",
-                "latest_candidate",
-                "manuscript_path",
-                "core_updates",
-                "error",
-                "action_required",
-                "terminal",
-            }
-            state_fields = {
-                "session_id",
-                "debate_id",
-                "input_kind",
-                "status",
-                "terminal",
-                "revision_id",
-                "rounds_completed",
-                "error",
-            }
-            fields = set(row)
-            if fields == result_fields:
-                if row["terminal"] is not True:
-                    raise ValueError(
-                        "runtime session terminal summary is inconsistent"
-                    )
-                artifact = row["manuscript_path"]
-            elif fields == state_fields:
-                artifact = None
-            else:
-                raise ValueError("runtime session debate summary has an invalid shape")
-            if row["session_id"] != session_id:
-                raise ValueError("runtime session debate identity is invalid")
-            debate_id = row["debate_id"]
-            self._validate_safe_inspection_identifier(
-                debate_id,
-                label="debate ID",
-            )
-            if previous_debate_id is not None and debate_id <= previous_debate_id:
-                raise ValueError("runtime session debates are not uniquely ordered")
-            previous_debate_id = debate_id
-            summary = self._format_validated_debate_summary(
-                session_id=session_id,
-                status=row["status"],
-                terminal=row["terminal"],
-                input_kind=row["input_kind"],
-                revision_id=row["revision_id"],
-                rounds_completed=row["rounds_completed"],
-                artifact=artifact,
-            )
-            summaries.append((debate_id, summary))
-        return tuple(summaries)
-
-    def _format_validated_debate_summary(
-        self,
-        *,
-        session_id: str,
-        status: object,
-        terminal: object,
-        input_kind: object,
-        revision_id: object,
-        rounds_completed: object,
-        artifact: object,
-    ) -> str:
-        """Validate whitelisted lifecycle fields and format one safe summary."""
-
-        if status not in {
-            "not_found",
-            "active",
-            "consensus",
-            "deadlock",
-            "failed",
-            "interrupted",
-        }:
-            raise ValueError("runtime debate status is invalid")
-        if type(terminal) is not bool:
-            raise ValueError("runtime debate terminal flag is invalid")
-        if input_kind is not None and input_kind not in {
-            InputKind.PROMPT.value,
-            InputKind.DRAFT.value,
-        }:
-            raise ValueError("runtime debate input kind is invalid")
-        if revision_id is not None:
-            self._validate_safe_inspection_identifier(
-                revision_id,
-                label="revision ID",
-            )
-        if (
-            isinstance(rounds_completed, bool)
-            or not isinstance(rounds_completed, int)
-            or rounds_completed < 0
-        ):
-            raise ValueError("runtime debate round count is invalid")
-        if artifact is not None and not isinstance(artifact, str):
-            raise ValueError("runtime debate artifact is invalid")
-        return (
-            f"Session: {session_id} | Status: {status} | Terminal: "
-            f"{'yes' if terminal else 'no'} | Input: {input_kind or 'none'} | "
-            f"Revision: {revision_id or 'none'} | Rounds: {rounds_completed} | "
-            f"Artifact: {artifact or 'none'}."
-        )
-
-    def _validated_debate_context_summary(
-        self,
-        value: object,
-        *,
-        session_id: str,
-        debate_id: str,
-    ) -> str:
-        """Project a strict sidecar to identity, mode, and count facts only."""
-
-        if value is None:
-            return "Context sidecar: none."
-        if type(value) is not dict or set(value) != {
-            "schema_version",
-            "session_id",
-            "debate_id",
-            "conversation_id",
-            "mode",
-            "snapshot",
-        }:
-            raise ValueError("runtime debate context has an invalid shape")
-        if (
-            value["schema_version"] != 1
-            or value["session_id"] != session_id
-            or value["debate_id"] != debate_id
-        ):
-            raise ValueError("runtime debate context identity is invalid")
-        conversation_id = value["conversation_id"]
-        self._validate_safe_inspection_identifier(
-            conversation_id,
-            label="conversation ID",
-        )
-        mode = value["mode"]
-        snapshot = value["snapshot"]
-        if mode == DebateContextMode.FRESH.value:
-            if snapshot is not None:
-                raise ValueError("fresh debate context has a snapshot")
-            return (
-                f"Context: conversation {conversation_id} | Mode: fresh | "
-                "Events: 0 | Complete turns: 0 | Retained turns: 0 | "
-                "Omitted turns: 0 | UTF-8 bytes: 0 | Truncated: no."
-            )
-        if mode != DebateContextMode.INCLUDED.value or type(snapshot) is not dict:
-            raise ValueError("runtime debate context mode is invalid")
-        if set(snapshot) != {
-            "events",
-            "total_complete_turns",
-            "retained_turns",
-            "omitted_turns",
-            "retained_utf8_bytes",
-            "truncated",
-        } or type(snapshot["events"]) is not list:
-            raise ValueError("runtime debate context snapshot is invalid")
-        event_fields = {
-            "schema_version",
-            "session_id",
-            "conversation_id",
-            "turn_id",
-            "sequence",
-            "timestamp",
-            "sender",
-            "recipient",
-            "kind",
-            "content",
-        }
-        if any(
-            type(event) is not dict or set(event) != event_fields
-            for event in snapshot["events"]
-        ):
-            raise ValueError("runtime debate context events are invalid")
-        total = snapshot["total_complete_turns"]
-        retained = snapshot["retained_turns"]
-        omitted = snapshot["omitted_turns"]
-        retained_bytes = snapshot["retained_utf8_bytes"]
-        truncated = snapshot["truncated"]
-        if any(
-            isinstance(count, bool) or not isinstance(count, int) or count < 0
-            for count in (total, retained, omitted, retained_bytes)
-        ) or type(truncated) is not bool:
-            raise ValueError("runtime debate context counts are invalid")
-        if (
-            total != retained + omitted
-            or len(snapshot["events"]) != retained * 2
-            or truncated is not (omitted > 0)
-        ):
-            raise ValueError("runtime debate context counts are inconsistent")
-        return (
-            f"Context: conversation {conversation_id} | Mode: included | "
-            f"Events: {len(snapshot['events'])} | Complete turns: {total} | "
-            f"Retained turns: {retained} | Omitted turns: {omitted} | "
-            f"UTF-8 bytes: {retained_bytes} | Truncated: "
-            f"{'yes' if truncated else 'no'}."
-        )
-
-    def _validate_safe_inspection_identifier(
-        self,
-        value: object,
-        *,
-        label: str,
-    ) -> str:
-        """Return a canonical safe identifier or convert tampering to ValueError."""
-
-        try:
-            return self._workspace.validate_identifier(value, label=label)
-        except (SessionIdError, TypeError, ValueError) as exc:
-            raise ValueError(f"runtime inspection {label} is invalid") from exc
-
     def _present_runtime_inspection_failure(self, failure: Exception) -> None:
         """Render typed inspection failures or abort on collaborator tampering."""
 
-        if isinstance(failure, SessionIdError):
-            self._terminal.write_error(
-                InteractiveError(InteractiveErrorCode.COMMAND_INVALID)
-            )
-            return
-        if isinstance(failure, WorkspaceSecurityError):
-            self._present_memory_error(
-                InteractiveError(InteractiveErrorCode.WORKSPACE_UNSAFE)
-            )
-            return
-        if isinstance(failure, WorkspaceVersionUnsupportedError):
-            self._present_memory_error(
-                InteractiveError(
-                    InteractiveErrorCode.WORKSPACE_VERSION_UNSUPPORTED
-                )
-            )
-            return
-        if isinstance(failure, (WorkspaceFormatError, OSError)):
-            self._present_memory_error(
-                InteractiveError(InteractiveErrorCode.WORKSPACE_INVALID)
-            )
-            return
-        raise _ControllerAbort(
-            InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
-        ) from None
+        self._present_memory_error(classify_inspection_failure(failure))
 
     def _set_target_agent(self, action: InteractiveAction) -> None:
         """Set one attached process's sticky responder without provider work.
@@ -2009,7 +1448,11 @@ class InteractiveController:
             result = runner.run(operation_coroutine)
         except KeyboardInterrupt:
             if progress_callback_failure is not None:
-                self._raise_progress_callback_abort(progress_callback_failure)
+                raise _ControllerAbort(
+                    classify_progress_callback_failure(
+                        progress_callback_failure
+                    )
+                ) from None
             if not operation_entered:
                 cancellation_is_safe = self._interactive_runner_is_quiescent()
             else:
@@ -2039,12 +1482,18 @@ class InteractiveController:
                 InteractiveError(InteractiveErrorCode.OPERATION_INTERRUPTED)
             ) from None
         except ConversationRetrievalObserverError as exc:
-            self._raise_progress_callback_abort(
-                progress_callback_failure or exc.__cause__ or exc
-            )
+            raise _ControllerAbort(
+                classify_progress_callback_failure(
+                    progress_callback_failure or exc.__cause__ or exc
+                )
+            ) from None
         except Exception as exc:
             if progress_callback_failure is not None:
-                self._raise_progress_callback_abort(progress_callback_failure)
+                raise _ControllerAbort(
+                    classify_progress_callback_failure(
+                        progress_callback_failure
+                    )
+                ) from None
             self._present_advisory_turn_failure(exc)
             return
         finally:
@@ -2052,12 +1501,12 @@ class InteractiveController:
                 operation_coroutine.close()
 
         try:
-            result = self._validated_conversation_retrieval_result(
+            result = validate_conversation_retrieval_result(
                 result,
                 expected_session_id=session_id,
                 expected_conversation_id=focused.conversation_id,
                 expected_agent_id=agent_id,
-                progress_events=progress_events,
+                progress_events=tuple(progress_events),
             )
         except (AttributeError, TypeError, ValueError):
             raise _ControllerAbort(
@@ -2099,76 +1548,13 @@ class InteractiveController:
         and cannot add transcript events here.
         """
 
-        if type(event) is not ConversationRetrievalProgressEvent:
-            raise TypeError(
-                "retrieval progress sink requires a "
-                "ConversationRetrievalProgressEvent"
-            )
-        try:
-            canonical = ConversationRetrievalProgressEvent(
-                session_id=event.session_id,
-                conversation_id=event.conversation_id,
-                turn_id=event.turn_id,
-                agent_id=event.agent_id,
-                action_index=event.action_index,
-                phase=event.phase,
-                search_hit_count=event.search_hit_count,
-                transcript_turn_count=event.transcript_turn_count,
-                transcript_event_count=event.transcript_event_count,
-                observation_utf8_bytes=event.observation_utf8_bytes,
-                truncated=event.truncated,
-            )
-        except (AttributeError, TypeError, ValueError) as exc:
-            raise TypeError("retrieval progress event is invalid") from exc
-        if (
-            canonical.session_id != expected_session_id
-            or canonical.conversation_id != expected_conversation_id
-            or canonical.agent_id != expected_agent_id
-        ):
-            raise ValueError("retrieval progress identity does not match the turn")
-
-        previous = events[-1] if events else None
-        if previous is None:
-            if (
-                canonical.phase
-                is not ConversationRetrievalProgressPhase.SEARCH_STARTED
-                or canonical.action_index != 1
-            ):
-                raise ValueError("retrieval progress must begin with search action 1")
-        elif canonical.turn_id != previous.turn_id:
-            raise ValueError("retrieval progress turn identity changed")
-        elif previous.phase is ConversationRetrievalProgressPhase.SEARCH_STARTED:
-            if (
-                canonical.phase
-                is not ConversationRetrievalProgressPhase.SEARCH_COMPLETED
-                or canonical.action_index != previous.action_index
-            ):
-                raise ValueError("retrieval search progress pair is invalid")
-        elif previous.phase is ConversationRetrievalProgressPhase.READ_STARTED:
-            if (
-                canonical.phase
-                is not ConversationRetrievalProgressPhase.READ_COMPLETED
-                or canonical.action_index != previous.action_index
-            ):
-                raise ValueError("retrieval read progress pair is invalid")
-        else:
-            expected_index = previous.action_index + 1
-            if canonical.action_index != expected_index:
-                raise ValueError("retrieval progress action index is not sequential")
-            if previous.phase is ConversationRetrievalProgressPhase.SEARCH_COMPLETED:
-                allowed = {
-                    ConversationRetrievalProgressPhase.SEARCH_STARTED,
-                    ConversationRetrievalProgressPhase.READ_STARTED,
-                }
-            else:
-                assert (
-                    previous.phase
-                    is ConversationRetrievalProgressPhase.READ_COMPLETED
-                )
-                allowed = {ConversationRetrievalProgressPhase.READ_STARTED}
-            if canonical.phase not in allowed:
-                raise ValueError("retrieval progress phase order is invalid")
-
+        canonical = validate_conversation_retrieval_progress(
+            event,
+            expected_session_id=expected_session_id,
+            expected_conversation_id=expected_conversation_id,
+            expected_agent_id=expected_agent_id,
+            previous=events[-1] if events else None,
+        )
         self._render_conversation_retrieval_progress(canonical)
         events.append(canonical)
 
@@ -2206,74 +1592,6 @@ class InteractiveController:
                 f"truncated: {'yes' if event.truncated else 'no'}."
             )
         self._terminal.write_status(TerminalMessageKind.CONTEXT, text)
-
-    @staticmethod
-    def _validated_conversation_retrieval_result(
-        value: object,
-        *,
-        expected_session_id: str,
-        expected_conversation_id: str,
-        expected_agent_id: str,
-        progress_events: list[ConversationRetrievalProgressEvent],
-    ) -> ConversationRetrievalResult:
-        """Return one exact correlated result after pure deep reconstruction.
-
-        Sources and citations are copied into exact built-in contracts, progress
-        must end on a completed pair when present, and its turn must match the
-        result. No output, provider state, controller state, or transcript is
-        mutated; invalid collaborator values raise ``TypeError`` or ``ValueError``.
-        """
-
-        if type(value) is not ConversationRetrievalResult:
-            raise TypeError("runtime returned an invalid retrieval result")
-        sources: list[ConversationRetrievalSource] = []
-        if type(value.sources) is not tuple:
-            raise TypeError("retrieval result sources must be a tuple")
-        for source in value.sources:
-            if type(source) is not ConversationRetrievalSource:
-                raise TypeError("retrieval result source is invalid")
-            citation = source.citation
-            if type(citation) is not ConversationCitation:
-                raise TypeError("retrieval result citation is invalid")
-            sources.append(
-                ConversationRetrievalSource(
-                    subject=source.subject,
-                    citation=ConversationCitation(
-                        session_id=citation.session_id,
-                        conversation_id=citation.conversation_id,
-                        turn_id=citation.turn_id,
-                        sequence=citation.sequence,
-                        event_kind=citation.event_kind,
-                    ),
-                )
-            )
-        canonical = ConversationRetrievalResult(
-            session_id=value.session_id,
-            conversation_id=value.conversation_id,
-            turn_id=value.turn_id,
-            agent_id=value.agent_id,
-            content=value.content,
-            context=value.context,
-            sources=tuple(sources),
-        )
-        if (
-            canonical.session_id != expected_session_id
-            or canonical.conversation_id != expected_conversation_id
-            or canonical.agent_id != expected_agent_id
-        ):
-            raise ValueError("retrieval result identity does not match its turn")
-        if canonical.sources and not progress_events:
-            raise ValueError("retrieval sources require completed search progress")
-        if progress_events:
-            final_progress = progress_events[-1]
-            if final_progress.phase not in {
-                ConversationRetrievalProgressPhase.SEARCH_COMPLETED,
-                ConversationRetrievalProgressPhase.READ_COMPLETED,
-            }:
-                raise ValueError("retrieval progress ended before completion")
-            if final_progress.turn_id != canonical.turn_id:
-                raise ValueError("retrieval progress turn does not match its result")
-        return canonical
 
     def _render_conversation_retrieval_sources(
         self,
@@ -2429,7 +1747,11 @@ class InteractiveController:
             result = runner.run(operation_coroutine)
         except KeyboardInterrupt:
             if progress_callback_failure is not None:
-                self._raise_progress_callback_abort(progress_callback_failure)
+                raise _ControllerAbort(
+                    classify_progress_callback_failure(
+                        progress_callback_failure
+                    )
+                ) from None
             if not operation_entered:
                 if not self._interactive_runner_is_quiescent():
                     raise _ControllerAbort(
@@ -2455,12 +1777,18 @@ class InteractiveController:
                 InteractiveError(InteractiveErrorCode.OPERATION_INTERRUPTED)
             ) from None
         except ProgressObserverError as exc:
-            self._raise_progress_callback_abort(
-                progress_callback_failure or exc.__cause__ or exc
-            )
+            raise _ControllerAbort(
+                classify_progress_callback_failure(
+                    progress_callback_failure or exc.__cause__ or exc
+                )
+            ) from None
         except Exception as exc:
             if progress_callback_failure is not None:
-                self._raise_progress_callback_abort(progress_callback_failure)
+                raise _ControllerAbort(
+                    classify_progress_callback_failure(
+                        progress_callback_failure
+                    )
+                ) from None
             self._present_consensus_execution_failure(
                 exc,
                 draft_payload_was_empty=draft_payload_was_empty,
@@ -2471,12 +1799,17 @@ class InteractiveController:
             if not operation_entered:
                 operation_coroutine.close()
 
-        terminal_event, artifact_event = self._validated_consensus_result(
-            result,
-            expected_session_id=session_id,
-            expected_input_kind=input_kind,
-            progress_events=progress_events,
-        )
+        try:
+            terminal_event, artifact_event = validate_consensus_result(
+                result,
+                expected_session_id=session_id,
+                expected_input_kind=input_kind,
+                progress_events=tuple(progress_events),
+            )
+        except (TypeError, ValueError):
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            ) from None
         self._present_consensus_result(result, terminal_event, artifact_event)
         return False
 
@@ -2537,17 +1870,6 @@ class InteractiveController:
         except (Exception, KeyboardInterrupt):
             return False
 
-    @staticmethod
-    def _raise_progress_callback_abort(failure: BaseException) -> None:
-        """Raise the fixed fatal code for one synchronous progress failure."""
-
-        code = (
-            InteractiveErrorCode.OPERATION_INTERRUPTED
-            if isinstance(failure, (OSError, KeyboardInterrupt))
-            else InteractiveErrorCode.INTERNAL_ERROR
-        )
-        raise _ControllerAbort(InteractiveError(code)) from None
-
     def _accept_debate_progress(
         self,
         event: DebateProgressEvent,
@@ -2568,103 +1890,19 @@ class InteractiveController:
         owns interruption and observer-error semantics.
         """
 
-        if type(event) is not DebateProgressEvent:
-            raise TypeError("progress sink requires a DebateProgressEvent")
-        try:
-            canonical = DebateProgressEvent(
-                session_id=event.session_id,
-                debate_id=event.debate_id,
-                input_kind=event.input_kind,
-                phase=event.phase,
-                revision_id=event.revision_id,
-                round_number=event.round_number,
-                context_mode=event.context_mode,
-                context_event_count=event.context_event_count,
-                context_omitted_turns=event.context_omitted_turns,
-                conflicting_agents=event.conflicting_agents,
-                manuscript_path=event.manuscript_path,
-                core_updates=event.core_updates,
-                failure_kind=event.failure_kind,
-            )
-        except (AttributeError, TypeError, ValueError) as exc:
-            raise TypeError("progress event is invalid") from exc
-        if (
-            canonical.session_id != expected_session_id
-            or canonical.input_kind is not expected_input_kind
-        ):
-            raise ValueError("progress event identity does not match the run")
-        previous = events[-1] if events else None
-        if previous is None:
-            if canonical.phase not in {
-                DebateProgressPhase.STARTED,
-                DebateProgressPhase.INTERRUPTED,
-            }:
-                raise ValueError(
-                    "the first progress event must be started or interrupted"
-                )
-            if (
-                canonical.phase is DebateProgressPhase.STARTED
-                and canonical.context_mode is not expected_context_mode
-            ):
-                raise ValueError("started progress context mode does not match")
-        else:
-            if canonical.debate_id != previous.debate_id:
-                raise ValueError("progress debate identity changed")
-            if not self._debate_progress_transition_is_valid(
-                previous.phase,
-                canonical.phase,
-            ):
-                raise ValueError("progress phase order is invalid")
+        canonical = validate_debate_progress(
+            event,
+            expected_session_id=expected_session_id,
+            expected_input_kind=expected_input_kind,
+            expected_context_mode=expected_context_mode,
+            previous=events[-1] if events else None,
+        )
         self._render_debate_progress(canonical)
         events.append(canonical)
         if canonical.phase is DebateProgressPhase.STARTED:
             self._last_started_debate_by_session[
                 canonical.session_id
             ] = canonical.debate_id
-
-    @staticmethod
-    def _debate_progress_transition_is_valid(
-        previous: DebateProgressPhase,
-        current: DebateProgressPhase,
-    ) -> bool:
-        """Return whether two adjacent trusted phases can occur in one workflow."""
-
-        terminal = {
-            DebateProgressPhase.CONSENSUS,
-            DebateProgressPhase.DEADLOCK,
-            DebateProgressPhase.FAILED,
-            DebateProgressPhase.INTERRUPTED,
-        }
-        if previous in terminal:
-            return False
-        if current is DebateProgressPhase.INTERRUPTED:
-            return True
-        allowed = {
-            DebateProgressPhase.STARTED: {
-                DebateProgressPhase.DRAFTED,
-                DebateProgressPhase.FAILED,
-            },
-            DebateProgressPhase.DRAFTED: {
-                DebateProgressPhase.AUDIT_STARTED,
-            },
-            DebateProgressPhase.AUDIT_STARTED: {
-                DebateProgressPhase.AUDIT_COMPLETED,
-                DebateProgressPhase.FAILED,
-            },
-            DebateProgressPhase.AUDIT_COMPLETED: {
-                DebateProgressPhase.SYNTHESIZED,
-                DebateProgressPhase.ARTIFACTS_COMMITTED,
-                DebateProgressPhase.DEADLOCK,
-                DebateProgressPhase.FAILED,
-            },
-            DebateProgressPhase.SYNTHESIZED: {
-                DebateProgressPhase.AUDIT_STARTED,
-            },
-            DebateProgressPhase.ARTIFACTS_COMMITTED: {
-                DebateProgressPhase.CONSENSUS,
-            },
-        }
-        return current in allowed.get(previous, set())
 
     def _render_debate_progress(self, event: DebateProgressEvent) -> None:
         """Render one validated event using only typed fields and fixed labels."""
@@ -2735,74 +1973,6 @@ class InteractiveController:
             text = "Run interrupted after durable state transition."
         self._terminal.write_run(event.debate_id, text)
 
-    def _validated_consensus_result(
-        self,
-        result: DebateResult,
-        *,
-        expected_session_id: str,
-        expected_input_kind: InputKind,
-        progress_events: list[DebateProgressEvent],
-    ) -> tuple[DebateProgressEvent, DebateProgressEvent | None]:
-        """Validate terminal result identity and typed progress correlation.
-
-        The operation reads no persistence and exposes no result prose. Any type,
-        identity, status, revision, round, or committed-artifact mismatch aborts
-        through the controller's fatal cleanup boundary.
-        """
-
-        invalid = InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
-        if type(result) is not DebateResult or not progress_events:
-            raise _ControllerAbort(invalid)
-        started = progress_events[0]
-        terminal = progress_events[-1]
-        if (
-            started.phase is not DebateProgressPhase.STARTED
-            or result.session_id != expected_session_id
-            or result.session_id != started.session_id
-            or result.debate_id != started.debate_id
-            or result.input_kind is not expected_input_kind
-            or result.input_kind is not started.input_kind
-            or not isinstance(result.status, DebateStatus)
-            or result.revision_id != terminal.revision_id
-            or isinstance(result.rounds_completed, bool)
-            or not isinstance(result.rounds_completed, int)
-            or result.rounds_completed != terminal.round_number
-            or type(result.core_updates) is not tuple
-        ):
-            raise _ControllerAbort(invalid)
-        expected_terminal = {
-            DebateStatus.CONSENSUS: DebateProgressPhase.CONSENSUS,
-            DebateStatus.DEADLOCK: DebateProgressPhase.DEADLOCK,
-            DebateStatus.FAILED: DebateProgressPhase.FAILED,
-        }[result.status]
-        if terminal.phase is not expected_terminal:
-            raise _ControllerAbort(invalid)
-
-        artifact_event: DebateProgressEvent | None = None
-        if result.status is DebateStatus.CONSENSUS:
-            if len(progress_events) < 2:
-                raise _ControllerAbort(invalid)
-            artifact_event = progress_events[-2]
-            if (
-                artifact_event.phase
-                is not DebateProgressPhase.ARTIFACTS_COMMITTED
-                or result.manuscript_path != artifact_event.manuscript_path
-                or result.core_updates != artifact_event.core_updates
-                or result.manuscript_path is None
-            ):
-                raise _ControllerAbort(invalid)
-        elif (
-            result.manuscript_path is not None
-            or result.core_updates
-            or result.final_candidate is not None
-            or any(
-                event.phase is DebateProgressPhase.ARTIFACTS_COMMITTED
-                for event in progress_events
-            )
-        ):
-            raise _ControllerAbort(invalid)
-        return terminal, artifact_event
-
     def _present_consensus_result(
         self,
         result: DebateResult,
@@ -2832,7 +2002,7 @@ class InteractiveController:
             code = InteractiveErrorCode.CONSENSUS_DEADLOCK
         else:
             assert terminal_event.failure_kind is not None
-            code = self._interactive_code_for_debate_failure(
+            code = interactive_code_for_debate_failure(
                 terminal_event.failure_kind
             )
         self._present_consensus_error_after_required_attachment_check(code)
@@ -2852,41 +2022,16 @@ class InteractiveController:
         rendered.
         """
 
-        if isinstance(failure, ConfigurationError):
-            code = InteractiveErrorCode.PROVIDER_PREFLIGHT_FAILED
-        elif isinstance(failure, SessionNotFoundError):
-            code = InteractiveErrorCode.SESSION_NOT_FOUND
-        elif isinstance(failure, SessionPausedError):
-            code = InteractiveErrorCode.SESSION_PAUSED
-        elif isinstance(failure, SessionAccessBlockedError):
-            code = InteractiveErrorCode.SESSION_ACCESS_BLOCKED
-        elif isinstance(failure, SessionOwnershipUnknownError):
-            code = InteractiveErrorCode.SESSION_OWNERSHIP_UNKNOWN
-        elif isinstance(failure, BackendProtocolError):
-            code = InteractiveErrorCode.PROVIDER_PROTOCOL_ERROR
-        elif isinstance(failure, ConversationNotFoundError):
-            code = InteractiveErrorCode.TRANSCRIPT_INVALID
-        elif isinstance(failure, WorkspaceSecurityError):
-            code = InteractiveErrorCode.WORKSPACE_INVALID
-        elif isinstance(failure, WorkspaceVersionUnsupportedError):
-            code = InteractiveErrorCode.WORKSPACE_VERSION_UNSUPPORTED
-        elif isinstance(failure, WorkspaceFormatError):
-            code = InteractiveErrorCode.WORKSPACE_INVALID
-        elif isinstance(failure, OSError):
-            code = InteractiveErrorCode.WORKSPACE_INVALID
-        elif (
-            draft_payload_was_empty
-            and not progress_events
-            and isinstance(failure, (TypeError, ValueError))
-        ):
-            code = InteractiveErrorCode.DRAFT_INPUT_INVALID
-        elif not progress_events and isinstance(failure, (TypeError, ValueError)):
-            code = InteractiveErrorCode.TRANSCRIPT_INVALID
-        else:
-            raise _ControllerAbort(
-                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
-            ) from None
-        self._present_consensus_error_after_required_attachment_check(code)
+        error = classify_consensus_execution_failure(
+            failure,
+            draft_payload_was_empty=draft_payload_was_empty,
+            progress_events=tuple(progress_events),
+        )
+        if error.code is InteractiveErrorCode.INTERNAL_ERROR:
+            raise _ControllerAbort(error) from None
+        self._present_consensus_error_after_required_attachment_check(
+            error.code
+        )
 
     def _present_consensus_error_after_required_attachment_check(
         self,
@@ -2912,22 +2057,6 @@ class InteractiveController:
             self._confirm_attachment_after_command_failure()
         self._terminal.write_error(InteractiveError(code))
 
-    @staticmethod
-    def _interactive_code_for_debate_failure(
-        failure_kind: DebateFailureKind,
-    ) -> InteractiveErrorCode:
-        """Map one trusted runtime failure category to a fixed terminal code."""
-
-        return {
-            DebateFailureKind.PREFLIGHT: InteractiveErrorCode.PROVIDER_PREFLIGHT_FAILED,
-            DebateFailureKind.PROTOCOL: InteractiveErrorCode.PROVIDER_PROTOCOL_ERROR,
-            DebateFailureKind.CONTEXT: InteractiveErrorCode.TRANSCRIPT_INVALID,
-            DebateFailureKind.WORKSPACE: InteractiveErrorCode.WORKSPACE_INVALID,
-            DebateFailureKind.ARTIFACT_CONFLICT: InteractiveErrorCode.ARTIFACT_CONFLICT,
-            DebateFailureKind.ARTIFACT_FAILURE: InteractiveErrorCode.CONSENSUS_FAILED,
-            DebateFailureKind.INTERNAL: InteractiveErrorCode.CONSENSUS_FAILED,
-        }[failure_kind]
-
     def _present_advisory_turn_failure(self, failure: Exception) -> None:
         """Render one typed turn failure or abort when recovery is uncertain.
 
@@ -2938,7 +2067,7 @@ class InteractiveController:
         abort, while runtime remains the sole owner of durable turn outcomes.
         """
 
-        error = self._classify_advisory_turn_failure(failure)
+        error = classify_advisory_turn_failure(failure)
         if error.code is InteractiveErrorCode.INTERNAL_ERROR:
             raise _ControllerAbort(error)
         if error.code is InteractiveErrorCode.CONVERSATION_NOT_FOUND:
@@ -2956,52 +2085,6 @@ class InteractiveController:
         }:
             self._confirm_attachment_after_command_failure()
         self._terminal.write_error(error)
-
-    @staticmethod
-    def _classify_advisory_turn_failure(
-        failure: Exception,
-    ) -> InteractiveError:
-        """Map exact turn exception types to safe codes without mutation.
-
-        Established session, conversation, and workspace categories take
-        precedence over provider categories. The returned error carries no raw
-        diagnostic; unknown exceptions become ``internal_error`` for fatal
-        cleanup at the caller.
-        """
-
-        if isinstance(failure, SessionIdError):
-            code = InteractiveErrorCode.SESSION_INVALID
-        elif isinstance(failure, ConversationRetrievalSemanticError):
-            code = InteractiveErrorCode.RETRIEVAL_INVALID
-        elif isinstance(failure, ConversationRetrievalBudgetError):
-            code = InteractiveErrorCode.RETRIEVAL_BUDGET_EXHAUSTED
-        elif isinstance(failure, ConversationRetrievalObserverError):
-            code = InteractiveErrorCode.INTERNAL_ERROR
-        elif isinstance(failure, SessionExistsError):
-            code = InteractiveErrorCode.SESSION_EXISTS
-        elif isinstance(failure, SessionNotFoundError):
-            code = InteractiveErrorCode.SESSION_NOT_FOUND
-        elif isinstance(failure, SessionPausedError):
-            code = InteractiveErrorCode.SESSION_PAUSED
-        elif isinstance(failure, SessionAccessBlockedError):
-            code = InteractiveErrorCode.SESSION_ACCESS_BLOCKED
-        elif isinstance(failure, SessionOwnershipUnknownError):
-            code = InteractiveErrorCode.SESSION_OWNERSHIP_UNKNOWN
-        elif isinstance(failure, ConversationNotFoundError):
-            code = InteractiveErrorCode.CONVERSATION_NOT_FOUND
-        elif isinstance(failure, WorkspaceSecurityError):
-            code = InteractiveErrorCode.WORKSPACE_UNSAFE
-        elif isinstance(failure, WorkspaceVersionUnsupportedError):
-            code = InteractiveErrorCode.WORKSPACE_VERSION_UNSUPPORTED
-        elif isinstance(failure, (WorkspaceFormatError, OSError)):
-            code = InteractiveErrorCode.WORKSPACE_INVALID
-        elif isinstance(failure, ConfigurationError):
-            code = InteractiveErrorCode.PROVIDER_PREFLIGHT_FAILED
-        elif isinstance(failure, BackendProtocolError):
-            code = InteractiveErrorCode.PROVIDER_PROTOCOL_ERROR
-        else:
-            code = InteractiveErrorCode.INTERNAL_ERROR
-        return InteractiveError(code)
 
     def _write_unavailable_lobby_command_error(self) -> None:
         """Render the stable later-feature error without mutating controller state."""
@@ -3052,7 +2135,7 @@ class InteractiveController:
                 )
             try:
                 result = memory_service.search(query)
-                handles = self._validated_search_result_handles(
+                handles = validate_search_result_handles(
                     result,
                     query=query,
                     session_id=session_id,
@@ -3141,7 +2224,7 @@ class InteractiveController:
                     start_sequence=start_sequence,
                     max_events=page_limit,
                 )
-                page = self._validated_transcript_page(
+                page = validate_transcript_page(
                     page,
                     session_id=session_id,
                     conversation_id=metadata.conversation_id,
@@ -3152,7 +2235,7 @@ class InteractiveController:
                 self._present_transcript_service_failure(exc)
                 return
 
-            handle = self._visible_conversation_handle(metadata, entries)
+            handle = visible_conversation_handle(metadata, entries)
             for event in page.events:
                 self._terminal.write_conversation_transcript_event(
                     handle,
@@ -3182,117 +2265,6 @@ class InteractiveController:
                 "Transcript read cancelled; attached state is unchanged.",
             )
 
-    @staticmethod
-    def _validated_search_result_handles(
-        result: object,
-        *,
-        query: ConversationSearchQuery,
-        session_id: str,
-        entries: tuple[ConversationMetadata, ...],
-    ) -> tuple[str, ...]:
-        """Validate one search result against the complete catalog snapshot.
-
-        Exact result/query identity and active metadata must agree before
-        copyable handles are returned in service order. The check is pure and
-        raises ``TypeError`` or ``ValueError`` for collaborator violations.
-        """
-
-        if type(result) is not ConversationSearchResult:
-            raise TypeError("conversation search returned an invalid result")
-        if result.query != query:
-            raise ValueError("conversation search changed its query")
-        metadata_by_id = {
-            entry.conversation_id: entry
-            for entry in entries
-        }
-        handles: list[str] = []
-        for hit in result.hits:
-            if hit.citation.session_id != session_id:
-                raise ValueError("conversation search crossed the attached session")
-            metadata = metadata_by_id.get(hit.citation.conversation_id)
-            if metadata is None:
-                raise ValueError("conversation search returned an unknown identity")
-            if (
-                hit.status is not ConversationStatus.ACTIVE
-                or metadata.status is not ConversationStatus.ACTIVE
-                or hit.status is not metadata.status
-                or hit.subject != metadata.subject
-                or hit.subject_revision != metadata.subject_revision
-                or hit.updated_at != metadata.updated_at
-            ):
-                raise ValueError("conversation search metadata is inconsistent")
-            handles.append(
-                InteractiveController._visible_conversation_handle(
-                    metadata,
-                    entries,
-                )
-            )
-        return tuple(handles)
-
-    @staticmethod
-    def _validated_transcript_page(
-        page: object,
-        *,
-        session_id: str,
-        conversation_id: str,
-        start_sequence: int,
-        page_limit: int,
-    ) -> ConversationTranscriptPage:
-        """Return a page matching one fresh no-filter transcript request.
-
-        The pure validation requires exact scope, full-snapshot range, count,
-        contiguous event, and cursor boundaries. Invalid collaborator output
-        raises ``TypeError`` or ``ValueError`` without lifecycle mutation.
-        """
-
-        if type(page) is not ConversationTranscriptPage:
-            raise TypeError("conversation transcript returned an invalid page")
-        if (
-            page.session_id != session_id
-            or page.conversation_id != conversation_id
-        ):
-            raise ValueError("conversation transcript crossed its attached scope")
-        if page.requested_start_sequence != start_sequence:
-            raise ValueError("conversation transcript changed its requested start")
-        if page.requested_end_sequence != page.snapshot_last_sequence:
-            raise ValueError("conversation transcript shortened its requested range")
-        if len(page.events) > page_limit:
-            raise ValueError("conversation transcript exceeded its requested count")
-        if (
-            page.next_cursor is not None
-            and page.next_cursor.max_events != page_limit
-        ):
-            raise ValueError("conversation transcript cursor changed its count")
-
-        if not page.events:
-            if (
-                page.requested_start_sequence
-                != page.snapshot_last_sequence + 1
-            ):
-                raise ValueError(
-                    "conversation transcript returned an invalid empty page"
-                )
-            return page
-
-        for expected_sequence, event in enumerate(
-            page.events,
-            start=start_sequence,
-        ):
-            if event.sequence != expected_sequence:
-                raise ValueError(
-                    "conversation transcript returned non-contiguous events"
-                )
-
-        last_returned_sequence = page.events[-1].sequence
-        if page.next_cursor is not None:
-            if page.next_cursor.next_sequence != last_returned_sequence + 1:
-                raise ValueError(
-                    "conversation transcript cursor skipped returned events"
-                )
-        elif last_returned_sequence != page.requested_end_sequence:
-            raise ValueError("conversation transcript returned an incomplete page")
-        return page
-
     def _present_memory_catalog_or_reference_failure(
         self,
         failure: Exception,
@@ -3304,29 +2276,9 @@ class InteractiveController:
         rendering; unknown failures abort to final controller cleanup.
         """
 
-        if isinstance(failure, _ConversationResolutionFailure):
-            code = failure.code
-        elif isinstance(failure, ConversationNotFoundError):
-            code = InteractiveErrorCode.CONVERSATION_NOT_FOUND
-        elif isinstance(failure, WorkspaceSecurityError):
-            code = InteractiveErrorCode.WORKSPACE_UNSAFE
-        elif isinstance(failure, WorkspaceVersionUnsupportedError):
-            code = InteractiveErrorCode.WORKSPACE_VERSION_UNSUPPORTED
-        elif isinstance(
-            failure,
-            (
-                _ConversationCatalogProtocolFailure,
-                WorkspaceFormatError,
-                OSError,
-                SessionIdError,
-                TypeError,
-                ValueError,
-            ),
-        ):
-            code = InteractiveErrorCode.WORKSPACE_INVALID
-        else:
-            code = InteractiveErrorCode.INTERNAL_ERROR
-        self._present_memory_error(InteractiveError(code))
+        self._present_memory_error(
+            classify_memory_catalog_or_reference_failure(failure)
+        )
 
     def _present_search_service_failure(self, failure: Exception) -> None:
         """Classify a valid-query search failure without exposing its prose.
@@ -3336,27 +2288,7 @@ class InteractiveController:
         failures. Unknown failures abort through the controller lifecycle.
         """
 
-        if isinstance(failure, ConversationNotFoundError):
-            code = InteractiveErrorCode.CONVERSATION_NOT_FOUND
-        elif isinstance(failure, WorkspaceSecurityError):
-            code = InteractiveErrorCode.WORKSPACE_UNSAFE
-        elif isinstance(failure, WorkspaceVersionUnsupportedError):
-            code = InteractiveErrorCode.WORKSPACE_VERSION_UNSUPPORTED
-        elif isinstance(
-            failure,
-            (
-                _ConversationCatalogProtocolFailure,
-                WorkspaceFormatError,
-                OSError,
-                SessionIdError,
-                TypeError,
-                ValueError,
-            ),
-        ):
-            code = InteractiveErrorCode.WORKSPACE_INVALID
-        else:
-            code = InteractiveErrorCode.INTERNAL_ERROR
-        self._present_memory_error(InteractiveError(code))
+        self._present_memory_error(classify_search_service_failure(failure))
 
     def _present_transcript_service_failure(self, failure: Exception) -> None:
         """Classify one post-catalog transcript failure without raw prose.
@@ -3366,24 +2298,9 @@ class InteractiveController:
         or unsafe identifiers are workspace-invalid, and unknowns are fatal.
         """
 
-        if isinstance(failure, ConversationNotFoundError):
-            code = InteractiveErrorCode.CONVERSATION_NOT_FOUND
-        elif isinstance(failure, WorkspaceSecurityError):
-            code = InteractiveErrorCode.WORKSPACE_UNSAFE
-        elif isinstance(failure, WorkspaceVersionUnsupportedError):
-            code = InteractiveErrorCode.WORKSPACE_VERSION_UNSUPPORTED
-        elif isinstance(failure, WorkspaceFormatError):
-            code = InteractiveErrorCode.TRANSCRIPT_INVALID
-        elif isinstance(failure, (TypeError, ValueError)):
-            code = InteractiveErrorCode.TRANSCRIPT_INVALID
-        elif isinstance(
-            failure,
-            (_ConversationCatalogProtocolFailure, OSError, SessionIdError),
-        ):
-            code = InteractiveErrorCode.WORKSPACE_INVALID
-        else:
-            code = InteractiveErrorCode.INTERNAL_ERROR
-        self._present_memory_error(InteractiveError(code))
+        self._present_memory_error(
+            classify_transcript_service_failure(failure)
+        )
 
     def _present_memory_error(self, error: InteractiveError) -> None:
         """Render one trusted read error after any required access proof.
@@ -3465,7 +2382,7 @@ class InteractiveController:
                 return
             self._focused_conversation = current
             focused = current
-            handle = self._visible_conversation_handle(current, entries)
+            handle = visible_conversation_handle(current, entries)
 
         self._terminal.write_conversation_scope(
             session_id=session_id,
@@ -3502,14 +2419,14 @@ class InteractiveController:
         session_id = self._attached_session_id
         assert session_id is not None
         try:
-            self._normalized_conversation_input(subject)
+            normalize_conversation_input(subject)
             created = self._conversation_catalog.create(session_id, subject)
-            created = self._validated_catalog_metadata(
+            created = validate_catalog_metadata(
                 created,
                 session_id,
             )
             if created.status is not ConversationStatus.ACTIVE:
-                raise _ConversationCatalogProtocolFailure(
+                raise ConversationCatalogProtocolFailure(
                     "new conversation metadata is not active"
                 )
         except Exception as exc:
@@ -3524,7 +2441,7 @@ class InteractiveController:
             )
         except Exception as exc:
             self._confirm_attachment_after_command_failure()
-            error = self._classify_conversation_failure(exc)
+            error = classify_conversation_failure(exc)
             self._terminal.write_error(
                 InteractiveError(
                     error.code,
@@ -3568,7 +2485,7 @@ class InteractiveController:
             normalized_query = (
                 None
                 if query is None
-                else self._normalized_conversation_input(query)
+                else normalize_conversation_input(query)
             )
             entries = self._catalog_entries(session_id)
         except Exception as exc:
@@ -3603,7 +2520,7 @@ class InteractiveController:
         )
         for entry in visible_entries:
             self._terminal.write_conversation_list_entry(
-                self._visible_conversation_handle(entry, entries),
+                visible_conversation_handle(entry, entries),
                 entry.subject,
                 archived=(entry.status is ConversationStatus.ARCHIVED),
                 focused=(entry.conversation_id == focused_id),
@@ -3642,7 +2559,7 @@ class InteractiveController:
         except Exception as exc:
             self._confirm_attachment_after_command_failure()
             self._terminal.write_error(
-                self._classify_conversation_failure(exc)
+                classify_conversation_failure(exc)
             )
             return
 
@@ -3651,7 +2568,7 @@ class InteractiveController:
             TerminalMessageKind.CONVERSATION,
             (
                 "Current focus: "
-                f"{self._visible_conversation_handle(focused, entries)} | "
+                f"{visible_conversation_handle(focused, entries)} | "
                 f"Subject: {focused.subject}"
             ),
         )
@@ -3671,13 +2588,13 @@ class InteractiveController:
         session_id = self._attached_session_id
         assert session_id is not None
         try:
-            self._normalized_conversation_input(subject)
+            normalize_conversation_input(subject)
             renamed = self._conversation_catalog.rename(
                 session_id,
                 current.conversation_id,
                 subject,
             )
-            renamed = self._validated_catalog_metadata(
+            renamed = validate_catalog_metadata(
                 renamed,
                 session_id,
                 expected_conversation_id=current.conversation_id,
@@ -3750,7 +2667,7 @@ class InteractiveController:
                     TerminalMessageKind.CONVERSATION,
                     (
                         "Already archived "
-                        f"{self._visible_conversation_handle(target, entries)} | "
+                        f"{visible_conversation_handle(target, entries)} | "
                         f"Subject: {target.subject}"
                     ),
                 )
@@ -3779,13 +2696,13 @@ class InteractiveController:
                 session_id,
                 target.conversation_id,
             )
-            archived = self._validated_catalog_metadata(
+            archived = validate_catalog_metadata(
                 archived,
                 session_id,
                 expected_conversation_id=target.conversation_id,
             )
             if archived.status is not ConversationStatus.ARCHIVED:
-                raise _ConversationCatalogProtocolFailure(
+                raise ConversationCatalogProtocolFailure(
                     "archived conversation metadata is not archived"
                 )
         except Exception as exc:
@@ -3794,7 +2711,7 @@ class InteractiveController:
         self._terminal.write_status(
             TerminalMessageKind.CONVERSATION,
             (
-                f"Archived {self._visible_conversation_handle(target, entries)} | "
+                f"Archived {visible_conversation_handle(target, entries)} | "
                 f"Subject: {archived.subject}"
             ),
         )
@@ -3824,7 +2741,7 @@ class InteractiveController:
             ),
             None,
         )
-        target_handle = self._visible_conversation_handle(target, entries)
+        target_handle = visible_conversation_handle(target, entries)
         decision = self._terminal.request_confirmation(
             (
                 f'Archive current conversation "{target.subject}" '
@@ -3845,13 +2762,13 @@ class InteractiveController:
                 session_id,
                 target.conversation_id,
             )
-            archived = self._validated_catalog_metadata(
+            archived = validate_catalog_metadata(
                 archived,
                 session_id,
                 expected_conversation_id=target.conversation_id,
             )
             if archived.status is not ConversationStatus.ARCHIVED:
-                raise _ConversationCatalogProtocolFailure(
+                raise ConversationCatalogProtocolFailure(
                     "archived conversation metadata is not archived"
                 )
         except ConversationNotFoundError as exc:
@@ -3883,7 +2800,7 @@ class InteractiveController:
         else:
             status += (
                 "; current focus: "
-                f"{self._visible_conversation_handle(successor, entries)} | "
+                f"{visible_conversation_handle(successor, entries)} | "
                 f"Subject: {successor.subject}"
             )
         self._terminal.write_status(
@@ -3913,7 +2830,7 @@ class InteractiveController:
                 session_id,
                 original.conversation_id,
             )
-            restored = self._validated_catalog_metadata(
+            restored = validate_catalog_metadata(
                 restored,
                 session_id,
                 expected_conversation_id=original.conversation_id,
@@ -3922,7 +2839,7 @@ class InteractiveController:
                 session_id,
                 original.conversation_id,
             )
-            confirmed = self._validated_catalog_metadata(
+            confirmed = validate_catalog_metadata(
                 confirmed,
                 session_id,
                 expected_conversation_id=original.conversation_id,
@@ -3935,7 +2852,7 @@ class InteractiveController:
                 restored.status is not ConversationStatus.ACTIVE
                 or confirmed.status is not ConversationStatus.ACTIVE
             ):
-                raise _ConversationCatalogProtocolFailure(
+                raise ConversationCatalogProtocolFailure(
                     "unarchived conversation metadata is not active"
                 )
             if (
@@ -3950,7 +2867,7 @@ class InteractiveController:
 
         self._focused_conversation = confirmed
         self._terminal.write_error(
-            self._classify_conversation_failure(default_failure)
+            classify_conversation_failure(default_failure)
         )
         self._terminal.write_status(
             TerminalMessageKind.CONVERSATION,
@@ -3980,7 +2897,7 @@ class InteractiveController:
                 session_id,
                 focused.conversation_id,
             )
-            current = self._validated_catalog_metadata(
+            current = validate_catalog_metadata(
                 current,
                 session_id,
                 expected_conversation_id=focused.conversation_id,
@@ -4047,44 +2964,9 @@ class InteractiveController:
         trusted categories; catalog/storage failures propagate unchanged.
         """
 
-        try:
-            safe_reference = self._workspace.validate_identifier(
-                reference,
-                label="conversation ID",
-            )
-        except SessionIdError as exc:
-            raise _ConversationResolutionFailure(
-                InteractiveErrorCode.CONVERSATION_INVALID
-            ) from exc
+        safe_reference = validate_conversation_reference(reference)
         entries = self._catalog_entries(session_id)
-        exact = next(
-            (
-                entry
-                for entry in entries
-                if entry.conversation_id == safe_reference
-            ),
-            None,
-        )
-        if exact is not None:
-            return exact, entries
-        if len(safe_reference) < _MINIMUM_CONVERSATION_PREFIX_LENGTH:
-            raise _ConversationResolutionFailure(
-                InteractiveErrorCode.CONVERSATION_INVALID
-            )
-        matches = tuple(
-            entry
-            for entry in entries
-            if entry.conversation_id.startswith(safe_reference)
-        )
-        if not matches:
-            raise _ConversationResolutionFailure(
-                InteractiveErrorCode.CONVERSATION_NOT_FOUND
-            )
-        if len(matches) > 1:
-            raise _ConversationResolutionFailure(
-                InteractiveErrorCode.CONVERSATION_AMBIGUOUS
-            )
-        return matches[0], entries
+        return resolve_conversation_reference(safe_reference, entries), entries
 
     def _catalog_entries(
         self,
@@ -4101,81 +2983,7 @@ class InteractiveController:
             session_id,
             include_archived=True,
         )
-        if type(entries) is not tuple:
-            raise _ConversationCatalogProtocolFailure(
-                "conversation catalog returned an invalid collection"
-            )
-        validated = tuple(
-            self._validated_catalog_metadata(entry, session_id)
-            for entry in entries
-        )
-        identifiers = tuple(entry.conversation_id for entry in validated)
-        if len(set(identifiers)) != len(identifiers):
-            raise _ConversationCatalogProtocolFailure(
-                "conversation catalog contains duplicate identifiers"
-            )
-        return validated
-
-    @staticmethod
-    def _validated_catalog_metadata(
-        metadata: object,
-        expected_session_id: str,
-        *,
-        expected_conversation_id: str | None = None,
-    ) -> ConversationMetadata:
-        """Return exact session-owned metadata or raise a safe format failure.
-
-        Validation is read-only and ensures an injected or filesystem catalog
-        cannot make the controller commit foreign or malformed identity state.
-        """
-
-        if type(metadata) is not ConversationMetadata:
-            raise _ConversationCatalogProtocolFailure(
-                "conversation catalog returned invalid metadata"
-            )
-        if metadata.session_id != expected_session_id:
-            raise _ConversationCatalogProtocolFailure(
-                "conversation metadata belongs to another session"
-            )
-        if (
-            expected_conversation_id is not None
-            and metadata.conversation_id != expected_conversation_id
-        ):
-            raise _ConversationCatalogProtocolFailure(
-                "conversation metadata identity changed unexpectedly"
-            )
-        return metadata
-
-    @staticmethod
-    def _normalized_conversation_input(value: str) -> str:
-        """Return a normalized valid subject/query or raise trusted invalid input.
-
-        Only ``TypeError`` and ``ValueError`` raised directly by the stable
-        normalization contract are wrapped. Catalog and callback exceptions are
-        classified independently and cannot masquerade as user-input failures.
-        """
-
-        try:
-            return normalize_conversation_subject(value)
-        except (TypeError, ValueError) as exc:
-            raise _ConversationInputFailure from exc
-
-    @staticmethod
-    def _visible_conversation_handle(
-        metadata: ConversationMetadata,
-        entries: tuple[ConversationMetadata, ...],
-    ) -> str:
-        """Return a unique twelve-character prefix or the immutable full ID.
-
-        Uniqueness is evaluated across every supplied active and archived row.
-        The function performs no I/O or mutation and assumes validated metadata.
-        """
-
-        prefix = metadata.conversation_id[:_MINIMUM_CONVERSATION_PREFIX_LENGTH]
-        collisions = sum(
-            entry.conversation_id.startswith(prefix) for entry in entries
-        )
-        return prefix if collisions == 1 else metadata.conversation_id
+        return validate_catalog_entries(entries, session_id)
 
     def _visible_handle_after_mutation(
         self,
@@ -4194,7 +3002,7 @@ class InteractiveController:
         except Exception as exc:
             self._present_conversation_failure(exc)
             return metadata.conversation_id
-        return self._visible_conversation_handle(metadata, entries)
+        return visible_conversation_handle(metadata, entries)
 
     def _confirm_attachment_after_command_failure(self) -> None:
         """Require public proof that ready access remains held after failure.
@@ -4225,7 +3033,7 @@ class InteractiveController:
         controller returns to its prompt; failed proof aborts cleanup.
         """
 
-        error = self._classify_conversation_failure(
+        error = classify_conversation_failure(
             failure,
             creating=creating,
         )
@@ -4237,41 +3045,6 @@ class InteractiveController:
         }:
             self._confirm_attachment_after_command_failure()
         self._terminal.write_error(error)
-
-    @staticmethod
-    def _classify_conversation_failure(
-        failure: Exception,
-        *,
-        creating: bool = False,
-    ) -> InteractiveError:
-        """Select the exact safe conversation/workspace code by exception type.
-
-        Resolution categories take precedence, followed by creation exhaustion,
-        missing records, invalid subject/ID values, workspace security/format,
-        and finally unexpected internal failure. Raw diagnostics are discarded.
-        """
-
-        if isinstance(failure, _ConversationResolutionFailure):
-            code = failure.code
-        elif isinstance(failure, _ConversationInputFailure):
-            code = InteractiveErrorCode.CONVERSATION_INVALID
-        elif isinstance(failure, _ConversationCatalogProtocolFailure):
-            code = InteractiveErrorCode.INTERNAL_ERROR
-        elif creating and isinstance(failure, ConversationExistsError):
-            code = InteractiveErrorCode.CONVERSATION_CREATE_FAILED
-        elif isinstance(failure, ConversationNotFoundError):
-            code = InteractiveErrorCode.CONVERSATION_NOT_FOUND
-        elif isinstance(failure, SessionIdError):
-            code = InteractiveErrorCode.CONVERSATION_INVALID
-        elif isinstance(failure, WorkspaceSecurityError):
-            code = InteractiveErrorCode.WORKSPACE_UNSAFE
-        elif isinstance(failure, WorkspaceVersionUnsupportedError):
-            code = InteractiveErrorCode.WORKSPACE_VERSION_UNSUPPORTED
-        elif isinstance(failure, (WorkspaceFormatError, OSError)):
-            code = InteractiveErrorCode.WORKSPACE_INVALID
-        else:
-            code = InteractiveErrorCode.INTERNAL_ERROR
-        return InteractiveError(code)
 
     def _write_conversation_cancelled_status(self, text: str) -> None:
         """Acknowledge one cancelled conversation action without state mutation."""
@@ -4288,9 +3061,9 @@ class InteractiveController:
                     "backend returned an invalid lifecycle collection"
                 )
             validated = tuple(
-                self._require_lifecycle_state(state, state.session_id)
+                require_lifecycle_state(state, state.session_id)
                 if type(state) is SessionLifecycleState
-                else self._require_lifecycle_state(state, "invalid")
+                else require_lifecycle_state(state, "invalid")
                 for state in states
             )
         except Exception as exc:
@@ -4310,7 +3083,7 @@ class InteractiveController:
                 return
             attached = self._attached_session_id == state.session_id
             focused = attached and self._focused_conversation is not None
-            next_action = self._next_session_action(
+            next_action = next_session_action(
                 state,
                 attached=attached,
                 focused=focused,
@@ -4349,7 +3122,7 @@ class InteractiveController:
             return False
         try:
             state = self._backend.pause_session_and_release_access(session_id)
-            state = self._require_lifecycle_state(state, session_id)
+            state = require_lifecycle_state(state, session_id)
             if (
                 state.durable_state is not SessionDurableState.PAUSED
                 or state.access_state is SessionAccessState.HELD_HERE
@@ -4360,7 +3133,7 @@ class InteractiveController:
         except Exception as exc:
             if not self._attachment_is_safely_retained(session_id):
                 self._abandon_known_attachment_for_cleanup_abort()
-            self._terminal.write_error(self._classify_session_failure(exc))
+            self._terminal.write_error(classify_session_failure(exc))
             return False
 
         self._attached_session_id = None
@@ -4379,7 +3152,7 @@ class InteractiveController:
 
         try:
             state = self._backend.get_session_lifecycle(session_id)
-            self._require_lifecycle_state(state, session_id)
+            require_lifecycle_state(state, session_id)
         except (Exception, KeyboardInterrupt):
             return False
         return (
@@ -4466,43 +3239,10 @@ class InteractiveController:
         prompt; workspace, internal, and cleanup uncertainty abort the run.
         """
 
-        error = self._classify_session_failure(failure)
-        if error.code not in _RECOVERABLE_SESSION_ERRORS:
+        error = classify_session_failure(failure)
+        if error.code not in RECOVERABLE_SESSION_ERROR_CODES:
             raise _ControllerAbort(error)
         self._terminal.write_error(error)
-
-    @staticmethod
-    def _classify_session_failure(failure: Exception) -> InteractiveError:
-        """Select one safe interactive code from type, without raw diagnostics.
-
-        The function does not mutate state. Backend protocol/configuration
-        failures at this boundary mean lifecycle preflight failure; workspace
-        security/format and unknown failures remain fatal to the controller.
-        """
-
-        if isinstance(failure, SessionIdError):
-            code = InteractiveErrorCode.SESSION_INVALID
-        elif isinstance(failure, SessionExistsError):
-            code = InteractiveErrorCode.SESSION_EXISTS
-        elif isinstance(failure, SessionNotFoundError):
-            code = InteractiveErrorCode.SESSION_NOT_FOUND
-        elif isinstance(failure, SessionPausedError):
-            code = InteractiveErrorCode.SESSION_PAUSED
-        elif isinstance(failure, SessionAccessBlockedError):
-            code = InteractiveErrorCode.SESSION_ACCESS_BLOCKED
-        elif isinstance(failure, SessionOwnershipUnknownError):
-            code = InteractiveErrorCode.SESSION_OWNERSHIP_UNKNOWN
-        elif isinstance(failure, WorkspaceSecurityError):
-            code = InteractiveErrorCode.WORKSPACE_UNSAFE
-        elif isinstance(failure, WorkspaceVersionUnsupportedError):
-            code = InteractiveErrorCode.WORKSPACE_VERSION_UNSUPPORTED
-        elif isinstance(failure, (WorkspaceFormatError, OSError)):
-            code = InteractiveErrorCode.WORKSPACE_INVALID
-        elif isinstance(failure, (ConfigurationError, BackendProtocolError)):
-            code = InteractiveErrorCode.PROVIDER_PREFLIGHT_FAILED
-        else:
-            code = InteractiveErrorCode.INTERNAL_ERROR
-        return InteractiveError(code)
 
     def _write_main_input_cancelled_status(self) -> None:
         """Acknowledge main-input Ctrl-C without changing controller state."""
@@ -4602,7 +3342,7 @@ class InteractiveController:
                         released = self._backend.release_session_access(
                             attached_session
                         )
-                        self._require_released_state(
+                        require_released_state(
                             released,
                             attached_session,
                         )
