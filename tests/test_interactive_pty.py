@@ -8,6 +8,7 @@ import os
 import re
 import select
 import signal
+import struct
 import subprocess
 import sys
 import tempfile
@@ -227,6 +228,14 @@ def _control_character_byte(value: object, *, label: str) -> bytes:
     raise unittest.SkipTest(f"POSIX PTY {label} is not a one-byte value")
 
 
+def _copy_terminal_attributes(attributes: list[Any]) -> list[Any]:
+    """Copy one termios attribute list including its control-character vector."""
+
+    copied = list(attributes)
+    copied[6] = list(attributes[6])
+    return copied
+
+
 def _durable_tree(root: Path) -> dict[str, bytes]:
     """Capture exact file bytes below one test-owned workspace."""
 
@@ -258,6 +267,7 @@ class PtyCliProcess:
         vintr: bytes,
         veof: bytes,
         stdout_is_terminal: bool,
+        original_terminal_attributes: list[Any],
     ) -> None:
         """Retain validated process and terminal resources for one bounded run."""
 
@@ -266,6 +276,10 @@ class PtyCliProcess:
         self.vintr = vintr
         self.veof = veof
         self.stdout_is_terminal = stdout_is_terminal
+        self.original_terminal_attributes = _copy_terminal_attributes(
+            original_terminal_attributes
+        )
+        self.final_terminal_attributes: list[Any] | None = None
         self.raw_bytes = bytearray()
         self.pipe_stdout = b""
         self.pipe_stderr = b""
@@ -312,6 +326,13 @@ class PtyCliProcess:
             raise AssertionError("cannot write to an exited CLI process")
         os.write(self.master_fd, line.encode("utf-8") + b"\n")
 
+    def send_text(self, text: str) -> None:
+        """Write exact UTF-8 input without adding a submission character."""
+
+        if self.process.poll() is not None:
+            raise AssertionError("cannot write to an exited CLI process")
+        os.write(self.master_fd, text.encode("utf-8"))
+
     def send_interrupt(self) -> None:
         """Deliver the terminal's configured VINTR byte through the PTY."""
 
@@ -356,6 +377,11 @@ class PtyCliProcess:
         while self.process.poll() is None:
             self._read_terminal_once(deadline)
         self._drain_terminal()
+        if self.stdout_is_terminal:
+            assert termios is not None
+            self.final_terminal_attributes = _copy_terminal_attributes(
+                termios.tcgetattr(self.master_fd)
+            )
         stdout, stderr = self.process.communicate(
             timeout=_TEARDOWN_DEADLINE_SECONDS
         )
@@ -590,6 +616,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
         stdin_is_terminal: bool = True,
         stdout_is_terminal: bool = True,
         environment_overrides: Mapping[str, str] | None = None,
+        terminal_columns: int = 80,
     ) -> PtyCliProcess:
         """Spawn the package entry with independently configurable terminal streams."""
 
@@ -599,6 +626,11 @@ class InteractiveCliPtyTests(unittest.TestCase):
         try:
             master_fd, slave_fd = pty.openpty()
             attributes = termios.tcgetattr(slave_fd)
+            fcntl.ioctl(
+                slave_fd,
+                termios.TIOCSWINSZ,
+                struct.pack("HHHH", 24, terminal_columns, 0, 0),
+            )
         except OSError as exc:
             self.skipTest(
                 "POSIX PTY allocation/configuration is unavailable: "
@@ -651,6 +683,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
             vintr=vintr,
             veof=veof,
             stdout_is_terminal=stdout_is_terminal,
+            original_terminal_attributes=configured,
         )
         self._processes.append(harness)
         return harness
@@ -684,7 +717,94 @@ class InteractiveCliPtyTests(unittest.TestCase):
         )
         self.assertEqual(load_cli_context(self.workspace).selected_session, "alpha")
         self.assertFalse(self.provider_log.exists())
+        self.assertNotIn("[suggestions]", process.normalized_text)
         self.assertNotIn("PTY_TEST_CREDENTIAL_MUST_NOT_APPEAR", process.normalized_text)
+
+    def test_capable_main_editor_previews_edits_clears_and_restores(self) -> None:
+        """Exercise live suggestions and exact PTY cleanup without side effects."""
+
+        before = _durable_tree(self.workspace.root)
+        process = self._spawn_cli(
+            (),
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=20,
+        )
+        process.wait_for_text("story[lobby]> ")
+        assert termios is not None
+        active_attributes = termios.tcgetattr(process.master_fd)
+        self.assertFalse(active_attributes[3] & termios.ICANON)
+        self.assertFalse(active_attributes[3] & termios.ECHO)
+
+        preview_mark = process.output_mark()
+        process.send_text("/")
+        process.wait_for_text("/exit", after=preview_mark)
+        preview = process.text_after(preview_mark)
+        self.assertIn("[suggestions]", preview)
+        for token in (
+            "/say",
+            "/to",
+            "/agent",
+            "/agents",
+            "/language",
+            "/persona",
+            "/reset",
+            "/run",
+            "/draft-file",
+            "/session",
+            "/conversation",
+            "/search",
+            "/transcript",
+            "/inspect",
+            "/history",
+            "/status",
+            "/help",
+            "/?",
+            "/quit",
+            "/exit",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, preview)
+        self.assertNotIn("/compose", preview)
+        self.assertNotIn("/send", preview)
+        self.assertNotIn("/cancel", preview)
+        self.assertEqual(_durable_tree(self.workspace.root), before)
+        self.assertFalse(self.provider_log.exists())
+
+        process.send_text("statuX")
+        process.wait_for_text(
+            "story[lobby]> /stat\nuX",
+            after=preview_mark,
+        )
+        backspace_mark = process.output_mark()
+        process.send_text("\x7f")
+        process.wait_for_text("/status", after=backspace_mark)
+        edited = process.text_after(backspace_mark)
+        self.assertIn("[suggestions]", edited)
+        self.assertIn("story[lobby]> /stat\nu", edited)
+        self.assertIn("/status", edited)
+        process.send_text("s")
+        process.wait_for_text(
+            "story[lobby]> /stat\nus",
+            after=backspace_mark,
+        )
+
+        submit_mark = process.output_mark()
+        process.send_text("\n")
+        submitted = process.wait_for_text("[session] ", after=submit_mark)
+        process.wait_for_text("story[lobby]> ", after=submit_mark)
+        self.assertIn("\x1b[J", submitted)
+        self.assertNotIn("[suggestions]", submitted)
+        self.assertEqual(_durable_tree(self.workspace.root), before)
+        self.assertFalse(self.provider_log.exists())
+
+        process.send_line("/quit")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(_durable_tree(self.workspace.root), before)
+        self.assertFalse(self.provider_log.exists())
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
 
     def test_conversation_management_routes_controls_and_main_interrupt(
         self,

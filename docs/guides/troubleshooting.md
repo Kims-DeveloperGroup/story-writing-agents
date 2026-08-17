@@ -16,8 +16,8 @@ rehash
 story --help
 ```
 
-Editable source changes appear immediately; new console-script names require
-reinstalling. Both aliases share a parser.
+Editable changes appear immediately; new script names require reinstalling.
+Both aliases share a parser.
 
 ## Interactive mode requires a terminal
 
@@ -25,6 +25,15 @@ reinstalling. Both aliases share a parser.
 failed `isatty()` emits `tty_required` on stderr and exits `2` before input,
 option validation, workspace/context access, backend construction, or mutation.
 Pipes and scripts must use `story run`.
+
+## Slash suggestions do not appear
+
+The live panel appears only at a lobby or attached main prompt on capable POSIX
+TTY streams with usable terminal size and nonempty, non-`dumb` `TERM`. Missing
+capability uses line input without ANSI; commands still work. Subject,
+confirmation, and composer prompts never show it. The panel
+filters exact case-sensitive tokens, not completion or scope gates; use
+`/help`. See [terminal safety](../operations/terminal-safety.md#live-editor-boundary).
 
 ## No workspace or session is selected
 
@@ -39,9 +48,9 @@ For `session_inactive`, create `/session new NEW_ID` or reactivate with
 
 ## A shell command is unavailable
 
-`/help [COMMAND]` shows syntax; `/status` shows scope. Management and local read
-commands need attachment; advisory lines, `/history`, `/run`, and `/draft-file`
-also need an active selection.
+`/help [COMMAND]` shows syntax; `/status` shows scope. Management/local reads
+need attachment; advisory, `/history`, `/run`, and `/draft-file` also need an
+active selection.
 
 The main prompt rejects standalone `/compose`, `/send`, and `/cancel`. Bare
 `/run` alone opens the composer, where `/send` submits and `/cancel` discards.
