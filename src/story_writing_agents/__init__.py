@@ -123,6 +123,12 @@ from .models import (
     Verdict,
 )
 from .orchestrator import Runtime, RuntimeSession, Session, StoryRuntime
+from .session_lifecycle import (
+    SessionAccessState,
+    SessionDurableState,
+    SessionLifecycleState,
+    provider_work_is_ready,
+)
 from .workspace import (
     FilesystemConversationCatalog,
     FilesystemConversationEventStore,
@@ -229,10 +235,13 @@ __all__ = [
     "RuntimeSession",
     "SPECIALIST_IDS",
     "Session",
+    "SessionAccessState",
+    "SessionDurableState",
     "SessionExistsError",
     "SessionIdError",
     "SessionInUseError",
     "SessionLeaseState",
+    "SessionLifecycleState",
     "SessionNotFoundError",
     "SessionSummary",
     "StoryRuntime",
@@ -246,4 +255,5 @@ __all__ = [
     "normalize_conversation_subject",
     "parse_directive",
     "parse_interactive_line",
+    "provider_work_is_ready",
 ]

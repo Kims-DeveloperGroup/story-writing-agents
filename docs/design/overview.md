@@ -21,10 +21,10 @@ owner-isolated history, and artifacts. For advisory turns it owns conversation
 locking, context and transcript order, retrieval scope/actions/budgets, and the
 final reply or safe error. See the [Runtime API](../reference/runtime-api.md#one-conversation-turn).
 
-`AgentBackend` owns provider routes, Codex preflight, prompt staging,
-story-session leases, provider processes, and resumable thread metadata. A
-`BoundAgent` owns one immutable definition and invocation path. Codex is
-implemented; Gemini remains a reserved name that fails preflight.
+`session_lifecycle` owns immutable provider-neutral lifecycle facts, legacy
+projections, and readiness, with no resource or I/O. `AgentBackend` retains
+manifests, lease claims, prompt staging, routes, processes, and threads;
+`BoundAgent` owns one binding. Codex is implemented; Gemini fails preflight.
 
 `Workspace` is the local persistence and path-safety boundary. It owns strict
 UTF-8 reads, JSON/JSONL artifacts, reservations, manuscripts, inspection, and
@@ -70,39 +70,35 @@ flowchart LR
     M --> K
 ```
 
-The controller constructs one filesystem event store against its resolved
-catalog and gives that exact instance to the retained runtime. For each
-attachment it constructs a `ConversationMemoryService` over the same catalog
-and event store.
+The controller gives one filesystem event store to the retained runtime and
+builds each attachment's memory service over that store and resolved catalog.
 
-On session switch, the destination service is built after destination
-validation but before source detach. It becomes current only when the
-destination attachment commits. End, abort, and final cleanup clear it.
-Conversation create, use, rename, and archive do not replace it; their
-consequence is simply that later reads observe current catalog and transcript
-data in the same attached-session scope.
+On switch, destination memory is built after validation and becomes current
+only with committed attachment. End, abort, and cleanup clear it. Conversation
+changes reuse it; later reads observe current data in the same session scope.
 
-For advisory content the controller passes its exact memory service to
-`StoryRuntime.converse_with_retrieval()`. Runtime alone calls its search/read
-methods; backend receives only the handler protocol and framed observations.
-Direct `/search` and `/transcript` remain controller-to-service local reads.
-The controller's sole direct event store call is public
-`ConversationEventStore.read(...)`, which reads the selected transcript for
-`/history` and derives transcript totals and context facts for `/status`; it
-never appends, calls `read_context`, or calls a bound agent.
+For advisory work the controller supplies the exact service to runtime. Runtime
+alone calls search/read; backend sees only the handler and framed observations.
+Direct `/search` and `/transcript` stay local. Controller calls the event store
+only through `read(...)` for `/history` and `/status`; it never appends, calls
+`read_context`, or calls a bound agent.
 
 ## Dependency direction
 
-The CLI injects the editor's main-read callback into the terminal before
-creating backend/controller. The editor uses only command metadata and terminal
-sanitization. Controller construction is unchanged and receives completed
-actions; it depends downward on runtime and presentation/storage. Runtime and
-backend use provider-neutral retrieval contracts; the handler port prevents
-backend-to-orchestrator access, keeping the graph acyclic.
+The facade depends downward on canonical `session_lifecycle` contracts;
+`models` compatibility-forwards the exact legacy objects. Backend still reaches
+them through `models`. Controller, terminal, storage, and transition ownership
+are unchanged; no new shell copy/navigation exists.
 
-This supports deterministic test collaborators but is not a dynamically
-loaded plugin system. Exact public imports live in
-[Package API](../reference/package-api.md); conversation contracts live in
+The CLI injects the editor's main-read callback before backend/controller
+construction. The editor uses command metadata and terminal sanitization.
+Controller receives completed actions and depends downward on runtime and
+presentation/storage. Retrieval's handler port prevents backend-to-orchestrator
+access, keeping the graph acyclic.
+
+This supports deterministic collaborators, not a dynamic plugin system. Exact
+imports live in [Package API](../reference/package-api.md), lifecycle meaning in
+[Session lifecycle](session-lifecycle.md), and conversation contracts in
 [Conversation search](../reference/conversation-search.md),
 [Conversation transcripts](../reference/conversation-transcripts.md), and
 [Bounded retrieval](../reference/conversation-retrieval.md).

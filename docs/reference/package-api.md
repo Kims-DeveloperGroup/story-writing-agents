@@ -14,12 +14,14 @@ Import public contracts from the package root:
 from story_writing_agents import StoryRuntime, Workspace
 ```
 
-The exact export inventory is:
+The exact 119-name export inventory is:
 
 - roster: `AGENT_SPECS`, `ROSTER`, `SPECIALIST_IDS`, `LEAD_ORCHESTRATOR`,
   `PLOT_ARCHITECT`, `CHARACTER_CUSTODIAN`, `EXECUTION_SPECIALIST`;
-- backend: `AgentBackend`, `BoundAgent`, `SessionSummary`,
-  `SessionLeaseState`;
+- backend: `AgentBackend`, `BoundAgent`;
+- session lifecycle: additive `SessionDurableState`, `SessionAccessState`,
+  `SessionLifecycleState`, and `provider_work_is_ready`; compatibility
+  `SessionLeaseState` and `SessionSummary` retain their root imports;
 - agent, conversation-turn, and debate models: `PromptFileReference`,
   `AgentDefinition`, `AgentRequest`, `AgentReply`, `ConversationRequest`,
   `ConversationReply`, `ConversationResult`, `AgentStateEntry`,
@@ -85,6 +87,8 @@ of `RuntimeSession`. They do not provide different behavior.
 | `DebateProgressPhase` | `started`, `drafted`, `audit_started`, `audit_completed`, `synthesized`, `artifacts_committed`, `consensus`, `deadlock`, `failed`, `interrupted` |
 | `DebateFailureKind` | `preflight`, `protocol`, `context`, `workspace`, `artifact_conflict`, `artifact_failure`, `internal` |
 | `DirectiveKind` | `language`, `persona`, `reset` |
+| `SessionDurableState` | `absent`, `ready`, `paused` |
+| `SessionAccessState` | `claimable`, `held_here`, `blocked_by_live_local_owner`, `ownership_unknown` |
 | `SessionLeaseState` | `available`, `owned`, `in_use`, `unverified` |
 | `ConversationStatus` | `active`, `archived` |
 | `ConversationSearchMatchKind` | `exact_subject`, `subject_prefix`, `subject_substring`, `transcript` |
@@ -94,6 +98,10 @@ of `RuntimeSession`. They do not provide different behavior.
 These are `StrEnum` values. Use members such as `Verdict.APPROVE`; a plain
 string like `"approve"` is not accepted where reply validation requires the
 enum member.
+
+The projection helpers `lifecycle_from_session_summary` and
+`session_summary_from_lifecycle` are supported only from
+`story_writing_agents.session_lifecycle`, not this facade. See [Backend and sessions](backend-and-sessions.md#lifecycle-value-contracts).
 
 ## Reference map
 

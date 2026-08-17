@@ -17,6 +17,7 @@ from .conversations import (
     validate_conversation_context_window,
 )
 from .errors import SessionIdError, WorkspaceFormatError
+from .session_lifecycle import SessionLeaseState, SessionSummary
 
 
 _SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
@@ -239,29 +240,6 @@ class DebateProgressEvent:
 
 
 DebateProgressSink = Callable[[DebateProgressEvent], None]
-
-
-class SessionLeaseState(StrEnum):
-    """Observed ownership and liveness state for a provider-session lease."""
-
-    AVAILABLE = "available"
-    OWNED = "owned"
-    IN_USE = "in_use"
-    UNVERIFIED = "unverified"
-
-
-@dataclass(frozen=True, slots=True)
-class SessionSummary:
-    """Immutable provider-session lifecycle status."""
-
-    session_id: str
-    active: bool
-    selected: bool
-    lease_state: SessionLeaseState
-    lease_hostname: str | None
-    lease_pid: int | None
-    created_at: str
-    updated_at: str
 
 
 @dataclass(frozen=True, slots=True)

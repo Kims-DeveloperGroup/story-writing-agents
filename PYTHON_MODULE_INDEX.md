@@ -16,7 +16,7 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 22.
+Importable production units indexed: 23.
 
 ## Current Dependency Direction
 
@@ -50,7 +50,9 @@ story_writing_agents facade -> interactive_commands
                             -> conversation_retrieval -> agents/conversation_search
                             |                          -> conversations/errors
                             -> conversation_search -> conversations/errors
-models -> conversations/agents/errors
+                            -> session_lifecycle
+models -> conversations/agents/errors/session_lifecycle
+session_lifecycle -> (standard library only)
 workspace -> conversations -> agents/errors
 ```
 
@@ -63,7 +65,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 - **Source:** `src/story_writing_agents/__init__.py`
 - **Responsibility:** Provide the intentional package-level API facade.
-- **Supported surface:** Exactly 115 names in `__all__`, grouped by owner:
+- **Supported surface:** Exactly 119 names in `__all__`, grouped by owner:
   `AGENT_SPECS`, `ROSTER`, `SPECIALIST_IDS`, `LEAD_ORCHESTRATOR`,
   `PLOT_ARCHITECT`, `CHARACTER_CUSTODIAN`, and `EXECUTION_SPECIALIST` from
   `agents`; `AgentBackend` and `BoundAgent` from `backend`; `DirectiveKind`,
@@ -107,11 +109,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   `parse_interactive_line` from `interactive_commands`; `InputKind`, `Phase`,
   `Verdict`, `DebateStatus`, `DebateContextMode`, `DebateContextRequest`,
   `DebateFailureKind`, `DebateProgressPhase`, `DebateProgressEvent`,
-  `DebateProgressSink`, `SessionLeaseState`, `SessionSummary`, `DebateMessage`,
-  `AgentStateEntry`, `PromptFileReference`, `AgentDefinition`, `AgentRequest`,
-  `AgentReply`, `ConversationRequest`, `ConversationReply`, `ConversationResult`,
-  and `DebateResult` from `models`; `StoryRuntime`, `RuntimeSession`, `Runtime`,
-  and `Session` from `orchestrator`; and
+  `DebateProgressSink`, `DebateMessage`, `AgentStateEntry`,
+  `PromptFileReference`, `AgentDefinition`, `AgentRequest`, `AgentReply`,
+  `ConversationRequest`, `ConversationReply`, `ConversationResult`, and
+  `DebateResult` from `models`; exact compatibility-forwarded
+  `SessionLeaseState` and `SessionSummary` through `models`, plus
+  `SessionDurableState`, `SessionAccessState`, `SessionLifecycleState`, and
+  `provider_work_is_ready` from `session_lifecycle`; `StoryRuntime`,
+  `RuntimeSession`, `Runtime`, and `Session` from `orchestrator`; and
   `FilesystemConversationCatalog`, `FilesystemConversationEventStore`,
   `Workspace`, plus `initialize_workspace` from `workspace`.
   The re-exported `ActionKind` and `InteractiveAction` include additive search
@@ -119,8 +124,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   their public names and import paths are unchanged.
 - **Direct internal dependencies:** `agents`, `backend`,
   `conversation_retrieval`, `conversation_search`, `conversations`,
-  `directives`, `errors`, `interactive_commands`, `models`, `orchestrator`, and
-  `workspace`.
+  `directives`, `errors`, `interactive_commands`, `models`, `orchestrator`,
+  `session_lifecycle`, and `workspace`.
 - **State, resources, and side effects:** Owns no state or external resource;
   importing the facade loads its exported modules.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
@@ -598,12 +603,15 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Supported surface:** Package-supported `InputKind`, `Phase`, `Verdict`,
   `DebateStatus`, `DebateContextMode`, `DebateContextRequest`,
   `DebateFailureKind`, `DebateProgressPhase`, `DebateProgressEvent`,
-  `DebateProgressSink`, `SessionLeaseState`, `SessionSummary`, `DebateMessage`,
-  `AgentStateEntry`, `PromptFileReference`, `AgentDefinition`, `AgentRequest`,
-  `AgentReply`, `ConversationRequest`, `ConversationReply`, `ConversationResult`,
-  and `DebateResult`. `AgentRequest` carries an additive optional canonical
+  `DebateProgressSink`, `DebateMessage`, `AgentStateEntry`,
+  `PromptFileReference`, `AgentDefinition`, `AgentRequest`, `AgentReply`,
+  `ConversationRequest`, `ConversationReply`, `ConversationResult`, and
+  `DebateResult`. It also preserves exact package-supported compatibility
+  forwards for `SessionLeaseState` and `SessionSummary`, whose canonical owner
+  is `session_lifecycle`. `AgentRequest` carries an additive optional canonical
   `conversation_context` field without changing context-free construction.
-- **Direct internal dependencies:** `agents`, `conversations`, and `errors`.
+- **Direct internal dependencies:** `agents`, `conversations`, `errors`, and
+  `session_lifecycle`.
 - **State, resources, and side effects:** Value contracts own no process state;
   `PromptFileReference` performs verified filesystem reads.
 - **Primary verification/documentation:** `tests/test_prompts.py`,
@@ -694,6 +702,29 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
   `tests/test_cli_context.py`, `tests/test_interactive_consensus.py`,
   `docs/reference/cli.md`, and `docs/guides/consensus-runs.md`.
+
+### `story_writing_agents.session_lifecycle`
+
+- **Source:** `src/story_writing_agents/session_lifecycle.py`
+- **Responsibility:** Own the provider-neutral story-session lifecycle contract
+  boundary.
+- **Supported surface:** Module-supported `SessionDurableState`,
+  `SessionAccessState`, `SessionLifecycleState`, `SessionLeaseState`,
+  `SessionSummary`, `lifecycle_from_session_summary`,
+  `session_summary_from_lifecycle`, and `provider_work_is_ready`. The package
+  facade exports the three canonical types and readiness query; it retains the
+  two legacy types through exact `models` forwards. The two projection helpers
+  intentionally remain module-supported only.
+- **Direct internal dependencies:** None.
+- **State, resources, and side effects:** Frozen, slotted lifecycle and legacy
+  contracts, immutable mapping metadata, deterministic validation, and pure
+  projection/readiness functions only. The module performs no I/O, claims no
+  access, owns no storage, process, provider, thread, filesystem, or mutable
+  runtime state, and has no operational import side effect.
+- **Primary verification/documentation:** `tests/test_session_lifecycle.py`,
+  `tests/test_public_api_and_cli.py`,
+  `docs/reference/backend-and-sessions.md`, and
+  `docs/design/session-lifecycle.md`.
 
 ### `story_writing_agents.smoke`
 
@@ -882,12 +913,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   and methods. Existing debate and one-step provider payloads remain unchanged;
   provider-private thread history remains scoped by session, backend, and agent
   and can therefore span conversations.
-- `models` and `prompts` retain their prior responsibilities, imports, public
-  surfaces, and persistence/provider schemas. The context-selector extraction
-  changes no persistence schema, dependency direction, event-store protocol,
-  or package-facade export. Retrieval adds no dependency, migration, provider
-  tool, streaming, retry, whole-turn deadline, cross-session/archive authority,
-  or direct provider storage edge.
+- `session_lifecycle` owns the pure canonical provider-session lifecycle facts,
+  exact legacy lease/summary contracts, their bidirectional persisted-state
+  projection, and the provider-readiness query. `models` preserves the exact
+  legacy object identities and import paths through compatibility forwards;
+  backend, controller, terminal, persistence, and provider ownership remain
+  unchanged. The lifecycle extraction changes no version-1 bytes or keys,
+  public legacy signature or field order, exit code, migration, dependency,
+  provider operation, or storage edge. Other `models` and `prompts`
+  responsibilities and surfaces remain unchanged.
 - `tests/conversation_event_store_contract.py` is reusable test-only adapter
   conformance support; it is not a production module or supported package API.
 - Direct imports of internal configuration, prompt, workspace-constant, or CLI

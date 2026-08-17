@@ -1,108 +1,103 @@
 # Session lifecycle design
 
 > **Availability:** the controller manages sessions, conversations, routed
-> turns, local/management reads, directives, history, and context
-> consensus. Artifact commands remain unavailable.
+> turns, local/management reads, directives, history, and context consensus.
+> Artifact commands remain unavailable.
 
-<a id="three-independent-facts"></a>
+Key terms: **durable state** is `absent`, `ready`, or `paused`; **access state**
+records claimability or lease ownership; **saved default** is the persisted CLI
+pointer; **attachment** is this backend's lease; **focus** is the controller's
+selected conversation. These are separate facts.
 
-## Four independent facts
+After confirmed `/session end`, `draft` remains the saved default while the
+shell has no attachment or focus. Legacy `selected=True` therefore proves
+neither `held_here` access nor a focused conversation.
 
-| Fact | Persists? | Meaning |
-| --- | --- | --- |
-| Session active | Yes, in its manifest | Provider work is allowed. |
-| Session selected | Yes, in CLI context | Bare `story` knows which session to try. |
-| Session attached | No, through a lease | This backend temporarily owns it. |
-| Conversation selected | Yes, per story session | The shell knows the current subject. |
+## Canonical lifecycle state
 
-Selection never proves lease ownership. Quit detaches; end makes the session
-inactive. Both retain saved selections.
+`SessionLifecycleState` is frozen, slotted, and keyword-only. It carries a safe
+ID, durable/access states, an owner host/PID pair, and timestamp pair. Exactly
+these combinations are valid:
 
-## Entering the lobby
+| Durable state | Valid access states | Owner host and PID | Timestamps |
+| --- | --- | --- | --- |
+| `absent` | `claimable` only | Both absent | Both absent |
+| `ready` | Any access state | Optional pair for `claimable`; required pair otherwise | Required, offset-aware, ordered pair |
+| `paused` | Any access state | Optional pair for `claimable`; required pair otherwise | Required, offset-aware, ordered pair |
 
-The single-use controller installs an `asyncio.Runner` before the lobby; its
-shared event loop serves advisory/consensus operations. It owns final cleanup.
-Explicit entry creates, attaches, or resumes a named session without
-confirmation. Bare entry opens the lobby, attaches an active selection, or asks
-to resume an inactive one with yes as default.
+Access values are `claimable`, `held_here`, `blocked_by_live_local_owner`, and
+`ownership_unknown`. Paused sessions permit all four. An update timestamp
+cannot precede creation.
 
-After acquisition, missing, `null`, missing-record, or archived conversation
-selection enters the inner lobby; stale IDs are not rewritten. Malformed or
-unsafe selection storage is fatal on initial entry.
+## Facts and provider readiness
 
-Acquisition preflights routes/executable discovery but starts no provider.
+```mermaid
+flowchart LR
+    accTitle: Pure session facts and provider readiness
+    accDescr: Provider work requires ready state, locally held access, and ready configuration. Saved defaults and focus remain separate.
+    D[Durable fact] --> S[Validated lifecycle state]
+    A[Access fact] --> S
+    S --> G{ready and held_here?}
+    C[Configuration exactly True] --> G
+    G -->|All true| R[Provider work ready]
+    G -->|Otherwise| N[Not ready]
+    X[Saved default: outside lifecycle value]
+    F[Conversation focus: outside lifecycle value]
+```
 
-## Command gates and management state
+`provider_work_is_ready()` is true only for validated `ready` + `held_here` +
+exact `True` configuration readiness. It performs no I/O or acquisition.
 
-Help/status and roster/session navigation are global. Target, conversation,
-search/transcript, directives, and inspection require attachment; history,
-advisory, and consensus also require active selection. Ordinary and `/say` use
-the sticky target; `@AGENT` is one-shot. Conversation changes preserve it.
+Users can import, validate, project, and query facts. They cannot thereby claim,
+attach, detach, mutate selections/focus, read storage/configuration, start a
+provider, or gain shell behavior. Issue #53 does not yet drive Issue #54
+backend transitions or Issue #55 shell copy/navigation. Exact APIs are in
+[Backend and sessions](../reference/backend-and-sessions.md#lifecycle-value-contracts).
 
-Status refreshes selected metadata and distinguishes saved/attached state. The
-per-session latest accepted `started` debate ID is process-local. Provider-free
-management preserves all scope/story/provider state except successful directive
-overrides. See the [CLI contract](../reference/cli.md#interactive-streams).
+## Entering and command gates
+
+The controller installs one `asyncio.Runner` before the lobby and owns cleanup.
+Explicit entry creates, attaches, or resumes a name. Bare entry opens the
+lobby, attaches an active saved default, or asks to resume a paused one.
+
+An absent, `null`, missing, or archived conversation selection enters the inner
+lobby without rewriting stale IDs; malformed initial selection is fatal.
+Help/status and navigation are global. Content requires attachment; provider
+work also requires an active focused conversation.
 
 ## Attach and switch ordering
 
-For an initial attachment or switch to B, the controller:
+For initial attachment or a switch to B, the controller:
 
 1. acquires and validates B's active owned lease;
 2. loads and validates B's saved conversation, if any;
-3. saves B as the story-session selection when it changed;
-4. detaches source A when switching; and
-5. commits B in memory, resets the visible agent alias to `lead`, and renders.
+3. saves B as the session default when changed;
+4. detaches source A when switching; then
+5. commits B in memory, resets the visible alias to `lead`, and renders.
 
-Failure before step 3 releases B and preserves A. If A cannot detach after B is
-saved, B stays selected, no B orientation appears, close is attempted, and the
-controller exits `2` with `cleanup_failed`.
+Failure before step 3 releases B and preserves A. If A cannot detach afterward,
+B stays saved, no B orientation appears, close is attempted, and exit is `2`
+with `cleanup_failed`.
 
 ## Conversation lifecycle and compensation
 
-```mermaid
-flowchart TD
-    accTitle: Subject conversation selection and archive compensation
-    accDescr: Attachment restores an active choice or opens the inner lobby. Selected archive saves a successor or null; failed saving either proves the restored original or exits.
-    A[Attach story session] --> B{Saved active conversation?}
-    B -->|No, stale, or null| L[Conversation lobby]
-    B -->|Yes| S[Selected conversation]
-    L -->|New: create, then save ID| S
-    L -->|Use: resolve active ID, then save| S
-    S -->|Rename or list| S
-    S --> C{Archive selected?}
-    C -->|No or Ctrl-C| S
-    C -->|Yes| D[Archive metadata]
-    D --> E{Save first active successor or null}
-    E -->|Successor| S
-    E -->|Null| L
-    E -->|Write fails| F[Unarchive and verify original selection and lease]
-    F -->|Proved| S
-    F -->|Uncertain| X[Exit 2 and close best effort]
-```
+Attachment restores an active saved conversation or opens the inner lobby.
+`new` writes metadata before selection; save failure leaves the record and
+prior choice. `use` saves before memory changes; rename/list do not retarget.
 
-`new` writes metadata then selection; save failure leaves the record and prior
-choice. `use` saves before memory changes; `subject` renames; `list` reads only.
-None changes target.
-
-Nonselected archive neither confirms nor reselects. Selected archive defaults
-to no; yes selects the first other active record or `null`. Save failure is
-recoverable only if unarchive, original selection, and lease are proved.
+Archiving another record neither confirms nor reselects. Focused archive
+defaults to no; yes saves the first other active ID or `null`. Save failure must
+unarchive and prove the original selection and lease or exit `2`.
 
 ## End, detach, and close
 
-`/session end` defaults to no. Yes deactivates/releases the lease, retains saved
-session/conversation selections, clears in-process attachment/selection/memory,
-resets target to lead, and returns to outer lobby. No/blank/Ctrl-C stays attached; EOF
-exits without ending. `/quit`, `/exit`, main EOF, and compose EOF also request
-normal cleanup without deactivation.
+Confirmed `/session end` pauses/releases, retains saved defaults, clears process
+scope, resets `lead`, and returns to the lobby. No, blank, or Ctrl-C stays
+attached; confirmation EOF exits without ending. `/quit`, `/exit`, and
+main/compose EOF clean up without pausing.
 
-Cleanup order is `Runner.close()` → known detach → `backend.close()`;
-ordinary failure never skips a later stage. Runner close first finalizes residual
-tasks and async generators. Normal cleanup clears process-only state while
-durable sessions, selections, threads, transcripts, debates, and artifacts stay.
-Any ordinary cleanup failure exits `2` with one best-effort `cleanup_failed`.
-An interrupted Runner close still attempts detach/backend close, clears attached
-conversation/memory state, retains the unproved Runner reference, then
-propagates. See [Backend and sessions](../reference/backend-and-sessions.md) and
+Cleanup attempts `Runner.close()` → detach → `backend.close()` without skipping
+later stages. Durable data remains. Ordinary failure exits `2` with one
+best-effort `cleanup_failed`; interrupted Runner close attempts later cleanup,
+retains its unproved reference, and propagates. See
 [Session storage](../reference/configuration/session-storage.md).

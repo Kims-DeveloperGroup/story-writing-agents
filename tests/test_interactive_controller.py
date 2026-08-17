@@ -704,7 +704,7 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 22)
+        self.assertEqual(len(modules), 23)
 
 
 class ControllerStartupTests(ControllerTestCase):
