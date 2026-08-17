@@ -16,6 +16,9 @@ from story_writing_agents import (
     AgentRequest,
     Phase,
     SPECIALIST_IDS,
+    SessionAccessState,
+    SessionDurableState,
+    SessionLifecycleState,
     Workspace,
 )
 from story_writing_agents.agents import CORE_DOCUMENTS
@@ -63,7 +66,7 @@ class _DelegatingBoundAgent:
 
 
 class BindingBackendMixin:
-    """Give deterministic test backends the file-reference binding contract."""
+    """Give deterministic test backends binding and lifecycle contracts."""
 
     definitions: list[AgentDefinition]
     bound_invocations: list[tuple[AgentDefinition, AgentRequest]]
@@ -78,6 +81,48 @@ class BindingBackendMixin:
 
     async def invoke(self, request: AgentRequest) -> AgentReply:
         raise NotImplementedError
+
+    def validate_provider_configuration(self, _session_id: str) -> bool:
+        """Return the exact provider-ready fact used by neutral test doubles."""
+
+        return True
+
+    def get_session_lifecycle(self, session_id: str) -> SessionLifecycleState:
+        """Return deterministic ready access already held by this test double."""
+
+        return self._test_lifecycle(session_id, held=True)
+
+    def acquire_session_access(self, session_id: str) -> SessionLifecycleState:
+        """Return deterministic ready access held by this test double."""
+
+        return self._test_lifecycle(session_id, held=True)
+
+    def release_session_access(self, session_id: str) -> SessionLifecycleState:
+        """Return deterministic ready state after releasing test-double access."""
+
+        return self._test_lifecycle(session_id, held=False)
+
+    @staticmethod
+    def _test_lifecycle(
+        session_id: str,
+        *,
+        held: bool,
+    ) -> SessionLifecycleState:
+        """Build one exact immutable lifecycle result without external work."""
+
+        return SessionLifecycleState(
+            session_id=session_id,
+            durable_state=SessionDurableState.READY,
+            access_state=(
+                SessionAccessState.HELD_HERE
+                if held
+                else SessionAccessState.CLAIMABLE
+            ),
+            owner_hostname="test-runtime" if held else None,
+            owner_pid=1 if held else None,
+            created_at="2026-01-01T00:00:00+00:00",
+            updated_at="2026-01-01T00:00:00+00:00",
+        )
 
 
 class ScriptedBackend(BindingBackendMixin):

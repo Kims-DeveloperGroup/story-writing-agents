@@ -15,7 +15,7 @@ from story_writing_agents import workspace as workspace_module
 from story_writing_agents.backend import AgentBackend
 from story_writing_agents.cli_context import (
     load_cli_context,
-    select_session,
+    save_default_session,
 )
 from story_writing_agents.interactive_controller import InteractiveController
 from story_writing_agents.interactive_terminal import (
@@ -77,7 +77,7 @@ def _error_record(code: InteractiveErrorCode) -> str:
 
 
 def _persistent_file_snapshot(root: Path) -> dict[str, tuple[bytes, int]]:
-    """Capture durable file bytes and mtimes while excluding transient leases."""
+    """Capture durable file bytes and mtimes without transient access claims."""
 
     return {
         path.relative_to(root).as_posix(): (
@@ -85,7 +85,7 @@ def _persistent_file_snapshot(root: Path) -> dict[str, tuple[bytes, int]]:
             path.stat().st_mtime_ns,
         )
         for path in sorted(root.rglob("*"))
-        if path.is_file() and not path.name.endswith(".lease.json")
+        if path.is_file() and not path.name.endswith(".access.json")
     }
 
 
@@ -97,15 +97,15 @@ class InteractiveSearchFilesystemTests(unittest.TestCase):
 
         return initialized_workspace(self)
 
-    def seed_selected_active_session(self, workspace: Workspace) -> None:
-        """Persist one selected active story session without retaining its lease."""
+    def seed_default_ready_session(self, workspace: Workspace) -> None:
+        """Persist one default ready session without retaining process access."""
 
         backend = AgentBackend(workspace, executable=sys.executable)
         try:
-            backend.start_session(_SESSION)
+            backend.create_session_with_access(_SESSION)
         finally:
             backend.close()
-        select_session(workspace, _SESSION)
+        save_default_session(workspace, _SESSION)
 
     def make_controller(
         self,
@@ -140,7 +140,7 @@ class InteractiveSearchFilesystemTests(unittest.TestCase):
         self,
     ) -> None:
         workspace = self.make_workspace()
-        self.seed_selected_active_session(workspace)
+        self.seed_default_ready_session(workspace)
         catalog = FilesystemConversationCatalog(workspace)
         identifiers = (
             UUID(hex=_A[2:]),
@@ -185,16 +185,15 @@ class InteractiveSearchFilesystemTests(unittest.TestCase):
             mock.patch.object(subprocess, "run") as run,
             mock.patch.object(socket, "create_connection") as connect,
             mock.patch.object(controller_module.asyncio, "run") as async_run,
-            mock.patch.object(backend, "prepare_session") as prepare,
             mock.patch.object(backend, "bind") as bind,
             mock.patch.object(
                 controller_module,
-                "select_session",
-                wraps=select_session,
+                "save_default_session",
+                wraps=save_default_session,
             ) as persist_session,
             mock.patch.object(
                 controller_module,
-                "save_conversation_selection",
+                "save_default_conversation",
             ) as persist_conversation,
             mock.patch.object(
                 controller._runtime,
@@ -213,7 +212,6 @@ class InteractiveSearchFilesystemTests(unittest.TestCase):
         run.assert_not_called()
         connect.assert_not_called()
         async_run.assert_not_called()
-        prepare.assert_not_called()
         bind.assert_not_called()
         persist_session.assert_not_called()
         persist_conversation.assert_not_called()
@@ -223,7 +221,7 @@ class InteractiveSearchFilesystemTests(unittest.TestCase):
         self.assertEqual(core_snapshot(workspace), core_before)
         self.assertFalse(
             workspace.path(
-                "agent_states/orchestrator_state/conversation_selections/"
+                "agent_states/orchestrator_state/conversation_defaults/"
                 f"{_SESSION}.json"
             ).exists()
         )
@@ -265,7 +263,7 @@ class InteractiveSearchFilesystemTests(unittest.TestCase):
         self,
     ) -> None:
         workspace = self.make_workspace()
-        self.seed_selected_active_session(workspace)
+        self.seed_default_ready_session(workspace)
         catalog = FilesystemConversationCatalog(workspace)
         identifiers = (
             UUID(hex=_COLLIDING_A[2:]),
@@ -327,7 +325,7 @@ class InteractiveSearchFilesystemTests(unittest.TestCase):
         self,
     ) -> None:
         workspace = self.make_workspace()
-        self.seed_selected_active_session(workspace)
+        self.seed_default_ready_session(workspace)
         catalog = FilesystemConversationCatalog(workspace)
         with mock.patch.object(
             workspace_module,

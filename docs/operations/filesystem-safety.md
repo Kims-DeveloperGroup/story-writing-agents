@@ -2,7 +2,7 @@
 
 > **Availability:** containment and no-symlink checks, exclusive manuscript and
 > conversation creation, serialized transcript replacement, atomic per-file
-> selection/metadata replacement, and best-effort artifact rollback are
+> default/metadata replacement, and best-effort artifact rollback are
 > implemented.
 
 Key terms: **containment**—keeping paths beneath the workspace root; **symlink**—
@@ -20,7 +20,7 @@ of overwrite; **atomic file**—a replacement observed as old or complete new da
   workspace.
 
 The symlink rule protects logical as well as physical boundaries. A link cannot
-redirect a manuscript, core document, selection, catalog record, or transcript.
+redirect a manuscript, core document, default, catalog record, or transcript.
 Workspace and template identifiers have additional validation.
 
 CLI discovery chooses the nearest initialized ancestor and never initializes a
@@ -31,7 +31,7 @@ Manuscript names may use safe relative subdirectories beneath `manuscript/`.
 A direct client of generic `Workspace.write_text()` is trusted and can modify
 any safely contained relative file; containment is not authorization.
 
-Conversation adapters and selection helpers bind safe IDs to fixed paths. They
+Conversation adapters and default helpers bind safe IDs to fixed paths. They
 check every component and require embedded IDs to match the owning path. This
 protects namespace integrity, not access control: a process with workspace
 access can still name another session.
@@ -49,10 +49,10 @@ serialized together. An append validates the complete old transcript, then
 atomically replaces the complete file; readers observe the old or complete new
 version, not a partial appended line.
 
-The event-store adapter does not acquire or verify a session lease. A caller
-that permits multiple processes must use the story-session lease to exclude
-same-session writers. The lease is the cross-process guard; the in-process lock
-alone is insufficient.
+The event-store adapter does not acquire or verify story-session access. A
+caller that permits multiple processes must acquire the session's V2 access
+claim before same-session writes. The persisted claim and claim guard provide
+cross-process exclusion; the in-process transcript lock alone is insufficient.
 
 After catalog identity succeeds, a missing transcript is valid empty history.
 An existing empty file, malformed JSONL, invalid sequence or pairing, or
@@ -84,10 +84,10 @@ Conversation rename and status changes atomically replace one complete metadata
 file. Failure before replacement preserves the old record. A failure reported
 after successful replacement can leave the complete new record durable, but
 not partial JSON. Catalog mutations cannot alter provider sessions, debates,
-manuscripts, core documents, CLI selection, or agent state.
+manuscripts, core documents, CLI defaults, or agent state.
 
-Session and conversation selection saves also replace one complete fixed JSON
-file. A conversation-selection failure preserves its prior bytes and cannot
+Session and conversation default saves also replace one complete fixed JSON
+file. A conversation-default failure preserves its prior bytes and cannot
 alter catalog metadata; operations spanning both files are not atomic. See
 [Persistence](../design/persistence.md) for the cross-file consequence.
 

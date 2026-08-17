@@ -13,6 +13,10 @@ class WorkspaceFormatError(StoryWritingAgentsError):
     """Raised when a persisted workspace file has an invalid format."""
 
 
+class WorkspaceVersionUnsupportedError(WorkspaceFormatError):
+    """Raised when persisted workspace state uses an unsupported old schema."""
+
+
 class ConfigurationError(StoryWritingAgentsError):
     """Raised when global, agent, or runtime configuration is invalid."""
 
@@ -49,8 +53,16 @@ class SessionNotFoundError(BackendProtocolError):
     """Raised when a requested provider session does not exist."""
 
 
-class SessionInUseError(BackendProtocolError):
-    """Raised when another process may own a provider session lease."""
+class SessionPausedError(BackendProtocolError):
+    """Raised when provider work requires a ready story session."""
+
+
+class SessionAccessBlockedError(BackendProtocolError):
+    """Raised when a live local process owns story-session access."""
+
+
+class SessionOwnershipUnknownError(BackendProtocolError):
+    """Raised when safe access ownership cannot be determined."""
 
 
 class DebateExistsError(StoryWritingAgentsError):

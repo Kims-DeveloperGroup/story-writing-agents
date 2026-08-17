@@ -52,7 +52,7 @@ candidate where applicable. `messages` is the public blackboard snapshot.
 `agent_state` contains only the receiving agent's session-wide stored outcomes;
 parallel peers receive the same pre-phase state snapshot.
 
-`conversation_context` is `None` for legacy and fresh runs. Included runs put
+`conversation_context` is `None` for context-omitted and fresh runs. Included runs put
 the same validated immutable window in every draft, audit, proposal, synthesis,
 and finalization request. It stays a separate provider field: the runtime does
 not concatenate it into the task, input, candidate, blackboard, agent state, or

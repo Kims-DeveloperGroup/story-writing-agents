@@ -115,11 +115,34 @@ class PublicApiTests(unittest.TestCase):
     def test_all_declared_public_imports_exist_and_runtime_aliases_are_stable(
         self,
     ) -> None:
+        self.assertEqual(len(story_writing_agents.__all__), 120)
         for name in story_writing_agents.__all__:
             with self.subTest(name=name):
                 self.assertTrue(hasattr(story_writing_agents, name))
         self.assertIs(Runtime, StoryRuntime)
         self.assertIs(Session, RuntimeSession)
+        for removed in (
+            "Session" + "LeaseState",
+            "Session" + "Summary",
+            "Session" + "InUseError",
+        ):
+            self.assertNotIn(removed, story_writing_agents.__all__)
+            self.assertFalse(hasattr(story_writing_agents, removed))
+
+        for lifecycle_name in (
+            "SessionDurableState",
+            "SessionAccessState",
+            "SessionLifecycleState",
+            "provider_work_is_ready",
+            "SessionExistsError",
+            "SessionNotFoundError",
+            "SessionPausedError",
+            "SessionAccessBlockedError",
+            "SessionOwnershipUnknownError",
+            "WorkspaceVersionUnsupportedError",
+        ):
+            self.assertIn(lifecycle_name, story_writing_agents.__all__)
+            self.assertTrue(hasattr(story_writing_agents, lifecycle_name))
 
     def test_top_level_exports_include_models_directives_and_public_errors(
         self,
@@ -797,7 +820,7 @@ class CliTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertIn(command, completed.stdout)
 
-    def test_bare_and_chat_parser_shapes_preserve_legacy_help(self) -> None:
+    def test_bare_chat_and_lifecycle_parser_shapes_have_help(self) -> None:
         parser = build_parser()
         self.assertEqual(vars(parser.parse_args([])), {"command": None})
         parsed = parser.parse_args(
@@ -840,7 +863,9 @@ class CliTests(unittest.TestCase):
             ["--help"],
             ["chat", "--help"],
             ["run", "--help"],
-            ["session", "start", "--help"],
+            ["session", "create", "--help"],
+            ["session", "reopen", "--help"],
+            ["session", "pause", "--help"],
         ):
             with self.subTest(arguments=arguments):
                 completed = subprocess.run(
@@ -994,7 +1019,7 @@ class CliTests(unittest.TestCase):
                 stdin = TtyStringIO(is_terminal=True)
                 stdout = TtyStringIO(is_terminal=True)
                 stderr = io.StringIO()
-                cli_context = CliContext(selected_session="saved")
+                cli_context = CliContext(default_session_id="saved")
                 backend_value = mock.Mock()
                 controller_value = mock.Mock()
                 controller_value.run_session_lobby.return_value = 7

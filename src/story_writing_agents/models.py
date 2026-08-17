@@ -47,7 +47,7 @@ class DebateStatus(StrEnum):
 
 
 class DebateContextMode(StrEnum):
-    """Whether one debate includes or excludes its selected conversation."""
+    """Whether one debate includes or excludes its supplied conversation."""
 
     INCLUDED = "included"
     FRESH = "fresh"
@@ -55,7 +55,7 @@ class DebateContextMode(StrEnum):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class DebateContextRequest:
-    """Immutable selected-conversation request for one debate run."""
+    """Immutable supplied-conversation request for one debate run."""
 
     conversation_id: str
     mode: DebateContextMode
@@ -239,29 +239,6 @@ class DebateProgressEvent:
 
 
 DebateProgressSink = Callable[[DebateProgressEvent], None]
-
-
-class SessionLeaseState(StrEnum):
-    """Observed ownership and liveness state for a provider-session lease."""
-
-    AVAILABLE = "available"
-    OWNED = "owned"
-    IN_USE = "in_use"
-    UNVERIFIED = "unverified"
-
-
-@dataclass(frozen=True, slots=True)
-class SessionSummary:
-    """Immutable provider-session lifecycle status."""
-
-    session_id: str
-    active: bool
-    selected: bool
-    lease_state: SessionLeaseState
-    lease_hostname: str | None
-    lease_pid: int | None
-    created_at: str
-    updated_at: str
 
 
 @dataclass(frozen=True, slots=True)

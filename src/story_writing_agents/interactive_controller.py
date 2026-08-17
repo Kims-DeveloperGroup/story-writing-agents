@@ -8,9 +8,9 @@ from .agents import AGENT_SPECS, LEAD_ORCHESTRATOR, ROSTER
 from .backend import AgentBackend
 from .cli_context import (
     CliContext,
-    load_conversation_selection,
-    save_conversation_selection,
-    select_session,
+    load_default_conversation,
+    save_default_conversation,
+    save_default_session,
 )
 from .conversation_search import (
     CONVERSATION_MEMORY_POLICY,
@@ -47,12 +47,15 @@ from .errors import (
     ConversationRetrievalSemanticError,
     DirectiveError,
     ProgressObserverError,
+    SessionAccessBlockedError,
     SessionExistsError,
     SessionIdError,
-    SessionInUseError,
     SessionNotFoundError,
+    SessionOwnershipUnknownError,
+    SessionPausedError,
     WorkspaceFormatError,
     WorkspaceSecurityError,
+    WorkspaceVersionUnsupportedError,
 )
 from .interactive_commands import (
     AGENT_ROUTES,
@@ -79,11 +82,15 @@ from .models import (
     DebateResult,
     DebateStatus,
     InputKind,
-    SessionLeaseState,
-    SessionSummary,
 )
 from .orchestrator import StoryRuntime
 from .run_inputs import read_draft_file
+from .session_lifecycle import (
+    SessionAccessState,
+    SessionDurableState,
+    SessionLifecycleState,
+    provider_work_is_ready,
+)
 from .workspace import (
     FilesystemConversationCatalog,
     FilesystemConversationEventStore,
@@ -93,8 +100,8 @@ from .workspace import (
 
 _UNAVAILABLE_SUMMARY = "This command is not available in the session lobby."
 _LOBBY_COMMAND_HINT = (
-    "Use /help, /session list, /session new NAME, /session resume [NAME], "
-    "/session end, or /quit."
+    "Use /help, /session list, /session create NAME, /session open [NAME], "
+    "/session pause, or /quit."
 )
 _MINIMUM_CONVERSATION_PREFIX_LENGTH = 12
 _AGENT_ROUTE_ALIASES = frozenset(
@@ -113,8 +120,10 @@ _RECOVERABLE_SESSION_ERRORS = frozenset(
         InteractiveErrorCode.SESSION_INVALID,
         InteractiveErrorCode.SESSION_EXISTS,
         InteractiveErrorCode.SESSION_NOT_FOUND,
-        InteractiveErrorCode.SESSION_IN_USE,
-        InteractiveErrorCode.SESSION_INACTIVE,
+        InteractiveErrorCode.SESSION_PAUSED,
+        InteractiveErrorCode.SESSION_ACCESS_BLOCKED,
+        InteractiveErrorCode.SESSION_OWNERSHIP_UNKNOWN,
+        InteractiveErrorCode.WORKSPACE_VERSION_UNSUPPORTED,
         InteractiveErrorCode.PROVIDER_PREFLIGHT_FAILED,
     }
 )
@@ -171,7 +180,7 @@ class InteractiveController:
         "_last_started_debate_by_session",
         "_runner",
         "_runtime",
-        "_selected_conversation",
+        "_focused_conversation",
         "_started",
         "_target_agent_id",
         "_terminal",
@@ -194,7 +203,7 @@ class InteractiveController:
         adapter; an injected protocol implementation is retained as borrowed
         state and is never closed by this controller. The event store is shared
         by the retained runtime and later attachment-scoped memory services.
-        Construction performs no provider call, filesystem write, or lease.
+        Construction performs no provider call, filesystem write, or access claim.
         """
 
         if not isinstance(workspace, Workspace):
@@ -235,7 +244,7 @@ class InteractiveController:
             ConversationMemoryService | None
         ) = None
         self._attached_session_id: str | None = None
-        self._selected_conversation: ConversationMetadata | None = None
+        self._focused_conversation: ConversationMetadata | None = None
         self._target_agent_id = LEAD_ORCHESTRATOR
         self._last_started_debate_by_session: dict[str, str] = {}
         self._runner: asyncio.Runner | None = None
@@ -249,12 +258,12 @@ class InteractiveController:
     ) -> int:
         """Run one interactive attachment lifecycle and return status 0 or 2.
 
-        ``requested_session`` selects explicit create/attach/resume behavior;
-        ``None`` uses saved selection. Commands may mutate owned process state,
+        ``requested_session`` chooses explicit create/open behavior; ``None``
+        uses the saved default. Commands may mutate owned process state,
         established session/conversation persistence, or runtime-owned turn
         transcripts. One controller-owned ``asyncio.Runner`` serves every
         accepted provider coroutine and closes before session/backend cleanup.
-        Every started exit detaches known ownership and closes the borrowed
+        Every started exit releases known access and closes the borrowed
         backend; fatal uncertainty returns 2, and a second run raises
         ``RuntimeError`` without reacquiring resources.
         """
@@ -303,110 +312,109 @@ class InteractiveController:
         return exit_code
 
     def _enter_initial_session(self, requested_session: str | None) -> bool:
-        """Apply explicit or saved startup selection; return whether EOF exits.
+        """Open an explicit or default session; return whether startup saw EOF.
 
-        Recoverable acquisition failures are rendered and leave the controller
-        unattached. Fatal workspace or cleanup uncertainty raises a typed abort
-        for the outer resource boundary.
+        An explicit missing session is created. A paused default requires one
+        confirmation before it is reopened. Recoverable failures leave the
+        controller in the lobby; cleanup uncertainty reaches the outer boundary.
         """
 
         if requested_session is not None:
             self._enter_explicit_session(requested_session)
             return False
 
-        selected_session = self._context.selected_session
-        if selected_session is None:
+        default_session = self._context.default_session_id
+        if default_session is None:
             return False
         try:
-            summary = self._backend.get_session_summary(
-                selected_session,
-                selected_session=selected_session,
-            )
+            state = self._backend.get_session_lifecycle(default_session)
+            self._require_lifecycle_state(state, default_session)
         except Exception as exc:
-            self._present_session_failure(exc, selected_session)
+            self._present_session_failure(exc, default_session)
             return False
 
-        if not self._summary_matches_requested_session(
-            summary,
-            selected_session,
-        ):
+        if state.durable_state is SessionDurableState.ABSENT:
             self._present_session_failure(
-                BackendProtocolError("session summary did not match request"),
-                selected_session,
+                SessionNotFoundError(f"session not found: {default_session}"),
+                default_session,
             )
             return False
-
-        if summary.active:
-            self._acquire_known_session(selected_session, summary)
-            return False
-
-        decision = self._terminal.request_confirmation(
-            f"Resume selected session {selected_session}?",
-            default=True,
-        )
-        if decision is ConfirmationResult.EOF:
-            return True
-        if decision is not ConfirmationResult.YES:
-            self._write_session_resume_cancelled_status()
-            return False
-        self._acquire_known_session(selected_session, summary)
+        if state.durable_state is SessionDurableState.PAUSED:
+            decision = self._terminal.request_confirmation(
+                f"Open default session {default_session}?",
+                default=True,
+            )
+            if decision is ConfirmationResult.EOF:
+                return True
+            if decision is not ConfirmationResult.YES:
+                self._write_session_open_cancelled_status()
+                return False
+        self._open_known_session(default_session)
         return False
 
     def _enter_explicit_session(self, session_id: str) -> None:
-        """Create a missing explicit session or attach/resume an existing one.
-
-        The method performs no confirmation. Recoverable failures keep the
-        controller unattached; successful lease acquisition is followed by
-        selection persistence and orientation rendering.
-        """
+        """Create a missing explicit session or open an existing one."""
 
         try:
-            summary = self._backend.get_session_summary(
-                session_id,
-                selected_session=self._context.selected_session,
-            )
-        except SessionNotFoundError:
-            self._create_and_attach_session(session_id)
-            return
+            state = self._backend.get_session_lifecycle(session_id)
+            self._require_lifecycle_state(state, session_id)
         except Exception as exc:
             self._present_session_failure(exc, session_id)
             return
-        self._acquire_known_session(session_id, summary)
+        if state.durable_state is SessionDurableState.ABSENT:
+            self._create_and_attach_destination(session_id)
+            return
+        self._open_known_session(session_id)
 
-    def _create_and_attach_session(self, session_id: str) -> None:
-        """Create and lease one destination, then select or switch to it.
+    def _create_and_attach_destination(self, session_id: str) -> None:
+        """Validate configuration, create with access, and commit attachment."""
 
-        Acquisition failures preserve the current attachment. A successful
-        create is cleaned up if selection cannot be persisted; cleanup
-        uncertainty aborts the process with ``cleanup_failed``.
-        """
-
+        if session_id == self._attached_session_id:
+            self._terminal.write_error(
+                InteractiveError(InteractiveErrorCode.SESSION_EXISTS)
+            )
+            return
+        access_acquired = False
         try:
-            summary = self._backend.create_session(session_id)
+            configured = self._backend.validate_provider_configuration(session_id)
+            if configured is not True:
+                raise BackendProtocolError(
+                    "provider configuration validation returned a non-true value"
+                )
+            before = self._backend.get_session_lifecycle(session_id)
+            self._require_lifecycle_state(before, session_id)
+            if before.durable_state is not SessionDurableState.ABSENT:
+                raise SessionExistsError(f"session already exists: {session_id}")
+            acquired = self._backend.create_session_with_access(session_id)
+            access_acquired = True
+            self._require_ready_access_state(acquired, session_id)
+            observed = self._backend.get_session_lifecycle(session_id)
+            self._require_correlated_state(
+                None,
+                acquired,
+                observed,
+                session_id,
+            )
         except Exception as exc:
+            if access_acquired:
+                self._release_failed_new_destination(session_id)
             self._present_session_failure(exc, session_id)
             return
         self._accept_acquired_destination(
-            session_id,
-            summary,
+            acquired,
             AttachmentKind.CREATED,
         )
 
-    def _resume_selected_or_named_session(
+    def _open_default_or_named_session(
         self,
         requested_session: str | None,
     ) -> None:
-        """Resume an explicit or saved session without creating missing state.
-
-        The already-attached destination is an acknowledged no-op. Otherwise
-        lifecycle failures retain the source attachment and selection whenever
-        their public state remains trustworthy.
-        """
+        """Open an explicit or default session without creating missing state."""
 
         session_id = (
             requested_session
             if requested_session is not None
-            else self._context.selected_session
+            else self._context.default_session_id
         )
         if session_id is None:
             self._terminal.write_error(
@@ -419,114 +427,86 @@ class InteractiveController:
                 f"Already attached to {session_id}.",
             )
             return
+        self._open_known_session(session_id)
+
+    def _open_known_session(self, session_id: str) -> None:
+        """Run validate, pre-read, acquire/reopen, and correlated post-read."""
+
+        newly_acquired = False
         try:
-            summary = self._backend.get_session_summary(
+            configured = self._backend.validate_provider_configuration(session_id)
+            if configured is not True:
+                raise BackendProtocolError(
+                    "provider configuration validation returned a non-true value"
+                )
+            before = self._backend.get_session_lifecycle(session_id)
+            self._require_lifecycle_state(before, session_id)
+            if before.durable_state is SessionDurableState.ABSENT:
+                raise SessionNotFoundError(f"session not found: {session_id}")
+            newly_acquired = before.access_state is not SessionAccessState.HELD_HERE
+            if before.durable_state is SessionDurableState.PAUSED:
+                acquired = self._backend.reopen_session_with_access(session_id)
+                attachment = AttachmentKind.REOPENED
+            else:
+                acquired = self._backend.acquire_session_access(session_id)
+                attachment = AttachmentKind.OPENED
+            self._require_ready_access_state(acquired, session_id)
+            observed = self._backend.get_session_lifecycle(session_id)
+            self._require_correlated_state(
+                before,
+                acquired,
+                observed,
                 session_id,
-                selected_session=self._context.selected_session,
             )
         except Exception as exc:
+            if newly_acquired:
+                self._release_failed_new_destination(session_id)
             self._present_session_failure(exc, session_id)
             return
-        self._acquire_known_session(session_id, summary)
-
-    def _acquire_known_session(
-        self,
-        expected_session: str,
-        summary: SessionSummary,
-    ) -> None:
-        """Lease a known session with attach or resume semantics, then commit.
-
-        The summary must exactly match ``expected_session`` before its active
-        state selects the public backend operation. Races and preflight failures
-        are reported without changing the current source.
-        """
-
-        if not self._summary_matches_requested_session(
-            summary,
-            expected_session,
-        ):
-            self._present_session_failure(
-                BackendProtocolError("session summary did not match request"),
-                expected_session,
-            )
-            return
-        session_id = expected_session
-        attachment = (
-            AttachmentKind.ATTACHED
-            if summary.active
-            else AttachmentKind.RESUMED
-        )
-        try:
-            acquired = (
-                self._backend.attach_session(session_id)
-                if summary.active
-                else self._backend.resume_session(session_id)
-            )
-        except Exception as exc:
-            self._present_session_failure(
-                exc,
-                session_id,
-                check_for_inactive_race=summary.active,
-            )
-            return
-        self._accept_acquired_destination(session_id, acquired, attachment)
+        self._accept_acquired_destination(acquired, attachment)
 
     def _accept_acquired_destination(
         self,
-        expected_session: str,
-        summary: SessionSummary,
+        state: SessionLifecycleState,
         attachment: AttachmentKind,
     ) -> None:
-        """Validate a lease and read scope, then attach or switch safely.
+        """Load destination focus and commit an exact ready access state safely."""
 
-        The exact ``SessionSummary`` must identify ``expected_session`` as
-        active and owned. Any mismatch releases the requested destination when
-        possible and aborts into backend-close cleanup before selection writes.
-        Saved conversation validation and memory-service construction complete
-        before source detach or destination persistence.
-        """
-
-        if (
-            not self._summary_matches_requested_session(
-                summary,
-                expected_session,
-            )
-            or summary.active is not True
-            or summary.lease_state is not SessionLeaseState.OWNED
-        ):
-            self._release_uncommitted_destination(expected_session)
+        session_id = state.session_id
+        try:
+            self._require_ready_access_state(state, session_id)
+        except (TypeError, ValueError, BackendProtocolError):
+            self._release_uncommitted_destination(session_id)
             self._abandon_known_attachment_for_cleanup_abort()
         try:
-            selected_conversation = self._load_destination_conversation(
-                summary.session_id
-            )
+            focused_conversation = self._load_destination_conversation(session_id)
         except Exception as exc:
-            self._release_uncommitted_destination(expected_session)
+            self._release_uncommitted_destination(session_id)
             self._present_destination_conversation_failure(exc)
             return
         try:
             memory_service = ConversationMemoryService(
-                ConversationSearchScope(summary.session_id),
+                ConversationSearchScope(session_id),
                 self._conversation_catalog,
                 self._conversation_event_store,
             )
         except Exception:
-            self._release_uncommitted_destination(expected_session)
+            self._release_uncommitted_destination(session_id)
             raise _ControllerAbort(
                 InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
             ) from None
         if self._attached_session_id is None:
-            self._attach_selected_session(
-                summary.session_id,
+            self._attach_destination_session(
+                session_id,
                 attachment,
-                selected_conversation,
+                focused_conversation,
                 memory_service,
             )
             return
         self._switch_attached_session(
-            summary.session_id,
+            session_id,
             attachment,
-            selected_conversation,
+            focused_conversation,
             memory_service,
         )
 
@@ -534,25 +514,25 @@ class InteractiveController:
         self,
         session_id: str,
     ) -> ConversationMetadata | None:
-        """Load an existing active saved choice for one acquired destination.
+        """Load an existing active default for one acquired destination.
 
         Missing files, null choices, absent records, and archived records return
-        ``None`` without rewriting persistence. Malformed selection or catalog
+        ``None`` without rewriting persistence. Malformed default or catalog
         state propagates so the caller can release the uncommitted destination
         before presenting a safe error.
         """
 
-        selected_id = load_conversation_selection(self._workspace, session_id)
-        if selected_id is None:
+        default_id = load_default_conversation(self._workspace, session_id)
+        if default_id is None:
             return None
         try:
-            metadata = self._conversation_catalog.get(session_id, selected_id)
+            metadata = self._conversation_catalog.get(session_id, default_id)
         except ConversationNotFoundError:
             return None
         validated = self._validated_catalog_metadata(
             metadata,
             session_id,
-            expected_conversation_id=selected_id,
+            expected_conversation_id=default_id,
         )
         if validated.status is ConversationStatus.ARCHIVED:
             return None
@@ -564,10 +544,10 @@ class InteractiveController:
     ) -> None:
         """Render a released destination's typed catalog failure without prose.
 
-        The caller has already returned the destination lease. Workspace
+        The caller has already returned destination access. Workspace
         failures render and preserve an existing source, but an initial
         attachment has no source and aborts. Protocol/internal failure always
-        aborts so the outer boundary detaches any known source and closes.
+        aborts so the outer boundary releases any known source and closes.
         """
 
         error = self._classify_conversation_failure(failure)
@@ -578,29 +558,29 @@ class InteractiveController:
             raise _ControllerAbort(error)
         self._terminal.write_error(error)
 
-    def _attach_selected_session(
+    def _attach_destination_session(
         self,
         session_id: str,
         attachment: AttachmentKind,
-        selected_conversation: ConversationMetadata | None,
+        focused_conversation: ConversationMetadata | None,
         memory_service: ConversationMemoryService,
     ) -> None:
         """Persist and commit one destination with its scoped memory service.
 
-        Selection is written only after lease acquisition. A selection failure
+        The default is written only after access acquisition. A write failure
         releases the destination before it is reported; failed release makes
-        the remaining lease state fatal and delegates cleanup to backend close.
+        the remaining access state fatal and delegates cleanup to backend close.
         The validated candidate is retained only by a successful commit.
         """
 
-        next_context = self._persist_destination_selection(session_id)
+        next_context = self._persist_destination_default(session_id)
         if next_context is None:
             return
         self._commit_attached_session(
             next_context,
             session_id,
             attachment,
-            selected_conversation,
+            focused_conversation,
             memory_service,
         )
 
@@ -608,25 +588,26 @@ class InteractiveController:
         self,
         destination_session: str,
         attachment: AttachmentKind,
-        selected_conversation: ConversationMetadata | None,
+        focused_conversation: ConversationMetadata | None,
         memory_service: ConversationMemoryService,
     ) -> None:
-        """Select a leased destination before replacing source and read scope.
+        """Save the destination default before replacing source and read scope.
 
-        Destination acquisition has already succeeded. Selection failure
-        releases it and preserves the source. Source-detach failure after the
-        selection write is not rolled back; owned resources are closed best
+        Destination acquisition has already succeeded. Default-write failure
+        releases it and preserves the source. Source-release failure after the
+        default write is not rolled back; owned resources are closed best
         effort and the process exits with ``cleanup_failed``. The candidate
-        memory service commits only after source detach succeeds.
+        memory service commits only after source access is released.
         """
 
         source_session = self._attached_session_id
         assert source_session is not None
-        next_context = self._persist_destination_selection(destination_session)
+        next_context = self._persist_destination_default(destination_session)
         if next_context is None:
             return
         try:
-            self._backend.detach_session(source_session)
+            released = self._backend.release_session_access(source_session)
+            self._require_released_state(released, source_session)
         except Exception:
             self._abandon_known_attachment_for_cleanup_abort()
         self._conversation_memory_service = None
@@ -634,32 +615,32 @@ class InteractiveController:
             next_context,
             destination_session,
             attachment,
-            selected_conversation,
+            focused_conversation,
             memory_service,
         )
 
-    def _persist_destination_selection(
+    def _persist_destination_default(
         self,
         destination_session: str,
     ) -> CliContext | None:
-        """Persist a changed destination after leasing it, or return current.
+        """Persist a changed default after acquiring access, or return current.
 
-        On write failure the uncommitted destination lease is released. The
+        On write failure uncommitted destination access is released. The
         failure is then reported when recoverable or escalated when workspace
         state is unusable; no controller attachment state is changed here.
         """
 
-        if self._context.selected_session == destination_session:
+        if self._context.default_session_id == destination_session:
             return self._context
         try:
-            return select_session(self._workspace, destination_session)
+            return save_default_session(self._workspace, destination_session)
         except Exception as exc:
             self._release_uncommitted_destination(destination_session)
             self._present_session_failure(exc, destination_session)
             return None
 
     def _release_uncommitted_destination(self, session_id: str) -> None:
-        """Release a leased destination after pre-commit failure or abort.
+        """Release destination access after pre-commit failure or abort.
 
         A failed release makes all attachment bookkeeping uncertain, so the
         source marker is cleared and the outer boundary performs only backend
@@ -667,7 +648,22 @@ class InteractiveController:
         """
 
         try:
-            self._backend.detach_session(session_id)
+            released = self._backend.release_session_access(session_id)
+            self._require_released_state(released, session_id)
+        except Exception:
+            self._abandon_known_attachment_for_cleanup_abort()
+
+    def _release_failed_new_destination(self, session_id: str) -> None:
+        """Compensate a failed newly acquired destination without source loss."""
+
+        try:
+            state = self._backend.get_session_lifecycle(session_id)
+            self._require_lifecycle_state(state, session_id)
+            if state.access_state is SessionAccessState.HELD_HERE:
+                released = self._backend.release_session_access(session_id)
+                self._require_released_state(released, session_id)
+        except (SessionNotFoundError, WorkspaceVersionUnsupportedError):
+            return
         except Exception:
             self._abandon_known_attachment_for_cleanup_abort()
 
@@ -676,19 +672,19 @@ class InteractiveController:
         context: CliContext,
         session_id: str,
         attachment: AttachmentKind,
-        selected_conversation: ConversationMetadata | None,
+        focused_conversation: ConversationMetadata | None,
         memory_service: ConversationMemoryService,
     ) -> None:
         """Commit attachment, memory scope, routing, and orientation together.
 
-        The destination lease and story-session selection are already durable.
+        Destination access and the story-session default are already durable.
         This method performs no backend or catalog lifecycle operation and
         retains the prebuilt read service plus validated destination metadata.
         """
 
         self._context = context
         self._attached_session_id = session_id
-        self._selected_conversation = selected_conversation
+        self._focused_conversation = focused_conversation
         self._conversation_memory_service = memory_service
         self._target_agent_id = LEAD_ORCHESTRATOR
         self._terminal.write_session_orientation(
@@ -698,6 +694,152 @@ class InteractiveController:
             self._target_agent_id,
             history_count=None,
         )
+
+    @staticmethod
+    def _require_lifecycle_state(
+        state: object,
+        expected_session: str,
+    ) -> SessionLifecycleState:
+        """Return an exact correlated lifecycle value or raise protocol error."""
+
+        if type(state) is not SessionLifecycleState:
+            raise BackendProtocolError(
+                "backend returned an invalid session lifecycle value"
+            )
+        try:
+            provider_work_is_ready(
+                state,
+                provider_configuration_ready=False,
+            )
+        except (TypeError, ValueError) as exc:
+            raise BackendProtocolError(
+                "backend returned malformed session lifecycle facts"
+            ) from exc
+        if state.session_id != expected_session:
+            raise BackendProtocolError(
+                "backend returned lifecycle facts for another session"
+            )
+        return state
+
+    @classmethod
+    def _require_ready_access_state(
+        cls,
+        state: object,
+        expected_session: str,
+    ) -> SessionLifecycleState:
+        """Require exact ready durable state with access held by this process."""
+
+        value = cls._require_lifecycle_state(state, expected_session)
+        if (
+            value.durable_state is not SessionDurableState.READY
+            or value.access_state is not SessionAccessState.HELD_HERE
+        ):
+            raise BackendProtocolError(
+                "backend did not return ready access held by this process"
+            )
+        return value
+
+    @classmethod
+    def _require_correlated_state(
+        cls,
+        initial: SessionLifecycleState | None,
+        transition: object,
+        observed: object,
+        expected_session: str,
+    ) -> SessionLifecycleState:
+        """Require the transition result and immediate post-read to be identical."""
+
+        first = cls._require_ready_access_state(transition, expected_session)
+        second = cls._require_ready_access_state(observed, expected_session)
+        if initial is not None:
+            before = cls._require_lifecycle_state(initial, expected_session)
+            if first.created_at != before.created_at:
+                raise BackendProtocolError(
+                    "session creation identity changed during access acquisition"
+                )
+            if (
+                before.durable_state is SessionDurableState.READY
+                and first.updated_at != before.updated_at
+            ):
+                raise BackendProtocolError(
+                    "ready session changed during access acquisition"
+                )
+            if (
+                before.durable_state is SessionDurableState.PAUSED
+                and first.updated_at == before.updated_at
+            ):
+                raise BackendProtocolError(
+                    "reopened session did not advance its durable timestamp"
+                )
+        if second != first:
+            raise BackendProtocolError(
+                "session lifecycle changed during access acquisition"
+            )
+        return second
+
+    @classmethod
+    def _require_released_state(
+        cls,
+        state: object,
+        expected_session: str,
+    ) -> SessionLifecycleState:
+        """Require a valid post-release state no longer held by this process."""
+
+        value = cls._require_lifecycle_state(state, expected_session)
+        if value.access_state is SessionAccessState.HELD_HERE:
+            raise BackendProtocolError(
+                "backend retained process access after release"
+            )
+        return value
+
+    def _provider_work_is_ready(self, state: SessionLifecycleState) -> bool:
+        """Derive readiness from a read-only configuration validation and state."""
+
+        try:
+            configured = self._backend.validate_provider_configuration(
+                state.session_id
+            )
+        except (BackendProtocolError, ConfigurationError):
+            configured = False
+        if type(configured) is not bool:
+            raise BackendProtocolError(
+                "provider configuration validation returned a non-boolean value"
+            )
+        return provider_work_is_ready(
+            state,
+            provider_configuration_ready=configured,
+        )
+
+    @staticmethod
+    def _next_session_action(
+        state: SessionLifecycleState | None,
+        *,
+        attached: bool,
+        focused: bool,
+        provider_ready: bool,
+    ) -> str:
+        """Return the fixed next action for one read-only lifecycle snapshot."""
+
+        if state is None or state.durable_state is SessionDurableState.ABSENT:
+            return "Create a session."
+        if (
+            state.access_state
+            is SessionAccessState.BLOCKED_BY_LIVE_LOCAL_OWNER
+        ):
+            return "Close the owning local process normally, then retry."
+        if state.access_state is SessionAccessState.OWNERSHIP_UNKNOWN:
+            return "Verify ownership; do not remove the access claim."
+        if state.durable_state is SessionDurableState.PAUSED:
+            return "Open the session to make it ready."
+        if state.access_state is SessionAccessState.CLAIMABLE:
+            return "Open the session."
+        if not provider_ready:
+            return "Repair provider configuration, then retry."
+        if attached and not focused:
+            return "Create or choose a conversation."
+        if attached and focused:
+            return "Continue with the current focus."
+        return "Open the session."
 
     def _read_session_lobby_commands(self) -> int:
         """Read and dispatch interactive actions until normal exit status 0.
@@ -743,7 +885,7 @@ class InteractiveController:
         """Execute one parser action and return whether the loop should exit.
 
         ``original_line`` is used only to choose the trusted parse-error
-        category. Global help/status, directives, inspection, selected history,
+        category. Global help/status, directives, inspection, focused history,
         roster, story-session navigation, search, and transcript reads remain
         provider-free; routed and consensus content use the retained runtime.
         The returned boolean signals loop exit; command-specific state changes
@@ -762,15 +904,15 @@ class InteractiveController:
         if action.kind is ActionKind.SESSION_LIST:
             self._list_story_sessions()
             return False
-        if action.kind is ActionKind.SESSION_NEW:
+        if action.kind is ActionKind.SESSION_CREATE:
             assert action.argument is not None
-            self._create_and_attach_session(action.argument)
+            self._create_and_attach_destination(action.argument)
             return False
-        if action.kind is ActionKind.SESSION_RESUME:
-            self._resume_selected_or_named_session(action.argument)
+        if action.kind is ActionKind.SESSION_OPEN:
+            self._open_default_or_named_session(action.argument)
             return False
-        if action.kind is ActionKind.SESSION_END:
-            return self._end_attached_session()
+        if action.kind is ActionKind.SESSION_PAUSE:
+            return self._pause_attached_session()
         if action.kind is ActionKind.QUIT:
             return True
         if action.kind is ActionKind.PARSE_ERROR:
@@ -790,7 +932,7 @@ class InteractiveController:
             self._inspect_attached_runtime(action)
             return False
         if action.kind is ActionKind.HISTORY:
-            self._write_selected_conversation_history(action)
+            self._write_focused_conversation_history(action)
             return False
         if action.kind is ActionKind.SET_TARGET:
             self._set_target_agent(action)
@@ -810,7 +952,7 @@ class InteractiveController:
         if action.kind in {ActionKind.SEARCH, ActionKind.TRANSCRIPT}:
             if self._attached_session_id is None:
                 self._terminal.write_error(
-                    InteractiveError(InteractiveErrorCode.SESSION_INACTIVE)
+                    InteractiveError(InteractiveErrorCode.SESSION_NOT_ATTACHED)
                 )
                 return False
             if action.kind is ActionKind.SEARCH:
@@ -828,7 +970,7 @@ class InteractiveController:
         }:
             if self._attached_session_id is None:
                 self._terminal.write_error(
-                    InteractiveError(InteractiveErrorCode.SESSION_INACTIVE)
+                    InteractiveError(InteractiveErrorCode.SESSION_NOT_ATTACHED)
                 )
                 return False
             if action.kind is ActionKind.CONVERSATION_NEW:
@@ -846,16 +988,16 @@ class InteractiveController:
                 return False
             if action.kind is ActionKind.CONVERSATION_USE:
                 assert action.argument is not None
-                self._select_subject_conversation(action.argument)
+                self._focus_subject_conversation(action.argument)
                 return False
             if action.kind is ActionKind.CONVERSATION_SUBJECT:
                 assert action.argument is not None
-                self._rename_selected_conversation(action.argument)
+                self._rename_focused_conversation(action.argument)
                 return False
             return self._archive_subject_conversation(action.argument)
         if (
             self._attached_session_id is not None
-            and self._selected_conversation is None
+            and self._focused_conversation is None
         ):
             self._terminal.write_error(
                 InteractiveError(InteractiveErrorCode.CONVERSATION_REQUIRED)
@@ -865,89 +1007,115 @@ class InteractiveController:
         return False
 
     def _write_runtime_status(self) -> None:
-        """Render one provider-free snapshot of the current shell state.
+        """Render a read-only lifecycle record followed by detailed scope facts."""
 
-        Lobby output distinguishes the saved selection from the absent
-        attachment and marks attachment-only capabilities unavailable. An
-        attached selected conversation is read exactly once; the same immutable
-        event tuple supplies transcript totals and canonical bounded-context
-        facts. The operation never mutates session, conversation, or run state.
-        """
-
-        saved_session = self._context.selected_session or "none"
+        default_session = self._context.default_session_id
         attached_session = self._attached_session_id
-        workspace_status = (
-            f"Workspace: {self._workspace.root} | Saved session: "
-            f"{saved_session} | Attached session: "
-            f"{attached_session or 'none'}."
+        candidate = attached_session or default_session
+        if candidate is None:
+            state = SessionLifecycleState(
+                session_id="none",
+                durable_state=SessionDurableState.ABSENT,
+                access_state=SessionAccessState.CLAIMABLE,
+                owner_hostname=None,
+                owner_pid=None,
+                created_at=None,
+                updated_at=None,
+            )
+            provider_ready = False
+            default_conversation = None
+        else:
+            try:
+                state = self._backend.get_session_lifecycle(candidate)
+                self._require_lifecycle_state(state, candidate)
+                provider_ready = self._provider_work_is_ready(state)
+                default_conversation = load_default_conversation(
+                    self._workspace,
+                    candidate,
+                )
+            except Exception as exc:
+                self._present_session_failure(exc, candidate)
+                return
+
+        focus = self._focused_conversation
+        focused_id = (
+            focus.conversation_id
+            if attached_session is not None and focus is not None
+            else None
         )
+        next_action = self._next_session_action(
+            state if candidate is not None else None,
+            attached=(attached_session == candidate and candidate is not None),
+            focused=(focused_id is not None),
+            provider_ready=provider_ready,
+        )
+        record = (
+            f"Session: {candidate or 'none'} | "
+            f"Durable state: {state.durable_state.value} | "
+            f"Process access: {state.access_state.value} | "
+            f"Default session: {default_session or 'none'} | "
+            f"Current attachment: {attached_session or 'none'} | "
+            f"Default conversation: {default_conversation or 'none'} | "
+            f"Current focus: {focused_id or 'none'} | "
+            f"Agent focus: "
+            f"{self._target_agent_id if attached_session is not None else 'none'} | "
+            f"Provider readiness: {'yes' if provider_ready else 'no'} | "
+            f"Next action: {next_action}"
+        )
+        self._terminal.write_status(TerminalMessageKind.SESSION, record)
+
         if attached_session is None:
-            self._terminal.write_status(
-                TerminalMessageKind.SESSION,
-                workspace_status,
-            )
-            self._terminal.write_status(
-                TerminalMessageKind.CONTEXT,
-                (
-                    "Conversation: unavailable | Context: unavailable | "
-                    "Search: unavailable | Last run: none."
-                ),
-            )
             return
         if type(self._conversation_memory_service) is not ConversationMemoryService:
             raise _ControllerAbort(
                 InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
             )
-
-        selected = self._selected_conversation
-        transcript_status = "Context: unavailable (no selected conversation)."
-        if selected is None:
-            conversation_status = "Selected conversation: none."
-        else:
-            try:
-                current = self._conversation_catalog.get(
-                    attached_session,
-                    selected.conversation_id,
-                )
-                selected = self._validated_catalog_metadata(
-                    current,
-                    attached_session,
-                    expected_conversation_id=selected.conversation_id,
-                )
-            except ConversationNotFoundError as exc:
-                self._selected_conversation = None
-                self._present_conversation_failure(exc)
-                return
-            except Exception as exc:
-                self._present_conversation_failure(exc)
-                return
-            if selected.status is ConversationStatus.ARCHIVED:
-                self._selected_conversation = None
+        if focus is None:
+            self._terminal.write_status(
+                TerminalMessageKind.CONTEXT,
+                "Conversation focus: none | Context: unavailable | Last run: none.",
+            )
+            return
+        try:
+            current = self._conversation_catalog.get(
+                attached_session,
+                focus.conversation_id,
+            )
+            current = self._validated_catalog_metadata(
+                current,
+                attached_session,
+                expected_conversation_id=focus.conversation_id,
+            )
+            if current.status is ConversationStatus.ARCHIVED:
                 self._terminal.write_error(
                     InteractiveError(InteractiveErrorCode.CONVERSATION_ARCHIVED)
                 )
                 return
-            self._selected_conversation = selected
-            try:
-                events, context = self._read_selected_transcript_snapshot(selected)
-            except _ControllerAbort:
-                raise
-            except Exception as exc:
-                if isinstance(exc, ConversationNotFoundError):
-                    self._selected_conversation = None
-                self._present_transcript_service_failure(exc)
-                return
-            conversation_status = (
-                f"Selected conversation: {selected.conversation_id} | "
-                f"Subject: {selected.subject} | Status: {selected.status.value} | "
-                f"Revision: {selected.subject_revision}."
-            )
-            transcript_status = self._format_transcript_context_status(
+            events, context = self._read_focused_transcript_snapshot(current)
+        except ConversationNotFoundError as exc:
+            self._present_conversation_failure(exc)
+            return
+        except _ControllerAbort:
+            raise
+        except Exception as exc:
+            self._present_transcript_service_failure(exc)
+            return
+        self._terminal.write_status(
+            TerminalMessageKind.CONVERSATION,
+            (
+                f"Current focus: {current.conversation_id} | "
+                f"Subject: {current.subject} | Status: {current.status.value} | "
+                f"Revision: {current.subject_revision}."
+            ),
+        )
+        self._terminal.write_status(
+            TerminalMessageKind.CONTEXT,
+            self._format_transcript_context_status(
                 displayed_events=len(events),
                 total_events=len(events),
                 context=context,
-            )
-
+            ),
+        )
         last_debate = self._last_started_debate_by_session.get(attached_session)
         if last_debate is None:
             last_run_status = "none."
@@ -962,17 +1130,6 @@ class InteractiveController:
                 self._present_runtime_inspection_failure(exc)
                 return
             last_run_status = f"{last_debate} | {' | '.join(last_run_lines)}"
-
-        self._terminal.write_status(TerminalMessageKind.SESSION, workspace_status)
-        self._terminal.write_status(
-            TerminalMessageKind.ROUTING,
-            f"Sticky target: {self._target_agent_id}.",
-        )
-        self._terminal.write_status(
-            TerminalMessageKind.CONVERSATION,
-            conversation_status,
-        )
-        self._terminal.write_status(TerminalMessageKind.CONTEXT, transcript_status)
         self._terminal.write_status(
             TerminalMessageKind.RESULT,
             f"Search: available, active-only | Last interactive run: {last_run_status}",
@@ -985,14 +1142,14 @@ class InteractiveController:
         """Persist one parsed directive and acknowledge only its changed field.
 
         Language, canonical per-agent persona, and full reset actions require an
-        attachment but never a selected conversation or provider. A malformed
+        attachment but never a conversation focus or provider. A malformed
         runtime return fails closed; typed configuration and workspace failures
         retain their established safe interactive categories.
         """
 
         if self._attached_session_id is None:
             self._terminal.write_error(
-                InteractiveError(InteractiveErrorCode.SESSION_INACTIVE)
+                InteractiveError(InteractiveErrorCode.SESSION_NOT_ATTACHED)
             )
             return
         if action.kind is ActionKind.SET_LANGUAGE:
@@ -1027,6 +1184,13 @@ class InteractiveController:
         except WorkspaceSecurityError:
             self._present_memory_error(
                 InteractiveError(InteractiveErrorCode.WORKSPACE_UNSAFE)
+            )
+            return
+        except WorkspaceVersionUnsupportedError:
+            self._present_memory_error(
+                InteractiveError(
+                    InteractiveErrorCode.WORKSPACE_VERSION_UNSUPPORTED
+                )
             )
             return
         except (WorkspaceFormatError, OSError):
@@ -1098,13 +1262,13 @@ class InteractiveController:
             and not agents
         )
 
-    def _write_selected_conversation_history(
+    def _write_focused_conversation_history(
         self,
         action: InteractiveAction,
     ) -> None:
-        """Render one selected transcript snapshot and its context accounting.
+        """Render the focused transcript snapshot and context accounting.
 
-        The command requires an attached active selection. It reads the
+        The command requires an attached active focus. It reads the
         authoritative event store exactly once, derives bounded context from
         that exact tuple, and displays either all events or the requested newest
         suffix in chronological order. No cursor, mutation, search, or provider
@@ -1113,14 +1277,14 @@ class InteractiveController:
         """
 
         try:
-            self._write_selected_conversation_history_rows(action)
+            self._write_focused_conversation_history_rows(action)
         except KeyboardInterrupt:
             self._terminal.write_status(
                 TerminalMessageKind.CANCELLED,
                 "History cancelled; attached state is unchanged.",
             )
 
-    def _write_selected_conversation_history_rows(
+    def _write_focused_conversation_history_rows(
         self,
         action: InteractiveAction,
     ) -> None:
@@ -1129,26 +1293,26 @@ class InteractiveController:
         assert action.kind is ActionKind.HISTORY
         if self._attached_session_id is None:
             self._terminal.write_error(
-                InteractiveError(InteractiveErrorCode.SESSION_INACTIVE)
+                InteractiveError(InteractiveErrorCode.SESSION_NOT_ATTACHED)
             )
             return
-        selected = self._require_active_selected_conversation()
-        if selected is None:
+        focused = self._require_active_conversation_focus()
+        if focused is None:
             return
         try:
-            events, context = self._read_selected_transcript_snapshot(selected)
+            events, context = self._read_focused_transcript_snapshot(focused)
         except _ControllerAbort:
             raise
         except Exception as exc:
             if isinstance(exc, ConversationNotFoundError):
-                self._selected_conversation = None
+                self._focused_conversation = None
             self._present_transcript_service_failure(exc)
             return
 
         displayed = events if action.count is None else events[-action.count :]
         for event in displayed:
             self._terminal.write_conversation_transcript_event(
-                selected.conversation_id,
+                focused.conversation_id,
                 sequence=event.sequence,
                 turn_id=event.turn_id,
                 kind=event.kind.value,
@@ -1165,11 +1329,11 @@ class InteractiveController:
             ),
         )
 
-    def _read_selected_transcript_snapshot(
+    def _read_focused_transcript_snapshot(
         self,
-        selected: ConversationMetadata,
+        focused: ConversationMetadata,
     ) -> tuple[tuple[ConversationEvent, ...], ConversationContextWindow]:
-        """Read one selected transcript once and derive its canonical context.
+        """Read the focused transcript once and derive canonical context.
 
         The retained filesystem adapter remains the authoritative read owner;
         the pure selector consumes the exact immutable tuple it returns. The
@@ -1180,7 +1344,7 @@ class InteractiveController:
         assert session_id is not None
         events = self._conversation_event_store.read(
             session_id,
-            selected.conversation_id,
+            focused.conversation_id,
         )
         context = select_bounded_conversation_context(events)
         return events, context
@@ -1220,7 +1384,7 @@ class InteractiveController:
         session_id = self._attached_session_id
         if session_id is None:
             self._terminal.write_error(
-                InteractiveError(InteractiveErrorCode.SESSION_INACTIVE)
+                InteractiveError(InteractiveErrorCode.SESSION_NOT_ATTACHED)
             )
             return
         if action.argument is None:
@@ -1696,6 +1860,13 @@ class InteractiveController:
                 InteractiveError(InteractiveErrorCode.WORKSPACE_UNSAFE)
             )
             return
+        if isinstance(failure, WorkspaceVersionUnsupportedError):
+            self._present_memory_error(
+                InteractiveError(
+                    InteractiveErrorCode.WORKSPACE_VERSION_UNSUPPORTED
+                )
+            )
+            return
         if isinstance(failure, (WorkspaceFormatError, OSError)):
             self._present_memory_error(
                 InteractiveError(InteractiveErrorCode.WORKSPACE_INVALID)
@@ -1709,7 +1880,7 @@ class InteractiveController:
         """Set one attached process's sticky responder without provider work.
 
         The validated action supplies a canonical agent and the method returns
-        no value. An unattached controller renders ``session_inactive``;
+        no value. An unattached controller renders ``session_not_attached``;
         success mutates only process-local routing and needs no cleanup.
         """
 
@@ -1717,7 +1888,7 @@ class InteractiveController:
         assert action.agent_id is not None
         if self._attached_session_id is None:
             self._terminal.write_error(
-                InteractiveError(InteractiveErrorCode.SESSION_INACTIVE)
+                InteractiveError(InteractiveErrorCode.SESSION_NOT_ATTACHED)
             )
             return
         self._target_agent_id = action.agent_id
@@ -1727,11 +1898,11 @@ class InteractiveController:
         )
 
     def _run_advisory_turn(self, action: InteractiveAction) -> None:
-        """Run one selected-conversation retrieval turn through the runtime.
+        """Run one focused-conversation retrieval turn through the runtime.
 
         ``MESSAGE`` uses the sticky target and ``ROUTED_MESSAGE`` uses its
         one-shot canonical agent without changing sticky state. The method
-        revalidates attachment and selection, passes the retained attachment-
+        revalidates attachment and focus, passes the retained attachment-
         scoped memory service, validates and renders content-free progress,
         and submits exactly one coroutine to the controller-owned Runner before
         rendering the validated answer and sources. A first Ctrl-C is successful
@@ -1744,11 +1915,11 @@ class InteractiveController:
 
         if self._attached_session_id is None:
             self._terminal.write_error(
-                InteractiveError(InteractiveErrorCode.SESSION_INACTIVE)
+                InteractiveError(InteractiveErrorCode.SESSION_NOT_ATTACHED)
             )
             return
-        selected = self._require_active_selected_conversation()
-        if selected is None:
+        focused = self._require_active_conversation_focus()
+        if focused is None:
             return
 
         session_id = self._attached_session_id
@@ -1794,7 +1965,7 @@ class InteractiveController:
                 self._accept_conversation_retrieval_progress(
                     event,
                     expected_session_id=session_id,
-                    expected_conversation_id=selected.conversation_id,
+                    expected_conversation_id=focused.conversation_id,
                     expected_agent_id=agent_id,
                     events=progress_events,
                 )
@@ -1816,7 +1987,7 @@ class InteractiveController:
             try:
                 return await self._runtime.converse_with_retrieval(
                     session_id,
-                    selected.conversation_id,
+                    focused.conversation_id,
                     agent_id,
                     action.text,
                     memory_service=memory_service,
@@ -1884,7 +2055,7 @@ class InteractiveController:
             result = self._validated_conversation_retrieval_result(
                 result,
                 expected_session_id=session_id,
-                expected_conversation_id=selected.conversation_id,
+                expected_conversation_id=focused.conversation_id,
                 expected_agent_id=agent_id,
                 progress_events=progress_events,
             )
@@ -2112,7 +2283,7 @@ class InteractiveController:
 
         Subject-only citations omit event fields; exact event citations include
         turn, sequence, and event-kind values. Rendering is non-durable and does
-        not mutate selection, routing, memory, or transcripts. Invalid sources
+        not mutate focus, routing, memory, or transcripts. Invalid sources
         and terminal writer failures propagate to fatal controller cleanup.
         """
 
@@ -2134,7 +2305,7 @@ class InteractiveController:
     def _run_consensus_action(self, action: InteractiveAction) -> bool:
         """Execute one interactive prompt, fresh prompt, or draft-file debate.
 
-        The attached session and selected active conversation are revalidated
+        The attached session and focused active conversation are revalidated
         before composition or file access. Bare ``/run`` submits only a terminal
         ``SEND`` result; cancel and interrupt discard locally, while compose EOF
         requests normal shell exit. Draft files use the shared strict loader.
@@ -2146,11 +2317,11 @@ class InteractiveController:
 
         if self._attached_session_id is None:
             self._terminal.write_error(
-                InteractiveError(InteractiveErrorCode.SESSION_INACTIVE)
+                InteractiveError(InteractiveErrorCode.SESSION_NOT_ATTACHED)
             )
             return False
-        selected = self._require_active_selected_conversation()
-        if selected is None:
+        focused = self._require_active_conversation_focus()
+        if focused is None:
             return False
 
         if action.kind is ActionKind.RUN:
@@ -2195,7 +2366,7 @@ class InteractiveController:
         session_id = self._attached_session_id
         assert session_id is not None
         request = DebateContextRequest(
-            conversation_id=selected.conversation_id,
+            conversation_id=focused.conversation_id,
             mode=context_mode,
         )
         progress_events: list[DebateProgressEvent] = []
@@ -2320,7 +2491,7 @@ class InteractiveController:
         outcome and has already rendered its sole run row. An entered operation
         with no event is still unproven because reservation may precede progress.
         Every entered run without that terminal proof fails closed rather than
-        treating Runner quiescence or a retained lease as durability evidence.
+        treating Runner quiescence or retained access as durability evidence.
         """
 
         terminal_event = progress_events[-1] if progress_events else None
@@ -2338,7 +2509,7 @@ class InteractiveController:
             )
             self._terminal.write_status(
                 TerminalMessageKind.SESSION,
-                f'"{session_id}" remains active and attached.',
+                f'"{session_id}" remains ready and attached.',
             )
             return
 
@@ -2508,7 +2679,7 @@ class InteractiveController:
                 self._terminal.write_status(
                     TerminalMessageKind.CONTEXT,
                     (
-                        f"Included {event.context_event_count} selected-conversation "
+                        f"Included {event.context_event_count} focused-conversation "
                         f"events; {event.context_omitted_turns} earlier turns omitted."
                     ),
                 )
@@ -2640,7 +2811,7 @@ class InteractiveController:
     ) -> None:
         """Render only trusted terminal metadata from a validated result.
 
-        Workspace failures first prove the same active owned attachment. No
+        Workspace failures first prove the same ready access held here. No
         terminal outcome exposes provider or result prose.
         """
 
@@ -2683,12 +2854,22 @@ class InteractiveController:
 
         if isinstance(failure, ConfigurationError):
             code = InteractiveErrorCode.PROVIDER_PREFLIGHT_FAILED
+        elif isinstance(failure, SessionNotFoundError):
+            code = InteractiveErrorCode.SESSION_NOT_FOUND
+        elif isinstance(failure, SessionPausedError):
+            code = InteractiveErrorCode.SESSION_PAUSED
+        elif isinstance(failure, SessionAccessBlockedError):
+            code = InteractiveErrorCode.SESSION_ACCESS_BLOCKED
+        elif isinstance(failure, SessionOwnershipUnknownError):
+            code = InteractiveErrorCode.SESSION_OWNERSHIP_UNKNOWN
         elif isinstance(failure, BackendProtocolError):
             code = InteractiveErrorCode.PROVIDER_PROTOCOL_ERROR
         elif isinstance(failure, ConversationNotFoundError):
             code = InteractiveErrorCode.TRANSCRIPT_INVALID
         elif isinstance(failure, WorkspaceSecurityError):
             code = InteractiveErrorCode.WORKSPACE_INVALID
+        elif isinstance(failure, WorkspaceVersionUnsupportedError):
+            code = InteractiveErrorCode.WORKSPACE_VERSION_UNSUPPORTED
         elif isinstance(failure, WorkspaceFormatError):
             code = InteractiveErrorCode.WORKSPACE_INVALID
         elif isinstance(failure, OSError):
@@ -2711,15 +2892,20 @@ class InteractiveController:
         self,
         code: InteractiveErrorCode,
     ) -> None:
-        """Render a fixed consensus error after any required lease proof.
+        """Render a fixed consensus error after any required access proof.
 
         Workspace errors return to the prompt only when public state proves the
-        same active owned attachment. Failed proof uses the existing fatal
+        the same ready access held here. Failed proof uses the existing fatal
         cleanup boundary before any terminal error is written; other codes
         render immediately without changing consensus mappings.
         """
 
         if code in {
+            InteractiveErrorCode.SESSION_NOT_FOUND,
+            InteractiveErrorCode.SESSION_PAUSED,
+            InteractiveErrorCode.SESSION_ACCESS_BLOCKED,
+            InteractiveErrorCode.SESSION_OWNERSHIP_UNKNOWN,
+            InteractiveErrorCode.WORKSPACE_VERSION_UNSUPPORTED,
             InteractiveErrorCode.WORKSPACE_INVALID,
             InteractiveErrorCode.WORKSPACE_UNSAFE,
         }:
@@ -2746,23 +2932,25 @@ class InteractiveController:
         """Render one typed turn failure or abort when recovery is uncertain.
 
         Exception classes, never exception prose, select the result. Missing
-        conversations clear only stale effective in-memory selection, leaving
-        the persisted selection and catalog untouched. Session/workspace
-        failures require proof that the existing lease remains active and
-        owned. Unknown failures enter fatal internal cleanup, while runtime
-        remains the sole owner of any durable turn outcome.
+        conversations clear only stale effective in-memory focus, leaving the
+        persisted default and catalog untouched. Session/workspace failures
+        require proof that ready access remains held here. Unknown failures
+        abort, while runtime remains the sole owner of durable turn outcomes.
         """
 
         error = self._classify_advisory_turn_failure(failure)
         if error.code is InteractiveErrorCode.INTERNAL_ERROR:
             raise _ControllerAbort(error)
         if error.code is InteractiveErrorCode.CONVERSATION_NOT_FOUND:
-            self._selected_conversation = None
+            self._focused_conversation = None
         if error.code in {
             InteractiveErrorCode.SESSION_INVALID,
             InteractiveErrorCode.SESSION_EXISTS,
             InteractiveErrorCode.SESSION_NOT_FOUND,
-            InteractiveErrorCode.SESSION_IN_USE,
+            InteractiveErrorCode.SESSION_PAUSED,
+            InteractiveErrorCode.SESSION_ACCESS_BLOCKED,
+            InteractiveErrorCode.SESSION_OWNERSHIP_UNKNOWN,
+            InteractiveErrorCode.WORKSPACE_VERSION_UNSUPPORTED,
             InteractiveErrorCode.WORKSPACE_INVALID,
             InteractiveErrorCode.WORKSPACE_UNSAFE,
         }:
@@ -2793,12 +2981,18 @@ class InteractiveController:
             code = InteractiveErrorCode.SESSION_EXISTS
         elif isinstance(failure, SessionNotFoundError):
             code = InteractiveErrorCode.SESSION_NOT_FOUND
-        elif isinstance(failure, SessionInUseError):
-            code = InteractiveErrorCode.SESSION_IN_USE
+        elif isinstance(failure, SessionPausedError):
+            code = InteractiveErrorCode.SESSION_PAUSED
+        elif isinstance(failure, SessionAccessBlockedError):
+            code = InteractiveErrorCode.SESSION_ACCESS_BLOCKED
+        elif isinstance(failure, SessionOwnershipUnknownError):
+            code = InteractiveErrorCode.SESSION_OWNERSHIP_UNKNOWN
         elif isinstance(failure, ConversationNotFoundError):
             code = InteractiveErrorCode.CONVERSATION_NOT_FOUND
         elif isinstance(failure, WorkspaceSecurityError):
             code = InteractiveErrorCode.WORKSPACE_UNSAFE
+        elif isinstance(failure, WorkspaceVersionUnsupportedError):
+            code = InteractiveErrorCode.WORKSPACE_VERSION_UNSUPPORTED
         elif isinstance(failure, (WorkspaceFormatError, OSError)):
             code = InteractiveErrorCode.WORKSPACE_INVALID
         elif isinstance(failure, ConfigurationError):
@@ -2912,7 +3106,7 @@ class InteractiveController:
         """Resolve and render one fresh bounded transcript page.
 
         The reference may name an active or archived conversation. The method
-        retains no cursor and mutates no attachment, selection, routing, or
+        retains no cursor and mutates no attachment, focus, routing, or
         persistence state; Ctrl-C returns to the same prompt after a status.
         """
 
@@ -3103,10 +3297,10 @@ class InteractiveController:
         self,
         failure: Exception,
     ) -> None:
-        """Render safe reference/catalog failures under the retained lease.
+        """Render safe reference/catalog failures under retained access.
 
         Resolution categories preserve their exact public code. Unsafe paths
-        and invalid complete-catalog behavior are lease-confirmed before
+        and invalid complete-catalog behavior are access-confirmed before
         rendering; unknown failures abort to final controller cleanup.
         """
 
@@ -3116,6 +3310,8 @@ class InteractiveController:
             code = InteractiveErrorCode.CONVERSATION_NOT_FOUND
         elif isinstance(failure, WorkspaceSecurityError):
             code = InteractiveErrorCode.WORKSPACE_UNSAFE
+        elif isinstance(failure, WorkspaceVersionUnsupportedError):
+            code = InteractiveErrorCode.WORKSPACE_VERSION_UNSUPPORTED
         elif isinstance(
             failure,
             (
@@ -3136,7 +3332,7 @@ class InteractiveController:
         """Classify a valid-query search failure without exposing its prose.
 
         Missing identities retain their conversation code; unsafe paths and
-        invalid storage/collaborator results are lease-confirmed workspace
+        invalid storage/collaborator results are access-confirmed workspace
         failures. Unknown failures abort through the controller lifecycle.
         """
 
@@ -3144,6 +3340,8 @@ class InteractiveController:
             code = InteractiveErrorCode.CONVERSATION_NOT_FOUND
         elif isinstance(failure, WorkspaceSecurityError):
             code = InteractiveErrorCode.WORKSPACE_UNSAFE
+        elif isinstance(failure, WorkspaceVersionUnsupportedError):
+            code = InteractiveErrorCode.WORKSPACE_VERSION_UNSUPPORTED
         elif isinstance(
             failure,
             (
@@ -3172,6 +3370,8 @@ class InteractiveController:
             code = InteractiveErrorCode.CONVERSATION_NOT_FOUND
         elif isinstance(failure, WorkspaceSecurityError):
             code = InteractiveErrorCode.WORKSPACE_UNSAFE
+        elif isinstance(failure, WorkspaceVersionUnsupportedError):
+            code = InteractiveErrorCode.WORKSPACE_VERSION_UNSUPPORTED
         elif isinstance(failure, WorkspaceFormatError):
             code = InteractiveErrorCode.TRANSCRIPT_INVALID
         elif isinstance(failure, (TypeError, ValueError)):
@@ -3186,11 +3386,11 @@ class InteractiveController:
         self._present_memory_error(InteractiveError(code))
 
     def _present_memory_error(self, error: InteractiveError) -> None:
-        """Render one trusted read error after any required lease proof.
+        """Render one trusted read error after any required access proof.
 
-        Workspace-invalid and unsafe outcomes confirm the same active owned
+        Workspace-invalid and unsafe outcomes confirm the same ready access
         attachment before output. Internal errors abort; other codes render
-        without changing memory scope, selection, routing, or persistence.
+        without changing memory scope, focus, routing, or persistence.
         """
 
         if error.code is InteractiveErrorCode.INTERNAL_ERROR:
@@ -3203,18 +3403,18 @@ class InteractiveController:
         self._terminal.write_error(error)
 
     def _write_attached_conversation_scope(self) -> None:
-        """Render the effective selected scope immediately before main input.
+        """Render the effective current focus immediately before main input.
 
         The current metadata is revalidated against the complete catalog so a
         unique display handle can be derived across active and archived IDs.
-        Missing or archived external state drops only in-memory selection and
-        reports its typed category; durable selection is never rewritten here.
+        Missing or archived external state drops only in-memory focus and
+        reports its typed category; the durable default is not rewritten here.
         """
 
         session_id = self._attached_session_id
         assert session_id is not None
-        selected = self._selected_conversation
-        if selected is None:
+        focused = self._focused_conversation
+        if focused is None:
             self._terminal.write_conversation_scope(
                 session_id=session_id,
                 conversation_handle=None,
@@ -3227,18 +3427,18 @@ class InteractiveController:
             entries = self._catalog_entries(session_id)
         except Exception as exc:
             self._present_conversation_failure(exc)
-            handle = selected.conversation_id
+            handle = focused.conversation_id
         else:
             current = next(
                 (
                     entry
                     for entry in entries
-                    if entry.conversation_id == selected.conversation_id
+                    if entry.conversation_id == focused.conversation_id
                 ),
                 None,
             )
             if current is None:
-                self._selected_conversation = None
+                self._focused_conversation = None
                 self._terminal.write_error(
                     InteractiveError(
                         InteractiveErrorCode.CONVERSATION_NOT_FOUND
@@ -3252,7 +3452,7 @@ class InteractiveController:
                 )
                 return
             if current.status is ConversationStatus.ARCHIVED:
-                self._selected_conversation = None
+                self._focused_conversation = None
                 self._terminal.write_error(
                     InteractiveError(InteractiveErrorCode.CONVERSATION_ARCHIVED)
                 )
@@ -3263,23 +3463,23 @@ class InteractiveController:
                     agent_id=self._target_agent_id,
                 )
                 return
-            self._selected_conversation = current
-            selected = current
+            self._focused_conversation = current
+            focused = current
             handle = self._visible_conversation_handle(current, entries)
 
         self._terminal.write_conversation_scope(
             session_id=session_id,
             conversation_handle=handle,
-            conversation_subject=selected.subject,
+            conversation_subject=focused.subject,
             agent_id=self._target_agent_id,
         )
 
     def _create_subject_conversation(self, subject: str | None) -> bool:
-        """Create and select one active conversation, returning EOF exit intent.
+        """Create and focus one active conversation, returning EOF exit intent.
 
         A missing subject causes exactly one call-local terminal read. Interrupt
         cancels without mutation and EOF requests normal process cleanup. After
-        catalog creation, selection is saved before memory changes; a save
+        catalog creation, the default is saved before focus changes; a save
         failure leaves the created entry and prior process state intact.
         """
 
@@ -3317,7 +3517,7 @@ class InteractiveController:
             return False
 
         try:
-            save_conversation_selection(
+            save_default_conversation(
                 self._workspace,
                 session_id,
                 created.conversation_id,
@@ -3330,21 +3530,21 @@ class InteractiveController:
                     error.code,
                     summary=(
                         f"Conversation {created.conversation_id} was created "
-                        "but was not selected."
+                        "but did not become the default."
                     ),
                     hint=(
                         "Repair workspace storage, then use the full ID to "
-                        "select it."
+                        "make it the current focus."
                     ),
                 )
             )
             return False
 
-        self._selected_conversation = created
+        self._focused_conversation = created
         handle = self._visible_handle_after_mutation(created)
         self._terminal.write_status(
             TerminalMessageKind.CONVERSATION,
-            f"Created and selected {handle} | Subject: {created.subject}",
+            f"Created and focused {handle} | Subject: {created.subject}",
         )
         return False
 
@@ -3359,7 +3559,7 @@ class InteractiveController:
         Handles are derived from the complete active-and-archived ID set even
         when only active rows are requested. The optional query uses the
         established normalized-subject substring rule; external loss or
-        archival of the in-memory selection clears memory but not its file.
+        archival of the in-memory focus clears memory but not its default file.
         """
 
         session_id = self._attached_session_id
@@ -3375,7 +3575,7 @@ class InteractiveController:
             self._present_conversation_failure(exc)
             return
 
-        self._reconcile_in_memory_selection(entries)
+        self._reconcile_conversation_focus(entries)
         visible_entries = tuple(
             entry
             for entry in entries
@@ -3396,48 +3596,48 @@ class InteractiveController:
             )
             return
 
-        selected_id = (
+        focused_id = (
             None
-            if self._selected_conversation is None
-            else self._selected_conversation.conversation_id
+            if self._focused_conversation is None
+            else self._focused_conversation.conversation_id
         )
         for entry in visible_entries:
             self._terminal.write_conversation_list_entry(
                 self._visible_conversation_handle(entry, entries),
                 entry.subject,
                 archived=(entry.status is ConversationStatus.ARCHIVED),
-                selected=(entry.conversation_id == selected_id),
+                focused=(entry.conversation_id == focused_id),
             )
 
-    def _select_subject_conversation(self, reference: str) -> None:
-        """Resolve and durably select one active conversation without rerouting.
+    def _focus_subject_conversation(self, reference: str) -> None:
+        """Resolve, save, and focus one active conversation without rerouting.
 
         Exact IDs win over case-sensitive prefixes of at least twelve
         characters. Resolution includes archived records, which receive a
-        typed rejection. Selection persistence completes before in-memory
-        metadata and presentation change.
+        typed rejection. Default persistence completes before in-memory focus
+        and presentation change.
         """
 
         session_id = self._attached_session_id
         assert session_id is not None
         try:
-            selected, entries = self._resolve_conversation_reference(
+            focused, entries = self._resolve_conversation_reference(
                 session_id,
                 reference,
             )
         except Exception as exc:
             self._present_conversation_failure(exc)
             return
-        if selected.status is ConversationStatus.ARCHIVED:
+        if focused.status is ConversationStatus.ARCHIVED:
             self._terminal.write_error(
                 InteractiveError(InteractiveErrorCode.CONVERSATION_ARCHIVED)
             )
             return
         try:
-            save_conversation_selection(
+            save_default_conversation(
                 self._workspace,
                 session_id,
-                selected.conversation_id,
+                focused.conversation_id,
             )
         except Exception as exc:
             self._confirm_attachment_after_command_failure()
@@ -3446,26 +3646,26 @@ class InteractiveController:
             )
             return
 
-        self._selected_conversation = selected
+        self._focused_conversation = focused
         self._terminal.write_status(
             TerminalMessageKind.CONVERSATION,
             (
-                "Selected "
-                f"{self._visible_conversation_handle(selected, entries)} | "
-                f"Subject: {selected.subject}"
+                "Current focus: "
+                f"{self._visible_conversation_handle(focused, entries)} | "
+                f"Subject: {focused.subject}"
             ),
         )
 
-    def _rename_selected_conversation(self, subject: str) -> None:
-        """Atomically rename the selected active conversation, then update memory.
+    def _rename_focused_conversation(self, subject: str) -> None:
+        """Atomically rename the focused active conversation, then update memory.
 
         The exact display subject is validated without normalization replacement.
-        Missing or externally archived selections enter the conversation lobby
-        without rewriting their stale durable choice; catalog failure leaves
+        Missing or externally archived focus enters the conversation lobby
+        without rewriting the stale durable default; catalog failure leaves
         the previous process metadata intact until later revalidation.
         """
 
-        current = self._require_active_selected_conversation()
+        current = self._require_active_conversation_focus()
         if current is None:
             return
         session_id = self._attached_session_id
@@ -3483,20 +3683,20 @@ class InteractiveController:
                 expected_conversation_id=current.conversation_id,
             )
         except ConversationNotFoundError as exc:
-            self._selected_conversation = None
+            self._focused_conversation = None
             self._present_conversation_failure(exc)
             return
         except Exception as exc:
             self._present_conversation_failure(exc)
             return
         if renamed.status is ConversationStatus.ARCHIVED:
-            self._selected_conversation = None
+            self._focused_conversation = None
             self._terminal.write_error(
                 InteractiveError(InteractiveErrorCode.CONVERSATION_ARCHIVED)
             )
             return
 
-        self._selected_conversation = renamed
+        self._focused_conversation = renamed
         handle = self._visible_handle_after_mutation(renamed)
         self._terminal.write_status(
             TerminalMessageKind.CONVERSATION,
@@ -3506,16 +3706,16 @@ class InteractiveController:
     def _archive_subject_conversation(self, reference: str | None) -> bool:
         """Archive one resolved conversation and return confirmation EOF intent.
 
-        Bare archive requires the selected active record. Explicit lookup can
-        target any record; an already archived nonselection is an acknowledged
-        no-op. Archiving the current selection delegates to the compensated
+        Bare archive requires the focused active record. Explicit lookup can
+        target any record; an already archived unfocused record is an acknowledged
+        no-op. Archiving the current focus delegates to the compensated
         successor transition, while other targets require one catalog mutation.
         """
 
         session_id = self._attached_session_id
         assert session_id is not None
         if reference is None:
-            target = self._require_active_selected_conversation()
+            target = self._require_active_conversation_focus()
             if target is None:
                 return False
             try:
@@ -3533,15 +3733,15 @@ class InteractiveController:
                 self._present_conversation_failure(exc)
                 return False
 
-        selected_id = (
+        focused_id = (
             None
-            if self._selected_conversation is None
-            else self._selected_conversation.conversation_id
+            if self._focused_conversation is None
+            else self._focused_conversation.conversation_id
         )
-        is_selected = target.conversation_id == selected_id
+        is_focused = target.conversation_id == focused_id
         if target.status is ConversationStatus.ARCHIVED:
-            if is_selected:
-                self._selected_conversation = None
+            if is_focused:
+                self._focused_conversation = None
                 self._terminal.write_error(
                     InteractiveError(InteractiveErrorCode.CONVERSATION_ARCHIVED)
                 )
@@ -3555,21 +3755,21 @@ class InteractiveController:
                     ),
                 )
             return False
-        if is_selected:
-            return self._archive_selected_conversation(target, entries)
-        self._archive_unselected_conversation(target, entries)
+        if is_focused:
+            return self._archive_focused_conversation(target, entries)
+        self._archive_unfocused_conversation(target, entries)
         return False
 
-    def _archive_unselected_conversation(
+    def _archive_unfocused_conversation(
         self,
         target: ConversationMetadata,
         entries: tuple[ConversationMetadata, ...],
     ) -> None:
-        """Archive one active nonselection with a single catalog mutation.
+        """Archive one active unfocused conversation with one catalog mutation.
 
-        The durable and in-memory selection are never changed. A validated
+        The durable default and in-memory focus are never changed. A validated
         archived result is rendered using the pre-mutation all-record handle;
-        failures follow command-time lease confirmation rules.
+        failures follow command-time access confirmation rules.
         """
 
         session_id = self._attached_session_id
@@ -3599,17 +3799,17 @@ class InteractiveController:
             ),
         )
 
-    def _archive_selected_conversation(
+    def _archive_focused_conversation(
         self,
         target: ConversationMetadata,
         entries: tuple[ConversationMetadata, ...],
     ) -> bool:
-        """Confirm, archive, and durably select the first active successor.
+        """Confirm, archive, and make the first active successor the default.
 
         No, blank, or interrupt cancels without mutation; EOF requests normal
-        detach. After archive, successor/null persistence precedes memory. A
-        failed selection write best-effort unarchives and proves both original
-        active metadata and original durable selection before recovery is
+        access release. After archive, successor/null persistence precedes memory. A
+        failed default write best-effort unarchives and proves both original
+        active metadata and original durable default before recovery is
         claimed; any uncertainty aborts through cleanup-failed.
         """
 
@@ -3655,7 +3855,7 @@ class InteractiveController:
                     "archived conversation metadata is not archived"
                 )
         except ConversationNotFoundError as exc:
-            self._selected_conversation = None
+            self._focused_conversation = None
             self._present_conversation_failure(exc)
             return False
         except Exception as exc:
@@ -3663,7 +3863,7 @@ class InteractiveController:
             return False
 
         try:
-            save_conversation_selection(
+            save_default_conversation(
                 self._workspace,
                 session_id,
                 (
@@ -3673,16 +3873,16 @@ class InteractiveController:
                 ),
             )
         except Exception as exc:
-            self._compensate_failed_selected_archive(target, exc)
+            self._compensate_failed_focused_archive(target, exc)
             return False
 
-        self._selected_conversation = successor
+        self._focused_conversation = successor
         status = f"Archived {target_handle} | Subject: {archived.subject}"
         if successor is None:
-            status += "; no conversation is selected."
+            status += "; current focus is none."
         else:
             status += (
-                "; selected "
+                "; current focus: "
                 f"{self._visible_conversation_handle(successor, entries)} | "
                 f"Subject: {successor.subject}"
             )
@@ -3692,17 +3892,17 @@ class InteractiveController:
         )
         return False
 
-    def _compensate_failed_selected_archive(
+    def _compensate_failed_focused_archive(
         self,
         original: ConversationMetadata,
-        selection_failure: Exception,
+        default_failure: Exception,
     ) -> None:
-        """Restore and prove the original active selection after save failure.
+        """Restore and prove the original focus after a default-save failure.
 
-        Compensation uses only public catalog and selection APIs. It succeeds
+        Compensation uses only public catalog and default APIs. It succeeds
         only when unarchive/get both show the original active metadata, the
-        durable selection still names it, and the current session lease is
-        publicly confirmed active and owned. Otherwise controller bookkeeping
+        durable default still names it, and the current session remains ready
+        with access held here. Otherwise controller bookkeeping
         is abandoned for best-effort backend close and ``cleanup_failed``.
         """
 
@@ -3727,7 +3927,7 @@ class InteractiveController:
                 session_id,
                 expected_conversation_id=original.conversation_id,
             )
-            durable_selection = load_conversation_selection(
+            durable_default = load_default_conversation(
                 self._workspace,
                 session_id,
             )
@@ -3739,36 +3939,36 @@ class InteractiveController:
                     "unarchived conversation metadata is not active"
                 )
             if (
-                durable_selection != original.conversation_id
+                durable_default != original.conversation_id
                 or not self._attachment_is_safely_retained(session_id)
             ):
                 raise WorkspaceFormatError(
-                    "selected archive compensation could not be confirmed"
+                    "focused archive compensation could not be confirmed"
                 )
         except Exception:
             self._abandon_known_attachment_for_cleanup_abort()
 
-        self._selected_conversation = confirmed
+        self._focused_conversation = confirmed
         self._terminal.write_error(
-            self._classify_conversation_failure(selection_failure)
+            self._classify_conversation_failure(default_failure)
         )
         self._terminal.write_status(
             TerminalMessageKind.CONVERSATION,
-            "Archive did not complete; the original conversation remains selected.",
+            "Archive did not complete; the original conversation remains focused.",
         )
 
-    def _require_active_selected_conversation(
+    def _require_active_conversation_focus(
         self,
     ) -> ConversationMetadata | None:
-        """Return the revalidated active selection or render its typed absence.
+        """Return the revalidated active focus or render its typed absence.
 
-        Missing and archived records clear only effective in-memory selection,
+        Missing and archived records clear only effective in-memory focus,
         leaving the durable stale ID for safe restart behavior. Other failures
-        preserve memory and follow command-time lease confirmation rules.
+        preserve memory and follow command-time access confirmation rules.
         """
 
-        selected = self._selected_conversation
-        if selected is None:
+        focused = self._focused_conversation
+        if focused is None:
             self._terminal.write_error(
                 InteractiveError(InteractiveErrorCode.CONVERSATION_REQUIRED)
             )
@@ -3778,62 +3978,62 @@ class InteractiveController:
         try:
             current = self._conversation_catalog.get(
                 session_id,
-                selected.conversation_id,
+                focused.conversation_id,
             )
             current = self._validated_catalog_metadata(
                 current,
                 session_id,
-                expected_conversation_id=selected.conversation_id,
+                expected_conversation_id=focused.conversation_id,
             )
         except ConversationNotFoundError as exc:
-            self._selected_conversation = None
+            self._focused_conversation = None
             self._present_conversation_failure(exc)
             return None
         except Exception as exc:
             self._present_conversation_failure(exc)
             return None
         if current.status is ConversationStatus.ARCHIVED:
-            self._selected_conversation = None
+            self._focused_conversation = None
             self._terminal.write_error(
                 InteractiveError(InteractiveErrorCode.CONVERSATION_ARCHIVED)
             )
             return None
-        self._selected_conversation = current
+        self._focused_conversation = current
         return current
 
-    def _reconcile_in_memory_selection(
+    def _reconcile_conversation_focus(
         self,
         entries: tuple[ConversationMetadata, ...],
     ) -> None:
-        """Refresh, drop, and safely report selection against one catalog read.
+        """Refresh, drop, and report current focus against one catalog read.
 
         The operation changes only effective in-memory metadata. Missing or
-        archived durable choices remain untouched so no silent rewrite occurs.
+        archived durable defaults remain untouched so no silent rewrite occurs.
         """
 
-        selected = self._selected_conversation
-        if selected is None:
+        focused = self._focused_conversation
+        if focused is None:
             return
         current = next(
             (
                 entry
                 for entry in entries
-                if entry.conversation_id == selected.conversation_id
+                if entry.conversation_id == focused.conversation_id
             ),
             None,
         )
         if current is None:
-            self._selected_conversation = None
+            self._focused_conversation = None
             self._terminal.write_error(
                 InteractiveError(InteractiveErrorCode.CONVERSATION_NOT_FOUND)
             )
         elif current.status is ConversationStatus.ARCHIVED:
-            self._selected_conversation = None
+            self._focused_conversation = None
             self._terminal.write_error(
                 InteractiveError(InteractiveErrorCode.CONVERSATION_ARCHIVED)
             )
         else:
-            self._selected_conversation = current
+            self._focused_conversation = current
 
     def _resolve_conversation_reference(
         self,
@@ -3983,7 +4183,7 @@ class InteractiveController:
     ) -> str:
         """Derive a post-mutation handle, falling back safely to the full ID.
 
-        Catalog-read failure is reported under command-time lease rules. The
+        Catalog-read failure is reported under command-time access rules. The
         completed durable mutation is never rolled back merely for presentation.
         """
 
@@ -3997,10 +4197,10 @@ class InteractiveController:
         return self._visible_conversation_handle(metadata, entries)
 
     def _confirm_attachment_after_command_failure(self) -> None:
-        """Require public proof of the same active owned lease after storage failure.
+        """Require public proof that ready access remains held after failure.
 
-        The provider-free summary read performs no mutation. Missing, foreign,
-        inactive, unowned, or unreadable state abandons explicit detach and
+        The provider-free lifecycle read performs no mutation. Missing, foreign,
+        paused, unowned, or unreadable state abandons explicit release and
         raises ``cleanup_failed`` so backend close remains best effort.
         """
 
@@ -4021,7 +4221,7 @@ class InteractiveController:
 
         Invalid input and deterministic lookup categories are immediately safe.
         Workspace, I/O, and unexpected command-time failures require public
-        proof that the same session lease remains active and owned before the
+        proof that the session remains ready with access held here before the
         controller returns to its prompt; failed proof aborts cleanup.
         """
 
@@ -4065,6 +4265,8 @@ class InteractiveController:
             code = InteractiveErrorCode.CONVERSATION_INVALID
         elif isinstance(failure, WorkspaceSecurityError):
             code = InteractiveErrorCode.WORKSPACE_UNSAFE
+        elif isinstance(failure, WorkspaceVersionUnsupportedError):
+            code = InteractiveErrorCode.WORKSPACE_VERSION_UNSUPPORTED
         elif isinstance(failure, (WorkspaceFormatError, OSError)):
             code = InteractiveErrorCode.WORKSPACE_INVALID
         else:
@@ -4077,79 +4279,84 @@ class InteractiveController:
         self._terminal.write_status(TerminalMessageKind.CANCELLED, text)
 
     def _list_story_sessions(self) -> None:
-        """Render deterministic public session summaries without mutation.
-
-        Listing performs no provider preflight or lifecycle change. Invalid
-        workspace state aborts the process; ordinary typed session failures are
-        rendered and return to the current prompt.
-        """
+        """Render canonical read-only lifecycle rows in backend order."""
 
         try:
-            summaries = self._backend.list_sessions(
-                selected_session=self._context.selected_session
+            states = self._backend.list_session_lifecycles()
+            if type(states) is not tuple:
+                raise BackendProtocolError(
+                    "backend returned an invalid lifecycle collection"
+                )
+            validated = tuple(
+                self._require_lifecycle_state(state, state.session_id)
+                if type(state) is SessionLifecycleState
+                else self._require_lifecycle_state(state, "invalid")
+                for state in states
             )
         except Exception as exc:
-            self._present_session_failure(exc, self._context.selected_session)
+            self._present_session_failure(exc, self._context.default_session_id)
             return
-        if not summaries:
+        if not validated:
             self._terminal.write_status(
                 TerminalMessageKind.SESSION,
                 "No story sessions found.",
             )
             return
-        for summary in summaries:
+        for state in validated:
+            try:
+                provider_ready = self._provider_work_is_ready(state)
+            except Exception as exc:
+                self._present_session_failure(exc, state.session_id)
+                return
+            attached = self._attached_session_id == state.session_id
+            focused = attached and self._focused_conversation is not None
+            next_action = self._next_session_action(
+                state,
+                attached=attached,
+                focused=focused,
+                provider_ready=provider_ready,
+            )
             self._terminal.write_status(
                 TerminalMessageKind.SESSION,
-                self._format_session_summary(summary),
+                (
+                    f"Session: {state.session_id} | "
+                    f"Durable state: {state.durable_state.value} | "
+                    f"Process access: {state.access_state.value} | "
+                    f"Default session: "
+                    f"{'yes' if self._context.default_session_id == state.session_id else 'no'} | "
+                    f"Provider readiness: {'yes' if provider_ready else 'no'} | "
+                    f"Next action: {next_action}"
+                ),
             )
 
-    @staticmethod
-    def _format_session_summary(summary: SessionSummary) -> str:
-        """Format one validated summary including visible lease ownership.
-
-        The function has no side effects. Host and PID are included only when
-        the public summary supplies them; terminal rendering sanitizes text.
-        """
-
-        state = "active" if summary.active else "inactive"
-        selection = "selected" if summary.selected else "not selected"
-        text = (
-            f"{summary.session_id}: {state}; {selection}; "
-            f"lease {summary.lease_state.value}."
-        )
-        if summary.lease_pid is not None and summary.lease_hostname is not None:
-            text += (
-                f" Owner PID {summary.lease_pid} on "
-                f"{summary.lease_hostname}."
-            )
-        return text
-
-    def _end_attached_session(self) -> bool:
-        """Confirm and deactivate the attachment, returning EOF exit intent.
-
-        No/blank/Ctrl-C preserves the attachment and memory scope. EOF leaves
-        ending untouched and asks the outer boundary to detach normally. A
-        successful end clears the memory service; failed end remains
-        recoverable only with active owned state, else cleanup aborts.
-        """
+    def _pause_attached_session(self) -> bool:
+        """Confirm, pause, release access, and return to the session lobby."""
 
         session_id = self._attached_session_id
         if session_id is None:
             self._terminal.write_error(
-                InteractiveError(InteractiveErrorCode.SESSION_INACTIVE)
+                InteractiveError(InteractiveErrorCode.SESSION_NOT_ATTACHED)
             )
             return False
         decision = self._terminal.request_confirmation(
-            f"End session {session_id}?",
+            f"Pause session {session_id}?",
             default=False,
         )
         if decision is ConfirmationResult.EOF:
             return True
         if decision is not ConfirmationResult.YES:
-            self._write_session_end_cancelled_status()
+            self._write_session_pause_cancelled_status()
             return False
         try:
-            self._backend.end_session(session_id)
+            state = self._backend.pause_session_and_release_access(session_id)
+            state = self._require_lifecycle_state(state, session_id)
+            if (
+                state.durable_state is not SessionDurableState.PAUSED
+                or state.access_state is SessionAccessState.HELD_HERE
+            ):
+                raise BackendProtocolError(
+                    "backend did not return a released paused session"
+                )
         except Exception as exc:
             if not self._attachment_is_safely_retained(session_id):
                 self._abandon_known_attachment_for_cleanup_abort()
@@ -4157,53 +4364,27 @@ class InteractiveController:
             return False
 
         self._attached_session_id = None
-        self._selected_conversation = None
+        self._focused_conversation = None
         self._conversation_memory_service = None
         self._target_agent_id = LEAD_ORCHESTRATOR
         self._terminal.write_status(
             TerminalMessageKind.SESSION,
-            f"Ended {session_id}; selection retained.",
+            f"Paused {session_id}; default retained.",
         )
         self._write_lobby_orientation()
         return False
 
     def _attachment_is_safely_retained(self, session_id: str) -> bool:
-        """Return whether public state proves an active lease is still owned.
-
-        The check performs a provider-free summary read and never mutates the
-        session. An ordinary read failure, ``KeyboardInterrupt``, or
-        non-owned/inactive state is unproven, so callers fail closed; unrelated
-        ``BaseException`` subclasses continue to propagate.
-        """
+        """Return whether public state proves ready access is still held here."""
 
         try:
-            summary = self._backend.get_session_summary(
-                session_id,
-                selected_session=self._context.selected_session,
-            )
+            state = self._backend.get_session_lifecycle(session_id)
+            self._require_lifecycle_state(state, session_id)
         except (Exception, KeyboardInterrupt):
             return False
         return (
-            self._summary_matches_requested_session(summary, session_id)
-            and summary.active is True
-            and summary.lease_state is SessionLeaseState.OWNED
-        )
-
-    @staticmethod
-    def _summary_matches_requested_session(
-        summary: object,
-        expected_session: str,
-    ) -> bool:
-        """Check exact summary identity and route fields without side effects.
-
-        The result is false for foreign or malformed backend values, allowing
-        callers to fail closed before lifecycle or selection mutation.
-        """
-
-        return (
-            type(summary) is SessionSummary
-            and summary.session_id == expected_session
-            and type(summary.active) is bool
+            state.durable_state is SessionDurableState.READY
+            and state.access_state is SessionAccessState.HELD_HERE
         )
 
     def _write_parser_error(
@@ -4276,54 +4457,16 @@ class InteractiveController:
     def _present_session_failure(
         self,
         failure: Exception,
-        session_id: str | None,
-        *,
-        check_for_inactive_race: bool = False,
+        _session_id: str | None,
     ) -> None:
         """Map a typed operation failure to safe output or a fatal abort.
 
-        Mapping uses exception classes and optional public state only, never
-        exception prose. Recoverable session/preflight categories return to the
+        Mapping uses exception classes, never exception prose. Recoverable
+        session/preflight categories return to the
         prompt; workspace, internal, and cleanup uncertainty abort the run.
         """
 
         error = self._classify_session_failure(failure)
-        if (
-            check_for_inactive_race
-            and session_id is not None
-            and isinstance(failure, BackendProtocolError)
-            and not isinstance(
-                failure,
-                (SessionExistsError, SessionNotFoundError, SessionInUseError),
-            )
-        ):
-            try:
-                summary = self._backend.get_session_summary(
-                    session_id,
-                    selected_session=self._context.selected_session,
-                )
-            except SessionNotFoundError:
-                error = InteractiveError(
-                    InteractiveErrorCode.SESSION_NOT_FOUND
-                )
-            except (WorkspaceSecurityError, WorkspaceFormatError, OSError) as exc:
-                raise _ControllerAbort(
-                    self._classify_session_failure(exc)
-                ) from None
-            except Exception:
-                pass
-            else:
-                if (
-                    self._summary_matches_requested_session(
-                        summary,
-                        session_id,
-                    )
-                    and summary.active is False
-                ):
-                    error = InteractiveError(
-                        InteractiveErrorCode.SESSION_INACTIVE
-                    )
-
         if error.code not in _RECOVERABLE_SESSION_ERRORS:
             raise _ControllerAbort(error)
         self._terminal.write_error(error)
@@ -4343,10 +4486,16 @@ class InteractiveController:
             code = InteractiveErrorCode.SESSION_EXISTS
         elif isinstance(failure, SessionNotFoundError):
             code = InteractiveErrorCode.SESSION_NOT_FOUND
-        elif isinstance(failure, SessionInUseError):
-            code = InteractiveErrorCode.SESSION_IN_USE
+        elif isinstance(failure, SessionPausedError):
+            code = InteractiveErrorCode.SESSION_PAUSED
+        elif isinstance(failure, SessionAccessBlockedError):
+            code = InteractiveErrorCode.SESSION_ACCESS_BLOCKED
+        elif isinstance(failure, SessionOwnershipUnknownError):
+            code = InteractiveErrorCode.SESSION_OWNERSHIP_UNKNOWN
         elif isinstance(failure, WorkspaceSecurityError):
             code = InteractiveErrorCode.WORKSPACE_UNSAFE
+        elif isinstance(failure, WorkspaceVersionUnsupportedError):
+            code = InteractiveErrorCode.WORKSPACE_VERSION_UNSUPPORTED
         elif isinstance(failure, (WorkspaceFormatError, OSError)):
             code = InteractiveErrorCode.WORKSPACE_INVALID
         elif isinstance(failure, (ConfigurationError, BackendProtocolError)):
@@ -4363,20 +4512,20 @@ class InteractiveController:
             "No action was taken.",
         )
 
-    def _write_session_resume_cancelled_status(self) -> None:
-        """Acknowledge declined saved-session resume without mutation."""
+    def _write_session_open_cancelled_status(self) -> None:
+        """Acknowledge declined default-session open without mutation."""
 
         self._terminal.write_status(
             TerminalMessageKind.CANCELLED,
-            "Session resume cancelled.",
+            "Session open cancelled.",
         )
 
-    def _write_session_end_cancelled_status(self) -> None:
-        """Acknowledge declined session end while retaining its attachment."""
+    def _write_session_pause_cancelled_status(self) -> None:
+        """Acknowledge declined session pause while retaining attachment."""
 
         self._terminal.write_status(
             TerminalMessageKind.CANCELLED,
-            "Session end cancelled.",
+            "Session pause cancelled.",
         )
 
     def _write_lobby_orientation(self) -> None:
@@ -4387,14 +4536,14 @@ class InteractiveController:
     def _abandon_known_attachment_for_cleanup_abort(self) -> None:
         """Clear uncertain bookkeeping and abort into backend-close cleanup.
 
-        No further explicit detach is attempted because a prior lifecycle
+        No further explicit release is attempted because a prior lifecycle
         failure made source/destination ownership ambiguous. Process attachment,
-        selection, and memory scope are cleared while backend ``close`` remains
+        focus, and memory scope are cleared while backend ``close`` remains
         the best-effort resource cleanup operation.
         """
 
         self._attached_session_id = None
-        self._selected_conversation = None
+        self._focused_conversation = None
         self._conversation_memory_service = None
         raise _ControllerAbort(
             InteractiveError(InteractiveErrorCode.CLEANUP_FAILED)
@@ -4420,11 +4569,11 @@ class InteractiveController:
         *,
         cleanup_error_reported: bool,
     ) -> int:
-        """Close Runner, detach, close backend, and apply failure precedence.
+        """Close Runner, release access, close backend, and rank failures.
 
-        Normal quit/EOF detaches without deactivation. Each cleanup stage runs
-        after the preceding stage even when that stage fails. Runner, detach,
-        backend, attachment, selection, and memory state are cleared before the
+        Normal quit/EOF releases access without pausing. Each cleanup stage runs
+        after the preceding stage even when that stage fails. Runner, access,
+        backend, attachment, focus, and memory state are cleared before the
         method returns; one best-effort cleanup diagnostic accompanies status 2.
         A ``BaseException`` from any stage propagates only after later stages
         run. If Runner close is interrupted, its private reference is retained
@@ -4450,7 +4599,13 @@ class InteractiveController:
             try:
                 if attached_session is not None:
                     try:
-                        self._backend.detach_session(attached_session)
+                        released = self._backend.release_session_access(
+                            attached_session
+                        )
+                        self._require_released_state(
+                            released,
+                            attached_session,
+                        )
                     except Exception:
                         cleanup_failed = True
             finally:
@@ -4463,7 +4618,7 @@ class InteractiveController:
                     if discard_runner_state_after_cleanup:
                         self._runner = None
                     self._attached_session_id = None
-                    self._selected_conversation = None
+                    self._focused_conversation = None
                     self._conversation_memory_service = None
                     self._closed = True
 

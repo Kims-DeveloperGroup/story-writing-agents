@@ -1,107 +1,106 @@
 # Backend and session API
 
-> **Availability:** `AgentBackend`, `BoundAgent`, one-step/retrieval calls, and
-> strict session lifecycle are implemented; Codex alone is supported.
+> **Availability:** `AgentBackend`, `BoundAgent`, the exact lifecycle API, and
+> pure lifecycle contracts are implemented. Codex is the only supported provider.
 
-Key terms: **binding**—immutable agent/provider pairing; **manifest**—the
-durable session/thread record; **lease**—temporary process ownership;
-**thread**—a resumable provider conversation reference.
+Key terms: **binding**—agent/provider pairing; **manifest**—durable session and
+thread state; **access claim**—temporary exclusive process ownership;
+**lifecycle value**—validated provider-neutral facts.
+
+## Backend surface
 
 ```python
-AgentBackend(
-    workspace: Workspace | str | pathlib.Path,
-    *,
-    executable: str = "codex",
-    model: str | None = None,
-    timeout_seconds: float = 300,
-    backend_overrides: Mapping[str, str] | None = None,
-)
+AgentBackend(workspace: Workspace | str | pathlib.Path, *, executable: str = "codex",
+             model: str | None = None, timeout_seconds: float = 300,
+             backend_overrides: Mapping[str, str] | None = None)
 await AgentBackend.bind(definition: AgentDefinition) -> BoundAgent
+await BoundAgent.invoke(request: AgentRequest) -> AgentReply
 await BoundAgent.converse(request: ConversationRequest) -> ConversationReply
-await BoundAgent.converse_with_retrieval(request: ConversationRetrievalRequest,
-                                         handler: ConversationRetrievalActionHandler) -> ConversationRetrievalReply
-AgentBackend.prepare_session(session_id: str) -> None
-AgentBackend.get_session_summary(session_id: str, *, selected_session: str | None = None) -> SessionSummary
-AgentBackend.list_sessions(*, selected_session: str | None = None) -> tuple[SessionSummary, ...]
-AgentBackend.create_session(session_id: str) -> SessionSummary
-AgentBackend.resume_session(session_id: str) -> SessionSummary
-AgentBackend.attach_session(session_id: str) -> SessionSummary
-AgentBackend.detach_session(session_id: str) -> SessionSummary
-AgentBackend.start_session(session_id: str) -> dict[str, Any]
-AgentBackend.end_session(session_id: str) -> dict[str, Any]
+await BoundAgent.converse_with_retrieval(request, handler) -> ConversationRetrievalReply
 AgentBackend.close() -> None
 ```
 
-`model=None` uses Codex's default; invocation ignores user configuration.
-Timeout is positive. Overrides map canonical agents to vendors. Reserved
-`gemini` is unimplemented; no runtime plugin loader exists.
+`model=None` uses Codex's default. Timeout is positive. Overrides map canonical
+agents to providers; reserved `gemini` fails configuration validation. A bound
+agent exposes `backend`, `definition`, `vendor`, and `staging_directory`.
+Provider calls require ready access already held by the backend. Runtime owns
+transcripts and retrieval authorization; backend owns provider metadata,
+processes, access claims, and per-thread serialization.
 
-`bind()` verifies a definition and returns a `BoundAgent` with public `backend`,
-`definition`, `vendor`, and `staging_directory`. `invoke()` runs a debate phase.
-
-## Conversation calls
-
-| Concern | Contract |
-| --- | --- |
-| One-step | Exact `ConversationRequest`; one correlated reply. Its signature and payload are unchanged. |
-| Retrieval | Exact request plus synchronous handler. Thread lock covers the loop; backend receives no memory service. |
-| Validation | Malformed JSON/schema or invalid/miscorrelated handler outcomes raise `BackendProtocolError`. Runtime maps provider action identity/index violations to `ConversationRetrievalSemanticError`; unsupported vendors raise `ConfigurationError`. |
-| Lifecycle | Both paths share lease, timeout, and `(session, backend, agent)` serialization; changed fingerprints or taint start fresh. |
-| Cancellation | Terminate the active process, wait at most two seconds, then kill/wait if needed. Incomplete history is tainted, forcing the next compatible call fresh; a completed answer stays compatible if reply storage later fails. |
-| Scope and writes | Conversation ID is not a thread key. Private history may span conversations/debates. Only provider metadata may change. |
-
-Runtime owns transcript writes and retrieval authority. See [Runtime API](runtime-api.md#one-conversation-turn), [retrieval](conversation-retrieval.md), and [provider flow](../design/prompts-and-provider.md#conversation-turn-flow).
-
-## Session status
+## Lifecycle value contracts
 
 ```python
-SessionSummary(
-    session_id: str,
-    active: bool,
-    selected: bool,
-    lease_state: SessionLeaseState,
-    lease_hostname: str | None,
-    lease_pid: int | None,
-    created_at: str,
-    updated_at: str,
+from story_writing_agents import (
+    SessionAccessState, SessionDurableState, SessionLifecycleState,
+    provider_work_is_ready,
 )
+
+SessionLifecycleState(*, session_id: str, durable_state: SessionDurableState,
+    access_state: SessionAccessState, owner_hostname: str | None,
+    owner_pid: int | None, created_at: str | None, updated_at: str | None)
+provider_work_is_ready(state: SessionLifecycleState, *,
+                       provider_configuration_ready: bool) -> bool
 ```
 
-This frozen value separates durable `active`, caller-computed `selected`, and
-temporary lease state. Backend never reads or writes CLI context.
+The value is frozen, slotted, keyword-only, and validates without I/O. Wrong
+exact types raise `TypeError`; unsafe IDs, incomplete owner/timestamp pairs,
+impossible absent facts, and unordered or offset-free timestamps raise
+`ValueError`. Valid combinations are in the
+[state matrix](../design/session-lifecycle.md#canonical-lifecycle-state).
 
-| State | Meaning at read time |
+Readiness is true only for a valid `ready` state, `held_here` access, and exact
+`True` configuration readiness. It never reads configuration or storage,
+acquires access, invokes a provider, or mutates state.
+
+## Exact lifecycle methods
+
+```python
+AgentBackend.get_session_lifecycle(session_id: str) -> SessionLifecycleState
+AgentBackend.list_session_lifecycles() -> tuple[SessionLifecycleState, ...]
+AgentBackend.validate_provider_configuration(session_id: str) -> bool
+AgentBackend.acquire_session_access(session_id: str) -> SessionLifecycleState
+AgentBackend.release_session_access(session_id: str) -> SessionLifecycleState
+AgentBackend.create_session_with_access(session_id: str) -> SessionLifecycleState
+AgentBackend.reopen_session_with_access(session_id: str) -> SessionLifecycleState
+AgentBackend.pause_session_and_release_access(session_id: str) -> SessionLifecycleState
+```
+
+These are the complete lifecycle surface:
+
+| Method | Contract |
 | --- | --- |
-| `available` | No sidecar, or POSIX same-host PID demonstrably gone; reads do not remove dead sidecars. |
-| `owned` | This backend holds the matching token. |
-| `in_use` | POSIX same-host unowned PID is demonstrably live. |
-| `unverified` | Remote host, ambiguous probe, permission failure, or any unowned non-POSIX sidecar; acquisition is blocked. |
+| `get_session_lifecycle` | Provider-free read; missing returns `absent` only when manifest and claim are both absent. |
+| `list_session_lifecycles` | Provider-free, newest durable update then ID; validates all encountered lifecycle files. |
+| `validate_provider_configuration` | No claim or provider call; exact `True` or a typed failure. |
+| `acquire_session_access` | Claim an existing session without changing durable bytes. |
+| `release_session_access` | Release only this backend's exact claim; otherwise read-only. |
+| `create_session_with_access` | Exclusively create a ready V2 manifest and retain access. |
+| `reopen_session_with_access` | Acquire and make paused state ready; ready state is byte-preserving. |
+| `pause_session_and_release_access` | Acquire, make paused, and release access. |
 
-Available sidecars retain hostname/PID; both are `None` only when absent.
-Selected input need not exist. Status reads never acquire/reclaim/remove.
-POSIX same-host liveness uses `os.kill(pid, 0)`; only a later claim reclaims
-proved-dead ownership. Ambiguous/permission/remote/non-POSIX ownership is
-`unverified`. No remote probe, heartbeat, expiry, or stale-remote reclaim exists;
-PID reuse and hostname equality remain imperfect evidence.
+Create and reopen deliberately do not perform configuration validation; their
+caller does so first. Provider work uses the mandatory synchronous sequence
+validation → lifecycle pre-read → acquisition → correlated lifecycle post-read.
+Missing is `SessionNotFoundError`, paused provider work is
+`SessionPausedError`, live local ownership is `SessionAccessBlockedError`, and
+unprovable ownership is `SessionOwnershipUnknownError`.
 
-## Lifecycle methods
+## Ownership, correlation, and cleanup
 
-| Method | Exact lifecycle distinction |
-| --- | --- |
-| `get_session_summary` | Provider-free read; missing raises `SessionNotFoundError`. |
-| `list_sessions` | Provider-free, newest update then ID; absent directory returns `()`. |
-| `prepare_session` | Preflight, require active, retain lease, return `None`. |
-| `create_session` | Preflight and exclusively create active; any manifest means exists. |
-| `resume_session` | Preflight, retain lease, reactivate only when inactive. |
-| `attach_session` | Preflight and retain existing active without manifest rewrite. |
-| `detach_session` | Release this lease; keep active state, threads, and selection. |
-| `start_session` | Compatibility create/reactivate without executable preflight; release transient lease. |
-| `end_session` | Write inactive, preserve threads, release lease. |
-| `close` | Release leases/staging without deactivation; prohibit reuse. |
+Claims are serialized by `.access-claims.lock`. A missing local POSIX process
+is `claimable`; guarded acquisition re-reads and replaces that unchanged claim.
+A live local process blocks. A remote host, unsupported platform, inaccessible
+process, failed probe, or changed claim is `ownership_unknown` and is preserved.
+No remote probe occurs.
 
-Lifecycle methods validate IDs/state. Prepare/attach reject inactive state.
-Live or unverifiable ownership raises `SessionInUseError` without its token;
-changed ownership raises `BackendProtocolError` and is not deleted. Failure
-releases a newly acquired lease but retains a previously owned one.
+Release compares the opaque token under the guard and removes only the claim
+recorded by this backend. Failed create/access/reopen compensates only a claim
+newly acquired by that operation. A caller that already held access keeps it on
+later failure. `close()` best-effort releases its recorded claims and removes
+prompt staging; it never pauses durable state or permits backend reuse.
 
-Detach, end, and close retain threads. See [Session storage](configuration/session-storage.md) and [Session lifecycle](../design/session-lifecycle.md).
+V1 manifests, access sidecars, and guards raise
+`WorkspaceVersionUnsupportedError` without migration, deletion, or rewriting.
+Malformed, orphaned, path-mismatched, or changed V2 data fails closed. Exact
+paths and schemas are in [Session storage](configuration/session-storage.md);
+user-visible transitions are in [Session lifecycle](../design/session-lifecycle.md).

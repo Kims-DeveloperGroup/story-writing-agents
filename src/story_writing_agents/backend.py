@@ -63,12 +63,15 @@ from .errors import (
     ConfigurationError,
     ConversationRetrievalSemanticError,
     ManuscriptExistsError,
+    SessionAccessBlockedError,
     SessionExistsError,
     SessionIdError,
-    SessionInUseError,
     SessionNotFoundError,
+    SessionOwnershipUnknownError,
+    SessionPausedError,
     WorkspaceFormatError,
     WorkspaceSecurityError,
+    WorkspaceVersionUnsupportedError,
 )
 from .models import (
     AgentDefinition,
@@ -77,20 +80,27 @@ from .models import (
     ConversationReply,
     ConversationRequest,
     Phase,
-    SessionLeaseState,
-    SessionSummary,
     Verdict,
+)
+from .session_lifecycle import (
+    SessionAccessState,
+    SessionDurableState,
+    SessionLifecycleState,
+    provider_work_is_ready,
 )
 from .workspace import Workspace
 
 
-_SESSION_SCHEMA_VERSION = 1
-_LEASE_SCHEMA_VERSION = 1
+_SESSION_SCHEMA_VERSION = 2
+_ACCESS_CLAIM_SCHEMA_VERSION = 2
 _SESSION_DIRECTORY = "agent_states/orchestrator_state/provider_sessions"
-_LEASE_CLAIM_GUARD = f"{_SESSION_DIRECTORY}/.lease-claims.lock"
+_ACCESS_CLAIM_GUARD = f"{_SESSION_DIRECTORY}/.access-claims.lock"
+_UNSUPPORTED_V1_ACCESS_CLAIM_GUARD = (
+    f"{_SESSION_DIRECTORY}/.lease-claims.lock"
+)
 _WINDOWS_LOCK_RETRY_SECONDS = 0.05
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
-_LEASE_DIAGNOSTIC_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
+_ACCESS_DIAGNOSTIC_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
 _SAFE_THREAD_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 _SAFE_FINGERPRINT = re.compile(r"[0-9a-f]{64}")
 
@@ -351,7 +361,7 @@ class AgentBackend:
         self.executable = executable
         self.model = model
         self.timeout_seconds = float(timeout_seconds)
-        self._lease_tokens: dict[str, str] = {}
+        self._access_claim_tokens: dict[str, str] = {}
         self._thread_locks: dict[tuple[str, str, str], asyncio.Lock] = {}
         self._staging_directories: set[Path] = set()
         self._closed = False
@@ -372,38 +382,43 @@ class AgentBackend:
             reference.read_text()
         return BoundAgent(self, definition, staging_directory)
 
-    def prepare_session(self, session_id: str) -> None:
-        """Validate every route and exclusively lease an active session."""
+    def get_session_lifecycle(self, session_id: str) -> SessionLifecycleState:
+        """Return validated durable and access facts without mutation.
+
+        Absence is represented only when no manifest or access claim exists.
+        Old lifecycle artifacts raise ``WorkspaceVersionUnsupportedError`` and
+        an access claim without a manifest raises ``WorkspaceFormatError``.
+        """
 
         self._ensure_open()
         session = self.workspace.validate_identifier(session_id)
-        self._preflight_session(session)
-        self._ensure_session_lease(session)
+        self._reject_unsupported_access_artifacts(session)
+        manifest = self._read_manifest(session, missing_ok=True)
+        if manifest is None:
+            if self._read_access_claim_if_present(session) is not None:
+                raise WorkspaceFormatError(
+                    f"provider session access claim has no manifest: {session}"
+                )
+            return SessionLifecycleState(
+                session_id=session,
+                durable_state=SessionDurableState.ABSENT,
+                access_state=SessionAccessState.CLAIMABLE,
+                owner_hostname=None,
+                owner_pid=None,
+                created_at=None,
+                updated_at=None,
+            )
+        return self._session_lifecycle(manifest)
 
-    def get_session_summary(
-        self,
-        session_id: str,
-        *,
-        selected_session: str | None = None,
-    ) -> SessionSummary:
-        """Return validated provider-session status without changing its lease."""
+    def list_session_lifecycles(self) -> tuple[SessionLifecycleState, ...]:
+        """List validated persisted lifecycle facts without mutation.
+
+        Results are ordered by newest durable update and then session ID.
+        Unsupported version-1 artifacts and orphan access claims fail closed.
+        """
 
         self._ensure_open()
-        session = self.workspace.validate_identifier(session_id)
-        selected = self._validate_selected_session(selected_session)
-        manifest = self._read_manifest(session, missing_ok=False)
-        assert manifest is not None
-        return self._session_summary(manifest, selected_session=selected)
-
-    def list_sessions(
-        self,
-        *,
-        selected_session: str | None = None,
-    ) -> tuple[SessionSummary, ...]:
-        """List validated provider sessions in deterministic recency order."""
-
-        self._ensure_open()
-        selected = self._validate_selected_session(selected_session)
+        self._reject_unsupported_access_artifacts(None)
         directory = self.workspace.path(_SESSION_DIRECTORY)
         if not directory.exists():
             return ()
@@ -418,202 +433,211 @@ class AgentBackend:
                 "cannot enumerate provider session manifests"
             ) from exc
 
-        summaries: list[SessionSummary] = []
+        manifest_sessions: set[str] = set()
+        claim_sessions: set[str] = set()
+        states: list[SessionLifecycleState] = []
         for entry in entries:
             name = entry.name
-            if (
-                name == ".gitkeep"
-                or name.endswith(".lease.json")
-                or not name.endswith(".json")
-            ):
+            if name in {".gitkeep", ".access-claims.lock"}:
+                continue
+            if name == ".lease-claims.lock" or name.endswith(".lease.json"):
+                raise WorkspaceVersionUnsupportedError(
+                    "workspace contains unsupported version-1 session access data"
+                )
+            if name.endswith(".access.json"):
+                session = self.workspace.validate_identifier(
+                    name[: -len(".access.json")]
+                )
+                claim_sessions.add(session)
+                self._read_access_claim(session)
+                continue
+            if not name.endswith(".json"):
                 continue
             session = self.workspace.validate_identifier(name[:-5])
+            manifest_sessions.add(session)
             manifest = self._read_manifest(session, missing_ok=False)
             assert manifest is not None
-            summaries.append(
-                self._session_summary(manifest, selected_session=selected)
-            )
+            states.append(self._session_lifecycle(manifest))
 
-        summaries.sort(key=lambda summary: summary.session_id)
-        summaries.sort(
-            key=lambda summary: _parse_timestamp(
-                summary.updated_at,
+        orphaned = sorted(claim_sessions.difference(manifest_sessions))
+        if orphaned:
+            raise WorkspaceFormatError(
+                f"provider session access claim has no manifest: {orphaned[0]}"
+            )
+        states.sort(key=lambda state: state.session_id)
+        states.sort(
+            key=lambda state: _parse_timestamp(
+                state.updated_at,
                 label="provider session updated_at",
             ),
             reverse=True,
         )
-        return tuple(summaries)
+        return tuple(states)
 
-    def create_session(self, session_id: str) -> SessionSummary:
-        """Create and attach a new active provider session."""
+    def validate_provider_configuration(self, session_id: str) -> bool:
+        """Validate every provider route without lifecycle or provider mutation.
+
+        Success returns exact ``True``. Invalid configuration or an unavailable
+        provider executable raises its existing typed failure.
+        """
 
         self._ensure_open()
         session = self.workspace.validate_identifier(session_id)
         self._preflight_session(session)
-        if self._manifest_exists(session):
+        return True
+
+    def acquire_session_access(self, session_id: str) -> SessionLifecycleState:
+        """Acquire or prove access without changing durable session bytes."""
+
+        self._ensure_open()
+        session = self.workspace.validate_identifier(session_id)
+        state, _ = self._acquire_access_with_reuse(session)
+        return state
+
+    def release_session_access(self, session_id: str) -> SessionLifecycleState:
+        """Release only this backend's claim and return current lifecycle facts.
+
+        Without a locally recorded claim the operation is a read-only no-op;
+        foreign claims are never removed or rewritten.
+        """
+
+        self._ensure_open()
+        session = self.workspace.validate_identifier(session_id)
+        token = self._access_claim_tokens.get(session)
+        if token is not None:
+            self._release_access_claim(session, token)
+        return self.get_session_lifecycle(session)
+
+    def create_session_with_access(
+        self,
+        session_id: str,
+    ) -> SessionLifecycleState:
+        """Atomically create one ready V2 session and retain its access claim.
+
+        Creation writes an empty provider-thread map with equal timestamps.
+        Configuration validation remains the caller's separate operation.
+        """
+
+        self._ensure_open()
+        session = self.workspace.validate_identifier(session_id)
+        current = self.get_session_lifecycle(session)
+        if current.durable_state is not SessionDurableState.ABSENT:
             raise SessionExistsError(f"provider session already exists: {session}")
 
-        token, already_owned = self._lease_for_attachment(session)
-        try:
+        token = uuid.uuid4().hex
+        claim = self._new_access_claim(session, token)
+        now = _now()
+        _parse_timestamp(now, label="provider session timestamp")
+        manifest: dict[str, Any] = {
+            "schema_version": _SESSION_SCHEMA_VERSION,
+            "session_id": session,
+            "durable_state": SessionDurableState.READY.value,
+            "created_at": now,
+            "updated_at": now,
+            "provider_threads": {},
+        }
+        with self._access_claim_guard():
+            self._reject_unsupported_access_artifacts(session)
             if self._manifest_exists(session):
+                self._read_manifest(session, missing_ok=False)
                 raise SessionExistsError(
                     f"provider session already exists: {session}"
                 )
-            now = _now()
-            _parse_timestamp(now, label="provider session timestamp")
-            manifest = {
-                "schema_version": _SESSION_SCHEMA_VERSION,
-                "session_id": session,
-                "active": True,
-                "created_at": now,
-                "updated_at": now,
-                "threads": {},
-            }
-            self._write_manifest(session, manifest)
-        except Exception:
-            if not already_owned:
-                self._release_lease(session, token)
-            raise
+            if self._read_access_claim_if_present(session) is not None:
+                raise WorkspaceFormatError(
+                    f"provider session access claim has no manifest: {session}"
+                )
+            self.workspace.write_json(
+                self._access_claim_relative(session),
+                claim,
+                overwrite=False,
+            )
+            try:
+                self._write_manifest(session, manifest, overwrite=False)
+            except BaseException as exc:
+                self._discard_access_claim_after_failed_create(session, token, exc)
+                raise
 
-        self._lease_tokens[session] = token
-        return self._session_summary(manifest, selected_session=None)
+        self._access_claim_tokens[session] = token
+        return self._session_lifecycle(manifest)
 
-    def resume_session(self, session_id: str) -> SessionSummary:
-        """Attach an existing session, reactivating it only when inactive."""
+    def reopen_session_with_access(
+        self,
+        session_id: str,
+    ) -> SessionLifecycleState:
+        """Acquire an existing session, make it ready, and retain access.
+
+        An already-ready manifest is a byte- and timestamp-preserving no-op.
+        A newly acquired claim is released if durable validation or writing
+        fails; access already owned by this backend is retained on failure.
+        """
 
         self._ensure_open()
         session = self.workspace.validate_identifier(session_id)
-        self._preflight_session(session)
-        self._read_manifest(session, missing_ok=False)
-
-        token, already_owned = self._lease_for_attachment(session)
+        _, already_owned = self._acquire_access_with_reuse(session)
         try:
             manifest = self._read_manifest(session, missing_ok=False)
             assert manifest is not None
-            if not manifest["active"]:
-                manifest["active"] = True
+            if manifest["durable_state"] != SessionDurableState.READY.value:
+                manifest["durable_state"] = SessionDurableState.READY.value
                 manifest["updated_at"] = _advanced_timestamp(
                     manifest["updated_at"]
                 )
                 self._write_manifest(session, manifest)
-        except Exception:
+            return self._session_lifecycle(manifest)
+        except BaseException:
             if not already_owned:
-                self._release_lease(session, token)
+                token = self._access_claim_tokens.get(session)
+                if token is not None:
+                    self._release_access_claim(session, token)
             raise
 
-        self._lease_tokens[session] = token
-        return self._session_summary(manifest, selected_session=None)
+    def pause_session_and_release_access(
+        self,
+        session_id: str,
+    ) -> SessionLifecycleState:
+        """Acquire a session, make it paused, then release local access.
 
-    def attach_session(self, session_id: str) -> SessionSummary:
-        """Attach an existing active session without rewriting its manifest."""
+        An already-paused manifest is not rewritten. A durable-write failure
+        releases only an access claim acquired by this call; after a successful
+        pause, release is always attempted and its failure propagates.
+        """
 
         self._ensure_open()
         session = self.workspace.validate_identifier(session_id)
-        self._preflight_session(session)
-        manifest = self._read_manifest(session, missing_ok=False)
-        assert manifest is not None
-        if not manifest["active"]:
-            raise BackendProtocolError(
-                f"provider session is not active: {session}"
-            )
-
-        token, already_owned = self._lease_for_attachment(session)
+        _, already_owned = self._acquire_access_with_reuse(session)
         try:
             manifest = self._read_manifest(session, missing_ok=False)
             assert manifest is not None
-            if not manifest["active"]:
-                raise BackendProtocolError(
-                    f"provider session is not active: {session}"
-                )
-        except Exception:
-            if not already_owned:
-                self._release_lease(session, token)
-            raise
-
-        self._lease_tokens[session] = token
-        return self._session_summary(manifest, selected_session=None)
-
-    def detach_session(self, session_id: str) -> SessionSummary:
-        """Release this backend's attachment without mutating session state."""
-
-        self._ensure_open()
-        session = self.workspace.validate_identifier(session_id)
-        manifest = self._read_manifest(session, missing_ok=False)
-        assert manifest is not None
-        token = self._lease_tokens.get(session)
-        if token is not None:
-            self._assert_owned_lease(session)
-            self._release_lease(session, token)
-        return self._session_summary(manifest, selected_session=None)
-
-    def start_session(self, session_id: str) -> dict[str, Any]:
-        """Create or reactivate a story session while retaining vendor threads."""
-
-        self._ensure_open()
-        session = self.workspace.validate_identifier(session_id)
-        token = self._claim_lease(session)
-        try:
-            manifest = self._read_manifest(session, missing_ok=True)
-            now = _now()
-            if manifest is None:
-                _parse_timestamp(now, label="provider session timestamp")
-                manifest = {
-                    "schema_version": _SESSION_SCHEMA_VERSION,
-                    "session_id": session,
-                    "active": True,
-                    "created_at": now,
-                    "updated_at": now,
-                    "threads": {},
-                }
-            else:
-                manifest["active"] = True
+            if manifest["durable_state"] != SessionDurableState.PAUSED.value:
+                manifest["durable_state"] = SessionDurableState.PAUSED.value
                 manifest["updated_at"] = _advanced_timestamp(
-                    manifest["updated_at"],
-                    candidate=now,
+                    manifest["updated_at"]
                 )
-            self._write_manifest(session, manifest)
-            return manifest
-        finally:
-            self._release_lease(session, token)
-
-    def end_session(self, session_id: str) -> dict[str, Any]:
-        """Deactivate a story session without deleting resumable threads."""
-
-        self._ensure_open()
-        session = self.workspace.validate_identifier(session_id)
-        token = self._lease_tokens.get(session)
-        transient = token is None
-        if token is None:
-            token = self._claim_lease(session)
-        else:
-            self._assert_owned_lease(session)
-        succeeded = False
-        try:
-            manifest = self._read_manifest(session, missing_ok=False)
-            assert manifest is not None
-            manifest["active"] = False
-            manifest["updated_at"] = _advanced_timestamp(
-                manifest["updated_at"]
-            )
-            self._write_manifest(session, manifest)
-            succeeded = True
-            return manifest
-        finally:
-            if transient or succeeded:
-                self._release_lease(session, token)
+                self._write_manifest(session, manifest)
+        except BaseException:
+            if not already_owned:
+                token = self._access_claim_tokens.get(session)
+                if token is not None:
+                    self._release_access_claim(session, token)
+            raise
+        token = self._access_claim_tokens.get(session)
+        if token is not None:
+            self._release_access_claim(session, token)
+        return self.get_session_lifecycle(session)
 
     def close(self) -> None:
-        """Release owned session leases and remove ephemeral prompt staging."""
+        """Release owned access claims and remove ephemeral prompt staging."""
 
         if self._closed:
             return
         self._closed = True
-        for session, token in tuple(self._lease_tokens.items()):
+        for session, token in tuple(self._access_claim_tokens.items()):
             try:
-                self._release_lease(session, token)
+                self._release_access_claim(session, token)
             except Exception:
                 pass
-        self._lease_tokens.clear()
+        self._access_claim_tokens.clear()
         self._thread_locks.clear()
         for directory in tuple(self._staging_directories):
             shutil.rmtree(directory, ignore_errors=True)
@@ -626,7 +650,7 @@ class AgentBackend:
     ) -> AgentReply:
         """Invoke Codex with conditional context projection and safe diagnostics.
 
-        The request is serialized without changing the legacy key set unless an
+        The request is serialized without changing the established key set unless an
         included conversation window is present. Provider and staging resources
         retain their established lifecycle; protocol, process, and decode errors
         use provider-safe diagnostics that never reproduce response values.
@@ -973,7 +997,7 @@ class AgentBackend:
 
         self._ensure_open()
         session = session_id
-        self._ensure_session_lease(session)
+        self._assert_provider_work_ready(session)
         stored = self._load_thread(session, bound_agent.definition)
         thread_id = stored["thread_id"] if stored is not None else None
 
@@ -1848,7 +1872,7 @@ class AgentBackend:
         )
 
     def _preflight_session(self, session_id: str) -> None:
-        """Validate configured provider routes without acquiring a lease."""
+        """Validate configured provider routes without acquiring access."""
 
         runtime_overrides = self.workspace.load_session_overrides(session_id)
         manager = ConfigManager(self.workspace)
@@ -1869,169 +1893,135 @@ class AgentBackend:
                 f"Codex CLI executable was not found: {self.executable}"
             )
 
-    def _validate_selected_session(self, value: str | None) -> str | None:
-        """Return a validated selection, or ``None`` when none is selected."""
-
-        if value is None:
-            return None
-        return self.workspace.validate_identifier(value)
-
-    def _session_summary(
+    def _session_lifecycle(
         self,
         manifest: Mapping[str, Any],
-        *,
-        selected_session: str | None,
-    ) -> SessionSummary:
-        """Build a summary from a validated manifest and current lease state.
-
-        The manifest is not mutated; lease read and format failures propagate,
-        while uncertain liveness probes are represented as
-        ``SessionLeaseState.UNVERIFIED``.
-        """
+    ) -> SessionLifecycleState:
+        """Combine one validated manifest with an observed access claim."""
 
         session = manifest["session_id"]
-        lease = self._read_lease_if_present(session)
-        if lease is None:
-            lease_state = SessionLeaseState.AVAILABLE
-            lease_hostname = None
-            lease_pid = None
+        claim = self._read_access_claim_if_present(session)
+        if claim is None:
+            access_state = SessionAccessState.CLAIMABLE
+            owner_hostname = None
+            owner_pid = None
         else:
-            lease_state = self._lease_state(session, lease)
-            lease_hostname = lease["hostname"]
-            lease_pid = lease["pid"]
-        return SessionSummary(
+            access_state = self._access_state(session, claim)
+            owner_hostname = claim["owner_hostname"]
+            owner_pid = claim["owner_pid"]
+        try:
+            durable_state = SessionDurableState(manifest["durable_state"])
+        except ValueError as exc:
+            raise WorkspaceFormatError(
+                "provider session durable state is invalid"
+            ) from exc
+        return SessionLifecycleState(
             session_id=session,
-            active=manifest["active"],
-            selected=session == selected_session,
-            lease_state=lease_state,
-            lease_hostname=lease_hostname,
-            lease_pid=lease_pid,
+            durable_state=durable_state,
+            access_state=access_state,
+            owner_hostname=owner_hostname,
+            owner_pid=owner_pid,
             created_at=manifest["created_at"],
             updated_at=manifest["updated_at"],
         )
 
-    def _lease_for_attachment(self, session_id: str) -> tuple[str, bool]:
-        """Return an owned or newly claimed lease token and its reuse flag.
+    def _acquire_access_with_reuse(
+        self,
+        session_id: str,
+    ) -> tuple[SessionLifecycleState, bool]:
+        """Acquire or prove access and report whether it was already owned."""
 
-        An absent lease is claimed on disk; ownership and contention failures
-        propagate without installing the token in this backend.
-        """
-
-        token = self._lease_tokens.get(session_id)
-        if token is not None:
-            self._assert_owned_lease(session_id)
-            return token, True
-        return self._claim_lease(session_id), False
-
-    def _ensure_session_lease(self, session_id: str) -> None:
-        """Ensure this backend owns a lease for an active provider session.
-
-        A new claim is followed by an active-state recheck and is released on
-        recheck failure. The owned-token map changes only after successful
-        validation; inactive, missing, contended, or malformed state raises.
-        """
-
-        session = self.workspace.validate_identifier(session_id)
-        manifest = self._read_manifest(session, missing_ok=False)
-        assert manifest is not None
-        if not manifest["active"]:
-            raise BackendProtocolError(
-                f"provider session is not active: {session}; run 'story session start'"
+        current = self.get_session_lifecycle(session_id)
+        if current.durable_state is SessionDurableState.ABSENT:
+            raise SessionNotFoundError(
+                f"provider session does not exist: {session_id}; "
+                f"run 'story session create {session_id}'"
             )
-        if session in self._lease_tokens:
-            self._assert_owned_lease(session)
-            return
-        token = self._claim_lease(session)
+        token, already_owned = self._access_for_attachment(session_id)
         try:
-            # Re-check after the atomic claim so an end cannot race this run.
-            manifest = self._read_manifest(session, missing_ok=False)
+            self._access_claim_tokens[session_id] = token
+            manifest = self._read_manifest(session_id, missing_ok=False)
             assert manifest is not None
-            if not manifest["active"]:
+            state = self._session_lifecycle(manifest)
+            if state.access_state is not SessionAccessState.HELD_HERE:
                 raise BackendProtocolError(
-                    f"provider session is not active: {session}"
+                    f"provider session access ownership changed: {session_id}"
                 )
-        except Exception:
-            self._release_lease(session, token)
+        except BaseException:
+            if not already_owned:
+                self._release_access_claim(session_id, token)
             raise
-        self._lease_tokens[session] = token
+        return state, already_owned
 
-    def _claim_lease(self, session_id: str) -> str:
-        """Atomically create or safely reclaim a provider-session lease.
+    def _access_for_attachment(self, session_id: str) -> tuple[str, bool]:
+        """Return a proved existing or newly created local access token."""
 
-        The claim guard serializes creation and stale replacement. A live or
-        changed lease raises ``SessionInUseError``; unsafe or failed storage
-        operations raise their bounded workspace or backend errors.
+        token = self._access_claim_tokens.get(session_id)
+        if token is not None:
+            self._assert_owned_access(session_id)
+            return token, True
+        return self._claim_access(session_id), False
+
+    def _claim_access(self, session_id: str) -> str:
+        """Atomically create or safely replace a proved-dead local claim.
+
+        The persistent guard serializes compliant claimers. Live local owners
+        and ownership that cannot be proved fail with distinct public errors;
+        no remote or ambiguous claim is replaced.
         """
 
         session = self.workspace.validate_identifier(session_id)
-        relative = self._lease_relative(session)
+        self._reject_unsupported_access_artifacts(session)
+        relative = self._access_claim_relative(session)
         token = uuid.uuid4().hex
-        value = {
-            "schema_version": _LEASE_SCHEMA_VERSION,
-            "session_id": session,
-            "hostname": socket.gethostname(),
-            "pid": os.getpid(),
-            "token": token,
-            "acquired_at": _now(),
-        }
-        with self._lease_claim_guard():
+        value = self._new_access_claim(session, token)
+        with self._access_claim_guard():
             try:
                 self.workspace.write_json(relative, value, overwrite=False)
                 return token
             except ManuscriptExistsError:
-                existing = self._read_lease(session)
-                if not self._lease_is_stale(existing):
-                    raise SessionInUseError(
-                        f"provider session is in use by process "
-                        f"{existing['pid']} on "
-                        f"{self._lease_hostname_diagnostic(existing['hostname'])}: "
-                        f"{session}"
-                    )
-
-            current = self._read_lease(session)
-            if current != existing:
-                raise SessionInUseError(
-                    f"provider session lease changed while reclaiming: {session}"
+                existing = self._read_access_claim(session)
+            access_state = self._unowned_access_state(existing)
+            if access_state is SessionAccessState.BLOCKED_BY_LIVE_LOCAL_OWNER:
+                raise SessionAccessBlockedError(
+                    "provider session access is held by live local process "
+                    f"{existing['owner_pid']} on "
+                    f"{self._access_hostname_diagnostic(existing['owner_hostname'])}: "
+                    f"{session}"
                 )
-            target = self.workspace.path(relative)
-            try:
-                target.unlink()
-            except FileNotFoundError:
-                raise SessionInUseError(
-                    f"provider session lease changed while reclaiming: {session}"
-                ) from None
-            except OSError as exc:
-                raise BackendProtocolError(
-                    "provider session lease could not be reclaimed: "
-                    f"{type(exc).__name__}"
-                ) from None
-            try:
-                self.workspace.write_json(relative, value, overwrite=False)
-            except ManuscriptExistsError:
-                raise SessionInUseError(
-                    f"provider session lease changed while reclaiming: {session}"
-                ) from None
+            if access_state is SessionAccessState.OWNERSHIP_UNKNOWN:
+                raise SessionOwnershipUnknownError(
+                    "provider session access ownership cannot be proved: "
+                    f"{session}"
+                )
+            current = self._read_access_claim(session)
+            if current != existing:
+                raise SessionOwnershipUnknownError(
+                    "provider session access changed while claiming: "
+                    f"{session}"
+                )
+            self.workspace.write_json(relative, value)
             return token
 
     @contextmanager
-    def _lease_claim_guard(self) -> Iterator[None]:
-        """Serialize one complete provider-session lease claim transaction."""
+    def _access_claim_guard(self) -> Iterator[None]:
+        """Serialize one complete provider-session access claim transaction."""
 
-        descriptor = self._open_lease_claim_guard()
+        descriptor = self._open_access_claim_guard()
         locked = False
         active_error: BaseException | None = None
         try:
             try:
-                self._lock_lease_claim_guard(descriptor)
+                self._lock_access_claim_guard(descriptor)
             except BackendProtocolError:
                 raise
             except Exception as exc:
                 raise BackendProtocolError(
-                    "provider session lease claim guard could not be locked: "
+                    "provider session access claim guard could not be locked: "
                     f"{type(exc).__name__}"
                 ) from None
             locked = True
-            self._verify_lease_claim_guard(descriptor)
+            self._verify_access_claim_guard(descriptor)
             yield
         except BaseException as exc:
             active_error = exc
@@ -2040,7 +2030,7 @@ class AgentBackend:
             unlock_error: BaseException | None = None
             if locked:
                 try:
-                    self._unlock_lease_claim_guard(descriptor)
+                    self._unlock_access_claim_guard(descriptor)
                 except BaseException as exc:
                     unlock_error = exc
             close_error: BaseException | None = None
@@ -2054,7 +2044,7 @@ class AgentBackend:
                     unlock_error
                     if not isinstance(unlock_error, Exception)
                     else BackendProtocolError(
-                        "provider session lease claim guard could not be unlocked: "
+                        "provider session access claim guard could not be unlocked: "
                         f"{type(unlock_error).__name__}"
                     )
                 )
@@ -2063,7 +2053,7 @@ class AgentBackend:
                     close_error
                     if not isinstance(close_error, Exception)
                     else BackendProtocolError(
-                        "provider session lease claim guard could not be closed: "
+                        "provider session access claim guard could not be closed: "
                         f"{type(close_error).__name__}"
                     )
                 )
@@ -2071,22 +2061,22 @@ class AgentBackend:
                     cleanup_error = translated_close_error
                 else:
                     cleanup_error.add_note(str(translated_close_error))
-            # A normal body exit has committed the sidecar. Never turn that into
+            # A normal body exit has committed the claim. Never turn that into
             # a false claim failure: successful close releases the advisory lock,
             # while an ambiguous close is not retried and the token returns so the
-            # caller can track and release the lease. Exceptional work keeps its
+            # caller can track and release access. Exceptional work keeps its
             # original error and receives only bounded cleanup notes.
             if cleanup_error is not None and active_error is not None:
                 active_error.add_note(str(cleanup_error))
 
-    def _open_lease_claim_guard(self) -> int:
+    def _open_access_claim_guard(self) -> int:
         """Open, secure, verify, and platform-initialize the claim guard.
 
         The caller owns the returned descriptor. Setup failures close it before
         propagating a bounded backend or workspace error.
         """
 
-        _, target = self._lease_claim_guard_paths()
+        _, target = self._access_claim_guard_paths()
         flags = os.O_CREAT | os.O_RDWR
         for flag_name in (
             "O_CLOEXEC",
@@ -2099,7 +2089,7 @@ class AgentBackend:
             descriptor = os.open(target, flags, 0o600)
         except OSError as exc:
             raise BackendProtocolError(
-                "provider session lease claim guard could not be opened: "
+                "provider session access claim guard could not be opened: "
                 f"{type(exc).__name__}"
             ) from None
 
@@ -2108,24 +2098,24 @@ class AgentBackend:
                 os.set_inheritable(descriptor, False)
             except Exception as exc:
                 raise BackendProtocolError(
-                    "provider session lease claim guard could not be secured: "
+                    "provider session access claim guard could not be secured: "
                     f"{type(exc).__name__}"
                 ) from None
-            self._verify_lease_claim_guard(descriptor)
+            self._verify_access_claim_guard(descriptor)
             if _fcntl is None and _msvcrt is not None:
-                self._initialize_windows_lease_claim_guard(descriptor)
+                self._initialize_windows_access_claim_guard(descriptor)
             return descriptor
         except BaseException as exc:
             try:
                 os.close(descriptor)
             except OSError as close_error:
                 exc.add_note(
-                    "provider session lease claim guard close failed: "
+                    "provider session access claim guard close failed: "
                     f"{type(close_error).__name__}"
                 )
             raise
 
-    def _lease_claim_guard_paths(self) -> tuple[Path, Path]:
+    def _access_claim_guard_paths(self) -> tuple[Path, Path]:
         """Resolve safe guard parent and file paths without creating either.
 
         Unsafe paths or a missing/non-directory parent raise workspace errors.
@@ -2133,47 +2123,47 @@ class AgentBackend:
 
         try:
             parent = self.workspace.path(_SESSION_DIRECTORY)
-            target = self.workspace.path(_LEASE_CLAIM_GUARD)
+            target = self.workspace.path(_ACCESS_CLAIM_GUARD)
         except WorkspaceSecurityError:
             raise WorkspaceFormatError(
-                "provider session lease claim guard path is unsafe"
+                "provider session access claim guard path is unsafe"
             ) from None
         if not parent.is_dir():
             raise WorkspaceFormatError(
-                "provider session lease claim guard parent is not a directory"
+                "provider session access claim guard parent is not a directory"
             )
         return parent, target
 
-    def _verify_lease_claim_guard(self, descriptor: int) -> None:
+    def _verify_access_claim_guard(self, descriptor: int) -> None:
         """Verify both guard references are regular and, when meaningful, identical.
 
         Inspection failures raise ``BackendProtocolError``; unsafe type or
         identity changes raise ``WorkspaceFormatError``.
         """
 
-        _, target = self._lease_claim_guard_paths()
+        _, target = self._access_claim_guard_paths()
         try:
             opened = os.fstat(descriptor)
             pathname = os.stat(target, follow_symlinks=False)
         except OSError as exc:
             raise BackendProtocolError(
-                "provider session lease claim guard could not be inspected: "
+                "provider session access claim guard could not be inspected: "
                 f"{type(exc).__name__}"
             ) from None
         if not stat.S_ISREG(opened.st_mode) or not stat.S_ISREG(pathname.st_mode):
             raise WorkspaceFormatError(
-                "provider session lease claim guard is not a regular file"
+                "provider session access claim guard is not a regular file"
             )
         opened_identity = (opened.st_dev, opened.st_ino)
         pathname_identity = (pathname.st_dev, pathname.st_ino)
         identity_is_meaningful = any((*opened_identity, *pathname_identity))
         if identity_is_meaningful and opened_identity != pathname_identity:
             raise WorkspaceFormatError(
-                "provider session lease claim guard identity changed"
+                "provider session access claim guard identity changed"
             )
 
     @staticmethod
-    def _initialize_windows_lease_claim_guard(descriptor: int) -> None:
+    def _initialize_windows_access_claim_guard(descriptor: int) -> None:
         """Ensure a Windows one-byte lock region exists and rewind the file.
 
         The guard is written only when empty; seek or write failures become
@@ -2188,12 +2178,12 @@ class AgentBackend:
             os.lseek(descriptor, 0, os.SEEK_SET)
         except OSError as exc:
             raise BackendProtocolError(
-                "provider session lease claim guard could not be initialized: "
+                "provider session access claim guard could not be initialized: "
                 f"{type(exc).__name__}"
             ) from None
 
     @staticmethod
-    def _lock_lease_claim_guard(descriptor: int) -> None:
+    def _lock_access_claim_guard(descriptor: int) -> None:
         """Acquire the platform advisory lock for a guard descriptor.
 
         POSIX acquisition blocks; Windows contention is retried. Unsupported
@@ -2205,7 +2195,7 @@ class AgentBackend:
             return
         if _msvcrt is None:
             raise BackendProtocolError(
-                "provider session lease claim guard is unsupported "
+                "provider session access claim guard is unsupported "
                 "on this platform"
             )
         contention_errors = {
@@ -2223,7 +2213,7 @@ class AgentBackend:
                 time.sleep(_WINDOWS_LOCK_RETRY_SECONDS)
 
     @staticmethod
-    def _unlock_lease_claim_guard(descriptor: int) -> None:
+    def _unlock_access_claim_guard(descriptor: int) -> None:
         """Release the platform advisory lock for a guard descriptor.
 
         Unsupported platforms raise ``BackendProtocolError``; OS failures
@@ -2235,135 +2225,242 @@ class AgentBackend:
             return
         if _msvcrt is None:
             raise BackendProtocolError(
-                "provider session lease claim guard is unsupported "
+                "provider session access claim guard is unsupported "
                 "on this platform"
             )
         os.lseek(descriptor, 0, os.SEEK_SET)
         _msvcrt.locking(descriptor, _msvcrt.LK_UNLCK, 1)
 
-    def _release_lease(self, session_id: str, token: str) -> None:
+    def _release_access_claim(self, session_id: str, token: str) -> None:
+        """Guard, compare, and remove only this backend's exact access claim."""
+
         session = self.workspace.validate_identifier(session_id)
-        relative = self._lease_relative(session)
-        target = self.workspace.path(relative)
-        if not target.exists():
-            self._lease_tokens.pop(session, None)
-            return
-        existing = self._read_lease(session)
-        if existing["token"] != token:
-            raise BackendProtocolError(
-                f"provider session lease ownership changed: {session}"
-            )
-        target.unlink()
-        self._lease_tokens.pop(session, None)
+        relative = self._access_claim_relative(session)
+        with self._access_claim_guard():
+            self._reject_unsupported_access_artifacts(session)
+            target = self.workspace.path(relative)
+            if not target.exists():
+                self._access_claim_tokens.pop(session, None)
+                return
+            existing = self._read_access_claim(session)
+            if existing["claim_token"] != token:
+                raise BackendProtocolError(
+                    f"provider session access ownership changed: {session}"
+                )
+            try:
+                target.unlink()
+            except OSError as exc:
+                raise BackendProtocolError(
+                    "provider session access claim could not be released: "
+                    f"{type(exc).__name__}"
+                ) from None
+        self._access_claim_tokens.pop(session, None)
 
-    @staticmethod
-    def _lease_is_stale(value: Mapping[str, Any]) -> bool:
-        """Report whether an unowned lease is conclusively available."""
-
-        return AgentBackend._unowned_lease_state(value) is SessionLeaseState.AVAILABLE
-
-    def _lease_state(
+    def _access_state(
         self,
         session_id: str,
         value: Mapping[str, Any],
-    ) -> SessionLeaseState:
-        """Classify a lease as locally owned or derive its unowned state."""
+    ) -> SessionAccessState:
+        """Classify a claim as locally held or conservatively unowned."""
 
-        token = self._lease_tokens.get(session_id)
-        if token is not None and value["token"] == token:
-            return SessionLeaseState.OWNED
-        return self._unowned_lease_state(value)
+        token = self._access_claim_tokens.get(session_id)
+        if token is not None and value["claim_token"] == token:
+            return SessionAccessState.HELD_HERE
+        return self._unowned_access_state(value)
 
     @staticmethod
-    def _unowned_lease_state(value: Mapping[str, Any]) -> SessionLeaseState:
-        """Conservatively classify an unowned lease from host and PID liveness.
+    def _unowned_access_state(value: Mapping[str, Any]) -> SessionAccessState:
+        """Classify unowned access using only safe local process liveness.
 
-        Only a missing local POSIX process is available; remote, unsupported,
-        inaccessible, or invalid probes remain unverified.
+        A missing local POSIX process is claimable. Remote hosts, unsupported
+        platforms, inaccessible processes, and ambiguous probes remain unknown.
         """
 
-        if value["hostname"] != socket.gethostname():
-            return SessionLeaseState.UNVERIFIED
+        if value["owner_hostname"] != socket.gethostname():
+            return SessionAccessState.OWNERSHIP_UNKNOWN
         if os.name != "posix":
-            return SessionLeaseState.UNVERIFIED
-        pid = value["pid"]
+            return SessionAccessState.OWNERSHIP_UNKNOWN
+        pid = value["owner_pid"]
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
-            return SessionLeaseState.AVAILABLE
+            return SessionAccessState.CLAIMABLE
         except PermissionError:
-            return SessionLeaseState.UNVERIFIED
+            return SessionAccessState.OWNERSHIP_UNKNOWN
         except (OSError, OverflowError, ValueError):
-            return SessionLeaseState.UNVERIFIED
-        return SessionLeaseState.IN_USE
+            return SessionAccessState.OWNERSHIP_UNKNOWN
+        return SessionAccessState.BLOCKED_BY_LIVE_LOCAL_OWNER
 
     @staticmethod
-    def _lease_hostname_diagnostic(hostname: str) -> str:
+    def _access_hostname_diagnostic(hostname: str) -> str:
         """Return a control-sanitized hostname diagnostic of at most 255 chars."""
 
-        sanitized = _LEASE_DIAGNOSTIC_CHARACTERS.sub("?", hostname)
+        sanitized = _ACCESS_DIAGNOSTIC_CHARACTERS.sub("?", hostname)
         if len(sanitized) > 255:
             sanitized = sanitized[:243] + " [truncated]"
         return sanitized
 
-    def _read_lease_if_present(self, session_id: str) -> dict[str, Any] | None:
-        """Return a validated lease, or ``None`` when its path is absent.
+    def _read_access_claim_if_present(
+        self,
+        session_id: str,
+    ) -> dict[str, Any] | None:
+        """Return a validated claim or ``None`` without storage mutation."""
 
-        The check and read do not mutate storage; races and malformed content
-        propagate through the strict lease reader.
-        """
-
-        relative = self._lease_relative(session_id)
+        relative = self._access_claim_relative(session_id)
         if not self.workspace.path(relative).exists():
             return None
-        return self._read_lease(session_id)
+        return self._read_access_claim(session_id)
 
-    def _read_lease(self, session_id: str) -> dict[str, Any]:
-        """Read and strictly validate one identity-bound lease record.
+    def _read_access_claim(self, session_id: str) -> dict[str, Any]:
+        """Read and strictly validate one identity-bound V2 access claim."""
 
-        Exact schema, version, strings, timestamp, and positive PID are
-        required. A shallow copy is returned; malformed storage raises
-        ``WorkspaceFormatError``.
-        """
-
-        value = self.workspace.read_json(self._lease_relative(session_id))
+        value = self._read_lifecycle_json(
+            self._access_claim_relative(session_id)
+        )
         expected = {
             "schema_version",
             "session_id",
-            "hostname",
-            "pid",
-            "token",
-            "acquired_at",
+            "owner_hostname",
+            "owner_pid",
+            "claim_token",
+            "claimed_at",
         }
         if not isinstance(value, dict) or set(value) != expected:
-            raise WorkspaceFormatError("provider session lease has an invalid schema")
-        schema_version = value["schema_version"]
-        if (
-            isinstance(schema_version, bool)
-            or not isinstance(schema_version, int)
-            or schema_version != _LEASE_SCHEMA_VERSION
-        ):
             raise WorkspaceFormatError(
-                "unsupported provider session lease schema version"
+                "provider session access claim has an invalid schema"
+            )
+        schema_version = value["schema_version"]
+        if isinstance(schema_version, bool) or not isinstance(schema_version, int):
+            raise WorkspaceFormatError(
+                "provider session access claim has an invalid schema version"
+            )
+        if schema_version != _ACCESS_CLAIM_SCHEMA_VERSION:
+            raise WorkspaceVersionUnsupportedError(
+                "unsupported provider session access claim schema version"
             )
         if value["session_id"] != session_id:
-            raise WorkspaceFormatError("provider session lease path mismatch")
-        for field in ("session_id", "hostname", "token", "acquired_at"):
+            raise WorkspaceFormatError("provider session access claim path mismatch")
+        for field in (
+            "session_id",
+            "owner_hostname",
+            "claim_token",
+            "claimed_at",
+        ):
             if not isinstance(value[field], str) or not value[field]:
                 raise WorkspaceFormatError(
-                    "provider session lease has an invalid string field"
+                    "provider session access claim has an invalid string field"
                 )
         _parse_timestamp(
-            value["acquired_at"],
-            label="provider session lease acquired_at",
+            value["claimed_at"],
+            label="provider session access claimed_at",
         )
         if (
-            isinstance(value["pid"], bool)
-            or not isinstance(value["pid"], int)
-            or value["pid"] <= 0
+            isinstance(value["owner_pid"], bool)
+            or not isinstance(value["owner_pid"], int)
+            or value["owner_pid"] <= 0
         ):
-            raise WorkspaceFormatError("provider session lease has an invalid pid")
+            raise WorkspaceFormatError(
+                "provider session access claim has an invalid owner PID"
+            )
         return dict(value)
+
+    @staticmethod
+    def _new_access_claim(session_id: str, token: str) -> dict[str, Any]:
+        """Build one exact V2 claim for the current host and process."""
+
+        return {
+            "schema_version": _ACCESS_CLAIM_SCHEMA_VERSION,
+            "session_id": session_id,
+            "owner_hostname": socket.gethostname(),
+            "owner_pid": os.getpid(),
+            "claim_token": token,
+            "claimed_at": _now(),
+        }
+
+    def _read_lifecycle_json(self, relative: str) -> Any:
+        """Read lifecycle JSON while rejecting duplicate object fields."""
+
+        text = self.workspace.read_text(relative)
+
+        def reject_duplicate_fields(
+            pairs: list[tuple[str, Any]],
+        ) -> dict[str, Any]:
+            """Build one object or reject a repeated persisted field name."""
+
+            result: dict[str, Any] = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError(f"duplicate field: {key}")
+                result[key] = value
+            return result
+
+        try:
+            return json.loads(text, object_pairs_hook=reject_duplicate_fields)
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise WorkspaceFormatError(
+                f"lifecycle file is not valid strict JSON: {relative}"
+            ) from exc
+
+    def _reject_unsupported_access_artifacts(
+        self,
+        session_id: str | None,
+    ) -> None:
+        """Reject version-1 access sidecars or guards without changing them."""
+
+        directory = self.workspace.path(_SESSION_DIRECTORY)
+        if not directory.exists():
+            return
+        if not directory.is_dir():
+            raise WorkspaceFormatError(
+                "provider session manifest path is not a directory"
+            )
+        if self.workspace.path(_UNSUPPORTED_V1_ACCESS_CLAIM_GUARD).exists():
+            raise WorkspaceVersionUnsupportedError(
+                "workspace contains an unsupported version-1 access guard"
+            )
+        if session_id is not None:
+            unsupported = self.workspace.path(
+                f"{_SESSION_DIRECTORY}/{session_id}.lease.json"
+            )
+            if unsupported.exists():
+                raise WorkspaceVersionUnsupportedError(
+                    "workspace contains an unsupported version-1 access sidecar"
+                )
+            return
+        try:
+            has_unsupported_sidecar = any(
+                entry.name.endswith(".lease.json")
+                for entry in directory.iterdir()
+            )
+        except OSError as exc:
+            raise WorkspaceFormatError(
+                "cannot enumerate provider session manifests"
+            ) from exc
+        if has_unsupported_sidecar:
+            raise WorkspaceVersionUnsupportedError(
+                "workspace contains an unsupported version-1 access sidecar"
+            )
+
+    def _discard_access_claim_after_failed_create(
+        self,
+        session_id: str,
+        token: str,
+        failure: BaseException,
+    ) -> None:
+        """Best-effort remove this call's claim while preserving its failure."""
+
+        try:
+            existing = self._read_access_claim(session_id)
+            if existing["claim_token"] != token:
+                raise BackendProtocolError(
+                    "provider session access changed during failed creation"
+                )
+            self.workspace.path(self._access_claim_relative(session_id)).unlink()
+        except BaseException as cleanup_error:
+            failure.add_note(
+                "failed creation access cleanup: "
+                f"{type(cleanup_error).__name__}"
+            )
 
     def _load_thread(
         self,
@@ -2372,7 +2469,7 @@ class AgentBackend:
     ) -> dict[str, Any] | None:
         manifest = self._read_manifest(session_id, missing_ok=False)
         assert manifest is not None
-        raw = manifest["threads"].get(self._thread_key(definition))
+        raw = manifest["provider_threads"].get(self._thread_key(definition))
         if raw is None:
             return None
         validated = self._validate_thread(raw)
@@ -2396,10 +2493,10 @@ class AgentBackend:
             or _SAFE_THREAD_ID.fullmatch(thread_id) is None
         ):
             raise BackendProtocolError("Codex thread ID is invalid")
-        self._assert_owned_lease(session_id)
+        self._assert_owned_access(session_id)
         manifest = self._read_manifest(session_id, missing_ok=False)
         assert manifest is not None
-        manifest["threads"][self._thread_key(definition)] = {
+        manifest["provider_threads"][self._thread_key(definition)] = {
             "backend": definition.backend,
             "agent_id": definition.agent_id,
             "fingerprint": definition.fingerprint,
@@ -2407,7 +2504,7 @@ class AgentBackend:
             "tainted": tainted,
             "updated_at": _now(),
         }
-        manifest["updated_at"] = _now()
+        manifest["updated_at"] = _advanced_timestamp(manifest["updated_at"])
         self._write_manifest(session_id, manifest)
 
     def _taint_thread(
@@ -2418,21 +2515,56 @@ class AgentBackend:
         manifest = self._read_manifest(session_id, missing_ok=False)
         assert manifest is not None
         key = self._thread_key(definition)
-        raw = manifest["threads"].get(key)
+        raw = manifest["provider_threads"].get(key)
         if raw is None:
             return
         thread = self._validate_thread(raw)
         thread["tainted"] = True
         thread["updated_at"] = _now()
-        manifest["threads"][key] = thread
-        manifest["updated_at"] = _now()
+        manifest["provider_threads"][key] = thread
+        manifest["updated_at"] = _advanced_timestamp(manifest["updated_at"])
         self._write_manifest(session_id, manifest)
 
-    def _assert_owned_lease(self, session_id: str) -> None:
-        token = self._lease_tokens.get(session_id)
-        if token is None or self._read_lease(session_id)["token"] != token:
+    def _assert_owned_access(self, session_id: str) -> None:
+        """Require the exact persisted claim tracked by this backend."""
+
+        token = self._access_claim_tokens.get(session_id)
+        if (
+            token is None
+            or self._read_access_claim(session_id)["claim_token"] != token
+        ):
             raise BackendProtocolError(
-                f"provider session lease is not owned: {session_id}"
+                f"provider session access is not held here: {session_id}"
+            )
+
+    def _assert_provider_work_ready(self, session_id: str) -> None:
+        """Require ready durable state and access already held by this backend."""
+
+        state = self.get_session_lifecycle(session_id)
+        if state.durable_state is SessionDurableState.ABSENT:
+            raise SessionNotFoundError(
+                f"provider session does not exist: {session_id}; "
+                f"run 'story session create {session_id}'"
+            )
+        if state.durable_state is SessionDurableState.PAUSED:
+            raise SessionPausedError(
+                f"provider session is paused: {session_id}; "
+                f"run 'story session reopen {session_id}'"
+            )
+        if state.access_state is SessionAccessState.BLOCKED_BY_LIVE_LOCAL_OWNER:
+            raise SessionAccessBlockedError(
+                f"provider session access is blocked: {session_id}"
+            )
+        if state.access_state is SessionAccessState.OWNERSHIP_UNKNOWN:
+            raise SessionOwnershipUnknownError(
+                f"provider session access ownership is unknown: {session_id}"
+            )
+        if not provider_work_is_ready(
+            state,
+            provider_configuration_ready=True,
+        ):
+            raise BackendProtocolError(
+                f"provider session access is not held here: {session_id}"
             )
 
     def _read_manifest(
@@ -2455,16 +2587,26 @@ class AgentBackend:
                 return None
             raise SessionNotFoundError(
                 f"provider session does not exist: {session_id}; "
-                "run 'story session start'"
+                f"run 'story session create {session_id}'"
             )
-        value = self.workspace.read_json(relative)
+        value = self._read_lifecycle_json(relative)
+        if isinstance(value, dict):
+            schema_version = value.get("schema_version")
+            if (
+                isinstance(schema_version, int)
+                and not isinstance(schema_version, bool)
+                and schema_version != _SESSION_SCHEMA_VERSION
+            ):
+                raise WorkspaceVersionUnsupportedError(
+                    "unsupported provider session manifest schema version"
+                )
         expected = {
             "schema_version",
             "session_id",
-            "active",
+            "durable_state",
             "created_at",
             "updated_at",
-            "threads",
+            "provider_threads",
         }
         if not isinstance(value, dict) or set(value) != expected:
             raise WorkspaceFormatError(
@@ -2474,16 +2616,22 @@ class AgentBackend:
         if (
             isinstance(schema_version, bool)
             or not isinstance(schema_version, int)
-            or schema_version != _SESSION_SCHEMA_VERSION
         ):
             raise WorkspaceFormatError(
+                "provider session manifest has an invalid schema version"
+            )
+        if schema_version != _SESSION_SCHEMA_VERSION:
+            raise WorkspaceVersionUnsupportedError(
                 "unsupported provider session manifest schema version"
             )
         if value["session_id"] != session_id:
             raise WorkspaceFormatError("provider session manifest path mismatch")
-        if not isinstance(value["active"], bool):
+        if value["durable_state"] not in {
+            SessionDurableState.READY.value,
+            SessionDurableState.PAUSED.value,
+        }:
             raise WorkspaceFormatError(
-                "provider session active state must be boolean"
+                "provider session durable state is invalid"
             )
         if any(
             not isinstance(value[field], str) or not value[field]
@@ -2504,11 +2652,11 @@ class AgentBackend:
             raise WorkspaceFormatError(
                 "provider session updated_at precedes created_at"
             )
-        if not isinstance(value["threads"], dict):
+        if not isinstance(value["provider_threads"], dict):
             raise WorkspaceFormatError(
-                "provider session threads must contain an object"
+                "provider session provider_threads must contain an object"
             )
-        for key, thread in value["threads"].items():
+        for key, thread in value["provider_threads"].items():
             if not isinstance(key, str) or not key:
                 raise WorkspaceFormatError("provider thread key is invalid")
             validated = self._validate_thread(thread)
@@ -2520,7 +2668,7 @@ class AgentBackend:
                     "provider thread key does not match its backend and agent"
                 )
         result = dict(value)
-        result["threads"] = dict(value["threads"])
+        result["provider_threads"] = dict(value["provider_threads"])
         return result
 
     def _manifest_exists(self, session_id: str) -> bool:
@@ -2567,10 +2715,19 @@ class AgentBackend:
         )
         return dict(value)
 
-    def _write_manifest(self, session_id: str, value: Mapping[str, Any]) -> None:
+    def _write_manifest(
+        self,
+        session_id: str,
+        value: Mapping[str, Any],
+        *,
+        overwrite: bool = True,
+    ) -> None:
+        """Write one complete manifest through the workspace boundary."""
+
         self.workspace.write_json(
             self._manifest_relative(session_id),
             dict(value),
+            overwrite=overwrite,
         )
 
     @staticmethod
@@ -2584,10 +2741,10 @@ class AgentBackend:
         return f"{_SESSION_DIRECTORY}/{session_id}.json"
 
     @staticmethod
-    def _lease_relative(session_id: str) -> str:
-        """Return the lease path for a previously validated session ID."""
+    def _access_claim_relative(session_id: str) -> str:
+        """Return the access-claim path for a validated session ID."""
 
-        return f"{_SESSION_DIRECTORY}/{session_id}.lease.json"
+        return f"{_SESSION_DIRECTORY}/{session_id}.access.json"
 
 def _parse_timestamp(value: Any, *, label: str) -> datetime:
     """Return an offset-aware timestamp or raise ``WorkspaceFormatError``.

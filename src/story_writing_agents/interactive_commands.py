@@ -39,9 +39,9 @@ class ActionKind(StrEnum):
     SET_PERSONA = "set_persona"
     RESET = "reset"
     SESSION_LIST = "session_list"
-    SESSION_NEW = "session_new"
-    SESSION_RESUME = "session_resume"
-    SESSION_END = "session_end"
+    SESSION_CREATE = "session_create"
+    SESSION_OPEN = "session_open"
+    SESSION_PAUSE = "session_pause"
     CONVERSATION_NEW = "conversation_new"
     CONVERSATION_LIST = "conversation_list"
     CONVERSATION_LIST_ALL = "conversation_list_all"
@@ -292,12 +292,12 @@ _ACTION_FIELD_RULES: dict[
     ),
     ActionKind.RESET: (_NO_FIELDS, _NO_FIELDS),
     ActionKind.SESSION_LIST: (_NO_FIELDS, _NO_FIELDS),
-    ActionKind.SESSION_NEW: (
+    ActionKind.SESSION_CREATE: (
         frozenset({"argument"}),
         frozenset({"argument"}),
     ),
-    ActionKind.SESSION_RESUME: (frozenset({"argument"}), _NO_FIELDS),
-    ActionKind.SESSION_END: (_NO_FIELDS, _NO_FIELDS),
+    ActionKind.SESSION_OPEN: (frozenset({"argument"}), _NO_FIELDS),
+    ActionKind.SESSION_PAUSE: (_NO_FIELDS, _NO_FIELDS),
     ActionKind.CONVERSATION_NEW: (frozenset({"argument"}), _NO_FIELDS),
     ActionKind.CONVERSATION_LIST: (frozenset({"argument"}), _NO_FIELDS),
     ActionKind.CONVERSATION_LIST_ALL: (
@@ -383,11 +383,11 @@ COMMANDS: tuple[CommandSpec, ...] = (
     ),
     CommandSpec(
         "Sessions",
-        "/session list | new NAME | resume [NAME] | end",
+        "/session list | create NAME | open [NAME] | pause",
         (),
         False,
         False,
-        "/session new chapter-01",
+        "/session create chapter-01",
     ),
     CommandSpec(
         "Conversations",
@@ -479,9 +479,9 @@ _COMMAND_ALIASES: dict[str, str] = {
 
 _SESSION_COMMANDS: dict[str, str] = {
     "list": "/session list",
-    "new": "/session new",
-    "resume": "/session resume",
-    "end": "/session end",
+    "create": "/session create",
+    "open": "/session open",
+    "pause": "/session pause",
 }
 
 _CONVERSATION_COMMANDS: dict[str, str] = {
@@ -695,7 +695,7 @@ def _parse_run(tail: str | None) -> InteractiveAction:
 def _parse_session(tail: str | None) -> InteractiveAction:
     """Parse exact session subcommands and token counts without I/O.
 
-    Valid list/new/resume/end forms return typed actions; unknown, unsafe, or
+    Valid list/create/open/pause forms return typed actions; unknown, unsafe, or
     mis-sized forms return parse-error actions with suggestions when available.
     """
 
@@ -713,28 +713,30 @@ def _parse_session(tail: str | None) -> InteractiveAction:
         if len(tokens) != 1:
             return _parse_error("/session list does not accept arguments")
         return InteractiveAction(ActionKind.SESSION_LIST)
-    if subcommand == "new":
+    if subcommand == "create":
         if len(tokens) != 2:
-            return _parse_error("/session new requires exactly one name")
-        name = tokens[1]
-        if not _is_valid_token(name):
-            return _parse_error("/session new name must be a control-free token")
-        return InteractiveAction(ActionKind.SESSION_NEW, argument=name)
-    if subcommand == "resume":
-        if len(tokens) > 2:
-            return _parse_error("/session resume accepts at most one name")
-        if len(tokens) == 1:
-            return InteractiveAction(ActionKind.SESSION_RESUME)
+            return _parse_error("/session create requires exactly one name")
         name = tokens[1]
         if not _is_valid_token(name):
             return _parse_error(
-                "/session resume name must be a control-free token"
+                "/session create name must be a control-free token"
             )
-        return InteractiveAction(ActionKind.SESSION_RESUME, argument=name)
+        return InteractiveAction(ActionKind.SESSION_CREATE, argument=name)
+    if subcommand == "open":
+        if len(tokens) > 2:
+            return _parse_error("/session open accepts at most one name")
+        if len(tokens) == 1:
+            return InteractiveAction(ActionKind.SESSION_OPEN)
+        name = tokens[1]
+        if not _is_valid_token(name):
+            return _parse_error(
+                "/session open name must be a control-free token"
+            )
+        return InteractiveAction(ActionKind.SESSION_OPEN, argument=name)
 
     if len(tokens) != 1:
-        return _parse_error("/session end does not accept arguments")
-    return InteractiveAction(ActionKind.SESSION_END)
+        return _parse_error("/session pause does not accept arguments")
+    return InteractiveAction(ActionKind.SESSION_PAUSE)
 
 
 def _parse_conversation(tail: str | None) -> InteractiveAction:

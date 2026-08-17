@@ -28,16 +28,17 @@ from story_writing_agents import (
     InputKind,
     Phase,
     ProgressObserverError,
-    SessionLeaseState,
+    SessionAccessState,
+    SessionDurableState,
     SessionNotFoundError,
     WorkspaceFormatError,
     WorkspaceSecurityError,
 )
 from story_writing_agents import interactive_controller as controller_module
 from story_writing_agents.cli_context import (
-    load_conversation_selection,
-    save_conversation_selection,
-    select_session,
+    load_default_conversation,
+    save_default_conversation,
+    save_default_session,
 )
 from story_writing_agents.conversations import ConversationMetadata
 from story_writing_agents.interactive_terminal import InteractiveErrorCode
@@ -313,13 +314,13 @@ class InteractiveConsensusGateTests(InteractiveConversationTestCase):
         loader.assert_not_called()
         bind.assert_not_called()
         self.assertEqual(
-            "".join(callbacks.records).count("[error session_inactive]"),
+            "".join(callbacks.records).count("[error session_not_attached]"),
             3,
         )
 
         workspace = self.make_workspace()
         self.seed_session(workspace, "session")
-        select_session(workspace, "session")
+        save_default_session(workspace, "session")
         catalog = FilesystemConversationCatalog(workspace)
         runtime = ScriptedConsensusRuntime()
         controller, _backend, callbacks, _store, _factory = self.make_controller(
@@ -342,16 +343,16 @@ class InteractiveConsensusGateTests(InteractiveConversationTestCase):
 
         workspace = self.make_workspace()
         self.seed_session(workspace, "session")
-        select_session(workspace, "session")
+        save_default_session(workspace, "session")
         catalog = FilesystemConversationCatalog(workspace)
         selected = catalog.create("session", "Selected")
-        save_conversation_selection(
+        save_default_conversation(
             workspace,
             "session",
             selected.conversation_id,
         )
         selection_path = workspace.path(
-            "agent_states/orchestrator_state/conversation_selections/session.json"
+            "agent_states/orchestrator_state/conversation_defaults/session.json"
         )
         selection_before = selection_path.read_bytes()
 
@@ -404,7 +405,7 @@ class InteractiveConsensusDispatchTests(InteractiveConversationTestCase):
         runtime.on_call = lambda: attachment_facts.append(
             (
                 controller._attached_session_id,
-                controller._selected_conversation,
+                controller._focused_conversation,
                 controller._target_agent_id,
                 controller._conversation_memory_service,
             )
@@ -504,7 +505,7 @@ class InteractiveConsensusDispatchTests(InteractiveConversationTestCase):
                 self.assertEqual(runtime.calls, [])
                 self.assertEqual(file_bytes(workspace), before)
                 self.assertEqual(
-                    load_conversation_selection(workspace, "session"),
+                    load_default_conversation(workspace, "session"),
                     entries[0].conversation_id,
                 )
 
@@ -540,7 +541,7 @@ class InteractiveConsensusResultTests(InteractiveConversationTestCase):
         self.assertEqual(len(runtime.calls), len(commands))
         self.assertEqual(file_bytes(workspace), before)
         self.assertEqual(
-            load_conversation_selection(workspace, "session"),
+            load_default_conversation(workspace, "session"),
             entries[0].conversation_id,
         )
 
@@ -647,44 +648,43 @@ class InteractiveConsensusResultTests(InteractiveConversationTestCase):
             "/quit",
             runtime=runtime,  # type: ignore[arg-type]
         )
-        original_summary = backend.get_session_summary
+        original_summary = backend.get_session_lifecycle
         retained_summaries: list[object] = []
 
         def record_owned_summary(
             session_id: str,
-            *,
-            selected_session: str | None = None,
         ) -> object:
             """Record every public summary used to prove safe recovery."""
 
-            summary = original_summary(
-                session_id,
-                selected_session=selected_session,
-            )
+            summary = original_summary(session_id)
             retained_summaries.append(summary)
             return summary
 
         with (
             mock.patch.object(
                 backend,
-                "get_session_summary",
+                "get_session_lifecycle",
                 side_effect=record_owned_summary,
             ),
             mock.patch.object(
                 backend,
-                "detach_session",
-                wraps=backend.detach_session,
+                "release_session_access",
+                wraps=backend.release_session_access,
             ) as detach,
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
 
         self.assertEqual(len(runtime.calls), 4)
-        self.assertEqual(len(retained_summaries), 4)
+        held_proofs = [
+            summary
+            for summary in retained_summaries
+            if summary.access_state is SessionAccessState.HELD_HERE
+        ]
+        self.assertGreaterEqual(len(held_proofs), 3)
         self.assertTrue(
             all(
-                summary.active is True
-                and summary.lease_state is SessionLeaseState.OWNED
-                for summary in retained_summaries[1:]
+                summary.durable_state is SessionDurableState.READY
+                for summary in held_proofs
             )
         )
         detach.assert_called_once_with("session")
@@ -712,7 +712,7 @@ class InteractiveConsensusResultTests(InteractiveConversationTestCase):
                 OSError("pre-unowned-secret"),
                 lambda summary: replace(
                     summary,
-                    lease_state=SessionLeaseState.AVAILABLE,
+                    access_state=SessionAccessState.CLAIMABLE,
                 ),
             ),
             (
@@ -720,7 +720,7 @@ class InteractiveConsensusResultTests(InteractiveConversationTestCase):
                 WorkspaceFormatError("pre-format-unowned-secret"),
                 lambda summary: replace(
                     summary,
-                    lease_state=SessionLeaseState.AVAILABLE,
+                    access_state=SessionAccessState.CLAIMABLE,
                 ),
             ),
             (
@@ -757,43 +757,40 @@ class InteractiveConsensusResultTests(InteractiveConversationTestCase):
                     "/quit",
                     runtime=runtime,  # type: ignore[arg-type]
                 )
-                original_summary = backend.get_session_summary
+                original_summary = backend.get_session_lifecycle
                 summary_calls = 0
+                altered_calls = 0
 
                 def change_recovery_summary(
                     session_id: str,
-                    *,
-                    selected_session: str | None = None,
                 ) -> object:
                     """Keep startup valid, then alter only recovery proof."""
 
                     nonlocal summary_calls
+                    nonlocal altered_calls
                     summary_calls += 1
-                    summary = original_summary(
-                        session_id,
-                        selected_session=selected_session,
-                    )
-                    return (
-                        summary
-                        if summary_calls == 1
-                        else alter_summary(summary)
-                    )
+                    summary = original_summary(session_id)
+                    if not runtime.calls:
+                        return summary
+                    altered_calls += 1
+                    return alter_summary(summary)
 
                 with (
                     mock.patch.object(
                         backend,
-                        "get_session_summary",
+                        "get_session_lifecycle",
                         side_effect=change_recovery_summary,
                     ),
                     mock.patch.object(
                         backend,
-                        "detach_session",
-                        wraps=backend.detach_session,
+                        "release_session_access",
+                        wraps=backend.release_session_access,
                     ) as detach,
                 ):
                     self.assertEqual(controller.run_session_lobby(), 2)
 
-                self.assertEqual(summary_calls, 2)
+                self.assertGreaterEqual(summary_calls, 4)
+                self.assertEqual(altered_calls, 1)
                 self.assertEqual(len(runtime.calls), 1)
                 detach.assert_not_called()
                 self.assertIsNone(controller._attached_session_id)
@@ -838,8 +835,8 @@ class InteractiveConsensusResultTests(InteractiveConversationTestCase):
                 )
                 with mock.patch.object(
                     backend,
-                    "detach_session",
-                    wraps=backend.detach_session,
+                    "release_session_access",
+                    wraps=backend.release_session_access,
                 ) as detach:
                     self.assertEqual(controller.run_session_lobby(), 2)
                 detach.assert_called_once_with("session")
@@ -950,33 +947,36 @@ class RealRetainedConsensusRuntimeTests(InteractiveConversationTestCase):
             "/quit",
             runtime=_REAL_RUNTIME,
         )
-        original_summary = backend.get_session_summary
+        original_summary = backend.get_session_lifecycle
         summary_observations: list[tuple[bool, Any]] = []
 
         def record_summary_phase(
             session_id: str,
-            *,
-            selected_session: str | None = None,
         ) -> object:
             """Distinguish startup lookup from post-dispatch recovery proof."""
 
-            summary = original_summary(
-                session_id,
-                selected_session=selected_session,
-            )
+            summary = original_summary(session_id)
             summary_observations.append((run_command_returned, summary))
             return summary
 
         with (
             mock.patch.object(
                 backend,
-                "get_session_summary",
+                "get_session_lifecycle",
                 side_effect=record_summary_phase,
             ),
             mock.patch.object(
+                type(controller),
+                "_confirm_attachment_after_command_failure",
+                autospec=True,
+                side_effect=(
+                    type(controller)._confirm_attachment_after_command_failure
+                ),
+            ) as confirm_attachment,
+            mock.patch.object(
                 backend,
-                "detach_session",
-                wraps=backend.detach_session,
+                "release_session_access",
+                wraps=backend.release_session_access,
             ) as detach,
             mock.patch.object(
                 workspace,
@@ -986,19 +986,21 @@ class RealRetainedConsensusRuntimeTests(InteractiveConversationTestCase):
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
 
-        self.assertEqual(
-            [after_dispatch for after_dispatch, _summary in summary_observations],
-            [False, True],
-        )
+        self.assertTrue(any(not phase for phase, _summary in summary_observations))
+        self.assertTrue(any(phase for phase, _summary in summary_observations))
         post_dispatch_proofs = [
             summary
             for after_dispatch, summary in summary_observations
-            if after_dispatch
+            if (
+                after_dispatch
+                and summary.access_state is SessionAccessState.HELD_HERE
+            )
         ]
         self.assertEqual(len(post_dispatch_proofs), 1)
         proof = post_dispatch_proofs[0]
-        self.assertIs(proof.active, True)
-        self.assertIs(proof.lease_state, SessionLeaseState.OWNED)
+        self.assertIs(proof.durable_state, SessionDurableState.READY)
+        self.assertIs(proof.access_state, SessionAccessState.HELD_HERE)
+        confirm_attachment.assert_called_once_with(controller)
         reserve.assert_not_called()
         detach.assert_called_once_with("session")
         self.assertEqual(callbacks.reads, [])
@@ -1042,33 +1044,36 @@ class RealRetainedConsensusRuntimeTests(InteractiveConversationTestCase):
         )
         transcript_path.parent.mkdir(parents=True, exist_ok=True)
         transcript_path.write_bytes(b"{invalid")
-        original_summary = backend.get_session_summary
+        original_summary = backend.get_session_lifecycle
         summary_observations: list[tuple[bool, Any]] = []
 
         def record_summary_phase(
             session_id: str,
-            *,
-            selected_session: str | None = None,
         ) -> object:
             """Record whether any summary read occurs after run dispatch."""
 
-            summary = original_summary(
-                session_id,
-                selected_session=selected_session,
-            )
+            summary = original_summary(session_id)
             summary_observations.append((run_command_returned, summary))
             return summary
 
         with (
             mock.patch.object(
                 backend,
-                "get_session_summary",
+                "get_session_lifecycle",
                 side_effect=record_summary_phase,
             ),
             mock.patch.object(
+                type(controller),
+                "_confirm_attachment_after_command_failure",
+                autospec=True,
+                side_effect=(
+                    type(controller)._confirm_attachment_after_command_failure
+                ),
+            ) as confirm_attachment,
+            mock.patch.object(
                 backend,
-                "detach_session",
-                wraps=backend.detach_session,
+                "release_session_access",
+                wraps=backend.release_session_access,
             ) as detach,
             mock.patch.object(
                 workspace,
@@ -1078,10 +1083,8 @@ class RealRetainedConsensusRuntimeTests(InteractiveConversationTestCase):
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
 
-        self.assertEqual(
-            [after_dispatch for after_dispatch, _summary in summary_observations],
-            [False],
-        )
+        self.assertTrue(any(not phase for phase, _summary in summary_observations))
+        confirm_attachment.assert_not_called()
         reserve.assert_not_called()
         detach.assert_called_once_with("session")
         self.assertEqual(callbacks.reads, [])
@@ -1096,10 +1099,10 @@ class RealRetainedConsensusRuntimeTests(InteractiveConversationTestCase):
     def test_mixed_chat_included_fresh_and_draft_runs_remain_loop_safe(self) -> None:
         workspace = self.make_workspace()
         self.seed_session(workspace, "session")
-        select_session(workspace, "session")
+        save_default_session(workspace, "session")
         catalog = FilesystemConversationCatalog(workspace)
         selected = catalog.create("session", "Selected")
-        save_conversation_selection(
+        save_default_conversation(
             workspace,
             "session",
             selected.conversation_id,
@@ -1213,7 +1216,7 @@ class RealRetainedConsensusRuntimeTests(InteractiveConversationTestCase):
                 self.assertIsNotNone(sidecar["snapshot"])
         self.assertEqual(len(all_manuscripts(workspace)), 3)
         self.assertEqual(
-            load_conversation_selection(workspace, "session"),
+            load_default_conversation(workspace, "session"),
             selected.conversation_id,
         )
         self.assertNotIn("loop", "".join(callbacks.records).casefold())

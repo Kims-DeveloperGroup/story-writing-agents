@@ -22,6 +22,9 @@ from story_writing_agents import (
     Phase,
     ProgressObserverError,
     SPECIALIST_IDS,
+    SessionAccessState,
+    SessionDurableState,
+    SessionLifecycleState,
     StoryRuntime,
     Workspace,
     WorkspaceFormatError,
@@ -202,8 +205,11 @@ class DebateReservationTests(unittest.IsolatedAsyncioTestCase):
             truncated=False,
         )
 
-        class PreparationFailureBackend(ScriptedBackend):
-            def prepare_session(self, _session_id: str) -> None:
+        class ConfigurationFailureBackend(ScriptedBackend):
+            def validate_provider_configuration(
+                self,
+                _session_id: str,
+            ) -> bool:
                 raise ConfigurationError("preparation failed")
 
         cases: list[tuple[str, ScriptedBackend, object, object, type[BaseException]]] = [
@@ -219,7 +225,7 @@ class DebateReservationTests(unittest.IsolatedAsyncioTestCase):
             ),
             (
                 "prepare",
-                PreparationFailureBackend(
+                ConfigurationFailureBackend(
                     lambda request: AssertionError(request.phase)
                 ),
                 _ContextReadStore(empty),
@@ -351,8 +357,8 @@ class DebateReservationTests(unittest.IsolatedAsyncioTestCase):
             async def __call__(self, *_args: object):
                 yield self.yielded
 
-        class DeclaredPrepareBackend(ScriptedBackend):
-            async def prepare_session(self, _session_id: str):
+        class DeclaredLifecycleBackend(ScriptedBackend):
+            async def validate_provider_configuration(self, _session_id: str):
                 yield None
 
         class DeclaredReadStore(_ContextReadStore):
@@ -363,50 +369,52 @@ class DebateReservationTests(unittest.IsolatedAsyncioTestCase):
             ):
                 yield empty
 
-        dynamic_prepare_results = []
-        dynamic_prepare_calls: list[str] = []
+        dynamic_lifecycle_results = []
+        dynamic_lifecycle_calls: list[str] = []
 
-        async def dynamic_prepare_values():
+        async def dynamic_lifecycle_values():
             yield None
 
-        def dynamic_prepare(session_id: str) -> object:
-            dynamic_prepare_calls.append(session_id)
-            result = dynamic_prepare_values()
-            dynamic_prepare_results.append(result)
+        def dynamic_lifecycle(session_id: str) -> object:
+            dynamic_lifecycle_calls.append(session_id)
+            result = dynamic_lifecycle_values()
+            dynamic_lifecycle_results.append(result)
             return result
 
-        declared_prepare = DeclaredPrepareBackend(
+        declared_lifecycle = DeclaredLifecycleBackend(
             lambda request: AssertionError(request.phase)
         )
-        callable_prepare = ScriptedBackend(
+        callable_lifecycle = ScriptedBackend(
             lambda request: AssertionError(request.phase)
         )
-        callable_prepare.prepare_session = AsyncGeneratorCallable(  # type: ignore[attr-defined]
-            None
+        callable_lifecycle.validate_provider_configuration = (  # type: ignore[method-assign]
+            AsyncGeneratorCallable(None)
         )
-        dynamic_prepare_backend = ScriptedBackend(
+        dynamic_lifecycle_backend = ScriptedBackend(
             lambda request: AssertionError(request.phase)
         )
-        dynamic_prepare_backend.prepare_session = dynamic_prepare  # type: ignore[attr-defined]
-        prepare_cases = (
+        dynamic_lifecycle_backend.validate_provider_configuration = (  # type: ignore[method-assign]
+            dynamic_lifecycle
+        )
+        lifecycle_cases = (
             (
                 "declared_method",
-                declared_prepare,
-                "backend prepare_session must be synchronous",
+                declared_lifecycle,
+                "backend session lifecycle hooks must be synchronous",
             ),
             (
                 "callable_object",
-                callable_prepare,
-                "backend prepare_session must be synchronous",
+                callable_lifecycle,
+                "backend session lifecycle hooks must be synchronous",
             ),
             (
                 "dynamic_result",
-                dynamic_prepare_backend,
-                "backend prepare_session() must be synchronous",
+                dynamic_lifecycle_backend,
+                "backend validate_provider_configuration() must be synchronous",
             ),
         )
-        for index, (label, backend, expected_message) in enumerate(prepare_cases):
-            with self.subTest(collaborator="prepare_session", form=label):
+        for index, (label, backend, expected_message) in enumerate(lifecycle_cases):
+            with self.subTest(collaborator="lifecycle", form=label):
                 workspace = initialized_workspace(self)
                 before = lifecycle_file_snapshot(workspace)
                 events: list[DebateProgressEvent] = []
@@ -416,9 +424,9 @@ class DebateReservationTests(unittest.IsolatedAsyncioTestCase):
                         backend,
                         conversation_event_store=_ContextReadStore(empty),
                     ).run_draft(
-                        f"async_prepare_{index}",
+                        f"async_lifecycle_{index}",
                         "candidate",
-                        debate_id=f"async_prepare_debate_{index}",
+                        debate_id=f"async_lifecycle_debate_{index}",
                         conversation_context=DebateContextRequest(
                             conversation_id="conversation_a",
                             mode=DebateContextMode.FRESH,
@@ -504,12 +512,12 @@ class DebateReservationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(backend.requests, [])
                 self.assertEqual(lifecycle_file_snapshot(workspace), before)
 
-        self.assertEqual(dynamic_prepare_calls, ["async_prepare_2"])
+        self.assertEqual(dynamic_lifecycle_calls, ["async_lifecycle_2"])
         self.assertEqual(
             dynamic_read_calls,
             [("async_read_2", "conversation_a")],
         )
-        for result in (*dynamic_prepare_results, *dynamic_read_results):
+        for result in (*dynamic_lifecycle_results, *dynamic_read_results):
             await result.aclose()
 
     async def test_sidecar_save_failure_leaves_only_best_effort_failed_state(
@@ -581,7 +589,7 @@ class _CancellableAuditBackend(BindingBackendMixin):
         return AgentReply.approval(request.revision_id)
 
 
-class _BlockingAuditBindBackend:
+class _BlockingAuditBindBackend(BindingBackendMixin):
     """Keep every specialist bind pending until its only waiter is cancelled."""
 
     def __init__(self) -> None:
