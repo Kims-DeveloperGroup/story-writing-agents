@@ -74,7 +74,7 @@ application raises `DirectiveError` and preserves prior state.
 
 ## Interactive directive bridge
 
-After session attachment, no conversation selection is needed:
+With a current attachment, no conversation focus is needed:
 
 | Shell syntax | Exact `StoryRuntime.apply_directive` text |
 | --- | --- |
@@ -86,7 +86,7 @@ Persona route aliases normalize to a canonical ID before application. An
 unknown agent reports `agent_invalid`; directive/configuration application
 failure reports `configuration_invalid`. Candidate validation and atomic
 replacement remain runtime-owned, so only validated success changes overrides.
-These commands call no provider and change no shell selection or routing state.
+These commands call no provider and change no defaults or focus state.
 
 ## Debate round limit
 

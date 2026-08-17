@@ -16,15 +16,16 @@ from story_writing_agents import (
     EXECUTION_SPECIALIST,
     LEAD_ORCHESTRATOR,
     PLOT_ARCHITECT,
+    SessionDurableState,
 )
 from story_writing_agents import interactive_controller as controller_module
 from story_writing_agents.backend import AgentBackend
 from story_writing_agents.cli_context import (
     CliContext,
     load_cli_context,
-    load_conversation_selection,
-    save_conversation_selection,
-    select_session,
+    load_default_conversation,
+    save_default_conversation,
+    save_default_session,
 )
 from story_writing_agents.conversations import (
     CONVERSATION_EVENT_SCHEMA_VERSION,
@@ -54,7 +55,7 @@ from story_writing_agents.errors import (
     ConversationRetrievalSemanticError,
     SessionExistsError,
     SessionIdError,
-    SessionInUseError,
+    SessionAccessBlockedError,
     SessionNotFoundError,
     WorkspaceFormatError,
     WorkspaceSecurityError,
@@ -334,13 +335,13 @@ class InteractiveConversationTestCase(unittest.TestCase):
         workspace: Workspace,
         session_id: str,
         *,
-        active: bool = True,
+        durable_state: SessionDurableState = SessionDurableState.READY,
     ) -> None:
         backend = AgentBackend(workspace, executable=sys.executable)
         try:
-            backend.start_session(session_id)
-            if not active:
-                backend.end_session(session_id)
+            backend.create_session_with_access(session_id)
+            if durable_state is SessionDurableState.PAUSED:
+                backend.pause_session_and_release_access(session_id)
         finally:
             backend.close()
 
@@ -420,10 +421,10 @@ class InteractiveConversationTestCase(unittest.TestCase):
     ]:
         workspace = self.make_workspace()
         self.seed_session(workspace, session_id)
-        select_session(workspace, session_id)
+        save_default_session(workspace, session_id)
         catalog = FilesystemConversationCatalog(workspace)
         entries = tuple(catalog.create(session_id, subject) for subject in subjects)
-        save_conversation_selection(
+        save_default_conversation(
             workspace,
             session_id,
             entries[selected_index].conversation_id,
@@ -530,7 +531,7 @@ class RuntimeWiringAndGateTests(InteractiveConversationTestCase):
             runtime=runtime,
         )
         with (
-            mock.patch.object(backend, "prepare_session") as prepare,
+            mock.patch.object(backend, "validate_provider_configuration") as validate_configuration,
             mock.patch.object(backend, "bind") as bind,
             mock.patch.object(
                 controller_module.asyncio,
@@ -541,17 +542,17 @@ class RuntimeWiringAndGateTests(InteractiveConversationTestCase):
 
         self.assertEqual(runtime.calls, [])
         run_boundary.assert_not_called()
-        prepare.assert_not_called()
+        validate_configuration.assert_not_called()
         bind.assert_not_called()
         rendered = "".join(callbacks.records)
         self.assertEqual(rendered.count("[agent] "), 4)
-        self.assertEqual(rendered.count("[error session_inactive]"), 4)
+        self.assertEqual(rendered.count("[error session_not_attached]"), 4)
         self.assertNotIn("[error conversation_required]", rendered)
 
-    def test_attached_target_changes_without_a_selected_conversation(self) -> None:
+    def test_attached_target_changes_without_a_default_conversation(self) -> None:
         workspace = self.make_workspace()
         self.seed_session(workspace, "session")
-        select_session(workspace, "session")
+        save_default_session(workspace, "session")
         catalog = FilesystemConversationCatalog(workspace)
         runtime = ScriptedRuntime()
         controller, backend, callbacks, _store, _factory = self.make_controller(
@@ -625,7 +626,7 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
             runtime=runtime,
         )
         selection_path = workspace.path(
-            "agent_states/orchestrator_state/conversation_selections/session.json"
+            "agent_states/orchestrator_state/conversation_defaults/session.json"
         )
         selection_before = (
             selection_path.read_bytes(),
@@ -636,7 +637,11 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
         with (
             mock.patch.object(store, "read_context") as read_context,
             mock.patch.object(store, "append") as append,
-            mock.patch.object(backend, "prepare_session") as prepare,
+            mock.patch.object(
+                backend,
+                "validate_provider_configuration",
+                wraps=backend.validate_provider_configuration,
+            ) as validate_configuration,
             mock.patch.object(backend, "bind") as bind,
             mock.patch.object(
                 controller_module.asyncio,
@@ -671,7 +676,7 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
         self.assertTrue(all(task is not None and task.done() for task in runtime.tasks))
         read_context.assert_not_called()
         append.assert_not_called()
-        prepare.assert_not_called()
+        validate_configuration.assert_called_once_with("session")
         bind.assert_not_called()
         self.assertEqual(
             (selection_path.read_bytes(), selection_path.stat().st_mtime_ns),
@@ -999,17 +1004,17 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
         workspace = self.make_workspace()
         for session_id in ("source", "destination"):
             self.seed_session(workspace, session_id)
-        select_session(workspace, "source")
+        save_default_session(workspace, "source")
         catalog = FilesystemConversationCatalog(workspace)
         source_a = catalog.create("source", "Source A")
         source_b = catalog.create("source", "Source B")
         destination = catalog.create("destination", "Destination")
-        save_conversation_selection(
+        save_default_conversation(
             workspace,
             "source",
             source_a.conversation_id,
         )
-        save_conversation_selection(
+        save_default_conversation(
             workspace,
             "destination",
             destination.conversation_id,
@@ -1023,7 +1028,7 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
             f"/conversation use {source_a.conversation_id}",
             "/conversation archive",
             "yes",
-            "/session resume destination",
+            "/session open destination",
             "/quit",
             catalog=catalog,
             runtime=runtime,
@@ -1046,17 +1051,17 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
             ],
         )
         self.assertEqual(
-            load_conversation_selection(workspace, "source"),
+            load_default_conversation(workspace, "source"),
             source_b.conversation_id,
         )
         self.assertEqual(
-            load_conversation_selection(workspace, "destination"),
+            load_default_conversation(workspace, "destination"),
             destination.conversation_id,
         )
         self.assertEqual(runtime.calls, [])
         rendered = "".join(callbacks.records)
         self.assertIn("Subject: Renamed", rendered)
-        self.assertIn("Session: destination (attached)", rendered)
+        self.assertIn("Session: destination (opened)", rendered)
         self.assertIn("Target: Lead Orchestrator", rendered)
 
 
@@ -1071,7 +1076,7 @@ class FailureAndResultTests(InteractiveConversationTestCase):
                 SessionNotFoundError("secret"),
                 InteractiveErrorCode.SESSION_NOT_FOUND,
             ),
-            (SessionInUseError("secret"), InteractiveErrorCode.SESSION_IN_USE),
+            (SessionAccessBlockedError("secret"), InteractiveErrorCode.SESSION_ACCESS_BLOCKED),
             (
                 ConversationNotFoundError("secret"),
                 InteractiveErrorCode.CONVERSATION_NOT_FOUND,
@@ -1107,10 +1112,10 @@ class FailureAndResultTests(InteractiveConversationTestCase):
                 runtime = ScriptedRuntime(failure, "recovered reply")
                 workspace = self.make_workspace()
                 self.seed_session(workspace, "session")
-                select_session(workspace, "session")
+                save_default_session(workspace, "session")
                 catalog = FilesystemConversationCatalog(workspace)
                 selected = catalog.create("session", "Selected")
-                save_conversation_selection(
+                save_default_conversation(
                     workspace,
                     "session",
                     selected.conversation_id,
@@ -1208,8 +1213,8 @@ class FailureAndResultTests(InteractiveConversationTestCase):
                 with (
                     mock.patch.object(
                         backend,
-                        "detach_session",
-                        wraps=backend.detach_session,
+                        "release_session_access",
+                        wraps=backend.release_session_access,
                     ) as detach,
                     mock.patch.object(
                         backend,
@@ -1230,7 +1235,7 @@ class FailureAndResultTests(InteractiveConversationTestCase):
                 self.assertEqual(len(runtime.calls), 1)
                 lease = workspace.path(
                     "agent_states/orchestrator_state/provider_sessions/"
-                    "session.lease.json"
+                    "session.access.json"
                 )
                 self.assertFalse(lease.exists())
 
@@ -1264,11 +1269,11 @@ class RealRetainedRuntimeTests(InteractiveConversationTestCase):
     ) -> None:
         workspace = self.make_workspace()
         self.seed_session(workspace, "session")
-        select_session(workspace, "session")
+        save_default_session(workspace, "session")
         catalog = FilesystemConversationCatalog(workspace)
         first = catalog.create("session", "First room")
         second = catalog.create("session", "Second room")
-        save_conversation_selection(
+        save_default_conversation(
             workspace,
             "session",
             first.conversation_id,
@@ -1408,7 +1413,7 @@ class RealRetainedRuntimeTests(InteractiveConversationTestCase):
         ]
         self.assertEqual(protected_unexpected, [])
         self.assertEqual(
-            load_conversation_selection(workspace, "session"),
+            load_default_conversation(workspace, "session"),
             first.conversation_id,
         )
         rendered = "".join(callbacks.records)
@@ -1418,10 +1423,10 @@ class RealRetainedRuntimeTests(InteractiveConversationTestCase):
     def test_real_runtime_persists_sanitized_failure_then_recovers(self) -> None:
         workspace = self.make_workspace()
         self.seed_session(workspace, "session")
-        select_session(workspace, "session")
+        save_default_session(workspace, "session")
         catalog = FilesystemConversationCatalog(workspace)
         selected = catalog.create("session", "Failure room")
-        save_conversation_selection(
+        save_default_conversation(
             workspace,
             "session",
             selected.conversation_id,

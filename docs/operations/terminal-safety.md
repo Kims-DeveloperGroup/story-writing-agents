@@ -74,7 +74,7 @@ Redaction covers supplied variants, not unknown credentials.
 
 Conversation failures distinguish invalid, missing, ambiguous, archived, and
 transcript-invalid input from workspace state. The terminal never classifies
-exceptions. Shell and lease consequences belong to
+exceptions. Shell and access-claim consequences belong to
 [Recovery](recovery-and-limitations.md).
 
 <a id="live-editor-boundary"></a>

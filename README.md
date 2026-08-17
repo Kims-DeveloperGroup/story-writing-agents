@@ -1,17 +1,14 @@
 # story-writing-agents
 
 <a id="objective"></a>
-
 A Python 3.11+ multi-agent runtime for drafting and reviewing long-form fiction.
 Four fixed roles work from editable project documents, audit the same revision,
 and write a manuscript only after all three voting specialists agree.
 
-> **Available now:** workspace setup, exact directives, consensus, inspection,
-> persistent Codex sessions, a provider-free conversation smoke test, and a TTY
-> shell. The shell provides global help/status; attached directives and safe run
-> inspection; conversation search; and selected history. A selected active
-> conversation also supports routed retrieval turns and prompt, fresh, or
-> draft-file consensus, with cancellation at controller boundaries. Standalone artifact commands remain unavailable there.
+> **Available now:** workspace setup, directives, consensus, inspection,
+> persistent Codex sessions, a provider-free smoke test, and a TTY shell. The
+> shell provides lifecycle status, conversation work, retrieval, and consensus.
+> Standalone artifact commands remain unavailable.
 
 ## Quick start
 
@@ -46,21 +43,25 @@ story smoke
 story
 ```
 
-At `story[lobby]>`, start a session and selected subject conversation:
+At `story[lobby]>`, create a session and focus a subject conversation:
 
 ```text
-/session new novel
+/session create novel
 /conversation new Opening scene
 Which core-document constraint should shape the opening?
-/run Draft the opening from our selected conversation.
+/run Draft the opening from the current conversation focus.
 /inspect last
 /quit
 ```
 
 Advisory input is one line; bare `/run` owns multiline composition. `/quit`
-detaches without ending the session; later `story` restores its selections. See the complete [Glasswater journey](docs/guides/glasswater-scenario.md).
+releases process access without pausing the ready session. The default session
+and default conversation remain saved, so later `story` can open them again.
+See the complete [Glasswater journey](docs/guides/glasswater-scenario.md).
 
-For scripts and non-TTY automation, use `story run`; it never uses selected conversation context. See the [single automation example](docs/guides/glasswater-scenario.md#use-one-explicit-automation-call-then-end) and [CLI contract](docs/reference/cli.md#workspace-noninteractive-behavior-and-exits).
+For scripts and non-TTY automation, use `story run`; it never uses conversation
+focus. See the [single automation example](docs/guides/glasswater-scenario.md#use-one-explicit-automation-call-then-pause)
+and [CLI contract](docs/reference/cli.md#workspace-noninteractive-behavior-and-exits).
 
 ## Choose the next page
 
@@ -68,6 +69,7 @@ For scripts and non-TTY automation, use `story run`; it never uses selected conv
 - [Documentation index](docs/INDEX.md) routes each task, contract, design topic, and operational concern.
 - [Workspace guide](docs/guides/workspaces.md) explains the editable project files.
 - [Story sessions](docs/guides/story-sessions.md) shows shell management, conversation reads, retrieval, and consensus.
+- [Session lifecycle](docs/design/session-lifecycle.md) maps internal state to commands, output, errors, and next actions.
 - [Consensus-run guide](docs/guides/consensus-runs.md) covers prompts, drafts, outputs, and round limits.
 - [CLI reference](docs/reference/cli.md) is the exact installed command contract.
 - [Package API](docs/reference/package-api.md) starts the Python reference.
@@ -90,9 +92,7 @@ For Python integrations, start with the [runtime API](docs/reference/runtime-api
 - Deadlocked and interrupted debates cannot resume under the same debate ID.
 - Workspace content, logs, provider metadata, agent state, and manuscripts are plaintext.
 - Artifact replacement is atomic per file with best-effort multi-file rollback, not a power-loss-safe transaction.
-- Smoke's explicit workspace is not read-only and retains plaintext diagnostics;
-  abrupt termination can interrupt temporary cleanup. A pass does not validate
-  provider/model, terminal behavior, integration, or story quality. See the [smoke guide](docs/guides/smoke-test.md).
+- Smoke's explicit workspace is not read-only and retains plaintext diagnostics; abrupt termination can interrupt cleanup. A pass does not validate provider/model, terminal behavior, integration, or story quality. See the [smoke guide](docs/guides/smoke-test.md).
 - The interactive shell accepts one advisory line; bare `/run` owns multiline
   composition. Process-level PTY tests verify TTY gating and VINTR/VEOF delivery
   on supported POSIX. Retrieval is active-only and bounded; standalone artifact

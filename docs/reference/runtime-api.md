@@ -3,7 +3,7 @@
 > **Availability:** `StoryRuntime` provides unchanged one-step and additive
 > bounded-retrieval turns, plus context-aware debates.
 
-Key terms: **legacy run**—no `conversation_context`; **included
+Key terms: **context-omitted run**—no `conversation_context`; **included
 snapshot**—one transcript window reused for a debate; **progress
 sink**—a synchronous observer; **retrieval turn**—one bounded answer.
 
@@ -48,8 +48,8 @@ DebateContextRequest(*, conversation_id: str, mode: DebateContextMode)
 The request is frozen, slotted, keyword-only, and has no defaults. Included
 mode reads and canonicalizes one bounded context before debate reservation,
 persists and reuses it for every phase, and performs no search or retrieval.
-Fresh mode records the selected conversation identity but performs no context
-read and sends no context. A legacy call does neither and has no sidecar.
+Fresh mode records the supplied conversation identity but performs no context
+read and sends no context. A context-omitted call does neither and has no sidecar.
 
 `inspect_debate_context()` reads only the strict sidecar and returns `None` when
 it is absent; it does not alter the established debate/session inspection JSON.
@@ -111,7 +111,7 @@ ConversationRetrievalResult(*, session_id: str, conversation_id: str,
 
 Validation, observer errors, cancellation, and uncertain persistence raise.
 Expected debate failures normally return a terminal `failed`
-result. `DebateResult`, its JSON, legacy calls, and CLI exits are unchanged.
+result. `DebateResult`, its JSON, context-omitted calls, and CLI exits are unchanged.
 
 `converse()` remains one provider call with one user and reply/error pair.
 `converse_with_retrieval()` requires an exact same-session memory service and

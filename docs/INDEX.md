@@ -5,31 +5,31 @@ Use this index to find one canonical answer instead of searching a long manual.
 > **Availability:** bare `story` and `story chat` open the installed TTY shell.
 > It manages story sessions and subject conversations, routes single-line
 > retrieval-enabled turns, searches and reads transcripts, and runs
-> selected-conversation consensus. It also provides global help/status,
-> attached directives and safe inspection, selected history, and controller-
-> boundary cancellation for active operations and local reads.
+> focused-conversation consensus. It also provides global help and lifecycle
+> status, attached directives and safe inspection, focused history, and
+> controller-boundary cancellation for active operations and local reads.
 
 ## Availability matrix
 
 | Capability | Available through |
 | --- | --- |
 | Initialize a workspace; run or inspect a debate | Installed CLI and Python API |
-| Start or end a provider session | Installed CLI and Python API |
-| Open the TTY shell; list, create, resume, switch, or end sessions | Bare `story` or `story chat` |
+| Create, reopen, or pause a provider session | Installed CLI and Python API |
+| Open the TTY shell; list, create, open, switch, or pause sessions | Bare `story` or `story chat` |
 | Show registry help or shell status | Global in the installed shell |
-| Apply runtime directives; safely inspect sessions or debates | Attached shell; no conversation selection required |
-| Create, list, select, rename, or archive subject conversations | Installed shell after session attachment; catalog Python API |
-| List or target agents; send ordinary, `@AGENT`, or `/say` turns | Installed shell; a selected active conversation is required for turns |
-| Strict create/resume/attach/detach session lifecycle | Python API; used by the installed shell |
+| Apply directives; safely inspect sessions or debates | Current attachment; no conversation focus required |
+| Create, list, focus, rename, or archive subject conversations | Installed shell after session attachment; catalog Python API |
+| List or target agents; send ordinary, `@AGENT`, or `/say` turns | Installed shell; an active conversation must have current focus |
+| Read durable/access facts and perform exact session transitions | Python API; used by the installed shell and runtime |
 | Parse the interactive command language and route metadata | Python API; the shell dispatches a documented subset |
 | Compose a prompt and render safe terminal records | Bare shell `/run`; module-supported terminal Python API |
 | Append/read transcripts; derive bounded complete-turn context | Shell turns append/consume context and `/transcript` reads fresh bounded pages; Python API |
 | Search one session and cite hits | Attached shell `/search` for active records; Python API can explicitly include archived records |
-| Ask an agent to retrieve cited conversation history | Selected shell conversation; additive Python runtime API; active records in the current session only |
+| Ask an agent to retrieve cited conversation history | Focused shell conversation; additive Python runtime API; active records in the current session only |
 | Persist and send one explicitly addressed one-step turn | Existing `StoryRuntime.converse()` Python API |
-| Run consensus with included, fresh, or draft-file input | Selected active shell conversation; noninteractive CLI and Python API remain available |
+| Run consensus with included, fresh, or draft-file input | Focused active shell conversation; noninteractive CLI and Python API remain available |
 | Cancel active advisory/consensus work or partial local rendering | Installed shell; process-level PTY verified on supported POSIX. [Delivery and platform scope](operations/recovery-and-limitations.md#posix-pty-boundary) |
-| Show one selected transcript snapshot and context accounting | Attached shell `/history`; active selection required |
+| Show one focused transcript snapshot and context accounting | Attached shell `/history`; active focus required |
 | Standalone artifact commands | Not implemented in the shell |
 
 ## Start and concepts

@@ -22,9 +22,9 @@ from story_writing_agents.backend import AgentBackend
 from story_writing_agents.cli_context import (
     CliContext,
     load_cli_context,
-    load_conversation_selection,
-    save_conversation_selection,
-    select_session,
+    load_default_conversation,
+    save_default_conversation,
+    save_default_session,
 )
 from story_writing_agents.conversation_search import (
     ConversationCitation,
@@ -52,10 +52,13 @@ from story_writing_agents.errors import (
     ConversationNotFoundError,
     SessionExistsError,
     SessionIdError,
-    SessionInUseError,
+    SessionAccessBlockedError,
     SessionNotFoundError,
+    SessionOwnershipUnknownError,
+    SessionPausedError,
     WorkspaceFormatError,
     WorkspaceSecurityError,
+    WorkspaceVersionUnsupportedError,
 )
 from story_writing_agents.interactive_controller import InteractiveController
 from story_writing_agents.interactive_terminal import (
@@ -63,7 +66,11 @@ from story_writing_agents.interactive_terminal import (
     InteractiveErrorCode,
     InteractiveTerminal,
 )
-from story_writing_agents.models import SessionLeaseState, SessionSummary
+from story_writing_agents.session_lifecycle import (
+    SessionAccessState,
+    SessionDurableState,
+    SessionLifecycleState,
+)
 from story_writing_agents.workspace import (
     FilesystemConversationCatalog,
     Workspace,
@@ -74,8 +81,8 @@ from tests.helpers import initialized_workspace
 
 _SESSION_DIRECTORY = "agent_states/orchestrator_state/provider_sessions"
 _CONTEXT_PATH = "agent_states/orchestrator_state/cli_context.json"
-_CONVERSATION_SELECTION_DIRECTORY = (
-    "agent_states/orchestrator_state/conversation_selections"
+_CONVERSATION_DEFAULT_DIRECTORY = (
+    "agent_states/orchestrator_state/conversation_defaults"
 )
 _CREATED = "2026-01-01T00:00:00+00:00"
 _UPDATED = "2026-01-02T00:00:00+00:00"
@@ -131,16 +138,16 @@ def _manifest_relative(session_id: str) -> str:
     return f"{_SESSION_DIRECTORY}/{session_id}.json"
 
 
-def _lease_relative(session_id: str) -> str:
-    """Return the backend-owned lease path for one safe test session."""
+def _access_relative(session_id: str) -> str:
+    """Return the backend-owned access path for one safe test session."""
 
-    return f"{_SESSION_DIRECTORY}/{session_id}.lease.json"
+    return f"{_SESSION_DIRECTORY}/{session_id}.access.json"
 
 
-def _selection_relative(session_id: str) -> str:
+def _default_relative(session_id: str) -> str:
     """Return one per-session conversation-selection path for assertions."""
 
-    return f"{_CONVERSATION_SELECTION_DIRECTORY}/{session_id}.json"
+    return f"{_CONVERSATION_DEFAULT_DIRECTORY}/{session_id}.json"
 
 
 def _error_record(code: InteractiveErrorCode) -> str:
@@ -153,26 +160,24 @@ def _error_record(code: InteractiveErrorCode) -> str:
     )
 
 
-def _summary(
+def _lifecycle(
     session_id: str,
     *,
-    active: bool = True,
-    selected: bool = False,
-    lease_state: SessionLeaseState = SessionLeaseState.AVAILABLE,
+    durable_state: SessionDurableState = SessionDurableState.READY,
+    access_state: SessionAccessState = SessionAccessState.CLAIMABLE,
     hostname: str | None = None,
     pid: int | None = None,
-) -> SessionSummary:
-    """Build one deterministic public summary for formatting/fault tests."""
+) -> SessionLifecycleState:
+    """Build one deterministic lifecycle value for formatting/fault tests."""
 
-    return SessionSummary(
-        session_id,
-        active,
-        selected,
-        lease_state,
-        hostname,
-        pid,
-        _CREATED,
-        _UPDATED,
+    return SessionLifecycleState(
+        session_id=session_id,
+        durable_state=durable_state,
+        access_state=access_state,
+        owner_hostname=hostname,
+        owner_pid=pid,
+        created_at=_CREATED,
+        updated_at=_UPDATED,
     )
 
 
@@ -438,15 +443,15 @@ class ControllerTestCase(unittest.TestCase):
         workspace: Workspace,
         session_id: str,
         *,
-        active: bool,
+        durable_state: SessionDurableState,
     ) -> None:
-        """Persist one active or inactive session without retaining its lease."""
+        """Persist one ready or paused session without retaining access."""
 
         backend = AgentBackend(workspace, executable=sys.executable)
         try:
-            backend.start_session(session_id)
-            if not active:
-                backend.end_session(session_id)
+            backend.create_session_with_access(session_id)
+            if durable_state is SessionDurableState.PAUSED:
+                backend.pause_session_and_release_access(session_id)
         finally:
             backend.close()
 
@@ -611,6 +616,7 @@ class ControllerContractTests(ControllerTestCase):
                 "models",
                 "orchestrator",
                 "run_inputs",
+                "session_lifecycle",
                 "workspace",
             },
         )
@@ -708,7 +714,7 @@ class ControllerContractTests(ControllerTestCase):
 
 
 class ControllerStartupTests(ControllerTestCase):
-    """Verify explicit, selected, confirmed, and failed startup paths."""
+    """Verify explicit, defaulted, confirmed, and failed startup paths."""
 
     def test_unselected_lobby_is_read_only(self) -> None:
         workspace = self.make_workspace()
@@ -723,22 +729,22 @@ class ControllerStartupTests(ControllerTestCase):
         self.assertEqual(len(callbacks.records), 1)
         self.assertIn("Session: lobby\n", callbacks.records[0])
 
-    def test_explicit_sessions_create_attach_and_resume_without_confirmation(
+    def test_explicit_sessions_create_open_and_reopen_without_confirmation(
         self,
     ) -> None:
         cases = (
             ("missing", None, "created"),
-            ("active", True, "attached"),
-            ("inactive", False, "resumed"),
+            ("ready", SessionDurableState.READY, "opened"),
+            ("paused", SessionDurableState.PAUSED, "reopened"),
         )
-        for session_id, initial_active, attachment in cases:
+        for session_id, initial_state, attachment in cases:
             with self.subTest(session=session_id):
                 workspace = self.make_workspace()
-                if initial_active is not None:
+                if initial_state is not None:
                     self.seed_session(
                         workspace,
                         session_id,
-                        active=initial_active,
+                        durable_state=initial_state,
                     )
                 controller, _backend, callbacks = self.make_controller(
                     workspace,
@@ -751,14 +757,17 @@ class ControllerStartupTests(ControllerTestCase):
                     0,
                 )
                 self.assertEqual(
-                    load_cli_context(workspace).selected_session,
+                    load_cli_context(workspace).default_session_id,
                     session_id,
                 )
-                self.assertTrue(
-                    workspace.read_json(_manifest_relative(session_id))["active"]
+                self.assertEqual(
+                    workspace.read_json(_manifest_relative(session_id))[
+                        "durable_state"
+                    ],
+                    "ready",
                 )
                 self.assertFalse(
-                    workspace.path(_lease_relative(session_id)).exists()
+                    workspace.path(_access_relative(session_id)).exists()
                 )
                 self.assertFalse(
                     any("[Y/n]" in prompt for prompt in callbacks.prompts)
@@ -771,10 +780,10 @@ class ControllerStartupTests(ControllerTestCase):
                 self.assertNotIn("History:", rendered)
                 self.assertNotIn("Room messages", rendered)
 
-    def test_saved_active_attaches_without_rewriting_selection(self) -> None:
+    def test_saved_ready_opens_without_rewriting_default(self) -> None:
         workspace = self.make_workspace()
-        self.seed_session(workspace, "selected", active=True)
-        select_session(workspace, "selected")
+        self.seed_session(workspace, "selected", durable_state=SessionDurableState.READY)
+        save_default_session(workspace, "selected")
         context_path = workspace.path(_CONTEXT_PATH)
         context_before = (
             context_path.read_bytes(),
@@ -789,27 +798,27 @@ class ControllerStartupTests(ControllerTestCase):
             (context_path.read_bytes(), context_path.stat().st_mtime_ns),
             context_before,
         )
-        self.assertIn("Session: selected (attached)\n", callbacks.records[0])
+        self.assertIn("Session: selected (opened)\n", callbacks.records[0])
         self.assertEqual(callbacks.prompts, ["story[selected:lead]> "])
 
-    def test_saved_inactive_confirmation_outcomes_are_distinct(self) -> None:
+    def test_saved_paused_confirmation_outcomes_are_distinct(self) -> None:
         cases = (
-            ("default_yes", "", True, False, "Session: saved (resumed)"),
-            ("no", "no", False, False, "Session resume cancelled."),
+            ("default_yes", "", "ready", False, "Session: saved (reopened)"),
+            ("no", "no", "paused", False, "Session open cancelled."),
             (
                 "interrupt",
                 KeyboardInterrupt(),
+                "paused",
                 False,
-                False,
-                "Session resume cancelled.",
+                "Session open cancelled.",
             ),
-            ("eof", EOFError(), False, True, None),
+            ("eof", EOFError(), "paused", True, None),
         )
-        for label, decision, becomes_active, exits_at_prompt, marker in cases:
+        for label, decision, durable_state, exits_at_prompt, marker in cases:
             with self.subTest(case=label):
                 workspace = self.make_workspace()
-                self.seed_session(workspace, "saved", active=False)
-                select_session(workspace, "saved")
+                self.seed_session(workspace, "saved", durable_state=SessionDurableState.PAUSED)
+                save_default_session(workspace, "saved")
                 before = _tree_snapshot(workspace.root)
                 reads = (decision,) if exits_at_prompt else (decision, "/quit")
                 controller, _backend, callbacks = self.make_controller(
@@ -819,22 +828,24 @@ class ControllerStartupTests(ControllerTestCase):
                 self.assertEqual(controller.run_session_lobby(), 0)
                 self.assertEqual(
                     callbacks.prompts[0],
-                    "Resume selected session saved? [Y/n] ",
+                    "Open default session saved? [Y/n] ",
                 )
                 self.assertEqual(
-                    workspace.read_json(_manifest_relative("saved"))["active"],
-                    becomes_active,
+                    workspace.read_json(_manifest_relative("saved"))[
+                        "durable_state"
+                    ],
+                    durable_state,
                 )
                 self.assertEqual(
-                    load_cli_context(workspace).selected_session,
+                    load_cli_context(workspace).default_session_id,
                     "saved",
                 )
                 if marker is not None:
                     self.assertIn(marker, "".join(callbacks.records))
-                if not becomes_active:
+                if durable_state == "paused":
                     self.assertEqual(_tree_snapshot(workspace.root), before)
                 self.assertFalse(
-                    workspace.path(_lease_relative("saved")).exists()
+                    workspace.path(_access_relative("saved")).exists()
                 )
 
     def test_startup_failures_use_typed_safe_mapping(self) -> None:
@@ -844,7 +855,18 @@ class ControllerStartupTests(ControllerTestCase):
             (SessionIdError, InteractiveErrorCode.SESSION_INVALID, True),
             (SessionExistsError, InteractiveErrorCode.SESSION_EXISTS, True),
             (SessionNotFoundError, InteractiveErrorCode.SESSION_NOT_FOUND, True),
-            (SessionInUseError, InteractiveErrorCode.SESSION_IN_USE, True),
+            (SessionPausedError, InteractiveErrorCode.SESSION_PAUSED, True),
+            (SessionAccessBlockedError, InteractiveErrorCode.SESSION_ACCESS_BLOCKED, True),
+            (
+                SessionOwnershipUnknownError,
+                InteractiveErrorCode.SESSION_OWNERSHIP_UNKNOWN,
+                True,
+            ),
+            (
+                WorkspaceVersionUnsupportedError,
+                InteractiveErrorCode.WORKSPACE_VERSION_UNSUPPORTED,
+                True,
+            ),
             (
                 ConfigurationError,
                 InteractiveErrorCode.PROVIDER_PREFLIGHT_FAILED,
@@ -876,19 +898,13 @@ class ControllerStartupTests(ControllerTestCase):
                     workspace,
                     "/quit",
                     backend=backend,
+                    terminal_width=200,
                 )
                 failure = failure_type("secret-token-from-backend")
-                with (
-                    mock.patch.object(
-                        backend,
-                        "get_session_summary",
-                        side_effect=failure,
-                    ),
-                    mock.patch.object(
-                        backend,
-                        "create_session",
-                        side_effect=failure,
-                    ),
+                with mock.patch.object(
+                    backend,
+                    "get_session_lifecycle",
+                    side_effect=failure,
                 ):
                     result = controller.run_session_lobby(
                         requested_session="target"
@@ -903,11 +919,11 @@ class ControllerStartupTests(ControllerTestCase):
                 else:
                     self.assertNotIn("Session: lobby\n", rendered)
 
-    def test_missing_saved_selection_and_inactive_attach_race_return_to_lobby(
+    def test_missing_default_and_paused_open_race_return_to_lobby(
         self,
     ) -> None:
         workspace = self.make_workspace()
-        select_session(workspace, "missing")
+        save_default_session(workspace, "missing")
         context_before = workspace.path(_CONTEXT_PATH).read_bytes()
         controller, _backend, callbacks = self.make_controller(
             workspace,
@@ -920,7 +936,7 @@ class ControllerStartupTests(ControllerTestCase):
         self.assertEqual(workspace.path(_CONTEXT_PATH).read_bytes(), context_before)
 
         workspace = self.make_workspace()
-        self.seed_session(workspace, "raced", active=True)
+        self.seed_session(workspace, "raced", durable_state=SessionDurableState.READY)
         backend = self.make_backend(workspace)
         controller, _backend, callbacks = self.make_controller(
             workspace,
@@ -928,38 +944,38 @@ class ControllerStartupTests(ControllerTestCase):
             backend=backend,
         )
 
-        def deactivate_then_fail(session_id: str) -> SessionSummary:
+        def pause_then_fail(session_id: str) -> SessionLifecycleState:
             manifest = workspace.read_json(_manifest_relative(session_id))
-            manifest["active"] = False
+            manifest["durable_state"] = "paused"
             workspace.write_json(_manifest_relative(session_id), manifest)
-            raise BackendProtocolError("inactive-race-secret")
+            raise SessionPausedError("paused-race-secret")
 
         with mock.patch.object(
             backend,
-            "attach_session",
-            side_effect=deactivate_then_fail,
+            "acquire_session_access",
+            side_effect=pause_then_fail,
         ):
             self.assertEqual(
                 controller.run_session_lobby(requested_session="raced"),
                 0,
             )
         rendered = "".join(callbacks.records)
-        self.assertIn(_error_record(InteractiveErrorCode.SESSION_INACTIVE), rendered)
-        self.assertNotIn("inactive-race-secret", rendered)
+        self.assertIn(_error_record(InteractiveErrorCode.SESSION_PAUSED), rendered)
+        self.assertNotIn("paused-race-secret", rendered)
         self.assertIn("Session: lobby\n", rendered)
         self.assertFalse(workspace.path(_CONTEXT_PATH).exists())
 
     def test_acquisition_rejects_mismatched_or_unowned_summaries(self) -> None:
         mutations: tuple[
-            tuple[str, Callable[[SessionSummary], object]], ...
+            tuple[str, Callable[[SessionLifecycleState], object]], ...
         ] = (
             ("wrong_id", lambda value: replace(value, session_id="other")),
-            ("inactive", lambda value: replace(value, active=False)),
+            ("paused", lambda value: replace(value, durable_state=SessionDurableState.PAUSED)),
             (
                 "available",
                 lambda value: replace(
                     value,
-                    lease_state=SessionLeaseState.AVAILABLE,
+                    access_state=SessionAccessState.CLAIMABLE,
                 ),
             ),
             ("wrong_type", lambda _value: object()),
@@ -967,9 +983,9 @@ class ControllerStartupTests(ControllerTestCase):
         for label, mutate in mutations:
             with self.subTest(case=label):
                 workspace = self.make_workspace()
-                self.seed_session(workspace, "target", active=True)
+                self.seed_session(workspace, "target", durable_state=SessionDurableState.READY)
                 backend = self.make_backend(workspace)
-                original_attach = backend.attach_session
+                original_attach = backend.acquire_session_access
 
                 def invalid_attach(session_id: str) -> object:
                     acquired = original_attach(session_id)
@@ -977,26 +993,27 @@ class ControllerStartupTests(ControllerTestCase):
 
                 controller, _backend, callbacks = self.make_controller(
                     workspace,
+                    "/quit",
                     backend=backend,
                 )
                 with mock.patch.object(
                     backend,
-                    "attach_session",
+                    "acquire_session_access",
                     side_effect=invalid_attach,
                 ):
                     self.assertEqual(
                         controller.run_session_lobby(
                             requested_session="target"
                         ),
-                        2,
+                        0,
                     )
                 self.assertIn(
-                    _error_record(InteractiveErrorCode.CLEANUP_FAILED),
+                    _error_record(InteractiveErrorCode.PROVIDER_PREFLIGHT_FAILED),
                     callbacks.records,
                 )
                 self.assertFalse(workspace.path(_CONTEXT_PATH).exists())
                 self.assertFalse(
-                    workspace.path(_lease_relative("target")).exists()
+                    workspace.path(_access_relative("target")).exists()
                 )
 
 
@@ -1028,19 +1045,19 @@ class ControllerConversationStartupTests(ControllerTestCase):
         for label, entry, selected_id, persist_file in cases:
             with self.subTest(case=label):
                 workspace = self.make_workspace()
-                self.seed_session(workspace, "session", active=True)
-                select_session(workspace, "session")
+                self.seed_session(workspace, "session", durable_state=SessionDurableState.READY)
+                save_default_session(workspace, "session")
                 catalog = MemoryConversationCatalog(
                     () if entry is None else (entry,)
                 )
                 if persist_file:
-                    save_conversation_selection(
+                    save_default_conversation(
                         workspace,
                         "session",
                         selected_id,
                     )
                     selection_path = workspace.path(
-                        _selection_relative("session")
+                        _default_relative("session")
                     )
                     selection_before = (
                         selection_path.read_bytes(),
@@ -1085,7 +1102,7 @@ class ControllerConversationStartupTests(ControllerTestCase):
                     )
                 else:
                     self.assertFalse(
-                        workspace.path(_selection_relative("session")).exists()
+                        workspace.path(_default_relative("session")).exists()
                     )
 
     def test_malformed_or_unsafe_initial_selection_aborts_and_detaches(self) -> None:
@@ -1104,9 +1121,9 @@ class ControllerConversationStartupTests(ControllerTestCase):
         for label, expected_code, symlinked in cases:
             with self.subTest(case=label):
                 workspace = self.make_workspace()
-                self.seed_session(workspace, "session", active=True)
-                select_session(workspace, "session")
-                selection_path = workspace.root / _selection_relative("session")
+                self.seed_session(workspace, "session", durable_state=SessionDurableState.READY)
+                save_default_session(workspace, "session")
+                selection_path = workspace.root / _default_relative("session")
                 selection_path.parent.mkdir(parents=True, exist_ok=True)
                 if symlinked:
                     external = Path(tempfile.mkdtemp()) / "selection.json"
@@ -1131,7 +1148,7 @@ class ControllerConversationStartupTests(ControllerTestCase):
                 self.assertEqual(controller.run_session_lobby(), 2)
                 self.assertIn(_error_record(expected_code), callbacks.records)
                 self.assertFalse(
-                    workspace.path(_lease_relative("session")).exists()
+                    workspace.path(_access_relative("session")).exists()
                 )
                 self.assertEqual(callbacks.prompts, [])
 
@@ -1139,9 +1156,9 @@ class ControllerConversationStartupTests(ControllerTestCase):
         self,
     ) -> None:
         workspace = self.make_workspace()
-        self.seed_session(workspace, "session", active=True)
-        select_session(workspace, "session")
-        save_conversation_selection(workspace, "session", _UNIQUE_C)
+        self.seed_session(workspace, "session", durable_state=SessionDurableState.READY)
+        save_default_session(workspace, "session")
+        save_default_conversation(workspace, "session", _UNIQUE_C)
         catalog = MemoryConversationCatalog(
             (_conversation_metadata(_UNIQUE_C, "Opening scene"),)
         )
@@ -1164,14 +1181,14 @@ class ControllerConversationStartupTests(ControllerTestCase):
             _error_record(InteractiveErrorCode.INTERNAL_ERROR),
             callbacks.records,
         )
-        self.assertFalse(workspace.path(_lease_relative("session")).exists())
+        self.assertFalse(workspace.path(_access_relative("session")).exists())
 
     def test_switch_validates_destination_conversation_before_session_commit(
         self,
     ) -> None:
         workspace = self.make_workspace()
         for session_id in ("source", "destination"):
-            self.seed_session(workspace, session_id, active=True)
+            self.seed_session(workspace, session_id, durable_state=SessionDurableState.READY)
         source = _conversation_metadata(
             _COLLIDING_A,
             "Source subject",
@@ -1183,30 +1200,30 @@ class ControllerConversationStartupTests(ControllerTestCase):
             session_id="destination",
         )
         catalog = MemoryConversationCatalog((source, destination))
-        select_session(workspace, "source")
-        save_conversation_selection(workspace, "source", source.conversation_id)
-        save_conversation_selection(
+        save_default_session(workspace, "source")
+        save_default_conversation(workspace, "source", source.conversation_id)
+        save_default_conversation(
             workspace,
             "destination",
             destination.conversation_id,
         )
         selection_snapshots = {
-            session_id: workspace.path(_selection_relative(session_id)).read_bytes()
+            session_id: workspace.path(_default_relative(session_id)).read_bytes()
             for session_id in ("source", "destination")
         }
         backend = self.make_backend(workspace)
         controller, _backend, callbacks = self.make_controller(
             workspace,
-            "/session resume destination",
+            "/session open destination",
             "/quit",
             backend=backend,
             conversation_catalog=catalog,
         )
         events: list[str] = []
-        original_attach = backend.attach_session
-        original_detach = backend.detach_session
-        original_load = controller_module.load_conversation_selection
-        original_select = controller_module.select_session
+        original_attach = backend.acquire_session_access
+        original_detach = backend.release_session_access
+        original_load = controller_module.load_default_conversation
+        original_select = controller_module.save_default_session
         original_get = catalog.get
 
         def attach(session_id: str):
@@ -1230,16 +1247,16 @@ class ControllerConversationStartupTests(ControllerTestCase):
             return original_get(session_id, conversation_id)
 
         with (
-            mock.patch.object(backend, "attach_session", side_effect=attach),
-            mock.patch.object(backend, "detach_session", side_effect=detach),
+            mock.patch.object(backend, "acquire_session_access", side_effect=attach),
+            mock.patch.object(backend, "release_session_access", side_effect=detach),
             mock.patch.object(
                 controller_module,
-                "load_conversation_selection",
+                "load_default_conversation",
                 side_effect=load_selection,
             ),
             mock.patch.object(
                 controller_module,
-                "select_session",
+                "save_default_session",
                 side_effect=select_story_session,
             ),
             mock.patch.object(catalog, "get", side_effect=get_conversation),
@@ -1268,12 +1285,12 @@ class ControllerConversationStartupTests(ControllerTestCase):
         self.assertIn("Destination subject", rendered)
         self.assertGreaterEqual(rendered.count("Agent: lead"), 2)
         self.assertEqual(
-            load_cli_context(workspace).selected_session,
+            load_cli_context(workspace).default_session_id,
             "destination",
         )
         for session_id, expected in selection_snapshots.items():
             self.assertEqual(
-                workspace.path(_selection_relative(session_id)).read_bytes(),
+                workspace.path(_default_relative(session_id)).read_bytes(),
                 expected,
             )
 
@@ -1291,42 +1308,42 @@ class ControllerConversationStartupTests(ControllerTestCase):
     def test_malformed_destination_releases_it_and_continues_source(self) -> None:
         workspace = self.make_workspace()
         for session_id in ("source", "destination"):
-            self.seed_session(workspace, session_id, active=True)
+            self.seed_session(workspace, session_id, durable_state=SessionDurableState.READY)
         source = _conversation_metadata(
             _UNIQUE_C,
             "Source subject",
             session_id="source",
         )
         catalog = MemoryConversationCatalog((source,))
-        select_session(workspace, "source")
-        save_conversation_selection(workspace, "source", source.conversation_id)
-        malformed = workspace.root / _selection_relative("destination")
+        save_default_session(workspace, "source")
+        save_default_conversation(workspace, "source", source.conversation_id)
+        malformed = workspace.root / _default_relative("destination")
         malformed.parent.mkdir(parents=True, exist_ok=True)
         malformed.write_text("{not-json}\n", encoding="utf-8")
         source_selection = workspace.path(
-            _selection_relative("source")
+            _default_relative("source")
         ).read_bytes()
         backend = self.make_backend(workspace)
         controller, _backend, callbacks = self.make_controller(
             workspace,
-            "/session resume destination",
+            "/session open destination",
             "/quit",
             backend=backend,
             conversation_catalog=catalog,
         )
         events: list[str] = []
-        original_detach = backend.detach_session
+        original_detach = backend.release_session_access
 
         def detach(session_id: str):
             events.append(session_id)
             return original_detach(session_id)
 
-        with mock.patch.object(backend, "detach_session", side_effect=detach):
+        with mock.patch.object(backend, "release_session_access", side_effect=detach):
             self.assertEqual(controller.run_session_lobby(), 0)
         self.assertEqual(events, ["destination", "source"])
-        self.assertEqual(load_cli_context(workspace).selected_session, "source")
+        self.assertEqual(load_cli_context(workspace).default_session_id, "source")
         self.assertEqual(
-            workspace.path(_selection_relative("source")).read_bytes(),
+            workspace.path(_default_relative("source")).read_bytes(),
             source_selection,
         )
         rendered = "".join(callbacks.records)
@@ -1341,7 +1358,7 @@ class ControllerConversationStartupTests(ControllerTestCase):
     ) -> None:
         workspace = self.make_workspace()
         for session_id in ("source", "destination"):
-            self.seed_session(workspace, session_id, active=True)
+            self.seed_session(workspace, session_id, durable_state=SessionDurableState.READY)
         source = _conversation_metadata(
             _COLLIDING_A,
             "Source subject",
@@ -1354,23 +1371,23 @@ class ControllerConversationStartupTests(ControllerTestCase):
             status=ConversationStatus.ARCHIVED,
         )
         catalog = MemoryConversationCatalog((source, destination))
-        select_session(workspace, "source")
+        save_default_session(workspace, "source")
         for session_id, selected_id in (
             ("source", source.conversation_id),
             ("destination", destination.conversation_id),
         ):
-            save_conversation_selection(workspace, session_id, selected_id)
+            save_default_conversation(workspace, session_id, selected_id)
         selection_snapshots = {
             session_id: (
-                workspace.path(_selection_relative(session_id)).read_bytes(),
-                workspace.path(_selection_relative(session_id)).stat().st_mtime_ns,
+                workspace.path(_default_relative(session_id)).read_bytes(),
+                workspace.path(_default_relative(session_id)).stat().st_mtime_ns,
             )
             for session_id in ("source", "destination")
         }
         backend = self.make_backend(workspace)
         controller, _backend, callbacks = self.make_controller(
             workspace,
-            "/session resume destination",
+            "/session open destination",
             "/quit",
             backend=backend,
             conversation_catalog=catalog,
@@ -1380,11 +1397,11 @@ class ControllerConversationStartupTests(ControllerTestCase):
         self.assertEqual(controller.run_session_lobby(), 0)
 
         self.assertEqual(
-            load_cli_context(workspace).selected_session,
+            load_cli_context(workspace).default_session_id,
             "destination",
         )
         for session_id, snapshot in selection_snapshots.items():
-            path = workspace.path(_selection_relative(session_id))
+            path = workspace.path(_default_relative(session_id))
             self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), snapshot)
         rendered = "".join(callbacks.records)
         self.assertIn("Subject: Source subject", rendered)
@@ -1415,7 +1432,7 @@ class ControllerCommandTests(ControllerTestCase):
             "/inspect last",
             "/to plot",
             "/session list",
-            "/session end",
+            "/session pause",
             "/exit",
         )
         with (
@@ -1431,7 +1448,10 @@ class ControllerCommandTests(ControllerTestCase):
 
         rendered = "".join(callbacks.records)
         self.assertIn("[cancelled] No action was taken.\n", rendered)
-        self.assertIn("Syntax: /session list | new NAME", rendered)
+        self.assertIn(
+            "Syntax: /session list | create NAME | open [NAME] | pause",
+            rendered,
+        )
         self.assertIn("[error command_invalid] unknown command: /sesion\n", rendered)
         self.assertIn("[hint] Try /session, or type /help.\n", rendered)
         unavailable = (
@@ -1439,19 +1459,21 @@ class ControllerCommandTests(ControllerTestCase):
             "session lobby.\n"
         )
         self.assertEqual(rendered.count(unavailable), 0)
-        self.assertEqual(rendered.count("[error session_inactive]"), 5)
+        self.assertEqual(rendered.count("[error session_not_attached]"), 5)
         self.assertIn("[session] No story sessions found.\n", rendered)
-        self.assertIn(_error_record(InteractiveErrorCode.SESSION_INACTIVE), rendered)
+        self.assertIn(
+            _error_record(InteractiveErrorCode.SESSION_NOT_ATTACHED),
+            rendered,
+        )
 
-    def test_session_list_preserves_order_and_sanitizes_lease_facts(self) -> None:
+    def test_session_list_preserves_order_and_hides_access_owner_facts(self) -> None:
         workspace = self.make_workspace()
         backend = self.make_backend(workspace)
         summaries = (
-            _summary("beta", active=False),
-            _summary(
+            _lifecycle("beta", durable_state=SessionDurableState.PAUSED),
+            _lifecycle(
                 "alpha",
-                selected=True,
-                lease_state=SessionLeaseState.IN_USE,
+                access_state=SessionAccessState.OWNERSHIP_UNKNOWN,
                 hostname="remote\x1bhost",
                 pid=321,
             ),
@@ -1460,16 +1482,18 @@ class ControllerCommandTests(ControllerTestCase):
             workspace,
             "/session list",
             "/quit",
+            context=CliContext(default_session_id="alpha"),
             backend=backend,
+            terminal_width=240,
         )
         before = _tree_snapshot(workspace.root)
         with mock.patch.object(
             backend,
-            "list_sessions",
+            "list_session_lifecycles",
             return_value=summaries,
-        ) as list_sessions:
+        ) as list_session_lifecycles:
             self.assertEqual(controller.run_session_lobby(), 0)
-        list_sessions.assert_called_once_with(selected_session=None)
+        list_session_lifecycles.assert_called_once_with()
         self.assertEqual(_tree_snapshot(workspace.root), before)
         session_records = [
             record
@@ -1478,30 +1502,42 @@ class ControllerCommandTests(ControllerTestCase):
         ]
         self.assertEqual(len(session_records), 2)
         beta, alpha = session_records
-        for fact in ("beta", "inactive", "not selected", "available"):
+        for fact in (
+            "beta",
+            "Durable state: paused",
+            "Process access: claimable",
+            "Default session: no",
+            "Provider readiness: no",
+            "Next action: Open the session to make it ready.",
+        ):
             with self.subTest(session="beta", fact=fact):
                 self.assertIn(fact, beta)
         for fact in (
             "alpha",
-            "active",
-            "selected",
-            "in_use",
-            "321",
-            "remote\\x1bhost",
+            "Durable state: ready",
+            "Process access: ownership_unknown",
+            "Default session: yes",
+            "Provider readiness: no",
+            "Next action: Verify ownership; do not remove the access claim.",
         ):
             with self.subTest(session="alpha", fact=fact):
                 self.assertIn(fact, alpha)
+        self.assertNotIn("321", alpha)
+        self.assertNotIn("remote", alpha)
         self.assertEqual(
-            [record.split(":", 1)[0] for record in session_records],
-            ["[session] beta", "[session] alpha"],
+            [
+                record.split("Session: ", 1)[1].split(" |", 1)[0]
+                for record in session_records
+            ],
+            ["beta", "alpha"],
         )
 
-    def test_resume_without_name_and_same_session_noop(self) -> None:
+    def test_open_without_name_and_same_session_noop(self) -> None:
         workspace = self.make_workspace()
         controller, _backend, callbacks = self.make_controller(
             workspace,
-            "/session resume",
-            "/session new action_session",
+            "/session open",
+            "/session create action_session",
             "/quit",
         )
         self.assertEqual(controller.run_session_lobby(), 0)
@@ -1509,13 +1545,13 @@ class ControllerCommandTests(ControllerTestCase):
         self.assertIn(_error_record(InteractiveErrorCode.SESSION_NOT_FOUND), rendered)
         self.assertIn("Session: action_session (created)\n", rendered)
         self.assertEqual(
-            load_cli_context(workspace).selected_session,
+            load_cli_context(workspace).default_session_id,
             "action_session",
         )
 
         workspace = self.make_workspace()
-        self.seed_session(workspace, "source", active=True)
-        select_session(workspace, "source")
+        self.seed_session(workspace, "source", durable_state=SessionDurableState.READY)
+        save_default_session(workspace, "source")
         context_path = workspace.path(_CONTEXT_PATH)
         context_before = (
             context_path.read_bytes(),
@@ -1524,25 +1560,25 @@ class ControllerCommandTests(ControllerTestCase):
         backend = self.make_backend(workspace)
         controller, _backend, callbacks = self.make_controller(
             workspace,
-            "/session resume",
+            "/session open",
             "/quit",
             backend=backend,
         )
         with (
             mock.patch.object(
                 backend,
-                "attach_session",
-                wraps=backend.attach_session,
+                "acquire_session_access",
+                wraps=backend.acquire_session_access,
             ) as attach,
             mock.patch.object(
                 backend,
-                "detach_session",
-                wraps=backend.detach_session,
+                "release_session_access",
+                wraps=backend.release_session_access,
             ) as detach,
             mock.patch.object(
                 controller_module,
-                "select_session",
-                wraps=select_session,
+                "save_default_session",
+                wraps=save_default_session,
             ) as persist,
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
@@ -1554,28 +1590,29 @@ class ControllerCommandTests(ControllerTestCase):
             context_before,
         )
         rendered = "".join(callbacks.records)
-        self.assertEqual(rendered.count("Session: source (attached)\n"), 1)
+        self.assertEqual(rendered.count("Session: source (opened)\n"), 1)
         self.assertIn("[session] Already attached to source.\n", rendered)
 
-    def test_declined_saved_session_can_be_resumed_by_omitted_command(self) -> None:
+    def test_declined_default_session_can_be_opened_by_omitted_command(self) -> None:
         workspace = self.make_workspace()
-        self.seed_session(workspace, "saved", active=False)
-        select_session(workspace, "saved")
+        self.seed_session(workspace, "saved", durable_state=SessionDurableState.PAUSED)
+        save_default_session(workspace, "saved")
         controller, _backend, callbacks = self.make_controller(
             workspace,
             "n",
-            "/session resume",
+            "/session open",
             "/quit",
         )
         self.assertEqual(controller.run_session_lobby(), 0)
-        self.assertTrue(
-            workspace.read_json(_manifest_relative("saved"))["active"]
+        self.assertEqual(
+            workspace.read_json(_manifest_relative("saved"))["durable_state"],
+            "ready",
         )
         rendered = "".join(callbacks.records)
-        self.assertIn("[cancelled] Session resume cancelled.\n", rendered)
-        self.assertIn("Session: saved (resumed)\n", rendered)
+        self.assertIn("[cancelled] Session open cancelled.\n", rendered)
+        self.assertIn("Session: saved (reopened)\n", rendered)
         self.assertEqual(
-            callbacks.prompts.count("Resume selected session saved? [Y/n] "),
+            callbacks.prompts.count("Open default session saved? [Y/n] "),
             1,
         )
 
@@ -1598,10 +1635,10 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
         """Create one attached session with an injected deterministic catalog."""
 
         workspace = self.make_workspace()
-        self.seed_session(workspace, "session", active=True)
-        select_session(workspace, "session")
+        self.seed_session(workspace, "session", durable_state=SessionDurableState.READY)
+        save_default_session(workspace, "session")
         if selected_id is not None:
-            save_conversation_selection(workspace, "session", selected_id)
+            save_default_conversation(workspace, "session", selected_id)
         catalog = MemoryConversationCatalog(entries)
         backend = self.make_backend(workspace)
         controller, _backend, callbacks = self.make_controller(
@@ -1706,7 +1743,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
         )
         self.assertIn("Conversation: none", rendered)
         self.assertFalse(
-            workspace.path(_selection_relative("session")).exists()
+            workspace.path(_default_relative("session")).exists()
         )
         self.assertIsNone(controller._conversation_memory_service)
 
@@ -1764,7 +1801,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
         self.assertIn(_error_record(InteractiveErrorCode.WORKSPACE_INVALID), rendered)
         self.assertEqual(workspace.path(_CONTEXT_PATH).read_bytes(), context_before)
         self.assertFalse(
-            workspace.path(_selection_relative("session")).exists()
+            workspace.path(_default_relative("session")).exists()
         )
         self.assertEqual(controller._target_agent_id, "plot_architect")
         self.assertIsNone(controller._conversation_memory_service)
@@ -1810,23 +1847,18 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                     context_path.read_bytes(),
                     context_path.stat().st_mtime_ns,
                 )
-                original_summary = backend.get_session_summary
-                summary_calls = 0
+                original_lifecycle = backend.get_session_lifecycle
+                lifecycle_calls = 0
 
                 def interrupt_recovery_proof(
                     session_id: str,
-                    *,
-                    selected_session: str | None = None,
-                ) -> SessionSummary:
-                    """Allow startup, then interrupt only the recovery proof."""
+                ) -> SessionLifecycleState:
+                    """Allow canonical startup, then interrupt recovery proof."""
 
-                    nonlocal summary_calls
-                    summary_calls += 1
-                    if summary_calls == 1:
-                        return original_summary(
-                            session_id,
-                            selected_session=selected_session,
-                        )
+                    nonlocal lifecycle_calls
+                    lifecycle_calls += 1
+                    if lifecycle_calls <= 4:
+                        return original_lifecycle(session_id)
                     raise KeyboardInterrupt
 
                 with (
@@ -1837,13 +1869,13 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                     ),
                     mock.patch.object(
                         backend,
-                        "get_session_summary",
+                        "get_session_lifecycle",
                         side_effect=interrupt_recovery_proof,
                     ),
                     mock.patch.object(
                         backend,
-                        "detach_session",
-                        wraps=backend.detach_session,
+                        "release_session_access",
+                        wraps=backend.release_session_access,
                     ) as detach,
                     mock.patch.object(
                         controller_module.asyncio,
@@ -1855,11 +1887,11 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                     ) as converse,
                     mock.patch.object(
                         controller_module,
-                        "select_session",
+                        "save_default_session",
                     ) as persist_session,
                     mock.patch.object(
                         controller_module,
-                        "save_conversation_selection",
+                        "save_default_conversation",
                     ) as persist_conversation,
                     mock.patch.object(
                         controller._conversation_event_store,
@@ -1868,7 +1900,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                 ):
                     self.assertEqual(controller.run_session_lobby(), 2)
 
-                self.assertEqual(summary_calls, 2)
+                self.assertEqual(lifecycle_calls, 5)
                 detach.assert_not_called()
                 for untouched in (
                     async_run,
@@ -1886,13 +1918,13 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                 self.assertNotIn("[error internal_error]", rendered)
                 self.assertNotIn(str(service_failure), rendered)
                 self.assertIsNone(controller._attached_session_id)
-                self.assertIsNone(controller._selected_conversation)
+                self.assertIsNone(controller._focused_conversation)
                 self.assertIsNone(controller._conversation_memory_service)
                 self.assertFalse(
-                    workspace.path(_lease_relative("session")).exists()
+                    workspace.path(_access_relative("session")).exists()
                 )
                 self.assertFalse(
-                    workspace.path(_selection_relative("session")).exists()
+                    workspace.path(_default_relative("session")).exists()
                 )
                 self.assertEqual(catalog.entries, [entry])
                 self.assertEqual(
@@ -1909,17 +1941,14 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
         )
         with mock.patch.object(
             backend,
-            "get_session_summary",
+            "get_session_lifecycle",
             side_effect=SystemExit(17),
         ) as summary:
             with self.assertRaises(SystemExit) as raised:
                 controller._attachment_is_safely_retained("session")
 
         self.assertEqual(raised.exception.code, 17)
-        summary.assert_called_once_with(
-            "session",
-            selected_session="session",
-        )
+        summary.assert_called_once_with("session")
 
     def test_fresh_transcript_pages_accept_complete_and_bounded_shapes(
         self,
@@ -2175,12 +2204,12 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
             with self.subTest(fails_destination=fails_destination):
                 workspace = self.make_workspace()
                 for session_id in ("source", "destination"):
-                    self.seed_session(workspace, session_id, active=True)
-                select_session(workspace, "source")
+                    self.seed_session(workspace, session_id, durable_state=SessionDurableState.READY)
+                save_default_session(workspace, "source")
                 backend = self.make_backend(workspace)
                 controller, _backend, callbacks = self.make_controller(
                     workspace,
-                    "/session resume destination",
+                    "/session open destination",
                     "/quit",
                     backend=backend,
                     conversation_catalog=MemoryConversationCatalog(),
@@ -2206,7 +2235,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                         else destination_memory
                     )
 
-                original_detach = backend.detach_session
+                original_detach = backend.release_session_access
 
                 def record_detach(session_id: str):
                     """Record and delegate one concrete session detach."""
@@ -2222,7 +2251,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                     ),
                     mock.patch.object(
                         backend,
-                        "detach_session",
+                        "release_session_access",
                         side_effect=record_detach,
                     ),
                 ):
@@ -2242,7 +2271,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                         ],
                     )
                     self.assertEqual(
-                        load_cli_context(workspace).selected_session,
+                        load_cli_context(workspace).default_session_id,
                         "source",
                     )
                     self.assertNotIn(
@@ -2260,7 +2289,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                         ],
                     )
                     self.assertEqual(
-                        load_cli_context(workspace).selected_session,
+                        load_cli_context(workspace).default_session_id,
                         "destination",
                     )
                 self.assertIsNone(controller._conversation_memory_service)
@@ -2280,7 +2309,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
 
         _workspace, _backend, _catalog, controller, _callbacks = (
             self.prepared_attached_controller(
-                "/session end",
+                "/session pause",
                 "yes",
                 observe_cleared_scope,
             )
@@ -2314,11 +2343,11 @@ class ControllerConversationCommandTests(ControllerTestCase):
         """Create one selected active story session and injected catalog."""
 
         workspace = self.make_workspace()
-        self.seed_session(workspace, "session", active=True)
-        select_session(workspace, "session")
+        self.seed_session(workspace, "session", durable_state=SessionDurableState.READY)
+        save_default_session(workspace, "session")
         selected_catalog = catalog or MemoryConversationCatalog(entries)
         if selected_id is not None:
-            save_conversation_selection(
+            save_default_conversation(
                 workspace,
                 "session",
                 selected_id,
@@ -2371,11 +2400,11 @@ class ControllerConversationCommandTests(ControllerTestCase):
             catalog.entries[1].conversation_id,
         )
         self.assertEqual(
-            load_conversation_selection(workspace, "session"),
+            load_default_conversation(workspace, "session"),
             catalog.entries[1].conversation_id,
         )
         rendered = "".join(callbacks.records)
-        self.assertEqual(rendered.count("Created and selected"), 2)
+        self.assertEqual(rendered.count("Created and focused"), 2)
         self.assertIn("Subject: Opening scene | Agent: lead", rendered)
         self.assertEqual(list(workspace.root.rglob("transcript.jsonl")), [])
         self.assertEqual(list(workspace.root.rglob("*.result.json")), [])
@@ -2400,14 +2429,14 @@ class ControllerConversationCommandTests(ControllerTestCase):
                 )
                 with mock.patch.object(
                     backend,
-                    "detach_session",
-                    wraps=backend.detach_session,
+                    "release_session_access",
+                    wraps=backend.release_session_access,
                 ) as detach:
                     self.assertEqual(controller.run_session_lobby(), 0)
                 detach.assert_called_once_with("session")
                 self.assertEqual(catalog.entries, [])
                 self.assertFalse(
-                    workspace.path(_selection_relative("session")).exists()
+                    workspace.path(_default_relative("session")).exists()
                 )
                 self.assertEqual(
                     callbacks.prompts.count("conversation[subject]> "),
@@ -2428,7 +2457,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
         )
         self.assertEqual(controller.run_session_lobby(), 0)
         self.assertEqual(catalog.entries, [])
-        self.assertFalse(workspace.path(_selection_relative("session")).exists())
+        self.assertFalse(workspace.path(_default_relative("session")).exists())
         self.assertIn(
             _error_record(InteractiveErrorCode.CONVERSATION_INVALID),
             callbacks.records,
@@ -2461,21 +2490,21 @@ class ControllerConversationCommandTests(ControllerTestCase):
         with (
             mock.patch.object(
                 controller_module,
-                "save_conversation_selection",
+                "save_default_conversation",
                 side_effect=OSError("selection-secret"),
             ),
             mock.patch.object(
                 backend,
-                "get_session_summary",
-                wraps=backend.get_session_summary,
+                "get_session_lifecycle",
+                wraps=backend.get_session_lifecycle,
             ) as summary,
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
         self.assertGreaterEqual(summary.call_count, 2)
         self.assertEqual(len(catalog.entries), 1)
-        self.assertFalse(workspace.path(_selection_relative("session")).exists())
+        self.assertFalse(workspace.path(_default_relative("session")).exists())
         rendered = "".join(callbacks.records)
-        self.assertIn("was created but was not selected", rendered)
+        self.assertIn("was created but did not become the default", rendered)
         self.assertIn("[error workspace_invalid]", rendered)
         self.assertNotIn("selection-secret", rendered)
         self.assertIn("Conversation: none | Agent: lead", rendered)
@@ -2505,7 +2534,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
                 selected_id=_COLLIDING_A,
             )
         )
-        selection_path = workspace.path(_selection_relative("session"))
+        selection_path = workspace.path(_default_relative("session"))
         selection_before = (
             selection_path.read_bytes(),
             selection_path.stat().st_mtime_ns,
@@ -2519,15 +2548,15 @@ class ControllerConversationCommandTests(ControllerTestCase):
         self.assertEqual(
             rows,
             [
-                f"[conversation] {_COLLIDING_A} | active | selected | "
+                f"[conversation] {_COLLIDING_A} | active | focused | "
                 "Subject: Ｍara   Motivation\n",
-                "[conversation] c_fedcba9876 | active | not selected | "
+                "[conversation] c_fedcba9876 | active | not focused | "
                 "Subject: Opening Scene\n",
-                f"[conversation] {_COLLIDING_A} | active | selected | "
+                f"[conversation] {_COLLIDING_A} | active | focused | "
                 "Subject: Ｍara   Motivation\n",
-                f"[conversation] {_COLLIDING_B} | archived | not selected | "
+                f"[conversation] {_COLLIDING_B} | archived | not focused | "
                 "Subject: Archived motivation\n",
-                "[conversation] c_fedcba9876 | active | not selected | "
+                "[conversation] c_fedcba9876 | active | not focused | "
                 "Subject: Opening Scene\n",
             ],
         )
@@ -2571,10 +2600,10 @@ class ControllerConversationCommandTests(ControllerTestCase):
         ):
             with self.subTest(code=code):
                 self.assertIn(_error_record(code), rendered)
-        self.assertIn(f"Selected {_COLLIDING_A} | Subject: First", rendered)
-        self.assertIn("Selected c_fedcba9876 | Subject: Unique", rendered)
+        self.assertIn(f"Current focus: {_COLLIDING_A} | Subject: First", rendered)
+        self.assertIn("Current focus: c_fedcba9876 | Subject: Unique", rendered)
         self.assertEqual(
-            load_conversation_selection(workspace, "session"),
+            load_default_conversation(workspace, "session"),
             _UNIQUE_C,
         )
 
@@ -2591,14 +2620,14 @@ class ControllerConversationCommandTests(ControllerTestCase):
                 selected_id=prior.conversation_id,
             )
         )
-        selection_path = workspace.path(_selection_relative("session"))
+        selection_path = workspace.path(_default_relative("session"))
         selection_before = (
             selection_path.read_bytes(),
             selection_path.stat().st_mtime_ns,
         )
         with mock.patch.object(
             controller_module,
-            "save_conversation_selection",
+            "save_default_conversation",
             side_effect=OSError("selection-secret"),
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
@@ -2646,7 +2675,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
                         selected_id=selected.conversation_id,
                     )
                 )
-                selection_path = workspace.path(_selection_relative("session"))
+                selection_path = workspace.path(_default_relative("session"))
                 selection_before = (
                     selection_path.read_bytes(),
                     selection_path.stat().st_mtime_ns,
@@ -2687,13 +2716,13 @@ class ControllerConversationCommandTests(ControllerTestCase):
         )
         with mock.patch.object(
             controller_module,
-            "save_conversation_selection",
+            "save_default_conversation",
             side_effect=OSError("selection-secret"),
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
         self.assertIs(catalog.entries[0].status, ConversationStatus.ACTIVE)
         self.assertEqual(
-            load_conversation_selection(workspace, "session"),
+            load_default_conversation(workspace, "session"),
             selected.conversation_id,
         )
         self.assertIn(
@@ -2705,7 +2734,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
             _error_record(InteractiveErrorCode.WORKSPACE_INVALID),
             rendered,
         )
-        self.assertIn("original conversation remains selected", rendered)
+        self.assertIn("original conversation remains focused", rendered)
         self.assertNotIn("selection-secret", rendered)
 
         selected = _conversation_metadata(_UNIQUE_C, "Selected")
@@ -2720,7 +2749,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
         with (
             mock.patch.object(
                 controller_module,
-                "save_conversation_selection",
+                "save_default_conversation",
                 side_effect=OSError("selection-secret"),
             ),
             mock.patch.object(
@@ -2730,22 +2759,22 @@ class ControllerConversationCommandTests(ControllerTestCase):
             ),
             mock.patch.object(
                 backend,
-                "detach_session",
-                wraps=backend.detach_session,
+                "release_session_access",
+                wraps=backend.release_session_access,
             ) as detach,
         ):
             self.assertEqual(controller.run_session_lobby(), 2)
         detach.assert_not_called()
         self.assertIs(catalog.entries[0].status, ConversationStatus.ARCHIVED)
         self.assertEqual(
-            load_conversation_selection(workspace, "session"),
+            load_default_conversation(workspace, "session"),
             selected.conversation_id,
         )
         rendered = "".join(callbacks.records)
         self.assertEqual(rendered.count("[error cleanup_failed]"), 1)
         self.assertNotIn("selection-secret", rendered)
         self.assertNotIn("compensation-secret", rendered)
-        self.assertFalse(workspace.path(_lease_relative("session")).exists())
+        self.assertFalse(workspace.path(_access_relative("session")).exists())
 
         restarted, _backend, restarted_callbacks = self.make_controller(
             workspace,
@@ -2759,11 +2788,11 @@ class ControllerConversationCommandTests(ControllerTestCase):
             restarted_callbacks.records,
         )
         self.assertEqual(
-            load_conversation_selection(workspace, "session"),
+            load_default_conversation(workspace, "session"),
             selected.conversation_id,
         )
 
-    def test_command_storage_failure_requires_public_owned_lease_proof(
+    def test_command_storage_failure_requires_public_held_access_proof(
         self,
     ) -> None:
         for retained in (True, False):
@@ -2774,26 +2803,20 @@ class ControllerConversationCommandTests(ControllerTestCase):
                         "/quit",
                     )
                 )
-                original_summary = backend.get_session_summary
-                summary_calls = 0
+                original_lifecycle = backend.get_session_lifecycle
+                lifecycle_calls = 0
 
                 def summarize(
                     session_id: str,
-                    *,
-                    selected_session: str | None = None,
-                ) -> SessionSummary:
-                    nonlocal summary_calls
-                    summary_calls += 1
-                    if retained or summary_calls == 1:
-                        return original_summary(
-                            session_id,
-                            selected_session=selected_session,
-                        )
-                    return _summary(
+                ) -> SessionLifecycleState:
+                    nonlocal lifecycle_calls
+                    lifecycle_calls += 1
+                    if retained or lifecycle_calls != 5:
+                        return original_lifecycle(session_id)
+                    return _lifecycle(
                         session_id,
-                        active=True,
-                        selected=True,
-                        lease_state=SessionLeaseState.AVAILABLE,
+                        durable_state=SessionDurableState.READY,
+                        access_state=SessionAccessState.CLAIMABLE,
                     )
 
                 with (
@@ -2804,13 +2827,13 @@ class ControllerConversationCommandTests(ControllerTestCase):
                     ),
                     mock.patch.object(
                         backend,
-                        "get_session_summary",
+                        "get_session_lifecycle",
                         side_effect=summarize,
                     ),
                     mock.patch.object(
                         backend,
-                        "detach_session",
-                        wraps=backend.detach_session,
+                        "release_session_access",
+                        wraps=backend.release_session_access,
                     ) as detach,
                 ):
                     self.assertEqual(
@@ -2818,7 +2841,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
                         0 if retained else 2,
                     )
 
-                self.assertEqual(summary_calls, 2)
+                self.assertEqual(lifecycle_calls, 6 if retained else 5)
                 rendered = "".join(callbacks.records)
                 self.assertNotIn("catalog-secret", rendered)
                 if retained:
@@ -2835,7 +2858,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
                     )
                     self.assertNotIn("[error workspace_invalid]", rendered)
                 self.assertFalse(
-                    workspace.path(_lease_relative("session")).exists()
+                    workspace.path(_access_relative("session")).exists()
                 )
 
     def test_injected_catalog_collection_tampering_is_fatal_and_safe(self) -> None:
@@ -2863,8 +2886,8 @@ class ControllerConversationCommandTests(ControllerTestCase):
                     ),
                     mock.patch.object(
                         backend,
-                        "detach_session",
-                        wraps=backend.detach_session,
+                        "release_session_access",
+                        wraps=backend.release_session_access,
                     ) as detach,
                     mock.patch.object(
                         backend,
@@ -2882,7 +2905,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
                 )
                 self.assertNotIn("foreign-secret", rendered)
                 self.assertFalse(
-                    workspace.path(_lease_relative("session")).exists()
+                    workspace.path(_access_relative("session")).exists()
                 )
 
     def test_later_feature_allowlists_are_provider_and_artifact_free(
@@ -2947,7 +2970,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
             self.assertEqual(catalog.events, [])
             rendered = "".join(callbacks.records)
             self.assertEqual(
-                rendered.count("[error session_inactive]"),
+                rendered.count("[error session_not_attached]"),
                 len(conversation_actions),
             )
 
@@ -3033,7 +3056,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
         self.assertEqual(renamed.subject, "Revised subject")
         self.assertIs(renamed.status, ConversationStatus.ACTIVE)
         self.assertEqual(
-            load_conversation_selection(workspace, "session"),
+            load_default_conversation(workspace, "session"),
             entry.conversation_id,
         )
         rendered = "".join(callbacks.records)
@@ -3071,7 +3094,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
                 )
                 expected = successor.conversation_id if has_successor else None
                 self.assertEqual(
-                    load_conversation_selection(workspace, "session"),
+                    load_default_conversation(workspace, "session"),
                     expected,
                 )
                 self.assertIn(
@@ -3080,9 +3103,9 @@ class ControllerConversationCommandTests(ControllerTestCase):
                 )
                 rendered = "".join(callbacks.records)
                 if has_successor:
-                    self.assertIn("selected c_fedcba9876", rendered)
+                    self.assertIn("current focus: c_fedcba9876", rendered)
                 else:
-                    self.assertIn("no conversation is selected", rendered)
+                    self.assertIn("current focus is none", rendered)
 
     def test_nonselected_and_already_archived_explicit_archive_do_not_reselect(
         self,
@@ -3108,7 +3131,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
         self.assertEqual(catalog.entries[2].to_dict(), archived_before)
         self.assertIs(catalog.entries[1].status, ConversationStatus.ARCHIVED)
         self.assertEqual(
-            load_conversation_selection(workspace, "session"),
+            load_default_conversation(workspace, "session"),
             selected.conversation_id,
         )
         self.assertNotIn("Archive current conversation", callbacks.prompts)
@@ -3143,8 +3166,8 @@ class ControllerConversationCommandTests(ControllerTestCase):
                 )
                 with mock.patch.object(
                     backend,
-                    "detach_session",
-                    wraps=backend.detach_session,
+                    "release_session_access",
+                    wraps=backend.release_session_access,
                 ) as detach:
                     self.assertEqual(controller.run_session_lobby(), 0)
                 detach.assert_called_once_with("session")
@@ -3153,7 +3176,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
                     ConversationStatus.ACTIVE,
                 )
                 self.assertEqual(
-                    load_conversation_selection(workspace, "session"),
+                    load_default_conversation(workspace, "session"),
                     selected.conversation_id,
                 )
                 rendered = "".join(callbacks.records)
@@ -3210,8 +3233,8 @@ class ControllerConversationCommandTests(ControllerTestCase):
                     ),
                     mock.patch.object(
                         backend,
-                        "detach_session",
-                        wraps=backend.detach_session,
+                        "release_session_access",
+                        wraps=backend.release_session_access,
                     ) as detach,
                 ):
                     self.assertEqual(controller.run_session_lobby(), 2)
@@ -3224,23 +3247,23 @@ class ControllerConversationCommandTests(ControllerTestCase):
                 )
                 self.assertNotIn("writer-secret", rendered)
                 self.assertFalse(
-                    workspace.path(_lease_relative("session")).exists()
+                    workspace.path(_access_relative("session")).exists()
                 )
                 if operation == "create":
                     self.assertEqual(len(catalog.entries), 1)
                     self.assertEqual(
-                        load_conversation_selection(workspace, "session"),
+                        load_default_conversation(workspace, "session"),
                         catalog.entries[0].conversation_id,
                     )
                 elif operation == "use":
                     self.assertEqual(
-                        load_conversation_selection(workspace, "session"),
+                        load_default_conversation(workspace, "session"),
                         target.conversation_id,
                     )
                 elif operation == "rename":
                     self.assertEqual(catalog.entries[0].subject, "Revised")
                     self.assertEqual(
-                        load_conversation_selection(workspace, "session"),
+                        load_default_conversation(workspace, "session"),
                         selected.conversation_id,
                     )
                 else:
@@ -3249,25 +3272,25 @@ class ControllerConversationCommandTests(ControllerTestCase):
                         ConversationStatus.ARCHIVED,
                     )
                     self.assertEqual(
-                        load_conversation_selection(workspace, "session"),
+                        load_default_conversation(workspace, "session"),
                         successor.conversation_id,
                     )
 
-    def test_session_end_and_resume_restore_the_same_durable_conversation(
+    def test_session_pause_and_open_restore_the_same_durable_conversation(
         self,
     ) -> None:
         selected = _conversation_metadata(_UNIQUE_C, "Persistent subject")
         workspace, _backend, catalog, controller, callbacks = (
             self.prepared_controller(
-                "/session end",
+                "/session pause",
                 "yes",
-                "/session resume",
+                "/session open",
                 "/quit",
                 entries=(selected,),
                 selected_id=selected.conversation_id,
             )
         )
-        selection_path = workspace.path(_selection_relative("session"))
+        selection_path = workspace.path(_default_relative("session"))
         selection_before = (
             selection_path.read_bytes(),
             selection_path.stat().st_mtime_ns,
@@ -3280,14 +3303,17 @@ class ControllerConversationCommandTests(ControllerTestCase):
             selection_before,
         )
         self.assertEqual(
-            load_conversation_selection(workspace, "session"),
+            load_default_conversation(workspace, "session"),
             selected.conversation_id,
         )
-        self.assertTrue(workspace.read_json(_manifest_relative("session"))["active"])
+        self.assertEqual(
+            workspace.read_json(_manifest_relative("session"))["durable_state"],
+            "ready",
+        )
         rendered = "".join(callbacks.records)
         self.assertEqual(rendered.count("Subject: Persistent subject"), 2)
-        self.assertIn("Ended session; selection retained", rendered)
-        self.assertIn("Session: session (resumed)", rendered)
+        self.assertIn("Paused session; default retained", rendered)
+        self.assertIn("Session: session (reopened)", rendered)
         self.assertTrue(
             all(
                 event.startswith(("get:", "list:"))
@@ -3307,32 +3333,33 @@ class ControllerSwitchTests(ControllerTestCase):
         InteractiveController,
         ScriptedTerminalCallbacks,
     ]:
-        """Create selected active source and destination sessions."""
+        """Create ready source and destination sessions with a source default."""
 
         workspace = self.make_workspace()
-        self.seed_session(workspace, "source", active=True)
-        self.seed_session(workspace, "destination", active=True)
-        select_session(workspace, "source")
+        self.seed_session(workspace, "source", durable_state=SessionDurableState.READY)
+        self.seed_session(workspace, "destination", durable_state=SessionDurableState.READY)
+        save_default_session(workspace, "source")
         backend = self.make_backend(workspace)
         controller, _backend, callbacks = self.make_controller(
             workspace,
-            "/session resume destination",
+            "/session open destination",
             "/quit",
             backend=backend,
+            terminal_width=200,
         )
         return workspace, backend, controller, callbacks
 
-    def test_successful_switch_orders_acquire_select_detach_and_cleanup(self) -> None:
+    def test_successful_switch_orders_acquire_default_release_and_cleanup(self) -> None:
         workspace, backend, controller, callbacks = self.prepare_switch()
         events: list[str] = []
-        original_get = backend.get_session_summary
-        original_attach = backend.attach_session
-        original_detach = backend.detach_session
+        original_get = backend.get_session_lifecycle
+        original_attach = backend.acquire_session_access
+        original_detach = backend.release_session_access
         original_close = backend.close
 
-        def record_get(session_id: str, *, selected_session: str | None = None):
+        def record_get(session_id: str):
             events.append(f"get:{session_id}")
-            return original_get(session_id, selected_session=selected_session)
+            return original_get(session_id)
 
         def record_attach(session_id: str):
             events.append(f"attach:{session_id}")
@@ -3344,20 +3371,20 @@ class ControllerSwitchTests(ControllerTestCase):
 
         def record_select(workspace_value: Workspace, session_id: str):
             events.append(f"select:{session_id}")
-            return select_session(workspace_value, session_id)
+            return save_default_session(workspace_value, session_id)
 
         def record_close() -> None:
             events.append("close")
             original_close()
 
         with (
-            mock.patch.object(backend, "get_session_summary", side_effect=record_get),
-            mock.patch.object(backend, "attach_session", side_effect=record_attach),
-            mock.patch.object(backend, "detach_session", side_effect=record_detach),
+            mock.patch.object(backend, "get_session_lifecycle", side_effect=record_get),
+            mock.patch.object(backend, "acquire_session_access", side_effect=record_attach),
+            mock.patch.object(backend, "release_session_access", side_effect=record_detach),
             mock.patch.object(backend, "close", side_effect=record_close),
             mock.patch.object(
                 controller_module,
-                "select_session",
+                "save_default_session",
                 side_effect=record_select,
             ),
         ):
@@ -3367,36 +3394,43 @@ class ControllerSwitchTests(ControllerTestCase):
             events,
             [
                 "get:source",
+                "get:source",
                 "attach:source",
+                "get:source",
+                "get:source",
                 "get:destination",
                 "attach:destination",
+                "get:destination",
+                "get:destination",
                 "select:destination",
                 "detach:source",
+                "get:source",
                 "detach:destination",
+                "get:destination",
                 "close",
             ],
         )
         self.assertEqual(
-            load_cli_context(workspace).selected_session,
+            load_cli_context(workspace).default_session_id,
             "destination",
         )
         rendered = "".join(callbacks.records)
         self.assertLess(
-            rendered.index("Session: source (attached)"),
-            rendered.index("Session: destination (attached)"),
+            rendered.index("Session: source (opened)"),
+            rendered.index("Session: destination (opened)"),
         )
 
-    def test_destination_failure_preserves_source_selection_and_files(self) -> None:
+    def test_destination_failure_preserves_source_default_and_files(self) -> None:
         workspace, backend, controller, callbacks = self.prepare_switch()
         before = _tree_snapshot(workspace.root)
-        original_attach = backend.attach_session
-        original_detach = backend.detach_session
+        original_attach = backend.acquire_session_access
+        original_detach = backend.release_session_access
         events: list[str] = []
 
         def attach(session_id: str):
             events.append(f"attach:{session_id}")
             if session_id == "destination":
-                raise SessionInUseError("secret-owner-token")
+                raise SessionAccessBlockedError("secret-owner-token")
             return original_attach(session_id)
 
         def detach(session_id: str):
@@ -3404,8 +3438,8 @@ class ControllerSwitchTests(ControllerTestCase):
             return original_detach(session_id)
 
         with (
-            mock.patch.object(backend, "attach_session", side_effect=attach),
-            mock.patch.object(backend, "detach_session", side_effect=detach),
+            mock.patch.object(backend, "acquire_session_access", side_effect=attach),
+            mock.patch.object(backend, "release_session_access", side_effect=detach),
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
         self.assertEqual(
@@ -3413,13 +3447,13 @@ class ControllerSwitchTests(ControllerTestCase):
             ["attach:source", "attach:destination", "detach:source"],
         )
         self.assertEqual(_tree_snapshot(workspace.root), before)
-        self.assertEqual(load_cli_context(workspace).selected_session, "source")
+        self.assertEqual(load_cli_context(workspace).default_session_id, "source")
         rendered = "".join(callbacks.records)
-        self.assertIn(_error_record(InteractiveErrorCode.SESSION_IN_USE), rendered)
+        self.assertIn(_error_record(InteractiveErrorCode.SESSION_ACCESS_BLOCKED), rendered)
         self.assertNotIn("secret-owner-token", rendered)
-        self.assertEqual(rendered.count("Session: source (attached)\n"), 1)
+        self.assertEqual(rendered.count("Session: source (opened)\n"), 1)
 
-    def test_selection_failure_releases_destination_before_source_cleanup(self) -> None:
+    def test_default_failure_releases_destination_before_source_cleanup(self) -> None:
         cases = (
             (SessionIdError("selection-secret"), 0),
             (OSError("selection-secret"), 2),
@@ -3427,7 +3461,7 @@ class ControllerSwitchTests(ControllerTestCase):
         for failure, expected_code in cases:
             with self.subTest(failure=type(failure).__name__):
                 workspace, backend, controller, callbacks = self.prepare_switch()
-                original_detach = backend.detach_session
+                original_detach = backend.release_session_access
                 events: list[str] = []
 
                 def fail_destination_selection(
@@ -3444,12 +3478,12 @@ class ControllerSwitchTests(ControllerTestCase):
                 with (
                     mock.patch.object(
                         controller_module,
-                        "select_session",
+                        "save_default_session",
                         side_effect=fail_destination_selection,
                     ),
                     mock.patch.object(
                         backend,
-                        "detach_session",
+                        "release_session_access",
                         side_effect=record_detach,
                     ),
                 ):
@@ -3466,11 +3500,11 @@ class ControllerSwitchTests(ControllerTestCase):
                     ],
                 )
                 self.assertEqual(
-                    load_cli_context(workspace).selected_session,
+                    load_cli_context(workspace).default_session_id,
                     "source",
                 )
                 self.assertFalse(
-                    workspace.path(_lease_relative("destination")).exists()
+                    workspace.path(_access_relative("destination")).exists()
                 )
                 rendered = "".join(callbacks.records)
                 expected_error = (
@@ -3483,7 +3517,7 @@ class ControllerSwitchTests(ControllerTestCase):
 
     def test_failed_destination_release_is_fatal_and_defers_to_close(self) -> None:
         workspace, backend, controller, callbacks = self.prepare_switch()
-        original_detach = backend.detach_session
+        original_detach = backend.release_session_access
         events: list[str] = []
 
         def fail_selection(
@@ -3502,20 +3536,20 @@ class ControllerSwitchTests(ControllerTestCase):
         with (
             mock.patch.object(
                 controller_module,
-                "select_session",
+                "save_default_session",
                 side_effect=fail_selection,
             ),
             mock.patch.object(
                 backend,
-                "detach_session",
+                "release_session_access",
                 side_effect=fail_destination_detach,
             ),
         ):
             self.assertEqual(controller.run_session_lobby(), 2)
         self.assertEqual(events, ["select:destination", "detach:destination"])
-        self.assertEqual(load_cli_context(workspace).selected_session, "source")
-        self.assertFalse(workspace.path(_lease_relative("source")).exists())
-        self.assertFalse(workspace.path(_lease_relative("destination")).exists())
+        self.assertEqual(load_cli_context(workspace).default_session_id, "source")
+        self.assertFalse(workspace.path(_access_relative("source")).exists())
+        self.assertFalse(workspace.path(_access_relative("destination")).exists())
         rendered = "".join(callbacks.records)
         self.assertEqual(
             rendered.count("[error cleanup_failed]"),
@@ -3527,12 +3561,12 @@ class ControllerSwitchTests(ControllerTestCase):
         self,
     ) -> None:
         workspace, backend, controller, callbacks = self.prepare_switch()
-        original_detach = backend.detach_session
+        original_detach = backend.release_session_access
         events: list[str] = []
 
         def record_select(workspace_value: Workspace, session_id: str):
             events.append(f"select:{session_id}")
-            return select_session(workspace_value, session_id)
+            return save_default_session(workspace_value, session_id)
 
         def fail_source_detach(session_id: str):
             events.append(f"detach:{session_id}")
@@ -3543,31 +3577,31 @@ class ControllerSwitchTests(ControllerTestCase):
         with (
             mock.patch.object(
                 controller_module,
-                "select_session",
+                "save_default_session",
                 side_effect=record_select,
             ),
             mock.patch.object(
                 backend,
-                "detach_session",
+                "release_session_access",
                 side_effect=fail_source_detach,
             ),
         ):
             self.assertEqual(controller.run_session_lobby(), 2)
         self.assertEqual(events, ["select:destination", "detach:source"])
         self.assertEqual(
-            load_cli_context(workspace).selected_session,
+            load_cli_context(workspace).default_session_id,
             "destination",
         )
-        self.assertFalse(workspace.path(_lease_relative("source")).exists())
-        self.assertFalse(workspace.path(_lease_relative("destination")).exists())
+        self.assertFalse(workspace.path(_access_relative("source")).exists())
+        self.assertFalse(workspace.path(_access_relative("destination")).exists())
         rendered = "".join(callbacks.records)
         self.assertEqual(rendered.count("[error cleanup_failed]"), 1)
         self.assertNotIn("source cleanup secret", rendered)
-        self.assertNotIn("Session: destination (attached)", rendered)
+        self.assertNotIn("Session: destination (opened)", rendered)
 
 
 class ControllerEndAndCleanupTests(ControllerTestCase):
-    """Verify end confirmation, state verification, and exit precedence."""
+    """Verify pause confirmation, state verification, and exit precedence."""
 
     def prepared_attached_controller(
         self,
@@ -3578,11 +3612,11 @@ class ControllerEndAndCleanupTests(ControllerTestCase):
         InteractiveController,
         ScriptedTerminalCallbacks,
     ]:
-        """Create a selected active session and controller with scripted input."""
+        """Create a default ready session and controller with scripted input."""
 
         workspace = self.make_workspace()
-        self.seed_session(workspace, "session", active=True)
-        select_session(workspace, "session")
+        self.seed_session(workspace, "session", durable_state=SessionDurableState.READY)
+        save_default_session(workspace, "session")
         backend = self.make_backend(workspace)
         controller, _backend, callbacks = self.make_controller(
             workspace,
@@ -3591,7 +3625,7 @@ class ControllerEndAndCleanupTests(ControllerTestCase):
         )
         return workspace, backend, controller, callbacks
 
-    def test_end_cancellation_and_eof_preserve_active_session(self) -> None:
+    def test_pause_cancellation_and_eof_preserve_ready_session(self) -> None:
         cases = (
             ("blank", "", False),
             ("no", "NO", False),
@@ -3600,7 +3634,7 @@ class ControllerEndAndCleanupTests(ControllerTestCase):
         )
         for label, decision, exits in cases:
             with self.subTest(case=label):
-                reads = ("/session end", decision)
+                reads = ("/session pause", decision)
                 if not exits:
                     reads += ("/quit",)
                 workspace, backend, controller, callbacks = (
@@ -3608,57 +3642,61 @@ class ControllerEndAndCleanupTests(ControllerTestCase):
                 )
                 with mock.patch.object(
                     backend,
-                    "end_session",
-                    wraps=backend.end_session,
+                    "pause_session_and_release_access",
+                    wraps=backend.pause_session_and_release_access,
                 ) as end:
                     self.assertEqual(controller.run_session_lobby(), 0)
                 end.assert_not_called()
-                self.assertTrue(
-                    workspace.read_json(_manifest_relative("session"))["active"]
+                self.assertEqual(
+                    workspace.read_json(_manifest_relative("session"))[
+                        "durable_state"
+                    ],
+                    "ready",
                 )
                 self.assertFalse(
-                    workspace.path(_lease_relative("session")).exists()
+                    workspace.path(_access_relative("session")).exists()
                 )
                 self.assertIn(
-                    "End session session? [y/N] ",
+                    "Pause session session? [y/N] ",
                     callbacks.prompts,
                 )
                 rendered = "".join(callbacks.records)
                 if exits:
-                    self.assertNotIn("Session end cancelled.", rendered)
+                    self.assertNotIn("Session pause cancelled.", rendered)
                 else:
                     self.assertIn(
-                        "[cancelled] Session end cancelled.\n",
+                        "[cancelled] Session pause cancelled.\n",
                         rendered,
                     )
 
-    def test_successful_end_retains_selection_and_returns_to_lobby(self) -> None:
+    def test_successful_pause_retains_default_and_returns_to_lobby(self) -> None:
         workspace, backend, controller, callbacks = (
             self.prepared_attached_controller(
-                "/session end",
+                "/session pause",
                 "yes",
                 "/quit",
             )
         )
         with mock.patch.object(
             backend,
-            "detach_session",
-            wraps=backend.detach_session,
+            "release_session_access",
+            wraps=backend.release_session_access,
         ) as detach:
             self.assertEqual(controller.run_session_lobby(), 0)
         detach.assert_not_called()
-        self.assertFalse(
-            workspace.read_json(_manifest_relative("session"))["active"]
+        self.assertEqual(
+            workspace.read_json(_manifest_relative("session"))["durable_state"],
+            "paused",
         )
-        self.assertEqual(load_cli_context(workspace).selected_session, "session")
+        self.assertEqual(load_cli_context(workspace).default_session_id, "session")
         rendered = "".join(callbacks.records)
-        self.assertIn("[session] Ended session; selection retained.\n", rendered)
+        self.assertIn("[session] Paused session; default retained.\n", rendered)
         self.assertIn("Session: lobby\n", rendered)
 
-    def test_confirmed_active_owned_end_failure_is_recoverable_and_safe(self) -> None:
+    def test_confirmed_ready_held_pause_failure_is_recoverable_and_safe(self) -> None:
         workspace, backend, controller, callbacks = (
             self.prepared_attached_controller(
-                "/session end",
+                "/session pause",
                 "yes",
                 "/quit",
             )
@@ -3666,77 +3704,73 @@ class ControllerEndAndCleanupTests(ControllerTestCase):
         with (
             mock.patch.object(
                 backend,
-                "end_session",
+                "pause_session_and_release_access",
                 side_effect=OSError("end-secret"),
             ),
             mock.patch.object(
                 backend,
-                "get_session_summary",
-                wraps=backend.get_session_summary,
+                "get_session_lifecycle",
+                wraps=backend.get_session_lifecycle,
             ) as summary,
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
-        self.assertEqual(summary.call_count, 2)
-        self.assertTrue(
-            workspace.read_json(_manifest_relative("session"))["active"]
+        self.assertEqual(summary.call_count, 6)
+        self.assertEqual(
+            workspace.read_json(_manifest_relative("session"))["durable_state"],
+            "ready",
         )
         rendered = "".join(callbacks.records)
         self.assertIn(_error_record(InteractiveErrorCode.WORKSPACE_INVALID), rendered)
         self.assertNotIn("end-secret", rendered)
-        self.assertEqual(rendered.count("Session: session (attached)\n"), 1)
+        self.assertEqual(rendered.count("Session: session (opened)\n"), 1)
 
-    def test_unconfirmed_end_state_is_fatal_cleanup_uncertainty(self) -> None:
-        def raise_summary_read(_value: SessionSummary) -> object:
-            """Simulate a public summary read that cannot confirm ownership."""
+    def test_unconfirmed_pause_state_is_fatal_cleanup_uncertainty(self) -> None:
+        def raise_lifecycle_read(_value: SessionLifecycleState) -> object:
+            """Simulate a lifecycle read that cannot confirm process access."""
 
             raise WorkspaceFormatError("summary-read-secret")
 
-        cases: tuple[tuple[str, Callable[[SessionSummary], object]], ...] = (
-            ("inactive", lambda value: replace(value, active=False)),
+        cases: tuple[tuple[str, Callable[[SessionLifecycleState], object]], ...] = (
+            ("paused", lambda value: replace(value, durable_state=SessionDurableState.PAUSED)),
             (
-                "available",
+                "claimable",
                 lambda value: replace(
                     value,
-                    lease_state=SessionLeaseState.AVAILABLE,
+                    access_state=SessionAccessState.CLAIMABLE,
                 ),
             ),
             ("foreign", lambda value: replace(value, session_id="other")),
             ("malformed", lambda _value: object()),
-            ("read_failure", raise_summary_read),
+            ("read_failure", raise_lifecycle_read),
         )
         for label, mutate in cases:
             with self.subTest(case=label):
                 workspace, backend, controller, callbacks = (
                     self.prepared_attached_controller(
-                        "/session end",
+                        "/session pause",
                         "yes",
                     )
                 )
-                original_get = backend.get_session_summary
+                original_get = backend.get_session_lifecycle
                 calls = 0
 
-                def changing_summary(
+                def changing_lifecycle(
                     session_id: str,
-                    *,
-                    selected_session: str | None = None,
                 ) -> object:
                     nonlocal calls
                     calls += 1
-                    value = original_get(
-                        session_id,
-                        selected_session=selected_session,
-                    )
-                    return value if calls == 1 else mutate(value)
+                    value = original_get(session_id)
+                    return value if calls <= 4 else mutate(value)
 
                 with (
                     mock.patch.object(
                         backend,
-                        "get_session_summary",
-                        side_effect=changing_summary,
+                        "get_session_lifecycle",
+                        side_effect=changing_lifecycle,
                     ),
                     mock.patch.object(
                         backend,
-                        "end_session",
+                        "pause_session_and_release_access",
                         side_effect=OSError("uncertain-secret"),
                     ),
                 ):
@@ -3745,17 +3779,17 @@ class ControllerEndAndCleanupTests(ControllerTestCase):
                 self.assertEqual(rendered.count("[error cleanup_failed]"), 1)
                 self.assertNotIn("uncertain-secret", rendered)
                 self.assertFalse(
-                    workspace.path(_lease_relative("session")).exists()
+                    workspace.path(_access_relative("session")).exists()
                 )
 
-    def test_quit_exit_and_eof_detach_before_close_without_ending(self) -> None:
+    def test_quit_exit_and_eof_release_before_close_without_pausing(self) -> None:
         for terminal_exit in ("/quit", "/exit", EOFError()):
             with self.subTest(exit=repr(terminal_exit)):
                 workspace, backend, controller, _callbacks = (
                     self.prepared_attached_controller(terminal_exit)
                 )
                 events: list[str] = []
-                original_detach = backend.detach_session
+                original_detach = backend.release_session_access
                 original_close = backend.close
 
                 def detach(session_id: str):
@@ -3767,13 +3801,16 @@ class ControllerEndAndCleanupTests(ControllerTestCase):
                     original_close()
 
                 with (
-                    mock.patch.object(backend, "detach_session", side_effect=detach),
+                    mock.patch.object(backend, "release_session_access", side_effect=detach),
                     mock.patch.object(backend, "close", side_effect=close),
                 ):
                     self.assertEqual(controller.run_session_lobby(), 0)
                 self.assertEqual(events, ["detach:session", "close"])
-                self.assertTrue(
-                    workspace.read_json(_manifest_relative("session"))["active"]
+                self.assertEqual(
+                    workspace.read_json(_manifest_relative("session"))[
+                        "durable_state"
+                    ],
+                    "ready",
                 )
 
     def test_cleanup_failure_overrides_normal_exit_and_not_primary_error(self) -> None:
@@ -3782,21 +3819,21 @@ class ControllerEndAndCleanupTests(ControllerTestCase):
         )
         with mock.patch.object(
             backend,
-            "detach_session",
+            "release_session_access",
             side_effect=OSError("detach-secret"),
         ):
             self.assertEqual(controller.run_session_lobby(), 2)
         rendered = "".join(callbacks.records)
         self.assertEqual(rendered.count("[error cleanup_failed]"), 1)
         self.assertNotIn("detach-secret", rendered)
-        self.assertFalse(workspace.path(_lease_relative("session")).exists())
+        self.assertFalse(workspace.path(_access_relative("session")).exists())
 
         workspace, backend, controller, callbacks = (
             self.prepared_attached_controller(RuntimeError("primary-secret"))
         )
         with mock.patch.object(
             backend,
-            "detach_session",
+            "release_session_access",
             side_effect=OSError("cleanup-secret"),
         ):
             self.assertEqual(controller.run_session_lobby(), 2)
@@ -3820,31 +3857,32 @@ class ControllerEndAndCleanupTests(ControllerTestCase):
         rendered = "".join(callbacks.records)
         self.assertEqual(rendered.count("[error cleanup_failed]"), 1)
         self.assertNotIn("close-secret", rendered)
-        self.assertFalse(workspace.path(_lease_relative("session")).exists())
+        self.assertFalse(workspace.path(_access_relative("session")).exists())
 
 
 class ControllerContentionTests(ControllerTestCase):
     """Verify two real controllers cannot own one session concurrently."""
 
-    def test_second_controller_enters_lobby_while_first_retains_lease(self) -> None:
+    def test_second_controller_enters_lobby_while_first_holds_access(self) -> None:
         workspace = self.make_workspace()
-        self.seed_session(workspace, "shared", active=True)
-        select_session(workspace, "shared")
+        self.seed_session(workspace, "shared", durable_state=SessionDurableState.READY)
+        save_default_session(workspace, "shared")
         context_before = workspace.path(_CONTEXT_PATH).read_bytes()
         nested: dict[str, object] = {}
 
         def run_contender(_prompt: str) -> str:
-            """Run a second controller while the first owns the shared lease."""
+            """Run a second controller while the first holds shared access."""
 
-            lease_path = workspace.path(_lease_relative("shared"))
-            nested["lease_before"] = lease_path.read_bytes()
+            access_path = workspace.path(_access_relative("shared"))
+            nested["access_before"] = access_path.read_bytes()
             inner, _backend, inner_callbacks = self.make_controller(
                 workspace,
                 "/quit",
+                terminal_width=200,
             )
             nested["exit_code"] = inner.run_session_lobby()
             nested["records"] = "".join(inner_callbacks.records)
-            nested["lease_after"] = lease_path.read_bytes()
+            nested["access_after"] = access_path.read_bytes()
             nested["context_after"] = workspace.path(_CONTEXT_PATH).read_bytes()
             return "/quit"
 
@@ -3854,15 +3892,15 @@ class ControllerContentionTests(ControllerTestCase):
         )
         self.assertEqual(outer.run_session_lobby(), 0)
         self.assertEqual(nested["exit_code"], 0)
-        self.assertEqual(nested["lease_before"], nested["lease_after"])
+        self.assertEqual(nested["access_before"], nested["access_after"])
         self.assertEqual(nested["context_after"], context_before)
         self.assertIn(
-            _error_record(InteractiveErrorCode.SESSION_IN_USE),
+            _error_record(InteractiveErrorCode.SESSION_ACCESS_BLOCKED),
             nested["records"],
         )
         self.assertIn("Session: lobby\n", nested["records"])
-        self.assertIn("Session: shared (attached)\n", "".join(outer_callbacks.records))
-        self.assertFalse(workspace.path(_lease_relative("shared")).exists())
+        self.assertIn("Session: shared (opened)\n", "".join(outer_callbacks.records))
+        self.assertFalse(workspace.path(_access_relative("shared")).exists())
 
 
 if __name__ == "__main__":

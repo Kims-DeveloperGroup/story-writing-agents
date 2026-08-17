@@ -29,13 +29,13 @@ provider conversation state is still partitioned by story session and agent.
 
 ## Advisory context
 
-The shell passes its selected identity, route, input, and attachment-scoped
+The shell passes its focused identity, route, input, and current-session
 memory service to `StoryRuntime.converse_with_retrieval()`. Runtime owns context,
 memory authorization, and transcript order. Backend holds one provider-thread
 lock across the action loop and calls only the synchronous runtime handler; it
 never receives a search, catalog, transcript, or filesystem collaborator.
 
-The first provider call receives current input and bounded selected context.
+The first provider call receives current input and bounded focused context.
 Later calls receive only runtime-authorized observations framed as untrusted
 story data. Exact payloads and action order live in
 [Bounded retrieval](../reference/conversation-retrieval.md). Direct Python
@@ -50,7 +50,7 @@ a responder; it is not a private provider channel.
 An included debate adds a top-level `conversation_context` field to every agent
 request. Drafting, audits, proposals, synthesis, and finalization all receive
 the same captured event snapshot. The runtime does not reread or search the
-transcript between phases. Fresh and legacy requests omit the field entirely.
+transcript between phases. Fresh and context-omitted requests omit the field.
 
 This context is not concatenated into the bound prompt, phase `task`, original
 `user_payload`, current candidate, public blackboard, or owner state. There is

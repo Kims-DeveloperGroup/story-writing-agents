@@ -68,6 +68,8 @@ from .errors import (
     ConversationRetrievalSemanticError,
     ManuscriptExistsError,
     ProgressObserverError,
+    SessionNotFoundError,
+    SessionPausedError,
     WorkspaceFormatError,
     WorkspaceSecurityError,
 )
@@ -93,6 +95,12 @@ from .models import (
     Verdict,
 )
 from .prompts import PromptAssembler
+from .session_lifecycle import (
+    SessionAccessState,
+    SessionDurableState,
+    SessionLifecycleState,
+    provider_work_is_ready,
+)
 from .workspace import FilesystemConversationEventStore, Workspace
 
 
@@ -678,7 +686,7 @@ class _RuntimeConversationRetrievalHandler:
                 or hit.status is not ConversationStatus.ACTIVE
             ):
                 raise ValueError(
-                    "conversation retrieval search crossed its active session scope"
+                    "conversation retrieval search crossed its active-conversation scope"
                 )
         return result
 
@@ -1145,7 +1153,7 @@ class StoryRuntime:
                     "an invalid context"
                 ) from exc
 
-            self._prepare_conversation_session(session)
+            self._acquire_ready_session_access(session)
             definition = self.prompts.build_definition(
                 session_id=session,
                 agent_id=agent,
@@ -1297,7 +1305,7 @@ class StoryRuntime:
                     "an invalid context"
                 ) from exc
 
-            self._prepare_conversation_session(session)
+            self._acquire_ready_session_access(session)
             definition = self.prompts.build_definition(
                 session_id=session,
                 agent_id=agent,
@@ -1406,9 +1414,9 @@ class StoryRuntime:
         conversation_context: DebateContextRequest | None = None,
         progress_sink: DebateProgressSink | None = None,
     ) -> DebateResult:
-        """Run a prompt debate with optional selected context and progress facts.
+        """Run a prompt debate with optional included context and progress facts.
 
-        Inputs are validated before session preparation. Requested context is
+        Inputs are validated before session access acquisition. Requested context is
         captured and persisted before provider work; terminal results and state
         are durable before terminal progress. Expected workflow failures return
         a ``DebateResult`` while invalid pre-reservation inputs, observer errors,
@@ -1470,7 +1478,7 @@ class StoryRuntime:
     ) -> DebateResult:
         """Validate, capture requested context, reserve, and run one debate.
 
-        Validation and synchronous session preparation precede mutation. Included
+        Validation and synchronous session access acquisition precede mutation. Included
         context is read once and canonicalized before reservation; requested
         sidecars precede initiation and provider work. Cancellation and observer
         failures preserve their typed control flow with best-effort interruption.
@@ -1506,7 +1514,7 @@ class StoryRuntime:
         progress = _ProgressEmitter(self._validate_progress_sink(progress_sink))
 
         target_name = manuscript_name or f"{session}_{debate}.md"
-        self._prepare_debate_session(session)
+        self._acquire_ready_session_access(session)
 
         context_snapshot: ConversationContextWindow | None = None
         if (
@@ -2436,51 +2444,206 @@ class StoryRuntime:
             )
         return method
 
-    def _prepare_conversation_session(self, session_id: str) -> None:
-        """Invoke the optional synchronous backend session-preparation hook.
+    def _acquire_ready_session_access(self, session_id: str) -> None:
+        """Acquire provider access through the exact synchronous lifecycle API.
 
-        An absent compatibility hook is a no-op. Non-callable or asynchronous
-        hooks/results raise ``BackendProtocolError``; ordinary hook mutation and
-        failures retain backend behavior.
+        All four hooks are required, validated before invocation, and called as
+        configuration validation, pre-read, acquisition, and post-read. A claim
+        newly acquired by this sequence is compensated on any later contract
+        failure; pre-owned access is never released here.
         """
 
         assert self.backend is not None
-        prepare_session = getattr(self.backend, "prepare_session", None)
-        if prepare_session is None:
-            return
-        if not callable(prepare_session):
-            raise BackendProtocolError("backend prepare_session must be callable")
-        if inspect.iscoroutinefunction(prepare_session) or inspect.iscoroutinefunction(
-            getattr(prepare_session, "__call__", None)
-        ):
-            raise BackendProtocolError("backend prepare_session must be synchronous")
-        outcome = prepare_session(session_id)
-        self._reject_async_result(outcome, operation="backend prepare_session")
+        hook_names = (
+            "validate_provider_configuration",
+            "get_session_lifecycle",
+            "acquire_session_access",
+            "release_session_access",
+        )
+        hooks = tuple(getattr(self.backend, name, None) for name in hook_names)
+        if any(hook is None or not callable(hook) for hook in hooks):
+            raise BackendProtocolError(
+                "backend must provide all canonical session lifecycle hooks"
+            )
+        for hook in hooks:
+            hook_call = getattr(hook, "__call__", None)
+            if (
+                inspect.iscoroutinefunction(hook)
+                or inspect.isasyncgenfunction(hook)
+                or inspect.iscoroutinefunction(hook_call)
+                or inspect.isasyncgenfunction(hook_call)
+            ):
+                raise BackendProtocolError(
+                    "backend session lifecycle hooks must be synchronous"
+                )
 
-    def _prepare_debate_session(self, session_id: str) -> None:
-        """Synchronously prepare a validated debate session without provider work.
+        validate_configuration = hooks[0]
+        get_lifecycle = hooks[1]
+        acquire_access = hooks[2]
+        release_access = hooks[3]
 
-        An absent compatibility hook is accepted. A non-callable, declared
-        asynchronous, awaitable- or async-generator-returning, or failing hook
-        raises before reservation, sidecar, progress, or provider mutation.
-        """
+        configuration_ready = validate_configuration(session_id)
+        self._reject_async_result(
+            configuration_ready,
+            operation="backend validate_provider_configuration",
+        )
+        if configuration_ready is not True:
+            raise BackendProtocolError(
+                "backend validate_provider_configuration() must return exact True"
+            )
 
-        assert self.backend is not None
-        prepare_session = getattr(self.backend, "prepare_session", None)
-        if prepare_session is None:
-            return
-        if not callable(prepare_session):
-            raise BackendProtocolError("backend prepare_session must be callable")
-        prepare_call = getattr(prepare_session, "__call__", None)
+        initial = get_lifecycle(session_id)
+        self._reject_async_result(
+            initial,
+            operation="backend get_session_lifecycle",
+        )
+        initial = self._validated_backend_lifecycle_result(
+            initial,
+            session_id=session_id,
+            operation="get_session_lifecycle",
+        )
+        if initial.durable_state is SessionDurableState.ABSENT:
+            raise SessionNotFoundError(
+                f"provider session does not exist: {session_id}; "
+                f"run 'story session create {session_id}'"
+            )
+        if initial.durable_state is SessionDurableState.PAUSED:
+            raise SessionPausedError(
+                f"provider session is paused: {session_id}; "
+                f"run 'story session reopen {session_id}'"
+            )
+        if initial.durable_state is not SessionDurableState.READY:
+            raise BackendProtocolError(
+                "backend session lifecycle is not ready for provider work"
+            )
+        access_was_held_here = (
+            initial.access_state is SessionAccessState.HELD_HERE
+        )
+
+        acquired = acquire_access(session_id)
+        try:
+            self._reject_async_result(
+                acquired,
+                operation="backend acquire_session_access",
+            )
+            acquired = self._validated_backend_lifecycle_result(
+                acquired,
+                session_id=session_id,
+                operation="acquire_session_access",
+            )
+            self._require_correlated_ready_access(
+                initial=initial,
+                current=acquired,
+                operation="acquire_session_access",
+            )
+
+            confirmed = get_lifecycle(session_id)
+            self._reject_async_result(
+                confirmed,
+                operation="backend get_session_lifecycle",
+            )
+            confirmed = self._validated_backend_lifecycle_result(
+                confirmed,
+                session_id=session_id,
+                operation="get_session_lifecycle",
+            )
+            self._require_correlated_ready_access(
+                initial=initial,
+                current=confirmed,
+                operation="get_session_lifecycle",
+            )
+            if confirmed != acquired or not provider_work_is_ready(
+                confirmed,
+                provider_configuration_ready=configuration_ready,
+            ):
+                raise BackendProtocolError(
+                    "backend lifecycle results are not ready and correlated"
+                )
+        except BaseException:
+            if not access_was_held_here:
+                self._release_backend_access_after_failed_acquisition(
+                    release_access,
+                    session_id=session_id,
+                    initial=initial,
+                )
+            raise
+
+    @staticmethod
+    def _validated_backend_lifecycle_result(
+        value: object,
+        *,
+        session_id: str,
+        operation: str,
+    ) -> SessionLifecycleState:
+        """Return one exact, internally valid, request-matching lifecycle value."""
+
+        if type(value) is not SessionLifecycleState:
+            raise BackendProtocolError(
+                f"backend {operation}() returned an invalid lifecycle state"
+            )
+        try:
+            provider_work_is_ready(
+                value,
+                provider_configuration_ready=False,
+            )
+        except (TypeError, ValueError):
+            raise BackendProtocolError(
+                f"backend {operation}() returned an invalid lifecycle state"
+            ) from None
+        if value.session_id != session_id:
+            raise BackendProtocolError(
+                f"backend {operation}() returned the wrong session"
+            )
+        return value
+
+    @staticmethod
+    def _require_correlated_ready_access(
+        *,
+        initial: SessionLifecycleState,
+        current: SessionLifecycleState,
+        operation: str,
+    ) -> None:
+        """Require acquisition to preserve durable identity and hold access."""
+
         if (
-            inspect.iscoroutinefunction(prepare_session)
-            or inspect.isasyncgenfunction(prepare_session)
-            or inspect.iscoroutinefunction(prepare_call)
-            or inspect.isasyncgenfunction(prepare_call)
+            current.session_id != initial.session_id
+            or current.durable_state is not SessionDurableState.READY
+            or current.access_state is not SessionAccessState.HELD_HERE
+            or current.created_at != initial.created_at
+            or current.updated_at != initial.updated_at
         ):
-            raise BackendProtocolError("backend prepare_session must be synchronous")
-        outcome = prepare_session(session_id)
-        self._reject_async_result(outcome, operation="backend prepare_session")
+            raise BackendProtocolError(
+                f"backend {operation}() returned uncorrelated lifecycle facts"
+            )
+
+    def _release_backend_access_after_failed_acquisition(
+        self,
+        release_access: Callable[[str], object],
+        *,
+        session_id: str,
+        initial: SessionLifecycleState,
+    ) -> None:
+        """Release a newly acquired claim and validate durable correlation."""
+
+        released = release_access(session_id)
+        self._reject_async_result(
+            released,
+            operation="backend release_session_access",
+        )
+        released = self._validated_backend_lifecycle_result(
+            released,
+            session_id=session_id,
+            operation="release_session_access",
+        )
+        if (
+            released.durable_state is not SessionDurableState.READY
+            or released.access_state is SessionAccessState.HELD_HERE
+            or released.created_at != initial.created_at
+            or released.updated_at != initial.updated_at
+        ):
+            raise BackendProtocolError(
+                "backend release_session_access() returned uncorrelated facts"
+            )
 
     @staticmethod
     def _validate_debate_context_request(
@@ -2511,7 +2674,7 @@ class StoryRuntime:
         ``None`` and ordinary callables are accepted without mutation. A
         non-callable, coroutine or async-generator function, or callable object
         with a coroutine or async-generator ``__call__`` raises ``TypeError``
-        before debate preparation or durability.
+        before debate setup or durability.
         """
 
         if sink is None:

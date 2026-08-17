@@ -1,20 +1,13 @@
 # Glossary
 
-> **Availability:** after attachment, the shell manages subject conversations,
-> sends routed advisory turns, searches active records, and reads bounded
-> active or archived transcripts. See [Story sessions](guides/story-sessions.md).
-
-Key terms: **story session**—related work; **conversation**—a session-scoped
-subject and visible history; **turn**—user event plus outcome; **debate**—one consensus
-attempt. See [Core concepts](concepts.md) for their relationships.
+> **Availability:** after opening a session, the shell manages conversations,
+> advisory turns, search, transcripts, and consensus. See [Story sessions](guides/story-sessions.md).
 
 ## A–W
 
-- **Active, selected, and attached (legacy summary).** `active` maps only to
-  durable `ready`/`paused`; `selected` means saved CLI default, never current
-  attachment or conversation focus. Attached means `held_here` access. Provider
-  readiness also requires configuration readiness to be exactly true. See
-  [Session lifecycle](design/session-lifecycle.md).
+- **Access claim and claim guard.** The temporary V2 claim names its host,
+  process, and token. The workspace-global guard serializes claim, proved-dead-local
+  replacement, and exact-token release. See [Session lifecycle](design/session-lifecycle.md).
 
 - **Agent, role, and binding.** An agent is a fixed team member; its role defines
   responsibility and instructions, and a binding connects it to a backend. See
@@ -38,25 +31,34 @@ attempt. See [Core concepts](concepts.md) for their relationships.
   approve one revision; deadlock leaves conflicts at the round limit. See
   [Inspection and recovery](guides/inspection-and-recovery.md).
 
-- **Conversation.** An immutable identity inside a session. Its catalog stores subject and status;
-  its event store holds the transcript. `StoryRuntime` addresses but does not
-  create or select it. See [Conversation
-  catalog](reference/conversation-catalog.md).
+- **Conversation.** An immutable session-scoped subject and visible history.
+  Its catalog stores identity and status; its event store holds the transcript.
+  See [Conversation catalog](reference/conversation-catalog.md).
 
 - **Conversation catalog and event store.** The catalog owns identity and discovery;
   the store owns append, full reads, and bounded context. Archive does not hide
   transcripts. See [Conversation
   transcripts](reference/conversation-transcripts.md).
 
-- **Conversation citation, page, and cursor.** A citation holds stable identity
-  and optional event. A page is a bounded read; its cursor continues that
-  snapshot. See [Conversation search and cited transcript
-  pages](reference/conversation-search.md).
+- **Conversation citation, page, and cursor.** A citation identifies a record;
+  a page is a bounded read, and its cursor continues that snapshot. See
+  [Conversation search](reference/conversation-search.md).
 
 - **Conversation search.** Bounded literal matching over current-session
   subjects and visible messages. Direct `/search` is a provider-free CLI
   command, not a provider call or tool; agent retrieval reaches memory only
   through runtime authorization. See [Conversation search](reference/conversation-search.md).
+
+- **Current attachment.** The story session whose process access this shell
+  holds. A default session is not necessarily attached. See
+  [Session lifecycle](design/session-lifecycle.md).
+
+- **Current focus and agent focus.** Current focus is the conversation used for
+  turns; agent focus is the ordinary advisory responder. Both are process-local.
+
+- **Default session and default conversation.** Persisted fallbacks used when a
+  command omits a session or when a newly opened session restores conversation
+  scope. A default does not prove attachment, focus, or provider readiness.
 
 - **Core documents.** Editable outlines, character/world facts, and narrative
   rules; each role receives its allowed subset.
@@ -68,6 +70,10 @@ attempt. See [Core concepts](concepts.md) for their relationships.
 - **Directive.** An exact message that changes or resets session language or persona. See
   [Runtime overrides](reference/configuration/runtime-overrides.md).
 
+- **Durable state.** `absent`, `ready`, or `paused`: whether a provider session
+  is missing, permits provider work, or is intentionally stopped. It is
+  independent of process access.
+
 - **Event, turn, and context window.** An event is one record; a complete turn
   pairs user input with a reply or error. Context is a bounded complete-turn view.
   See [Conversation transcripts](reference/conversation-transcripts.md).
@@ -76,12 +82,8 @@ attempt. See [Core concepts](concepts.md) for their relationships.
   context; its compatible provider thread is resumable. See
   [Prompts and provider](design/prompts-and-provider.md).
 
-- **Lease, sidecar, and claim guard.** A lease is exclusive temporary attachment;
-  its sidecar records ownership and the guard serializes local claims. See
-  [Backend and sessions](reference/backend-and-sessions.md).
-
-- **Manifest.** Durable provider-session active state and thread references,
-  separate from the lease sidecar. See
+- **Manifest.** Durable V2 provider-session state and thread references,
+  separate from the temporary access claim. See
   [Session storage](reference/configuration/session-storage.md).
 
 - **Manuscript.** Immutable story output created after consensus/finalization. See
@@ -96,6 +98,14 @@ attempt. See [Core concepts](concepts.md) for their relationships.
 
 - **Provider session.** Backend lifecycle state and resumable threads for one
   story session. See [Backend and sessions](reference/backend-and-sessions.md).
+
+- **Process access.** `claimable`, `held_here`,
+  `blocked_by_live_local_owner`, or `ownership_unknown`: the current safe view
+  of exclusive session ownership.
+
+- **Provider readiness.** Exact `True` configuration readiness combined with
+  durable `ready` and process access `held_here`. The query is pure and does not
+  acquire access.
 
 - **Runtime.** Local orchestration that validates, coordinates debates and turns,
   and persists results. See the

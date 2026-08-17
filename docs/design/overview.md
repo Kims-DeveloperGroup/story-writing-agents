@@ -7,7 +7,7 @@
 Key terms: **orchestration**—coordination of provider work;
 **controller**—owner of interactive transition order; **adapter**—a concrete
 provider-neutral implementation; **scope**—the session one service may read;
-**selection**—a saved pointer, not the record it names.
+**default**—a persisted fallback; **focus**—current process-local scope.
 
 `story-writing-agents` separates workflow, provider invocation, terminal
 presentation, and filesystem persistence. In this project, “commit” means
@@ -21,9 +21,9 @@ owner-isolated history, and artifacts. For advisory turns it owns conversation
 locking, context and transcript order, retrieval scope/actions/budgets, and the
 final reply or safe error. See the [Runtime API](../reference/runtime-api.md#one-conversation-turn).
 
-`session_lifecycle` owns immutable provider-neutral lifecycle facts, legacy
-projections, and readiness, with no resource or I/O. `AgentBackend` retains
-manifests, lease claims, prompt staging, routes, processes, and threads;
+`session_lifecycle` owns immutable provider-neutral lifecycle facts and pure
+readiness, with no resource or I/O. `AgentBackend` retains manifests, access
+claims, prompt staging, routes, processes, and threads;
 `BoundAgent` owns one binding. Codex is implemented; Gemini fails preflight.
 
 `Workspace` is the local persistence and path-safety boundary. It owns strict
@@ -45,10 +45,10 @@ provider calls finish in another order.
 | Owner | Responsibility |
 | --- | --- |
 | `interactive_commands` | Pure grammar and canonical agent-route metadata |
-| `interactive_controller` | Attachment, selection, sticky target, dispatch, transition order, and cleanup coordination |
-| `cli_context` | Saved session and per-session conversation selections |
+| `interactive_controller` | Current attachment/focus, agent focus, dispatch, transition order, and cleanup |
+| `cli_context` | Default session and per-session default conversations |
 | `ConversationCatalog` | Conversation identity, subject, archive status, and ordered metadata |
-| `ConversationMemoryService` | One attachment-scoped search/read authorization |
+| `ConversationMemoryService` | One current-attachment search/read authorization |
 | `conversation_retrieval` | Immutable actions, observations, policy, and runtime/backend handler port |
 | `ConversationEventStore` | Authoritative events and complete-turn context |
 | `InteractiveMainLineEditor` | Call-local POSIX main-input editing, suggestions, fallback, and restoration |
@@ -59,9 +59,9 @@ provider calls finish in another order.
 ```mermaid
 flowchart LR
     accTitle: Interactive conversation ownership
-    accDescr: The controller passes its attached-session memory service to the runtime, which alone authorizes provider-requested reads.
+    accDescr: The controller passes its current-session memory service to the runtime, which alone authorizes provider-requested reads.
     C[Interactive controller] --> R[Retained StoryRuntime]
-    C --> M[Attachment-scoped memory service]
+    C --> M[Current-session memory service]
     C --> K[Conversation catalog]
     R -->|authorized search and read| M
     R --> B[Agent backend]
@@ -71,10 +71,10 @@ flowchart LR
 ```
 
 The controller gives one filesystem event store to the retained runtime and
-builds each attachment's memory service over that store and resolved catalog.
+builds each current-session memory service over that store and resolved catalog.
 
 On switch, destination memory is built after validation and becomes current
-only with committed attachment. End, abort, and cleanup clear it. Conversation
+only with committed attachment. Pause, abort, and cleanup clear it. Conversation
 changes reuse it; later reads observe current data in the same session scope.
 
 For advisory work the controller supplies the exact service to runtime. Runtime
@@ -85,10 +85,10 @@ only through `read(...)` for `/history` and `/status`; it never appends, calls
 
 ## Dependency direction
 
-The facade depends downward on canonical `session_lifecycle` contracts;
-`models` compatibility-forwards the exact legacy objects. Backend still reaches
-them through `models`. Controller, terminal, storage, and transition ownership
-are unchanged; no new shell copy/navigation exists.
+The facade and lifecycle consumers depend downward on canonical
+`session_lifecycle` contracts. `models` owns debate and conversation models and
+does not forward lifecycle objects. Backend, controller, orchestrator, CLI, and
+smoke consume the canonical lifecycle module directly.
 
 The CLI injects the editor's main-read callback before backend/controller
 construction. The editor uses command metadata and terminal sanitization.

@@ -1,7 +1,7 @@
 # Privacy and provider exposure
 
 > **Availability:** these controls cover local reads, advisory turns, and
-> retrieval-enabled turns, management commands, and selected-context consensus.
+> retrieval-enabled turns, management commands, and focused-context consensus.
 > They do not make Codex, its executable, workspace, or terminal trusted.
 
 Key terms: **plaintext**—unencrypted content; **visible context**—events sent in
@@ -23,7 +23,9 @@ transcripts retain messages, replies, and runtime errors.
 `/search` shows active subjects/user/replies; `/transcript` shows active or
 archived metadata/content; `/history` shows one full or newest-suffix snapshot,
 including errors, unmatched users, and whitespace. `/status` exposes
-workspace/session/subject/context/run metadata. `/inspect` whitelists
+workspace/session/subject/context/run metadata. Session status shows durable
+state, process access, defaults, current attachment/focus, readiness, and next
+action, but never owner hostname, PID, or claim token. `/inspect` whitelists
 lifecycle/artifact/context identity/mode/counts, never raw messages, candidates,
 errors/actions, context content, or provider fields.
 
@@ -50,12 +52,12 @@ Agent definitions separately supply allowlisted core documents. Debates,
 manuscripts, core updates, and owner state are not retrieval memory. Direct
 routing selects a shared-transcript responder, not a private channel.
 
-Included consensus sends one selected-transcript snapshot through every phase.
-Fresh/legacy modes omit `conversation_context` entirely.
+Included consensus sends one focused-transcript snapshot through every phase.
+Fresh and context-omitted modes omit `conversation_context` entirely.
 
 Provider threads are keyed by session/backend/agent and can span conversations
-and debates. Changed visible context does not erase private history. Detach, end,
-and close preserve thread references; fresh/omitted context cannot make the
+and debates. Changed visible context does not erase private history. Switch,
+pause, quit, and close preserve thread references; fresh/omitted context cannot make the
 provider forget.
 
 <a id="runtime-error-diagnostics"></a>

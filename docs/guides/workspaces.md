@@ -46,7 +46,7 @@ config/agents/<agent-id>/AGENTS.md
 The four IDs are `lead_orchestrator`, `plot_architect`,
 `character_custodian`, and `execution_specialist`. Prompt files have no
 placeholders and are never interpolated into a request. Before each phase, the
-runtime creates content-addressed references for the role prompt, selected
+runtime creates content-addressed references for the role prompt, configured
 persona, language, and allowlisted core documents. Changing an effective input
 causes a new binding on the next phase. Finish edits before starting a run.
 
@@ -71,13 +71,13 @@ After initialization, enter the directory and start a session:
 
 ```bash
 cd ./my-novel
-story session start novel
+story session create novel
 story run 'Draft an opening scene from the core documents.'
 ```
 
 Without `--workspace`, commands search upward and choose the nearest fully
 initialized ancestor. An explicit path wins and is safer in automation or with
-nested workspaces. Neither discovery nor explicit selection silently
+nested workspaces. Neither discovery nor an explicit workspace argument silently
 initializes a directory.
 
 For the complete generated layout and exact storage schemas, use

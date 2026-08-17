@@ -13,9 +13,9 @@ from unittest import mock
 from story_writing_agents import interactive_controller as controller_module
 from story_writing_agents.agents import LEAD_ORCHESTRATOR, PLOT_ARCHITECT
 from story_writing_agents.cli_context import (
-    load_conversation_selection,
-    save_conversation_selection,
-    select_session,
+    load_default_conversation,
+    save_default_conversation,
+    save_default_session,
 )
 from story_writing_agents.conversations import (
     ConversationEventAppend,
@@ -61,7 +61,7 @@ def _durable_file_snapshot(workspace: Workspace) -> dict[str, tuple[bytes, int]]
             path.stat().st_mtime_ns,
         )
         for path in sorted(workspace.root.rglob("*"))
-        if path.is_file() and not path.name.endswith(".lease.json")
+        if path.is_file() and not path.name.endswith(".access.json")
     }
 
 
@@ -304,17 +304,21 @@ class InteractiveManagementGateAndDirectiveTests(
         self.assertEqual(_durable_file_snapshot(workspace), before)
         rendered = "".join(callbacks.records)
         self.assertIn("Syntax: /status", rendered)
-        self.assertIn("Attached session: none.", rendered)
         self.assertIn(
-            "Conversation: unavailable | Context: unavailable | "
-            "Search: unavailable | Last run: none.",
+            "Session: none | Durable state: absent | Process access: "
+            "claimable | Default session: none | Current attachment: none",
             rendered,
         )
-        self.assertEqual(rendered.count("[error session_inactive]"), 5)
+        self.assertIn(
+            "Default conversation: none | Current focus: none | Agent focus: "
+            "none | Provider readiness: no | Next action: Create a session.",
+            rendered,
+        )
+        self.assertEqual(rendered.count("[error session_not_attached]"), 5)
 
         attached = self.make_workspace()
         self.seed_session(attached, "session")
-        select_session(attached, "session")
+        save_default_session(attached, "session")
         controller, _backend, callbacks, _store, _factory = self.make_controller(
             attached,
             "/status",
@@ -331,8 +335,15 @@ class InteractiveManagementGateAndDirectiveTests(
             self.assertEqual(controller.run_session_lobby(), 0)
         transcript_read.assert_not_called()
         rendered = "".join(callbacks.records)
-        self.assertIn("Selected conversation: none.", rendered)
-        self.assertIn("Search: available, active-only", rendered)
+        self.assertIn(
+            "Default session: session | Current attachment: session | "
+            "Default conversation: none | Current focus: none",
+            rendered,
+        )
+        self.assertIn(
+            "Conversation focus: none | Context: unavailable | Last run: none.",
+            rendered,
+        )
         self.assertEqual(rendered.count("[error conversation_required]"), 1)
         self.assertIn("Session session: 0 persisted debates.", rendered)
         self.assertIn(
@@ -346,7 +357,7 @@ class InteractiveManagementGateAndDirectiveTests(
     ) -> None:
         workspace = self.make_workspace()
         self.seed_session(workspace, "session")
-        select_session(workspace, "session")
+        save_default_session(workspace, "session")
         workspace.write_text(
             "config/persona_templates/alternative_templates/"
             "directive_persona.md",
@@ -431,7 +442,7 @@ class InteractiveManagementGateAndDirectiveTests(
         connect.assert_not_called()
         append.assert_not_called()
         self.assertEqual(controller._target_agent_id, LEAD_ORCHESTRATOR)
-        self.assertIsNone(load_conversation_selection(workspace, "session"))
+        self.assertIsNone(load_default_conversation(workspace, "session"))
         self.assertEqual(
             workspace.read_text("config/system_defaults.json"),
             system_before,
@@ -456,7 +467,7 @@ class InteractiveManagementGateAndDirectiveTests(
     def test_invalid_directives_preserve_existing_override_bytes(self) -> None:
         workspace = self.make_workspace()
         self.seed_session(workspace, "session")
-        select_session(workspace, "session")
+        save_default_session(workspace, "session")
         workspace.save_session_overrides(
             "session",
             {"language": "EN", "persona": None, "agents": {}},
@@ -583,7 +594,7 @@ class InteractiveHistoryAndStatusTests(InteractiveConversationTestCase):
             catalog=controller._conversation_catalog,
         )
         core_before = core_snapshot(workspace)
-        selection_before = load_conversation_selection(workspace, "session")
+        selection_before = load_default_conversation(workspace, "session")
 
         def capture_then_append(
             session_id: str,
@@ -626,7 +637,7 @@ class InteractiveHistoryAndStatusTests(InteractiveConversationTestCase):
             ) as unarchive,
             mock.patch.object(
                 controller_module,
-                "save_conversation_selection",
+                "save_default_conversation",
             ) as save_selection,
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
@@ -644,7 +655,7 @@ class InteractiveHistoryAndStatusTests(InteractiveConversationTestCase):
         save_selection.assert_not_called()
         self.assertEqual(core_snapshot(workspace), core_before)
         self.assertEqual(
-            load_conversation_selection(workspace, "session"),
+            load_default_conversation(workspace, "session"),
             selection_before,
         )
         self.assertEqual(controller._target_agent_id, LEAD_ORCHESTRATOR)
@@ -789,9 +800,9 @@ class InteractiveHistoryAndStatusTests(InteractiveConversationTestCase):
         read.assert_called_once_with("session", metadata.conversation_id)
         read_context.assert_not_called()
         rendered = "".join(callbacks.records)
-        self.assertIn("Sticky target: plot_architect.", rendered)
+        self.assertIn("Agent focus: plot_architect", rendered)
         self.assertIn(
-            f"Selected conversation: {metadata.conversation_id} | "
+            f"Current focus: {metadata.conversation_id} | "
             "Subject: Revised subject | Status: active | Revision: 2.",
             rendered,
         )
@@ -817,7 +828,7 @@ class InteractiveHistoryAndStatusTests(InteractiveConversationTestCase):
                         self.assertEqual(prompt, "story[session:lead]> ")
                         continuation_state.append(
                             (
-                                controller._selected_conversation,
+                                controller._focused_conversation,
                                 controller._target_agent_id,
                             )
                         )
@@ -923,10 +934,10 @@ class InteractiveInspectionTests(InteractiveConversationTestCase):
     ) -> None:
         workspace = self.make_workspace()
         self.seed_session(workspace, "session")
-        select_session(workspace, "session")
+        save_default_session(workspace, "session")
         catalog = FilesystemConversationCatalog(workspace)
         selected = catalog.create("session", "Inspection subject")
-        save_conversation_selection(workspace, "session", selected.conversation_id)
+        save_default_conversation(workspace, "session", selected.conversation_id)
         store = FilesystemConversationEventStore(workspace, catalog=catalog)
         _append_visible_event(
             store,
@@ -1042,12 +1053,12 @@ class InteractiveInspectionTests(InteractiveConversationTestCase):
                 session_id,
                 f"Subject {session_id}",
             )
-            save_conversation_selection(
+            save_default_conversation(
                 workspace,
                 session_id,
                 entries[session_id].conversation_id,
             )
-        select_session(workspace, "session_a")
+        save_default_session(workspace, "session_a")
         runtime = InspectableConsensusRuntime(
             ConsensusOutcome(DebateStatus.CONSENSUS),
             ConsensusOutcome(DebateStatus.DEADLOCK),
@@ -1056,10 +1067,10 @@ class InteractiveInspectionTests(InteractiveConversationTestCase):
             workspace,
             "/run first",
             "/status",
-            "/session resume session_b",
+            "/session open session_b",
             "/run second",
             "/inspect last",
-            "/session resume session_a",
+            "/session open session_a",
             "/inspect last",
             "/quit",
             catalog=catalog,
@@ -1113,10 +1124,10 @@ class InteractiveInspectionTests(InteractiveConversationTestCase):
             with self.subTest(case=case):
                 workspace = self.make_workspace()
                 self.seed_session(workspace, "session")
-                select_session(workspace, "session")
+                save_default_session(workspace, "session")
                 catalog = FilesystemConversationCatalog(workspace)
                 selected = catalog.create("session", "Tamper target")
-                save_conversation_selection(
+                save_default_conversation(
                     workspace,
                     "session",
                     selected.conversation_id,

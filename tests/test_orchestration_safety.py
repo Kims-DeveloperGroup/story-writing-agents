@@ -152,11 +152,11 @@ class BackendFailureTests(unittest.IsolatedAsyncioTestCase):
     async def test_bind_failures_and_invalid_bound_agents_fail_without_writes(
         self,
     ) -> None:
-        class RaisingBackend:
+        class RaisingBackend(BindingBackendMixin):
             async def bind(self, definition):
                 raise RuntimeError("provider bind unavailable")
 
-        class MissingInvokeBackend:
+        class MissingInvokeBackend(BindingBackendMixin):
             async def bind(self, definition):
                 return object()
 
@@ -164,7 +164,7 @@ class BackendFailureTests(unittest.IsolatedAsyncioTestCase):
             def invoke(self, request):
                 return AgentReply.approval(request.revision_id)
 
-        class SyncInvokeBackend:
+        class SyncInvokeBackend(BindingBackendMixin):
             async def bind(self, definition):
                 return SyncInvokeAgent()
 
@@ -196,7 +196,7 @@ class BackendFailureTests(unittest.IsolatedAsyncioTestCase):
             async def invoke(self, request):
                 return AgentReply.approval(request.revision_id)
 
-        class TamperingBackend:
+        class TamperingBackend(BindingBackendMixin):
             async def bind(self, definition):
                 definition.system_prompt_file.path.write_text(
                     "tampered during bind",
@@ -737,7 +737,7 @@ class ProgressObserverTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(all_manuscripts(workspace), [])
 
 
-class _FailFastBindBackend:
+class _FailFastBindBackend(BindingBackendMixin):
     """Fail one bind after all peers start and observe peer-bind cancellation."""
 
     def __init__(self) -> None:

@@ -42,7 +42,7 @@ One run uses a single event loop and the ordinary runtime paths to:
    the second conversation, with trusted progress and answer sources equal to
    the authorized complete-pair citations;
 8. supply the source's bounded two-turn snapshot as included consensus context,
-   without reading or changing CLI selection, and verify every debate request
+   without reading or changing CLI defaults, and verify every debate request
    plus the persisted context sidecar uses that exact snapshot; and
 9. retain the original conflict/revision workflow, unanimous `r1` consensus,
    manuscript commit, exact phase/state counts, and unchanged core documents.
@@ -71,7 +71,7 @@ story inspect \
 This mode writes ordinary plaintext session data, two conversation records and
 transcripts, owner-isolated agent state, debate lifecycle/log/result/context
 files, and a manuscript. It preserves pre-existing core-document bytes and CLI
-selection files, but the supplied workspace is not read-only.
+default files, but the supplied workspace is not read-only.
 
 ## Interpret failures
 

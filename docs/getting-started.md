@@ -4,8 +4,9 @@
 > interactive turns use Codex; `story smoke` is provider-free. See [Story sessions](guides/story-sessions.md) for the shell.
 
 Key terms: **editable install**—an installation that points at this checkout;
-**workspace**—the local story project directory; **selected session**—the
-saved CLI default session; **smoke test**—a provider-free deterministic check.
+**workspace**—the local story project directory; **default session**—the saved
+session used when a command omits its name; **current focus**—the conversation
+used for turns in this shell; **smoke test**—a provider-free deterministic check.
 
 ## 1. Prepare the tools
 
@@ -78,25 +79,28 @@ story
 At the lobby prompt, create a durable session and subject conversation:
 
 ```text
-/session new first_novel
+/session create first_novel
 /conversation new Opening scene
 Which established fact should anchor the opening?
-/run Draft a restrained opening using our selected conversation.
+/run Draft a restrained opening using the current conversation focus.
 /inspect last
+/status
 /quit
 ```
 
 The ordinary question is one advisory line. `/run PROMPT` starts consensus with
-one bounded snapshot of the selected conversation. `/inspect last` shows safe
-metadata for this process's latest accepted run. `/quit` releases the lease but
-keeps the session, conversation, and selections; later bare `story` reattaches.
-Use `/session end` and confirm when provider work for that session is finished.
+one bounded snapshot of the current focus. `/inspect last` shows safe metadata
+for this process's latest accepted run. `/status` names the durable state,
+process access, defaults, current attachment and focus, provider readiness, and
+next action. `/quit` releases access without pausing. Run `story` again to open
+the ready default and restore its active default conversation. Use confirmed
+`/session pause` when provider work should stop until the session is opened again.
 
 ## 5. Automate without a TTY
 
 Scripts, pipelines, and other non-TTY callers must use noninteractive
-`story run`; it never receives selected conversation context. Use explicit
-workspace and session inputs in the [single automation example](guides/glasswater-scenario.md#use-one-explicit-automation-call-then-end),
+`story run`; it never receives conversation focus. Use explicit workspace and
+session inputs in the [single automation example](guides/glasswater-scenario.md#use-one-explicit-automation-call-then-pause),
 then consult the exact [CLI contract](reference/cli.md#workspace-noninteractive-behavior-and-exits).
 
 Continue with [Workspaces](guides/workspaces.md), [Consensus runs](guides/consensus-runs.md),

@@ -77,6 +77,10 @@ ERROR_DEFAULTS = {
         "The requested workspace path is unsafe.",
         "Use a path inside the initialized workspace.",
     ),
+    InteractiveErrorCode.WORKSPACE_VERSION_UNSUPPORTED: (
+        "This workspace uses an unsupported older session format.",
+        "Use a new workspace or follow the documented manual reset procedure.",
+    ),
     InteractiveErrorCode.CONFIGURATION_INVALID: (
         "Runtime configuration is invalid.",
         "Correct the reported configuration value and retry.",
@@ -95,23 +99,31 @@ ERROR_DEFAULTS = {
     ),
     InteractiveErrorCode.SESSION_EXISTS: (
         "The story session already exists.",
-        "Resume it or choose a different session name.",
+        "Open it or choose a different session name.",
     ),
     InteractiveErrorCode.SESSION_NOT_FOUND: (
         "The story session was not found.",
         "List sessions or create a new one.",
     ),
-    InteractiveErrorCode.SESSION_IN_USE: (
-        "The story session is in use.",
-        "Choose another session or wait for its owner to detach.",
+    InteractiveErrorCode.SESSION_NOT_ATTACHED: (
+        "No story session is attached to this shell.",
+        "Create or open a session before using this command.",
     ),
-    InteractiveErrorCode.SESSION_INACTIVE: (
-        "The story session is inactive.",
-        "Resume the session before starting provider work.",
+    InteractiveErrorCode.SESSION_PAUSED: (
+        "The story session is paused.",
+        "Open the session to make it ready before provider work.",
+    ),
+    InteractiveErrorCode.SESSION_ACCESS_BLOCKED: (
+        "Story-session access is held by another live local process.",
+        "Wait for that process to release access, then open the session.",
+    ),
+    InteractiveErrorCode.SESSION_OWNERSHIP_UNKNOWN: (
+        "Story-session access ownership cannot be verified.",
+        "Do not remove the claim; inspect recovery guidance before retrying.",
     ),
     InteractiveErrorCode.CONVERSATION_REQUIRED: (
-        "No conversation is selected.",
-        "Create, list, or use a conversation first.",
+        "No conversation has current focus.",
+        "Create or choose a conversation first.",
     ),
     InteractiveErrorCode.CONVERSATION_INVALID: (
         "The conversation input is invalid.",
@@ -190,7 +202,7 @@ ERROR_DEFAULTS = {
     ),
     InteractiveErrorCode.CLEANUP_FAILED: (
         "Cleanup did not complete.",
-        "Inspect retained temporary or lease state before retrying.",
+        "Inspect retained temporary or access-claim state before retrying.",
     ),
     InteractiveErrorCode.INTERNAL_ERROR: (
         "An internal error occurred.",
@@ -262,7 +274,7 @@ def expected_session_orientation(
         f"Target: {display_name}\n"
         f"History: {history_count} visible room {event_word}\n"
         "Room messages are saved locally and shared with addressed agents.\n"
-        "Type /help for commands; /quit leaves the story session active.\n"
+        "Type /help for commands; /quit releases access without pausing.\n"
     )
 
 
@@ -299,8 +311,8 @@ class PublicContractTests(unittest.TestCase):
         expected = {
             AttachmentKind: (
                 ("CREATED", "created"),
-                ("ATTACHED", "attached"),
-                ("RESUMED", "resumed"),
+                ("OPENED", "opened"),
+                ("REOPENED", "reopened"),
             ),
             ComposeMode: (("CHAT", "chat"), ("RUN", "run")),
             ConfirmationResult: (
@@ -332,14 +344,20 @@ class PublicContractTests(unittest.TestCase):
                 ("WORKSPACE_NOT_INITIALIZED", "workspace_not_initialized"),
                 ("WORKSPACE_INVALID", "workspace_invalid"),
                 ("WORKSPACE_UNSAFE", "workspace_unsafe"),
+                (
+                    "WORKSPACE_VERSION_UNSUPPORTED",
+                    "workspace_version_unsupported",
+                ),
                 ("CONFIGURATION_INVALID", "configuration_invalid"),
                 ("COMMAND_INVALID", "command_invalid"),
                 ("AGENT_INVALID", "agent_invalid"),
                 ("SESSION_INVALID", "session_invalid"),
                 ("SESSION_EXISTS", "session_exists"),
                 ("SESSION_NOT_FOUND", "session_not_found"),
-                ("SESSION_IN_USE", "session_in_use"),
-                ("SESSION_INACTIVE", "session_inactive"),
+                ("SESSION_NOT_ATTACHED", "session_not_attached"),
+                ("SESSION_PAUSED", "session_paused"),
+                ("SESSION_ACCESS_BLOCKED", "session_access_blocked"),
+                ("SESSION_OWNERSHIP_UNKNOWN", "session_ownership_unknown"),
                 ("CONVERSATION_REQUIRED", "conversation_required"),
                 ("CONVERSATION_INVALID", "conversation_invalid"),
                 ("CONVERSATION_NOT_FOUND", "conversation_not_found"),
@@ -604,14 +622,14 @@ class PromptAndRenderingTests(unittest.TestCase):
                 "conversation_handle",
                 "conversation_subject",
                 "archived",
-                "selected",
+                "focused",
             ),
         )
         self.assertTrue(
             all(
                 list_signature.parameters[name].kind
                 is inspect.Parameter.KEYWORD_ONLY
-                for name in ("archived", "selected")
+                for name in ("archived", "focused")
             )
         )
         search_signature = inspect.signature(
@@ -933,7 +951,7 @@ class PromptAndRenderingTests(unittest.TestCase):
                 "Workspace: /stories/example\n"
                 "Session: lobby\n"
                 "Provider calls are unavailable in the lobby. Use "
-                "/session new NAME, /session resume [NAME], or /session list.\n"
+                "/session create NAME, /session open [NAME], or /session list.\n"
                 "Type /help for commands; /quit exits.\n"
             ],
         )
@@ -950,11 +968,11 @@ class PromptAndRenderingTests(unittest.TestCase):
         for attachment in AttachmentKind:
             cases.append((attachment, *AGENT_CASES[0], 1))
         for agent_case in AGENT_CASES:
-            cases.append((AttachmentKind.ATTACHED, *agent_case, 2))
+            cases.append((AttachmentKind.OPENED, *agent_case, 2))
         for history_count in (0, 1, 2):
             cases.append(
                 (
-                    AttachmentKind.RESUMED,
+                    AttachmentKind.REOPENED,
                     *AGENT_CASES[1],
                     history_count,
                 )
@@ -1002,7 +1020,7 @@ class PromptAndRenderingTests(unittest.TestCase):
                 "Workspace: /stories/example\n"
                 "Session: SESSION (created)\n"
                 "Target: Lead Orchestrator\n"
-                "Type /help for commands; /quit leaves the story session active.\n"
+                "Type /help for commands; /quit releases access without pausing.\n"
             ],
         )
         self.assertNotIn("History:", callbacks.records[0])
@@ -1019,7 +1037,7 @@ class PromptAndRenderingTests(unittest.TestCase):
         self.assertIn("History: 0 visible room events\n", callbacks.records[0])
         self.assertIn("Room messages are saved locally", callbacks.records[0])
 
-    def test_conversation_scope_has_exact_selected_and_lobby_records(self) -> None:
+    def test_conversation_scope_has_exact_focused_and_lobby_records(self) -> None:
         terminal, callbacks = make_terminal(width=200)
         terminal.write_conversation_scope(
             session_id="SESSION",
@@ -1065,20 +1083,20 @@ class PromptAndRenderingTests(unittest.TestCase):
             "c_0123456789",
             "Opening scene",
             archived=False,
-            selected=True,
+            focused=True,
         )
         terminal.write_conversation_list_entry(
             "c_fedcba9876",
             "Old\nsubject\x1b",
             archived=True,
-            selected=False,
+            focused=False,
         )
         self.assertEqual(
             callbacks.records,
             [
-                "[conversation] c_0123456789 | active | selected | "
+                "[conversation] c_0123456789 | active | focused | "
                 "Subject: Opening scene\n",
-                "[conversation] c_fedcba9876 | archived | not selected | "
+                "[conversation] c_fedcba9876 | archived | not focused | "
                 "Subject: Old\\x0asubject\\x1b\n",
             ],
         )
@@ -1100,25 +1118,25 @@ class PromptAndRenderingTests(unittest.TestCase):
                 "unsafe/id",
                 "Subject",
                 archived=False,
-                selected=False,
+                focused=False,
             ),
             lambda: terminal.write_conversation_list_entry(
                 "conversation",
                 " ",
                 archived=False,
-                selected=False,
+                focused=False,
             ),
             lambda: terminal.write_conversation_list_entry(
                 "conversation",
                 "Subject",
                 archived=True,
-                selected=True,
+                focused=True,
             ),
             lambda: terminal.write_conversation_list_entry(
                 "conversation",
                 "Subject",
                 archived=1,  # type: ignore[arg-type]
-                selected=False,
+                focused=False,
             ),
         )
         for call in invalid_calls:
@@ -1920,7 +1938,7 @@ class TerminalBoundaryTests(unittest.TestCase):
                     "c_0123456789",
                     "Subject",
                     archived=False,
-                    selected=True,
+                    focused=True,
                 )
                 terminal.write_conversation_search_hit(
                     "c_0123456789",

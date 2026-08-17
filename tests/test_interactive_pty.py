@@ -21,9 +21,9 @@ from typing import Any
 from story_writing_agents.backend import AgentBackend
 from story_writing_agents.cli_context import (
     load_cli_context,
-    load_conversation_selection,
-    save_conversation_selection,
-    select_session,
+    load_default_conversation,
+    save_default_conversation,
+    save_default_session,
 )
 from story_writing_agents.conversations import (
     ConversationEventAppend,
@@ -246,13 +246,13 @@ def _durable_tree(root: Path) -> dict[str, bytes]:
     }
 
 
-def _durable_tree_without_leases(root: Path) -> dict[str, bytes]:
-    """Capture persistent workspace bytes while excluding transient lease files."""
+def _durable_tree_without_access(root: Path) -> dict[str, bytes]:
+    """Capture persistent bytes while excluding transient access claims."""
 
     return {
         path.relative_to(root).as_posix(): path.read_bytes()
         for path in sorted(root.rglob("*"))
-        if path.is_file() and not path.name.endswith(".lease.json")
+        if path.is_file() and not path.name.endswith(".access.json")
     }
 
 
@@ -582,26 +582,26 @@ class InteractiveCliPtyTests(unittest.TestCase):
                     f"captured={process.normalized_text!r}"
                 )
 
-    def _seed_selected_session(
+    def _seed_default_session(
         self,
         *,
         session_id: str = "alpha",
         subject: str = "Harbor planning",
     ) -> ConversationMetadata:
-        """Persist one active selected session and selected conversation lease-free."""
+        """Persist one ready default session and default conversation."""
 
         backend = AgentBackend(
             self.workspace,
             executable=str(self.fake_executable),
         )
         try:
-            backend.start_session(session_id)
+            backend.create_session_with_access(session_id)
         finally:
             backend.close()
-        select_session(self.workspace, session_id)
+        save_default_session(self.workspace, session_id)
         catalog = FilesystemConversationCatalog(self.workspace)
         selected = catalog.create(session_id, subject)
-        save_conversation_selection(
+        save_default_conversation(
             self.workspace,
             session_id,
             selected.conversation_id,
@@ -688,7 +688,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
         self._processes.append(harness)
         return harness
 
-    def test_bare_entry_creates_session_then_quit_releases_only_the_lease(
+    def test_bare_entry_creates_session_then_quit_releases_only_access(
         self,
     ) -> None:
         """Prove lobby orientation, explicit creation, prompts, and safe quit."""
@@ -702,20 +702,20 @@ class InteractiveCliPtyTests(unittest.TestCase):
         )
         self.assertIn("Session: lobby\n", process.normalized_text)
 
-        process.send_line("/session new alpha")
+        process.send_line("/session create alpha")
         process.wait_for_text("story[alpha:lead]> ")
         self.assertIn("Session: alpha (created)\n", process.normalized_text)
         process.send_line("/quit")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
 
         manifest = self.workspace.read_json(f"{_SESSION_DIRECTORY}/alpha.json")
-        self.assertIs(manifest["active"], True)
+        self.assertEqual(manifest["durable_state"], "ready")
         self.assertFalse(
             self.workspace.path(
-                f"{_SESSION_DIRECTORY}/alpha.lease.json"
+                f"{_SESSION_DIRECTORY}/alpha.access.json"
             ).exists()
         )
-        self.assertEqual(load_cli_context(self.workspace).selected_session, "alpha")
+        self.assertEqual(load_cli_context(self.workspace).default_session_id, "alpha")
         self.assertFalse(self.provider_log.exists())
         self.assertNotIn("[suggestions]", process.normalized_text)
         self.assertNotIn("PTY_TEST_CREDENTIAL_MUST_NOT_APPEAR", process.normalized_text)
@@ -814,14 +814,14 @@ class InteractiveCliPtyTests(unittest.TestCase):
         process = self._spawn_cli(())
         process.wait_for_text("story[lobby]> ")
         mark = process.output_mark()
-        process.send_line("/session new alpha")
+        process.send_line("/session create alpha")
         process.wait_for_text("story[alpha:lead]> ", after=mark)
 
         mark = process.output_mark()
         process.send_line("/conversation new First Subject")
         created_output = process.wait_for_text("Subject: First Subject", after=mark)
         match = re.search(
-            r"Created and selected ([A-Za-z0-9_-]+) \| Subject: First Subject",
+            r"Created and focused ([A-Za-z0-9_-]+) \| Subject: First Subject",
             created_output,
         )
         self.assertIsNotNone(match, created_output)
@@ -835,11 +835,11 @@ class InteractiveCliPtyTests(unittest.TestCase):
         process.send_line("/conversation list")
         listed = process.wait_for_text("First Subject", after=mark)
         process.wait_for_text("Second Subject", after=mark)
-        self.assertIn("selected", listed)
+        self.assertIn("focused", listed)
 
         mark = process.output_mark()
         process.send_line(f"/conversation use {first_handle}")
-        process.wait_for_text("Selected ", after=mark)
+        process.wait_for_text("Current focus: ", after=mark)
         mark = process.output_mark()
         process.send_line("/conversation subject Renamed Subject")
         process.wait_for_text("Subject: Renamed Subject", after=mark)
@@ -899,7 +899,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
         successor = by_subject["Second Subject"]
         self.assertIs(successor.status, ConversationStatus.ACTIVE)
         self.assertEqual(
-            load_conversation_selection(self.workspace, "alpha"),
+            load_default_conversation(self.workspace, "alpha"),
             successor.conversation_id,
         )
         events = FilesystemConversationEventStore(
@@ -918,7 +918,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
             ),
         )
         self.assertFalse(
-            self.workspace.path(f"{_SESSION_DIRECTORY}/alpha.lease.json").exists()
+            self.workspace.path(f"{_SESSION_DIRECTORY}/alpha.access.json").exists()
         )
         history_names = {
             ".python_history",
@@ -929,12 +929,12 @@ class InteractiveCliPtyTests(unittest.TestCase):
             any(path.name in history_names for path in self.temporary_root.rglob("*"))
         )
 
-    def test_explicit_chat_switches_sessions_and_confirmed_end_is_distinct(
+    def test_explicit_chat_switches_sessions_and_confirmed_pause_is_distinct(
         self,
     ) -> None:
         """Prove explicit attachment, safe switching, and confirmed deactivation."""
 
-        selected = self._seed_selected_session()
+        selected = self._seed_default_session()
         noncanonical_option = self.workspace.root / ".." / self.workspace.root.name
         process = self._spawn_cli(
             ("chat", "alpha", "--workspace", str(noncanonical_option)),
@@ -945,47 +945,47 @@ class InteractiveCliPtyTests(unittest.TestCase):
             f"Workspace: {self.workspace.root}\n",
             process.normalized_text,
         )
-        self.assertIn("Session: alpha (attached)", process.normalized_text)
+        self.assertIn("Session: alpha (opened)", process.normalized_text)
         self.assertIn(selected.subject, process.normalized_text)
 
         mark = process.output_mark()
-        process.send_line("/session new beta")
+        process.send_line("/session create beta")
         process.wait_for_text("Session: beta (created)", after=mark)
         process.wait_for_text("story[beta:lead]> ", after=mark)
         self.assertFalse(
-            self.workspace.path(f"{_SESSION_DIRECTORY}/alpha.lease.json").exists()
+            self.workspace.path(f"{_SESSION_DIRECTORY}/alpha.access.json").exists()
         )
 
         mark = process.output_mark()
-        process.send_line("/session resume alpha")
-        process.wait_for_text("Session: alpha (attached)", after=mark)
+        process.send_line("/session open alpha")
+        process.wait_for_text("Session: alpha (opened)", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         self.assertFalse(
-            self.workspace.path(f"{_SESSION_DIRECTORY}/beta.lease.json").exists()
+            self.workspace.path(f"{_SESSION_DIRECTORY}/beta.access.json").exists()
         )
 
         mark = process.output_mark()
-        process.send_line("/session end")
-        process.wait_for_text("End session alpha? [y/N] ", after=mark)
+        process.send_line("/session pause")
+        process.wait_for_text("Pause session alpha? [y/N] ", after=mark)
         process.send_line("y")
-        process.wait_for_text("[session] Ended alpha; selection retained.", after=mark)
+        process.wait_for_text("[session] Paused alpha; default retained.", after=mark)
         process.wait_for_text("story[lobby]> ", after=mark)
         process.send_line("/quit")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
 
         alpha = self.workspace.read_json(f"{_SESSION_DIRECTORY}/alpha.json")
         beta = self.workspace.read_json(f"{_SESSION_DIRECTORY}/beta.json")
-        self.assertIs(alpha["active"], False)
-        self.assertIs(beta["active"], True)
-        self.assertEqual(load_cli_context(self.workspace).selected_session, "alpha")
+        self.assertEqual(alpha["durable_state"], "paused")
+        self.assertEqual(beta["durable_state"], "ready")
+        self.assertEqual(load_cli_context(self.workspace).default_session_id, "alpha")
         self.assertEqual(
-            load_conversation_selection(self.workspace, "alpha"),
+            load_default_conversation(self.workspace, "alpha"),
             selected.conversation_id,
         )
         for session_id in ("alpha", "beta"):
             self.assertFalse(
                 self.workspace.path(
-                    f"{_SESSION_DIRECTORY}/{session_id}.lease.json"
+                    f"{_SESSION_DIRECTORY}/{session_id}.access.json"
                 ).exists()
             )
         self.assertFalse(self.provider_log.exists())
@@ -995,7 +995,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
     ) -> None:
         """Exercise provider-free reads followed by trusted retrieval progress."""
 
-        selected = self._seed_selected_session()
+        selected = self._seed_default_session()
         process = self._spawn_cli(
             ("chat", "alpha", "--workspace", str(self.workspace.root))
         )
@@ -1100,11 +1100,11 @@ class InteractiveCliPtyTests(unittest.TestCase):
         )
         self.assertEqual(events[-1].content, "retrieval-assisted answer")
         self.assertEqual(
-            load_conversation_selection(self.workspace, "alpha"),
+            load_default_conversation(self.workspace, "alpha"),
             selected.conversation_id,
         )
         self.assertFalse(
-            self.workspace.path(f"{_SESSION_DIRECTORY}/alpha.lease.json").exists()
+            self.workspace.path(f"{_SESSION_DIRECTORY}/alpha.access.json").exists()
         )
 
     def test_run_composer_send_cancel_interrupt_and_eof_have_exact_durability(
@@ -1112,7 +1112,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
     ) -> None:
         """Cover multiline consensus plus local cancel, VINTR, and VEOF discards."""
 
-        selected = self._seed_selected_session()
+        selected = self._seed_default_session()
         process = self._spawn_cli(
             ("chat", "alpha", "--workspace", str(self.workspace.root))
         )
@@ -1151,7 +1151,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
         offsets = [collapsed.index(fragment) for fragment in ordered_fragments]
         self.assertEqual(offsets, sorted(offsets))
         self.assertNotIn("[waiting]", successful_output)
-        durable_after_success = _durable_tree_without_leases(self.workspace.root)
+        durable_after_success = _durable_tree_without_access(self.workspace.root)
 
         mark = process.output_mark()
         process.send_line("/run")
@@ -1162,7 +1162,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
         process.wait_for_text("Discarded 1 line.", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         self.assertEqual(
-            _durable_tree_without_leases(self.workspace.root),
+            _durable_tree_without_access(self.workspace.root),
             durable_after_success,
         )
 
@@ -1175,7 +1175,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
         process.wait_for_text("Discarded 1 line.", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         self.assertEqual(
-            _durable_tree_without_leases(self.workspace.root),
+            _durable_tree_without_access(self.workspace.root),
             durable_after_success,
         )
 
@@ -1188,7 +1188,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
         self.assertIn("Discarded 1 line.", process.text_after(mark))
         self.assertEqual(
-            _durable_tree_without_leases(self.workspace.root),
+            _durable_tree_without_access(self.workspace.root),
             durable_after_success,
         )
 
@@ -1228,29 +1228,29 @@ class InteractiveCliPtyTests(unittest.TestCase):
             5,
         )
         self.assertFalse(
-            self.workspace.path(f"{_SESSION_DIRECTORY}/alpha.lease.json").exists()
+            self.workspace.path(f"{_SESSION_DIRECTORY}/alpha.access.json").exists()
         )
 
     def test_main_eof_exits_normally_without_ending_or_mutating_session(self) -> None:
         """Deliver configured VEOF at main input and prove detach-only cleanup."""
 
-        selected = self._seed_selected_session()
-        before = _durable_tree_without_leases(self.workspace.root)
+        selected = self._seed_default_session()
+        before = _durable_tree_without_access(self.workspace.root)
         process = self._spawn_cli(
             ("chat", "alpha", "--workspace", str(self.workspace.root))
         )
         process.wait_for_text("story[alpha:lead]> ")
         process.send_eof()
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
-        self.assertEqual(_durable_tree_without_leases(self.workspace.root), before)
+        self.assertEqual(_durable_tree_without_access(self.workspace.root), before)
         manifest = self.workspace.read_json(f"{_SESSION_DIRECTORY}/alpha.json")
-        self.assertIs(manifest["active"], True)
+        self.assertEqual(manifest["durable_state"], "ready")
         self.assertEqual(
-            load_conversation_selection(self.workspace, "alpha"),
+            load_default_conversation(self.workspace, "alpha"),
             selected.conversation_id,
         )
         self.assertFalse(
-            self.workspace.path(f"{_SESSION_DIRECTORY}/alpha.lease.json").exists()
+            self.workspace.path(f"{_SESSION_DIRECTORY}/alpha.access.json").exists()
         )
         self.assertFalse(self.provider_log.exists())
 
@@ -1259,7 +1259,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
     ) -> None:
         """Prove joined real-signal advisory cancellation and clean retry semantics."""
 
-        selected = self._seed_selected_session()
+        selected = self._seed_default_session()
         process = self._spawn_cli(
             ("chat", "alpha", "--workspace", str(self.workspace.root))
         )
@@ -1275,7 +1275,10 @@ class InteractiveCliPtyTests(unittest.TestCase):
         manifest_path = f"{_SESSION_DIRECTORY}/alpha.json"
         manifest = self.workspace.read_json(manifest_path)
         thread_key = "codex:plot_architect"
-        self.assertIs(manifest["threads"][thread_key]["tainted"], False)
+        self.assertIs(
+            manifest["provider_threads"][thread_key]["tainted"],
+            False,
+        )
 
         self._set_provider_control(mode="block")
         records_before_cancel = len(self._provider_records())
@@ -1332,7 +1335,10 @@ class InteractiveCliPtyTests(unittest.TestCase):
             os.kill(blocked_pid, 0)
 
         manifest = self.workspace.read_json(manifest_path)
-        self.assertIs(manifest["threads"][thread_key]["tainted"], True)
+        self.assertIs(
+            manifest["provider_threads"][thread_key]["tainted"],
+            True,
+        )
         catalog = FilesystemConversationCatalog(self.workspace)
         store = FilesystemConversationEventStore(self.workspace, catalog=catalog)
         events = store.read("alpha", selected.conversation_id)
@@ -1356,7 +1362,10 @@ class InteractiveCliPtyTests(unittest.TestCase):
         process.wait_for_text("plot> deterministic advisory reply", after=mark)
         process.wait_for_text("story[alpha:plot]> ", after=mark)
         manifest = self.workspace.read_json(manifest_path)
-        self.assertIs(manifest["threads"][thread_key]["tainted"], False)
+        self.assertIs(
+            manifest["provider_threads"][thread_key]["tainted"],
+            False,
+        )
         started = [
             record
             for record in self._provider_records()
@@ -1370,11 +1379,11 @@ class InteractiveCliPtyTests(unittest.TestCase):
         process.send_line("/quit")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
         self.assertEqual(
-            load_conversation_selection(self.workspace, "alpha"),
+            load_default_conversation(self.workspace, "alpha"),
             selected.conversation_id,
         )
         self.assertFalse(
-            self.workspace.path(f"{_SESSION_DIRECTORY}/alpha.lease.json").exists()
+            self.workspace.path(f"{_SESSION_DIRECTORY}/alpha.access.json").exists()
         )
         self.assertNotIn("PTY_TEST_CREDENTIAL_MUST_NOT_APPEAR", cancelled_output)
 
@@ -1383,7 +1392,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
     ) -> None:
         """Prove real-signal interruption, artifact safety, and drafter retry."""
 
-        selected = self._seed_selected_session()
+        selected = self._seed_default_session()
         process = self._spawn_cli(
             ("chat", "alpha", "--workspace", str(self.workspace.root))
         )
@@ -1437,7 +1446,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
         process.wait_for_text("[cancelled] Debate ", after=mark)
         process.wait_for_text("was marked interrupted.", after=mark)
         process.wait_for_text("It cannot resume.", after=mark)
-        process.wait_for_text('"alpha" remains active and attached.', after=mark)
+        process.wait_for_text('"alpha" remains ready and attached.', after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
 
         blocked_pid = blocked["pid"]
@@ -1481,7 +1490,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
         manifest_path = f"{_SESSION_DIRECTORY}/alpha.json"
         manifest = self.workspace.read_json(manifest_path)
         self.assertIs(
-            manifest["threads"]["codex:execution_specialist"]["tainted"],
+            manifest["provider_threads"]["codex:execution_specialist"]["tainted"],
             True,
         )
 
@@ -1492,7 +1501,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         manifest = self.workspace.read_json(manifest_path)
         self.assertIs(
-            manifest["threads"]["codex:execution_specialist"]["tainted"],
+            manifest["provider_threads"]["codex:execution_specialist"]["tainted"],
             False,
         )
         drafter_invocations = [
@@ -1522,11 +1531,11 @@ class InteractiveCliPtyTests(unittest.TestCase):
         process.send_line("/quit")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
         self.assertEqual(
-            load_conversation_selection(self.workspace, "alpha"),
+            load_default_conversation(self.workspace, "alpha"),
             selected.conversation_id,
         )
         self.assertFalse(
-            self.workspace.path(f"{_SESSION_DIRECTORY}/alpha.lease.json").exists()
+            self.workspace.path(f"{_SESSION_DIRECTORY}/alpha.access.json").exists()
         )
 
     def test_vintr_during_large_local_history_stops_sequential_rendering(
@@ -1534,7 +1543,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
     ) -> None:
         """Use PTY backpressure to interrupt provider-free row rendering safely."""
 
-        selected = self._seed_selected_session()
+        selected = self._seed_default_session()
         catalog = FilesystemConversationCatalog(self.workspace)
         store = FilesystemConversationEventStore(self.workspace, catalog=catalog)
         for ordinal in range(1, 13):
@@ -1561,7 +1570,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
                     content=f"answer {ordinal} " + ("a" * 4096),
                 )
             )
-        before = _durable_tree_without_leases(self.workspace.root)
+        before = _durable_tree_without_access(self.workspace.root)
         process = self._spawn_cli(
             ("chat", "alpha", "--workspace", str(self.workspace.root))
         )
@@ -1579,18 +1588,18 @@ class InteractiveCliPtyTests(unittest.TestCase):
         self.assertLess(interrupted_output.count("[transcript "), 24)
         self.assertNotIn("[result] Transcript:", interrupted_output)
         self.assertEqual(
-            _durable_tree_without_leases(self.workspace.root),
+            _durable_tree_without_access(self.workspace.root),
             before,
         )
         self.assertFalse(self.provider_log.exists())
         process.send_line("/quit")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
         self.assertEqual(
-            load_conversation_selection(self.workspace, "alpha"),
+            load_default_conversation(self.workspace, "alpha"),
             selected.conversation_id,
         )
         self.assertFalse(
-            self.workspace.path(f"{_SESSION_DIRECTORY}/alpha.lease.json").exists()
+            self.workspace.path(f"{_SESSION_DIRECTORY}/alpha.access.json").exists()
         )
 
     def test_tty_startup_workspace_configuration_and_preflight_errors_are_safe(
@@ -1642,30 +1651,30 @@ class InteractiveCliPtyTests(unittest.TestCase):
         self.assertNotIn("PTY_TEST_CREDENTIAL_MUST_NOT_APPEAR", combined)
         self.assertNotIn(b"\x1b[", combined.encode("utf-8"))
 
-    def test_second_real_process_reports_session_lease_without_exposing_token(
+    def test_second_real_process_reports_blocked_access_without_exposing_token(
         self,
     ) -> None:
-        """Prove one natural lease conflict preserves the owner and durable scope."""
+        """Prove a natural access conflict preserves owner and durable scope."""
 
-        selected = self._seed_selected_session()
+        selected = self._seed_default_session()
         owner = self._spawn_cli(
             ("chat", "alpha", "--workspace", str(self.workspace.root))
         )
         owner.wait_for_text("story[alpha:lead]> ")
-        lease_path = f"{_SESSION_DIRECTORY}/alpha.lease.json"
-        lease = self.workspace.read_json(lease_path)
-        lease_token = lease["token"]
+        access_path = f"{_SESSION_DIRECTORY}/alpha.access.json"
+        access = self.workspace.read_json(access_path)
+        claim_token = access["claim_token"]
         before_contender = _durable_tree(self.workspace.root)
 
         contender = self._spawn_cli(
             ("chat", "alpha", "--workspace", str(self.workspace.root))
         )
-        contender.wait_for_text("[error session_in_use]")
+        contender.wait_for_text("[error session_access_blocked]")
         contender.wait_for_text("story[lobby]> ")
         contender.send_line("/quit")
         self.assertEqual(contender.wait_for_exit(), 0, contender.normalized_text)
         self.assertEqual(_durable_tree(self.workspace.root), before_contender)
-        self.assertNotIn(lease_token, contender.normalized_text)
+        self.assertNotIn(claim_token, contender.normalized_text)
         self.assertNotIn(
             "PTY_TEST_CREDENTIAL_MUST_NOT_APPEAR",
             contender.normalized_text,
@@ -1674,11 +1683,11 @@ class InteractiveCliPtyTests(unittest.TestCase):
 
         owner.send_line("/quit")
         self.assertEqual(owner.wait_for_exit(), 0, owner.normalized_text)
-        self.assertFalse(self.workspace.path(lease_path).exists())
+        self.assertFalse(self.workspace.path(access_path).exists())
         manifest = self.workspace.read_json(f"{_SESSION_DIRECTORY}/alpha.json")
-        self.assertIs(manifest["active"], True)
+        self.assertEqual(manifest["durable_state"], "ready")
         self.assertEqual(
-            load_conversation_selection(self.workspace, "alpha"),
+            load_default_conversation(self.workspace, "alpha"),
             selected.conversation_id,
         )
 
@@ -1687,7 +1696,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
     ) -> None:
         """Cover stable real-process error categories and recovery without leaks."""
 
-        selected = self._seed_selected_session()
+        selected = self._seed_default_session()
         process = self._spawn_cli(
             ("chat", "alpha", "--workspace", str(self.workspace.root))
         )
@@ -1852,11 +1861,11 @@ class InteractiveCliPtyTests(unittest.TestCase):
         process.send_line("/quit")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
         self.assertEqual(
-            load_conversation_selection(self.workspace, "alpha"),
+            load_default_conversation(self.workspace, "alpha"),
             selected.conversation_id,
         )
         self.assertFalse(
-            self.workspace.path(f"{_SESSION_DIRECTORY}/alpha.lease.json").exists()
+            self.workspace.path(f"{_SESSION_DIRECTORY}/alpha.access.json").exists()
         )
 
     def test_each_one_stream_non_tty_entry_rejects_without_any_mutation(

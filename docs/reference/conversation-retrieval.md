@@ -1,6 +1,6 @@
 # Bounded conversation retrieval
 
-> **Availability:** selected shell conversations use bounded retrieval. Python
+> **Availability:** focused shell conversations use bounded retrieval. Python
 > callers opt in; `converse()` remains one-step.
 
 Key terms: **retrieval turn**—one message, action loop, and answer; **action**—a
@@ -82,7 +82,7 @@ No clipping, retry, sixth-call grace, or whole-turn deadline exists.
 
 ## Short sequence
 
-1. Call one receives the question and selected context.
+1. Call one receives the question and focused context.
 2. The agent searches active same-session conversations; it receives `s1h1`.
 3. It reads through `s1h1`, receiving pair `r2e1`, `r2e2`.
 4. It answers with supplied IDs; sources retain subject and citation.

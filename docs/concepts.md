@@ -1,6 +1,6 @@
 # Core concepts
 
-> **Availability:** the attached TTY shell manages subject conversations,
+> **Availability:** the TTY shell with a current attachment manages conversations,
 > dispatches routed advisory turns, searches active records, and reads bounded
 > active or archived transcripts. See [Story sessions](guides/story-sessions.md).
 
@@ -37,7 +37,7 @@ execution. Its catalog owns subject and archive status; its event store owns
 the full visible transcript and a bounded complete-turn view. A read-only
 memory service searches both and follows stable citations into bounded pages.
 `StoryRuntime` can also persist and send one turn for an existing conversation
-ID, without creating or selecting that identity. See [Runtime API](reference/runtime-api.md#one-conversation-turn)
+ID, without creating or focusing that identity. See [Runtime API](reference/runtime-api.md#one-conversation-turn)
 and [Conversation search and cited transcript pages](reference/conversation-search.md).
 
 ## The four roles

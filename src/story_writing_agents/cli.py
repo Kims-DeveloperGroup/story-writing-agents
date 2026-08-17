@@ -15,7 +15,7 @@ from .cli_context import (
     load_cli_context,
     resolve_session,
     resolve_workspace,
-    select_session,
+    save_default_session,
 )
 from .config import ConfigManager
 from .errors import (
@@ -24,6 +24,7 @@ from .errors import (
     SessionIdError,
     WorkspaceFormatError,
     WorkspaceSecurityError,
+    WorkspaceVersionUnsupportedError,
 )
 from .interactive_controller import InteractiveController
 from .interactive_line_editor import InteractiveMainLineEditor
@@ -35,20 +36,26 @@ from .interactive_terminal import (
 from .models import DebateStatus
 from .orchestrator import StoryRuntime
 from .run_inputs import read_draft_file
+from .session_lifecycle import (
+    SessionAccessState,
+    SessionDurableState,
+    SessionLifecycleState,
+    provider_work_is_ready,
+)
 from .workspace import initialize_workspace
 
 
 _WORKSPACE_HELP = (
     "explicit initialized workspace; omitted discovers the nearest ancestor"
 )
-_SESSION_HELP = "explicit session; omitted uses the workspace selection"
+_SESSION_HELP = "explicit session; omitted uses the workspace default"
 
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the CLI grammar without reading files or starting runtime work.
 
-    The returned parser keeps all legacy command shapes and adds optional bare
-    interactive entry plus ``chat [SESSION]``. Parsing help has no TTY or
+    The returned parser includes optional bare interactive entry plus
+    ``chat [SESSION]``. Parsing help has no TTY or
     resource requirement; interactive value validation remains after the TTY
     guard so non-terminal entry cannot touch configuration.
     """
@@ -144,19 +151,25 @@ def build_parser() -> argparse.ArgumentParser:
 
     session = subcommands.add_parser(
         "session",
-        help="start or end a persistent provider session",
+        help="create, reopen, or pause a persistent provider session",
     )
     session_actions = session.add_subparsers(dest="session_action", required=True)
-    for action in ("start", "end"):
+    for action in ("create", "reopen", "pause"):
         action_parser = session_actions.add_parser(action)
-        action_parser.add_argument(
-            "session_name",
-            nargs="?",
-            metavar="SESSION",
-            help="session ID; omitted uses the workspace selection",
-        )
+        if action == "create":
+            action_parser.add_argument(
+                "session_name",
+                metavar="SESSION",
+                help="new session ID",
+            )
+        else:
+            action_parser.add_argument(
+                "session_name",
+                nargs="?",
+                metavar="SESSION",
+                help="session ID; omitted uses the workspace default",
+            )
         action_parser.add_argument("--workspace", help=_WORKSPACE_HELP)
-        action_parser.add_argument("--session", help=_SESSION_HELP)
 
     smoke = subcommands.add_parser(
         "smoke",
@@ -223,7 +236,7 @@ def _parse_positive_timeout_seconds(value: object) -> float:
 
 
 def _resolve_run_input(arguments: argparse.Namespace) -> tuple[str, str]:
-    """Resolve exactly one legacy prompt/draft source without runtime mutation.
+    """Resolve exactly one established prompt/draft source without mutation.
 
     Inline values are returned unchanged. Draft files are read as strict UTF-8;
     ambiguous, missing, unreadable, or invalid input raises
@@ -249,6 +262,39 @@ def _resolve_run_input(arguments: argparse.Namespace) -> tuple[str, str]:
         return input_kind, value
 
     return "draft", read_draft_file(value)
+
+
+def _require_session_command_state(
+    value: object,
+    *,
+    session_id: str,
+    durable_state: SessionDurableState,
+    access_state: SessionAccessState,
+) -> SessionLifecycleState:
+    """Return exact correlated lifecycle facts for one automation transition."""
+
+    if type(value) is not SessionLifecycleState:
+        raise BackendProtocolError(
+            "session command returned an invalid lifecycle state"
+        )
+    try:
+        provider_work_is_ready(
+            value,
+            provider_configuration_ready=False,
+        )
+    except (TypeError, ValueError) as exc:
+        raise BackendProtocolError(
+            "session command returned malformed lifecycle facts"
+        ) from exc
+    if (
+        value.session_id != session_id
+        or value.durable_state is not durable_state
+        or value.access_state is not access_state
+    ):
+        raise BackendProtocolError(
+            "session command returned uncorrelated lifecycle facts"
+        )
+    return value
 
 
 def _interactive_streams_are_terminals() -> bool:
@@ -296,6 +342,8 @@ def _classify_workspace_entry_failure(failure: Exception) -> InteractiveError:
 
     if isinstance(failure, WorkspaceSecurityError):
         code = InteractiveErrorCode.WORKSPACE_UNSAFE
+    elif isinstance(failure, WorkspaceVersionUnsupportedError):
+        code = InteractiveErrorCode.WORKSPACE_VERSION_UNSUPPORTED
     elif isinstance(failure, (WorkspaceFormatError, OSError)):
         code = InteractiveErrorCode.WORKSPACE_INVALID
     elif isinstance(failure, ConfigurationError):
@@ -317,6 +365,8 @@ def _classify_interactive_configuration_failure(
 
     if isinstance(failure, WorkspaceSecurityError):
         code = InteractiveErrorCode.WORKSPACE_UNSAFE
+    elif isinstance(failure, WorkspaceVersionUnsupportedError):
+        code = InteractiveErrorCode.WORKSPACE_VERSION_UNSUPPORTED
     elif isinstance(failure, (WorkspaceFormatError, OSError)):
         code = InteractiveErrorCode.WORKSPACE_INVALID
     elif isinstance(
@@ -462,11 +512,10 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Dispatch one CLI invocation while preserving legacy command contracts.
+    """Dispatch one CLI invocation through the canonical command contracts.
 
-    Bare and ``chat`` invocations use the guarded interactive adapter. Existing
-    commands retain their JSON, stderr, exit-code, backend-cleanup, and async
-    behavior; argparse continues to own help and syntax exits.
+    Bare and ``chat`` invocations use the guarded interactive adapter. Argparse
+    owns help and syntax exits; runtime failures use the stable status-2 path.
     """
 
     parser = build_parser()
@@ -499,28 +548,82 @@ def main(argv: Sequence[str] | None = None) -> int:
         workspace = resolve_workspace(arguments.workspace)
         cli_context = load_cli_context(workspace)
         if arguments.command == "session":
-            session_id = resolve_session(
-                workspace=workspace,
-                context=cli_context,
-                option_session=arguments.session,
-                positional_session=arguments.session_name,
-            )
+            if arguments.session_name is not None:
+                session_id = workspace.validate_identifier(
+                    arguments.session_name
+                )
+            elif cli_context.default_session_id is not None:
+                session_id = workspace.validate_identifier(
+                    cli_context.default_session_id
+                )
+            else:
+                raise ConfigurationError(
+                    "no default session; provide SESSION or run "
+                    "'story session create SESSION'"
+                )
             backend = AgentBackend(workspace)
             try:
-                manifest = (
-                    backend.start_session(session_id)
-                    if arguments.session_action == "start"
-                    else backend.end_session(session_id)
-                )
+                if arguments.session_action == "create":
+                    if backend.validate_provider_configuration(session_id) is not True:
+                        raise BackendProtocolError(
+                            "provider configuration validation did not return true"
+                        )
+                    acquired = _require_session_command_state(
+                        backend.create_session_with_access(session_id),
+                        session_id=session_id,
+                        durable_state=SessionDurableState.READY,
+                        access_state=SessionAccessState.HELD_HERE,
+                    )
+                    observed = backend.get_session_lifecycle(session_id)
+                    if observed != acquired:
+                        raise BackendProtocolError(
+                            "created session lifecycle changed before release"
+                        )
+                    try:
+                        save_default_session(workspace, session_id)
+                    finally:
+                        state = backend.release_session_access(session_id)
+                elif arguments.session_action == "reopen":
+                    if backend.validate_provider_configuration(session_id) is not True:
+                        raise BackendProtocolError(
+                            "provider configuration validation did not return true"
+                        )
+                    acquired = _require_session_command_state(
+                        backend.reopen_session_with_access(session_id),
+                        session_id=session_id,
+                        durable_state=SessionDurableState.READY,
+                        access_state=SessionAccessState.HELD_HERE,
+                    )
+                    observed = backend.get_session_lifecycle(session_id)
+                    if observed != acquired:
+                        raise BackendProtocolError(
+                            "reopened session lifecycle changed before release"
+                        )
+                    try:
+                        save_default_session(workspace, session_id)
+                    finally:
+                        state = backend.release_session_access(session_id)
+                else:
+                    state = backend.pause_session_and_release_access(session_id)
             finally:
                 backend.close()
-            if arguments.session_action == "start":
-                select_session(workspace, session_id)
+            expected_durable_state = (
+                SessionDurableState.PAUSED
+                if arguments.session_action == "pause"
+                else SessionDurableState.READY
+            )
+            state = _require_session_command_state(
+                state,
+                session_id=session_id,
+                durable_state=expected_durable_state,
+                access_state=SessionAccessState.CLAIMABLE,
+            )
             print(
                 json.dumps(
                     {
-                        "session_id": manifest["session_id"],
-                        "active": manifest["active"],
+                        "access_state": state.access_state.value,
+                        "durable_state": state.durable_state.value,
+                        "session_id": state.session_id,
                     },
                     ensure_ascii=False,
                     indent=2,

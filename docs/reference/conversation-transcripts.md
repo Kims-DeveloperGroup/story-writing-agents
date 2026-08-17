@@ -1,7 +1,7 @@
 # Conversation transcripts
 
 > **Availability:** interactive turns append transcripts and consume bounded
-> context. `/transcript` reads bounded pages; selected `/history` shows one full
+> context. `/transcript` reads bounded pages; focused `/history` shows one full
 > snapshot with context accounting; `/search` cites active events.
 
 Key terms: **event**—one visible stored record; **complete turn**—one user event
@@ -75,8 +75,8 @@ their own values; `StoryRuntime` applies the
 ## Interactive read bridge
 
 `/transcript` reads a fresh bounded page from an attached active or archived
-identity without selecting it. `/history [COUNT]` requires an attached active
-selection and reads the store once. Omission displays all; a positive count
+identity without focusing it. `/history [COUNT]` requires current focus on an
+active conversation and reads the store once. Omission displays all; a positive count
 displays newest `min(count,total)` chronologically. Every kind, unmatched user,
 and whitespace stays visible; empty is normal. Its same-tuple summary reports
 displayed/total events, canonical turns/bytes/truncation, and fixed caps. It has
@@ -87,11 +87,11 @@ after completed event records, emits its fixed cancellation instead of the
 summary, and performs no second read or write. See
 [terminal presentation](interactive-terminal.md) and [page/search limits](conversation-search.md).
 
-## Context selection and failure evidence
+## Context-window derivation and failure evidence
 
 A complete turn is one `user_message` plus one `agent_reply` or
 `runtime_error`. The store and pure selector walk complete turns newest to
-oldest and retain at most 24 turns and 32,768 combined content bytes. Selection
+oldest and retain at most 24 turns and 32,768 combined content bytes. Derivation
 stops at the first turn that would exceed either cap, never splits a turn, and
 restores retained events to storage order.
 
@@ -111,8 +111,8 @@ as empty without creating a file. A present empty, malformed,
 noncontiguous-sequence, invalidly paired, or path-mismatched file fails closed
 with `WorkspaceFormatError`.
 
-The adapter validates the complete history before read, context selection, or
-append. It never invokes a provider, changes selection, searches, migrates
-legacy data, or deletes events. See [Filesystem safety](../operations/filesystem-safety.md)
+The adapter validates complete history before read, context derivation, or
+append. It never invokes a provider, changes defaults/focus, searches, migrates
+old data, or deletes events. See [Filesystem safety](../operations/filesystem-safety.md)
 for mutation and locking and [Privacy](../operations/privacy-and-provider.md)
 for exposure.

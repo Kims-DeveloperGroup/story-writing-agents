@@ -8,7 +8,7 @@ Key terms: **blackboard**—the public persisted debate history; **terminal
 result**—a completed consensus, deadlock, or failure record; **deadlock**—
 unresolved conflict at the round limit; **interrupted**—best-effort cancellation state.
 
-Inspect the selected session's overrides and debate summaries:
+Inspect the explicit or default session's overrides and debate summaries:
 
 ```bash
 story inspect
@@ -28,7 +28,7 @@ ID was reserved; it does not prove the creating process is alive.
 
 ## Inspect safely in the interactive shell
 
-After attachment, no conversation selection is required:
+After opening a session, no conversation focus is required:
 
 | Command | Result |
 | --- | --- |
@@ -45,11 +45,11 @@ Shell inspection whitelists identity, lifecycle, input, revision, rounds,
 artifact path, and context conversation/mode/counts. It never emits blackboard
 messages, candidates, stored errors/actions, context event content, raw state,
 or provider-private fields. Malformed collaborator data fails closed. These
-reads are provider-free and preserve attachment, selection, target, transcript,
+reads are provider-free and preserve attachment, defaults, both focuses, transcript,
 catalog, artifacts, and provider state. The established `story inspect` and
 Python inspection JSON shapes remain unchanged.
 
-Use global `/status` for the current shell snapshot and selected `/history`
+Use global `/status` for the current shell snapshot and focused `/history`
 for one visible transcript snapshot plus canonical context accounting. Their
 exact gates are in the [CLI reference](../reference/cli.md#interactive-streams).
 
