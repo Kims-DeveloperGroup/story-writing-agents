@@ -10,9 +10,11 @@ attempt. See [Core concepts](concepts.md) for their relationships.
 
 ## A–W
 
-- **Active, selected, and attached.** Independent facts: active permits provider
-  work, selected is the CLI default, and attached means this backend holds the
-  lease. See [Session lifecycle](design/session-lifecycle.md).
+- **Active, selected, and attached (legacy summary).** `active` maps only to
+  durable `ready`/`paused`; `selected` means saved CLI default, never current
+  attachment or conversation focus. Attached means `held_here` access. Provider
+  readiness also requires configuration readiness to be exactly true. See
+  [Session lifecycle](design/session-lifecycle.md).
 
 - **Agent, role, and binding.** An agent is a fixed team member; its role defines
   responsibility and instructions, and a binding connects it to a backend. See
