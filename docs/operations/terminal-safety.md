@@ -39,13 +39,15 @@ uncertain capability selects safe ordinary-line fallback without raw mode or
 cursor controls. This component fallback does not bypass the installed CLI's
 earlier two-stream TTY guard.
 
-The output descriptor supplies width. A missing, failing, nonpositive, or
-invalid result falls back to 80 columns; a reliable result is capped at 120.
-Capability observation and contextual live-input setup repeat on the next operation,
-so resize is noticed without a signal loop. Package-private semantic rendering
-also asks for current capabilities on its next render. Existing public record
-methods retain their established construction width until their later view
-migrations.
+The output descriptor supplies width. During capability observation, a missing,
+failing, nonpositive, or invalid result falls back to 80 columns; a reliable
+result is capped at 120. Live-input setup rechecks size before raw activation: a
+missing or failing query selects ordinary-line fallback, while a returned
+nonpositive or invalid column count uses 80. Capability observation and
+live-input setup repeat on the next operation, so resize is noticed without a
+signal loop. Package-private semantic rendering also asks for current
+capabilities on its next render. Existing public record methods retain their
+established construction width until their later view migrations.
 
 The internal profiles are fixed ANSI, capable plain, and line fallback. Presence
 of `NO_COLOR` disables decorative SGR only; it does not disable safe functional

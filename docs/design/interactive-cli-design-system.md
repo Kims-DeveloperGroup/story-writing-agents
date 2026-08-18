@@ -31,7 +31,7 @@ production behavior.
 | #85 input history | Planned: Up/Down history and the 100-entry process-local store are not implemented. |
 | Prerequisite #73 | Implemented: RUN/CHAT composition uses the fixed preview-only `/send`, `/cancel` projection through explicit call-local routing. |
 | #86 composer/confirmation integration | Planned: existing line-oriented composition and confirmation behavior remains unchanged beyond #73 previews. |
-| #79 selectable completion | Planned: the current slash suggestion list is preview-only; Tab/Shift-Tab selection and fixed-value completion are not implemented. |
+| #79 selectable completion | Planned: the current slash suggestion list is preview-only; Tab application, Up/Down palette navigation, and fixed-value completion are not implemented. Shift-Tab has no palette action in the target behavior. |
 | #87 pickers | Planned: semantic picker values and rendering exist internally, but no interactive picker transition or consumer is implemented. |
 
 ## Goals and limits

@@ -118,13 +118,15 @@ The main-invalid `/compose`, `/send`, and `/cancel` are excluded. Composition
 uses the separate fixed preview below; subject and confirmation prompts keep
 ordinary line reads. Editing, control keys, fallbacks, and restoration are in
 [Terminal safety](../operations/terminal-safety.md#live-editor-boundary).
-The lists are not selectable: Tab/Shift-Tab completion and Up/Down history are
-not implemented by the current foundation.
+The lists are not selectable: Tab does not apply a suggestion, Shift-Tab has no
+palette action, and Up/Down history is unavailable in the current foundation.
+Future palette/history coordination is specified in the
+[design contract](../design/interactive-cli-design-system.md#main-command-palette-and-fixed-choices).
 
 ## Composition live suggestions
 
-On capable POSIX live editing, RUN composition and module-supported CHAT
-composition routed through the project's contextual reader show
+On capable POSIX live editing, RUN and module-supported CHAT composition reads
+routed through the unified stream terminal's explicit composition route show
 `[suggestions]` with only these tokens, in this order:
 
 ```text
