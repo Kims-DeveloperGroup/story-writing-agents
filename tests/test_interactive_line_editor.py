@@ -469,7 +469,7 @@ class SuggestionContractTests(unittest.TestCase):
         )
         self.assertEqual(
             InteractiveMainLineEditor.__slots__,
-            ("_fallback_read_line", "_input_stream", "_output_stream"),
+            ("_driver",),
         )
         self.assertEqual(input_stream.read_calls, 0)
         self.assertEqual(output.records, [])

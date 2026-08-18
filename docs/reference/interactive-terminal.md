@@ -1,11 +1,21 @@
 # Interactive terminal component
 
-> **Availability:** this module-supported component owns shell input, safe
-> records, and bare `/run` composition.
+> **Availability:** this package-supported component owns shell input, safe
+> records, and bare `/run` composition. Its internal semantic/rendering
+> foundation is implemented, while public view methods retain their exact
+> established plain presentation.
 
 ## Public API
 
-Import from `story_writing_agents.interactive_terminal`, not the facade. Its exact `__all__` is `AttachmentKind`, `ComposeMode`, `ConfirmationResult`, `TerminalActionKind`, `TerminalMessageKind`, `InteractiveErrorCode`, `TerminalAction`, `InteractiveErrorSpec`, `INTERACTIVE_ERROR_SPECS`, `InteractiveError`, `sanitize_terminal_text`, and `InteractiveTerminal`.
+Import from the package-supported facade
+`story_writing_agents.interactive_terminal`. Its exact `__all__` is
+`AttachmentKind`, `ComposeMode`, `ConfirmationResult`, `TerminalActionKind`,
+`TerminalMessageKind`, `InteractiveErrorCode`, `TerminalAction`,
+`InteractiveErrorSpec`, `INTERACTIVE_ERROR_SPECS`, `InteractiveError`,
+`sanitize_terminal_text`, and `InteractiveTerminal`. Package leaves and
+unlisted factory, model, control, renderer, and driver names are internal, not
+additional supported API. The root `story_writing_agents` facade remains
+unchanged and does not re-export the terminal.
 
 ```python
 InteractiveTerminal(read_line, write_text, *, width: int = 80,
@@ -49,6 +59,32 @@ supported API.
 | `TerminalActionKind` | `line`, `send`, `cancel`, `interrupt`, `eof` |
 | `TerminalMessageKind` | `compose`, `session`, `conversation`, `routing`, `context`, `waiting`, `result`, `cancelled`, `hint` |
 
+## Implemented foundation and current presentation
+
+The import-compatible package contains private immutable semantic components
+and states, pure current one-line transitions and exact slash-prefix
+projection, a responsive structured plain/fixed-ANSI renderer, capability
+profiles, one raw driver, and one real-CLI stream factory. These internal seams
+support architecture and deterministic testing; they add no public theme API
+or public component types.
+
+The real CLI factory constructs one `InteractiveTerminal` around one raw
+driver. That driver alone owns its streams, capability/width observation, key
+decoding, functional cursor sequences, raw-mode activation/restoration, writes,
+and flushes. `interactive_line_editor.InteractiveMainLineEditor` remains a
+standalone compatibility facade with its exact constructor and `read_line`
+surface, delegating to the same driver implementation rather than owning a
+second terminal lifecycle. Callback construction remains deterministic plain
+and performs no stream observation or resource acquisition.
+
+This foundation does not migrate existing shell views. Orientation, help,
+lists, search, transcript, history, advisory, retrieval, consensus, and error
+methods still emit the exact plain records documented below. Structured
+semantic layouts and decorative color for those views remain future migration
+work. Contextual composition previews are implemented as documented below.
+History navigation, selectable palettes/fixed values, component-integrated
+composer/confirmation, and pickers are not currently available.
+
 ## Prompts and ordinary presentation
 
 Exact prompts include their final space:
@@ -66,8 +102,8 @@ return typed outcomes.
 
 ## Main-prompt live suggestions
 
-The CLI injects it at main prompts. On capable POSIX, buffer `/` displays
-`[suggestions]` followed by one token per row. Compact
+The unified driver provides the existing preview at main prompts. On capable
+POSIX, buffer `/` displays `[suggestions]` followed by one token per row. Compact
 registry order (not output layout):
 
 ```text
@@ -82,11 +118,15 @@ The main-invalid `/compose`, `/send`, and `/cancel` are excluded. Composition
 uses the separate fixed preview below; subject and confirmation prompts keep
 ordinary line reads. Editing, control keys, fallbacks, and restoration are in
 [Terminal safety](../operations/terminal-safety.md#live-editor-boundary).
+The lists are not selectable: Tab does not apply a suggestion, Shift-Tab has no
+palette action, and Up/Down history is unavailable in the current foundation.
+Future palette/history coordination is specified in the
+[design contract](../design/interactive-cli-design-system.md#main-command-palette-and-fixed-choices).
 
 ## Composition live suggestions
 
-On capable POSIX live editing, RUN composition and module-supported CHAT
-composition routed through the project's contextual reader show
+On capable POSIX live editing, RUN and module-supported CHAT composition reads
+routed through the unified stream terminal's explicit composition route show
 `[suggestions]` with only these tokens, in this order:
 
 ```text

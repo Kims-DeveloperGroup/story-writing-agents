@@ -1,0 +1,1122 @@
+"""Deterministic contract tests for the interactive-terminal foundation."""
+
+from __future__ import annotations
+
+import ast
+import inspect
+import os
+import pickle
+import re
+import subprocess
+import sys
+import tempfile
+import unittest
+from dataclasses import FrozenInstanceError, fields
+from pathlib import Path
+from types import SimpleNamespace
+from typing import get_args
+from unittest import mock
+
+from story_writing_agents import interactive_line_editor as editor_facade
+from story_writing_agents import interactive_terminal as terminal_facade
+from story_writing_agents.interactive_line_editor import (
+    InteractiveMainLineEditor,
+    SlashCommandSuggestion,
+)
+from story_writing_agents.interactive_terminal import (
+    AttachmentKind,
+    ComposeMode,
+    ConfirmationResult,
+    InteractiveError,
+    InteractiveErrorCode,
+    InteractiveErrorSpec,
+    InteractiveTerminal,
+    TerminalAction,
+    TerminalActionKind,
+    TerminalMessageKind,
+)
+from story_writing_agents.interactive_terminal import _controls, _core, _model
+from story_writing_agents.interactive_terminal._controls import (
+    project_slash_suggestions,
+    transition_line_input,
+)
+from story_writing_agents.interactive_terminal._driver import (
+    RawTerminalDriver,
+    detect_terminal_capabilities,
+)
+from story_writing_agents.interactive_terminal._model import (
+    CapabilityProfile,
+    Choice,
+    ControlOutcome,
+    ControlOutcomeKind,
+    Field,
+    KeyEvent,
+    KeyKind,
+    LineInputState,
+    ListView,
+    Message,
+    Notice,
+    Panel,
+    Picker,
+    Prompt,
+    Record,
+    RenderedFrame,
+    Section,
+    SemanticRole,
+    SuggestionPalette,
+    TerminalCapabilities,
+    ViewState,
+    display_character_width,
+)
+from story_writing_agents.interactive_terminal._render import (
+    render_component,
+    render_plain,
+    strip_decorative_sgr,
+)
+
+
+TERMINAL_EXPORTS = (
+    "AttachmentKind",
+    "ComposeMode",
+    "ConfirmationResult",
+    "TerminalActionKind",
+    "TerminalMessageKind",
+    "InteractiveErrorCode",
+    "TerminalAction",
+    "InteractiveErrorSpec",
+    "INTERACTIVE_ERROR_SPECS",
+    "InteractiveError",
+    "sanitize_terminal_text",
+    "InteractiveTerminal",
+)
+
+MODEL_EXPORTS = (
+    "SemanticRole",
+    "ViewState",
+    "CapabilityProfile",
+    "KeyKind",
+    "ControlOutcomeKind",
+    "TerminalCapabilities",
+    "KeyEvent",
+    "LineInputState",
+    "SlashCommandSuggestion",
+    "ControlOutcome",
+    "Prompt",
+    "Panel",
+    "Section",
+    "Field",
+    "Notice",
+    "Message",
+    "Record",
+    "ListView",
+    "Choice",
+    "SuggestionPalette",
+    "Picker",
+    "Component",
+    "RenderedFrame",
+    "sanitize_terminal_text",
+    "display_character_width",
+)
+
+
+class ObservedStream:
+    """Expose deterministic stream capabilities without real terminal I/O."""
+
+    def __init__(
+        self,
+        *,
+        is_terminal: bool = True,
+        descriptor: int = 7,
+        tty_failure: BaseException | None = None,
+    ) -> None:
+        self.is_terminal = is_terminal
+        self.descriptor = descriptor
+        self.tty_failure = tty_failure
+        self.calls: list[str] = []
+
+    def isatty(self) -> bool:
+        self.calls.append("isatty")
+        if self.tty_failure is not None:
+            raise self.tty_failure
+        return self.is_terminal
+
+    def fileno(self) -> int:
+        self.calls.append("fileno")
+        return self.descriptor
+
+    def read(self, size: int) -> str:
+        self.calls.append("read")
+        raise AssertionError(f"unexpected input read of {size}")
+
+    def write(self, text: str) -> int:
+        self.calls.append("write")
+        raise AssertionError(f"unexpected output write of {text!r}")
+
+    def flush(self) -> None:
+        self.calls.append("flush")
+        raise AssertionError("unexpected output flush")
+
+
+class CompleteTermios:
+    """Provide only the complete interface needed for capability detection."""
+
+    ECHO = 1
+    ICANON = 2
+    TCSADRAIN = 3
+    TCSANOW = 4
+    VEOF = 5
+    VINTR = 6
+    VMIN = 7
+    VTIME = 8
+
+    @staticmethod
+    def tcgetattr(descriptor: int) -> list[object]:
+        raise AssertionError(f"unexpected attribute read from {descriptor}")
+
+    @staticmethod
+    def tcsetattr(
+        descriptor: int,
+        when: int,
+        attributes: list[object],
+    ) -> None:
+        raise AssertionError(
+            f"unexpected attribute write to {descriptor}: {when}, {attributes!r}"
+        )
+
+
+def fake_os(
+    *,
+    terminal_name: str = "xterm-256color",
+    width: object = 80,
+    no_color: bool = False,
+) -> SimpleNamespace:
+    """Return one deterministic POSIX capability collaborator."""
+
+    environment = {"TERM": terminal_name}
+    if no_color:
+        environment["NO_COLOR"] = ""
+
+    def get_terminal_size(descriptor: int) -> os.terminal_size:
+        if isinstance(width, BaseException):
+            raise width
+        return os.terminal_size((width, 24))  # type: ignore[arg-type]
+
+    return SimpleNamespace(
+        name="posix",
+        environ=environment,
+        get_terminal_size=get_terminal_size,
+    )
+
+
+def capability(
+    profile: CapabilityProfile,
+    *,
+    width: int = 80,
+) -> TerminalCapabilities:
+    """Build one internally consistent render-capability value."""
+
+    raw = profile is not CapabilityProfile.LINE
+    return TerminalCapabilities(
+        profile,
+        width,
+        input_tty=raw,
+        output_tty=raw,
+        raw_mode=raw,
+        cursor_controls=raw,
+        decorative_sgr=profile is CapabilityProfile.ANSI,
+    )
+
+
+def physical_width(text: str) -> int:
+    """Measure sanitized unstyled text using the foundation cell rule."""
+
+    return sum(display_character_width(character) for character in text)
+
+
+class PublicCompatibilityFoundationTests(unittest.TestCase):
+    def test_facades_export_exact_defining_objects_with_canonical_identity(
+        self,
+    ) -> None:
+        self.assertEqual(tuple(terminal_facade.__all__), TERMINAL_EXPORTS)
+        self.assertEqual(
+            tuple(editor_facade.__all__),
+            (
+                "SlashCommandSuggestion",
+                "slash_command_suggestions",
+                "InteractiveMainLineEditor",
+            ),
+        )
+        defining_objects = (
+            AttachmentKind,
+            ComposeMode,
+            ConfirmationResult,
+            TerminalActionKind,
+            TerminalMessageKind,
+            InteractiveErrorCode,
+            TerminalAction,
+            InteractiveErrorSpec,
+            InteractiveError,
+            InteractiveTerminal,
+        )
+        for value in defining_objects:
+            with self.subTest(value=value.__name__):
+                self.assertIs(getattr(terminal_facade, value.__name__), value)
+                self.assertIs(getattr(_core, value.__name__), value)
+                self.assertEqual(
+                    value.__module__,
+                    "story_writing_agents.interactive_terminal",
+                )
+        self.assertIs(
+            terminal_facade.sanitize_terminal_text,
+            _model.sanitize_terminal_text,
+        )
+        self.assertEqual(
+            terminal_facade.sanitize_terminal_text.__module__,
+            "story_writing_agents.interactive_terminal",
+        )
+        self.assertIs(SlashCommandSuggestion, _model.SlashCommandSuggestion)
+        self.assertIs(terminal_facade.SlashCommandSuggestion, SlashCommandSuggestion)
+        self.assertEqual(
+            SlashCommandSuggestion.__module__,
+            "story_writing_agents.interactive_line_editor",
+        )
+        self.assertEqual(
+            InteractiveMainLineEditor.__module__,
+            "story_writing_agents.interactive_line_editor",
+        )
+
+    def test_public_signatures_remain_exact(self) -> None:
+        positional = inspect.Parameter.POSITIONAL_OR_KEYWORD
+        keyword = inspect.Parameter.KEYWORD_ONLY
+        required = inspect.Parameter.empty
+
+        def shape(value: object) -> tuple[tuple[str, object, object], ...]:
+            signature = inspect.signature(value)
+            return tuple(
+                (parameter.name, parameter.kind, parameter.default)
+                for parameter in signature.parameters.values()
+                if parameter.name != "self"
+            )
+
+        expected = {
+            InteractiveTerminal: (
+                ("read_line", positional, required),
+                ("write_text", positional, required),
+                ("width", keyword, 80),
+                ("main_read_line", keyword, None),
+            ),
+            InteractiveTerminal.read_main: (
+                ("session_id", keyword, None),
+                ("agent_id", keyword, None),
+            ),
+            InteractiveTerminal.request_conversation_subject: (),
+            InteractiveTerminal.request_confirmation: (
+                ("message", positional, required),
+                ("default", keyword, required),
+            ),
+            InteractiveTerminal.compose: (
+                ("mode", positional, required),
+                ("agent_id", keyword, None),
+            ),
+            InteractiveTerminal.write_lobby_orientation: (
+                ("workspace", positional, required),
+            ),
+            InteractiveTerminal.write_session_orientation: (
+                ("workspace", positional, required),
+                ("session_id", positional, required),
+                ("attachment", positional, required),
+                ("agent_id", positional, required),
+                ("history_count", positional, None),
+            ),
+            InteractiveTerminal.write_conversation_scope: (
+                ("session_id", keyword, required),
+                ("conversation_handle", keyword, required),
+                ("conversation_subject", keyword, required),
+                ("agent_id", keyword, required),
+            ),
+            InteractiveTerminal.write_conversation_list_entry: (
+                ("conversation_handle", positional, required),
+                ("conversation_subject", positional, required),
+                ("archived", keyword, required),
+                ("focused", keyword, required),
+            ),
+            InteractiveTerminal.write_conversation_search_hit: (
+                ("conversation_handle", positional, required),
+                ("conversation_subject", positional, required),
+                ("match_kind", positional, required),
+                ("snippet", positional, required),
+                ("archived", keyword, required),
+                ("citation_turn_id", keyword, None),
+                ("citation_sequence", keyword, None),
+                ("citation_kind", keyword, None),
+            ),
+            InteractiveTerminal.write_conversation_transcript_event: (
+                ("conversation_handle", positional, required),
+                ("sequence", keyword, required),
+                ("turn_id", keyword, required),
+                ("kind", keyword, required),
+                ("sender", keyword, required),
+                ("recipient", keyword, required),
+                ("content", keyword, required),
+            ),
+            InteractiveTerminal.write_agent_roster: (),
+            InteractiveTerminal.write_status: (
+                ("kind", positional, required),
+                ("text", positional, required),
+            ),
+            InteractiveTerminal.write_run: (
+                ("debate_id", positional, required),
+                ("text", positional, required),
+            ),
+            InteractiveTerminal.write_agent: (
+                ("agent_id", positional, required),
+                ("text", positional, required),
+            ),
+            InteractiveTerminal.write_help: (
+                ("command", positional, None),
+            ),
+            InteractiveTerminal.write_error: (
+                ("error", positional, required),
+                ("secrets", keyword, ()),
+            ),
+            terminal_facade.sanitize_terminal_text: (
+                ("text", positional, required),
+            ),
+            SlashCommandSuggestion: (
+                ("token", positional, required),
+                ("canonical_token", positional, required),
+            ),
+            editor_facade.slash_command_suggestions: (
+                ("buffer", positional, required),
+            ),
+            InteractiveMainLineEditor: (
+                ("fallback_read_line", positional, required),
+                ("input_stream", positional, required),
+                ("output_stream", positional, required),
+            ),
+            InteractiveMainLineEditor.read_line: (
+                ("prompt", positional, required),
+            ),
+        }
+        for value, expected_shape in expected.items():
+            with self.subTest(value=getattr(value, "__qualname__", repr(value))):
+                self.assertEqual(shape(value), expected_shape)
+
+    def test_public_values_pickle_and_preserve_isinstance_compatibility(self) -> None:
+        samples = (
+            AttachmentKind.CREATED,
+            ComposeMode.RUN,
+            ConfirmationResult.EOF,
+            TerminalAction(TerminalActionKind.LINE, text="exact"),
+            InteractiveErrorSpec("Summary", "Hint"),
+            InteractiveError(InteractiveErrorCode.INTERNAL_ERROR),
+            SlashCommandSuggestion("/agent", "/to"),
+        )
+        for sample in samples:
+            with self.subTest(sample=sample):
+                restored = pickle.loads(pickle.dumps(sample))
+                self.assertEqual(restored, sample)
+                self.assertIs(type(restored), type(sample))
+                self.assertIsInstance(restored, type(sample))
+
+
+class SemanticModelFoundationTests(unittest.TestCase):
+    def test_closed_vocabulary_states_and_internal_exports_are_exact(self) -> None:
+        self.assertEqual(tuple(_model.__all__), MODEL_EXPORTS)
+        self.assertEqual(
+            tuple(item.value for item in ViewState),
+            (
+                "idle",
+                "focused",
+                "open",
+                "highlighted",
+                "selected",
+                "disabled",
+                "loading",
+                "empty",
+                "error",
+                "cancelled",
+                "completed",
+            ),
+        )
+        self.assertEqual(
+            tuple(item.value for item in SemanticRole),
+            (
+                "default",
+                "emphasis",
+                "muted",
+                "info",
+                "success",
+                "warning",
+                "error",
+                "command",
+                "agent",
+            ),
+        )
+        self.assertEqual(
+            get_args(_model.Component),
+            (
+                Prompt,
+                Panel,
+                Section,
+                Field,
+                Notice,
+                Message,
+                Record,
+                ListView,
+                SuggestionPalette,
+                Picker,
+            ),
+        )
+        self.assertEqual(
+            tuple(field.name for field in fields(LineInputState)),
+            ("buffer", "cursor"),
+        )
+        self.assertEqual(
+            tuple(_controls.__all__),
+            (
+                "transition_line_input",
+                "project_slash_suggestions",
+                "project_composition_suggestions",
+            ),
+        )
+        for deferred_name in (
+            "transition_history",
+            "transition_palette",
+            "transition_picker",
+            "persistent_history",
+        ):
+            self.assertFalse(hasattr(_controls, deferred_name))
+
+    def test_semantic_values_are_frozen_slotted_and_reject_invalid_relations(
+        self,
+    ) -> None:
+        empty_notice = Notice("Nothing here.", state=ViewState.EMPTY)
+        choice = Choice("one", "One")
+        samples = (
+            capability(CapabilityProfile.LINE),
+            KeyEvent(KeyKind.TEXT, text="x"),
+            LineInputState("x", 1),
+            SlashCommandSuggestion("/x", "/x"),
+            ControlOutcome(ControlOutcomeKind.COMMIT, text="x"),
+            Prompt("Input"),
+            Field("Label", "Value"),
+            Notice("Ready"),
+            Message("user", "content"),
+            Record("record", fields=(Field("Key", "Value"),)),
+            ListView("Records", (), empty_notice=empty_notice),
+            Section("Section", (empty_notice,)),
+            Panel("Panel", (empty_notice,)),
+            choice,
+            SuggestionPalette("/", (choice,), highlighted_id="one"),
+            Picker(Prompt("Choose"), (choice,), highlighted_id="one"),
+            RenderedFrame("text", 80, 1),
+        )
+        for sample in samples:
+            with self.subTest(sample=type(sample).__name__):
+                self.assertFalse(hasattr(sample, "__dict__"))
+                with self.assertRaises(FrozenInstanceError):
+                    setattr(sample, fields(sample)[0].name, None)
+
+        invalid_calls = (
+            lambda: TerminalCapabilities(
+                CapabilityProfile.LINE,
+                80,
+                input_tty=True,
+                output_tty=True,
+                raw_mode=True,
+                cursor_controls=False,
+                decorative_sgr=False,
+            ),
+            lambda: TerminalCapabilities(
+                CapabilityProfile.PLAIN,
+                80,
+                input_tty=True,
+                output_tty=True,
+                raw_mode=True,
+                cursor_controls=True,
+                decorative_sgr=True,
+            ),
+            lambda: KeyEvent(KeyKind.TEXT),
+            lambda: KeyEvent(KeyKind.ENTER, text="x"),
+            lambda: LineInputState("x", 2),
+            lambda: ListView("Empty", ()),
+            lambda: SuggestionPalette(
+                "/",
+                (Choice("same", "One"), Choice("same", "Two")),
+            ),
+            lambda: SuggestionPalette(
+                "/",
+                (Choice("off", "Off", enabled=False),),
+                highlighted_id="off",
+            ),
+            lambda: Picker(
+                Prompt("Choose"),
+                (Choice("off", "Off", enabled=False),),
+                selected_id="off",
+            ),
+            lambda: Panel("Panel", (Prompt("Unsupported child"),)),
+        )
+        for call in invalid_calls:
+            with self.subTest(call=call):
+                with self.assertRaises((TypeError, ValueError)):
+                    call()
+
+
+class PureControlFoundationTests(unittest.TestCase):
+    def test_line_input_transitions_edit_commit_and_preserve_terminal_events(
+        self,
+    ) -> None:
+        state = LineInputState("ac", 1)
+        state, outcome = transition_line_input(
+            state,
+            KeyEvent(KeyKind.TEXT, text="b"),
+        )
+        self.assertEqual((state, outcome), (LineInputState("abc", 2), None))
+        expected_states = (
+            (KeyKind.LEFT, LineInputState("abc", 1)),
+            (KeyKind.BACKSPACE, LineInputState("bc", 0)),
+            (KeyKind.DELETE, LineInputState("c", 0)),
+            (KeyKind.RIGHT, LineInputState("c", 1)),
+            (KeyKind.HOME, LineInputState("c", 0)),
+            (KeyKind.END, LineInputState("c", 1)),
+        )
+        for kind, expected in expected_states:
+            state, outcome = transition_line_input(state, KeyEvent(kind))
+            self.assertEqual((state, outcome), (expected, None))
+
+        committed_state = LineInputState("visible", 3)
+        unchanged, outcome = transition_line_input(
+            committed_state,
+            KeyEvent(KeyKind.ENTER),
+        )
+        self.assertIs(unchanged, committed_state)
+        self.assertEqual(
+            outcome,
+            ControlOutcome(ControlOutcomeKind.COMMIT, text="visible"),
+        )
+        for kind, expected in (
+            (KeyKind.INTERRUPT, ControlOutcome(ControlOutcomeKind.INTERRUPT)),
+            (KeyKind.EOF, ControlOutcome(ControlOutcomeKind.COMMIT, text="visible")),
+        ):
+            unchanged, outcome = transition_line_input(
+                committed_state,
+                KeyEvent(kind),
+            )
+            self.assertIs(unchanged, committed_state)
+            self.assertEqual(outcome, expected)
+        empty = LineInputState()
+        self.assertEqual(
+            transition_line_input(empty, KeyEvent(KeyKind.EOF)),
+            (empty, ControlOutcome(ControlOutcomeKind.EOF)),
+        )
+
+    def test_reserved_later_control_keys_have_no_foundation_semantics(self) -> None:
+        state = LineInputState("draft", 2)
+        for kind in (
+            KeyKind.UP,
+            KeyKind.DOWN,
+            KeyKind.TAB,
+            KeyKind.SHIFT_TAB,
+            KeyKind.ESCAPE,
+        ):
+            with self.subTest(kind=kind):
+                next_state, outcome = transition_line_input(state, KeyEvent(kind))
+                self.assertIs(next_state, state)
+                self.assertIsNone(outcome)
+
+        metadata = (
+            ("/alpha", ("/a",)),
+            ("/compose", ("/composition",)),
+            ("/beta", ()),
+        )
+        self.assertEqual(
+            project_slash_suggestions(
+                "/",
+                metadata,
+                exclusions=frozenset({"/compose"}),
+            ),
+            (
+                SlashCommandSuggestion("/alpha", "/alpha"),
+                SlashCommandSuggestion("/a", "/alpha"),
+                SlashCommandSuggestion("/beta", "/beta"),
+            ),
+        )
+        for buffer in ("", "alpha", " /a", "/a ", "/A"):
+            self.assertEqual(
+                project_slash_suggestions(
+                    buffer,
+                    metadata,
+                    exclusions=frozenset(),
+                ),
+                (),
+            )
+
+
+class RenderingFoundationTests(unittest.TestCase):
+    def test_plain_and_ansi_are_one_sanitized_structure_with_local_fixed_sgr(
+        self,
+    ) -> None:
+        component = Panel(
+            "Unsafe\x1b]0;owned\x07",
+            (
+                Notice(
+                    "bad\x1b[31m text",
+                    role=SemanticRole.ERROR,
+                    state=ViewState.ERROR,
+                ),
+                Field("Wide", "界e\u0301"),
+            ),
+        )
+        plain = render_plain(component, width=40)
+        ansi = render_component(
+            component,
+            capability(CapabilityProfile.ANSI, width=40),
+        )
+        self.assertEqual(strip_decorative_sgr(ansi.text), plain.text)
+        self.assertIn("Unsafe\\x1b]0;owned\\x07", plain.text)
+        self.assertIn("bad\\x1b[31m text", plain.text)
+        self.assertNotIn("\x1b", plain.text)
+        self.assertNotIn("\x07", plain.text)
+        allowed = {
+            "\x1b[0m",
+            "\x1b[1m",
+            "\x1b[31m",
+            "\x1b[32m",
+            "\x1b[33m",
+            "\x1b[34m",
+            "\x1b[35m",
+            "\x1b[36m",
+            "\x1b[37m",
+        }
+        sequences = re.findall(r"\x1b\[[0-9;]*[A-Za-z]", ansi.text)
+        self.assertTrue(sequences)
+        self.assertTrue(set(sequences).issubset(allowed))
+        for line in ansi.text.splitlines():
+            if "\x1b" in line:
+                self.assertTrue(line.endswith("\x1b[0m"))
+        self.assertEqual(
+            strip_decorative_sgr("x\x1b[41mbackground\x1b[0m"),
+            "x\x1b[41mbackground",
+        )
+
+    def test_narrow_rendering_preserves_labels_wraps_by_cells_and_stacks_fields(
+        self,
+    ) -> None:
+        field = Field(
+            "Status",
+            "界界 e\u0301 value",
+            role=SemanticRole.SUCCESS,
+            state=ViewState.COMPLETED,
+        )
+        frame = render_plain(field, width=20)
+        self.assertEqual(
+            frame.text,
+            "Status [completed] [\nsuccess]:\n 界界 e\u0301 value",
+        )
+        self.assertEqual(frame.line_count, 3)
+        for line in frame.text.splitlines():
+            self.assertLessEqual(physical_width(line), 20)
+        self.assertEqual(display_character_width("界"), 2)
+        self.assertEqual(display_character_width("e"), 1)
+        self.assertEqual(display_character_width("\u0301"), 0)
+
+        ansi = render_component(
+            field,
+            capability(CapabilityProfile.ANSI, width=20),
+        )
+        self.assertEqual(strip_decorative_sgr(ansi.text), frame.text)
+        for line in strip_decorative_sgr(ansi.text).splitlines():
+            self.assertLessEqual(physical_width(line), 20)
+
+    def test_every_state_and_selection_disabled_empty_cue_is_plainly_visible(
+        self,
+    ) -> None:
+        state_panel = Panel(
+            "States",
+            tuple(Notice(state.value, state=state) for state in ViewState),
+        )
+        rendered_states = render_plain(state_panel, width=40).text
+        for state in ViewState:
+            with self.subTest(state=state):
+                if state is ViewState.IDLE:
+                    self.assertIn("[info] idle", rendered_states)
+                else:
+                    self.assertIn(f"[{state.value}] {state.value}", rendered_states)
+
+        empty_list = ListView(
+            "Results",
+            (),
+            empty_notice=Notice("No results.", state=ViewState.EMPTY),
+            state=ViewState.EMPTY,
+        )
+        self.assertEqual(
+            render_plain(empty_list, width=40).text,
+            "Results (0) [empty]\n  [empty] No results.",
+        )
+        empty_palette = render_plain(SuggestionPalette("/", ()), width=40).text
+        self.assertIn("Suggestions [open]", empty_palette)
+        self.assertIn("[empty] No suggestions.", empty_palette)
+
+        choices = (
+            Choice("one", "First"),
+            Choice(
+                "two",
+                "Second",
+                enabled=False,
+                disabled_reason="Unavailable",
+            ),
+            Choice("three", "Third"),
+        )
+        picker = Picker(
+            Prompt("Choose"),
+            choices,
+            highlighted_id="one",
+            selected_id="three",
+        )
+        rendered_picker = render_plain(picker, width=40).text
+        self.assertIn("> [highlighted] First", rendered_picker)
+        self.assertIn("- [disabled] Second (Unavailable)", rendered_picker)
+        self.assertIn("* [selected] Third", rendered_picker)
+
+
+class CapabilityAndDriverFoundationTests(unittest.TestCase):
+    def test_capabilities_observe_streams_independently_and_select_profiles(
+        self,
+    ) -> None:
+        cases = (
+            (True, True, "xterm", False, CapabilityProfile.ANSI, True, True),
+            (True, True, "xterm", True, CapabilityProfile.PLAIN, True, True),
+            (True, True, "dumb", False, CapabilityProfile.LINE, True, True),
+            (False, True, "xterm", False, CapabilityProfile.LINE, False, True),
+            (True, False, "xterm", False, CapabilityProfile.LINE, True, False),
+        )
+        for (
+            input_tty,
+            output_tty,
+            terminal_name,
+            no_color,
+            expected_profile,
+            expected_input,
+            expected_output,
+        ) in cases:
+            with self.subTest(
+                input_tty=input_tty,
+                output_tty=output_tty,
+                terminal_name=terminal_name,
+                no_color=no_color,
+            ):
+                observed = detect_terminal_capabilities(
+                    ObservedStream(is_terminal=input_tty),  # type: ignore[arg-type]
+                    ObservedStream(  # type: ignore[arg-type]
+                        is_terminal=output_tty,
+                        descriptor=8,
+                    ),
+                    termios_module=CompleteTermios,
+                    os_module=fake_os(
+                        terminal_name=terminal_name,
+                        no_color=no_color,
+                    ),
+                )
+                self.assertEqual(observed.profile, expected_profile)
+                self.assertEqual(observed.input_tty, expected_input)
+                self.assertEqual(observed.output_tty, expected_output)
+                self.assertEqual(
+                    (observed.raw_mode, observed.cursor_controls),
+                    (expected_profile is not CapabilityProfile.LINE,) * 2,
+                )
+                self.assertEqual(
+                    observed.decorative_sgr,
+                    expected_profile is CapabilityProfile.ANSI,
+                )
+
+    def test_capability_width_fallback_cap_and_uncertain_results_are_safe(
+        self,
+    ) -> None:
+        for width, expected in (
+            (0, 80),
+            (-1, 80),
+            (OSError("unknown"), 80),
+            (79, 79),
+            (120, 120),
+            (200, 120),
+        ):
+            with self.subTest(width=width):
+                observed = detect_terminal_capabilities(
+                    ObservedStream(),  # type: ignore[arg-type]
+                    ObservedStream(descriptor=8),  # type: ignore[arg-type]
+                    termios_module=CompleteTermios,
+                    os_module=fake_os(width=width),
+                )
+                self.assertEqual(observed.width, expected)
+
+        observed = detect_terminal_capabilities(
+            ObservedStream(  # type: ignore[arg-type]
+                tty_failure=RuntimeError("uncertain")
+            ),
+            ObservedStream(descriptor=8),  # type: ignore[arg-type]
+            termios_module=CompleteTermios,
+            os_module=fake_os(),
+        )
+        self.assertEqual(observed.profile, CapabilityProfile.LINE)
+        self.assertFalse(observed.input_tty)
+        self.assertTrue(observed.output_tty)
+        self.assertFalse(observed.raw_mode)
+
+    def test_driver_and_callback_constructors_perform_no_io(self) -> None:
+        input_stream = ObservedStream()
+        output_stream = ObservedStream(descriptor=8)
+        termios_provider = mock.Mock(return_value=CompleteTermios)
+        os_provider = mock.Mock(return_value=fake_os())
+        fallback = mock.Mock(return_value="fallback")
+        transition = mock.Mock()
+        driver = RawTerminalDriver(
+            fallback,
+            input_stream,  # type: ignore[arg-type]
+            output_stream,  # type: ignore[arg-type]
+            transition,
+            termios_provider=termios_provider,
+            os_provider=os_provider,
+        )
+        self.assertIsInstance(driver, RawTerminalDriver)
+        self.assertEqual(input_stream.calls, [])
+        self.assertEqual(output_stream.calls, [])
+        termios_provider.assert_not_called()
+        os_provider.assert_not_called()
+
+        read_line = mock.Mock(return_value="line")
+        write_text = mock.Mock()
+        main_read_line = mock.Mock(return_value="main")
+        terminal = InteractiveTerminal(
+            read_line,
+            write_text,
+            width=40,
+            main_read_line=main_read_line,
+        )
+        self.assertIsInstance(terminal, InteractiveTerminal)
+        read_line.assert_not_called()
+        write_text.assert_not_called()
+        main_read_line.assert_not_called()
+
+    def test_stream_factory_builds_one_terminal_around_one_driver(self) -> None:
+        driver = mock.Mock(spec=RawTerminalDriver)
+        driver.capabilities.return_value = capability(
+            CapabilityProfile.ANSI,
+            width=120,
+        )
+        driver.read_line.return_value = "subject"
+        driver.read_live_line.side_effect = (
+            "/status",
+            "composition line",
+            "/send",
+            "/help",
+        )
+        fallback = mock.Mock()
+        input_stream = object()
+        output_stream = object()
+        with mock.patch.object(
+            _core,
+            "RawTerminalDriver",
+            return_value=driver,
+        ) as driver_factory:
+            terminal = _core.build_stream_terminal(
+                fallback,
+                input_stream,  # type: ignore[arg-type]
+                output_stream,  # type: ignore[arg-type]
+            )
+
+        driver_factory.assert_called_once_with(
+            fallback,
+            input_stream,
+            output_stream,
+            transition_line_input,
+        )
+        driver.capabilities.assert_called_once_with()
+        self.assertIsInstance(terminal, InteractiveTerminal)
+        self.assertEqual(
+            terminal.read_main(),
+            TerminalAction(TerminalActionKind.LINE, text="/status"),
+        )
+        self.assertEqual(
+            terminal.compose(ComposeMode.RUN),
+            TerminalAction(
+                TerminalActionKind.SEND,
+                text="composition line",
+                line_count=1,
+                character_count=16,
+            ),
+        )
+        self.assertEqual(
+            terminal.read_main(),
+            TerminalAction(TerminalActionKind.LINE, text="/help"),
+        )
+        self.assertEqual(
+            terminal.request_conversation_subject(),
+            TerminalAction(TerminalActionKind.LINE, text="subject"),
+        )
+        terminal.write_status(TerminalMessageKind.RESULT, "ready")
+        self.assertEqual(
+            driver.read_live_line.call_args_list,
+            [
+                mock.call(
+                    "story[lobby]> ",
+                    _core._main_slash_suggestions,
+                ),
+                mock.call(
+                    "compose[run:1]> ",
+                    _controls.project_composition_suggestions,
+                ),
+                mock.call(
+                    "compose[run:2]> ",
+                    _controls.project_composition_suggestions,
+                ),
+                mock.call(
+                    "story[lobby]> ",
+                    _core._main_slash_suggestions,
+                ),
+            ],
+        )
+        driver.read_line.assert_called_once_with("conversation[subject]> ")
+        self.assertEqual(
+            driver.write_text.call_args_list,
+            [
+                mock.call(
+                    "[compose] Consensus run. Use /send to submit or "
+                    "/cancel to discard.\n"
+                ),
+                mock.call(
+                    "[compose] Sending 1 line, 16 characters to consensus.\n"
+                ),
+                mock.call("[result] ready\n"),
+            ],
+        )
+
+    def test_compatibility_editor_contains_only_delegation_not_a_second_driver(
+        self,
+    ) -> None:
+        input_stream = ObservedStream()
+        output_stream = ObservedStream(descriptor=8)
+        editor = InteractiveMainLineEditor(
+            lambda prompt: "fallback",
+            input_stream,  # type: ignore[arg-type]
+            output_stream,  # type: ignore[arg-type]
+        )
+        self.assertIsInstance(editor._driver, RawTerminalDriver)
+        self.assertIs(RawTerminalDriver, _core.RawTerminalDriver)
+        self.assertIs(RawTerminalDriver, terminal_facade.RawTerminalDriver)
+
+        source_path = (
+            Path(__file__).resolve().parents[1]
+            / "src"
+            / "story_writing_agents"
+            / "interactive_line_editor.py"
+        )
+        source = source_path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        editor_class = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef)
+            and node.name == "InteractiveMainLineEditor"
+        )
+        self.assertEqual(
+            tuple(
+                node.name
+                for node in editor_class.body
+                if isinstance(node, ast.FunctionDef)
+            ),
+            ("__init__", "read_line", "_read_line"),
+        )
+        read_line = next(
+            node
+            for node in editor_class.body
+            if isinstance(node, ast.FunctionDef) and node.name == "read_line"
+        )
+        called_attributes = {
+            node.func.attr
+            for node in ast.walk(read_line)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        }
+        self.assertEqual(called_attributes, {"_read_line"})
+        for duplicated_primitive in (
+            "tcgetattr",
+            "tcsetattr",
+            "get_terminal_size",
+            "\\x1b[J",
+            "\\x1b[A",
+            "\\x1b[C",
+        ):
+            self.assertNotIn(duplicated_primitive, source)
+
+
+class PackageBoundaryFoundationTests(unittest.TestCase):
+    def test_package_import_graph_is_exact_acyclic_and_clean(self) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        package_root = repository_root / "src" / "story_writing_agents"
+        terminal_root = package_root / "interactive_terminal"
+        expected_dependencies = {
+            "__init__.py": {"._core"},
+            "_model.py": set(),
+            "_controls.py": {"._model"},
+            "_render.py": {"._model"},
+            "_driver.py": {"._model"},
+            "_core.py": {
+                "..agents",
+                "..interactive_commands",
+                "._controls",
+                "._driver",
+                "._model",
+                "._render",
+            },
+        }
+        self.assertEqual(
+            {path.name for path in terminal_root.glob("*.py")},
+            set(expected_dependencies),
+        )
+        for filename, expected in expected_dependencies.items():
+            tree = ast.parse(
+                (terminal_root / filename).read_text(encoding="utf-8")
+            )
+            dependencies = {
+                "." * node.level + (node.module or "")
+                for node in ast.walk(tree)
+                if isinstance(node, ast.ImportFrom) and node.level
+            }
+            with self.subTest(filename=filename):
+                self.assertEqual(dependencies, expected)
+
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = str(package_root.parent)
+        environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        modules = (
+            "story_writing_agents.interactive_terminal._model",
+            "story_writing_agents.interactive_terminal._controls",
+            "story_writing_agents.interactive_terminal._render",
+            "story_writing_agents.interactive_terminal._driver",
+            "story_writing_agents.interactive_terminal._core",
+            "story_writing_agents.interactive_terminal",
+            "story_writing_agents.interactive_line_editor",
+        )
+        script = (
+            "import importlib; "
+            f"modules = {modules!r}; "
+            "loaded = tuple(importlib.import_module(name).__name__ "
+            "for name in modules); "
+            "assert loaded == modules; print('ok')"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            completed = subprocess.run(
+                [sys.executable, "-c", script],
+                cwd=temporary,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(completed.stdout, "ok\n")
+            self.assertEqual(list(Path(temporary).iterdir()), [])
+
+
+if __name__ == "__main__":
+    unittest.main()

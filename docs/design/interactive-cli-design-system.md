@@ -1,11 +1,16 @@
 # Interactive CLI design system contract
 
-> **Status:** approved design for issues #82 through #87 and #79. This page
-> defines migration requirements; it does not claim that the planned design is
-> implemented. Until each slice lands, the
+> **Status:** #82 has delivered the import-compatible package, closed semantic
+> models, pure foundation controls, responsive plain/fixed-ANSI renderer,
+> capability profiles, unified raw driver and CLI factory, line-editor
+> compatibility facade, and 32-unit module index; completed prerequisite #73
+> supplies contextual composition previews through that unified driver. View
+> migrations (#83/#84), history (#85), composer/confirmation component
+> integration (#86), selectable completion (#79), and pickers (#87) remain
+> planned. The
 > [interactive terminal reference](../reference/interactive-terminal.md) and
-> [terminal safety rules](../operations/terminal-safety.md) describe available
-> behavior.
+> [terminal safety rules](../operations/terminal-safety.md) describe current
+> observable behavior.
 
 This contract governs every human-facing interactive view and control in the
 installed shell. It preserves scrollback and the established command/runtime
@@ -14,7 +19,20 @@ confirmation, suggestions, fixed choices, command history, and pickers one
 semantic model.
 
 The words **must**, **must not**, and **may** below constrain the delivery
-issues. They do not change current production behavior by themselves.
+issues. Requirements beyond the #82 foundation do not describe current
+production behavior.
+
+## Delivery status
+
+| Slice | Current availability |
+| --- | --- |
+| #82 terminal foundation | Implemented: package boundary, private semantic values, current line-edit transitions and suggestion projection, responsive renderer, capability observation, sole raw driver, unified CLI construction, compatibility facades, and index reconciliation. |
+| #83 and #84 view migrations | Planned: existing shell, orientation, notices, messages, progress, help, roster, list, search, history, and transcript methods still render their established plain records. |
+| #85 input history | Planned: Up/Down history and the 100-entry process-local store are not implemented. |
+| Prerequisite #73 | Implemented: RUN/CHAT composition uses the fixed preview-only `/send`, `/cancel` projection through explicit call-local routing. |
+| #86 composer/confirmation integration | Planned: existing line-oriented composition and confirmation behavior remains unchanged beyond #73 previews. |
+| #79 selectable completion | Planned: the current slash suggestion list is preview-only; Tab application, Up/Down palette navigation, and fixed-value completion are not implemented. Shift-Tab has no palette action in the target behavior. |
+| #87 pickers | Planned: semantic picker values and rendering exist internally, but no interactive picker transition or consumer is implemented. |
 
 ## Goals and limits
 
@@ -37,9 +55,10 @@ committed.
 
 ## Closed semantic vocabulary
 
-These are the only semantic view components. Delivery slices may compose them
-but must not introduce an additional component kind without first revising
-this contract.
+These are the only semantic view components. #82 implements their immutable,
+package-private models and deterministic rendering. Delivery slices may compose
+them into public views but must not introduce an additional component kind
+without first revising this contract.
 
 | Component | Contract |
 | --- | --- |
@@ -101,6 +120,12 @@ raw-mode activation, key decoding, cursor control, writes, flushing, and
 restoration. No editor, renderer, model, control transition, controller, or
 compatibility facade may independently acquire or restore the terminal.
 
+#82 implements that ownership boundary. Its pure line-input transition handles
+the established insertion, deletion, cursor, Enter, Ctrl-C, and EOF behavior;
+its suggestion projection preserves the current preview list. Up/Down, Tab,
+Shift-Tab, and Escape are reserved without history, selectable-palette, or
+picker semantics until their owning slices land.
+
 Controls receive normalized key events such as text, Enter, Backspace, Delete,
 Left, Right, Home, End, Up, Down, Tab, Shift-Tab, Escape, Ctrl-C, and EOF. Their
 transitions are pure:
@@ -130,6 +155,11 @@ record into multiple caller-visible callback records.
 
 ## Key and commit semantics
 
+The following table is the complete target interaction contract. In the #82
+foundation, only the existing one-line editing, composition, confirmation, and
+non-selectable slash-preview behavior is observable; the history, selectable
+palette, and picker rows remain planned as identified above.
+
 | Focused control | Navigation and editing | Commit | Cancel or terminal event |
 | --- | --- | --- | --- |
 | Main one-line input | Text, Backspace/Delete, Left/Right, and Home/End edit. Up/Down navigate history only while no palette is open. Slash-prefixed input may open a palette; Tab applies its highlighted completion. | Enter submits the exact visible buffer to the existing parser once. | Ctrl-C and EOF retain their established typed outcomes; no text is parsed. |
@@ -144,6 +174,9 @@ highlight, and history behavior supplied by contextual suggestions must not
 change `/send`, `/cancel`, `/say`, Ctrl-C, or EOF semantics.
 
 ### Main-command history
+
+> **Planned for #85:** #82 stores no command history and Up/Down have no
+> foundation transition.
 
 History is process-local UI state owned by the unified terminal core. It is not
 stored in a workspace, transcript, configuration file, environment variable,
@@ -165,6 +198,10 @@ or provider session.
   nonblank, appends it as a new exact history entry.
 
 ### Main-command palette and fixed choices
+
+> **Planned for #79:** #82 retains exact prefix projection and the existing
+> non-selectable preview list. It does not implement candidate highlight,
+> replacement, Escape restoration, subcommands, or fixed-value completion.
 
 A leading slash may automatically open `SuggestionPalette`. Candidate command,
 subcommand, and fixed-value data comes from canonical command metadata, not a
@@ -194,6 +231,9 @@ projects that metadata and does not duplicate parser grammar.
 
 ### Picker semantics
 
+> **Planned for #87:** #82 supplies package-private picker values and rendering
+> only. It does not install a picker control or transition into the shell.
+
 A `Picker` is single-select. Up/Down moves highlight without changing the
 selected value or calling a consumer. Enter commits only an enabled highlighted
 item; Escape cancels. Disabled items remain visible but are skipped by
@@ -208,7 +248,10 @@ cancelled, EOF, Ctrl-C, and error behavior must remain deterministic.
 
 ## Rendering and capability policy
 
-The planned implementation has three observable capability profiles:
+#82 implements three capability profiles and a package-private semantic
+renderer. Existing public terminal record methods still use their established
+plain templates; broad structured layout and visible decorative color arrive
+only with the #83/#84 migrations.
 
 | Profile | Selection | Output and input behavior |
 | --- | --- | --- |
@@ -255,15 +298,16 @@ and enclosing marks use zero cells, East Asian wide/fullwidth code points use
 two, and other safe visible code points use one. Styling never changes those
 measurements.
 
-The real CLI detects terminal width for the next render or input operation,
-falls back to 80 columns when no reliable positive width is available, and
-caps detected width at 120 columns. A resize is observed on the next
-render/input; no signal-driven resize loop is added. Narrow layouts degrade in
-this order: remove decorative alignment, stack `Field` label/value pairs,
-reduce indentation, wrap content with visible continuation structure, and
-window long selectable lists with position cues. They must not drop semantic
-labels, status meaning, citations, item identity, or committed content merely
-to preserve a wide layout.
+The real CLI detects terminal width, falls back to 80 columns when no reliable
+positive width is available, and caps detected width at 120 columns. A resize
+is observed on the next live-input or package-private semantic-render operation;
+no signal-driven resize loop is added. Existing public plain record methods
+retain their established construction width until their view migrations.
+Narrow layouts degrade in this order: remove decorative alignment, stack
+`Field` label/value pairs, reduce indentation, wrap content with visible
+continuation structure, and window long selectable lists with position cues.
+They must not drop semantic labels, status meaning, citations, item identity,
+or committed content merely to preserve a wide layout.
 
 Color is always redundant with words, labels, order, or symbols. Focus,
 highlight, selected, disabled, loading, empty, error, cancelled, and completed
@@ -373,18 +417,17 @@ or order in `story_writing_agents.__all__`.
 
 ## Approved module boundary
 
-`interactive_terminal.py` becomes an import-compatible
-`interactive_terminal/` package. Responsibility and dependency direction are
-fixed as follows:
+`interactive_terminal` is now an import-compatible package. Responsibility and
+dependency direction are fixed as follows:
 
 | Unit | Responsibility |
 | --- | --- |
 | `interactive_terminal.__init__` | Compatibility facade with the exact existing public surface plus one package-internal real-CLI stream factory. It owns no import-time resource or state. |
 | `interactive_terminal._model` | Immutable semantic components, control states, key/focus values, and transition/render results. No I/O. |
-| `interactive_terminal._controls` | Pure input, history, palette, composer, confirmation, and picker state transitions. |
+| `interactive_terminal._controls` | Pure established line-input transitions and exact registry-supplied slash suggestion projection. History, selectable palette, composer, confirmation, and picker transitions remain future work. |
 | `interactive_terminal._render` | Pure safe responsive renderers for plain and fixed ANSI profiles. It sanitizes dynamic content before styling and returns render data without writing. |
 | `interactive_terminal._driver` | Sole owner of raw streams, capability/width detection, key decoding, cursor controls, raw mode, restoration, writes, and flushes. |
-| `interactive_terminal._core` | `InteractiveTerminal`, public-operation orchestration, and bounded process-local UI state such as command history. It coordinates leaves without owning another raw-terminal implementation. |
+| `interactive_terminal._core` | `InteractiveTerminal`, established public-operation orchestration, package-internal stream factory, and semantic render seam. It coordinates leaves without owning another raw-terminal implementation or command history. |
 | `interactive_line_editor` | Standalone/public compatibility-only facade over the same unified terminal implementation and driver. |
 
 The allowed graph is:
@@ -414,32 +457,28 @@ modules do not import terminal package leaves. `terminal._controls`,
 `interactive_commands` and `agents`. No terminal package leaf imports CLI,
 controller, runtime orchestration, providers, or storage.
 
-### Planned module-index delta
+### Implemented module-index delta
 
-The current [Python module index](../../PYTHON_MODULE_INDEX.md) accurately
-records 27 importable production units. Issue #82, not this design-only slice,
-owns the implementation and index reconciliation:
+The current [Python module index](../../PYTHON_MODULE_INDEX.md) now records 32
+importable production units after #82's package conversion:
 
 ```text
-current interactive_terminal module                  -1
-planned interactive_terminal package and five leaves +6
-planned total                                         32
+former interactive_terminal module                    -1
+interactive_terminal package and five package leaves  +6
+current total                                          32
 ```
 
-The six planned entries are the package plus `_model`, `_controls`, `_render`,
-`_driver`, and `_core`. #82 must also revise the existing
-`interactive_line_editor` and `cli` entries, and revise controller or
-`interactive_commands` dependency/responsibility metadata if their completed
-imports or canonical-command-metadata roles change. The index must continue to
-describe observed implementation, never this plan, so it must remain at 27
-until the package conversion lands.
+The six entries are the package plus `_model`, `_controls`, `_render`,
+`_driver`, and `_core`. The existing `interactive_line_editor` and `cli`
+entries now describe compatibility delegation and unified factory construction;
+controller policy leaves still consume only facade error contracts.
 
 ## Migration coverage
 
-Issue #82 first delivers the common models, renderer/capability profiles,
-driver seam, package facade, and module-index reconciliation. The following
-issues then migrate every current view and control without redistributing
-runtime or storage responsibility.
+Issue #82 has delivered the common models, renderer/capability profiles, driver
+seam, package facade, and module-index reconciliation. The following issues
+migrate every current view and control without redistributing runtime or
+storage responsibility.
 
 ### View groups
 
@@ -469,15 +508,22 @@ runtime or storage responsibility.
 | Fixed command values | `SuggestionPalette`, `Field` | Canonical finite grammar choices, including metadata-exposed agent IDs/aliases; preview has no effects | #79 |
 | Single-select and selectable-list choices | `Picker`, `ListView`, `Record`, `Notice` | Up/Down highlight, Enter commit, Escape cancel, disabled/empty/error | #87 |
 
-Contextual non-main-prompt suggestions remain dependent on external issue #73.
-#86 and #79 integrate that prerequisite without moving parser, runtime, or
-storage authority into the terminal design system.
+Contextual non-main-prompt suggestions from completed issue #73 use the same
+unified driver without moving parser, runtime, or storage authority into the
+terminal design system. #86 and #79 build on that prerequisite.
 
 ## Verification and acceptance
 
 Each delivery slice must add deterministic tests at the lowest owning boundary
 and focused integration coverage. The complete program is accepted only when
 all of the following are covered.
+
+#82 covers public identity/signatures, model validation, current pure line
+transitions, reserved future keys, safe plain/ANSI rendering, narrow physical
+width, capability profiles, unified driver/factory ownership, compatibility
+delegation, and the package graph. Rows involving migrated views, history,
+selectable completion, component-integrated composition/confirmation, and
+picker transitions remain acceptance targets for their later slices.
 
 | Area | Required evidence |
 | --- | --- |

@@ -10,9 +10,24 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import KW_ONLY, dataclass
 from enum import StrEnum
 from types import MappingProxyType
+from typing import TextIO
 
-from .agents import AGENT_SPECS
-from .interactive_commands import AGENT_ROUTES, COMMANDS, CommandSpec
+from ..agents import AGENT_SPECS
+from ..interactive_commands import AGENT_ROUTES, COMMANDS, CommandSpec
+from ._controls import (
+    project_composition_suggestions,
+    project_slash_suggestions,
+    transition_line_input,
+)
+from ._driver import RawTerminalDriver
+from ._model import (
+    CapabilityProfile,
+    Component,
+    SlashCommandSuggestion,
+    TerminalCapabilities,
+    sanitize_terminal_text,
+)
+from ._render import render_component
 
 
 class AttachmentKind(StrEnum):
@@ -374,30 +389,14 @@ _TRUNCATION_SUFFIX = " ...[truncated]"
 _SUMMARY_LIMIT = 512
 _HINT_LIMIT = 256
 _REDACTION = "<redacted>"
-
-
-def sanitize_terminal_text(text: str) -> str:
-    """Return display text whose control code points cannot affect a terminal."""
-
-    if not isinstance(text, str):
-        raise TypeError("terminal text must be a string")
-    rendered: list[str] = []
-    for character in text:
-        if character == "\n":
-            rendered.append(character)
-            continue
-        category = unicodedata.category(character)
-        if category in {"Cc", "Cf", "Cs"} or character in {"\u2028", "\u2029"}:
-            rendered.append(_visible_escape(character))
-        else:
-            rendered.append(character)
-    return "".join(rendered)
+_MAIN_PROMPT_EXCLUSIONS = frozenset({"/compose", "/send", "/cancel"})
 
 
 class InteractiveTerminal:
     """Render plain terminal records and collect one input operation at a time."""
 
     __slots__ = (
+        "_capability_provider",
         "_composition_read_line",
         "_main_read_line",
         "_read_line",
@@ -416,9 +415,10 @@ class InteractiveTerminal:
         """Bind borrowed synchronous I/O callbacks and a fixed wrap width.
 
         The established ``read_line`` callback remains responsible for subject,
-        confirmation, and composition input. An optional keyword-only
-        ``main_read_line`` handles only completed main-prompt lines and defaults
-        to ``read_line``. Construction performs no I/O or resource acquisition.
+        confirmation, and public-constructor composition input. An optional
+        keyword-only ``main_read_line`` handles only completed main-prompt lines
+        and defaults to ``read_line``. Construction performs no I/O or resource
+        acquisition.
         """
 
         if not callable(read_line):
@@ -438,6 +438,7 @@ class InteractiveTerminal:
         self._composition_read_line = read_line
         self._write_text = write_text
         self._width = width
+        self._capability_provider = lambda: _plain_capabilities(width)
 
     def read_main(
         self,
@@ -1041,6 +1042,12 @@ class InteractiveTerminal:
 
         self._write_text(f"{sanitize_terminal_text(text)}\n")
 
+    def _write_component(self, component: Component) -> None:
+        """Render and write one semantic component through the bound callback."""
+
+        frame = render_component(component, self._capability_provider())
+        self._write_text(f"{frame.text}\n")
+
 
 def build_contextual_terminal(
     read_line: Callable[[str], str],
@@ -1069,15 +1076,64 @@ def build_contextual_terminal(
     return terminal
 
 
-def _visible_escape(character: str) -> str:
-    """Format one unsafe code point as a lowercase visible ASCII escape."""
+def _plain_capabilities(width: int) -> TerminalCapabilities:
+    """Return the deterministic resource-free callback rendering profile."""
 
-    value = ord(character)
-    if value <= 0xFF:
-        return f"\\x{value:02x}"
-    if value <= 0xFFFF:
-        return f"\\u{value:04x}"
-    return f"\\U{value:08x}"
+    return TerminalCapabilities(
+        CapabilityProfile.LINE,
+        width,
+        input_tty=False,
+        output_tty=False,
+        raw_mode=False,
+        cursor_controls=False,
+        decorative_sgr=False,
+    )
+
+
+def _main_slash_suggestions(
+    buffer: str,
+) -> tuple[SlashCommandSuggestion, ...]:
+    """Project the current canonical command registry for the live driver."""
+
+    command_tokens = tuple(
+        (spec.syntax.split(maxsplit=1)[0], spec.aliases) for spec in COMMANDS
+    )
+    return project_slash_suggestions(
+        buffer,
+        command_tokens,
+        exclusions=_MAIN_PROMPT_EXCLUSIONS,
+    )
+
+
+def build_stream_terminal(
+    fallback_read_line: Callable[[str], str],
+    input_stream: TextIO,
+    output_stream: TextIO,
+) -> InteractiveTerminal:
+    """Build the real CLI terminal around one stream-owning raw driver."""
+
+    driver = RawTerminalDriver(
+        fallback_read_line,
+        input_stream,
+        output_stream,
+        transition_line_input,
+    )
+    capabilities = driver.capabilities()
+    terminal = InteractiveTerminal(
+        driver.read_line,
+        driver.write_text,
+        width=max(20, capabilities.width),
+        main_read_line=lambda prompt: driver.read_live_line(
+            prompt,
+            _main_slash_suggestions,
+        ),
+    )
+    terminal._composition_read_line = lambda prompt: driver.read_live_line(
+        prompt,
+        project_composition_suggestions,
+    )
+    terminal._capability_provider = driver.capabilities
+    return terminal
 
 
 def _safe_identifier(name: str, value: object) -> str:
@@ -1380,4 +1436,7 @@ __all__ = [
     "InteractiveError",
     "sanitize_terminal_text",
     "InteractiveTerminal",
+    "build_contextual_terminal",
+    "build_stream_terminal",
+    "project_composition_suggestions",
 ]
