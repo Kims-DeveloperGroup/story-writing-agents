@@ -18,6 +18,7 @@ except ImportError:  # pragma: no cover - exercised on non-POSIX hosts
 
 
 _MAIN_PROMPT_EXCLUSIONS = frozenset({"/compose", "/send", "/cancel"})
+_COMPOSITION_SUGGESTION_TOKENS = ("/send", "/cancel")
 _SUGGESTION_HEADER = "[suggestions]"
 _CARRIAGE_RETURN = "\r"
 _CLEAR_TO_END = "\x1b[J"
@@ -83,6 +84,29 @@ def slash_command_suggestions(
     return tuple(matches)
 
 
+def composition_slash_command_suggestions(
+    buffer: str,
+) -> tuple[SlashCommandSuggestion, ...]:
+    """Project the exact ordered composition controls for one input buffer.
+
+    Matching is whole-buffer, case-sensitive, and prefix-only. Non-leading
+    slash input, whitespace, and no-match input return an empty tuple. The pure
+    projection performs no parser, terminal, provider, or storage operation.
+    """
+
+    if not isinstance(buffer, str):
+        raise TypeError("buffer must be a string")
+    if not buffer.startswith("/") or any(
+        character.isspace() for character in buffer
+    ):
+        return ()
+    return tuple(
+        SlashCommandSuggestion(token, token)
+        for token in _COMPOSITION_SUGGESTION_TOKENS
+        if token.startswith(buffer)
+    )
+
+
 @dataclass(slots=True)
 class _LiveEditorState:
     """Retain one call-local Unicode buffer, cursor, and redraw position."""
@@ -106,7 +130,11 @@ class _TerminalConfiguration:
 
 
 class InteractiveMainLineEditor:
-    """Read one editable main-prompt line with safe line-input fallback."""
+    """Read editable lines with main defaults and safe line-input fallback.
+
+    Public ``read_line`` preserves the main-prompt provider. The internal
+    binding seam supplies a call-local provider for composition reads.
+    """
 
     __slots__ = ("_fallback_read_line", "_input_stream", "_output_stream")
 
@@ -139,8 +167,26 @@ class InteractiveMainLineEditor:
         raises a fatal fixed ``RuntimeError`` instead.
         """
 
+        return self._read_line(prompt, slash_command_suggestions)
+
+    def _read_line(
+        self,
+        prompt: str,
+        suggestion_provider: Callable[
+            [str], tuple[SlashCommandSuggestion, ...]
+        ],
+    ) -> str:
+        """Read one line using an explicit call-local suggestion provider.
+
+        The provider affects only transient redraws for this call and is never
+        retained by the editor. Terminal capability, fallback, cleanup, and
+        restoration behavior remain owned by this raw-input boundary.
+        """
+
         if not isinstance(prompt, str):
             raise TypeError("prompt must be a string")
+        if not callable(suggestion_provider):
+            raise TypeError("suggestion_provider must be callable")
 
         try:
             configuration = _terminal_configuration(
@@ -164,7 +210,12 @@ class InteractiveMainLineEditor:
         line: str | None = None
         active_failure: BaseException | None = None
         try:
-            line = self._read_live_line(prompt, configuration, state)
+            line = self._read_live_line(
+                prompt,
+                configuration,
+                state,
+                suggestion_provider,
+            )
             self._finish_live_display(prompt, configuration.width, state)
         except BaseException as failure:
             active_failure = failure
@@ -186,6 +237,9 @@ class InteractiveMainLineEditor:
         prompt: str,
         configuration: _TerminalConfiguration,
         state: _LiveEditorState,
+        suggestion_provider: Callable[
+            [str], tuple[SlashCommandSuggestion, ...]
+        ],
     ) -> str:
         """Edit one code-point buffer until submit, interrupt, EOF, or failure.
 
@@ -198,6 +252,7 @@ class InteractiveMainLineEditor:
             prompt,
             configuration.width,
             state,
+            suggestion_provider,
         )
         while True:
             character = self._read_character()
@@ -214,6 +269,7 @@ class InteractiveMainLineEditor:
                             prompt,
                             configuration.width,
                             state,
+                            suggestion_provider,
                         )
                 if not reprocess:
                     continue
@@ -240,6 +296,7 @@ class InteractiveMainLineEditor:
                     prompt,
                     configuration.width,
                     state,
+                    suggestion_provider,
                 )
 
     def _read_character(self) -> str:
@@ -262,6 +319,9 @@ class InteractiveMainLineEditor:
         prompt: str,
         width: int,
         state: _LiveEditorState,
+        suggestion_provider: Callable[
+            [str], tuple[SlashCommandSuggestion, ...]
+        ],
     ) -> int:
         """Replace the current editor area and return its visible cursor row.
 
@@ -277,7 +337,7 @@ class InteractiveMainLineEditor:
             state.cursor,
             render_width,
         )
-        suggestions = slash_command_suggestions("".join(state.buffer))
+        suggestions = suggestion_provider("".join(state.buffer))
         panel_lines: list[str] = []
         if suggestions:
             panel_lines.extend(
@@ -379,6 +439,29 @@ class InteractiveMainLineEditor:
         if written is not None and written != len(text):
             raise OSError("interactive terminal write was incomplete")
         self._output_stream.flush()
+
+
+def bind_suggestion_reader(
+    editor: InteractiveMainLineEditor,
+    provider: Callable[[str], tuple[SlashCommandSuggestion, ...]],
+) -> Callable[[str], str]:
+    """Bind one editor to an explicit provider without exposing its internals.
+
+    The returned callback chooses the provider independently for every read;
+    the editor retains no mode or provider state. Binding performs no stream
+    access, terminal mutation, or input consumption.
+    """
+
+    reader = getattr(editor, "_read_line", None)
+    if not callable(reader):
+        raise TypeError("editor must support suggestion-bound reads")
+    if not callable(provider):
+        raise TypeError("provider must be callable")
+
+    def read_line(prompt: str) -> str:
+        return reader(prompt, provider)
+
+    return read_line
 
 
 def _terminal_configuration(

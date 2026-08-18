@@ -290,6 +290,7 @@ def visible_escape(character: str) -> str:
 class PublicContractTests(unittest.TestCase):
     def test_direct_module_public_surface_is_exact_and_ordered(self) -> None:
         self.assertEqual(tuple(terminal_module.__all__), PUBLIC_EXPORTS)
+        self.assertNotIn("build_contextual_terminal", terminal_module.__all__)
         for name in PUBLIC_EXPORTS:
             with self.subTest(name=name):
                 self.assertIs(getattr(terminal_module, name), globals()[name])
@@ -589,6 +590,28 @@ class PromptAndRenderingTests(unittest.TestCase):
             signature.parameters["main_read_line"].kind,
             inspect.Parameter.KEYWORD_ONLY,
         )
+        contextual_signature = inspect.signature(
+            terminal_module.build_contextual_terminal
+        )
+        self.assertEqual(
+            tuple(contextual_signature.parameters),
+            (
+                "read_line",
+                "write_text",
+                "main_read_line",
+                "composition_read_line",
+                "width",
+            ),
+        )
+        self.assertTrue(
+            all(
+                contextual_signature.parameters[name].kind
+                is inspect.Parameter.KEYWORD_ONLY
+                for name in ("main_read_line", "composition_read_line", "width")
+            )
+        )
+        self.assertEqual(contextual_signature.parameters["width"].default, 80)
+        self.assertTrue(inspect.getdoc(terminal_module.build_contextual_terminal))
         subject_signature = inspect.signature(
             InteractiveTerminal.request_conversation_subject
         )
@@ -752,7 +775,7 @@ class PromptAndRenderingTests(unittest.TestCase):
                 )
 
     def test_optional_main_reader_is_used_only_for_the_main_prompt(self) -> None:
-        general_callbacks = ScriptedCallbacks("subject")
+        general_callbacks = ScriptedCallbacks("subject", "ordinary content", "/send")
         main_callbacks = ScriptedCallbacks("/status")
         terminal = InteractiveTerminal(
             general_callbacks.read_line,
@@ -768,13 +791,97 @@ class PromptAndRenderingTests(unittest.TestCase):
             terminal.request_conversation_subject(),
             TerminalAction(TerminalActionKind.LINE, text="subject"),
         )
+        self.assertEqual(
+            terminal.compose(ComposeMode.RUN),
+            TerminalAction(
+                TerminalActionKind.SEND,
+                text="ordinary content",
+                line_count=1,
+                character_count=16,
+            ),
+        )
         self.assertEqual(main_callbacks.prompts, ["story[lobby]> "])
         self.assertEqual(
             general_callbacks.prompts,
-            ["conversation[subject]> "],
+            [
+                "conversation[subject]> ",
+                "compose[run:1]> ",
+                "compose[run:2]> ",
+            ],
         )
         self.assertEqual(main_callbacks.records, [])
-        self.assertEqual(general_callbacks.records, [])
+        self.assertEqual(
+            general_callbacks.records,
+            [
+                "[compose] Consensus run. Use /send to submit or "
+                "/cancel to discard.\n",
+                "[compose] Sending 1 line, 16 characters to consensus.\n",
+            ],
+        )
+
+    def test_contextual_factory_routes_each_operation_without_prompt_inference(
+        self,
+    ) -> None:
+        ordinary_callbacks = ScriptedCallbacks("subject", "yes")
+        main_callbacks = ScriptedCallbacks("/status")
+        composition_callbacks = ScriptedCallbacks(
+            "run text",
+            "/send",
+            "chat text",
+            "/send",
+        )
+        terminal = terminal_module.build_contextual_terminal(
+            ordinary_callbacks.read_line,
+            ordinary_callbacks.write_text,
+            main_read_line=main_callbacks.read_line,
+            composition_read_line=composition_callbacks.read_line,
+        )
+
+        self.assertEqual(
+            terminal.read_main(),
+            TerminalAction(TerminalActionKind.LINE, text="/status"),
+        )
+        self.assertEqual(
+            terminal.compose(ComposeMode.RUN),
+            TerminalAction(
+                TerminalActionKind.SEND,
+                text="run text",
+                line_count=1,
+                character_count=8,
+            ),
+        )
+        self.assertEqual(
+            terminal.compose(ComposeMode.CHAT, agent_id=PLOT_ARCHITECT),
+            TerminalAction(
+                TerminalActionKind.SEND,
+                text="chat text",
+                line_count=1,
+                character_count=9,
+            ),
+        )
+        self.assertEqual(
+            terminal.request_conversation_subject(),
+            TerminalAction(TerminalActionKind.LINE, text="subject"),
+        )
+        self.assertIs(
+            terminal.request_confirmation("Continue?", default=False),
+            ConfirmationResult.YES,
+        )
+
+        self.assertEqual(main_callbacks.prompts, ["story[lobby]> "])
+        self.assertEqual(
+            composition_callbacks.prompts,
+            [
+                "compose[run:1]> ",
+                "compose[run:2]> ",
+                "compose[chat:plot:1]> ",
+                "compose[chat:plot:2]> ",
+            ],
+        )
+        self.assertEqual(
+            ordinary_callbacks.prompts,
+            ["conversation[subject]> ", "Continue? [y/N] "],
+        )
 
     def test_main_read_maps_terminal_events_and_propagates_bad_collaborators(
         self,
