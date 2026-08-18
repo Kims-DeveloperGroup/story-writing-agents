@@ -133,7 +133,7 @@ record into multiple caller-visible callback records.
 | Focused control | Navigation and editing | Commit | Cancel or terminal event |
 | --- | --- | --- | --- |
 | Main one-line input | Text, Backspace/Delete, Left/Right, and Home/End edit. Up/Down navigate history. Slash-prefixed input may open a palette; Tab/Shift-Tab navigate completion. | Enter submits the exact visible buffer to the existing parser once. | Ctrl-C and EOF retain their established typed outcomes; no text is parsed. |
-| `SuggestionPalette` anchored to main input | Tab/Shift-Tab cycles candidates and replaces the applicable span. Up/Down remain history keys. | Enter submits the current buffer, not a hidden candidate. | Escape closes the palette and restores the prefix captured before completion replacement. |
+| `SuggestionPalette` anchored to main input | Opening highlights the first eligible candidate without editing. Tab applies the highlighted candidate to the applicable span; later Tab/Shift-Tab cycles and applies the next/previous candidate. Up/Down remain history keys. | Enter submits the current visible buffer, never an unapplied highlighted candidate. | Escape closes the palette and restores the prefix captured before the first completion replacement. |
 | `Picker` | Up/Down changes highlight among enabled items. Highlight never selects or commits. | Enter selects and commits the highlighted enabled item. | Escape cancels. Ctrl-C and EOF leave without commit and retain the invoking API's typed semantics. |
 | Line-oriented composer | Each ordinary line appends exact content. No raw full-screen editing or command-history traversal is introduced. | `/send` commits the exact LF-joined content when nonblank. | `/cancel`, Ctrl-C, and EOF preserve established discard outcomes and counts. |
 | Confirmation | Existing accepted yes/no input and blank-default behavior remain authoritative. Invalid input rerenders a notice and asks again. | A valid answer or blank default returns the established `yes` or `no` result. | Ctrl-C and EOF return the established `interrupt` or `eof` result. |
@@ -169,10 +169,15 @@ subcommand, and fixed-value data comes from canonical command metadata, not a
 second handwritten registry. Filtering, opening, empty results, highlight,
 replacement, and dismissal are deterministic pure transitions.
 
-Tab moves to the next candidate and replaces the applicable buffer span;
-Shift-Tab moves to the previous candidate and performs the same replacement.
-The control retains the pre-completion prefix so Escape can restore it exactly.
-Enter always commits the visible buffer through the existing parser once.
+Opening the palette highlights the first eligible candidate deterministically
+without changing the editable buffer. The first Tab applies that highlighted
+candidate by replacing the applicable buffer span. While the palette remains
+open after a replacement, later Tab advances to and applies the next candidate;
+Shift-Tab moves to and applies the previous candidate. Applying a highlighted
+candidate is completion only, not parser or runtime commit. The control retains
+the pre-completion prefix before the first replacement so Escape can restore it
+exactly. Enter always commits the visible buffer through the existing parser
+once and never implicitly applies an unapplied highlighted candidate.
 Up/Down never move palette highlight: while main input is focused they remain
 older/newer history keys. Recalled text remains editable and may reopen a
 palette based on its current buffer.
@@ -479,7 +484,7 @@ all of the following are covered.
 | Semantic output | Every view group uses only the closed vocabulary; status remains understandable without color; one semantic record uses one callback write unless an explicit live-control exception is tested. |
 | State transitions | Pure tests cover idle/focused/open/highlighted/selected/disabled/loading/empty/error/cancelled/completed states and invalid or boundary transitions. |
 | History | Blank exclusion, duplicate preservation, 100-entry eviction, older/newer bounds, exact draft restoration, editable copies, and process isolation. |
-| Palette/history coordination | Slash opening, filtering, empty/error, canonical metadata projection including finite agent IDs/aliases, Tab/Shift-Tab cycling/replacement, Escape prefix restoration, Up/Down history, edited recall, and Enter commit. |
+| Palette/history coordination | Slash opening with deterministic initial highlight and unchanged buffer; filtering; empty/error; canonical metadata projection including finite agent IDs/aliases; first-Tab application of the highlighted candidate; later Tab/Shift-Tab cycling and replacement; Escape prefix restoration; Up/Down history; edited recall; and visible-buffer-only Enter commit. |
 | Picker | Highlight-versus-selection, enabled/disabled navigation, Enter commit, Escape cancel, empty/one/long list, stable rerender identity, and resize on next operation. |
 | Parser and mutation boundary | The exact visible committed main buffer reaches the established parser once; previews, recall, replacement, highlight, rerender, cancel, Ctrl-C, and EOF cause no parser/runtime/storage call. |
 | Composer/confirmation | Existing `/send`, `/cancel`, `/say`, yes/no/default, invalid input, Ctrl-C, and EOF results; no full-screen or persistent state. |
