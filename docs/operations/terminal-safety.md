@@ -1,12 +1,14 @@
 # Terminal display safety
 
 > **Availability:** these rules protect shell live editing and
-> module-supported terminal records. They do not make scrollback private.
+> package-supported terminal records. They do not make scrollback private.
 
 Key terms: **TTY guard**—check for interactive streams; **typed error**—trusted
 public code instead of exception prose; **display escaping**—showing a control
 as text; **primitive renderer**—a writer that owns presentation, not search or
-storage; **redaction**—replacing caller-supplied secrets.
+storage; **raw driver**—the sole real-CLI owner of streams, terminal mode,
+functional controls, and restoration; **redaction**—replacing caller-supplied
+secrets.
 
 ## The TTY guard comes first
 
@@ -17,6 +19,37 @@ backend, or controller work.
 
 Help and syntax errors finish in `argparse` before this guard. Standard error
 need not be a TTY. See the [CLI stream contract](../reference/cli.md#interactive-streams).
+
+## Unified driver and capability profiles
+
+After the guard, one package-internal factory constructs one stream-backed
+`InteractiveTerminal` around one `RawTerminalDriver`. The CLI does not create
+or inject a separate line editor. The public standalone
+`InteractiveMainLineEditor` compatibility facade delegates to the same driver
+implementation and contains no second raw-mode, key, cursor, width, write,
+flush, or restoration implementation. Constructing either callback terminal or
+driver retains collaborators without reading, writing, flushing, inspecting a
+stream, or changing terminal attributes.
+
+Capability observation evaluates input and output independently. Live raw mode
+requires a complete POSIX `termios` interface, a nonempty non-`dumb` `TERM`,
+capable input and output TTY descriptors, a readable input, a writable/flushable
+output, and reliable size access. Missing, non-TTY, `TERM=dumb`, non-POSIX, or
+uncertain capability selects safe ordinary-line fallback without raw mode or
+cursor controls. This component fallback does not bypass the installed CLI's
+earlier two-stream TTY guard.
+
+The output descriptor supplies width. A missing, failing, nonpositive, or
+invalid result falls back to 80 columns; a reliable result is capped at 120.
+Capability observation and live main-input setup repeat on the next operation,
+so resize is noticed without a signal loop. Package-private semantic rendering
+also asks for current capabilities on its next render. Existing public record
+methods retain their established construction width until their later view
+migrations.
+
+The internal profiles are fixed ANSI, capable plain, and line fallback. Presence
+of `NO_COLOR` disables decorative SGR only; it does not disable safe functional
+cursor controls on an otherwise capable terminal. There is no public theme API.
 
 ## Safe display boundary
 
@@ -50,12 +83,20 @@ structures never reach the terminal. Renderers open no file and retain no
 cursor. Exact templates live in the
 [terminal reference](../reference/interactive-terminal.md#exact-search-and-transcript-records).
 
-Record presentation remains feature-blind plain text. The live editor instead
-checks terminal capability/width and emits only fixed carriage-return,
-cursor-up/right, and clear-to-end controls. Prompt, buffer, and suggestion text
-is sanitized first, with embedded LF visible. No untrusted text becomes ANSI.
-Emulators, multiplexers, remote sessions, and scrollback may still retain or
-transform display.
+Current public record presentation remains feature-blind plain text. The
+package-private semantic renderer supports the same structured text in plain
+and fixed ANSI profiles: it sanitizes dynamic content before wrapping or
+styling, counts ANSI as zero display cells, uses local resets, and permits only
+reset, bold emphasis, and foreground SGR 31 through 37. It emits no background,
+dim, blink, OSC, query, or cursor sequence. Removing those allowed decorative
+sequences yields the exact plain structure. This foundation is not yet a broad
+public-view color migration.
+
+The live driver separately emits only fixed carriage-return, cursor-up/right,
+and clear-to-end controls for functional editing. Prompt, buffer, and suggestion
+text is sanitized first, with embedded LF visible. No untrusted text becomes
+ANSI. Emulators, multiplexers, remote sessions, and scrollback may still retain
+or transform display.
 
 ## Typed errors, never raw diagnostics
 
@@ -81,10 +122,10 @@ exceptions. Shell and access-claim consequences belong to
 
 ## Live-editor boundary
 
-Live mode requires POSIX `termios`, capable TTY streams/descriptors and size,
-and nonempty, non-`dumb` `TERM`. Missing capability switches to the existing
-reader before editor I/O or terminal mutation. Recoverable activation
-failure restores first, then falls back.
+Live mode uses the unified driver's capability boundary described above.
+Missing capability switches to the existing reader before editor I/O or
+terminal mutation. Recoverable activation failure restores first, then falls
+back.
 
 An active read disables canonical input and echo, keeps a Unicode
 code-point buffer, and supports insertion, Left/Right, Home/End,

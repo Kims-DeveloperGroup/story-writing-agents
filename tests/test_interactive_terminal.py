@@ -20,6 +20,7 @@ from unittest import mock
 
 import story_writing_agents
 from story_writing_agents import (
+    AGENT_SPECS,
     CHARACTER_CUSTODIAN,
     COMMANDS,
     EXECUTION_SPECIALIST,
@@ -721,7 +722,7 @@ class PromptAndRenderingTests(unittest.TestCase):
                 (
                     route.agent_id,
                     route.prompt_alias,
-                    terminal_module.AGENT_SPECS[route.agent_id].display_name,
+                    AGENT_SPECS[route.agent_id].display_name,
                 )
                 for route in AGENT_ROUTES
             ),
@@ -1363,11 +1364,11 @@ class PromptAndRenderingTests(unittest.TestCase):
         )
         self.assertTrue(all(len(line) <= 44 for line in wrapped.splitlines()))
 
-        original = terminal_module.AGENT_SPECS[LEAD_ORCHESTRATOR]
+        original = AGENT_SPECS[LEAD_ORCHESTRATOR]
         unsafe = replace(original, display_name="Unsafe\x1bLead")
         terminal, callbacks = make_terminal(width=1000)
         with mock.patch.dict(
-            terminal_module.AGENT_SPECS,
+            AGENT_SPECS,
             {LEAD_ORCHESTRATOR: unsafe},
         ):
             terminal.write_agent_roster()
@@ -1869,7 +1870,8 @@ class TerminalBoundaryTests(unittest.TestCase):
             Path(__file__).resolve().parents[1]
             / "src"
             / "story_writing_agents"
-            / "interactive_terminal.py"
+            / "interactive_terminal"
+            / "__init__.py"
         )
         tree = ast.parse(source_path.read_text(encoding="utf-8"))
         internal_dependencies = {
@@ -1879,7 +1881,7 @@ class TerminalBoundaryTests(unittest.TestCase):
         }
         self.assertEqual(
             internal_dependencies,
-            {"agents", "interactive_commands"},
+            {"_core"},
         )
         self.assertNotIn("interactive_terminal", story_writing_agents.__all__)
         for name in PUBLIC_EXPORTS:

@@ -923,8 +923,8 @@ class CliTests(unittest.TestCase):
                     mock.patch.object(cli_module, "AgentBackend") as backend,
                     mock.patch.object(
                         cli_module,
-                        "InteractiveMainLineEditor",
-                    ) as line_editor,
+                        "build_stream_terminal",
+                    ) as terminal_factory,
                     mock.patch.object(
                         cli_module,
                         "InteractiveController",
@@ -942,7 +942,7 @@ class CliTests(unittest.TestCase):
                 resolve_workspace.assert_not_called()
                 load_context.assert_not_called()
                 backend.assert_not_called()
-                line_editor.assert_not_called()
+                terminal_factory.assert_not_called()
                 controller.assert_not_called()
 
     def test_module_non_tty_entry_is_exact_and_does_not_touch_cwd(self) -> None:
@@ -1023,8 +1023,12 @@ class CliTests(unittest.TestCase):
                 backend_value = mock.Mock()
                 controller_value = mock.Mock()
                 controller_value.run_session_lobby.return_value = 7
-                main_line_editor = mock.Mock()
-                main_line_editor.read_line.return_value = "/status"
+                main_reader = mock.Mock(return_value="/status")
+                terminal_value = InteractiveTerminal(
+                    lambda prompt: "unused",
+                    lambda text: None,
+                    main_read_line=main_reader,
+                )
                 with (
                     mock.patch.object(sys, "stdin", stdin),
                     mock.patch.object(sys, "stdout", stdout),
@@ -1046,9 +1050,9 @@ class CliTests(unittest.TestCase):
                     ) as backend_factory,
                     mock.patch.object(
                         cli_module,
-                        "InteractiveMainLineEditor",
-                        return_value=main_line_editor,
-                    ) as line_editor_factory,
+                        "build_stream_terminal",
+                        return_value=terminal_value,
+                    ) as terminal_factory,
                     mock.patch.object(
                         cli_module,
                         "InteractiveController",
@@ -1070,7 +1074,7 @@ class CliTests(unittest.TestCase):
                     timeout_seconds=timeout,
                     backend_overrides=overrides,
                 )
-                line_editor_factory.assert_called_once_with(input, stdin, stdout)
+                terminal_factory.assert_called_once_with(input, stdin, stdout)
                 controller_args = controller_factory.call_args.args
                 self.assertEqual(
                     controller_args[:3],
@@ -1080,7 +1084,7 @@ class CliTests(unittest.TestCase):
                 self.assertIsInstance(terminal, InteractiveTerminal)
                 action = terminal.read_main()
                 self.assertEqual((action.kind.value, action.text), ("line", "/status"))
-                main_line_editor.read_line.assert_called_once_with(
+                main_reader.assert_called_once_with(
                     "story[lobby]> "
                 )
                 self.assertEqual(stdin.readline_calls, 0)
@@ -1255,8 +1259,8 @@ class CliTests(unittest.TestCase):
             ),
             mock.patch.object(
                 cli_module,
-                "InteractiveMainLineEditor",
-                side_effect=RuntimeError("editor-constructor-secret"),
+                "build_stream_terminal",
+                side_effect=RuntimeError("terminal-constructor-secret"),
             ),
             mock.patch.object(cli_module, "AgentBackend") as backend,
         ):
@@ -1266,7 +1270,7 @@ class CliTests(unittest.TestCase):
             expected_interactive_error(InteractiveErrorCode.INTERNAL_ERROR),
         )
         self.assertEqual(stdout.getvalue(), "")
-        self.assertNotIn("editor-constructor-secret", stderr.getvalue())
+        self.assertNotIn("terminal-constructor-secret", stderr.getvalue())
         backend.assert_not_called()
 
         backend_cases = (

@@ -16,7 +16,7 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 27.
+Importable production units indexed: 32.
 
 ## Current Dependency Direction
 
@@ -25,8 +25,7 @@ configuration, prompt, persistence, and stable contract modules:
 
 ```text
 __main__ -> cli -> interactive_controller -> interactive_controller._core
-                 -> interactive_line_editor -> interactive_commands/interactive_terminal
-                 -> interactive_terminal -> interactive_commands/agents
+                 -> interactive_terminal -> interactive_terminal._core
                  -> run_inputs -> errors
                  -> orchestrator -> conversation_retrieval -> agents/conversation_search
                  |               |                           -> conversations/errors
@@ -58,7 +57,16 @@ interactive_controller._runtime_policy -> conversation_retrieval/conversation_se
 smoke -> agents/conversation_retrieval/conversation_search/conversations/models/orchestrator/session_lifecycle/workspace
 directives -> config/workspace/errors/agents
 interactive_commands -> agents
-interactive_terminal -> interactive_commands/agents
+interactive_line_editor -> interactive_commands/interactive_terminal
+interactive_terminal -> interactive_terminal._core
+interactive_terminal._core -> agents/interactive_commands
+                           -> interactive_terminal._controls
+                           -> interactive_terminal._driver
+                           -> interactive_terminal._model
+                           -> interactive_terminal._render
+interactive_terminal._controls -> interactive_terminal._model
+interactive_terminal._driver -> interactive_terminal._model
+interactive_terminal._render -> interactive_terminal._model
 story_writing_agents facade -> interactive_commands
                             -> conversation_retrieval -> agents/conversation_search
                             |                          -> conversations/errors
@@ -247,17 +255,17 @@ every intermediate arrow. The current runtime graph is acyclic.
   sorted, indented JSON containing only `access_state`, `durable_state`, and
   `session_id`.
 - **Direct internal dependencies:** `agents`, `backend`, `cli_context`, `config`,
-  `errors`, `interactive_controller`, `interactive_line_editor`,
-  `interactive_terminal`, `models`, `orchestrator`, `run_inputs`,
+  `errors`, `interactive_controller`, `interactive_terminal`, `models`,
+  `orchestrator`, `run_inputs`,
   `session_lifecycle`, and `workspace`; imports `smoke` lazily for the
   diagnostic command.
 - **State, resources, and side effects:** Reads terminal input and delegates
   caller-selected draft-file reads to `run_inputs`; writes JSON, plain-text
   interaction, or errors to standard streams; creates backends; constructs one
-  main-only live line editor and injects it into the terminal after a
+  unified stream-backed terminal through its package-internal factory after a
   stdin/stdout TTY guard; constructs the interactive controller; and runs the
-  async event loop. The editor retains the existing `input` callback as its
-  unsupported-terminal fallback. The controller owns interactive backend
+  async event loop. The terminal driver retains the existing `input` callback
+  as its unsupported-terminal fallback. The controller owns interactive backend
   cleanup after its session-lobby run begins, while the CLI closes a backend if
   construction fails before that ownership transfer.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
@@ -682,7 +690,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.interactive_line_editor`
 
 - **Source:** `src/story_writing_agents/interactive_line_editor.py`
-- **Responsibility:** Own one live interactive main-prompt editing operation.
+- **Responsibility:** Preserve the standalone main-line-editor compatibility
+  surface.
 - **Supported surface:** Module-supported frozen, slotted
   `SlashCommandSuggestion`, pure `slash_command_suggestions`, and
   `InteractiveMainLineEditor`. Suggestions project canonical tokens and aliases
@@ -693,78 +702,165 @@ every intermediate arrow. The current runtime graph is acyclic.
   code-point buffer or raises the established interrupt/EOF events.
 - **Direct internal dependencies:** `interactive_commands` and
   `interactive_terminal`.
-- **State, resources, and side effects:** Instances retain borrowed fallback,
-  input-stream, and output-stream collaborators but acquire no resource during
-  construction or import. A capable POSIX read owns call-local terminal
-  attributes, Unicode buffer/cursor state, escape-sequence state, terminal
-  width, and one transient sanitized `[suggestions]` panel. It supports fixed
-  insertion, deletion, and cursor controls, submits nonempty Ctrl-D buffers,
-  and restores the exact captured terminal configuration after normal or
-  exceptional completion; restoration uncertainty is fatal. Unsupported,
-  `TERM=dumb`, or safely restored pre-consumption setup paths call the existing
-  line-input fallback without ANSI output. The module performs no provider,
-  filesystem, persistence, subprocess, network, or import-time operational
-  side effect.
+- **State, resources, and side effects:** The facade retains one unified raw
+  driver but contains no raw-mode, key-decoding, cursor, width, write, flush, or
+  restoration implementation. Construction performs no stream access or
+  terminal mutation. `read_line` delegates one call-local operation to the
+  driver, preserving exact fallback, editing, interrupt, EOF, output-failure,
+  and restoration behavior. The facade performs no provider, filesystem,
+  persistence, subprocess, network, or import-time operational side effect.
 - **Primary verification/documentation:** `tests/test_interactive_line_editor.py`,
-  `tests/test_interactive_terminal.py`, `tests/test_public_api_and_cli.py`, and
-  `tests/test_interactive_pty.py`;
-  `docs/reference/interactive-terminal.md`, `docs/reference/cli.md`, and
+  `tests/test_interactive_terminal.py`,
+  `tests/test_interactive_terminal_foundation.py`,
+  `tests/test_public_api_and_cli.py`, and `tests/test_interactive_pty.py`;
+  `docs/reference/interactive-terminal.md`, `docs/reference/cli.md`,
+  `docs/design/interactive-cli-design-system.md`, and
   `docs/operations/terminal-safety.md`.
 
 ### `story_writing_agents.interactive_terminal`
 
-- **Source:** `src/story_writing_agents/interactive_terminal.py`
-- **Responsibility:** Provide deterministic, safe plain-text interaction
-  primitives for an interactive terminal.
-- **Supported surface:** Module-supported `AttachmentKind`, `ComposeMode`,
+- **Source:** `src/story_writing_agents/interactive_terminal/__init__.py`
+- **Responsibility:** Provide the stable interactive-terminal import and
+  construction boundary.
+- **Supported surface:** Package-supported `AttachmentKind`, `ComposeMode`,
   `ConfirmationResult`, `TerminalActionKind`, `TerminalMessageKind`,
   `InteractiveErrorCode`, `TerminalAction`, `InteractiveErrorSpec`,
   `INTERACTIVE_ERROR_SPECS`, `InteractiveError`, `sanitize_terminal_text`, and
-  `InteractiveTerminal`. Its two positional callbacks and keyword-only width
-  are stable; keyword-only `main_read_line`
-  defaults to `read_line` and is used only by `read_main`.
-  `InteractiveTerminal.request_confirmation` returns a typed
-  yes/no/interrupt/EOF result, and `write_session_orientation` accepts an
-  optional history count whose absence omits history claims.
-  `request_conversation_subject` performs one typed line/interrupt/EOF read;
-  `write_conversation_scope` and `write_conversation_list_entry` render bounded
-  conversation context and catalog rows using current-focus terminology, and
-  `write_agent_roster` projects the shared route registry and canonical display
-  names into one safe roster block.
-  `write_conversation_search_hit` accepts primitive `conversation_handle`,
-  `conversation_subject`, `match_kind`, and `snippet` values plus keyword-only
-  `archived` and optional citation values;
-  `write_conversation_transcript_event` accepts primitive
-  `conversation_handle`, `sequence`, `turn_id`, `kind`, `sender`, `recipient`,
-  and `content` values and preserves internal, empty, and trailing content lines
-  in one output record.
-  The immutable error registry includes the exact clean-break lifecycle codes
-  `session_not_attached`, `session_paused`, `session_access_blocked`,
-  `session_ownership_unknown`, and `workspace_version_unsupported`, alongside
-  unrelated workspace, command, conversation, retrieval, provider,
-  cancellation, and artifact categories. Renderers and validation helpers are
-  private.
-- **Direct internal dependencies:** `agents` and `interactive_commands`.
-- **State, resources, and side effects:** Instances retain borrowed synchronous
-  general-line-read, main-line-read, and text-write callbacks plus an immutable
-  display width; each composition call and subject request own only call-local
-  input state. `read_main` maps completed input or terminal events from its
-  dedicated callback without owning editor resources, while every other input
-  operation retains the established general reader. Methods write sanitized,
-  newline-terminated plain-text blocks, including adjacent conversation scope,
-  listing rows, and the metadata-derived agent roster. Prompt aliases derive from
-  `AGENT_ROUTES`; the module owns immutable display metadata, no persistent or
-  external resource, and performs no provider, filesystem, persistence,
-  environment, or import-time operational side effects. Search-hit and
-  transcript-event blocks sanitize controls; transcript content preserves line
-  structure with deterministic hanging indentation while remaining one
-  callback record.
+  `InteractiveTerminal` in the exact established `__all__` order. The facade
+  exports the defining objects without wrapper subclasses and preserves their
+  canonical `story_writing_agents.interactive_terminal` identities. Its
+  unlisted package-internal `build_stream_terminal` factory is the sole real-CLI
+  construction boundary; package-internal control/driver/model bindings support
+  the standalone compatibility facade without adding root-package exports.
+- **Direct internal dependencies:** `interactive_terminal._core`.
+- **State, resources, and side effects:** Owns no terminal resource or mutable
+  process state. Import deterministically canonicalizes supported public object
+  module identities and performs no stream, capability, filesystem, provider,
+  persistence, subprocess, network, or application-startup operation.
 - **Primary verification/documentation:** `tests/test_interactive_terminal.py`,
+  `tests/test_interactive_line_editor.py`, `tests/test_public_api_and_cli.py`,
+  `tests/test_interactive_terminal_foundation.py`,
+  `tests/test_interactive_pty.py`, `docs/design/overview.md`,
   `docs/reference/interactive-terminal.md`,
-  `docs/reference/conversation-retrieval.md`, and
+  `docs/design/interactive-cli-design-system.md`, and
   `docs/operations/terminal-safety.md`; `tests/test_interactive_commands.py`
   and `docs/reference/interactive-command-parser.md` verify the consumed
   command registry contract.
+
+### `story_writing_agents.interactive_terminal._model`
+
+- **Source:** `src/story_writing_agents/interactive_terminal/_model.py`
+- **Responsibility:** Define immutable semantic terminal contracts.
+- **Supported surface:** Package-internal semantic roles, explicit view states,
+  capability profiles, normalized keys, control outcomes, terminal
+  capabilities, line-input state, `SlashCommandSuggestion`, the closed
+  `Prompt`, `Panel`, `Section`, `Field`, `Notice`, `Message`, `Record`,
+  `ListView`, `SuggestionPalette`, and `Picker` component vocabulary, shared
+  `Choice`, `RenderedFrame`, terminal-text sanitization, and deterministic
+  physical-cell measurement.
+- **Direct internal dependencies:** None.
+- **State, resources, and side effects:** Immutable values and pure validation
+  only. Models contain no ANSI, callbacks, streams, calculated layout, runtime,
+  provider, filesystem, or storage handles and perform no operational I/O.
+- **Primary verification/documentation:**
+  `tests/test_interactive_terminal_foundation.py` and
+  `docs/design/interactive-cli-design-system.md`; focused component, renderer,
+  control, capability, and compatibility coverage belongs to the interactive
+  terminal test suites.
+
+### `story_writing_agents.interactive_terminal._controls`
+
+- **Source:** `src/story_writing_agents/interactive_terminal/_controls.py`
+- **Responsibility:** Apply pure interactive-control transitions.
+- **Supported surface:** Package-internal `transition_line_input` for existing
+  insertion, deletion, cursor, commit, interrupt, and EOF semantics, plus
+  `project_slash_suggestions` for exact registry-supplied prefix projection.
+  History, selectable palette, composer, confirmation, and picker transitions
+  are not implemented by this foundation slice.
+- **Direct internal dependencies:** `interactive_terminal._model`.
+- **State, resources, and side effects:** Pure call-local value transitions
+  only; owns no parser, persistence, runtime, provider, stream, terminal mode,
+  cursor, filesystem, process, or network resource.
+- **Primary verification/documentation:**
+  `tests/test_interactive_line_editor.py`,
+  `tests/test_interactive_terminal_foundation.py`,
+  `docs/design/interactive-cli-design-system.md`, and
+  `docs/reference/interactive-command-parser.md`.
+
+### `story_writing_agents.interactive_terminal._render`
+
+- **Source:** `src/story_writing_agents/interactive_terminal/_render.py`
+- **Responsibility:** Render semantic terminal components safely.
+- **Supported surface:** Package-internal deterministic responsive component
+  rendering for structured plain and fixed-theme ANSI profiles, exact removal
+  of the allowed decorative SGR vocabulary, semantic state labels, physical-cell
+  wrapping, narrow-layout stacking, and explicit empty/selection cues.
+- **Direct internal dependencies:** `interactive_terminal._model`.
+- **State, resources, and side effects:** Pure projections only. Dynamic text
+  is sanitized before wrapping or fixed styling; the module writes and flushes
+  no stream, emits no OSC, query, background, dim, blink, or cursor sequence,
+  and owns no environment, terminal, runtime, provider, filesystem, or storage
+  state.
+- **Primary verification/documentation:**
+  `tests/test_interactive_terminal_foundation.py`,
+  `docs/design/interactive-cli-design-system.md`, and
+  `docs/operations/terminal-safety.md`; focused rich/plain/narrow/wide coverage
+  belongs to the interactive terminal test suites.
+
+### `story_writing_agents.interactive_terminal._driver`
+
+- **Source:** `src/story_writing_agents/interactive_terminal/_driver.py`
+- **Responsibility:** Own the raw terminal resource lifecycle.
+- **Supported surface:** Package-internal `RawTerminalDriver` and
+  `detect_terminal_capabilities`. The driver accepts pure suggestion and
+  line-transition collaborators, provides ordinary-line fallback and one-write
+  output, and retains the established live main-line behavior without adding
+  history, selectable completion, or picker semantics.
+- **Direct internal dependencies:** `interactive_terminal._model`.
+- **State, resources, and side effects:** Sole owner of borrowed input/output
+  streams, independent capability checks, detected width, normalized physical
+  keys, raw POSIX attributes, functional cursor controls, live redraw writes,
+  flushes, and exact restoration. Configuration and editing state are
+  call-local; construction performs no stream access or terminal mutation.
+  Missing, uncertain, non-TTY, non-POSIX, or `TERM=dumb` capability safely uses
+  ordinary line input, while `NO_COLOR` affects decorative SGR only.
+- **Primary verification/documentation:**
+  `tests/test_interactive_line_editor.py`,
+  `tests/test_interactive_terminal_foundation.py`,
+  `tests/test_interactive_pty.py`,
+  `docs/design/interactive-cli-design-system.md`, and
+  `docs/operations/terminal-safety.md`.
+
+### `story_writing_agents.interactive_terminal._core`
+
+- **Source:** `src/story_writing_agents/interactive_terminal/_core.py`
+- **Responsibility:** Coordinate public interactive-terminal operations.
+- **Supported surface:** Defines every supported terminal enum, frozen/slotted
+  action and error value, immutable error registry, and `InteractiveTerminal`
+  re-exported by the package facade. Constructor and public method signatures,
+  validation, typed input outcomes, established plain record contents/order,
+  error redaction/caps, composition behavior, callback granularity, and fixed
+  callback-width semantics remain compatible. Its package-internal stream
+  factory coordinates the driver, controls, command metadata, and current
+  capability profile; semantic rendering is available without migrating the
+  established views in this foundation slice.
+- **Direct internal dependencies:** `agents`, `interactive_commands`,
+  `interactive_terminal._controls`, `interactive_terminal._driver`,
+  `interactive_terminal._model`, and `interactive_terminal._render`.
+- **State, resources, and side effects:** Callback-constructed instances retain
+  borrowed synchronous read/write callbacks, deterministic plain capabilities,
+  and an explicit width but inspect no stream and acquire no resource.
+  Stream-factory instances delegate all raw terminal state, width detection,
+  keys, writes, flushes, and restoration to one driver. Composition and subject
+  input remain call-local; there is no history, provider, runtime, filesystem,
+  persistence, subprocess, network, or import-time operational I/O.
+- **Primary verification/documentation:** `tests/test_interactive_terminal.py`,
+  `tests/test_interactive_line_editor.py`, `tests/test_public_api_and_cli.py`,
+  `tests/test_interactive_terminal_foundation.py`,
+  `tests/test_interactive_pty.py`, `docs/design/overview.md`,
+  `docs/reference/interactive-terminal.md`,
+  `docs/design/interactive-cli-design-system.md`, and
+  `docs/operations/terminal-safety.md`.
 
 ### `story_writing_agents.models`
 
@@ -982,17 +1078,18 @@ every intermediate arrow. The current runtime graph is acyclic.
 - `interactive_commands` owns canonical command and agent-route metadata, parse
   rules, and typed parsed actions. `interactive_line_editor` projects the
   main-eligible canonical tokens and declared aliases directly from `COMMANDS`,
-  owns call-local POSIX editing and transient sanitized suggestion redraw, and
-  reaches the existing public terminal sanitizer without creating a registry
-  or parser edge. `interactive_terminal` consumes public `COMMANDS` and
-  `AGENT_ROUTES` metadata plus canonical display names to own safe prompt,
-  confirmation, help, roster, status, error, call-local composition, subject
-  input, conversation scope, catalog-row, search-hit, and transcript-event
-  presentation. Its additive main-reader callback delegates editor resources
-  without changing typed outcomes. Issue #21 adds two immutable retrieval error
-  entries without changing message kinds, rendering, or dependencies. The
-  controller still receives only completed terminal outcomes and alone passes
-  exact lines to the parser.
+  but delegates all raw terminal behavior to the unified terminal driver and
+  creates no registry or parser edge. The `interactive_terminal` package keeps
+  its established public facade while `_core` consumes public `COMMANDS` and
+  `AGENT_ROUTES` metadata plus canonical display names to coordinate safe
+  prompt, confirmation, help, roster, status, error, call-local composition,
+  subject input, conversation scope, catalog-row, search-hit, and
+  transcript-event presentation. `_model`, `_controls`, and `_render` remain
+  pure; `_driver` alone owns raw streams, capabilities, functional cursor
+  controls, width, key decoding, writes, flushes, and restoration. The real CLI
+  constructs one stream-backed terminal rather than injecting a second editor.
+  The controller still receives only completed terminal outcomes and alone
+  passes exact lines to the parser.
 - `interactive_controller` is the stable one-class import boundary and owns no
   shell state or resource. Its `_core` owns interactive shell action mapping,
   current in-memory attachment, current-focus conversation and sticky-target state,

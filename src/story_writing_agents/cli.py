@@ -27,11 +27,11 @@ from .errors import (
     WorkspaceVersionUnsupportedError,
 )
 from .interactive_controller import InteractiveController
-from .interactive_line_editor import InteractiveMainLineEditor
 from .interactive_terminal import (
     InteractiveError,
     InteractiveErrorCode,
     InteractiveTerminal,
+    build_stream_terminal,
 )
 from .models import DebateStatus
 from .orchestrator import StoryRuntime
@@ -406,9 +406,10 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
     """Construct and transfer one guarded interactive session-lobby lifecycle.
 
     Both streams are checked before input, option validation, workspace/context
-    access, or backend construction. The adapter injects a main-only live line
-    editor whose unsupported-terminal path retains the existing ``input``
-    callback; other terminal reads remain line-oriented. Setup failures are
+    access, or backend construction. The adapter constructs one unified
+    stream-backed terminal whose sole raw driver provides main-line live
+    editing and retains the existing ``input`` callback for unsupported
+    fallback; other terminal reads remain line-oriented. Setup failures are
     rendered safely on stderr. Once ``run_session_lobby`` is called, the
     controller owns backend cleanup; before that transfer this adapter closes
     any constructed backend.
@@ -457,16 +458,7 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
         return 2
 
     try:
-        main_line_editor = InteractiveMainLineEditor(
-            input,
-            sys.stdin,
-            sys.stdout,
-        )
-        terminal = InteractiveTerminal(
-            input,
-            sys.stdout.write,
-            main_read_line=main_line_editor.read_line,
-        )
+        terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
     except Exception:
         _write_interactive_cli_error(
             InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
