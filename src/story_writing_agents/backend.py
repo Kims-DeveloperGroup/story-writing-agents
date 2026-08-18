@@ -1422,12 +1422,12 @@ class AgentBackend:
 
     @staticmethod
     def _conversation_retrieval_action_schema() -> dict[str, Any]:
-        """Return the exact strict one-of JSON schema for retrieval actions."""
+        """Return the strict provider envelope for retrieval actions."""
 
         correlation = {
-            "session_id": {"type": "string", "minLength": 1},
-            "conversation_id": {"type": "string", "minLength": 1},
-            "turn_id": {"type": "string", "minLength": 1},
+            "session_id": {"type": "string"},
+            "conversation_id": {"type": "string"},
+            "turn_id": {"type": "string"},
             "action_index": {"type": "integer", "minimum": 1},
         }
 
@@ -1449,16 +1449,16 @@ class AgentBackend:
                 "additionalProperties": False,
             }
 
-        return {
-            "oneOf": [
+        action = {
+            "anyOf": [
                 action_schema(
                     ConversationRetrievalActionKind.SEARCH_CONVERSATIONS,
-                    {"query": {"type": "string", "minLength": 1}},
+                    {"query": {"type": "string"}},
                 ),
                 action_schema(
                     ConversationRetrievalActionKind.READ_TRANSCRIPT,
                     {
-                        "citation_id": {"type": "string", "minLength": 1},
+                        "citation_id": {"type": "string"},
                         "start_sequence": {"type": "integer", "minimum": 1},
                         "end_sequence": {
                             "type": ["integer", "null"],
@@ -1469,22 +1469,27 @@ class AgentBackend:
                 action_schema(
                     ConversationRetrievalActionKind.ANSWER,
                     {
-                        "content": {"type": "string", "minLength": 1},
+                        "content": {"type": "string"},
                         "citation_ids": {
                             "type": "array",
-                            "items": {"type": "string", "minLength": 1},
-                            "uniqueItems": True,
+                            "items": {"type": "string"},
                         },
                     },
                 ),
             ]
+        }
+        return {
+            "type": "object",
+            "properties": {"action": action},
+            "required": ["action"],
+            "additionalProperties": False,
         }
 
     @staticmethod
     def _decode_conversation_retrieval_action(
         text: str,
     ) -> ConversationRetrievalAction:
-        """Decode one exact action shape while leaving semantics to the handler.
+        """Decode one exact action envelope while leaving semantics to the handler.
 
         Duplicate keys, malformed JSON, primitives, unknown kinds, missing or
         extra fields, and invalid primitive values raise
@@ -1526,6 +1531,15 @@ class AgentBackend:
         if type(value) is not dict:
             raise BackendProtocolError(
                 "Codex conversation retrieval response must be a JSON object"
+            )
+        if set(value) != {"action"}:
+            raise BackendProtocolError(
+                "Codex conversation retrieval response has an invalid schema"
+            )
+        value = value["action"]
+        if type(value) is not dict:
+            raise BackendProtocolError(
+                "Codex conversation retrieval action must be a JSON object"
             )
         kind_value = value.get("kind")
         if type(kind_value) is not str:

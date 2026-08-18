@@ -416,12 +416,14 @@ def _retrieval_action_json(
 
     return json.dumps(
         {
-            "kind": kind.value,
-            "session_id": request.session_id,
-            "conversation_id": request.conversation_id,
-            "turn_id": request.turn_id,
-            "action_index": action_index,
-            **fields,
+            "action": {
+                "kind": kind.value,
+                "session_id": request.session_id,
+                "conversation_id": request.conversation_id,
+                "turn_id": request.turn_id,
+                "action_index": action_index,
+                **fields,
+            },
         },
         ensure_ascii=False,
         separators=(",", ":"),
@@ -2184,9 +2186,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 )
 
         correlation = {
-            "session_id": {"type": "string", "minLength": 1},
-            "conversation_id": {"type": "string", "minLength": 1},
-            "turn_id": {"type": "string", "minLength": 1},
+            "session_id": {"type": "string"},
+            "conversation_id": {"type": "string"},
+            "turn_id": {"type": "string"},
             "action_index": {"type": "integer", "minimum": 1},
         }
 
@@ -2208,16 +2210,16 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 "additionalProperties": False,
             }
 
-        expected_schema = {
-            "oneOf": [
+        expected_action_schema = {
+            "anyOf": [
                 branch(
                     "search_conversations",
-                    {"query": {"type": "string", "minLength": 1}},
+                    {"query": {"type": "string"}},
                 ),
                 branch(
                     "read_transcript",
                     {
-                        "citation_id": {"type": "string", "minLength": 1},
+                        "citation_id": {"type": "string"},
                         "start_sequence": {"type": "integer", "minimum": 1},
                         "end_sequence": {
                             "type": ["integer", "null"],
@@ -2228,20 +2230,25 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 branch(
                     "answer",
                     {
-                        "content": {"type": "string", "minLength": 1},
+                        "content": {"type": "string"},
                         "citation_ids": {
                             "type": "array",
-                            "items": {"type": "string", "minLength": 1},
-                            "uniqueItems": True,
+                            "items": {"type": "string"},
                         },
                     },
                 ),
             ]
         }
+        expected_schema = {
+            "type": "object",
+            "properties": {"action": expected_action_schema},
+            "required": ["action"],
+            "additionalProperties": False,
+        }
         self.assertTrue(
             all(invocation["schema"] == expected_schema for invocation in invocations)
         )
-        read_branch = expected_schema["oneOf"][1]
+        read_branch = expected_action_schema["anyOf"][1]
         self.assertIn("end_sequence", read_branch["required"])
         self.assertEqual(
             AgentBackend._conversation_retrieval_allowed_actions(
@@ -2252,8 +2259,43 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             (ConversationRetrievalActionKind.ANSWER,),
         )
 
+    def test_retrieval_schema_uses_supported_strict_object_subset(self) -> None:
+        schema = AgentBackend._conversation_retrieval_action_schema()
+        self.assertEqual(schema.get("type"), "object")
+        self.assertNotIn("anyOf", schema)
+        self.assertEqual(set(schema["properties"]), {"action"})
+        action_schema = schema["properties"]["action"]
+        self.assertEqual(len(action_schema["anyOf"]), 3)
+
+        forbidden_keywords = {"oneOf", "minLength", "uniqueItems"}
+
+        def assert_supported(value: object) -> None:
+            """Check only the strict-object invariants used by this schema."""
+
+            if type(value) is dict:
+                self.assertTrue(forbidden_keywords.isdisjoint(value))
+                if value.get("type") == "object":
+                    properties = value.get("properties")
+                    self.assertIs(type(properties), dict)
+                    assert type(properties) is dict
+                    self.assertEqual(set(value.get("required", ())), set(properties))
+                    self.assertIs(value.get("additionalProperties"), False)
+                for child in value.values():
+                    assert_supported(child)
+            elif type(value) is list:
+                for child in value:
+                    assert_supported(child)
+
+        assert_supported(schema)
+
     def test_retrieval_decoder_rejects_malformed_duplicate_and_schema_errors(self) -> None:
         request = _retrieval_request()
+        valid_search = _retrieval_action_json(
+            request,
+            kind=ConversationRetrievalActionKind.SEARCH_CONVERSATIONS,
+            action_index=1,
+            query="Needle source",
+        )
         valid_read = _retrieval_action_json(
             request,
             kind=ConversationRetrievalActionKind.READ_TRANSCRIPT,
@@ -2262,28 +2304,71 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             start_sequence=1,
             end_sequence=None,
         )
-        decoded = AgentBackend._decode_conversation_retrieval_action(valid_read)
-        self.assertIs(type(decoded), ConversationRetrievalReadAction)
-        assert type(decoded) is ConversationRetrievalReadAction
-        self.assertIsNone(decoded.end_sequence)
+        valid_answer = _retrieval_action_json(
+            request,
+            kind=ConversationRetrievalActionKind.ANSWER,
+            action_index=3,
+            content="answer",
+            citation_ids=["s1h1"],
+        )
+        decoded_actions = tuple(
+            AgentBackend._decode_conversation_retrieval_action(payload)
+            for payload in (valid_search, valid_read, valid_answer)
+        )
+        self.assertEqual(
+            tuple(type(action) for action in decoded_actions),
+            (
+                ConversationRetrievalSearchAction,
+                ConversationRetrievalReadAction,
+                ConversationRetrievalAnswerAction,
+            ),
+        )
+        decoded_read = decoded_actions[1]
+        decoded_answer = decoded_actions[2]
+        for action, expected_index in zip(decoded_actions, (1, 2, 3), strict=True):
+            self.assertEqual(action.session_id, request.session_id)
+            self.assertEqual(action.conversation_id, request.conversation_id)
+            self.assertEqual(action.turn_id, request.turn_id)
+            self.assertEqual(action.action_index, expected_index)
+        assert type(decoded_read) is ConversationRetrievalReadAction
+        assert type(decoded_answer) is ConversationRetrievalAnswerAction
+        self.assertIsNone(decoded_read.end_sequence)
+        self.assertEqual(decoded_answer.citation_ids, ("s1h1",))
 
-        values = json.loads(valid_read)
+        envelope = json.loads(valid_read)
+        values = envelope["action"]
         missing_end = dict(values)
         missing_end.pop("end_sequence")
         extra = dict(values, unexpected=True)
+        action_text = json.dumps(values, separators=(",", ":"))
         malformed_cases = (
             ("not-json", "malformed JSON"),
             ("[]", "JSON object"),
-            (json.dumps(missing_end), "invalid schema"),
-            (json.dumps(extra), "invalid schema"),
-            (json.dumps(dict(values, kind="unknown")), "kind is unknown"),
-            (json.dumps(dict(values, action_index=True)), "positive integer"),
+            (json.dumps(values), "invalid schema"),
+            ("{}", "invalid schema"),
+            (json.dumps({"action": []}), "action must be a JSON object"),
+            (json.dumps({"action": values, "unexpected": True}), "invalid schema"),
+            (json.dumps({"action": missing_end}), "invalid schema"),
+            (json.dumps({"action": extra}), "invalid schema"),
+            (json.dumps({"action": dict(values, query="mixed")}), "invalid schema"),
             (
-                '{"kind":"answer","kind":"answer",'
+                json.dumps({"action": dict(values, kind="unknown")}),
+                "kind is unknown",
+            ),
+            (
+                json.dumps({"action": dict(values, action_index=True)}),
+                "positive integer",
+            ),
+            (
+                '{"action":' + action_text + ',"action":' + action_text + "}",
+                "duplicates a field",
+            ),
+            (
+                '{"action":{"kind":"answer","kind":"answer",'
                 '"session_id":"story_session",'
                 '"conversation_id":"conversation_a",'
                 '"turn_id":"turn_current","action_index":1,'
-                '"content":"answer","citation_ids":[]}',
+                '"content":"answer","citation_ids":[]}}',
                 "duplicates a field",
             ),
         )
@@ -2295,7 +2380,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         reversed_range = dict(values, start_sequence=2, end_sequence=1)
         with self.assertRaises(ConversationRetrievalSemanticError):
             AgentBackend._decode_conversation_retrieval_action(
-                json.dumps(reversed_range)
+                json.dumps({"action": reversed_range})
             )
         duplicate_citations = json.loads(
             _retrieval_action_json(
