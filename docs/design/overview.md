@@ -42,7 +42,7 @@ revision; all must approve. Blackboard and owner-isolated history stay separate.
 | `interactive_controller._conversation_policy` | Pure catalog, reference, search, transcript, and failure interpretation |
 | `interactive_controller._runtime_policy` | Pure progress, result, inspection, and failure interpretation |
 | `cli_context`, catalog, memory service, event store | Defaults, identity, scoped reads, and authoritative events |
-| Line editor and terminal | Main-input editing and safe typed presentation |
+| Line editor and terminal | Context-selected main/composition live editing and safe typed presentation |
 | `StoryRuntime`, `AgentBackend` | Orchestration/retrieval authority and provider resources |
 
 The supported import remains `from story_writing_agents.interactive_controller import InteractiveController`.
@@ -83,9 +83,13 @@ Controller dependency is exactly facade → stateful core → three leaves. Leav
 depend only on lower-layer contracts. Lifecycle consumers use canonical
 `session_lifecycle`; `models` does not forward its objects.
 
-CLI injects the editor before controller construction. The core receives typed
-actions and depends downward on runtime, presentation, and storage. Retrieval's
-handler port prevents backend-to-orchestrator access.
+CLI constructs one shared editor before controller construction and selects
+main or composition preview behavior through call-local internal bindings.
+Subject and confirmation reads remain ordinary; the terminal routes each input
+kind explicitly without prompt inspection. The editor alone owns raw terminal
+resources. The core receives typed actions and depends downward on runtime,
+presentation, and storage. Retrieval's handler port prevents
+backend-to-orchestrator access.
 
 This supports deterministic collaborators, not a dynamic plugin system. Exact
 imports live in [Package API](../reference/package-api.md), lifecycle meaning in

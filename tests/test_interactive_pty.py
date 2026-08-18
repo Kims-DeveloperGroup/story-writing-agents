@@ -623,6 +623,43 @@ class InteractiveCliPtyTests(unittest.TestCase):
     ) -> PtyCliProcess:
         """Spawn the package entry with independently configurable terminal streams."""
 
+        return self._spawn_command(
+            (sys.executable, "-m", "story_writing_agents", *arguments),
+            cwd=cwd,
+            stdin_is_terminal=stdin_is_terminal,
+            stdout_is_terminal=stdout_is_terminal,
+            environment_overrides=environment_overrides,
+            terminal_columns=terminal_columns,
+        )
+
+    def _spawn_python(
+        self,
+        source: str,
+        *,
+        terminal_columns: int = 80,
+        environment_overrides: Mapping[str, str] | None = None,
+    ) -> PtyCliProcess:
+        """Spawn one source-backed package integration probe on a real PTY."""
+
+        return self._spawn_command(
+            (sys.executable, "-c", source),
+            cwd=self.workspace.root,
+            environment_overrides=environment_overrides,
+            terminal_columns=terminal_columns,
+        )
+
+    def _spawn_command(
+        self,
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        stdin_is_terminal: bool = True,
+        stdout_is_terminal: bool = True,
+        environment_overrides: Mapping[str, str] | None = None,
+        terminal_columns: int = 80,
+    ) -> PtyCliProcess:
+        """Spawn an exact child command with independently configurable streams."""
+
         assert pty is not None
         assert fcntl is not None
         assert termios is not None
@@ -668,7 +705,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
             environment.update(environment_overrides)
         try:
             process = subprocess.Popen(
-                [sys.executable, "-m", "story_writing_agents", *arguments],
+                command,
                 cwd=cwd or self.workspace.root,
                 env=environment,
                 stdin=slave_fd if stdin_is_terminal else subprocess.PIPE,
@@ -802,6 +839,120 @@ class InteractiveCliPtyTests(unittest.TestCase):
 
         process.send_line("/quit")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(_durable_tree(self.workspace.root), before)
+        self.assertFalse(self.provider_log.exists())
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
+    def test_capable_chat_composer_previews_edits_sanitizes_and_restores(
+        self,
+    ) -> None:
+        """Exercise the internal chat reader binding on one real narrow PTY."""
+
+        source = r'''
+import json
+import sys
+
+from story_writing_agents import PLOT_ARCHITECT
+from story_writing_agents.interactive_line_editor import (
+    InteractiveMainLineEditor,
+    bind_suggestion_reader,
+    composition_slash_command_suggestions,
+)
+from story_writing_agents.interactive_terminal import (
+    ComposeMode,
+    build_contextual_terminal,
+)
+
+editor = InteractiveMainLineEditor(input, sys.stdin, sys.stdout)
+composition_reader = bind_suggestion_reader(
+    editor,
+    composition_slash_command_suggestions,
+)
+terminal = build_contextual_terminal(
+    input,
+    sys.stdout.write,
+    main_read_line=editor.read_line,
+    composition_read_line=composition_reader,
+)
+action = terminal.compose(ComposeMode.CHAT, agent_id=PLOT_ARCHITECT)
+print(
+    "RESULT="
+    + json.dumps(
+        {
+            "kind": action.kind.value,
+            "text": action.text,
+            "line_count": action.line_count,
+            "character_count": action.character_count,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+)
+'''
+        before = _durable_tree(self.workspace.root)
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=20,
+        )
+        process.wait_for_text("compose[chat:plot:1\n]> ")
+        assert termios is not None
+        active_attributes = termios.tcgetattr(process.master_fd)
+        self.assertFalse(active_attributes[3] & termios.ICANON)
+        self.assertFalse(active_attributes[3] & termios.ECHO)
+
+        preview_mark = process.output_mark()
+        process.send_text("/")
+        process.wait_for_text("/cancel", after=preview_mark)
+        preview = process.text_after(preview_mark)
+        self.assertIn("[suggestions]", preview)
+        self.assertIn("/send", preview)
+        self.assertIn("/cancel", preview)
+        self.assertNotIn("/status", preview)
+        self.assertEqual(_durable_tree(self.workspace.root), before)
+        self.assertFalse(self.provider_log.exists())
+
+        clear_mark = process.output_mark()
+        process.send_text("\x7f")
+        cleared = process.wait_for_text(
+            "compose[chat:plot:1\n]> ",
+            after=clear_mark,
+        )
+        self.assertIn("\x1b[J", cleared)
+        self.assertNotIn("[suggestions]", cleared)
+
+        process.send_line("/say /send")
+        process.wait_for_text("compose[chat:plot:2\n]> ")
+        process.send_text("韓界e\u0301\x00")
+        process.wait_for_text(r"\x00")
+        process.send_text("\n")
+        process.wait_for_text("compose[chat:plot:3\n]> ")
+
+        edit_mark = process.output_mark()
+        process.send_text("/sX\x1b[D\x7fsend\x1b[3~")
+        edited = process.wait_for_text("/cancel", after=edit_mark)
+        self.assertIn("[suggestions]", edited)
+        self.assertIn("/send", edited)
+        self.assertNotIn("/status", edited)
+        process.send_text("\n")
+
+        result_output = process.wait_for_text("RESULT=")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        result_match = re.search(r"RESULT=(\{[^\n]+\})", result_output)
+        self.assertIsNotNone(result_match, result_output)
+        assert result_match is not None
+        self.assertEqual(
+            json.loads(result_match.group(1)),
+            {
+                "kind": "send",
+                "text": "/send\n韓界e\u0301\x00",
+                "line_count": 2,
+                "character_count": 11,
+            },
+        )
         self.assertEqual(_durable_tree(self.workspace.root), before)
         self.assertFalse(self.provider_log.exists())
         self.assertEqual(
@@ -1117,13 +1268,34 @@ class InteractiveCliPtyTests(unittest.TestCase):
 
         selected = self._seed_default_session()
         process = self._spawn_cli(
-            ("chat", "alpha", "--workspace", str(self.workspace.root))
+            ("chat", "alpha", "--workspace", str(self.workspace.root)),
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=20,
         )
         process.wait_for_text("story[alpha:lead]> ")
 
         mark = process.output_mark()
         process.send_line("/run")
         process.wait_for_text("compose[run:1]> ", after=mark)
+        preview_bytes = _durable_tree_without_access(self.workspace.root)
+        preview_mark = process.output_mark()
+        process.send_text("/")
+        process.wait_for_text("/cancel", after=preview_mark)
+        preview = process.text_after(preview_mark)
+        self.assertIn("[suggestions]", preview)
+        self.assertIn("/send", preview)
+        self.assertIn("/cancel", preview)
+        self.assertNotIn("/status", preview)
+        self.assertEqual(
+            _durable_tree_without_access(self.workspace.root),
+            preview_bytes,
+        )
+        self.assertFalse(self.provider_log.exists())
+        clear_mark = process.output_mark()
+        process.send_text("\x7f")
+        cleared = process.wait_for_text("compose[run:1]> ", after=clear_mark)
+        self.assertIn("\x1b[J", cleared)
+        self.assertNotIn("[suggestions]", cleared)
         process.send_line("")
         process.wait_for_text("compose[run:2]> ", after=mark)
         process.send_line("/send")
@@ -1220,15 +1392,15 @@ class InteractiveCliPtyTests(unittest.TestCase):
             ).read("alpha", selected.conversation_id),
             (),
         )
+        started = [
+            record
+            for record in self._provider_records()
+            if record.get("event") == "started"
+        ]
+        self.assertEqual(len(started), 5)
         self.assertEqual(
-            len(
-                [
-                    record
-                    for record in self._provider_records()
-                    if record.get("event") == "started"
-                ]
-            ),
-            5,
+            started[0]["payload"]["user_payload"],
+            "\n/send\n/cancel\nfinal literal line",
         )
         self.assertFalse(
             self.workspace.path(f"{_SESSION_DIRECTORY}/alpha.access.json").exists()

@@ -83,8 +83,17 @@ exceptions. Shell and access-claim consequences belong to
 
 Live mode requires POSIX `termios`, capable TTY streams/descriptors and size,
 and nonempty, non-`dumb` `TERM`. Missing capability switches to the existing
-reader before editor I/O or terminal mutation. Recoverable activation
+reader before editor I/O or terminal mutation. At this component boundary,
+that includes `TERM=dumb`, non-TTY, and non-POSIX cases; their ordinary
+line-input fallback shows no suggestion panel. The installed CLI's earlier
+dual-TTY guard still exits before editor construction. Recoverable activation
 failure restores first, then falls back.
+
+One editor instance is the sole owner of raw terminal resources. The CLI
+selects the main or composition suggestion provider for each read; the editor
+retains no provider or operation mode. The terminal routes completed main and
+composition reads explicitly, without inspecting prompt text, while subject and
+confirmation input remains on the ordinary reader.
 
 An active read disables canonical input and echo, keeps a Unicode
 code-point buffer, and supports insertion, Left/Right, Home/End,
@@ -92,11 +101,17 @@ Backspace/Delete, Enter, and configured VINTR/VEOF. Enter submits; VEOF submits
 nonempty text or returns EOF when empty; VINTR returns interrupt. Submission
 clears the panel; failure attempts it; both restore captured attributes.
 Active failures propagate after restoration; restoration uncertainty is fatal
-`internal_error`. See the [exact tokens](../reference/interactive-terminal.md#main-prompt-live-suggestions).
+`internal_error`. See the exact
+[main](../reference/interactive-terminal.md#main-prompt-live-suggestions) and
+[composition](../reference/interactive-terminal.md#composition-live-suggestions)
+tokens.
 
-Preview calls no parser, provider, filesystem, persistence, subprocess, or
-network. It changes only call-local editor/terminal state; the exact buffer is
-passed once to the terminal/controller boundary.
+Preview neither completes, selects, nor dispatches. It calls no parser, story
+provider, runtime, filesystem, persistence, subprocess, storage, or network.
+It changes only call-local editor/terminal state; the exact buffer is passed
+once to the terminal/controller boundary. Main command previews remain
+registry-backed. Composition preview is the fixed ordered `/send`, `/cancel`
+set, and whitespace or a nonmatch clears it.
 
 ## Other input and process-local state
 

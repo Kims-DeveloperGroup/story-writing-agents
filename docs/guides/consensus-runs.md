@@ -20,6 +20,9 @@ attempt key.
 The shell forms require current attachment and focus on an active conversation.
 Bare `/run` opens the multiline composer and starts only on `/send`. See the
 [focused-discussion guide](story-sessions.md#turn-the-current-focus-into-consensus).
+On capable POSIX live editing, a whole-buffer `/` prefix previews only `/send`
+then `/cancel`; the preview does not complete or run either control. Unsupported
+terminals keep the same line-oriented composer without a panel.
 
 ## Run noninteractively
 

@@ -27,11 +27,16 @@ from .errors import (
     WorkspaceVersionUnsupportedError,
 )
 from .interactive_controller import InteractiveController
-from .interactive_line_editor import InteractiveMainLineEditor
+from .interactive_line_editor import (
+    InteractiveMainLineEditor,
+    bind_suggestion_reader,
+    composition_slash_command_suggestions,
+)
 from .interactive_terminal import (
     InteractiveError,
     InteractiveErrorCode,
     InteractiveTerminal,
+    build_contextual_terminal,
 )
 from .models import DebateStatus
 from .orchestrator import StoryRuntime
@@ -406,12 +411,13 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
     """Construct and transfer one guarded interactive session-lobby lifecycle.
 
     Both streams are checked before input, option validation, workspace/context
-    access, or backend construction. The adapter injects a main-only live line
-    editor whose unsupported-terminal path retains the existing ``input``
-    callback; other terminal reads remain line-oriented. Setup failures are
-    rendered safely on stderr. Once ``run_session_lobby`` is called, the
-    controller owns backend cleanup; before that transfer this adapter closes
-    any constructed backend.
+    access, or backend construction. The adapter constructs one shared live
+    line editor and binds its main and composition readers through the
+    contextual terminal. Unsupported-terminal paths retain the existing
+    ``input`` callback; other terminal reads remain line-oriented. Setup
+    failures are rendered safely on stderr. Once ``run_session_lobby`` is
+    called, the controller owns backend cleanup; before that transfer this
+    adapter closes any constructed backend.
     """
 
     if not _interactive_streams_are_terminals():
@@ -462,10 +468,15 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
             sys.stdin,
             sys.stdout,
         )
-        terminal = InteractiveTerminal(
+        composition_read_line = bind_suggestion_reader(
+            main_line_editor,
+            composition_slash_command_suggestions,
+        )
+        terminal = build_contextual_terminal(
             input,
             sys.stdout.write,
             main_read_line=main_line_editor.read_line,
+            composition_read_line=composition_read_line,
         )
     except Exception:
         _write_interactive_cli_error(
