@@ -264,10 +264,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   interaction, or errors to standard streams; creates backends; constructs one
   unified stream-backed terminal through its package-internal factory after a
   stdin/stdout TTY guard; constructs the interactive controller; and runs the
-  async event loop. The terminal driver retains the existing `input` callback
-  as its unsupported-terminal fallback. The controller owns interactive backend
-  cleanup after its session-lobby run begins, while the CLI closes a backend if
-  construction fails before that ownership transfer.
+  async event loop. The factory binds main and composition previews explicitly
+  through one terminal driver, which retains the existing `input` callback as
+  its unsupported-terminal fallback; subject and confirmation input remain
+  ordinary reads. The controller owns interactive backend cleanup after its
+  session-lobby run begins, while the CLI closes a backend if construction
+  fails before that ownership transfer.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
   `tests/test_cli_context.py`, `tests/test_smoke_cli.py`, and
   `tests/test_interactive_pty.py` for primary process-level POSIX PTY
@@ -690,8 +692,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.interactive_line_editor`
 
 - **Source:** `src/story_writing_agents/interactive_line_editor.py`
-- **Responsibility:** Preserve the standalone main-line-editor compatibility
-  surface.
+- **Responsibility:** Preserve the standalone contextual line-editor
+  compatibility surface over the unified driver.
 - **Supported surface:** Module-supported frozen, slotted
   `SlashCommandSuggestion`, pure `slash_command_suggestions`, and
   `InteractiveMainLineEditor`. Suggestions project canonical tokens and aliases
@@ -699,15 +701,21 @@ every intermediate arrow. The current runtime graph is acyclic.
   alias's canonical identity, exclude the three main-unavailable composition
   tokens, and match exact case-sensitive whole-buffer prefixes without parsing.
   `InteractiveMainLineEditor.read_line` returns one unchanged Python Unicode
-  code-point buffer or raises the established interrupt/EOF events.
+  code-point buffer or raises the established interrupt/EOF events. Unexported
+  project-internal `composition_slash_command_suggestions` projects only
+  `/send` then `/cancel` from exact whole-buffer prefixes, while
+  `bind_suggestion_reader` binds an explicit provider to an editor without
+  exposing private members to consumers. The public `__all__` remains exact.
 - **Direct internal dependencies:** `interactive_commands` and
   `interactive_terminal`.
 - **State, resources, and side effects:** The facade retains one unified raw
   driver but contains no raw-mode, key-decoding, cursor, width, write, flush, or
   restoration implementation. Construction performs no stream access or
-  terminal mutation. `read_line` delegates one call-local operation to the
-  driver, preserving exact fallback, editing, interrupt, EOF, output-failure,
-  and restoration behavior. The facade performs no provider, filesystem,
+  terminal mutation. Public `read_line` delegates with the main projection;
+  the internal binding supplies a provider for one call without retaining it.
+  The unified driver preserves exact fallback, editing, interrupt, EOF,
+  output-failure, and restoration behavior. The facade performs no provider,
+  filesystem,
   persistence, subprocess, network, or import-time operational side effect.
 - **Primary verification/documentation:** `tests/test_interactive_line_editor.py`,
   `tests/test_interactive_terminal.py`,
@@ -730,8 +738,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   exports the defining objects without wrapper subclasses and preserves their
   canonical `story_writing_agents.interactive_terminal` identities. Its
   unlisted package-internal `build_stream_terminal` factory is the sole real-CLI
-  construction boundary; package-internal control/driver/model bindings support
-  the standalone compatibility facade without adding root-package exports.
+  construction boundary. Unlisted `build_contextual_terminal` preserves the
+  completed contextual-callback seam; package-internal control/driver/model
+  bindings support the standalone compatibility facade without adding
+  root-package exports. Public construction continues using `read_line` for
+  composition, while internal construction binds distinct ordinary, main, and
+  composition readers without prompt inspection.
 - **Direct internal dependencies:** `interactive_terminal._core`.
 - **State, resources, and side effects:** Owns no terminal resource or mutable
   process state. Import deterministically canonicalizes supported public object
@@ -774,9 +786,11 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Responsibility:** Apply pure interactive-control transitions.
 - **Supported surface:** Package-internal `transition_line_input` for existing
   insertion, deletion, cursor, commit, interrupt, and EOF semantics, plus
-  `project_slash_suggestions` for exact registry-supplied prefix projection.
-  History, selectable palette, composer, confirmation, and picker transitions
-  are not implemented by this foundation slice.
+  `project_slash_suggestions` for exact registry-supplied prefix projection and
+  `project_composition_suggestions` for fixed ordered `/send`, `/cancel`
+  preview projection. History, selectable palette, composer state,
+  confirmation, and picker transitions are not implemented by this foundation
+  slice.
 - **Direct internal dependencies:** `interactive_terminal._model`.
 - **State, resources, and side effects:** Pure call-local value transitions
   only; owns no parser, persistence, runtime, provider, stream, terminal mode,
@@ -812,10 +826,11 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:** `src/story_writing_agents/interactive_terminal/_driver.py`
 - **Responsibility:** Own the raw terminal resource lifecycle.
 - **Supported surface:** Package-internal `RawTerminalDriver` and
-  `detect_terminal_capabilities`. The driver accepts pure suggestion and
-  line-transition collaborators, provides ordinary-line fallback and one-write
-  output, and retains the established live main-line behavior without adding
-  history, selectable completion, or picker semantics.
+  `detect_terminal_capabilities`. The driver accepts a pure line-transition
+  collaborator at construction and an explicit suggestion provider per live
+  read, provides ordinary-line fallback and one-write output, and retains the
+  established contextual live-line behavior without adding history, selectable
+  completion, or picker semantics.
 - **Direct internal dependencies:** `interactive_terminal._model`.
 - **State, resources, and side effects:** Sole owner of borrowed input/output
   streams, independent capability checks, detected width, normalized physical
@@ -843,7 +858,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   callback-width semantics remain compatible. Its package-internal stream
   factory coordinates the driver, controls, command metadata, and current
   capability profile; semantic rendering is available without migrating the
-  established views in this foundation slice.
+  established views in this foundation slice. The internal contextual factory
+  preserves explicit ordinary/main/composition callback routing, while the real
+  stream factory binds both preview providers to one driver.
 - **Direct internal dependencies:** `agents`, `interactive_commands`,
   `interactive_terminal._controls`, `interactive_terminal._driver`,
   `interactive_terminal._model`, and `interactive_terminal._render`.
@@ -851,8 +868,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   borrowed synchronous read/write callbacks, deterministic plain capabilities,
   and an explicit width but inspect no stream and acquire no resource.
   Stream-factory instances delegate all raw terminal state, width detection,
-  keys, writes, flushes, and restoration to one driver. Composition and subject
-  input remain call-local; there is no history, provider, runtime, filesystem,
+  keys, writes, flushes, and restoration to one driver. Main and composition
+  providers are selected per call and never retained by that driver; subject
+  and confirmation use ordinary input. There is no history, runtime, filesystem,
   persistence, subprocess, network, or import-time operational I/O.
 - **Primary verification/documentation:** `tests/test_interactive_terminal.py`,
   `tests/test_interactive_line_editor.py`, `tests/test_public_api_and_cli.py`,
@@ -1078,18 +1096,18 @@ every intermediate arrow. The current runtime graph is acyclic.
 - `interactive_commands` owns canonical command and agent-route metadata, parse
   rules, and typed parsed actions. `interactive_line_editor` projects the
   main-eligible canonical tokens and declared aliases directly from `COMMANDS`,
-  but delegates all raw terminal behavior to the unified terminal driver and
-  creates no registry or parser edge. The `interactive_terminal` package keeps
-  its established public facade while `_core` consumes public `COMMANDS` and
-  `AGENT_ROUTES` metadata plus canonical display names to coordinate safe
-  prompt, confirmation, help, roster, status, error, call-local composition,
-  subject input, conversation scope, catalog-row, search-hit, and
-  transcript-event presentation. `_model`, `_controls`, and `_render` remain
+  while `_controls` owns the fixed ordered `/send`, `/cancel` composition
+  projection. The facade delegates all raw terminal behavior to the unified
+  terminal driver and creates no registry or parser edge. The
+  `interactive_terminal` package keeps its established public facade while
+  `_core` consumes public `COMMANDS` and `AGENT_ROUTES` metadata plus canonical
+  display names to coordinate safe presentation and explicit ordinary, main,
+  and composition reader routing. `_model`, `_controls`, and `_render` remain
   pure; `_driver` alone owns raw streams, capabilities, functional cursor
-  controls, width, key decoding, writes, flushes, and restoration. The real CLI
-  constructs one stream-backed terminal rather than injecting a second editor.
-  The controller still receives only completed terminal outcomes and alone
-  passes exact lines to the parser.
+  controls, width, key decoding, writes, flushes, and restoration and receives
+  preview providers only per read. The real CLI constructs one stream-backed
+  terminal rather than injecting a second editor. The controller still receives
+  only completed terminal outcomes and alone passes exact lines to the parser.
 - `interactive_controller` is the stable one-class import boundary and owns no
   shell state or resource. Its `_core` owns interactive shell action mapping,
   current in-memory attachment, current-focus conversation and sticky-target state,

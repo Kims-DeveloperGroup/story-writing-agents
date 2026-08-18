@@ -6,6 +6,7 @@ import ast
 import contextlib
 import inspect
 import os
+import pickle
 import socket
 import subprocess
 import sys
@@ -22,6 +23,8 @@ from story_writing_agents.interactive_commands import CommandSpec
 from story_writing_agents.interactive_line_editor import (
     InteractiveMainLineEditor,
     SlashCommandSuggestion,
+    bind_suggestion_reader,
+    composition_slash_command_suggestions,
     slash_command_suggestions,
 )
 
@@ -246,18 +249,61 @@ class SuggestionContractTests(unittest.TestCase):
             tuple(inspect.signature(SlashCommandSuggestion).parameters),
             ("token", "canonical_token"),
         )
+        self.assertEqual(
+            tuple(inspect.signature(slash_command_suggestions).parameters),
+            ("buffer",),
+        )
+        self.assertEqual(
+            tuple(
+                inspect.signature(
+                    composition_slash_command_suggestions
+                ).parameters
+            ),
+            ("buffer",),
+        )
+        self.assertEqual(
+            tuple(inspect.signature(InteractiveMainLineEditor).parameters),
+            ("fallback_read_line", "input_stream", "output_stream"),
+        )
+        self.assertEqual(
+            tuple(inspect.signature(InteractiveMainLineEditor.read_line).parameters),
+            ("self", "prompt"),
+        )
+        self.assertEqual(
+            tuple(inspect.signature(bind_suggestion_reader).parameters),
+            ("editor", "provider"),
+        )
+        for internal_name in (
+            "composition_slash_command_suggestions",
+            "bind_suggestion_reader",
+        ):
+            self.assertNotIn(internal_name, editor_module.__all__)
         suggestion = SlashCommandSuggestion("/agent", "/to")
+        self.assertIs(type(suggestion), SlashCommandSuggestion)
+        self.assertIs(type(pickle.loads(pickle.dumps(suggestion))), type(suggestion))
+        self.assertEqual(pickle.loads(pickle.dumps(suggestion)), suggestion)
         self.assertFalse(hasattr(suggestion, "__dict__"))
         with self.assertRaises(FrozenInstanceError):
             suggestion.token = "/changed"  # type: ignore[misc]
         for changed_callable in (
             SlashCommandSuggestion,
             slash_command_suggestions,
+            composition_slash_command_suggestions,
+            bind_suggestion_reader,
             InteractiveMainLineEditor,
             InteractiveMainLineEditor.read_line,
         ):
             with self.subTest(docstring=changed_callable.__qualname__):
                 self.assertTrue(inspect.getdoc(changed_callable))
+        for canonical_callable in (
+            SlashCommandSuggestion,
+            slash_command_suggestions,
+            InteractiveMainLineEditor,
+        ):
+            self.assertEqual(
+                canonical_callable.__module__,
+                "story_writing_agents.interactive_line_editor",
+            )
         self.assertNotIn("interactive_line_editor", story_writing_agents.__all__)
         for name in editor_module.__all__:
             self.assertNotIn(name, story_writing_agents.__all__)
@@ -346,6 +392,92 @@ class SuggestionContractTests(unittest.TestCase):
                 ),
             )
         self.assertIs(editor_module.COMMANDS, commands_module.COMMANDS)
+
+    def test_composition_projection_is_exact_ordered_and_context_only(self) -> None:
+        cases = (
+            ("/", ("/send", "/cancel")),
+            ("/s", ("/send",)),
+            ("/se", ("/send",)),
+            ("/send", ("/send",)),
+            ("/c", ("/cancel",)),
+            ("/ca", ("/cancel",)),
+            ("/cancel", ("/cancel",)),
+            ("", ()),
+            ("plain 한글", ()),
+            (" /send", ()),
+            ("/send ", ()),
+            ("/send\t", ()),
+            ("/SEND", ()),
+            ("/send-more", ()),
+            ("/cancelled", ()),
+            ("/say", ()),
+            ("/say /send", ()),
+            ("/say /cancel", ()),
+        )
+        for buffer, expected in cases:
+            with self.subTest(buffer=buffer):
+                suggestions = composition_slash_command_suggestions(buffer)
+                self.assertEqual(
+                    tuple(suggestion.token for suggestion in suggestions),
+                    expected,
+                )
+                self.assertEqual(
+                    tuple(
+                        suggestion.canonical_token
+                        for suggestion in suggestions
+                    ),
+                    expected,
+                )
+        with self.assertRaises(TypeError):
+            composition_slash_command_suggestions(None)  # type: ignore[arg-type]
+
+        self.assertEqual(
+            tuple(suggestion.token for suggestion in slash_command_suggestions("/")),
+            EXPECTED_SUGGESTIONS,
+        )
+        self.assertTrue(
+            {"/send", "/cancel"}.isdisjoint(
+                suggestion.token for suggestion in slash_command_suggestions("/")
+            )
+        )
+
+    def test_internal_binding_is_call_local_and_public_read_stays_main_only(
+        self,
+    ) -> None:
+        editor, input_stream, output, fallback = make_editor("")
+        first_provider = mock.Mock(return_value=())
+        second_provider = mock.Mock(return_value=())
+        with mock.patch.object(
+            InteractiveMainLineEditor,
+            "_read_line",
+            autospec=True,
+            side_effect=lambda _self, prompt, _provider: prompt,
+        ) as internal_read:
+            first_reader = bind_suggestion_reader(editor, first_provider)
+            second_reader = bind_suggestion_reader(editor, second_provider)
+            self.assertEqual(first_reader("compose[first]> "), "compose[first]> ")
+            self.assertEqual(editor.read_line("story[lobby]> "), "story[lobby]> ")
+            self.assertEqual(second_reader("compose[second]> "), "compose[second]> ")
+
+        self.assertEqual(
+            internal_read.call_args_list,
+            [
+                mock.call(editor, "compose[first]> ", first_provider),
+                mock.call(editor, "story[lobby]> ", slash_command_suggestions),
+                mock.call(editor, "compose[second]> ", second_provider),
+            ],
+        )
+        self.assertEqual(
+            InteractiveMainLineEditor.__slots__,
+            ("_driver",),
+        )
+        self.assertEqual(input_stream.read_calls, 0)
+        self.assertEqual(output.records, [])
+        fallback.assert_not_called()
+        with self.assertRaises(TypeError):
+            bind_suggestion_reader(object(), first_provider)  # type: ignore[arg-type]
+        with self.assertRaises(TypeError):
+            bind_suggestion_reader(editor, None)  # type: ignore[arg-type]
 
 
 class LiveEditingTests(unittest.TestCase):
@@ -510,6 +642,108 @@ class LiveEditingTests(unittest.TestCase):
                     tuple(call[1] for call in termios_double.set_calls),
                     (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
                 )
+
+    def test_contextual_panel_clears_on_whitespace_no_match_and_submit(self) -> None:
+        cases = (
+            ("/ \n", "/ ", ("", "/", "/ ")),
+            ("/x\n", "/x", ("", "/", "/x")),
+            (
+                "/send\n",
+                "/send",
+                ("", "/", "/s", "/se", "/sen", "/send"),
+            ),
+        )
+        for characters, expected, expected_buffers in cases:
+            with self.subTest(characters=repr(characters)):
+                editor, _input, output, fallback = make_editor(characters)
+                provider = mock.Mock(
+                    wraps=composition_slash_command_suggestions
+                )
+                reader = bind_suggestion_reader(editor, provider)
+                with capable_terminal(FakeTermios(), width=20):
+                    self.assertEqual(reader("compose[run:1]> "), expected)
+
+                self.assertEqual(
+                    tuple(call.args[0] for call in provider.call_args_list),
+                    expected_buffers,
+                )
+                preview = next(
+                    record for record in output.records if "[suggestions]" in record
+                )
+                self.assertIn("/send", preview)
+                self.assertIn("/cancel", preview)
+                self.assertNotIn("/status", preview)
+                self.assertNotIn("[suggestions]", output.records[-1])
+                self.assertIn("\x1b[J", output.records[-1])
+                fallback.assert_not_called()
+
+    def test_contextual_interrupt_eof_and_physical_eof_clear_and_restore(
+        self,
+    ) -> None:
+        cases = (
+            ("\x03", KeyboardInterrupt),
+            ("\x04", EOFError),
+            ("", EOFError),
+        )
+        for characters, error_type in cases:
+            with self.subTest(characters=repr(characters)):
+                editor, _input, output, fallback = make_editor(characters)
+                provider = mock.Mock(
+                    wraps=composition_slash_command_suggestions
+                )
+                termios_double = FakeTermios()
+                with capable_terminal(termios_double):
+                    with self.assertRaises(error_type):
+                        bind_suggestion_reader(editor, provider)(
+                            "compose[run:1]> "
+                        )
+                self.assertEqual(
+                    output.records[-1],
+                    "\r\r\x1b[J\n",
+                )
+                self.assertEqual(
+                    tuple(call[1] for call in termios_double.set_calls),
+                    (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
+                )
+                provider.assert_called_once_with("")
+                fallback.assert_not_called()
+
+    def test_contextual_editing_narrow_wrapping_and_sanitization_are_exact(
+        self,
+    ) -> None:
+        characters = "/sX\x1b[D\x7fsend\x1b[3~\n"
+        editor, _input, output, fallback = make_editor(characters)
+        with capable_terminal(FakeTermios(), width=20):
+            self.assertEqual(
+                bind_suggestion_reader(
+                    editor,
+                    composition_slash_command_suggestions,
+                )("compose[run:1]> "),
+                "/send",
+            )
+        rendered = "".join(output.records)
+        self.assertIn("[suggestions]", rendered)
+        self.assertIn("/send", rendered)
+        self.assertNotIn("/status", rendered)
+        self.assertIn("compose[run:1]> /se\nnd", rendered)
+        fallback.assert_not_called()
+
+        unsafe_provider = mock.Mock(
+            return_value=(
+                SlashCommandSuggestion("/unsafe\x1b[31m界界界", "/unsafe"),
+            )
+        )
+        editor, _input, output, fallback = make_editor("/\n")
+        with capable_terminal(FakeTermios(), width=20):
+            self.assertEqual(
+                bind_suggestion_reader(editor, unsafe_provider)("compose> "),
+                "/",
+            )
+        rendered = "".join(output.records)
+        self.assertIn("/unsafe\\x1b[31m", rendered)
+        self.assertNotIn("/unsafe\x1b[31m", rendered)
+        self.assertIn("界界\n界", rendered)
+        fallback.assert_not_called()
 
 
 class CapabilityAndFailureTests(unittest.TestCase):
@@ -737,6 +971,101 @@ class CapabilityAndFailureTests(unittest.TestCase):
         self.assertEqual(input_stream.read_calls, 0)
         self.assertEqual(output_stream.records, [])
 
+    def test_contextual_fallback_and_failure_paths_keep_one_resource_owner(
+        self,
+    ) -> None:
+        fallback_cases = (
+            ("dumb", True, True, "posix"),
+            ("xterm", False, True, "posix"),
+            ("xterm", True, False, "posix"),
+            ("xterm", True, True, "nt"),
+        )
+        for terminal_name, input_tty, output_tty, platform_name in fallback_cases:
+            with self.subTest(
+                terminal_name=terminal_name,
+                input_tty=input_tty,
+                output_tty=output_tty,
+                platform_name=platform_name,
+            ):
+                input_stream = ScriptedInput("unused", is_terminal=input_tty)
+                output = RecordingOutput(is_terminal=output_tty)
+                fallback = mock.Mock(return_value="plain")
+                editor = InteractiveMainLineEditor(
+                    fallback,
+                    input_stream,  # type: ignore[arg-type]
+                    output,  # type: ignore[arg-type]
+                )
+                provider = mock.Mock(
+                    wraps=composition_slash_command_suggestions
+                )
+                with (
+                    mock.patch.object(editor_module, "_termios", FakeTermios()),
+                    mock.patch.object(editor_module.os, "name", platform_name),
+                    mock.patch.dict(os.environ, {"TERM": terminal_name}),
+                ):
+                    self.assertEqual(
+                        bind_suggestion_reader(editor, provider)("compose> "),
+                        "plain",
+                    )
+                fallback.assert_called_once_with("compose> ")
+                provider.assert_not_called()
+                self.assertEqual(input_stream.read_calls, 0)
+                self.assertEqual(output.records, [])
+
+        output = RecordingOutput()
+        editor, _input, _unused_output, fallback = make_editor("/x", output=output)
+        termios_double = FakeTermios()
+
+        def fail_after_panel(text: str) -> int:
+            output.records.append(text)
+            if len(output.records) == 3:
+                raise OSError("redraw failed")
+            return len(text)
+
+        output.write = fail_after_panel  # type: ignore[method-assign]
+        with capable_terminal(termios_double):
+            with self.assertRaises(OSError):
+                bind_suggestion_reader(
+                    editor,
+                    composition_slash_command_suggestions,
+                )("compose> ")
+        self.assertEqual(
+            tuple(call[1] for call in termios_double.set_calls),
+            (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
+        )
+        self.assertIn("[suggestions]", output.records[1])
+        self.assertEqual(output.records[-1], "\r\r\x1b[J\n")
+        fallback.assert_not_called()
+
+        editor, input_stream, output, fallback = make_editor("unused")
+        termios_double = FakeTermios()
+        termios_double.activation_failure = OSError("activation failed")
+        provider = mock.Mock(wraps=composition_slash_command_suggestions)
+        with capable_terminal(termios_double):
+            self.assertEqual(
+                bind_suggestion_reader(editor, provider)("compose> "),
+                "fallback",
+            )
+        provider.assert_not_called()
+        self.assertEqual(input_stream.read_calls, 0)
+        self.assertEqual(output.records, [])
+
+        editor, _input, _output, fallback = make_editor("/send\n")
+        termios_double = FakeTermios()
+        termios_double.restoration_failure = OSError("restore failed")
+        with capable_terminal(termios_double):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "^interactive terminal restoration failed$",
+            ):
+                bind_suggestion_reader(
+                    editor,
+                    composition_slash_command_suggestions,
+                )("compose> ")
+        self.assertIn("\x1b[J", _output.records[-1])
+        self.assertNotIn("[suggestions]", _output.records[-1])
+        fallback.assert_not_called()
+
 
 class EditorBoundaryTests(unittest.TestCase):
     def test_dependency_boundary_clean_import_and_non_facade_surface(self) -> None:
@@ -790,6 +1119,9 @@ class EditorBoundaryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             editor, _input, _output, fallback = make_editor("/status\n")
+            contextual_editor, _context_input, _context_output, contextual_fallback = (
+                make_editor("/\x7fplain\n")
+            )
             with (
                 mock.patch.object(
                     commands_module,
@@ -805,6 +1137,13 @@ class EditorBoundaryTests(unittest.TestCase):
                 capable_terminal(FakeTermios()),
             ):
                 self.assertEqual(editor.read_line("p> "), "/status")
+                self.assertEqual(
+                    bind_suggestion_reader(
+                        contextual_editor,
+                        composition_slash_command_suggestions,
+                    )("compose[run:1]> "),
+                    "plain",
+                )
                 self.assertEqual(
                     tuple(
                         suggestion.token
@@ -822,6 +1161,7 @@ class EditorBoundaryTests(unittest.TestCase):
                 mkdir.assert_not_called()
             self.assertEqual(tuple(root.iterdir()), ())
         fallback.assert_not_called()
+        contextual_fallback.assert_not_called()
         self.assertEqual(Path.cwd(), cwd_before)
         self.assertEqual(os.environ, environment_before)
 

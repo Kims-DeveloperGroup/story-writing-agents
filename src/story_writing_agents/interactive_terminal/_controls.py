@@ -12,6 +12,9 @@ from ._model import (
 )
 
 
+_COMPOSITION_SUGGESTION_TOKENS = ("/send", "/cancel")
+
+
 def transition_line_input(
     state: LineInputState,
     event: KeyEvent,
@@ -122,4 +125,30 @@ def project_slash_suggestions(
     return tuple(matches)
 
 
-__all__ = ["transition_line_input", "project_slash_suggestions"]
+def project_composition_suggestions(
+    buffer: str,
+) -> tuple[SlashCommandSuggestion, ...]:
+    """Project the fixed ordered composition controls for one input buffer.
+
+    Matching is whole-buffer, case-sensitive, and prefix-only. This pure
+    projection performs no parser, terminal, provider, or storage operation.
+    """
+
+    if not isinstance(buffer, str):
+        raise TypeError("buffer must be a string")
+    if not buffer.startswith("/") or any(
+        character.isspace() for character in buffer
+    ):
+        return ()
+    return tuple(
+        SlashCommandSuggestion(token, token)
+        for token in _COMPOSITION_SUGGESTION_TOKENS
+        if token.startswith(buffer)
+    )
+
+
+__all__ = [
+    "transition_line_input",
+    "project_slash_suggestions",
+    "project_composition_suggestions",
+]

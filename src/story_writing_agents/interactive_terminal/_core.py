@@ -14,7 +14,11 @@ from typing import TextIO
 
 from ..agents import AGENT_SPECS
 from ..interactive_commands import AGENT_ROUTES, COMMANDS, CommandSpec
-from ._controls import project_slash_suggestions, transition_line_input
+from ._controls import (
+    project_composition_suggestions,
+    project_slash_suggestions,
+    transition_line_input,
+)
 from ._driver import RawTerminalDriver
 from ._model import (
     CapabilityProfile,
@@ -393,6 +397,7 @@ class InteractiveTerminal:
 
     __slots__ = (
         "_capability_provider",
+        "_composition_read_line",
         "_main_read_line",
         "_read_line",
         "_width",
@@ -410,9 +415,10 @@ class InteractiveTerminal:
         """Bind borrowed synchronous I/O callbacks and a fixed wrap width.
 
         The established ``read_line`` callback remains responsible for subject,
-        confirmation, and composition input. An optional keyword-only
-        ``main_read_line`` handles only completed main-prompt lines and defaults
-        to ``read_line``. Construction performs no I/O or resource acquisition.
+        confirmation, and public-constructor composition input. An optional
+        keyword-only ``main_read_line`` handles only completed main-prompt lines
+        and defaults to ``read_line``. Construction performs no I/O or resource
+        acquisition.
         """
 
         if not callable(read_line):
@@ -429,6 +435,7 @@ class InteractiveTerminal:
         self._main_read_line = (
             read_line if main_read_line is None else main_read_line
         )
+        self._composition_read_line = read_line
         self._write_text = write_text
         self._width = width
         self._capability_provider = lambda: _plain_capabilities(width)
@@ -535,7 +542,9 @@ class InteractiveTerminal:
         while True:
             prompt = _compose_prompt(mode, alias, len(lines) + 1)
             try:
-                line = _validated_input_line(self._read_line(prompt))
+                line = _validated_input_line(
+                    self._composition_read_line(prompt)
+                )
             except KeyboardInterrupt:
                 return self._record_discarded_composition(
                     TerminalActionKind.INTERRUPT,
@@ -1040,6 +1049,33 @@ class InteractiveTerminal:
         self._write_text(f"{frame.text}\n")
 
 
+def build_contextual_terminal(
+    read_line: Callable[[str], str],
+    write_text: Callable[[str], None],
+    *,
+    main_read_line: Callable[[str], str],
+    composition_read_line: Callable[[str], str],
+    width: int = 80,
+) -> InteractiveTerminal:
+    """Construct a terminal with explicit main, composition, and plain reads.
+
+    Public construction continues routing composition through ``read_line``.
+    This internal seam binds the contextual callbacks without inspecting
+    prompts, acquiring resources, or changing the public constructor.
+    """
+
+    if not callable(composition_read_line):
+        raise TypeError("composition_read_line must be callable")
+    terminal = InteractiveTerminal(
+        read_line,
+        write_text,
+        width=width,
+        main_read_line=main_read_line,
+    )
+    terminal._composition_read_line = composition_read_line
+    return terminal
+
+
 def _plain_capabilities(width: int) -> TerminalCapabilities:
     """Return the deterministic resource-free callback rendering profile."""
 
@@ -1080,7 +1116,6 @@ def build_stream_terminal(
         fallback_read_line,
         input_stream,
         output_stream,
-        _main_slash_suggestions,
         transition_line_input,
     )
     capabilities = driver.capabilities()
@@ -1088,7 +1123,14 @@ def build_stream_terminal(
         driver.read_line,
         driver.write_text,
         width=max(20, capabilities.width),
-        main_read_line=driver.read_main_line,
+        main_read_line=lambda prompt: driver.read_live_line(
+            prompt,
+            _main_slash_suggestions,
+        ),
+    )
+    terminal._composition_read_line = lambda prompt: driver.read_live_line(
+        prompt,
+        project_composition_suggestions,
     )
     terminal._capability_provider = driver.capabilities
     return terminal
@@ -1394,5 +1436,7 @@ __all__ = [
     "InteractiveError",
     "sanitize_terminal_text",
     "InteractiveTerminal",
+    "build_contextual_terminal",
     "build_stream_terminal",
+    "project_composition_suggestions",
 ]

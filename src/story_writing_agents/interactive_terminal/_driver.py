@@ -67,7 +67,6 @@ class RawTerminalDriver:
         "_line_transition",
         "_os_provider",
         "_output_stream",
-        "_suggestion_provider",
         "_termios_provider",
     )
 
@@ -76,9 +75,6 @@ class RawTerminalDriver:
         fallback_read_line: Callable[[str], str],
         input_stream: TextIO,
         output_stream: TextIO,
-        suggestion_provider: Callable[
-            [str], tuple[SlashCommandSuggestion, ...]
-        ],
         line_transition: Callable[
             [LineInputState, KeyEvent],
             tuple[LineInputState, ControlOutcome | None],
@@ -90,15 +86,13 @@ class RawTerminalDriver:
         """Retain borrowed fallback and terminal stream collaborators.
 
         Construction performs no stream access or terminal mutation.
-        ``read_main_line`` resolves live-terminal capabilities at call time;
+        ``read_live_line`` resolves live-terminal capabilities at call time;
         ``read_line`` delegates ordinary fallback input, whose callback remains
         responsible for its own I/O lifecycle.
         """
 
         if not callable(fallback_read_line):
             raise TypeError("fallback_read_line must be callable")
-        if not callable(suggestion_provider):
-            raise TypeError("suggestion_provider must be callable")
         if not callable(line_transition):
             raise TypeError("line_transition must be callable")
         if termios_provider is not None and not callable(termios_provider):
@@ -108,7 +102,6 @@ class RawTerminalDriver:
         self._fallback_read_line = fallback_read_line
         self._input_stream = input_stream
         self._output_stream = output_stream
-        self._suggestion_provider = suggestion_provider
         self._line_transition = line_transition
         self._termios_provider = (
             (lambda: _termios) if termios_provider is None else termios_provider
@@ -148,8 +141,14 @@ class RawTerminalDriver:
             os_module=os_module,
         )
 
-    def read_main_line(self, prompt: str) -> str:
-        """Read and return one exact Unicode main-input buffer.
+    def read_live_line(
+        self,
+        prompt: str,
+        suggestion_provider: Callable[
+            [str], tuple[SlashCommandSuggestion, ...]
+        ],
+    ) -> str:
+        """Read one exact Unicode buffer with a call-local preview provider.
 
         A capable POSIX terminal is placed in call-local noncanonical/no-echo
         mode and restored after submission or every failure. Unsupported or
@@ -160,6 +159,8 @@ class RawTerminalDriver:
 
         if not isinstance(prompt, str):
             raise TypeError("prompt must be a string")
+        if not callable(suggestion_provider):
+            raise TypeError("suggestion_provider must be callable")
 
         try:
             configuration = _terminal_configuration(
@@ -185,7 +186,12 @@ class RawTerminalDriver:
         line: str | None = None
         active_failure: BaseException | None = None
         try:
-            line = self._read_live_line(prompt, configuration, state)
+            line = self._read_live_buffer(
+                prompt,
+                configuration,
+                state,
+                suggestion_provider,
+            )
             self._finish_live_display(prompt, configuration.width, state)
         except BaseException as failure:
             active_failure = failure
@@ -202,23 +208,28 @@ class RawTerminalDriver:
         assert line is not None
         return line
 
-    def _read_live_line(
+    def _read_live_buffer(
         self,
         prompt: str,
         configuration: _TerminalConfiguration,
         state: _LiveEditorState,
+        suggestion_provider: Callable[
+            [str], tuple[SlashCommandSuggestion, ...]
+        ],
     ) -> str:
         """Edit one code-point buffer until submit, interrupt, EOF, or failure.
 
         The method borrows the active terminal configuration and mutates only
-        ``state``. Stream failures propagate to ``read_line`` for display and
-        attribute cleanup; no parser, provider, or persistence call occurs.
+        ``state``. Stream failures propagate to ``read_live_line`` for display
+        and attribute cleanup; no parser, story provider, or persistence call
+        occurs.
         """
 
         state.rendered_cursor_row = self._redraw_live_display(
             prompt,
             configuration.width,
             state,
+            suggestion_provider,
         )
         while True:
             character = self._read_character()
@@ -239,6 +250,7 @@ class RawTerminalDriver:
                             prompt,
                             configuration.width,
                             state,
+                            suggestion_provider,
                         )
                 if not reprocess:
                     continue
@@ -271,6 +283,7 @@ class RawTerminalDriver:
                     prompt,
                     configuration.width,
                     state,
+                    suggestion_provider,
                 )
 
     def _read_character(self) -> str:
@@ -293,6 +306,9 @@ class RawTerminalDriver:
         prompt: str,
         width: int,
         state: _LiveEditorState,
+        suggestion_provider: Callable[
+            [str], tuple[SlashCommandSuggestion, ...]
+        ],
     ) -> int:
         """Replace the current editor area and return its visible cursor row.
 
@@ -308,7 +324,7 @@ class RawTerminalDriver:
             state.cursor,
             render_width,
         )
-        suggestions = self._suggestion_provider("".join(state.buffer))
+        suggestions = suggestion_provider("".join(state.buffer))
         if type(suggestions) is not tuple or any(
             type(item) is not SlashCommandSuggestion for item in suggestions
         ):

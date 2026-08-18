@@ -43,8 +43,8 @@ revision; all must approve. Blackboard and owner-isolated history stay separate.
 | `interactive_controller._runtime_policy` | Pure progress, result, inspection, and failure interpretation |
 | `cli_context`, catalog, memory service, event store | Defaults, identity, scoped reads, and authoritative events |
 | `interactive_terminal` | Stable package-supported facade and package-internal real-CLI factory |
-| `interactive_terminal._core` | Established terminal API behavior and terminal-leaf coordination |
-| `interactive_terminal._model`, `_controls`, `_render` | Immutable semantic foundation, pure current line transitions/suggestion projection, and pure safe responsive rendering |
+| `interactive_terminal._core` | Established terminal API behavior, explicit ordinary/main/composition routing, and terminal-leaf coordination |
+| `interactive_terminal._model`, `_controls`, `_render` | Immutable semantic foundation, pure current line transitions/main and composition suggestion projection, and pure safe responsive rendering |
 | `interactive_terminal._driver` | Sole real-CLI raw streams, capabilities, width, keys, cursor controls, writes, flushes, and restoration |
 | `interactive_line_editor` | Standalone compatibility facade over the unified driver |
 | `StoryRuntime`, `AgentBackend` | Orchestration/retrieval authority and provider resources |
@@ -104,9 +104,11 @@ CLI constructs one unified stream-backed terminal before controller
 construction. The controller core imports the terminal facade; its policy
 leaves use facade error contracts rather than terminal package leaves. Terminal
 core depends on its pure controls, renderer, model, sole driver, and canonical
-command/agent metadata. The controller receives typed actions and depends
-downward on runtime, presentation, and storage. Retrieval's handler port
-prevents backend-to-orchestrator access.
+command/agent metadata. It binds main and composition preview providers per
+read without retaining prompt mode; subject and confirmation reads remain
+ordinary. The controller receives typed actions and depends downward on
+runtime, presentation, and storage. Retrieval's handler port prevents
+backend-to-orchestrator access.
 
 This supports deterministic collaborators, not a dynamic plugin system. Exact
 imports live in [Package API](../reference/package-api.md), lifecycle meaning in

@@ -3,10 +3,11 @@
 > **Status:** #82 has delivered the import-compatible package, closed semantic
 > models, pure foundation controls, responsive plain/fixed-ANSI renderer,
 > capability profiles, unified raw driver and CLI factory, line-editor
-> compatibility facade, and 32-unit module index. View migrations (#83/#84),
-> history (#85), composer/confirmation integration (#86), selectable
-> completion (#79), pickers (#87), and contextual composition suggestions
-> (#73) remain planned. The
+> compatibility facade, and 32-unit module index; completed prerequisite #73
+> supplies contextual composition previews through that unified driver. View
+> migrations (#83/#84), history (#85), composer/confirmation component
+> integration (#86), selectable completion (#79), and pickers (#87) remain
+> planned. The
 > [interactive terminal reference](../reference/interactive-terminal.md) and
 > [terminal safety rules](../operations/terminal-safety.md) describe current
 > observable behavior.
@@ -28,7 +29,8 @@ production behavior.
 | #82 terminal foundation | Implemented: package boundary, private semantic values, current line-edit transitions and suggestion projection, responsive renderer, capability observation, sole raw driver, unified CLI construction, compatibility facades, and index reconciliation. |
 | #83 and #84 view migrations | Planned: existing shell, orientation, notices, messages, progress, help, roster, list, search, history, and transcript methods still render their established plain records. |
 | #85 input history | Planned: Up/Down history and the 100-entry process-local store are not implemented. |
-| #86 and prerequisite #73 | Planned: composer/confirmation component integration and contextual composition suggestions are not implemented. Existing line-oriented behavior remains unchanged. |
+| Prerequisite #73 | Implemented: RUN/CHAT composition uses the fixed preview-only `/send`, `/cancel` projection through explicit call-local routing. |
+| #86 composer/confirmation integration | Planned: existing line-oriented composition and confirmation behavior remains unchanged beyond #73 previews. |
 | #79 selectable completion | Planned: the current slash suggestion list is preview-only; Tab/Shift-Tab selection and fixed-value completion are not implemented. |
 | #87 pickers | Planned: semantic picker values and rendering exist internally, but no interactive picker transition or consumer is implemented. |
 
@@ -499,9 +501,9 @@ storage responsibility.
 | Fixed command values | `SuggestionPalette`, `Field` | Canonical finite grammar choices, including metadata-exposed agent IDs/aliases; preview has no effects | #79 |
 | Single-select and selectable-list choices | `Picker`, `ListView`, `Record`, `Notice` | Up/Down highlight, Enter commit, Escape cancel, disabled/empty/error | #87 |
 
-Contextual non-main-prompt suggestions remain dependent on external issue #73.
-#86 and #79 integrate that prerequisite without moving parser, runtime, or
-storage authority into the terminal design system.
+Contextual non-main-prompt suggestions from completed issue #73 use the same
+unified driver without moving parser, runtime, or storage authority into the
+terminal design system. #86 and #79 build on that prerequisite.
 
 ## Verification and acceptance
 

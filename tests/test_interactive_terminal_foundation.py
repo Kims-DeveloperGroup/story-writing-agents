@@ -474,7 +474,11 @@ class SemanticModelFoundationTests(unittest.TestCase):
         )
         self.assertEqual(
             tuple(_controls.__all__),
-            ("transition_line_input", "project_slash_suggestions"),
+            (
+                "transition_line_input",
+                "project_slash_suggestions",
+                "project_composition_suggestions",
+            ),
         )
         for deferred_name in (
             "transition_history",
@@ -865,13 +869,11 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
         termios_provider = mock.Mock(return_value=CompleteTermios)
         os_provider = mock.Mock(return_value=fake_os())
         fallback = mock.Mock(return_value="fallback")
-        suggestions = mock.Mock(return_value=())
         transition = mock.Mock()
         driver = RawTerminalDriver(
             fallback,
             input_stream,  # type: ignore[arg-type]
             output_stream,  # type: ignore[arg-type]
-            suggestions,
             transition,
             termios_provider=termios_provider,
             os_provider=os_provider,
@@ -903,7 +905,12 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             width=120,
         )
         driver.read_line.return_value = "subject"
-        driver.read_main_line.return_value = "/status"
+        driver.read_live_line.side_effect = (
+            "/status",
+            "composition line",
+            "/send",
+            "/help",
+        )
         fallback = mock.Mock()
         input_stream = object()
         output_stream = object()
@@ -922,7 +929,6 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             fallback,
             input_stream,
             output_stream,
-            _core._main_slash_suggestions,
             transition_line_input,
         )
         driver.capabilities.assert_called_once_with()
@@ -932,13 +938,58 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             TerminalAction(TerminalActionKind.LINE, text="/status"),
         )
         self.assertEqual(
+            terminal.compose(ComposeMode.RUN),
+            TerminalAction(
+                TerminalActionKind.SEND,
+                text="composition line",
+                line_count=1,
+                character_count=16,
+            ),
+        )
+        self.assertEqual(
+            terminal.read_main(),
+            TerminalAction(TerminalActionKind.LINE, text="/help"),
+        )
+        self.assertEqual(
             terminal.request_conversation_subject(),
             TerminalAction(TerminalActionKind.LINE, text="subject"),
         )
         terminal.write_status(TerminalMessageKind.RESULT, "ready")
-        driver.read_main_line.assert_called_once_with("story[lobby]> ")
+        self.assertEqual(
+            driver.read_live_line.call_args_list,
+            [
+                mock.call(
+                    "story[lobby]> ",
+                    _core._main_slash_suggestions,
+                ),
+                mock.call(
+                    "compose[run:1]> ",
+                    _controls.project_composition_suggestions,
+                ),
+                mock.call(
+                    "compose[run:2]> ",
+                    _controls.project_composition_suggestions,
+                ),
+                mock.call(
+                    "story[lobby]> ",
+                    _core._main_slash_suggestions,
+                ),
+            ],
+        )
         driver.read_line.assert_called_once_with("conversation[subject]> ")
-        driver.write_text.assert_called_once_with("[result] ready\n")
+        self.assertEqual(
+            driver.write_text.call_args_list,
+            [
+                mock.call(
+                    "[compose] Consensus run. Use /send to submit or "
+                    "/cancel to discard.\n"
+                ),
+                mock.call(
+                    "[compose] Sending 1 line, 16 characters to consensus.\n"
+                ),
+                mock.call("[result] ready\n"),
+            ],
+        )
 
     def test_compatibility_editor_contains_only_delegation_not_a_second_driver(
         self,
@@ -974,7 +1025,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
                 for node in editor_class.body
                 if isinstance(node, ast.FunctionDef)
             ),
-            ("__init__", "read_line"),
+            ("__init__", "read_line", "_read_line"),
         )
         read_line = next(
             node
@@ -986,7 +1037,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             for node in ast.walk(read_line)
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
         }
-        self.assertEqual(called_attributes, {"read_main_line"})
+        self.assertEqual(called_attributes, {"_read_line"})
         for duplicated_primitive in (
             "tcgetattr",
             "tcsetattr",

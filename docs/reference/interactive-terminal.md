@@ -39,8 +39,17 @@ write_error(error: InteractiveError, *, secrets=()) -> None
 sanitize_terminal_text(text: str) -> str
 ```
 
-`main_read_line` defaults to `read_line` and serves only `read_main`; other input
-is unchanged. Record width starts at 20. It owns no lifecycle or storage.
+`main_read_line` defaults to `read_line` and serves only `read_main`; public
+construction continues to use `read_line` for composition, subjects, and
+confirmation. The CLI's package-internal wiring separates ordinary, main, and
+composition reads without changing this signature or `__all__`. Record width
+starts at 20. The terminal owns no lifecycle or storage.
+
+The exact `interactive_line_editor.__all__` remains
+`SlashCommandSuggestion`, `slash_command_suggestions`, and
+`InteractiveMainLineEditor`; its constructor and `read_line(prompt)` are
+unchanged. Composition-provider selection is package-internal, not an added
+supported API.
 
 | Enum | Exact values |
 | --- | --- |
@@ -72,9 +81,9 @@ This foundation does not migrate existing shell views. Orientation, help,
 lists, search, transcript, history, advisory, retrieval, consensus, and error
 methods still emit the exact plain records documented below. Structured
 semantic layouts and decorative color for those views remain future migration
-work. History navigation, selectable palettes/fixed values, component-integrated
-composer/confirmation, contextual composition suggestions, and pickers are not
-currently available.
+work. Contextual composition previews are implemented as documented below.
+History navigation, selectable palettes/fixed values, component-integrated
+composer/confirmation, and pickers are not currently available.
 
 ## Prompts and ordinary presentation
 
@@ -105,11 +114,38 @@ registry order (not output layout):
 Case-sensitive prefixes filter; whitespace, no match, submission,
 or control clears it. Tokens neither complete nor reflect scope gates; `/help`
 remains authoritative.
-The main-invalid `/compose`, `/send`, and `/cancel` are excluded. Other prompts
-and unsupported terminals keep ordinary line reads. Editing, control keys, and
-restoration are in [Terminal safety](../operations/terminal-safety.md#live-editor-boundary).
-The list is not selectable: Tab/Shift-Tab completion and Up/Down history are
+The main-invalid `/compose`, `/send`, and `/cancel` are excluded. Composition
+uses the separate fixed preview below; subject and confirmation prompts keep
+ordinary line reads. Editing, control keys, fallbacks, and restoration are in
+[Terminal safety](../operations/terminal-safety.md#live-editor-boundary).
+The lists are not selectable: Tab/Shift-Tab completion and Up/Down history are
 not implemented by the current foundation.
+
+## Composition live suggestions
+
+On capable POSIX live editing, RUN composition and module-supported CHAT
+composition routed through the project's contextual reader show
+`[suggestions]` with only these tokens, in this order:
+
+```text
+/send
+/cancel
+```
+
+Matching is an exact, case-sensitive prefix of the whole current buffer. `/`
+shows both entries, `/s` narrows to `/send`, and `/c` narrows to `/cancel`.
+Whitespace, an empty buffer, or any nonmatching text clears the panel. `/say`
+is not suggested; `/say /send` and `/say /cancel` keep their established
+literal-escape meaning and show no panel because the buffers contain
+whitespace.
+
+This is preview only: it does not complete, replace, select, parse, or dispatch
+the buffer and does not call a story provider, runtime, filesystem, or storage.
+Enter submits the unchanged buffer to the existing composition rules. The
+installed shell enters RUN composition through bare `/run`; CHAT composition
+remains a module-supported terminal operation. At the editor boundary,
+unsupported, `TERM=dumb`, non-TTY, and non-POSIX reads use ordinary line input
+without a panel; the installed CLI's earlier dual-TTY guard still applies.
 
 ## Exact search and transcript records
 

@@ -10,6 +10,7 @@ from .interactive_commands import COMMANDS
 from .interactive_terminal import (
     RawTerminalDriver,
     SlashCommandSuggestion,
+    project_composition_suggestions,
     project_slash_suggestions,
     transition_line_input,
 )
@@ -43,8 +44,16 @@ def slash_command_suggestions(
     )
 
 
+def composition_slash_command_suggestions(
+    buffer: str,
+) -> tuple[SlashCommandSuggestion, ...]:
+    """Project the exact ordered composition controls for one input buffer."""
+
+    return project_composition_suggestions(buffer)
+
+
 class InteractiveMainLineEditor:
-    """Read one editable main-prompt line through the unified raw driver."""
+    """Read contextual editable lines through the unified raw driver."""
 
     __slots__ = ("_driver",)
 
@@ -57,15 +66,14 @@ class InteractiveMainLineEditor:
         """Retain borrowed fallback and terminal stream collaborators.
 
         Construction performs no stream access or terminal mutation. Missing
-        live-terminal capabilities are resolved by ``read_line`` at call time;
-        the fallback callback remains responsible for its own I/O lifecycle.
+        live-terminal capabilities are resolved by each contextual read; the
+        fallback callback remains responsible for its own I/O lifecycle.
         """
 
         self._driver = RawTerminalDriver(
             fallback_read_line,
             input_stream,
             output_stream,
-            slash_command_suggestions,
             transition_line_input,
             termios_provider=lambda: _termios,
             os_provider=lambda: os,
@@ -74,7 +82,33 @@ class InteractiveMainLineEditor:
     def read_line(self, prompt: str) -> str:
         """Read and return one exact Unicode main-input buffer."""
 
-        return self._driver.read_main_line(prompt)
+        return self._read_line(prompt, slash_command_suggestions)
+
+    def _read_line(
+        self,
+        prompt: str,
+        suggestion_provider: Callable[
+            [str], tuple[SlashCommandSuggestion, ...]
+        ],
+    ) -> str:
+        """Read one line using an explicit call-local suggestion provider."""
+
+        return self._driver.read_live_line(prompt, suggestion_provider)
+
+
+def bind_suggestion_reader(
+    editor: InteractiveMainLineEditor,
+    provider: Callable[
+        [str], tuple[SlashCommandSuggestion, ...]
+    ],
+) -> Callable[[str], str]:
+    """Bind a validated call-local provider to one compatibility editor."""
+
+    if type(editor) is not InteractiveMainLineEditor:
+        raise TypeError("editor must be an InteractiveMainLineEditor")
+    if not callable(provider):
+        raise TypeError("provider must be callable")
+    return lambda prompt: editor._read_line(prompt, provider)
 
 
 SlashCommandSuggestion.__module__ = __name__

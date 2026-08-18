@@ -407,12 +407,12 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
 
     Both streams are checked before input, option validation, workspace/context
     access, or backend construction. The adapter constructs one unified
-    stream-backed terminal whose sole raw driver provides main-line live
-    editing and retains the existing ``input`` callback for unsupported
-    fallback; other terminal reads remain line-oriented. Setup failures are
-    rendered safely on stderr. Once ``run_session_lobby`` is called, the
-    controller owns backend cleanup; before that transfer this adapter closes
-    any constructed backend.
+    stream-backed terminal whose sole raw driver provides contextual main and
+    composition live editing while retaining the existing ``input`` callback
+    for unsupported fallback; subject and confirmation reads stay line-
+    oriented. Setup failures are rendered safely on stderr. Once
+    ``run_session_lobby`` is called, the controller owns backend cleanup;
+    before that transfer this adapter closes any constructed backend.
     """
 
     if not _interactive_streams_are_terminals():
