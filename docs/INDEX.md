@@ -72,6 +72,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 ## System design
 
 - [Overview](design/overview.md)
+- [Interactive CLI design system contract](design/interactive-cli-design-system.md)
 - [Prompts and provider boundary](design/prompts-and-provider.md)
 - [Session lifecycle](design/session-lifecycle.md)
 - [Consensus workflow](design/consensus-workflow.md)
