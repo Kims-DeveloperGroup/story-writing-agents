@@ -882,13 +882,15 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
 
             return json.dumps(
                 {
-                    "kind": "answer",
-                    "session_id": "session",
-                    "conversation_id": selected.conversation_id,
-                    "turn_id": turn_id,
-                    "action_index": 1,
-                    "content": content,
-                    "citation_ids": [],
+                    "action": {
+                        "kind": "answer",
+                        "session_id": "session",
+                        "conversation_id": selected.conversation_id,
+                        "turn_id": turn_id,
+                        "action_index": 1,
+                        "content": content,
+                        "citation_ids": [],
+                    },
                 },
                 ensure_ascii=False,
                 separators=(",", ":"),

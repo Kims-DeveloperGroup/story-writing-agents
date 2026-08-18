@@ -181,7 +181,10 @@ elif payload.get("operation") == "conversation_retrieval":
             "content": content,
             "citation_ids": [],
         }
-    output_path.write_text(json.dumps(response), encoding="utf-8")
+    output_path.write_text(
+        json.dumps({"action": response}),
+        encoding="utf-8",
+    )
 elif payload["phase"] == "audit":
     response = {
         "revision_id": payload["revision_id"],
