@@ -397,7 +397,13 @@ def sanitize_terminal_text(text: str) -> str:
 class InteractiveTerminal:
     """Render plain terminal records and collect one input operation at a time."""
 
-    __slots__ = ("_main_read_line", "_read_line", "_width", "_write_text")
+    __slots__ = (
+        "_composition_read_line",
+        "_main_read_line",
+        "_read_line",
+        "_width",
+        "_write_text",
+    )
 
     def __init__(
         self,
@@ -429,6 +435,7 @@ class InteractiveTerminal:
         self._main_read_line = (
             read_line if main_read_line is None else main_read_line
         )
+        self._composition_read_line = read_line
         self._write_text = write_text
         self._width = width
 
@@ -534,7 +541,9 @@ class InteractiveTerminal:
         while True:
             prompt = _compose_prompt(mode, alias, len(lines) + 1)
             try:
-                line = _validated_input_line(self._read_line(prompt))
+                line = _validated_input_line(
+                    self._composition_read_line(prompt)
+                )
             except KeyboardInterrupt:
                 return self._record_discarded_composition(
                     TerminalActionKind.INTERRUPT,
@@ -1031,6 +1040,33 @@ class InteractiveTerminal:
         """Sanitize one rendered block and append exactly one record newline."""
 
         self._write_text(f"{sanitize_terminal_text(text)}\n")
+
+
+def build_contextual_terminal(
+    read_line: Callable[[str], str],
+    write_text: Callable[[str], None],
+    *,
+    main_read_line: Callable[[str], str],
+    composition_read_line: Callable[[str], str],
+    width: int = 80,
+) -> InteractiveTerminal:
+    """Construct a terminal with explicit main, composition, and plain reads.
+
+    Public construction continues routing composition through ``read_line``.
+    This internal seam binds the contextual callbacks without inspecting
+    prompts, acquiring resources, or changing the public constructor.
+    """
+
+    if not callable(composition_read_line):
+        raise TypeError("composition_read_line must be callable")
+    terminal = InteractiveTerminal(
+        read_line,
+        write_text,
+        width=width,
+        main_read_line=main_read_line,
+    )
+    terminal._composition_read_line = composition_read_line
+    return terminal
 
 
 def _visible_escape(character: str) -> str:

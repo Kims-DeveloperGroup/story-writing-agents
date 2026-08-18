@@ -77,6 +77,10 @@ Keep the viewpoint close and the final discovery concrete.
 
 Bare `/run` opens the multiline composer. There, `/send` starts the debate and
 `/cancel` or Ctrl-C discards the buffer; those commands are unavailable outside it.
+On capable POSIX live editing, typing `/` previews only `/send` then `/cancel`;
+case-sensitive whole-buffer prefixes narrow that list. The panel does not
+complete or submit text. `/say /send` and `/say /cancel` still insert literal
+control lines, and ordinary fallback input shows no panel.
 
 The runtime supplies every debate phase one bounded focus snapshot.
 `/run --fresh PROMPT` records its identity without transcript; `/draft-file PATH`

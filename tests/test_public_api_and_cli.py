@@ -927,6 +927,14 @@ class CliTests(unittest.TestCase):
                     ) as line_editor,
                     mock.patch.object(
                         cli_module,
+                        "bind_suggestion_reader",
+                    ) as bind_reader,
+                    mock.patch.object(
+                        cli_module,
+                        "build_contextual_terminal",
+                    ) as terminal_factory,
+                    mock.patch.object(
+                        cli_module,
                         "InteractiveController",
                     ) as controller,
                 ):
@@ -943,6 +951,8 @@ class CliTests(unittest.TestCase):
                 load_context.assert_not_called()
                 backend.assert_not_called()
                 line_editor.assert_not_called()
+                bind_reader.assert_not_called()
+                terminal_factory.assert_not_called()
                 controller.assert_not_called()
 
     def test_module_non_tty_entry_is_exact_and_does_not_touch_cwd(self) -> None:
@@ -1025,6 +1035,7 @@ class CliTests(unittest.TestCase):
                 controller_value.run_session_lobby.return_value = 7
                 main_line_editor = mock.Mock()
                 main_line_editor.read_line.return_value = "/status"
+                composition_read_line = mock.Mock(return_value="/cancel")
                 with (
                     mock.patch.object(sys, "stdin", stdin),
                     mock.patch.object(sys, "stdout", stdout),
@@ -1051,6 +1062,16 @@ class CliTests(unittest.TestCase):
                     ) as line_editor_factory,
                     mock.patch.object(
                         cli_module,
+                        "bind_suggestion_reader",
+                        return_value=composition_read_line,
+                    ) as bind_reader,
+                    mock.patch.object(
+                        cli_module,
+                        "build_contextual_terminal",
+                        wraps=cli_module.build_contextual_terminal,
+                    ) as terminal_factory,
+                    mock.patch.object(
+                        cli_module,
                         "InteractiveController",
                         return_value=controller_value,
                     ) as controller_factory,
@@ -1071,6 +1092,16 @@ class CliTests(unittest.TestCase):
                     backend_overrides=overrides,
                 )
                 line_editor_factory.assert_called_once_with(input, stdin, stdout)
+                bind_reader.assert_called_once_with(
+                    main_line_editor,
+                    cli_module.composition_slash_command_suggestions,
+                )
+                terminal_factory.assert_called_once_with(
+                    input,
+                    stdout.write,
+                    main_read_line=main_line_editor.read_line,
+                    composition_read_line=composition_read_line,
+                )
                 controller_args = controller_factory.call_args.args
                 self.assertEqual(
                     controller_args[:3],
@@ -1236,38 +1267,65 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(stdout.getvalue(), "")
                 self.assertNotIn("context-secret", stderr.getvalue())
 
-        stdin = TtyStringIO(is_terminal=True)
-        stdout = TtyStringIO(is_terminal=True)
-        stderr = io.StringIO()
-        with (
-            mock.patch.object(sys, "stdin", stdin),
-            mock.patch.object(sys, "stdout", stdout),
-            mock.patch.object(sys, "stderr", stderr),
-            mock.patch.object(
-                cli_module,
-                "resolve_workspace",
-                return_value=workspace,
-            ),
-            mock.patch.object(
-                cli_module,
-                "load_cli_context",
-                return_value=CliContext(),
-            ),
-            mock.patch.object(
-                cli_module,
-                "InteractiveMainLineEditor",
-                side_effect=RuntimeError("editor-constructor-secret"),
-            ),
-            mock.patch.object(cli_module, "AgentBackend") as backend,
+        for failed_factory in (
+            "InteractiveMainLineEditor",
+            "bind_suggestion_reader",
+            "build_contextual_terminal",
         ):
-            self.assertEqual(main(["chat"]), 2)
-        self.assertEqual(
-            stderr.getvalue(),
-            expected_interactive_error(InteractiveErrorCode.INTERNAL_ERROR),
-        )
-        self.assertEqual(stdout.getvalue(), "")
-        self.assertNotIn("editor-constructor-secret", stderr.getvalue())
-        backend.assert_not_called()
+            with self.subTest(phase="terminal", failed_factory=failed_factory):
+                stdin = TtyStringIO(is_terminal=True)
+                stdout = TtyStringIO(is_terminal=True)
+                stderr = io.StringIO()
+                editor = mock.Mock()
+                factories = {
+                    "InteractiveMainLineEditor": mock.Mock(return_value=editor),
+                    "bind_suggestion_reader": mock.Mock(return_value=mock.Mock()),
+                    "build_contextual_terminal": mock.Mock(return_value=mock.Mock()),
+                }
+                factories[failed_factory].side_effect = RuntimeError(
+                    f"{failed_factory}-secret"
+                )
+                with (
+                    mock.patch.object(sys, "stdin", stdin),
+                    mock.patch.object(sys, "stdout", stdout),
+                    mock.patch.object(sys, "stderr", stderr),
+                    mock.patch.object(
+                        cli_module,
+                        "resolve_workspace",
+                        return_value=workspace,
+                    ),
+                    mock.patch.object(
+                        cli_module,
+                        "load_cli_context",
+                        return_value=CliContext(),
+                    ),
+                    mock.patch.object(
+                        cli_module,
+                        "InteractiveMainLineEditor",
+                        factories["InteractiveMainLineEditor"],
+                    ),
+                    mock.patch.object(
+                        cli_module,
+                        "bind_suggestion_reader",
+                        factories["bind_suggestion_reader"],
+                    ),
+                    mock.patch.object(
+                        cli_module,
+                        "build_contextual_terminal",
+                        factories["build_contextual_terminal"],
+                    ),
+                    mock.patch.object(cli_module, "AgentBackend") as backend,
+                ):
+                    self.assertEqual(main(["chat"]), 2)
+                self.assertEqual(
+                    stderr.getvalue(),
+                    expected_interactive_error(
+                        InteractiveErrorCode.INTERNAL_ERROR
+                    ),
+                )
+                self.assertEqual(stdout.getvalue(), "")
+                self.assertNotIn(f"{failed_factory}-secret", stderr.getvalue())
+                backend.assert_not_called()
 
         backend_cases = (
             (ConfigurationError, InteractiveErrorCode.CONFIGURATION_INVALID),
