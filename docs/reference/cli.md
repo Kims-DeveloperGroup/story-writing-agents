@@ -92,8 +92,10 @@ no-match positions show an empty open palette, while mixed free-value slots
 close it. Filtering retains an eligible highlight. The first changing Tab
 saves the full buffer/cursor snapshot; edits in the same grammar position keep
 it, and a grammar-position change resets it. Enter submits only the visible
-buffer to the parser once. `/settings` is not currently available; pickers and
-workspace Codex settings defaults also remain future work.
+buffer to the parser once. A generic single-select picker foundation now exists
+behind an unlisted package-internal terminal seam, but no installed shell
+command consumes it. `/settings` and workspace Codex settings defaults remain
+future work.
 
 On capable real-CLI streams, orientation/current context, `/status`, `/inspect`,
 central errors/recovery, and accepted management, advisory, retrieval, and

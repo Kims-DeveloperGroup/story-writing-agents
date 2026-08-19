@@ -8,7 +8,9 @@
 > well. Capable main input now provides selectable semantic command completion
 > coordinated with bounded process-local history. Line-oriented RUN/CHAT
 > composition and yes/no confirmation use semantic input views, and composer
-> lifecycle records use semantic notices.
+> lifecycle records use semantic notices. A generic single-select picker
+> foundation is also implemented behind an unlisted package-internal adapter.
+> No installed shell command consumes it, and `/settings` remains unavailable.
 
 ## Public API
 
@@ -46,7 +48,8 @@ sanitize_terminal_text(text: str) -> str
 
 `main_read_line` defaults to `read_line` and serves only `read_main`; public
 construction continues to use `read_line` for subjects and as the underlying
-callback for composition and confirmation. Each composition or confirmation
+callback for composition, confirmation, and the internal picker's line
+fallback. Each composition or confirmation
 attempt first renders its full semantic view to one structured plain prompt and
 passes that prompt to `read_line` once. The CLI's package-internal wiring
 separates ordinary subject, main, composition, and confirmation reads without
@@ -74,17 +77,33 @@ compatibility editor; they likewise remain unlisted and unsupported.
 unlisted internal bindings for the shared selectable main route. Its completion
 models remain package-private and outside the closed `Component` union; only
 their projected existing `SuggestionPalette` is rendered.
-The narrow internal adapter has these signatures:
+The facade also exposes the unlisted `Choice`, `Prompt`, `ControlOutcome`,
+`ControlOutcomeKind`, and `InteractivePickerInput` identities for the generic
+picker seam. `PickerControlState` and `PickerViewport` remain package-private;
+the existing semantic `Picker` remains a `Component`. None of these additions
+changes public `__all__`, root exports, or supported signatures.
+
+The narrow internal adapters have these signatures:
 
 ```python
 InteractiveSemanticOutput(terminal: InteractiveTerminal) -> None
 write_component(component: Component) -> None
+
+InteractivePickerInput(terminal: InteractiveTerminal) -> None
+read_picker(prompt: Prompt, choices: tuple[Choice, ...], *,
+            highlighted_id: str | None = None,
+            selected_id: str | None = None,
+            notice: Notice | None = None,
+            state: ViewState = ViewState.OPEN) -> ControlOutcome
 ```
 
 Construction validates and retains the terminal's bound component writer but
 does not render, read, write, observe a stream, or acquire a resource. Each
 accepted component call performs one render and one callback write, including
-the final LF; failures propagate without a retry.
+the final LF; failures propagate without a retry. The picker adapter likewise
+binds only the terminal's picker reader without observing capabilities or
+acquiring I/O. Its method is package-internal and has no direct application
+consumer.
 
 | Enum | Exact values |
 | --- | --- |
@@ -97,10 +116,11 @@ the final LF; failures propagate without a retry.
 ## Implemented semantic output and input
 
 The import-compatible package contains private immutable semantic components,
-input views, composer/history/completion states, pure one-line, selectable
-main/history, composer, and confirmation transitions, cursor-aware canonical
-grammar projection, responsive structured plain/fixed-ANSI renderers,
-capability profiles, one raw driver, and one real-CLI stream factory. These
+input views, composer/history/completion/picker states, pure one-line,
+selectable main/history, composer, confirmation, and picker transitions,
+cursor-aware canonical grammar projection, responsive structured
+plain/fixed-ANSI renderers, capability profiles, one raw driver, and one
+real-CLI stream factory. These
 internal seams support architecture and deterministic testing; they add no
 public theme API or public component/control types.
 
@@ -154,7 +174,9 @@ four generic-status call sites; the controller also has no generic
 `write_status` call site. Composition and confirmation build ordered semantic
 input views and use pure history-free controls as documented below. Selectable
 main-command palettes and finite fixed options are available on capable main
-reads; pickers and `/settings` are not currently available.
+reads. The generic picker foundation is available only through its unlisted
+internal seam; no installed command uses it, and `/settings` is not currently
+available.
 
 ## Prompts and semantic input presentation
 
@@ -181,6 +203,12 @@ the active width, end in the focused prompt's required space, and have no final
 LF. Safe line fallback receives the plain projection once. Capable live input
 uses the trusted fixed-theme projection for redraw and sanitizes the dynamic
 buffer separately.
+
+Picker input is a separate semantic projection. Capable live input renders a
+bounded viewport at the current observed width; plain callback, non-TTY,
+`TERM=dumb`, non-POSIX, and safely recovered activation paths render the
+complete numbered list through the ordinary line callback. Opaque choice
+identities are control state and are never rendered.
 
 ## Current semantic plain shapes
 
@@ -354,6 +382,58 @@ Invalid input writes one `[hint] Enter y, yes, n, or no.` semantic error notice,
 marks `Choices` with error state in the next view, and reads again. A valid
 answer produces `yes` or `no`; Ctrl-C and EOF produce `interrupt` or `eof`.
 None of those terminal results adds a final confirmation notice.
+
+<a id="generic-internal-picker-foundation"></a>
+
+## Generic internal picker foundation
+
+This foundation is package-internal and has no installed command, controller,
+or settings consumer. A caller supplies one semantic prompt and immutable
+choices whose opaque identities are returned on commit but never rendered.
+Initialization highlights an explicit enabled choice, otherwise an enabled
+selection, otherwise the first enabled choice. Empty and all-disabled choice
+sets remain explicit `empty` and `disabled` states.
+
+Highlight and selection are independent until commit, so a frame can show one
+selected choice and another highlighted choice. Up/Down moves the highlight
+among enabled choices, skips disabled choices, and clamps at the first or last
+enabled choice without consulting main history. Enter commits the highlighted
+identity and makes it selected; Escape returns `cancel` while preserving the
+prior selection. Configured VINTR/Ctrl-C and VEOF/physical EOF return the typed
+`interrupt` and `eof` outcomes. Other edit and completion keys do nothing and
+the picker never owns main completion state.
+
+Live rendering shows a contiguous viewport of at most seven choices and
+re-observes capability and width on each redraw. Selection and highlight may
+appear simultaneously on one row; a selected choice outside the viewport is
+summarized by ordinal and label. Choice-set reconciliation preserves enabled
+selection and highlight by identity when possible and deterministically finds
+the next enabled highlight when not. Opaque identities remain absent from
+plain, fixed-ANSI, `NO_COLOR`, narrow, and fallback text.
+
+Line fallback renders every choice as a numbered row and accepts only:
+
+- exact `/cancel`, which cancels;
+- a blank line when an enabled choice is highlighted, which commits that
+  highlight; or
+- an ASCII decimal ordinal with no leading zero that is in range and enabled.
+
+Zero, leading-zero, signed, spaced, non-ASCII, out-of-range, disabled-choice,
+name, label, identity, and other command input is rejected without changing
+selection or highlight. The retry adds exactly:
+
+```text
+Enter an enabled choice number, press Enter for the highlighted choice, or enter /cancel.
+```
+
+Both live and fallback lifecycles emit exactly one final semantic
+`completed` or `cancelled` frame after commit or cancel. Interrupt, EOF, and
+failures clear any transient live display and emit no final picker state;
+restoration failure remains fatal. Callback, non-TTY, `TERM=dumb`, non-POSIX,
+uncertain-capability, and safely recovered activation paths use the numbered
+fallback without acquiring raw input. The unified driver remains the only raw
+resource owner and picker reads do not inspect or mutate main history,
+completion, parser, provider, runtime, filesystem, storage, or network state.
 
 <a id="exact-search-and-transcript-records"></a>
 
