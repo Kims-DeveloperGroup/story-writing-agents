@@ -24,6 +24,7 @@ from ._model import (
     CapabilityProfile,
     Component,
     Field,
+    ListView,
     Message,
     Notice,
     Panel,
@@ -756,12 +757,20 @@ class InteractiveTerminal:
             raise ValueError("an archived conversation cannot be focused")
         status = "archived" if archived else "active"
         focus = "focused" if focused else "not focused"
-        entry = (
-            f"{safe_handle} | {status} | {focus} | Subject: {safe_subject}"
-        )
-        self._write_block(
-            "\n".join(
-                _wrap_prefixed("[conversation] ", entry, self._width)
+        self._write_component(
+            Record(
+                f"conversation {safe_handle}",
+                fields=(
+                    Field("Status", status),
+                    Field("Focus", focus),
+                    Field("Subject", safe_subject),
+                ),
+                role=(
+                    SemanticRole.MUTED
+                    if archived
+                    else SemanticRole.DEFAULT
+                ),
+                state=ViewState.COMPLETED,
             )
         )
 
@@ -809,7 +818,7 @@ class InteractiveTerminal:
             citation_kind,
         )
         if all(value is None for value in citation_values):
-            citation = f"Citation: conversation {safe_handle}"
+            citation = f"conversation {safe_handle}"
         elif any(value is None for value in citation_values):
             raise ValueError(
                 "citation turn ID, sequence, and kind must be present together"
@@ -827,24 +836,29 @@ class InteractiveTerminal:
                 _strict_required_text("citation_kind", citation_kind)
             )
             citation = (
-                f"Citation: conversation {safe_handle}, turn {safe_turn_id}, "
+                f"conversation {safe_handle}, turn {safe_turn_id}, "
                 f"sequence {safe_sequence}, kind {safe_citation_kind}"
             )
 
         status = "archived" if archived else "active"
-        header = (
-            f"Status: {status} | Match: {safe_match_kind} | "
-            f"Subject: {safe_subject} | {citation}"
+        self._write_component(
+            Record(
+                f"search {safe_handle}",
+                fields=(
+                    Field("Status", status),
+                    Field("Match", safe_match_kind),
+                    Field("Subject", safe_subject),
+                    Field("Citation", citation),
+                    Field("Snippet", safe_snippet),
+                ),
+                role=(
+                    SemanticRole.MUTED
+                    if archived
+                    else SemanticRole.DEFAULT
+                ),
+                state=ViewState.COMPLETED,
+            )
         )
-        lines = _wrap_prefixed(
-            f"[search {safe_handle}] ",
-            header,
-            self._width,
-        )
-        lines.extend(
-            _wrap_prefixed("[snippet] ", safe_snippet, self._width)
-        )
-        self._write_block("\n".join(lines))
 
     def write_conversation_transcript_event(
         self,
@@ -878,24 +892,21 @@ class InteractiveTerminal:
         safe_content = sanitize_terminal_text(
             _strict_nonempty_terminal_content(content)
         )
-        header = (
-            f"Sequence: {safe_sequence} | Turn: {safe_turn_id} | "
-            f"Kind: {safe_kind} | Sender: {safe_sender} | "
-            f"Recipient: {safe_recipient}"
-        )
-        lines = _wrap_prefixed(
-            f"[transcript {safe_handle}] ",
-            header,
-            self._width,
-        )
-        lines.extend(
-            _wrap_preserved_content_lines(
-                "[content] ",
-                safe_content,
-                self._width,
+        self._write_component(
+            Record(
+                f"transcript {safe_handle}",
+                fields=(
+                    Field("Sequence", str(safe_sequence)),
+                    Field("Turn", safe_turn_id),
+                    Field("Kind", safe_kind),
+                    Field("Sender", safe_sender),
+                    Field("Recipient", safe_recipient),
+                    Field("Content", ""),
+                ),
+                content=safe_content,
+                state=ViewState.COMPLETED,
             )
         )
-        self._write_block("\n".join(lines))
 
     def write_agent_roster(self) -> None:
         """Render every advisory route in registry order without mutation.
@@ -906,18 +917,28 @@ class InteractiveTerminal:
         resource and therefore owns no cleanup.
         """
 
-        lines: list[str] = []
-        for route in AGENT_ROUTES:
-            display_name = AGENT_SPECS[route.agent_id].display_name
-            description = (
-                f"{display_name} | ID: {route.agent_id} | "
-                f"Aliases: {', '.join(route.aliases)} | "
-                f"Advisory domain: {route.advisory_domain}"
+        records = tuple(
+            Record(
+                "agent",
+                title=AGENT_SPECS[route.agent_id].display_name,
+                fields=(
+                    Field("ID", route.agent_id),
+                    Field("Aliases", ", ".join(route.aliases)),
+                    Field("Advisory domain", route.advisory_domain),
+                ),
+                role=SemanticRole.AGENT,
+                state=ViewState.COMPLETED,
             )
-            lines.extend(
-                _wrap_prefixed("[agent] ", description, self._width)
+            for route in AGENT_ROUTES
+        )
+        self._write_component(
+            ListView(
+                "Agents",
+                records,
+                total_count=len(records),
+                state=ViewState.COMPLETED,
             )
-        self._write_block("\n".join(lines))
+        )
 
     def write_status(self, kind: TerminalMessageKind, text: str) -> None:
         """Write one trusted status prefix followed by safe display text."""
@@ -954,11 +975,70 @@ class InteractiveTerminal:
         """Render full or contextual help from the parser-owned registry."""
 
         if command is None:
-            lines = self._full_help_lines(COMMANDS)
+            sections: tuple[Section, ...] = ()
+            for group in dict.fromkeys(spec.group for spec in COMMANDS):
+                records = tuple(
+                    Record(
+                        "command",
+                        title=spec.syntax,
+                        fields=(
+                            Field("Aliases", _aliases_text(spec)),
+                            Field("Calls provider", _yes_no(spec.may_call_provider)),
+                            Field(
+                                "May write artifacts",
+                                _yes_no(spec.may_write_artifacts),
+                            ),
+                        ),
+                        role=SemanticRole.COMMAND,
+                        state=ViewState.COMPLETED,
+                    )
+                    for spec in COMMANDS
+                    if spec.group == group
+                )
+                sections += (
+                    Section(
+                        group,
+                        (
+                            ListView(
+                                "Commands",
+                                records,
+                                total_count=len(records),
+                                state=ViewState.COMPLETED,
+                            ),
+                        ),
+                        state=ViewState.COMPLETED,
+                    ),
+                )
+            component = Panel(
+                "Help",
+                sections,
+                state=ViewState.COMPLETED,
+            )
         else:
             spec = _find_command(command, COMMANDS)
-            lines = self._context_help_lines(spec)
-        self._write_block("\n".join(lines))
+            component = Panel(
+                "Help",
+                (
+                    Record(
+                        "command",
+                        fields=(
+                            Field("Group", spec.group),
+                            Field("Syntax", spec.syntax),
+                            Field("Aliases", _aliases_text(spec)),
+                            Field("Calls provider", _yes_no(spec.may_call_provider)),
+                            Field(
+                                "May write artifacts",
+                                _yes_no(spec.may_write_artifacts),
+                            ),
+                            Field("Example", spec.example),
+                        ),
+                        role=SemanticRole.COMMAND,
+                        state=ViewState.COMPLETED,
+                    ),
+                ),
+                state=ViewState.COMPLETED,
+            )
+        self._write_component(component)
 
     def write_error(
         self,

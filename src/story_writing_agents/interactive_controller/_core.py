@@ -62,6 +62,7 @@ from ..interactive_terminal import (
     InteractiveErrorCode,
     InteractiveSemanticOutput,
     InteractiveTerminal,
+    ListView,
     Message,
     Notice,
     Panel,
@@ -69,7 +70,6 @@ from ..interactive_terminal import (
     Section,
     SemanticRole,
     TerminalActionKind,
-    TerminalMessageKind,
     ViewState,
 )
 from ..models import (
@@ -100,7 +100,6 @@ from ._conversation_policy import (
     classify_memory_catalog_or_reference_failure,
     classify_search_service_failure,
     classify_transcript_service_failure,
-    format_transcript_context_status,
     normalize_conversation_input,
     resolve_conversation_reference,
     validate_catalog_entries,
@@ -274,6 +273,26 @@ class InteractiveController:
 
         self._semantic_output.write_component(
             Notice(text, label=label, role=role, state=state)
+        )
+
+    def _write_counted_list_row(
+        self,
+        title: str,
+        record: Record,
+        *,
+        position: int,
+        total_count: int,
+    ) -> None:
+        """Write one ordered row with its position in a known result set."""
+
+        self._semantic_output.write_component(
+            ListView(
+                title,
+                (record,),
+                total_count=total_count,
+                position=position,
+                state=ViewState.COMPLETED,
+            )
         )
 
     def _write_run_record(
@@ -1326,8 +1345,7 @@ class InteractiveController:
         try:
             self._write_focused_conversation_history_rows(action)
         except KeyboardInterrupt:
-            self._terminal.write_status(
-                TerminalMessageKind.CANCELLED,
+            self._write_conversation_cancelled_status(
                 "History cancelled; attached state is unchanged.",
             )
 
@@ -1357,22 +1375,59 @@ class InteractiveController:
             return
 
         displayed = events if action.count is None else events[-action.count :]
-        for event in displayed:
-            self._terminal.write_conversation_transcript_event(
-                focused.conversation_id,
-                sequence=event.sequence,
-                turn_id=event.turn_id,
-                kind=event.kind.value,
-                sender=event.sender,
-                recipient=event.recipient,
-                content=event.content,
+        total_count = len(displayed)
+        for position, event in enumerate(displayed, start=1):
+            self._write_counted_list_row(
+                "History",
+                Record(
+                    f"transcript {focused.conversation_id}",
+                    fields=(
+                        Field("Sequence", str(event.sequence)),
+                        Field("Turn", event.turn_id),
+                        Field("Kind", event.kind.value),
+                        Field("Sender", event.sender),
+                        Field("Recipient", event.recipient),
+                        Field("Content", ""),
+                    ),
+                    content=event.content,
+                    state=ViewState.COMPLETED,
+                ),
+                position=position,
+                total_count=total_count,
             )
-        self._terminal.write_status(
-            TerminalMessageKind.RESULT,
-            format_transcript_context_status(
-                displayed_events=len(displayed),
-                total_events=len(events),
-                context=context,
+        self._semantic_output.write_component(
+            Record(
+                "context",
+                fields=(
+                    Field(
+                        "History displayed",
+                        f"{len(displayed)}/{len(events)} events",
+                    ),
+                    Field("Complete turns", str(context.total_complete_turns)),
+                    Field(
+                        "Context retained",
+                        f"{context.retained_turns} turns, {len(context.events)} events",
+                    ),
+                    Field("Omitted turns", str(context.omitted_turns)),
+                    Field(
+                        "UTF-8 bytes",
+                        (
+                            f"{context.retained_utf8_bytes}/"
+                            f"{CONVERSATION_CONTEXT_POLICY.max_utf8_bytes}"
+                        ),
+                    ),
+                    Field(
+                        "Turn cap",
+                        str(CONVERSATION_CONTEXT_POLICY.max_complete_turns),
+                    ),
+                    Field(
+                        "Truncated",
+                        f"{'yes' if context.truncated else 'no'}.",
+                    ),
+                ),
+                state=(
+                    ViewState.EMPTY if not displayed else ViewState.COMPLETED
+                ),
             ),
         )
 
@@ -2443,40 +2498,84 @@ class InteractiveController:
                 self._present_search_service_failure(exc)
                 return
 
-            for handle, hit in zip(handles, result.hits, strict=True):
+            total_count = len(result.hits)
+            for position, (handle, hit) in enumerate(
+                zip(handles, result.hits, strict=True),
+                start=1,
+            ):
                 citation = hit.citation
-                self._terminal.write_conversation_search_hit(
-                    handle,
-                    hit.subject,
-                    hit.match_kind.value,
-                    hit.snippet,
-                    archived=(hit.status is ConversationStatus.ARCHIVED),
-                    citation_turn_id=citation.turn_id,
-                    citation_sequence=citation.sequence,
-                    citation_kind=(
-                        None
-                        if citation.event_kind is None
-                        else citation.event_kind.value
-                    ),
+                citation_values = (
+                    citation.turn_id,
+                    citation.sequence,
+                    citation.event_kind,
                 )
-            self._terminal.write_status(
-                TerminalMessageKind.RESULT,
+                if all(value is None for value in citation_values):
+                    citation_value = f"conversation {handle}"
+                elif any(value is None for value in citation_values):
+                    raise ValueError(
+                        "citation turn ID, sequence, and kind must be "
+                        "present together"
+                    )
+                else:
+                    citation_value = (
+                        f"conversation {handle}, turn {citation.turn_id}, "
+                        f"sequence {citation.sequence}, kind "
+                        f"{citation.event_kind.value}"
+                    )
+                archived = hit.status is ConversationStatus.ARCHIVED
+                self._write_counted_list_row(
+                    "Search results",
+                    Record(
+                        f"search {handle}",
+                        fields=(
+                            Field(
+                                "Status",
+                                "archived" if archived else "active",
+                            ),
+                            Field("Match", hit.match_kind.value),
+                            Field("Subject", hit.subject),
+                            Field("Citation", citation_value),
+                            Field("Snippet", hit.snippet),
+                        ),
+                        role=(
+                            SemanticRole.MUTED
+                            if archived
+                            else SemanticRole.DEFAULT
+                        ),
+                        state=ViewState.COMPLETED,
+                    ),
+                    position=position,
+                    total_count=total_count,
+                )
+            self._write_notice(
                 (
                     f"Search returned {len(result.hits)} of "
                     f"{result.matched_conversations} matching conversations."
                 ),
+                label="result",
+                role=(
+                    SemanticRole.MUTED
+                    if not result.hits
+                    else SemanticRole.SUCCESS
+                ),
+                state=(
+                    ViewState.EMPTY
+                    if not result.hits
+                    else ViewState.COMPLETED
+                ),
             )
             if result.truncated:
-                self._terminal.write_status(
-                    TerminalMessageKind.HINT,
+                self._write_notice(
                     (
                         "Search was truncated by fixed scan or result "
                         "limits; refine the query."
                     ),
+                    label="hint",
+                    role=SemanticRole.INFO,
+                    state=ViewState.COMPLETED,
                 )
         except KeyboardInterrupt:
-            self._terminal.write_status(
-                TerminalMessageKind.CANCELLED,
+            self._write_conversation_cancelled_status(
                 "Search cancelled; attached state is unchanged.",
             )
 
@@ -2534,32 +2633,53 @@ class InteractiveController:
                 return
 
             handle = visible_conversation_handle(metadata, entries)
-            for event in page.events:
-                self._terminal.write_conversation_transcript_event(
-                    handle,
-                    sequence=event.sequence,
-                    turn_id=event.turn_id,
-                    kind=event.kind.value,
-                    sender=event.sender,
-                    recipient=event.recipient,
-                    content=event.content,
+            total_count = len(page.events)
+            for position, event in enumerate(page.events, start=1):
+                self._write_counted_list_row(
+                    "Transcript",
+                    Record(
+                        f"transcript {handle}",
+                        fields=(
+                            Field("Sequence", str(event.sequence)),
+                            Field("Turn", event.turn_id),
+                            Field("Kind", event.kind.value),
+                            Field("Sender", event.sender),
+                            Field("Recipient", event.recipient),
+                            Field("Content", ""),
+                        ),
+                        content=event.content,
+                        state=ViewState.COMPLETED,
+                    ),
+                    position=position,
+                    total_count=total_count,
                 )
-            self._terminal.write_status(
-                TerminalMessageKind.RESULT,
+            self._write_notice(
                 f"Transcript page returned {len(page.events)} events.",
+                label="result",
+                role=(
+                    SemanticRole.MUTED
+                    if not page.events
+                    else SemanticRole.SUCCESS
+                ),
+                state=(
+                    ViewState.EMPTY
+                    if not page.events
+                    else ViewState.COMPLETED
+                ),
             )
             if page.next_cursor is not None:
-                self._terminal.write_status(
-                    TerminalMessageKind.HINT,
+                self._write_notice(
                     (
                         f"Continue with /transcript {handle} "
                         f"{page.next_cursor.max_events} --from "
                         f"{page.next_cursor.next_sequence}."
                     ),
+                    label="hint",
+                    role=SemanticRole.INFO,
+                    state=ViewState.COMPLETED,
                 )
         except KeyboardInterrupt:
-            self._terminal.write_status(
-                TerminalMessageKind.CANCELLED,
+            self._write_conversation_cancelled_status(
                 "Transcript read cancelled; attached state is unchanged.",
             )
 
@@ -2807,9 +2927,19 @@ class InteractiveController:
             )
         )
         if not visible_entries:
-            self._terminal.write_status(
-                TerminalMessageKind.CONVERSATION,
-                "No conversations found.",
+            self._semantic_output.write_component(
+                ListView(
+                    "Conversations",
+                    (),
+                    total_count=0,
+                    empty_notice=Notice(
+                        "No conversations found.",
+                        label="conversation",
+                        role=SemanticRole.MUTED,
+                        state=ViewState.EMPTY,
+                    ),
+                    state=ViewState.EMPTY,
+                )
             )
             return
 
@@ -2818,12 +2948,35 @@ class InteractiveController:
             if self._focused_conversation is None
             else self._focused_conversation.conversation_id
         )
-        for entry in visible_entries:
-            self._terminal.write_conversation_list_entry(
-                visible_conversation_handle(entry, entries),
-                entry.subject,
-                archived=(entry.status is ConversationStatus.ARCHIVED),
-                focused=(entry.conversation_id == focused_id),
+        total_count = len(visible_entries)
+        for position, entry in enumerate(visible_entries, start=1):
+            archived = entry.status is ConversationStatus.ARCHIVED
+            focused = entry.conversation_id == focused_id
+            handle = visible_conversation_handle(entry, entries)
+            self._write_counted_list_row(
+                "Conversations",
+                Record(
+                    f"conversation {handle}",
+                    fields=(
+                        Field(
+                            "Status",
+                            "archived" if archived else "active",
+                        ),
+                        Field(
+                            "Focus",
+                            "focused" if focused else "not focused",
+                        ),
+                        Field("Subject", entry.subject),
+                    ),
+                    role=(
+                        SemanticRole.MUTED
+                        if archived
+                        else SemanticRole.DEFAULT
+                    ),
+                    state=ViewState.COMPLETED,
+                ),
+                position=position,
+                total_count=total_count,
             )
 
     def _focus_subject_conversation(self, reference: str) -> None:
@@ -3387,12 +3540,23 @@ class InteractiveController:
             self._present_session_failure(exc, self._context.default_session_id)
             return
         if not validated:
-            self._terminal.write_status(
-                TerminalMessageKind.SESSION,
-                "No story sessions found.",
+            self._semantic_output.write_component(
+                ListView(
+                    "Story sessions",
+                    (),
+                    total_count=0,
+                    empty_notice=Notice(
+                        "No story sessions found.",
+                        label="session",
+                        role=SemanticRole.MUTED,
+                        state=ViewState.EMPTY,
+                    ),
+                    state=ViewState.EMPTY,
+                )
             )
             return
-        for state in validated:
+        total_count = len(validated)
+        for position, state in enumerate(validated, start=1):
             try:
                 provider_ready = self._provider_work_is_ready(state)
             except Exception as exc:
@@ -3406,17 +3570,33 @@ class InteractiveController:
                 focused=focused,
                 provider_ready=provider_ready,
             )
-            self._terminal.write_status(
-                TerminalMessageKind.SESSION,
-                (
-                    f"Session: {state.session_id} | "
-                    f"Durable state: {state.durable_state.value} | "
-                    f"Process access: {state.access_state.value} | "
-                    f"Default session: "
-                    f"{'yes' if self._context.default_session_id == state.session_id else 'no'} | "
-                    f"Provider readiness: {'yes' if provider_ready else 'no'} | "
-                    f"Next action: {next_action}"
+            self._write_counted_list_row(
+                "Story sessions",
+                Record(
+                    "session",
+                    fields=(
+                        Field("Session", state.session_id),
+                        Field("Durable state", state.durable_state.value),
+                        Field("Process access", state.access_state.value),
+                        Field(
+                            "Default session",
+                            (
+                                "yes"
+                                if self._context.default_session_id
+                                == state.session_id
+                                else "no"
+                            ),
+                        ),
+                        Field(
+                            "Provider readiness",
+                            "yes" if provider_ready else "no",
+                        ),
+                        Field("Next action", next_action),
+                    ),
+                    state=ViewState.COMPLETED,
                 ),
+                position=position,
+                total_count=total_count,
             )
 
     def _pause_attached_session(self) -> bool:

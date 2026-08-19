@@ -47,8 +47,8 @@ missing or failing query selects ordinary-line fallback, while a returned
 nonpositive or invalid column count uses 80. Capability observation and
 live-input setup repeat on the next operation, so resize is noticed without a
 signal loop. Semantic rendering also asks for current capabilities on its next
-render. Deferred plain record methods retain their established construction
-width until their later view migrations.
+render. The four deferred composer status records retain their established
+construction width until #86.
 
 The internal profiles are fixed ANSI, capable plain, and line fallback. Presence
 of `NO_COLOR` disables decorative SGR only; it does not disable safe functional
@@ -76,33 +76,39 @@ inline values display it as `\x0a`. Wrapping never creates commands.
 Transcript content follows a stricter primitive boundary: it must be an exact
 nonempty string, but whitespace-only content is valid. Sanitization makes
 controls visible while preserving source LFs. Internal empty lines and a
-trailing LF remain lines under `[content] `, and the complete event is still
-one callback record. Events are never joined, trimmed, or split into storage
-records by the terminal.
+trailing LF remain lines under the `Content` field, and the complete event is
+still one callback record. Events are never joined, trimmed, or split into
+storage records by the terminal.
 
 Search/history/transcript renderers validate IDs, sequences, metadata, and
-citations. Migrated controller views construct typed semantic components from
-validated facts; deferred controller summaries reuse established primitives.
-Raw structures never reach the terminal. Renderers open no file and retain no
-cursor. Exact deferred templates live in the
+citations. Controller views construct typed semantic components from validated
+facts. Raw structures never reach the terminal. Renderers open no file and
+retain no cursor. Exact dense-view fields and callback behavior live in the
 [terminal reference](../reference/interactive-terminal.md#exact-search-and-transcript-records).
 
 #83 routes orientation, interactive status/inspection, central errors/recovery,
 and accepted management, advisory, retrieval, and consensus output through the
-semantic renderer. Help, roster, list, search, transcript, focused-history, and
-remaining generic status records stay on their established feature-blind plain
-renderers until later migrations. The semantic renderer produces the same
-structured text in plain and fixed ANSI profiles: it sanitizes dynamic content
-before wrapping or styling, counts ANSI as zero display cells, uses local
-resets, and permits only reset, bold emphasis, and foreground SGR 31 through
-37. It emits no background, dim, blink, OSC, query, or cursor sequence.
-Removing those allowed decorative sequences yields the exact plain structure.
+semantic renderer. #84 does the same for full/context help, roster,
+session/conversation lists, search, transcript, and focused history. The only
+generic status records still deferred are four composer calls owned by #86.
+The semantic renderer produces the same structured text in plain and fixed ANSI
+profiles: it sanitizes dynamic content before wrapping or styling, counts ANSI
+as zero display cells, uses local resets, and permits only reset, bold emphasis,
+and foreground SGR 31 through 37. It emits no background, dim, blink, OSC,
+query, or cursor sequence. Removing those allowed decorative sequences yields
+the exact plain structure.
 
 The controller constructs semantic components only from trusted roles/states
 and validated facts. Its unlisted `InteractiveSemanticOutput` adapter acquires
 no resource when constructed and performs exactly one render and one callback
 write for each established component record. It neither reads input nor owns a
 second stream, raw mode, cursor, width, or restoration lifecycle.
+
+Dense list commands preserve callback granularity by rendering each row as one
+positioned, one-record `ListView`. If search, transcript, or history rendering
+is interrupted after completed rows, those callbacks remain visible, one
+cancellation record follows, and no unrendered row or trailing result, hint, or
+context component is written.
 
 The live driver separately emits only fixed carriage-return, cursor-up/right,
 and clear-to-end controls for functional editing. Prompt, buffer, and suggestion

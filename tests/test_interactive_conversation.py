@@ -560,6 +560,19 @@ class RuntimeWiringAndGateTests(InteractiveConversationTestCase):
         bind.assert_not_called()
         rendered = "".join(callbacks.records)
         self.assertEqual(rendered.count("[agent] "), 4)
+        roster_records = [
+            record for record in callbacks.records if record.startswith("Agents (4)")
+        ]
+        self.assertEqual(len(roster_records), 1)
+        roster = roster_records[0]
+        ordered_ids = (
+            "lead_orchestrator",
+            "plot_architect",
+            "character_custodian",
+            "execution_specialist",
+        )
+        positions = [roster.index(f"ID: {agent_id}") for agent_id in ordered_ids]
+        self.assertEqual(positions, sorted(positions))
         self.assertEqual(rendered.count("[error session_not_attached]"), 4)
         self.assertNotIn("[error conversation_required]", rendered)
 

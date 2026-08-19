@@ -22,7 +22,9 @@ from story_writing_agents.conversations import (
     ConversationMetadata,
 )
 from story_writing_agents.interactive_controller import _core as controller_core_module
+from story_writing_agents import interactive_terminal as terminal_module
 from story_writing_agents.interactive_terminal import InteractiveErrorCode
+from story_writing_agents.interactive_terminal._render import render_plain
 from story_writing_agents.models import (
     DebateContextMode,
     DebateContextRequest,
@@ -621,6 +623,13 @@ class InteractiveHistoryAndStatusTests(InteractiveConversationTestCase):
             )
             return snapshot
 
+        components: list[object] = []
+        real_write_component = terminal_module.InteractiveSemanticOutput.write_component
+
+        def capture_component(output, component):
+            components.append(component)
+            return real_write_component(output, component)
+
         with (
             mock.patch.object(store, "read", side_effect=capture_then_append) as read,
             mock.patch.object(store, "read_context") as read_context,
@@ -648,6 +657,12 @@ class InteractiveHistoryAndStatusTests(InteractiveConversationTestCase):
                 controller_core_module,
                 "save_default_conversation",
             ) as save_selection,
+            mock.patch.object(
+                terminal_module.InteractiveSemanticOutput,
+                "write_component",
+                autospec=True,
+                side_effect=capture_component,
+            ),
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
 
@@ -677,19 +692,82 @@ class InteractiveHistoryAndStatusTests(InteractiveConversationTestCase):
             6,
         )
         rendered = "".join(callbacks.records)
+        history_views = [
+            component
+            for component in components
+            if type(component) is terminal_module.ListView
+            and component.title == "History"
+        ]
+        expected_events = (
+            (1, "turn_reply", "user_message", "user", LEAD_ORCHESTRATOR, "question"),
+            (2, "turn_reply", "agent_reply", LEAD_ORCHESTRATOR, "user", "reply"),
+            (3, "turn_error", "user_message", "user", LEAD_ORCHESTRATOR, "bad request"),
+            (4, "turn_error", "runtime_error", "runtime", "user", "safe failure"),
+            (5, "turn_open", "user_message", "user", LEAD_ORCHESTRATOR, "unmatched"),
+        )
+        expected_history = [
+            terminal_module.ListView(
+                "History",
+                (
+                    terminal_module.Record(
+                        f"transcript {metadata.conversation_id}",
+                        fields=(
+                            terminal_module.Field("Sequence", str(sequence)),
+                            terminal_module.Field("Turn", turn_id),
+                            terminal_module.Field("Kind", kind),
+                            terminal_module.Field("Sender", sender),
+                            terminal_module.Field("Recipient", recipient),
+                            terminal_module.Field("Content", ""),
+                        ),
+                        content=content,
+                        state=terminal_module.ViewState.COMPLETED,
+                    ),
+                ),
+                total_count=5,
+                position=sequence,
+                state=terminal_module.ViewState.COMPLETED,
+            )
+            for sequence, turn_id, kind, sender, recipient, content in expected_events
+        ]
+        self.assertEqual(history_views, expected_history)
         for kind in ("user_message", "agent_reply", "runtime_error"):
             self.assertIn(f"Kind: {kind}", rendered)
-        self.assertIn("[content] unmatched", rendered)
+        self.assertIn("Content:\n    unmatched", rendered)
         self.assertNotIn("LATE_SNAPSHOT_SECRET", rendered)
         retained_bytes = len(
             "questionreplybad requestsafe failure".encode("utf-8")
         )
+        expected_context = terminal_module.Record(
+            "context",
+            fields=(
+                terminal_module.Field("History displayed", "5/5 events"),
+                terminal_module.Field("Complete turns", "2"),
+                terminal_module.Field(
+                    "Context retained",
+                    "2 turns, 4 events",
+                ),
+                terminal_module.Field("Omitted turns", "0"),
+                terminal_module.Field(
+                    "UTF-8 bytes",
+                    f"{retained_bytes}/32768",
+                ),
+                terminal_module.Field("Turn cap", "24"),
+                terminal_module.Field("Truncated", "no."),
+            ),
+            state=terminal_module.ViewState.COMPLETED,
+        )
+        self.assertEqual(
+            [
+                component
+                for component in components
+                if type(component) is terminal_module.Record
+                and component.identity == "context"
+            ],
+            [expected_context],
+        )
         self.assertIn(
-            "History displayed: 5/5 events | Complete turns: 2 | "
-            "Context retained: 2 turns, 4 events | Omitted turns: 0 | "
-            f"UTF-8 bytes: {retained_bytes}/32768 | Turn cap: 24 | "
-            "Truncated: no.",
-            rendered,
+            f"{render_plain(expected_context, width=240).text}\n",
+            callbacks.records,
         )
 
     def test_history_newest_tail_is_chronological_and_empty_is_normal(self) -> None:
@@ -717,9 +795,22 @@ class InteractiveHistoryAndStatusTests(InteractiveConversationTestCase):
                 kind=ConversationEventKind.AGENT_REPLY,
                 content="r",
             )
+        components: list[object] = []
+        real_write_component = terminal_module.InteractiveSemanticOutput.write_component
+
+        def capture_component(output, component):
+            components.append(component)
+            return real_write_component(output, component)
+
         with (
             mock.patch.object(store, "read", wraps=store.read) as read,
             mock.patch.object(store, "read_context") as read_context,
+            mock.patch.object(
+                terminal_module.InteractiveSemanticOutput,
+                "write_component",
+                autospec=True,
+                side_effect=capture_component,
+            ),
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
         read.assert_called_once_with("session", metadata.conversation_id)
@@ -731,11 +822,44 @@ class InteractiveHistoryAndStatusTests(InteractiveConversationTestCase):
         self.assertNotIn("Sequence: 1", rendered)
         self.assertNotIn("Sequence: 2", rendered)
         self.assertNotIn("Sequence: 48", rendered)
+        tail_views = [
+            component
+            for component in components
+            if type(component) is terminal_module.ListView
+            and component.title == "History"
+        ]
+        self.assertEqual(
+            [(view.position, view.total_count) for view in tail_views],
+            [(1, 2), (2, 2)],
+        )
+        expected_context = terminal_module.Record(
+            "context",
+            fields=(
+                terminal_module.Field("History displayed", "2/50 events"),
+                terminal_module.Field("Complete turns", "25"),
+                terminal_module.Field(
+                    "Context retained",
+                    "24 turns, 48 events",
+                ),
+                terminal_module.Field("Omitted turns", "1"),
+                terminal_module.Field("UTF-8 bytes", "48/32768"),
+                terminal_module.Field("Turn cap", "24"),
+                terminal_module.Field("Truncated", "yes."),
+            ),
+            state=terminal_module.ViewState.COMPLETED,
+        )
+        self.assertEqual(
+            [
+                component
+                for component in components
+                if type(component) is terminal_module.Record
+                and component.identity == "context"
+            ],
+            [expected_context],
+        )
         self.assertIn(
-            "History displayed: 2/50 events | Complete turns: 25 | "
-            "Context retained: 24 turns, 48 events | Omitted turns: 1 | "
-            "UTF-8 bytes: 48/32768 | Turn cap: 24 | Truncated: yes.",
-            rendered,
+            f"{render_plain(expected_context, width=240).text}\n",
+            callbacks.records,
         )
 
         (
@@ -747,17 +871,54 @@ class InteractiveHistoryAndStatusTests(InteractiveConversationTestCase):
             callbacks,
             store,
         ) = self.selected_controller("/history", "/quit")
-        self.assertEqual(controller.run_session_lobby(), 0)
+        components = []
+        real_write_component = terminal_module.InteractiveSemanticOutput.write_component
+
+        def capture_empty_component(output, component):
+            components.append(component)
+            return real_write_component(output, component)
+
+        with mock.patch.object(
+            terminal_module.InteractiveSemanticOutput,
+            "write_component",
+            autospec=True,
+            side_effect=capture_empty_component,
+        ):
+            self.assertEqual(controller.run_session_lobby(), 0)
         self.assertFalse(
             any(
-                record.startswith(f"[transcript {metadata.conversation_id}]")
+                record.startswith("History (")
                 for record in callbacks.records
             )
         )
+        empty_context = terminal_module.Record(
+            "context",
+            fields=(
+                terminal_module.Field("History displayed", "0/0 events"),
+                terminal_module.Field("Complete turns", "0"),
+                terminal_module.Field(
+                    "Context retained",
+                    "0 turns, 0 events",
+                ),
+                terminal_module.Field("Omitted turns", "0"),
+                terminal_module.Field("UTF-8 bytes", "0/32768"),
+                terminal_module.Field("Turn cap", "24"),
+                terminal_module.Field("Truncated", "no."),
+            ),
+            state=terminal_module.ViewState.EMPTY,
+        )
+        self.assertEqual(
+            [
+                component
+                for component in components
+                if type(component) is terminal_module.Record
+                and component.identity == "context"
+            ],
+            [empty_context],
+        )
         self.assertIn(
-            "History displayed: 0/0 events | Complete turns: 0 | "
-            "Context retained: 0 turns, 0 events",
-            "".join(callbacks.records),
+            f"{render_plain(empty_context, width=240).text}\n",
+            callbacks.records,
         )
         self.assertFalse(store.workspace.path(
             "discussion_logs/session/interactive/conversations/"

@@ -71,17 +71,27 @@ panel.
 On capable real-CLI streams, orientation/current context, `/status`, `/inspect`,
 central errors/recovery, and accepted management, advisory, retrieval, and
 consensus output use responsive semantic layout with fixed decorative ANSI.
-`NO_COLOR` removes only that decoration and leaves the same structured plain
-text; narrow output stacks and wraps labels without dropping facts. Help,
-agent/session/conversation catalogs, search, transcript, focused history, and
-remaining generic status sites retain their established plain records. This
-presentation split does not change command grammar, callback order, or any
-noninteractive stdout/stderr, JSON, ordering, or exit contract.
+Full/context help, the agent roster, session/conversation catalogs, search,
+transcript, and focused history use that layout too. `NO_COLOR` removes only
+decoration and leaves the same structured plain text; narrow output stacks and
+wraps labels without dropping facts. The only remaining generic status sites
+are four composer records, pending their component migration. These
+presentation changes do not alter command grammar, established callback order,
+or any noninteractive stdout/stderr, JSON, ordering, or exit contract.
 
 `/help [COMMAND]` (`/?`), `/status`, and `/session list` are global. Session
 grammar is `/session list | create NAME | open [NAME] | pause`. Explicit
 `story chat SESSION` creates an absent session or opens a persisted one. Bare
 entry opens a ready default and asks before reopening a paused default.
+
+Full help is one grouped semantic panel in command-registry order; contextual
+help is one command record with its group, syntax, aliases, provider/artifact
+effects, and example. `/agents` is one canonical roster list. Session and
+conversation catalogs, search hits, transcript events, and focused history
+emit one positioned, one-record list per established row callback. Empty
+states are explicit. If Ctrl-C interrupts search, transcript, or history after
+some rows, those completed rows remain, one cancellation record follows, and
+no trailing result, hint, or history-context record is emitted.
 
 `/status` emits one read-only semantic lifecycle record with fields in this
 exact order:

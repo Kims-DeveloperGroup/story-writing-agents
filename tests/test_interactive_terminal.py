@@ -1238,10 +1238,14 @@ class PromptAndRenderingTests(unittest.TestCase):
         self.assertEqual(
             callbacks.records,
             [
-                "[conversation] c_0123456789 | active | focused | "
-                "Subject: Opening scene\n",
-                "[conversation] c_fedcba9876 | archived | not focused | "
-                "Subject: Old\\x0asubject\\x1b\n",
+                "[conversation c_0123456789] [completed]\n"
+                "  Status: active\n"
+                "  Focus: focused\n"
+                "  Subject: Opening scene\n",
+                "[conversation c_fedcba9876] [completed]\n"
+                "  Status: archived\n"
+                "  Focus: not focused\n"
+                "  Subject: Old\\x0asubject\\x1b\n",
             ],
         )
 
@@ -1312,14 +1316,19 @@ class PromptAndRenderingTests(unittest.TestCase):
         self.assertEqual(
             callbacks.records,
             [
-                "[search c_0123456789] Status: active | Match: subject | "
-                "Subject: Opening scene | Citation: conversation "
-                "c_0123456789\n"
-                "[snippet] council vessel\n",
-                "[search c_fedcba9876] Status: archived | Match: event | "
-                "Subject: Old\\x0asubject | Citation: conversation "
-                "c_fedcba9876, turn turn_7, sequence 9, kind reply\n"
-                "[snippet] unsafe\\x1b\\x0atext\n",
+                "[search c_0123456789] [completed]\n"
+                "  Status: active\n"
+                "  Match: subject\n"
+                "  Subject: Opening scene\n"
+                "  Citation: conversation c_0123456789\n"
+                "  Snippet: council vessel\n",
+                "[search c_fedcba9876] [completed]\n"
+                "  Status: archived\n"
+                "  Match: event\n"
+                "  Subject: Old\\x0asubject\n"
+                "  Citation: conversation c_fedcba9876, turn turn_7, "
+                "sequence 9, kind reply\n"
+                "  Snippet: unsafe\\x1b\\x0atext\n",
             ],
         )
         self.assertEqual(len(callbacks.records), 2)
@@ -1392,15 +1401,20 @@ class PromptAndRenderingTests(unittest.TestCase):
             content="\x1b[31mred\x00\nlast",
         )
         header = (
-            "[transcript c_0123456789] Sequence: 2 | Turn: turn_2 | "
-            "Kind: reply | Sender: plot | Recipient: user\n"
+            "[transcript c_0123456789] [completed]\n"
+            "  Sequence: 2\n"
+            "  Turn: turn_2\n"
+            "  Kind: reply\n"
+            "  Sender: plot\n"
+            "  Recipient: user\n"
+            "  Content:\n"
         )
         self.assertEqual(
             callbacks.records,
             [
-                header + "[content]  \\x09\n",
-                header + "[content] first\n\n          third\n\n",
-                header + "[content] \\x1b[31mred\\x00\n          last\n",
+                header + "   \\x09\n",
+                header + "  first\n\n  third\n\n",
+                header + "  \\x1b[31mred\\x00\n  last\n",
             ],
         )
         self.assertEqual(len(callbacks.records), 3)
@@ -1414,16 +1428,27 @@ class PromptAndRenderingTests(unittest.TestCase):
             content="  alpha  \n   \n  beta gamma delta  ",
         )
         self.assertEqual(len(narrow_callbacks.records), 1)
-        _header, marker, rendered_content = narrow_callbacks.records[0].partition(
-            "[content] "
-        )
-        self.assertEqual(marker, "[content] ")
         self.assertEqual(
-            rendered_content,
-            "  alpha  \n"
-            "             \n"
-            "            beta gamma \n"
-            "          delta  \n",
+            narrow_callbacks.records,
+            [
+                "[transcript c_0123456789\n"
+                "] [completed]\n"
+                " Sequence:\n"
+                "  2\n"
+                " Turn:\n"
+                "  turn_2\n"
+                " Kind:\n"
+                "  reply\n"
+                " Sender:\n"
+                "  plot\n"
+                " Recipient:\n"
+                "  user\n"
+                " Content:\n"
+                "\n"
+                "   alpha  \n"
+                "    \n"
+                "   beta gamma delta  \n"
+            ],
         )
 
     def test_transcript_events_require_exact_nonempty_primitive_content(
@@ -1476,20 +1501,25 @@ class PromptAndRenderingTests(unittest.TestCase):
         self.assertEqual(
             callbacks.records,
             [
-                "[agent] Lead Orchestrator | ID: lead_orchestrator | "
-                "Aliases: lead, orchestrator, lead_orchestrator | "
-                "Advisory domain: Moderation, synthesis, and finalization.\n"
-                "[agent] Plot & Structure Architect | ID: plot_architect | "
-                "Aliases: plot, plot_architect | Advisory domain: Plot, "
-                "structure, flow, and pacing.\n"
-                "[agent] Character & World Custodian | ID: "
-                "character_custodian | Aliases: character, "
-                "character_custodian | Advisory domain: Characters, "
-                "relationships, world, and continuity.\n"
-                "[agent] Tone & Execution Specialist | ID: "
-                "execution_specialist | Aliases: execution, prose, "
-                "execution_specialist | Advisory domain: Drafting, prose, "
-                "point of view, tone, grammar, and format.\n"
+                "Agents (4) [completed]\n"
+                "  [agent] Lead Orchestrator [completed]\n"
+                "    ID: lead_orchestrator\n"
+                "    Aliases: lead, orchestrator, lead_orchestrator\n"
+                "    Advisory domain: Moderation, synthesis, and finalization.\n"
+                "  [agent] Plot & Structure Architect [completed]\n"
+                "    ID: plot_architect\n"
+                "    Aliases: plot, plot_architect\n"
+                "    Advisory domain: Plot, structure, flow, and pacing.\n"
+                "  [agent] Character & World Custodian [completed]\n"
+                "    ID: character_custodian\n"
+                "    Aliases: character, character_custodian\n"
+                "    Advisory domain: Characters, relationships, world, and "
+                "continuity.\n"
+                "  [agent] Tone & Execution Specialist [completed]\n"
+                "    ID: execution_specialist\n"
+                "    Aliases: execution, prose, execution_specialist\n"
+                "    Advisory domain: Drafting, prose, point of view, tone, "
+                "grammar, and format.\n"
             ],
         )
 
@@ -1497,14 +1527,16 @@ class PromptAndRenderingTests(unittest.TestCase):
         terminal.write_agent_roster()
         wrapped = callbacks.records[0]
         self.assertEqual(
-            [line for line in wrapped.splitlines() if line.startswith("[agent] ")],
-            [
-                "[agent] Lead Orchestrator | ID:",
-                "[agent] Plot & Structure Architect | ID:",
-                "[agent] Character & World Custodian | ID:",
-                "[agent] Tone & Execution Specialist | ID:",
-            ],
+            len(
+                [
+                    line
+                    for line in wrapped.splitlines()
+                    if line.startswith("  [agent] ")
+                ]
+            ),
+            4,
         )
+        self.assertIn("Agents (4) [completed]\n", wrapped)
         self.assertTrue(all(len(line) <= 44 for line in wrapped.splitlines()))
 
         original = AGENT_SPECS[LEAD_ORCHESTRATOR]
@@ -1516,7 +1548,8 @@ class PromptAndRenderingTests(unittest.TestCase):
         ):
             terminal.write_agent_roster()
         self.assertIn(
-            "[agent] Unsafe\\x1bLead | ID: lead_orchestrator",
+            "[agent] Unsafe\\x1bLead [completed]\n"
+            "    ID: lead_orchestrator",
             callbacks.records[0],
         )
         self.assertNotIn("\x1b", callbacks.records[0])
@@ -1800,24 +1833,59 @@ class HelpAndErrorTests(unittest.TestCase):
         terminal, callbacks = make_terminal(width=200)
         terminal.write_help()
 
-        expected_lines: list[str] = []
-        current_group = None
-        for spec in COMMANDS:
-            if spec.group != current_group:
-                current_group = spec.group
-                expected_lines.append(f"{spec.group}:")
-            aliases = ", ".join(spec.aliases) if spec.aliases else "none"
-            expected_lines.extend(
+        sections = tuple(
+            terminal_module.Section(
+                group,
                 (
-                    f"  {spec.syntax}",
-                    f"    Aliases: {aliases}",
-                    "    Calls provider: "
-                    f"{'yes' if spec.may_call_provider else 'no'}",
-                    "    May write artifacts: "
-                    f"{'yes' if spec.may_write_artifacts else 'no'}",
-                )
+                    terminal_module.ListView(
+                        "Commands",
+                        tuple(
+                            terminal_module.Record(
+                                "command",
+                                title=spec.syntax,
+                                fields=(
+                                    terminal_module.Field(
+                                        "Aliases",
+                                        ", ".join(spec.aliases)
+                                        if spec.aliases
+                                        else "none",
+                                    ),
+                                    terminal_module.Field(
+                                        "Calls provider",
+                                        "yes" if spec.may_call_provider else "no",
+                                    ),
+                                    terminal_module.Field(
+                                        "May write artifacts",
+                                        "yes"
+                                        if spec.may_write_artifacts
+                                        else "no",
+                                    ),
+                                ),
+                                role=terminal_module.SemanticRole.COMMAND,
+                                state=terminal_module.ViewState.COMPLETED,
+                            )
+                            for spec in COMMANDS
+                            if spec.group == group
+                        ),
+                        total_count=sum(
+                            spec.group == group for spec in COMMANDS
+                        ),
+                        state=terminal_module.ViewState.COMPLETED,
+                    ),
+                ),
+                state=terminal_module.ViewState.COMPLETED,
             )
-        self.assertEqual(callbacks.records, ["\n".join(expected_lines) + "\n"])
+            for group in dict.fromkeys(spec.group for spec in COMMANDS)
+        )
+        expected = terminal_module.Panel(
+            "Help",
+            sections,
+            state=terminal_module.ViewState.COMPLETED,
+        )
+        self.assertEqual(
+            callbacks.records,
+            [f"{render_plain(expected, width=200).text}\n"],
+        )
         self.assertNotIn("Example:", callbacks.records[0])
 
     def test_context_help_accepts_alias_and_includes_the_registry_example(
@@ -1828,12 +1896,14 @@ class HelpAndErrorTests(unittest.TestCase):
         self.assertEqual(
             callbacks.records,
             [
-                "Group: Agents\n"
-                "Syntax: /to NAME\n"
-                "Aliases: /agent\n"
-                "Calls provider: no\n"
-                "May write artifacts: no\n"
-                "Example: /to plot\n"
+                "Help [completed]\n"
+                "  [command] [completed]\n"
+                "    Group: Agents\n"
+                "    Syntax: /to NAME\n"
+                "    Aliases: /agent\n"
+                "    Calls provider: no\n"
+                "    May write artifacts: no\n"
+                "    Example: /to plot\n"
             ],
         )
 
@@ -1848,14 +1918,21 @@ class HelpAndErrorTests(unittest.TestCase):
         self.assertEqual(
             callbacks.records,
             [
-                "Group: Consensus\n"
-                "Syntax: /run [PROMPT] | /run\n"
-                "        --fresh PROMPT\n"
-                "Aliases: none\n"
-                "Calls provider: yes\n"
-                "May write artifacts: yes\n"
-                "Example: /run Outline chapter\n"
-                "         one\n"
+                "Help [completed]\n"
+                " [command] [completed]\n"
+                "  Group:\n"
+                "   Consensus\n"
+                "  Syntax:\n"
+                "   /run [PROMPT] | /run --fresh \n"
+                "   PROMPT\n"
+                "  Aliases:\n"
+                "   none\n"
+                "  Calls provider:\n"
+                "   yes\n"
+                "  May write artifacts:\n"
+                "   yes\n"
+                "  Example:\n"
+                "   /run Outline chapter one\n"
             ],
         )
         for line in callbacks.records[0].splitlines():

@@ -1555,14 +1555,14 @@ class ProviderFreeCancellationTests(InteractiveCancellationTestCase):
             (
                 "search",
                 "/search needle",
-                lambda text: text.startswith("[search "),
+                lambda text: text.startswith("Search results ("),
                 "[cancelled] Search cancelled; attached state is unchanged.\n",
                 "[result] Search returned",
             ),
             (
                 "transcript",
                 None,
-                lambda text: text.startswith("[transcript "),
+                lambda text: text.startswith("Transcript ("),
                 "[cancelled] Transcript read cancelled; attached state is "
                 "unchanged.\n",
                 "[result] Transcript page returned",
@@ -1570,9 +1570,9 @@ class ProviderFreeCancellationTests(InteractiveCancellationTestCase):
             (
                 "history",
                 "/history",
-                lambda text: text.startswith("[transcript "),
+                lambda text: text.startswith("History ("),
                 "[cancelled] History cancelled; attached state is unchanged.\n",
-                "[result] History displayed",
+                "[context]",
             ),
         )
         for label, configured_command, row_predicate, cancelled, result_prefix in cases:
@@ -1645,6 +1645,7 @@ class ProviderFreeCancellationTests(InteractiveCancellationTestCase):
                     1,
                 )
                 self.assertIn(cancelled, rendered)
+                self.assertEqual(callbacks.records.count(cancelled), 1)
                 self.assertNotIn(result_prefix, rendered)
                 self.assertFalse(workspace.path(_ACCESS_RELATIVE).exists())
                 self.assertEqual(all_manuscripts(workspace), [])

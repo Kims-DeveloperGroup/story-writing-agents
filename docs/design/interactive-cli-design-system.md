@@ -7,9 +7,11 @@
 > for orientation, status/inspection, central errors and recovery, and accepted
 > management, advisory, retrieval, and consensus output. Completed prerequisite
 > #73 supplies contextual composition previews through the unified driver.
-> Information-dense views (#84), history (#85), composer/confirmation component
-> integration (#86), selectable completion (#79), pickers (#87), and the
-> picker-dependent settings UI (#93) remain planned. The
+> #84 now applies the same system to help, roster, lists, search, transcript,
+> and focused history. Input history (#85), composer/confirmation component
+> integration (#86), selectable completion (#79), and pickers (#87) remain
+> planned. The settings UI (#93) is planned and blocked by #87 plus its
+> workspace Codex-settings prerequisite (#94). The
 > [interactive terminal reference](../reference/interactive-terminal.md) and
 > [terminal safety rules](../operations/terminal-safety.md) describe current
 > observable behavior.
@@ -21,8 +23,8 @@ confirmation, suggestions, fixed choices, command history, and pickers one
 semantic model.
 
 The words **must**, **must not**, and **may** below constrain the delivery
-issues. Requirements beyond the implemented #82, #83, and #73 slices do not
-describe current production behavior.
+issues. Requirements beyond the implemented #82, #83, #84, and #73 slices do
+not describe current production behavior.
 
 ## Delivery status
 
@@ -30,13 +32,14 @@ describe current production behavior.
 | --- | --- |
 | #82 terminal foundation | Implemented: package boundary, private semantic values, current line-edit transitions and suggestion projection, responsive renderer, capability observation, sole raw driver, unified CLI construction, compatibility facades, and index reconciliation. |
 | #83 output-view migration | Implemented: orientation/current context, interactive status and inspection, central errors and recovery, and accepted management, advisory, retrieval, and consensus output use semantic components with responsive plain/fixed-ANSI rendering. Facts, copy, order, callback granularity, and noninteractive contracts remain unchanged. |
-| #84 information-dense view migration | Planned: help, agent roster, session/conversation lists, search, transcript, and focused history retain their established plain record renderers. |
+| #84 information-dense view migration | Implemented: semantic full/context help, agent roster, session/conversation lists, search, transcript, and focused history preserve exact facts, copy, order, callback boundaries, cancellation, and empty behavior across responsive plain/fixed-ANSI rendering. |
 | #85 input history | Planned: Up/Down history and the 100-entry process-local store are not implemented. |
 | Prerequisite #73 | Implemented: RUN/CHAT composition uses the fixed preview-only `/send`, `/cancel` projection through explicit call-local routing. |
 | #86 composer/confirmation integration | Planned: existing line-oriented composition and confirmation behavior remains unchanged beyond #73 previews. |
 | #79 selectable completion | Planned: the current slash suggestion list is preview-only; Tab application, Up/Down palette navigation, and fixed-value completion are not implemented. Shift-Tab has no palette action in the target behavior. |
 | #87 pickers | Planned: semantic picker values and rendering exist internally, but no interactive picker transition or consumer is implemented. |
-| #93 settings UI | Planned and blocked by #87: `/settings` will edit only persistent system defaults through existing semantic components and an explicit atomic Save/Cancel boundary. No settings UI is currently available. |
+| #94 workspace Codex settings | Planned: extend the existing workspace configuration contract with optional Codex model and reasoning defaults. No model/reasoning workspace setting is currently available. |
+| #93 settings UI | Planned and blocked by #87 and #94: `/settings` will edit workspace defaults and per-agent provider choices through existing semantic components and an explicit guarded Save/Cancel boundary. No settings UI is currently available. |
 
 ## Goals and limits
 
@@ -252,81 +255,116 @@ cancelled, EOF, Ctrl-C, and error behavior must remain deterministic.
 
 ### Settings panel
 
-> **Planned for #93 after #87:** `/settings` is not currently available. This
-> section defines its interaction contract without selecting implementation
-> modules or adding public API.
+> **Planned for #93 after #87 and #94:** `/settings` is not currently
+> available. This section defines its interaction and persistence contract
+> without selecting implementation modules or adding public API. #94 must
+> first establish the workspace Codex model/reasoning fields; neither issue is
+> implemented by this design update.
 
-The settings view edits only the persistent system defaults described by
-[Agent configuration](../reference/configuration/agent-configuration.md):
-required `language` and `persona`, plus optional `max_debate_rounds`. It does
-not edit backend selection, per-agent configuration, session/runtime overrides,
-provider or model credentials, persona files, themes, or key bindings. It does
-not change configuration schemas or override precedence.
+The settings view edits two validated persistent snapshots: the
+`config/system_defaults.json` defaults described by
+[Agent configuration](../reference/configuration/agent-configuration.md), and
+the existing per-agent provider selections in `config/agent_configs.json`. The
+system snapshot contains required `language` and `persona`, optional
+`max_debate_rounds`, and the planned #94 workspace Codex model/reasoning
+defaults. Provider selection remains per agent; model and reasoning remain
+workspace defaults. The view does not change identity, thread ownership,
+configuration precedence, or either schema beyond #94's approved fields.
 
 The view is one `Panel` composed from `Section`, `Field`, `Prompt`, `Picker`,
 and `Notice`. It is not a new component or a general-purpose form abstraction.
-One section shows the validated current values; another shows the independent
-pending values and the focused editor. Any implementation need for a new
-semantic component must stop #93 and first revise the closed vocabulary through
-the repository's modularity process.
+One section shows validated current values; another shows independent pending
+values and the focused editor. Any implementation need for a new semantic
+component must stop #93 and first revise the closed vocabulary through the
+repository's modularity process.
+
+The top-level settings order is exact:
+
+```text
+Language
+Persona
+Maximum debate rounds
+Providers
+Codex model
+Codex reasoning
+Save
+Cancel
+```
 
 | Setting | Pending-value contract |
 | --- | --- |
 | Language | The picker candidates are exactly `KO`, `EN`, `JA`, `ZH`, `ES`, `FR`, `DE`, `PT`, `IT`, `RU`, in that order. A schema-valid existing value outside this UI catalog remains visible and may be preserved, but is not synthesized as a candidate. |
 | Persona | Candidates come only from the existing safe persona-template catalog. Duplicate identifiers resolve with the top-level template taking precedence over `alternative_templates`; the resulting identifiers are ordered lexically. The picker does not read, preview, create, or edit template content. |
 | Maximum debate rounds | A numeric `Prompt` accepts a pending nonnegative integer under the existing validation rule. Blank, negative, fractional, and nonnumeric values produce an inline error `Notice` and retain focus without changing the pending value. `0` remains valid and means audit-only consensus. |
+| Providers | A nested agent picker follows canonical `ROSTER` order, then a provider picker edits only that agent's pending `agent_configs` selection. Codex is enabled. Reserved Gemini is visible but disabled for new selection; a pre-existing Gemini value remains visible and may be preserved or changed to Codex for remediation. The UI neither invents providers nor changes roster identity. |
+| Codex model | A free-text `Prompt` accepts a safe model value; blank means the provider default. It performs no network lookup and does not offer a model catalog. |
+| Codex reasoning | Picker order is exactly Provider default, `minimal`, `low`, `medium`, `high`, `xhigh`. Validation is model-dependent under #94's workspace contract; the UI does not add a CLI reasoning flag. |
 
-Opening the panel reads and validates one current settings snapshot. A failure
-to read or validate those defaults or enumerate the safe persona catalog
-reports `error` and performs no write, without exposing raw paths or exception
-text. On success, the view copies the current values into pending UI state and
-still performs no write. The first focus is a settings `Picker` whose stable
-choices are Language, Persona, Maximum debate rounds, Save, and Cancel. Exactly
+Opening the panel reads and validates both current snapshots. Failure to read or
+validate either snapshot, or to enumerate the safe persona catalog, reports
+`error` and performs no write, without exposing raw paths or exception text. On
+success, the view copies both current snapshots into pending UI state and still
+performs no write. The first focus is the top-level settings `Picker`; exactly
 one control is focused:
 
 - Up/Down moves only the current picker's highlight; highlighting does not edit
   pending values or write configuration.
-- Enter on Language or Persona transfers focus to that value's picker. Enter
-  selects the highlighted value into pending state and returns focus to the
-  settings picker. Escape cancels that nested selection, restores its prior
-  pending value, and returns focus without a write.
-- Enter on Maximum debate rounds transfers focus to its numeric `Prompt`.
-  Valid Enter updates only the pending value and returns focus; invalid Enter
-  leaves the prompt focused with its trusted validation notice. Escape cancels
-  the numeric edit and restores its prior pending value.
-- Enter on Save validates the complete pending candidate against the existing
-  configuration contract and crosses the sole mutation boundary. Successful
-  Save atomically replaces the persistent defaults and reports `completed`.
-  Validation or replacement failure reports `error`, leaves the prior file
-  intact, and retains the pending values for retry or cancellation.
+- Enter on Language, Persona, Providers, or Codex reasoning transfers focus to
+  the corresponding nested picker. Provider editing transfers first to the
+  canonical agent picker and then to that agent's provider picker. Enter
+  updates only the applicable pending value and returns focus to its parent;
+  Escape restores that editor's prior pending value and returns focus without
+  a write.
+- Enter on Maximum debate rounds or Codex model transfers focus to its
+  `Prompt`. Valid Enter updates only the pending value and returns focus;
+  invalid Enter leaves the prompt focused with a trusted validation notice.
+  Escape restores its prior pending value.
+- Enter on Save validates both complete pending snapshots, then re-reads and
+  validates both persisted snapshots before any write. A stale-current conflict
+  fails closed with no write. A valid, unchanged baseline crosses the sole
+  mutation boundary: each affected file is replaced atomically, and failure
+  after the first replacement triggers a
+  best-effort rollback to the exact original bytes of every replaced file.
+  Success reports `completed`. Validation, conflict, replacement, or rollback
+  failure reports `error` and retains the pending values for retry or
+  cancellation. This is a guarded two-file update, not a global transaction or
+  a power-loss-safe transaction across both files.
 - Enter on Cancel, Escape from the top-level settings picker, Ctrl-C, or EOF
   returns `cancelled` without writing. Opening, navigating, highlighting,
   editing, validation preview, nested cancellation, and rerendering likewise
   have no filesystem, runtime, provider, storage, or configuration effect.
 
-The same current/pending labels, choice identity, validation meaning, and
-Save/Cancel outcomes must remain visible in wide, narrow, fixed-ANSI,
-`NO_COLOR`, and structured plain output. Narrow rendering stacks fields and
-windows long persona choices without dropping the highlighted identity or
+Saved values apply only to the next backend construction. Save does not mutate
+an active backend, existing provider thread, current identity, or override
+precedence. The view manages no credentials, provider network access, model
+catalog, per-agent model/reasoning override, provider implementation, persona
+file editing, theme, key binding, or automatic save.
+
+The same current/pending labels, choice identity, validation meaning, disabled
+provider meaning, and Save/Cancel outcomes must remain visible in wide, narrow,
+fixed-ANSI, `NO_COLOR`, and structured plain output. Narrow rendering stacks
+fields and windows long picker choices without dropping highlighted identity or
 position cues. `TERM=dumb`, non-TTY, non-POSIX, or uncertain component
 capability uses ordinary line input and structured plain records without raw
 mode or cursor controls. This fallback does not bypass the installed CLI's
 earlier two-stream TTY guard.
 
 All dynamic identifiers and error text are sanitized before measurement or
-styling. Color never carries current/pending differences, validation failure,
-error, cancelled, or completed meaning. The settings view preserves scrollback
-and adds no alternate screen, mouse handling, animation, background loop,
-dependency, persistent draft, or automatic save.
+styling. Color never carries current/pending differences, disabled-provider or
+validation meaning, error, cancelled, or completed state. The settings view
+preserves scrollback and adds no alternate screen, mouse handling, animation,
+background loop, dependency, persistent draft, arbitrary form framework, or
+automatic save.
 
 ## Rendering and capability policy
 
 #82 implements three capability profiles and a package-private semantic
-renderer. #83 routes the migrated view groups through that renderer; capable
-real CLI streams may therefore show their structured fixed-ANSI form, while
-`NO_COLOR` and plain/fallback consumers retain the same structured text.
-Deferred #84 views and the remaining generic `write_status` call sites keep
-their established plain templates until their owning slices land.
+renderer. #83 and #84 route all migrated output view groups through that
+renderer; capable real CLI streams may therefore show their structured
+fixed-ANSI form, while `NO_COLOR` and plain/fallback consumers retain the same
+structured text. The controller has no generic `write_status` call site;
+`write_status` remains only for four deferred terminal-composer records owned
+by #86.
 
 | Profile | Selection | Output and input behavior |
 | --- | --- | --- |
@@ -376,8 +414,8 @@ measurements.
 The real CLI detects terminal width, falls back to 80 columns when no reliable
 positive width is available, and caps detected width at 120 columns. A resize
 is observed on the next live-input or semantic-render operation; no
-signal-driven resize loop is added. Deferred public plain record methods retain
-their established construction width until their view migrations.
+signal-driven resize loop is added. The four deferred composer status records
+retain their established construction width until #86.
 Narrow layouts degrade in this order: remove decorative alignment, stack
 `Field` label/value pairs, reduce indentation, wrap content with visible
 continuation structure, and window long selectable lists with position cues.
@@ -391,8 +429,8 @@ states remain distinguishable in plain output and under `TERM=dumb`.
 ## Compatibility contract
 
 Human interactive layout may intentionally change as its owning migration
-slice lands; #83 has changed the migrated output groups in that permitted way.
-The following contracts may not change as a side effect.
+slice lands; #83 and #84 have changed their migrated output groups in that
+permitted way. The following contracts may not change as a side effect.
 
 ### Machine-facing CLI
 
@@ -465,9 +503,10 @@ compatible.
 
 #83 adds `InteractiveSemanticOutput`, `Field`, `Message`, `Notice`, `Panel`,
 `Record`, `Section`, `SemanticRole`, and `ViewState` as unlisted package-facade
-attributes for internal controller wiring. They are not supported public API,
-do not change `__all__` or the root package facade, and must not be imported
-from package leaves by controller code. Constructing the adapter validates and
+attributes for internal controller wiring; #84 adds the existing `ListView`
+identity to that same unlisted seam. They are not supported public API, do not
+change `__all__` or the root package facade, and must not be imported from
+package leaves by controller code. Constructing the adapter validates and
 retains an `InteractiveTerminal` writer without rendering, observing streams,
 or acquiring a resource; each `write_component(component)` call renders and
 writes exactly one component.
@@ -564,9 +603,10 @@ controller policy leaves still consume only facade error contracts.
 ## Migration coverage
 
 Issue #82 delivered the common models, renderer/capability profiles, driver
-seam, package facade, and module-index reconciliation. Issue #83 delivered its
-output rows below without redistributing runtime or storage responsibility;
-#84, the remaining control slices, and #93 settings remain planned.
+seam, package facade, and module-index reconciliation. Issues #83 and #84
+delivered their output rows below without redistributing runtime or storage
+responsibility. The remaining control slices and #93/#94 settings work remain
+planned.
 
 ### View groups
 
@@ -574,16 +614,16 @@ output rows below without redistributing runtime or storage responsibility;
 | --- | --- | --- | --- |
 | Shell scaffold | `Panel`, `Section`, `Prompt`, `Notice` | Idle/focused scope, plain structure, scrollback preserved | #83 (implemented output scaffold; prompts remain established input) |
 | Lobby/session/conversation orientation | `Panel`, `Section`, `Field`, `Notice` | Current workspace, attachment, focus, and next action remain textual | #83 (implemented) |
-| Help and command reference | `Panel`, `Section`, `Field`, `ListView`, `Record` | Grouping, syntax, aliases, effects, examples, empty/error | #84 |
-| Session/conversation/agent lists and rosters | `ListView`, `Record`, `Field`, `Notice` | Counts, active/focused/archived/empty meaning and stable order | #84 |
-| Search results | `ListView`, `Record`, `Field`, `Notice` | Citation, snippet, active/archive state, truncation, empty/error | #84 |
-| Transcript | `ListView`, `Record`, `Field`, `Message`, `Notice` | Event identity/order and LF content boundaries remain intact | #84 |
-| Focused history | `ListView`, `Record`, `Field`, `Message`, `Notice` | Snapshot order, context accounting, empty/cancelled/error | #84 |
+| Help and command reference | `Panel`, `Section`, `Field`, `ListView`, `Record` | Grouping, syntax, aliases, effects, examples, empty/error | #84 (implemented) |
+| Session/conversation/agent lists and rosters | `ListView`, `Record`, `Field`, `Notice` | Counts, active/focused/archived/empty meaning and stable order | #84 (implemented) |
+| Search results | `ListView`, `Record`, `Field`, `Notice` | Citation, snippet, active/archive state, truncation, empty/error | #84 (implemented) |
+| Transcript | `ListView`, `Record`, `Field`, `Notice` | Event identity/order and LF content boundaries remain intact | #84 (implemented) |
+| Focused history | `ListView`, `Record`, `Field`, `Notice` | Snapshot order, context accounting, empty/cancelled/error | #84 (implemented) |
 | Advisory turns | `Message`, `Notice`, `Field` | Routing, waiting/loading, result, cancelled/completed/error | #83 (implemented) |
 | Retrieval progress and summaries | `Notice`, `Record`, `ListView`, `Field` | Loading, citations/context accounting, result/error/cancelled | #83 (implemented accepted views) |
 | Consensus progress and summaries | `Panel`, `Section`, `Notice`, `Record`, `Field` | Loading, debate identity, result/cancelled/completed/error | #83 (implemented) |
 | Interactive errors and recovery hints | `Notice`, `Field` | Trusted code, redaction, error state, next action, no raw diagnostics | #83 (implemented) |
-| Settings current/pending view | `Panel`, `Section`, `Field`, `Prompt`, `Picker`, `Notice` | Stable field/value order, visible current/pending differences, validation/error/cancelled/completed meaning, atomic Save boundary | #93 (planned; blocked by #87) |
+| Settings current/pending view | `Panel`, `Section`, `Field`, `Prompt`, `Picker`, `Notice` | Exact top-level order; two current/pending snapshots; disabled provider, validation, error, cancelled, and completed meaning; guarded two-file Save boundary | #93 (planned; blocked by #87 and #94) |
 
 ### Control groups
 
@@ -596,13 +636,14 @@ output rows below without redistributing runtime or storage responsibility;
 | Main command/subcommand palette | `SuggestionPalette`, `Prompt`, `Notice` | Slash-open, Up/Down highlight, Tab replacement, Escape restoration | #79 |
 | Fixed command values | `SuggestionPalette`, `Field` | Canonical finite grammar choices, including metadata-exposed agent IDs/aliases; preview has no effects | #79 |
 | Single-select and selectable-list choices | `Picker`, `ListView`, `Record`, `Notice` | Up/Down highlight, Enter commit, Escape cancel, disabled/empty/error | #87 |
-| Settings field and action navigation | `Panel`, `Prompt`, `Picker`, `Field`, `Notice` | Single focus; value-picker/numeric-editor transfer; explicit Save/Cancel; no write before atomic Save | #93 (planned after #87) |
+| Settings field and action navigation | `Panel`, `Prompt`, `Picker`, `Field`, `Notice` | Single focus; nested agent/provider and value pickers; text/numeric editors; explicit Save/Cancel; no write before guarded Save | #93 (planned after #87 and #94) |
 
 Contextual non-main-prompt suggestions from completed issue #73 use the same
 unified driver without moving parser, runtime, or storage authority into the
 terminal design system. #86 and #79 build on that prerequisite.
-#93 consumes #87 picker behavior but does not broaden picker ownership or
-prescribe a module boundary before its own implementation analysis.
+#93 consumes #87 picker behavior and #94 workspace model/reasoning fields but
+does not broaden picker ownership or prescribe a module boundary before its
+own implementation analysis.
 
 ## Verification and acceptance
 
@@ -615,10 +656,12 @@ transitions, reserved future keys, safe plain/ANSI rendering, narrow physical
 width, capability profiles, unified driver/factory ownership, compatibility
 delegation, and the package graph. #83 covers its migrated output rows,
 resource-free adapter, typed controller facts, one-write projection, and real
-PTY ANSI/`NO_COLOR` behavior. Rows involving #84 dense views, history,
+PTY ANSI/`NO_COLOR` behavior. #84 covers full/context help, roster and dense
+lists, positioned one-record callbacks, exact empty/result/hint/context records,
+LF preservation, and cancellation after partial output. History traversal,
 selectable completion, component-integrated composition/confirmation, and
 picker transitions remain acceptance targets for their later slices. The #93
-settings contract remains a planned acceptance target after #87.
+settings contract remains a planned acceptance target after #87 and #94.
 
 | Area | Required evidence |
 | --- | --- |
@@ -629,7 +672,7 @@ settings contract remains a planned acceptance target after #87.
 | History | Blank exclusion, duplicate preservation, 100-entry eviction, older/newer bounds, exact draft restoration, editable copies, and process isolation. |
 | Palette/history coordination | Slash opening with deterministic initial highlight and unchanged buffer; filtering; empty/error; canonical metadata projection including finite agent IDs/aliases; open-palette Up/Down clamped highlight navigation without replacement or history movement; Tab application of the highlighted candidate; Shift-Tab no-op; Escape prefix restoration; closed-palette Up/Down history; edited recall; and visible-buffer-only Enter commit. |
 | Picker | Highlight-versus-selection, enabled/disabled navigation, Enter commit, Escape cancel, empty/one/long list, stable rerender identity, and resize on next operation. |
-| Settings | Current/pending separation; exact language order; safe persona precedence and lexical order; numeric `0`, positive, blank, negative, fractional, and nonnumeric cases; one focused control and deterministic focus return; nested and whole-panel cancellation; Save validation; atomic success/failure; no write on open/edit/highlight/error/cancel; plain/ANSI/`NO_COLOR`/narrow/line fallback; hostile display content; and unchanged schema, precedence, backend, per-agent, public, and machine contracts. |
+| Settings | Two-snapshot current/pending separation; exact top-level/language/reasoning/roster order; safe persona precedence and lexical order; numeric `0`, positive, blank, negative, fractional, and nonnumeric cases; Codex-enabled/reserved-Gemini-disabled provider behavior including preservation/remediation; safe model text and blank provider default; model-dependent reasoning validation; one focused control and deterministic focus return; nested and whole-panel cancellation; stale-snapshot conflict before writes; per-file atomic replacement; induced second-write failure and best-effort exact-byte rollback; pending retention; no write on open/edit/highlight/error/cancel; next-backend-only application; plain/ANSI/`NO_COLOR`/narrow/line fallback; hostile display content; and unchanged identity, thread, precedence, public, and machine contracts. |
 | Parser and mutation boundary | The exact visible committed main buffer reaches the established parser once; previews, recall, replacement, highlight, rerender, cancel, Ctrl-C, and EOF cause no parser/runtime/storage call. |
 | Composer/confirmation | Existing `/send`, `/cancel`, `/say`, yes/no/default, invalid input, Ctrl-C, and EOF results; no full-screen or persistent state. |
 | Restoration | Normal submit, commit, cancellation, Escape, EOF, Ctrl-C, setup failure, read/write/flush failure, render error, and restoration uncertainty, with raw attributes restored whenever acquired. |
