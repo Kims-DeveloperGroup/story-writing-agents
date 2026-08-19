@@ -247,15 +247,23 @@ class InteractiveSearchFilesystemTests(unittest.TestCase):
 
         rendered = "".join(callbacks.records)
         exact_row = (
-            f"[search {exact.conversation_id[:12]}] Status: active | "
-            "Match: exact_subject | Subject: Council Vessel | Citation: "
-            f"conversation {exact.conversation_id[:12]}\n"
+            "Search results (1/2) [completed]\n"
+            f"  [search {exact.conversation_id[:12]}] [completed]\n"
+            "    Status: active\n"
+            "    Match: exact_subject\n"
+            "    Subject: Council Vessel\n"
+            f"    Citation: conversation {exact.conversation_id[:12]}\n"
+            "    Snippet: council vessel\n"
         )
         transcript_row = (
-            f"[search {transcript.conversation_id[:12]}] Status: active | "
-            "Match: transcript | Subject: Harbor timing | Citation: "
-            f"conversation {transcript.conversation_id[:12]}, turn "
-            "turn_search, sequence 1, kind user_message\n"
+            "Search results (2/2) [completed]\n"
+            f"  [search {transcript.conversation_id[:12]}] [completed]\n"
+            "    Status: active\n"
+            "    Match: transcript\n"
+            "    Subject: Harbor timing\n"
+            f"    Citation: conversation {transcript.conversation_id[:12]}, "
+            "turn turn_search, sequence 1, kind user_message\n"
+            "    Snippet: the council vessel enters at dusk.\n"
         )
         self.assertIn(exact_row, rendered)
         self.assertIn(transcript_row, rendered)
@@ -392,15 +400,27 @@ class InteractiveSearchFilesystemTests(unittest.TestCase):
         rendered = "".join(callbacks.records)
         handle = metadata.conversation_id[:12]
         self.assertIn(
-            f"[transcript {handle}] Sequence: 3 | Turn: turn_2 | "
-            "Kind: user_message | Sender: user | Recipient: plot_architect\n"
-            "[content]  \\x09\n",
+            "Transcript (1/2) [completed]\n"
+            f"  [transcript {handle}] [completed]\n"
+            "    Sequence: 3\n"
+            "    Turn: turn_2\n"
+            "    Kind: user_message\n"
+            "    Sender: user\n"
+            "    Recipient: plot_architect\n"
+            "    Content:\n"
+            "     \\x09\n",
             rendered,
         )
         self.assertIn(
-            f"[transcript {handle}] Sequence: 4 | Turn: turn_2 | "
-            "Kind: agent_reply | Sender: plot_architect | Recipient: user\n"
-            "[content] new reply\n",
+            "Transcript (2/2) [completed]\n"
+            f"  [transcript {handle}] [completed]\n"
+            "    Sequence: 4\n"
+            "    Turn: turn_2\n"
+            "    Kind: agent_reply\n"
+            "    Sender: plot_architect\n"
+            "    Recipient: user\n"
+            "    Content:\n"
+            "    new reply\n",
             rendered,
         )
         self.assertEqual(

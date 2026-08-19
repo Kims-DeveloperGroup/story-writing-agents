@@ -747,6 +747,13 @@ class InteractiveCliPtyTests(unittest.TestCase):
         self.assertIn(b"\x1b[1mStory chat\x1b[0m", ansi.raw_bytes)
         self.assertIn(b"\x1b[33m  [warning]", ansi.raw_bytes)
         self.assertIn(b"\x1b[0m", ansi.raw_bytes)
+        mark = ansi.output_mark()
+        ansi.send_line("/help /run")
+        ansi.wait_for_text("Help [completed]", after=mark)
+        ansi.wait_for_text("story[lobby]> ", after=mark)
+        dense_ansi = bytes(ansi.raw_bytes[mark:])
+        self.assertIn(b"\x1b[1mHelp [completed]\x1b[0m", dense_ansi)
+        self.assertIn(b"\x1b[35m  [command] [completed]", dense_ansi)
         ansi.send_line("/quit")
         self.assertEqual(ansi.wait_for_exit(), 0, ansi.normalized_text)
         self.assertEqual(
@@ -762,11 +769,33 @@ class InteractiveCliPtyTests(unittest.TestCase):
         self.assertIn("Story chat\n", no_color.normalized_text)
         self.assertNotIn(b"\x1b[1mStory chat", no_color.raw_bytes)
         self.assertNotIn(b"\x1b[33m  [warning]", no_color.raw_bytes)
+        mark = no_color.output_mark()
+        no_color.send_line("/agents")
+        no_color.wait_for_text("Agents (4) [completed]", after=mark)
+        no_color.wait_for_text("story[lobby]> ", after=mark)
+        dense_plain = bytes(no_color.raw_bytes[mark:])
+        self.assertNotIn(b"\x1b[1mAgents", dense_plain)
+        self.assertNotIn(b"\x1b[34m  [agent]", dense_plain)
         no_color.send_line("/quit")
         self.assertEqual(no_color.wait_for_exit(), 0, no_color.normalized_text)
         self.assertEqual(
             no_color.final_terminal_attributes,
             no_color.original_terminal_attributes,
+        )
+
+        line = self._spawn_cli(())
+        line.wait_for_text("story[lobby]> ")
+        mark = line.output_mark()
+        line.send_line("/session list")
+        line.wait_for_text("Story sessions (0) [empty]", after=mark)
+        line.wait_for_text("[session] No story sessions found.", after=mark)
+        line.wait_for_text("story[lobby]> ", after=mark)
+        self.assertNotIn(b"\x1b", bytes(line.raw_bytes[mark:]))
+        line.send_line("/quit")
+        self.assertEqual(line.wait_for_exit(), 0, line.normalized_text)
+        self.assertEqual(
+            line.final_terminal_attributes,
+            line.original_terminal_attributes,
         )
 
     def test_bare_entry_creates_session_then_quit_releases_only_access(
@@ -1214,21 +1243,26 @@ print(
 
         mark = process.output_mark()
         process.send_line("/history 2")
+        process.wait_for_text("History (1/2) [completed]", after=mark)
         process.wait_for_text("harbor beacon beside the vessel", after=mark)
         history = process.wait_for_text("deterministic advisory reply", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
-        self.assertIn("[transcript ", history)
+        self.assertIn("History (2/2) [completed]", history)
         self.assertIn("deterministic advisory reply", history)
 
         mark = process.output_mark()
         process.send_line("/search harbor beacon")
-        search_output = process.wait_for_text("[search ", after=mark)
+        search_output = process.wait_for_text(
+            "Search results (1/1) [completed]",
+            after=mark,
+        )
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         self.assertIn("Citation: conversation", search_output)
         self.assertIn(selected.subject, " ".join(search_output.split()))
 
         mark = process.output_mark()
         process.send_line(f"/transcript {selected.conversation_id} 2")
+        process.wait_for_text("Transcript (1/2) [completed]", after=mark)
         process.wait_for_text(
             "harbor beacon beside the vessel",
             after=mark,
@@ -1800,7 +1834,7 @@ print(
         process.wait_for_text("story[alpha:lead]> ")
         mark = process.output_mark()
         process.send_line("/history 24")
-        process.wait_for_text("[transcript ", after=mark)
+        process.wait_for_text("History (1/24) [completed]", after=mark)
         process.send_interrupt()
         process.wait_for_text(
             "[cancelled] History cancelled; attached state is unchanged.",
@@ -1808,8 +1842,8 @@ print(
         )
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         interrupted_output = process.text_after(mark)
-        self.assertLess(interrupted_output.count("[transcript "), 24)
-        self.assertNotIn("[result] Transcript:", interrupted_output)
+        self.assertLess(interrupted_output.count("History ("), 24)
+        self.assertNotIn("[context]", interrupted_output)
         self.assertEqual(
             _durable_tree_without_access(self.workspace.root),
             before,
@@ -2041,11 +2075,10 @@ print(
 
         mark = process.output_mark()
         process.send_line("/history 2")
-        malformed_history = process.wait_for_text(
-            "malformed JSON",
-            after=mark,
-        )
+        process.wait_for_text("[context] [completed]", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
+        malformed_history = process.text_after(mark)
+        self.assertIn("malformedJSON", "".join(malformed_history.split()))
         self.assertNotIn(
             "MALFORMED_PROVIDER_VALUE_MUST_NOT_APPEAR",
             malformed_history,
