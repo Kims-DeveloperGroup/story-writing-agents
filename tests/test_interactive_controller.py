@@ -1810,6 +1810,11 @@ class ControllerCommandTests(ControllerTestCase):
             "/exit",
         )
         with (
+            mock.patch.object(
+                controller_core_module,
+                "parse_interactive_line",
+                wraps=controller_core_module.parse_interactive_line,
+            ) as parse_line,
             mock.patch.object(subprocess, "Popen") as popen,
             mock.patch.object(subprocess, "run") as run,
             mock.patch.object(socket, "create_connection") as connect,
@@ -1818,6 +1823,21 @@ class ControllerCommandTests(ControllerTestCase):
         popen.assert_not_called()
         run.assert_not_called()
         connect.assert_not_called()
+        self.assertEqual(
+            parse_line.call_args_list,
+            [
+                mock.call(" "),
+                mock.call("/? session"),
+                mock.call("/sesion list"),
+                mock.call("ordinary provider message"),
+                mock.call("/run create artifact"),
+                mock.call("/inspect last"),
+                mock.call("/to plot"),
+                mock.call("/session list"),
+                mock.call("/session pause"),
+                mock.call("/exit"),
+            ],
+        )
         self.assertEqual(_tree_snapshot(workspace.root), before)
 
         rendered = "".join(callbacks.records)

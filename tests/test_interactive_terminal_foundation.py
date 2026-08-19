@@ -37,8 +37,10 @@ from story_writing_agents.interactive_terminal import (
 )
 from story_writing_agents.interactive_terminal import _controls, _core, _model
 from story_writing_agents.interactive_terminal._controls import (
+    append_main_input_history,
     project_slash_suggestions,
     transition_line_input,
+    transition_main_input,
 )
 from story_writing_agents.interactive_terminal._driver import (
     RawTerminalDriver,
@@ -54,6 +56,8 @@ from story_writing_agents.interactive_terminal._model import (
     KeyKind,
     LineInputState,
     ListView,
+    MainInputControlState,
+    MainInputHistoryState,
     Message,
     Notice,
     Panel,
@@ -99,6 +103,8 @@ MODEL_EXPORTS = (
     "TerminalCapabilities",
     "KeyEvent",
     "LineInputState",
+    "MainInputHistoryState",
+    "MainInputControlState",
     "SlashCommandSuggestion",
     "ControlOutcome",
     "Prompt",
@@ -473,15 +479,24 @@ class SemanticModelFoundationTests(unittest.TestCase):
             ("buffer", "cursor"),
         )
         self.assertEqual(
+            tuple(field.name for field in fields(MainInputHistoryState)),
+            ("entries",),
+        )
+        self.assertEqual(
+            tuple(field.name for field in fields(MainInputControlState)),
+            ("line_state", "history_index", "saved_draft", "overlay_open"),
+        )
+        self.assertEqual(
             tuple(_controls.__all__),
             (
                 "transition_line_input",
+                "append_main_input_history",
+                "transition_main_input",
                 "project_slash_suggestions",
                 "project_composition_suggestions",
             ),
         )
         for deferred_name in (
-            "transition_history",
             "transition_palette",
             "transition_picker",
             "persistent_history",
@@ -870,11 +885,15 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
         os_provider = mock.Mock(return_value=fake_os())
         fallback = mock.Mock(return_value="fallback")
         transition = mock.Mock()
+        main_transition = mock.Mock()
+        history_append = mock.Mock()
         driver = RawTerminalDriver(
             fallback,
             input_stream,  # type: ignore[arg-type]
             output_stream,  # type: ignore[arg-type]
             transition,
+            main_transition,
+            history_append,
             termios_provider=termios_provider,
             os_provider=os_provider,
         )
@@ -905,11 +924,13 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             width=120,
         )
         driver.read_line.return_value = "subject"
-        driver.read_live_line.side_effect = (
+        driver.read_main_line.side_effect = (
             "/status",
+            "/help",
+        )
+        driver.read_live_line.side_effect = (
             "composition line",
             "/send",
-            "/help",
         )
         fallback = mock.Mock()
         input_stream = object()
@@ -930,6 +951,8 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             input_stream,
             output_stream,
             transition_line_input,
+            transition_main_input,
+            append_main_input_history,
         )
         driver.capabilities.assert_called_once_with()
         self.assertIsInstance(terminal, InteractiveTerminal)
@@ -956,12 +979,21 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
         )
         terminal.write_status(TerminalMessageKind.RESULT, "ready")
         self.assertEqual(
-            driver.read_live_line.call_args_list,
+            driver.read_main_line.call_args_list,
             [
                 mock.call(
                     "story[lobby]> ",
                     _core._main_slash_suggestions,
                 ),
+                mock.call(
+                    "story[lobby]> ",
+                    _core._main_slash_suggestions,
+                ),
+            ],
+        )
+        self.assertEqual(
+            driver.read_live_line.call_args_list,
+            [
                 mock.call(
                     "compose[run:1]> ",
                     _controls.project_composition_suggestions,
@@ -969,10 +1001,6 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
                 mock.call(
                     "compose[run:2]> ",
                     _controls.project_composition_suggestions,
-                ),
-                mock.call(
-                    "story[lobby]> ",
-                    _core._main_slash_suggestions,
                 ),
             ],
         )
@@ -1037,7 +1065,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             for node in ast.walk(read_line)
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
         }
-        self.assertEqual(called_attributes, {"_read_line"})
+        self.assertEqual(called_attributes, {"read_main_line"})
         for duplicated_primitive in (
             "tcgetattr",
             "tcsetattr",
