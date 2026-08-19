@@ -1,9 +1,10 @@
 # Interactive terminal component
 
 > **Availability:** this package-supported component owns shell input, safe
-> records, and bare `/run` composition. Its internal semantic/rendering
-> foundation is implemented, while public view methods retain their exact
-> established plain presentation.
+> records, and bare `/run` composition. Orientation, status/inspection,
+> central errors/recovery, and accepted management, advisory, retrieval, and
+> consensus output now use its semantic renderer. Information-dense views and
+> remaining generic status records retain their established presentation.
 
 ## Public API
 
@@ -51,6 +52,22 @@ The exact `interactive_line_editor.__all__` remains
 unchanged. Composition-provider selection is package-internal, not an added
 supported API.
 
+For controller wiring, the package facade also exposes the unlisted canonical
+identities `InteractiveSemanticOutput`, `Field`, `Message`, `Notice`, `Panel`,
+`Record`, `Section`, `SemanticRole`, and `ViewState`. They are package-internal,
+absent from `__all__` and the root package, and are not a supported public API.
+The narrow internal adapter has these signatures:
+
+```python
+InteractiveSemanticOutput(terminal: InteractiveTerminal) -> None
+write_component(component: Component) -> None
+```
+
+Construction validates and retains the terminal's bound component writer but
+does not render, read, write, observe a stream, or acquire a resource. Each
+accepted component call performs one render and one callback write, including
+the final LF; failures propagate without a retry.
+
 | Enum | Exact values |
 | --- | --- |
 | `AttachmentKind` | `created`, `opened`, `reopened` |
@@ -59,7 +76,7 @@ supported API.
 | `TerminalActionKind` | `line`, `send`, `cancel`, `interrupt`, `eof` |
 | `TerminalMessageKind` | `compose`, `session`, `conversation`, `routing`, `context`, `waiting`, `result`, `cancelled`, `hint` |
 
-## Implemented foundation and current presentation
+## Implemented semantic output and deferred presentation
 
 The import-compatible package contains private immutable semantic components
 and states, pure current one-line transitions and exact slash-prefix
@@ -77,13 +94,32 @@ surface, delegating to the same driver implementation rather than owning a
 second terminal lifecycle. Callback construction remains deterministic plain
 and performs no stream observation or resource acquisition.
 
-This foundation does not migrate existing shell views. Orientation, help,
-lists, search, transcript, history, advisory, retrieval, consensus, and error
-methods still emit the exact plain records documented below. Structured
-semantic layouts and decorative color for those views remain future migration
-work. Contextual composition previews are implemented as documented below.
-History navigation, selectable palettes/fixed values, component-integrated
-composer/confirmation, and pickers are not currently available.
+#83 uses this foundation for:
+
+- lobby, session, and conversation orientation;
+- interactive `/status` and `/inspect` projections built from frozen validated
+  facts, without raw persisted messages, errors, candidate text, or provider
+  state;
+- typed interactive errors and recovery hints;
+- accepted management acknowledgements and routing/current-context notices;
+- advisory waiting, cancellation, context disclosure, and agent replies;
+- retrieval progress and cited-source records; and
+- consensus progress, inspection, cancellation, and terminal summaries.
+
+The controller composes typed components and sends one component through the
+adapter for each established callback record. The plain form preserves the
+established facts, copy, order, and callback boundaries while adding explicit
+structure and applicable `loading`, `empty`, `error`, `cancelled`, and
+`completed` state markers. Capable real-CLI output may add fixed decorative
+ANSI; `NO_COLOR` removes only that decoration. Callback construction renders
+the same structure in plain text at its fixed width.
+
+Help, agent roster, session/conversation lists, search results, transcript,
+focused history, and the remaining generic `write_status` sites still use the
+exact established plain record renderers. Contextual composition previews are
+implemented as documented below. History navigation, selectable palettes/fixed
+values, component-integrated composer/confirmation, and pickers are not
+currently available.
 
 ## Prompts and ordinary presentation
 
@@ -99,6 +135,31 @@ f"compose[run:{line_number}]> "
 
 Confirmation shows `[Y/n] ` or `[y/N] `; blank selects its default. Ctrl-C/EOF
 return typed outcomes.
+
+## Current semantic plain shapes
+
+Orientation uses titled `Story chat` or `Conversation scope` panels with
+indented `Workspace`, `Session`, `Target`, optional `History`, `Conversation`,
+`Subject`, and `Agent` fields in the established order. Status and inspection
+use records headed by stable bracketed identities such as `[session]`,
+`[conversation]`, `[context]`, and `[run DEBATE_ID]`. Values stack under their
+labels at narrow widths instead of being dropped.
+
+Agent and run output preserve content boundaries:
+
+```text
+ALIAS [completed]> FIRST LINE
+                   CONTINUATION
+
+[run DEBATE_ID]
+  CONTENT
+```
+
+Status roles and terminal states are textual. For example, consensus inspection
+uses `[run DEBATE_ID] [completed] [success]`, interrupted inspection uses
+`[cancelled] [warning]`, failed/deadlocked inspection uses `[error]`, active
+inspection uses `[loading] [info]`, and a missing debate uses `[empty]`. These
+markers are present in plain and `NO_COLOR` output; color is redundant.
 
 ## Main-prompt live suggestions
 
@@ -178,14 +239,24 @@ Whitespace/LF remain; controls are visible and never joined.
 | Main prompt / open or pause confirmation | `[cancelled] No action was taken.` / `[cancelled] Session open cancelled.` / `[cancelled] Session pause cancelled.` |
 | Recoverable advisory | `[waiting] {DISPLAY_NAME} is responding; Ctrl-C cancels this turn.`<br>`[cancelled] {DISPLAY_NAME} turn was interrupted.`<br>`[hint] The story session remains attached; the affected provider thread may restart on the next message.` |
 | Consensus before entry | `[cancelled] Consensus run was cancelled before start.` |
-| Consensus with trusted durable proof | `[run {DEBATE_ID}] Run interrupted after durable state transition.`<br>`[cancelled] Debate {DEBATE_ID} was marked interrupted.`<br>`[hint] It cannot resume. Use /run to create a new debate.`<br>`[session] "{SESSION_ID}" remains ready and attached.` |
+| Consensus with trusted durable proof | `[run {DEBATE_ID}] [cancelled] [warning]` then an indented `Run interrupted after durable state transition.` in that same callback record;<br>`[cancelled] Debate {DEBATE_ID} was marked interrupted.`<br>`[hint] It cannot resume. Use /run to create a new debate.`<br>`[session] "{SESSION_ID}" remains ready and attached.` |
 | Partial local render | `[cancelled] Search cancelled; attached state is unchanged.` / `[cancelled] Transcript read cancelled; attached state is unchanged.` / `[cancelled] History cancelled; attached state is unchanged.` |
 
 ## Errors and other output
 
 The controller classifies 36 codes; the terminal accepts no exceptions.
 `write_error()` redacts secrets, caps summary/hint at 512/256 characters, and
-writes sanitized records. See
+writes one semantic panel and one callback record:
+
+```text
+Interactive error [error]
+  [error CODE] SUMMARY
+  [hint] HINT
+```
+
+It preserves the trusted code, summary, hint, order, limits, redaction, and
+failure behavior while allowing responsive wrapping and fixed decorative ANSI.
+See
 [recovery mappings](../operations/recovery-and-limitations.md) and
 [retrieval copy](conversation-retrieval.md). Composition retains exact LF;
 discards expose only counts. Routed replies are never reparsed.

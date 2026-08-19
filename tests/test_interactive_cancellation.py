@@ -846,7 +846,7 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
         self.assertEqual(rendered.count(cancelled), 1)
         self.assertEqual(rendered.count(hint), 1)
         self.assertNotIn("operation_interrupted", rendered)
-        self.assertIn("plot> reply:after cancellation\n", rendered)
+        self.assertIn("plot [completed]> reply:after cancellation\n", rendered)
         detach.assert_called_once_with("session")
         close.assert_called_once_with()
         self.assertFalse(workspace.path(_ACCESS_RELATIVE).exists())
@@ -1103,7 +1103,7 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
             "thread may restart on the next message.\n",
             rendered,
         )
-        self.assertIn("plot> after reply\n", rendered)
+        self.assertIn("plot [completed]> after reply\n", rendered)
 
     def test_advisory_outcome_failure_leaves_unmatched_user_then_recovers(
         self,
@@ -1214,7 +1214,7 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
             "thread may restart on the next message.\n",
             rendered,
         )
-        self.assertIn("lead> reply:after cancellation\n", rendered)
+        self.assertIn("lead [completed]> reply:after cancellation\n", rendered)
 
     def test_nonquiescent_preentry_unjoined_and_bare_cancelled_are_fatal(
         self,
@@ -1349,8 +1349,8 @@ class ConsensusCancellationTests(InteractiveCancellationTestCase):
         rendered = "".join(callbacks.records)
         self.assertEqual(
             rendered.count(
-                f"[run {debate_id}] Run interrupted after durable state "
-                "transition.\n"
+                f"[run {debate_id}] [cancelled] [warning]\n"
+                "  Run interrupted after durable state transition.\n"
             ),
             1,
         )
@@ -1449,8 +1449,8 @@ class ConsensusCancellationTests(InteractiveCancellationTestCase):
         rendered = "".join(callbacks.records)
         self.assertEqual(
             rendered.count(
-                "[run cancelled_debate] Run interrupted after durable state "
-                "transition.\n"
+                "[run cancelled_debate] [cancelled] [warning]\n"
+                "  Run interrupted after durable state transition.\n"
             ),
             1,
         )
@@ -1673,7 +1673,9 @@ class TerminalAndCleanupFailureTests(InteractiveCancellationTestCase):
                 "output_oserror",
                 InterruptingWriteCallbacks(
                     "/quit",
-                    output_predicate=lambda text: text.startswith("[context]"),
+                    output_predicate=lambda text: text.startswith(
+                        "Conversation scope\n"
+                    ),
                     failure=OSError("broken pipe"),
                 ),
                 InteractiveErrorCode.OPERATION_INTERRUPTED,

@@ -305,13 +305,20 @@ class InteractiveManagementGateAndDirectiveTests(
         rendered = "".join(callbacks.records)
         self.assertIn("Syntax: /status", rendered)
         self.assertIn(
-            "Session: none | Durable state: absent | Process access: "
-            "claimable | Default session: none | Current attachment: none",
+            "[session]\n"
+            "  Session: none\n"
+            "  Durable state: absent\n"
+            "  Process access: claimable\n"
+            "  Default session: none\n"
+            "  Current attachment: none\n",
             rendered,
         )
         self.assertIn(
-            "Default conversation: none | Current focus: none | Agent focus: "
-            "none | Provider readiness: no | Next action: Create a session.",
+            "  Default conversation: none\n"
+            "  Current focus: none\n"
+            "  Agent focus: none\n"
+            "  Provider readiness: no\n"
+            "  Next action: Create a session.\n",
             rendered,
         )
         self.assertEqual(rendered.count("[error session_not_attached]"), 5)
@@ -336,8 +343,10 @@ class InteractiveManagementGateAndDirectiveTests(
         transcript_read.assert_not_called()
         rendered = "".join(callbacks.records)
         self.assertIn(
-            "Default session: session | Current attachment: session | "
-            "Default conversation: none | Current focus: none",
+            "  Default session: session\n"
+            "  Current attachment: session\n"
+            "  Default conversation: none\n"
+            "  Current focus: none\n",
             rendered,
         )
         self.assertIn(
@@ -802,14 +811,19 @@ class InteractiveHistoryAndStatusTests(InteractiveConversationTestCase):
         rendered = "".join(callbacks.records)
         self.assertIn("Agent focus: plot_architect", rendered)
         self.assertIn(
-            f"Current focus: {metadata.conversation_id} | "
-            "Subject: Revised subject | Status: active | Revision: 2.",
+            "[conversation]\n"
+            f"  Current focus: {metadata.conversation_id}\n"
+            "  Subject: Revised subject\n"
+            "  Status: active\n"
+            "  Revision: 2.\n",
             rendered,
         )
         self.assertIn("History displayed: 3/3 events", rendered)
         self.assertIn("Context retained: 1 turns, 2 events", rendered)
         self.assertIn(
-            "Search: available, active-only | Last interactive run: none.",
+            "[result] [completed]\n"
+            "  Search: available, active-only\n"
+            "  Last interactive run: none.\n",
             rendered,
         )
 
@@ -1012,18 +1026,31 @@ class InteractiveInspectionTests(InteractiveConversationTestCase):
                 status.value if isinstance(status, DebateStatus) else status
             )
             self.assertIn(
-                f"[run {debate_id}] Session: session | "
-                f"Status: {expected_status}",
+                f"[run {debate_id}]"
+                + (
+                    " [completed] [success]"
+                    if expected_status == "consensus"
+                    else " [cancelled] [warning]"
+                    if expected_status == "interrupted"
+                    else " [error]"
+                )
+                + "\n  Session: session\n"
+                + f"  Status: {expected_status}\n",
                 rendered,
             )
         self.assertIn(
-            f"Context: conversation {selected.conversation_id} | "
-            "Mode: included | Events: 2 | Complete turns: 1 | "
-            "Retained turns: 1 | Omitted turns: 0",
+            f"[context] conversation {selected.conversation_id} [completed]\n"
+            "  Mode: included\n"
+            "  Events: 2\n"
+            "  Complete turns: 1\n"
+            "  Retained turns: 1\n"
+            "  Omitted turns: 0\n",
             rendered,
         )
         self.assertIn(
-            "[run debate_missing] Session: session | Status: not_found",
+            "[run debate_missing] [empty]\n"
+            "  Session: session\n"
+            "  Status: not_found\n",
             rendered,
         )
         self.assertIn(
@@ -1109,9 +1136,20 @@ class InteractiveInspectionTests(InteractiveConversationTestCase):
             [("session_a", "first"), ("session_b", "second")],
         )
         rendered = "".join(callbacks.records)
-        self.assertIn("Last interactive run: debate_1", rendered)
-        self.assertIn("[run debate_2] Session: session_b", rendered)
-        self.assertIn("[run debate_1] Session: session_a", rendered)
+        self.assertIn(
+            "Last interactive run\n"
+            "    [run debate_1] [completed] [success]\n",
+            rendered,
+        )
+        self.assertIn(
+            "[run debate_2] [error]\n  Session: session_b\n",
+            rendered,
+        )
+        self.assertIn(
+            "[run debate_1] [completed] [success]\n"
+            "  Session: session_a\n",
+            rendered,
+        )
         self.assertNotIn("RAW_RESULT_SECRET", rendered)
         self.assertNotIn("RAW_INSPECTION_SECRET", rendered)
         self.assertEqual(

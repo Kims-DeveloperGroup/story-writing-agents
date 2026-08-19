@@ -1,11 +1,13 @@
 # Interactive CLI design system contract
 
-> **Status:** #82 has delivered the import-compatible package, closed semantic
+> **Status:** #82 delivered the import-compatible package, closed semantic
 > models, pure foundation controls, responsive plain/fixed-ANSI renderer,
 > capability profiles, unified raw driver and CLI factory, line-editor
-> compatibility facade, and 32-unit module index; completed prerequisite #73
-> supplies contextual composition previews through that unified driver. View
-> migrations (#83/#84), history (#85), composer/confirmation component
+> compatibility facade, and 32-unit module index. #83 now uses that foundation
+> for orientation, status/inspection, central errors and recovery, and accepted
+> management, advisory, retrieval, and consensus output. Completed prerequisite
+> #73 supplies contextual composition previews through the unified driver.
+> Information-dense views (#84), history (#85), composer/confirmation component
 > integration (#86), selectable completion (#79), and pickers (#87) remain
 > planned. The
 > [interactive terminal reference](../reference/interactive-terminal.md) and
@@ -19,15 +21,16 @@ confirmation, suggestions, fixed choices, command history, and pickers one
 semantic model.
 
 The words **must**, **must not**, and **may** below constrain the delivery
-issues. Requirements beyond the #82 foundation do not describe current
-production behavior.
+issues. Requirements beyond the implemented #82, #83, and #73 slices do not
+describe current production behavior.
 
 ## Delivery status
 
 | Slice | Current availability |
 | --- | --- |
 | #82 terminal foundation | Implemented: package boundary, private semantic values, current line-edit transitions and suggestion projection, responsive renderer, capability observation, sole raw driver, unified CLI construction, compatibility facades, and index reconciliation. |
-| #83 and #84 view migrations | Planned: existing shell, orientation, notices, messages, progress, help, roster, list, search, history, and transcript methods still render their established plain records. |
+| #83 output-view migration | Implemented: orientation/current context, interactive status and inspection, central errors and recovery, and accepted management, advisory, retrieval, and consensus output use semantic components with responsive plain/fixed-ANSI rendering. Facts, copy, order, callback granularity, and noninteractive contracts remain unchanged. |
+| #84 information-dense view migration | Planned: help, agent roster, session/conversation lists, search, transcript, and focused history retain their established plain record renderers. |
 | #85 input history | Planned: Up/Down history and the 100-entry process-local store are not implemented. |
 | Prerequisite #73 | Implemented: RUN/CHAT composition uses the fixed preview-only `/send`, `/cancel` projection through explicit call-local routing. |
 | #86 composer/confirmation integration | Planned: existing line-oriented composition and confirmation behavior remains unchanged beyond #73 previews. |
@@ -249,9 +252,11 @@ cancelled, EOF, Ctrl-C, and error behavior must remain deterministic.
 ## Rendering and capability policy
 
 #82 implements three capability profiles and a package-private semantic
-renderer. Existing public terminal record methods still use their established
-plain templates; broad structured layout and visible decorative color arrive
-only with the #83/#84 migrations.
+renderer. #83 routes the migrated view groups through that renderer; capable
+real CLI streams may therefore show their structured fixed-ANSI form, while
+`NO_COLOR` and plain/fallback consumers retain the same structured text.
+Deferred #84 views and the remaining generic `write_status` call sites keep
+their established plain templates until their owning slices land.
 
 | Profile | Selection | Output and input behavior |
 | --- | --- | --- |
@@ -300,9 +305,9 @@ measurements.
 
 The real CLI detects terminal width, falls back to 80 columns when no reliable
 positive width is available, and caps detected width at 120 columns. A resize
-is observed on the next live-input or package-private semantic-render operation;
-no signal-driven resize loop is added. Existing public plain record methods
-retain their established construction width until their view migrations.
+is observed on the next live-input or semantic-render operation; no
+signal-driven resize loop is added. Deferred public plain record methods retain
+their established construction width until their view migrations.
 Narrow layouts degrade in this order: remove decorative alignment, stack
 `Field` label/value pairs, reduce indentation, wrap content with visible
 continuation structure, and window long selectable lists with position cues.
@@ -316,7 +321,8 @@ states remain distinguishable in plain output and under `TERM=dumb`.
 ## Compatibility contract
 
 Human interactive layout may intentionally change as its owning migration
-slice lands. The following contracts may not change as a side effect.
+slice lands; #83 has changed the migrated output groups in that permitted way.
+The following contracts may not change as a side effect.
 
 ### Machine-facing CLI
 
@@ -387,6 +393,15 @@ Public object identity, `isinstance` behavior, pickling/import lookup, and
 canonical `story_writing_agents.interactive_terminal` module identity remain
 compatible.
 
+#83 adds `InteractiveSemanticOutput`, `Field`, `Message`, `Notice`, `Panel`,
+`Record`, `Section`, `SemanticRole`, and `ViewState` as unlisted package-facade
+attributes for internal controller wiring. They are not supported public API,
+do not change `__all__` or the root package facade, and must not be imported
+from package leaves by controller code. Constructing the adapter validates and
+retains an `InteractiveTerminal` writer without rendering, observing streams,
+or acquiring a resource; each `write_component(component)` call renders and
+writes exactly one component.
+
 ### `interactive_line_editor` compatibility facade
 
 `story_writing_agents.interactive_line_editor` remains importable with this
@@ -427,14 +442,14 @@ dependency direction are fixed as follows:
 | `interactive_terminal._controls` | Pure established line-input transitions and exact registry-supplied slash suggestion projection. History, selectable palette, composer, confirmation, and picker transitions remain future work. |
 | `interactive_terminal._render` | Pure safe responsive renderers for plain and fixed ANSI profiles. It sanitizes dynamic content before styling and returns render data without writing. |
 | `interactive_terminal._driver` | Sole owner of raw streams, capability/width detection, key decoding, cursor controls, raw mode, restoration, writes, and flushes. |
-| `interactive_terminal._core` | `InteractiveTerminal`, established public-operation orchestration, package-internal stream factory, and semantic render seam. It coordinates leaves without owning another raw-terminal implementation or command history. |
+| `interactive_terminal._core` | `InteractiveTerminal`, established public-operation orchestration, package-internal stream factory, semantic render seam, and resource-free `InteractiveSemanticOutput` adapter. It coordinates leaves without owning another raw-terminal implementation or command history. |
 | `interactive_line_editor` | Standalone/public compatibility-only facade over the same unified terminal implementation and driver. |
 
 The allowed graph is:
 
 ```text
 cli -> interactive_terminal package-internal stream factory -> terminal._core
-interactive_controller._core -> interactive_terminal facade
+interactive_controller._core -> interactive_terminal facade components/adapter
 interactive_controller policy leaves -> terminal facade error contracts
 terminal._core -> terminal._controls -> terminal._model
                -> terminal._render   -> terminal._model
@@ -448,9 +463,12 @@ stream-backed terminal. It does not construct or inject a separate line editor.
 `interactive_line_editor` remains available to standalone/public compatibility
 consumers and delegates to that same implementation and driver.
 
-The controller core imports only the terminal facade; its policy leaves use
-only the facade's error contracts for their terminal dependency. Controller
-modules do not import terminal package leaves. `terminal._controls`,
+The controller core imports only the terminal facade; it composes typed output
+and sends each established semantic component through the unlisted adapter.
+The runtime-policy leaf returns frozen, validated inspection facts rather than
+presentation strings. Other policy leaves use only the facade's error
+contracts for their terminal dependency. Controller modules do not import
+terminal package leaves. `terminal._controls`,
 `terminal._render`, and `terminal._driver` share contracts through
 `terminal._model`; they do not reach through siblings for private state.
 `terminal._core` consumes canonical command, route, and roster metadata from
@@ -475,26 +493,26 @@ controller policy leaves still consume only facade error contracts.
 
 ## Migration coverage
 
-Issue #82 has delivered the common models, renderer/capability profiles, driver
-seam, package facade, and module-index reconciliation. The following issues
-migrate every current view and control without redistributing runtime or
-storage responsibility.
+Issue #82 delivered the common models, renderer/capability profiles, driver
+seam, package facade, and module-index reconciliation. Issue #83 delivered its
+output rows below without redistributing runtime or storage responsibility;
+#84 and the control slices remain planned.
 
 ### View groups
 
 | Current view group | Semantic construction | Required states or constraints | Delivery issue |
 | --- | --- | --- | --- |
-| Shell scaffold | `Panel`, `Section`, `Prompt`, `Notice` | Idle/focused scope, plain structure, scrollback preserved | #83 |
-| Lobby/session/conversation orientation | `Panel`, `Section`, `Field`, `Notice` | Current workspace, attachment, focus, and next action remain textual | #83 |
+| Shell scaffold | `Panel`, `Section`, `Prompt`, `Notice` | Idle/focused scope, plain structure, scrollback preserved | #83 (implemented output scaffold; prompts remain established input) |
+| Lobby/session/conversation orientation | `Panel`, `Section`, `Field`, `Notice` | Current workspace, attachment, focus, and next action remain textual | #83 (implemented) |
 | Help and command reference | `Panel`, `Section`, `Field`, `ListView`, `Record` | Grouping, syntax, aliases, effects, examples, empty/error | #84 |
 | Session/conversation/agent lists and rosters | `ListView`, `Record`, `Field`, `Notice` | Counts, active/focused/archived/empty meaning and stable order | #84 |
 | Search results | `ListView`, `Record`, `Field`, `Notice` | Citation, snippet, active/archive state, truncation, empty/error | #84 |
 | Transcript | `ListView`, `Record`, `Field`, `Message`, `Notice` | Event identity/order and LF content boundaries remain intact | #84 |
 | Focused history | `ListView`, `Record`, `Field`, `Message`, `Notice` | Snapshot order, context accounting, empty/cancelled/error | #84 |
-| Advisory turns | `Message`, `Notice`, `Field` | Routing, waiting/loading, result, cancelled/completed/error | #83 |
-| Retrieval progress and summaries | `Notice`, `Record`, `ListView`, `Field` | Loading, citations/context accounting, result/error/cancelled | #83 |
-| Consensus progress and summaries | `Panel`, `Section`, `Notice`, `Record`, `Field` | Loading, debate identity, result/cancelled/completed/error | #83 |
-| Interactive errors and recovery hints | `Notice`, `Field` | Trusted code, redaction, error state, next action, no raw diagnostics | #83 |
+| Advisory turns | `Message`, `Notice`, `Field` | Routing, waiting/loading, result, cancelled/completed/error | #83 (implemented) |
+| Retrieval progress and summaries | `Notice`, `Record`, `ListView`, `Field` | Loading, citations/context accounting, result/error/cancelled | #83 (implemented accepted views) |
+| Consensus progress and summaries | `Panel`, `Section`, `Notice`, `Record`, `Field` | Loading, debate identity, result/cancelled/completed/error | #83 (implemented) |
+| Interactive errors and recovery hints | `Notice`, `Field` | Trusted code, redaction, error state, next action, no raw diagnostics | #83 (implemented) |
 
 ### Control groups
 
@@ -521,7 +539,9 @@ all of the following are covered.
 #82 covers public identity/signatures, model validation, current pure line
 transitions, reserved future keys, safe plain/ANSI rendering, narrow physical
 width, capability profiles, unified driver/factory ownership, compatibility
-delegation, and the package graph. Rows involving migrated views, history,
+delegation, and the package graph. #83 covers its migrated output rows,
+resource-free adapter, typed controller facts, one-write projection, and real
+PTY ANSI/`NO_COLOR` behavior. Rows involving #84 dense views, history,
 selectable completion, component-integrated composition/confirmation, and
 picker transitions remain acceptance targets for their later slices.
 

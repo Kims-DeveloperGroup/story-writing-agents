@@ -68,12 +68,23 @@ Subject and confirmation prompts use ordinary reads. `TERM=dumb`, unavailable
 capabilities, and non-POSIX editing safely use `input()` without a suggestion
 panel.
 
+On capable real-CLI streams, orientation/current context, `/status`, `/inspect`,
+central errors/recovery, and accepted management, advisory, retrieval, and
+consensus output use responsive semantic layout with fixed decorative ANSI.
+`NO_COLOR` removes only that decoration and leaves the same structured plain
+text; narrow output stacks and wraps labels without dropping facts. Help,
+agent/session/conversation catalogs, search, transcript, focused history, and
+remaining generic status sites retain their established plain records. This
+presentation split does not change command grammar, callback order, or any
+noninteractive stdout/stderr, JSON, ordering, or exit contract.
+
 `/help [COMMAND]` (`/?`), `/status`, and `/session list` are global. Session
 grammar is `/session list | create NAME | open [NAME] | pause`. Explicit
 `story chat SESSION` creates an absent session or opens a persisted one. Bare
 entry opens a ready default and asks before reopening a paused default.
 
-`/status` emits one read-only lifecycle record with fields in this exact order:
+`/status` emits one read-only semantic lifecycle record with fields in this
+exact order:
 
 ```text
 Session | Durable state | Process access | Default session | Current attachment

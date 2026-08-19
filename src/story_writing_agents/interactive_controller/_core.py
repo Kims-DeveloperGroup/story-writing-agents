@@ -25,6 +25,7 @@ from ..conversation_retrieval import (
     ConversationRetrievalSource,
 )
 from ..conversations import (
+    CONVERSATION_CONTEXT_POLICY,
     ConversationCatalog,
     ConversationContextWindow,
     ConversationEvent,
@@ -56,11 +57,20 @@ from ..interactive_terminal import (
     AttachmentKind,
     ComposeMode,
     ConfirmationResult,
+    Field,
     InteractiveError,
     InteractiveErrorCode,
+    InteractiveSemanticOutput,
     InteractiveTerminal,
+    Message,
+    Notice,
+    Panel,
+    Record,
+    Section,
+    SemanticRole,
     TerminalActionKind,
     TerminalMessageKind,
+    ViewState,
 )
 from ..models import (
     DebateContextMode,
@@ -101,6 +111,8 @@ from ._conversation_policy import (
     visible_conversation_handle,
 )
 from ._runtime_policy import (
+    DebateContextInspectionFacts,
+    DebateInspectionFacts,
     classify_advisory_turn_failure,
     classify_consensus_execution_failure,
     classify_inspection_failure,
@@ -133,6 +145,9 @@ _LOBBY_COMMAND_HINT = (
 _AGENT_ROUTE_ALIASES = frozenset(
     alias for route in AGENT_ROUTES for alias in route.aliases
 )
+_AGENT_PROMPT_ALIASES = {
+    route.agent_id: route.prompt_alias for route in AGENT_ROUTES
+}
 _CONVERSATION_CATALOG_OPERATIONS = (
     "create",
     "get",
@@ -174,6 +189,7 @@ class InteractiveController:
         "_last_started_debate_by_session",
         "_runner",
         "_runtime",
+        "_semantic_output",
         "_focused_conversation",
         "_started",
         "_target_agent_id",
@@ -212,6 +228,7 @@ class InteractiveController:
         self._context = context
         self._backend = backend
         self._terminal = terminal
+        self._semantic_output = InteractiveSemanticOutput(terminal)
         resolved_catalog = (
             FilesystemConversationCatalog(workspace)
             if conversation_catalog is None
@@ -244,6 +261,105 @@ class InteractiveController:
         self._runner: asyncio.Runner | None = None
         self._started = False
         self._closed = False
+
+    def _write_notice(
+        self,
+        text: str,
+        *,
+        label: str,
+        role: SemanticRole = SemanticRole.INFO,
+        state: ViewState = ViewState.IDLE,
+    ) -> None:
+        """Write one controller-owned semantic notice through the narrow seam."""
+
+        self._semantic_output.write_component(
+            Notice(text, label=label, role=role, state=state)
+        )
+
+    def _write_run_record(
+        self,
+        debate_id: str,
+        *,
+        title: str | None = None,
+        fields: tuple[Field, ...] = (),
+        content: str | None = None,
+        role: SemanticRole = SemanticRole.DEFAULT,
+        state: ViewState = ViewState.IDLE,
+    ) -> None:
+        """Write one established debate callback as one semantic record."""
+
+        self._semantic_output.write_component(
+            Record(
+                f"run {debate_id}",
+                title=title,
+                fields=fields,
+                content=content,
+                role=role,
+                state=state,
+            )
+        )
+
+    @staticmethod
+    def _debate_inspection_record(facts: DebateInspectionFacts) -> Record:
+        """Project validated debate facts to stable ordered semantic fields."""
+
+        if facts.status == "active":
+            role = SemanticRole.INFO
+            state = ViewState.LOADING
+        elif facts.status == "consensus":
+            role = SemanticRole.SUCCESS
+            state = ViewState.COMPLETED
+        elif facts.status == "interrupted":
+            role = SemanticRole.WARNING
+            state = ViewState.CANCELLED
+        elif facts.status == "not_found":
+            role = SemanticRole.MUTED
+            state = ViewState.EMPTY
+        else:
+            role = SemanticRole.ERROR
+            state = ViewState.ERROR
+        return Record(
+            f"run {facts.debate_id}",
+            fields=(
+                Field("Session", facts.session_id),
+                Field("Status", facts.status),
+                Field("Terminal", "yes" if facts.terminal else "no"),
+                Field("Input", facts.input_kind or "none"),
+                Field("Revision", facts.revision_id or "none"),
+                Field("Rounds", str(facts.rounds_completed)),
+                Field("Artifact", f"{facts.artifact or 'none'}."),
+            ),
+            role=role,
+            state=state,
+        )
+
+    @staticmethod
+    def _debate_context_component(
+        facts: DebateContextInspectionFacts | None,
+    ) -> Record | Notice:
+        """Project an optional validated debate sidecar to one component."""
+
+        if facts is None:
+            return Notice(
+                "Context sidecar: none.",
+                label="context",
+                role=SemanticRole.MUTED,
+                state=ViewState.EMPTY,
+            )
+        return Record(
+            "context",
+            title=f"conversation {facts.conversation_id}",
+            fields=(
+                Field("Mode", facts.mode.value),
+                Field("Events", str(facts.event_count)),
+                Field("Complete turns", str(facts.complete_turns)),
+                Field("Retained turns", str(facts.retained_turns)),
+                Field("Omitted turns", str(facts.omitted_turns)),
+                Field("UTF-8 bytes", str(facts.retained_utf8_bytes)),
+                Field("Truncated", f"{'yes' if facts.truncated else 'no'}."),
+            ),
+            state=ViewState.COMPLETED,
+        )
 
     def run_session_lobby(
         self,
@@ -416,9 +532,11 @@ class InteractiveController:
             )
             return
         if session_id == self._attached_session_id:
-            self._terminal.write_status(
-                TerminalMessageKind.SESSION,
+            self._write_notice(
                 f"Already attached to {session_id}.",
+                label="session",
+                role=SemanticRole.SUCCESS,
+                state=ViewState.COMPLETED,
             )
             return
         self._open_known_session(session_id)
@@ -915,20 +1033,30 @@ class InteractiveController:
             focused=(focused_id is not None),
             provider_ready=provider_ready,
         )
-        record = (
-            f"Session: {candidate or 'none'} | "
-            f"Durable state: {state.durable_state.value} | "
-            f"Process access: {state.access_state.value} | "
-            f"Default session: {default_session or 'none'} | "
-            f"Current attachment: {attached_session or 'none'} | "
-            f"Default conversation: {default_conversation or 'none'} | "
-            f"Current focus: {focused_id or 'none'} | "
-            f"Agent focus: "
-            f"{self._target_agent_id if attached_session is not None else 'none'} | "
-            f"Provider readiness: {'yes' if provider_ready else 'no'} | "
-            f"Next action: {next_action}"
+        self._semantic_output.write_component(
+            Record(
+                "session",
+                fields=(
+                    Field("Session", candidate or "none"),
+                    Field("Durable state", state.durable_state.value),
+                    Field("Process access", state.access_state.value),
+                    Field("Default session", default_session or "none"),
+                    Field("Current attachment", attached_session or "none"),
+                    Field("Default conversation", default_conversation or "none"),
+                    Field("Current focus", focused_id or "none"),
+                    Field(
+                        "Agent focus",
+                        (
+                            self._target_agent_id
+                            if attached_session is not None
+                            else "none"
+                        ),
+                    ),
+                    Field("Provider readiness", "yes" if provider_ready else "no"),
+                    Field("Next action", next_action),
+                ),
+            )
         )
-        self._terminal.write_status(TerminalMessageKind.SESSION, record)
 
         if attached_session is None:
             return
@@ -937,9 +1065,11 @@ class InteractiveController:
                 InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
             )
         if focus is None:
-            self._terminal.write_status(
-                TerminalMessageKind.CONTEXT,
+            self._write_notice(
                 "Conversation focus: none | Context: unavailable | Last run: none.",
+                label="context",
+                role=SemanticRole.MUTED,
+                state=ViewState.EMPTY,
             )
             return
         try:
@@ -966,28 +1096,62 @@ class InteractiveController:
         except Exception as exc:
             self._present_transcript_service_failure(exc)
             return
-        self._terminal.write_status(
-            TerminalMessageKind.CONVERSATION,
-            (
-                f"Current focus: {current.conversation_id} | "
-                f"Subject: {current.subject} | Status: {current.status.value} | "
-                f"Revision: {current.subject_revision}."
+        self._semantic_output.write_component(
+            Record(
+                "conversation",
+                fields=(
+                    Field("Current focus", current.conversation_id),
+                    Field("Subject", current.subject),
+                    Field("Status", current.status.value),
+                    Field("Revision", f"{current.subject_revision}."),
+                ),
             ),
         )
-        self._terminal.write_status(
-            TerminalMessageKind.CONTEXT,
-            format_transcript_context_status(
-                displayed_events=len(events),
-                total_events=len(events),
-                context=context,
+        self._semantic_output.write_component(
+            Record(
+                "context",
+                fields=(
+                    Field("History displayed", f"{len(events)}/{len(events)} events"),
+                    Field("Complete turns", str(context.total_complete_turns)),
+                    Field(
+                        "Context retained",
+                        f"{context.retained_turns} turns, {len(context.events)} events",
+                    ),
+                    Field("Omitted turns", str(context.omitted_turns)),
+                    Field(
+                        "UTF-8 bytes",
+                        (
+                            f"{context.retained_utf8_bytes}/"
+                            f"{CONVERSATION_CONTEXT_POLICY.max_utf8_bytes}"
+                        ),
+                    ),
+                    Field(
+                        "Turn cap",
+                        str(CONVERSATION_CONTEXT_POLICY.max_complete_turns),
+                    ),
+                    Field(
+                        "Truncated",
+                        f"{'yes' if context.truncated else 'no'}.",
+                    ),
+                ),
+                state=ViewState.COMPLETED,
             ),
         )
         last_debate = self._last_started_debate_by_session.get(attached_session)
         if last_debate is None:
-            last_run_status = "none."
+            self._semantic_output.write_component(
+                Record(
+                    "result",
+                    fields=(
+                        Field("Search", "available, active-only"),
+                        Field("Last interactive run", "none."),
+                    ),
+                    state=ViewState.COMPLETED,
+                )
+            )
         else:
             try:
-                last_run_lines = self._read_safe_debate_inspection(
+                debate_facts, context_facts = self._read_safe_debate_inspection(
                     attached_session,
                     last_debate,
                     include_context=True,
@@ -995,11 +1159,23 @@ class InteractiveController:
             except Exception as exc:
                 self._present_runtime_inspection_failure(exc)
                 return
-            last_run_status = f"{last_debate} | {' | '.join(last_run_lines)}"
-        self._terminal.write_status(
-            TerminalMessageKind.RESULT,
-            f"Search: available, active-only | Last interactive run: {last_run_status}",
-        )
+            last_items: list[Record | Notice] = [
+                self._debate_inspection_record(debate_facts)
+            ]
+            if debate_facts.status != "not_found":
+                last_items.append(
+                    self._debate_context_component(context_facts)
+                )
+            self._semantic_output.write_component(
+                Panel(
+                    "Result",
+                    (
+                        Field("Search", "available, active-only"),
+                        Section("Last interactive run", tuple(last_items)),
+                    ),
+                    state=ViewState.COMPLETED,
+                )
+            )
 
     def _apply_attached_runtime_directive(
         self,
@@ -1072,7 +1248,12 @@ class InteractiveController:
             raise _ControllerAbort(
                 InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
             )
-        self._terminal.write_status(TerminalMessageKind.RESULT, acknowledgement)
+        self._write_notice(
+            acknowledgement,
+            label="result",
+            role=SemanticRole.SUCCESS,
+            state=ViewState.COMPLETED,
+        )
 
     @staticmethod
     def _directive_result_matches_action(
@@ -1242,33 +1423,45 @@ class InteractiveController:
             except Exception as exc:
                 self._present_runtime_inspection_failure(exc)
                 return
-            self._terminal.write_status(
-                TerminalMessageKind.RESULT,
+            self._write_notice(
                 (
                     f"Session {session_id}: {len(summaries)} persisted "
                     f"{'debate' if len(summaries) == 1 else 'debates'}."
                 ),
+                label="result",
+                role=(
+                    SemanticRole.MUTED
+                    if not summaries
+                    else SemanticRole.SUCCESS
+                ),
+                state=(
+                    ViewState.EMPTY if not summaries else ViewState.COMPLETED
+                ),
             )
-            for debate_id, summary in summaries:
-                self._terminal.write_run(debate_id, summary)
+            for facts in summaries:
+                self._semantic_output.write_component(
+                    self._debate_inspection_record(facts)
+                )
             return
 
         if action.argument == "last":
             debate_id = self._last_started_debate_by_session.get(session_id)
             if debate_id is None:
-                self._terminal.write_status(
-                    TerminalMessageKind.RESULT,
+                self._write_notice(
                     (
                         "No interactive consensus run has started in "
                         f"session {session_id} during this process."
                     ),
+                    label="result",
+                    role=SemanticRole.MUTED,
+                    state=ViewState.EMPTY,
                 )
                 return
         else:
             debate_id = action.argument
 
         try:
-            lines = self._read_safe_debate_inspection(
+            debate_facts, context_facts = self._read_safe_debate_inspection(
                 session_id,
                 debate_id,
                 include_context=True,
@@ -1276,8 +1469,13 @@ class InteractiveController:
         except Exception as exc:
             self._present_runtime_inspection_failure(exc)
             return
-        for line in lines:
-            self._terminal.write_run(debate_id, line)
+        self._semantic_output.write_component(
+            self._debate_inspection_record(debate_facts)
+        )
+        if debate_facts.status != "not_found":
+            self._semantic_output.write_component(
+                self._debate_context_component(context_facts)
+            )
 
     def _read_safe_debate_inspection(
         self,
@@ -1285,30 +1483,31 @@ class InteractiveController:
         debate_id: str,
         *,
         include_context: bool,
-    ) -> tuple[str, ...]:
+    ) -> tuple[DebateInspectionFacts, DebateContextInspectionFacts | None]:
         """Read and whitelist one debate plus optional context-sidecar facts.
 
-        The returned lines contain only identity, lifecycle, input, revision,
-        round, artifact, and context identity/mode/count fields. Raw messages,
-        candidate/error/action values, state dictionaries, event content, and
-        provider data are validated by their owners but never copied to output.
+        The returned typed facts expose only debate identity, lifecycle, input,
+        revision, round, and artifact metadata plus optional context
+        identity/mode/count metadata. Raw messages, candidate/error/action
+        values, state dictionaries, event content, and provider data are
+        validated by their owners but never copied to output.
         """
 
         inspected = self._runtime.inspect_debate(session_id, debate_id)
-        summary, status = validate_debate_inspection(
+        facts = validate_debate_inspection(
             inspected,
             session_id=session_id,
             debate_id=debate_id,
         )
-        if not include_context or status == "not_found":
-            return (summary,)
+        if not include_context or facts.status == "not_found":
+            return facts, None
         context = self._runtime.inspect_debate_context(session_id, debate_id)
-        context_summary = validate_debate_context_inspection(
+        context_facts = validate_debate_context_inspection(
             context,
             session_id=session_id,
             debate_id=debate_id,
         )
-        return (summary, context_summary)
+        return facts, context_facts
 
     def _present_runtime_inspection_failure(self, failure: Exception) -> None:
         """Render typed inspection failures or abort on collaborator tampering."""
@@ -1331,9 +1530,11 @@ class InteractiveController:
             )
             return
         self._target_agent_id = action.agent_id
-        self._terminal.write_status(
-            TerminalMessageKind.ROUTING,
+        self._write_notice(
             f"Sticky target set to {action.agent_id}.",
+            label="routing",
+            role=SemanticRole.SUCCESS,
+            state=ViewState.COMPLETED,
         )
 
     def _run_advisory_turn(self, action: InteractiveAction) -> None:
@@ -1380,10 +1581,15 @@ class InteractiveController:
             "Direct routing selects the responder in this shared room; "
             "it does not make the turn private."
         )
-        self._terminal.write_status(TerminalMessageKind.ROUTING, routing)
-        self._terminal.write_status(
-            TerminalMessageKind.WAITING,
+        self._write_notice(
+            routing,
+            label="routing",
+            state=ViewState.COMPLETED,
+        )
+        self._write_notice(
             f"{display_name} is responding; Ctrl-C cancels this turn.",
+            label="waiting",
+            state=ViewState.LOADING,
         )
 
         memory_service = self._conversation_memory_service
@@ -1465,16 +1671,19 @@ class InteractiveController:
                         InteractiveErrorCode.OPERATION_INTERRUPTED
                     )
                 ) from None
-            self._terminal.write_status(
-                TerminalMessageKind.CANCELLED,
+            self._write_notice(
                 f"{display_name} turn was interrupted.",
+                label="cancelled",
+                role=SemanticRole.WARNING,
+                state=ViewState.CANCELLED,
             )
-            self._terminal.write_status(
-                TerminalMessageKind.HINT,
+            self._write_notice(
                 (
                     "The story session remains attached; the affected "
                     "provider thread may restart on the next message."
-                )
+                ),
+                label="hint",
+                state=ViewState.COMPLETED,
             )
             return
         except asyncio.CancelledError:
@@ -1516,18 +1725,36 @@ class InteractiveController:
             event_count = len(result.context.events)
             retained_turns = result.context.retained_turns
             omitted_turns = result.context.omitted_turns
-            self._terminal.write_status(
-                TerminalMessageKind.CONTEXT,
-                (
-                    f"Context truncated: {event_count} "
-                    f"{'event' if event_count == 1 else 'events'} retained "
-                    f"across {retained_turns} "
-                    f"{'turn' if retained_turns == 1 else 'turns'}; "
-                    f"{omitted_turns} earlier "
-                    f"{'turn' if omitted_turns == 1 else 'turns'} omitted."
+            self._semantic_output.write_component(
+                Record(
+                    "context",
+                    fields=(
+                        Field(
+                            "Context truncated",
+                            (
+                                f"{event_count} "
+                                f"{'event' if event_count == 1 else 'events'} "
+                                "retained across "
+                                f"{retained_turns} "
+                                f"{'turn' if retained_turns == 1 else 'turns'}; "
+                                f"{omitted_turns} earlier "
+                                f"{'turn' if omitted_turns == 1 else 'turns'} "
+                                "omitted."
+                            ),
+                        ),
+                    ),
+                    role=SemanticRole.WARNING,
+                    state=ViewState.COMPLETED,
                 ),
             )
-        self._terminal.write_agent(agent_id, result.content)
+        self._semantic_output.write_component(
+            Message(
+                _AGENT_PROMPT_ALIASES[agent_id],
+                result.content,
+                role=SemanticRole.AGENT,
+                state=ViewState.COMPLETED,
+            )
+        )
         self._render_conversation_retrieval_sources(result.sources)
 
     def _accept_conversation_retrieval_progress(
@@ -1572,26 +1799,53 @@ class InteractiveController:
 
         phase = event.phase
         if phase is ConversationRetrievalProgressPhase.SEARCH_STARTED:
-            text = f"Retrieval search action {event.action_index} started."
+            self._write_notice(
+                f"Retrieval search action {event.action_index} started.",
+                label="context",
+                state=ViewState.LOADING,
+            )
+            return
         elif phase is ConversationRetrievalProgressPhase.SEARCH_COMPLETED:
-            text = (
-                f"Retrieval search action {event.action_index} completed: "
-                f"{event.search_hit_count} hits; "
-                f"{event.observation_utf8_bytes} observation bytes; "
-                f"truncated: {'yes' if event.truncated else 'no'}."
+            title = None
+            fields = (
+                Field(
+                    f"Retrieval search action {event.action_index} completed",
+                    (
+                        f"{event.search_hit_count} hits; "
+                        f"{event.observation_utf8_bytes} observation bytes; "
+                        f"truncated: {'yes' if event.truncated else 'no'}."
+                    ),
+                ),
             )
         elif phase is ConversationRetrievalProgressPhase.READ_STARTED:
-            text = f"Retrieval read action {event.action_index} started."
+            self._write_notice(
+                f"Retrieval read action {event.action_index} started.",
+                label="context",
+                state=ViewState.LOADING,
+            )
+            return
         else:
             assert phase is ConversationRetrievalProgressPhase.READ_COMPLETED
-            text = (
-                f"Retrieval read action {event.action_index} completed: "
-                f"{event.transcript_turn_count} turns; "
-                f"{event.transcript_event_count} events; "
-                f"{event.observation_utf8_bytes} observation bytes; "
-                f"truncated: {'yes' if event.truncated else 'no'}."
+            title = None
+            fields = (
+                Field(
+                    f"Retrieval read action {event.action_index} completed",
+                    (
+                        f"{event.transcript_turn_count} turns; "
+                        f"{event.transcript_event_count} events; "
+                        f"{event.observation_utf8_bytes} observation bytes; "
+                        f"truncated: {'yes' if event.truncated else 'no'}."
+                    ),
+                ),
             )
-        self._terminal.write_status(TerminalMessageKind.CONTEXT, text)
+        self._semantic_output.write_component(
+            Record(
+                "context",
+                title=title,
+                fields=fields,
+                state=ViewState.COMPLETED,
+            )
+        )
 
     def _render_conversation_retrieval_sources(
         self,
@@ -1607,18 +1861,28 @@ class InteractiveController:
 
         for ordinal, source in enumerate(sources, start=1):
             citation = source.citation
-            text = (
-                f"Source {ordinal}: Subject: {source.subject} | "
-                f"Conversation: {citation.conversation_id}"
-            )
+            fields = [
+                Field("Subject", source.subject),
+                Field("Conversation", citation.conversation_id),
+            ]
             if citation.sequence is not None:
                 assert citation.turn_id is not None
                 assert citation.event_kind is not None
-                text += (
-                    f" | Turn: {citation.turn_id} | Sequence: "
-                    f"{citation.sequence} | Kind: {citation.event_kind.value}"
+                fields.extend(
+                    (
+                        Field("Turn", citation.turn_id),
+                        Field("Sequence", str(citation.sequence)),
+                        Field("Kind", citation.event_kind.value),
+                    )
                 )
-            self._terminal.write_status(TerminalMessageKind.CONTEXT, text)
+            self._semantic_output.write_component(
+                Record(
+                    "context",
+                    title=f"Source {ordinal}",
+                    fields=tuple(fields),
+                    state=ViewState.COMPLETED,
+                )
+            )
 
     def _run_consensus_action(self, action: InteractiveAction) -> bool:
         """Execute one interactive prompt, fresh prompt, or draft-file debate.
@@ -1832,17 +2096,22 @@ class InteractiveController:
             terminal_event is not None
             and terminal_event.phase is DebateProgressPhase.INTERRUPTED
         ):
-            self._terminal.write_status(
-                TerminalMessageKind.CANCELLED,
+            self._write_notice(
                 f"Debate {terminal_event.debate_id} was marked interrupted.",
+                label="cancelled",
+                role=SemanticRole.WARNING,
+                state=ViewState.CANCELLED,
             )
-            self._terminal.write_status(
-                TerminalMessageKind.HINT,
+            self._write_notice(
                 "It cannot resume. Use /run to create a new debate.",
+                label="hint",
+                state=ViewState.COMPLETED,
             )
-            self._terminal.write_status(
-                TerminalMessageKind.SESSION,
+            self._write_notice(
                 f'"{session_id}" remains ready and attached.',
+                label="session",
+                role=SemanticRole.SUCCESS,
+                state=ViewState.COMPLETED,
             )
             return
 
@@ -1854,9 +2123,11 @@ class InteractiveController:
     def _write_consensus_cancelled_before_start(self) -> None:
         """Render the fixed pre-reservation cancellation acknowledgement."""
 
-        self._terminal.write_status(
-            TerminalMessageKind.CANCELLED,
+        self._write_notice(
             "Consensus run was cancelled before start.",
+            label="cancelled",
+            role=SemanticRole.WARNING,
+            state=ViewState.CANCELLED,
         )
 
     def _interactive_runner_is_quiescent(self) -> bool:
@@ -1909,22 +2180,26 @@ class InteractiveController:
 
         phase = event.phase
         if phase is DebateProgressPhase.STARTED:
-            self._terminal.write_run(
+            self._write_run_record(
                 event.debate_id,
-                f"Started {event.input_kind.value} consensus.",
+                content=f"Started {event.input_kind.value} consensus.",
+                role=SemanticRole.INFO,
+                state=ViewState.LOADING,
             )
             if event.context_mode is DebateContextMode.INCLUDED:
-                self._terminal.write_status(
-                    TerminalMessageKind.CONTEXT,
+                self._write_notice(
                     (
                         f"Included {event.context_event_count} focused-conversation "
                         f"events; {event.context_omitted_turns} earlier turns omitted."
                     ),
+                    label="context",
+                    state=ViewState.COMPLETED,
                 )
             elif event.context_mode is DebateContextMode.FRESH:
-                self._terminal.write_status(
-                    TerminalMessageKind.CONTEXT,
+                self._write_notice(
                     "Fresh run; no conversation events were included.",
+                    label="context",
+                    state=ViewState.COMPLETED,
                 )
             return
         if phase is DebateProgressPhase.DRAFTED:
@@ -1971,7 +2246,27 @@ class InteractiveController:
         else:
             assert phase is DebateProgressPhase.INTERRUPTED
             text = "Run interrupted after durable state transition."
-        self._terminal.write_run(event.debate_id, text)
+        if phase is DebateProgressPhase.CONSENSUS:
+            role = SemanticRole.SUCCESS
+            state = ViewState.COMPLETED
+        elif phase in {
+            DebateProgressPhase.DEADLOCK,
+            DebateProgressPhase.FAILED,
+        }:
+            role = SemanticRole.ERROR
+            state = ViewState.ERROR
+        elif phase is DebateProgressPhase.INTERRUPTED:
+            role = SemanticRole.WARNING
+            state = ViewState.CANCELLED
+        else:
+            role = SemanticRole.INFO
+            state = ViewState.LOADING
+        self._write_run_record(
+            event.debate_id,
+            content=text,
+            role=role,
+            state=state,
+        )
 
     def _present_consensus_result(
         self,
@@ -1988,14 +2283,17 @@ class InteractiveController:
         if result.status is DebateStatus.CONSENSUS:
             assert artifact_event is not None
             updates = ", ".join(artifact_event.core_updates) or "none"
-            self._terminal.write_run(
+            self._write_run_record(
                 result.debate_id,
-                (
-                    f"Consensus | revision: {terminal_event.revision_id} | "
-                    f"revision rounds: {terminal_event.round_number} | "
-                    f"manuscript: {artifact_event.manuscript_path} | "
-                    f"core updates: {updates}."
+                title="Consensus",
+                fields=(
+                    Field("revision", str(terminal_event.revision_id)),
+                    Field("revision rounds", str(terminal_event.round_number)),
+                    Field("manuscript", str(artifact_event.manuscript_path)),
+                    Field("core updates", f"{updates}."),
                 ),
+                role=SemanticRole.SUCCESS,
+                state=ViewState.COMPLETED,
             )
             return
         if result.status is DebateStatus.DEADLOCK:
@@ -2459,9 +2757,11 @@ class InteractiveController:
 
         self._focused_conversation = created
         handle = self._visible_handle_after_mutation(created)
-        self._terminal.write_status(
-            TerminalMessageKind.CONVERSATION,
+        self._write_notice(
             f"Created and focused {handle} | Subject: {created.subject}",
+            label="conversation",
+            role=SemanticRole.SUCCESS,
+            state=ViewState.COMPLETED,
         )
         return False
 
@@ -2564,13 +2864,15 @@ class InteractiveController:
             return
 
         self._focused_conversation = focused
-        self._terminal.write_status(
-            TerminalMessageKind.CONVERSATION,
+        self._write_notice(
             (
                 "Current focus: "
                 f"{visible_conversation_handle(focused, entries)} | "
                 f"Subject: {focused.subject}"
             ),
+            label="conversation",
+            role=SemanticRole.SUCCESS,
+            state=ViewState.COMPLETED,
         )
 
     def _rename_focused_conversation(self, subject: str) -> None:
@@ -2615,9 +2917,11 @@ class InteractiveController:
 
         self._focused_conversation = renamed
         handle = self._visible_handle_after_mutation(renamed)
-        self._terminal.write_status(
-            TerminalMessageKind.CONVERSATION,
+        self._write_notice(
             f"Renamed {handle} | Subject: {renamed.subject}",
+            label="conversation",
+            role=SemanticRole.SUCCESS,
+            state=ViewState.COMPLETED,
         )
 
     def _archive_subject_conversation(self, reference: str | None) -> bool:
@@ -2663,13 +2967,15 @@ class InteractiveController:
                     InteractiveError(InteractiveErrorCode.CONVERSATION_ARCHIVED)
                 )
             else:
-                self._terminal.write_status(
-                    TerminalMessageKind.CONVERSATION,
+                self._write_notice(
                     (
                         "Already archived "
                         f"{visible_conversation_handle(target, entries)} | "
                         f"Subject: {target.subject}"
                     ),
+                    label="conversation",
+                    role=SemanticRole.MUTED,
+                    state=ViewState.COMPLETED,
                 )
             return False
         if is_focused:
@@ -2708,12 +3014,14 @@ class InteractiveController:
         except Exception as exc:
             self._present_conversation_failure(exc)
             return
-        self._terminal.write_status(
-            TerminalMessageKind.CONVERSATION,
+        self._write_notice(
             (
                 f"Archived {visible_conversation_handle(target, entries)} | "
                 f"Subject: {archived.subject}"
             ),
+            label="conversation",
+            role=SemanticRole.SUCCESS,
+            state=ViewState.COMPLETED,
         )
 
     def _archive_focused_conversation(
@@ -2803,9 +3111,11 @@ class InteractiveController:
                 f"{visible_conversation_handle(successor, entries)} | "
                 f"Subject: {successor.subject}"
             )
-        self._terminal.write_status(
-            TerminalMessageKind.CONVERSATION,
+        self._write_notice(
             status,
+            label="conversation",
+            role=SemanticRole.SUCCESS,
+            state=ViewState.COMPLETED,
         )
         return False
 
@@ -2869,9 +3179,11 @@ class InteractiveController:
         self._terminal.write_error(
             classify_conversation_failure(default_failure)
         )
-        self._terminal.write_status(
-            TerminalMessageKind.CONVERSATION,
+        self._write_notice(
             "Archive did not complete; the original conversation remains focused.",
+            label="conversation",
+            role=SemanticRole.WARNING,
+            state=ViewState.COMPLETED,
         )
 
     def _require_active_conversation_focus(
@@ -3049,7 +3361,12 @@ class InteractiveController:
     def _write_conversation_cancelled_status(self, text: str) -> None:
         """Acknowledge one cancelled conversation action without state mutation."""
 
-        self._terminal.write_status(TerminalMessageKind.CANCELLED, text)
+        self._write_notice(
+            text,
+            label="cancelled",
+            role=SemanticRole.WARNING,
+            state=ViewState.CANCELLED,
+        )
 
     def _list_story_sessions(self) -> None:
         """Render canonical read-only lifecycle rows in backend order."""
@@ -3140,9 +3457,11 @@ class InteractiveController:
         self._focused_conversation = None
         self._conversation_memory_service = None
         self._target_agent_id = LEAD_ORCHESTRATOR
-        self._terminal.write_status(
-            TerminalMessageKind.SESSION,
+        self._write_notice(
             f"Paused {session_id}; default retained.",
+            label="session",
+            role=SemanticRole.SUCCESS,
+            state=ViewState.COMPLETED,
         )
         self._write_lobby_orientation()
         return False
@@ -3247,25 +3566,31 @@ class InteractiveController:
     def _write_main_input_cancelled_status(self) -> None:
         """Acknowledge main-input Ctrl-C without changing controller state."""
 
-        self._terminal.write_status(
-            TerminalMessageKind.CANCELLED,
+        self._write_notice(
             "No action was taken.",
+            label="cancelled",
+            role=SemanticRole.WARNING,
+            state=ViewState.CANCELLED,
         )
 
     def _write_session_open_cancelled_status(self) -> None:
         """Acknowledge declined default-session open without mutation."""
 
-        self._terminal.write_status(
-            TerminalMessageKind.CANCELLED,
+        self._write_notice(
             "Session open cancelled.",
+            label="cancelled",
+            role=SemanticRole.WARNING,
+            state=ViewState.CANCELLED,
         )
 
     def _write_session_pause_cancelled_status(self) -> None:
         """Acknowledge declined session pause while retaining attachment."""
 
-        self._terminal.write_status(
-            TerminalMessageKind.CANCELLED,
+        self._write_notice(
             "Session pause cancelled.",
+            label="cancelled",
+            role=SemanticRole.WARNING,
+            state=ViewState.CANCELLED,
         )
 
     def _write_lobby_orientation(self) -> None:

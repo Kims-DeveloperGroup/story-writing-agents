@@ -56,6 +56,8 @@ from story_writing_agents.interactive_terminal import (
     InteractiveErrorCode,
     InteractiveTerminal,
 )
+from story_writing_agents import interactive_terminal as terminal_module
+from story_writing_agents.interactive_terminal._render import render_plain
 from story_writing_agents.workspace import DEFAULT_AGENT_PROMPTS
 
 from tests.helpers import initialized_workspace
@@ -82,13 +84,23 @@ class TtyStringIO(io.StringIO):
 
 
 def expected_interactive_error(code: InteractiveErrorCode) -> str:
-    """Return the exact canonical two-line startup error record."""
+    """Return the exact callback-profile semantic startup error record."""
 
     spec = INTERACTIVE_ERROR_SPECS[code]
-    return (
-        f"[error {code.value}] {spec.summary}\n"
-        f"[hint] {spec.hint}\n"
+    component = terminal_module.Panel(
+        "Interactive error",
+        (
+            terminal_module.Notice(
+                spec.summary,
+                label=f"error {code.value}",
+                role=terminal_module.SemanticRole.ERROR,
+                state=terminal_module.ViewState.ERROR,
+            ),
+            terminal_module.Notice(spec.hint, label="hint"),
+        ),
+        state=terminal_module.ViewState.ERROR,
     )
+    return f"{render_plain(component, width=80).text}\n"
 
 
 class PackagingTests(unittest.TestCase):

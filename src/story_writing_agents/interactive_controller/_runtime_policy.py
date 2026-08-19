@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from ..conversation_retrieval import (
     ConversationRetrievalProgressEvent,
     ConversationRetrievalProgressPhase,
@@ -39,13 +41,41 @@ from ..models import (
 from ..workspace import Workspace
 
 
+@dataclass(frozen=True, slots=True)
+class DebateInspectionFacts:
+    """Whitelisted lifecycle facts for one persisted or active debate."""
+
+    session_id: str
+    debate_id: str
+    status: str
+    terminal: bool
+    input_kind: str | None
+    revision_id: str | None
+    rounds_completed: int
+    artifact: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class DebateContextInspectionFacts:
+    """Whitelisted identity and accounting facts for one debate sidecar."""
+
+    conversation_id: str
+    mode: DebateContextMode
+    event_count: int
+    complete_turns: int
+    retained_turns: int
+    omitted_turns: int
+    retained_utf8_bytes: int
+    truncated: bool
+
+
 def validate_debate_inspection(
     value: object,
     *,
     session_id: str,
     debate_id: str,
-) -> tuple[str, str]:
-    """Validate one full runtime inspection and return safe summary text."""
+) -> DebateInspectionFacts:
+    """Validate one full runtime inspection and return typed safe facts."""
 
     expected = {
         "session_id",
@@ -170,8 +200,9 @@ def validate_debate_inspection(
     elif status != "interrupted" or terminal is not True or not value["messages"]:
         raise ValueError("runtime debate inspection has no lifecycle source")
 
-    summary = _format_validated_debate_summary(
+    return _validated_debate_inspection_facts(
         session_id=session_id,
+        debate_id=debate_id,
         status=status,
         terminal=terminal,
         input_kind=input_kind,
@@ -179,14 +210,14 @@ def validate_debate_inspection(
         rounds_completed=rounds_completed,
         artifact=artifact,
     )
-    return summary, status
+
 
 def validate_session_inspection(
     value: object,
     *,
     session_id: str,
-) -> tuple[tuple[str, str], ...]:
-    """Validate a session inspection and project ordered safe debate rows."""
+) -> tuple[DebateInspectionFacts, ...]:
+    """Validate a session inspection and return ordered typed debate facts."""
 
     if type(value) is not dict or set(value) != {
         "session_id",
@@ -201,7 +232,7 @@ def validate_session_inspection(
     ):
         raise ValueError("runtime session inspection is invalid")
 
-    summaries: list[tuple[str, str]] = []
+    summaries: list[DebateInspectionFacts] = []
     previous_debate_id: str | None = None
     for row in value["debates"]:
         if type(row) is not dict:
@@ -252,8 +283,9 @@ def validate_session_inspection(
         if previous_debate_id is not None and debate_id <= previous_debate_id:
             raise ValueError("runtime session debates are not uniquely ordered")
         previous_debate_id = debate_id
-        summary = _format_validated_debate_summary(
+        facts = _validated_debate_inspection_facts(
             session_id=session_id,
+            debate_id=debate_id,
             status=row["status"],
             terminal=row["terminal"],
             input_kind=row["input_kind"],
@@ -261,20 +293,22 @@ def validate_session_inspection(
             rounds_completed=row["rounds_completed"],
             artifact=artifact,
         )
-        summaries.append((debate_id, summary))
+        summaries.append(facts)
     return tuple(summaries)
 
-def _format_validated_debate_summary(
+
+def _validated_debate_inspection_facts(
     *,
     session_id: str,
+    debate_id: str,
     status: object,
     terminal: object,
     input_kind: object,
     revision_id: object,
     rounds_completed: object,
     artifact: object,
-) -> str:
-    """Validate whitelisted lifecycle fields and format one safe summary."""
+) -> DebateInspectionFacts:
+    """Validate whitelisted lifecycle fields and construct typed safe facts."""
 
     if status not in {
         "not_found",
@@ -305,23 +339,28 @@ def _format_validated_debate_summary(
         raise ValueError("runtime debate round count is invalid")
     if artifact is not None and not isinstance(artifact, str):
         raise ValueError("runtime debate artifact is invalid")
-    return (
-        f"Session: {session_id} | Status: {status} | Terminal: "
-        f"{'yes' if terminal else 'no'} | Input: {input_kind or 'none'} | "
-        f"Revision: {revision_id or 'none'} | Rounds: {rounds_completed} | "
-        f"Artifact: {artifact or 'none'}."
+    return DebateInspectionFacts(
+        session_id=session_id,
+        debate_id=debate_id,
+        status=status,
+        terminal=terminal,
+        input_kind=input_kind,
+        revision_id=revision_id,
+        rounds_completed=rounds_completed,
+        artifact=artifact,
     )
+
 
 def validate_debate_context_inspection(
     value: object,
     *,
     session_id: str,
     debate_id: str,
-) -> str:
-    """Project a strict sidecar to identity, mode, and count facts only."""
+) -> DebateContextInspectionFacts | None:
+    """Project a strict sidecar to typed identity and accounting facts."""
 
     if value is None:
-        return "Context sidecar: none."
+        return None
     if type(value) is not dict or set(value) != {
         "schema_version",
         "session_id",
@@ -347,10 +386,15 @@ def validate_debate_context_inspection(
     if mode == DebateContextMode.FRESH.value:
         if snapshot is not None:
             raise ValueError("fresh debate context has a snapshot")
-        return (
-            f"Context: conversation {conversation_id} | Mode: fresh | "
-            "Events: 0 | Complete turns: 0 | Retained turns: 0 | "
-            "Omitted turns: 0 | UTF-8 bytes: 0 | Truncated: no."
+        return DebateContextInspectionFacts(
+            conversation_id=conversation_id,
+            mode=DebateContextMode.FRESH,
+            event_count=0,
+            complete_turns=0,
+            retained_turns=0,
+            omitted_turns=0,
+            retained_utf8_bytes=0,
+            truncated=False,
         )
     if mode != DebateContextMode.INCLUDED.value or type(snapshot) is not dict:
         raise ValueError("runtime debate context mode is invalid")
@@ -396,12 +440,15 @@ def validate_debate_context_inspection(
         or truncated is not (omitted > 0)
     ):
         raise ValueError("runtime debate context counts are inconsistent")
-    return (
-        f"Context: conversation {conversation_id} | Mode: included | "
-        f"Events: {len(snapshot['events'])} | Complete turns: {total} | "
-        f"Retained turns: {retained} | Omitted turns: {omitted} | "
-        f"UTF-8 bytes: {retained_bytes} | Truncated: "
-        f"{'yes' if truncated else 'no'}."
+    return DebateContextInspectionFacts(
+        conversation_id=conversation_id,
+        mode=DebateContextMode.INCLUDED,
+        event_count=len(snapshot["events"]),
+        complete_turns=total,
+        retained_turns=retained,
+        omitted_turns=omitted,
+        retained_utf8_bytes=retained_bytes,
+        truncated=truncated,
     )
 
 
@@ -870,6 +917,8 @@ def classify_advisory_turn_failure(
 
 
 __all__ = [
+    "DebateContextInspectionFacts",
+    "DebateInspectionFacts",
     "classify_advisory_turn_failure",
     "classify_consensus_execution_failure",
     "classify_inspection_failure",

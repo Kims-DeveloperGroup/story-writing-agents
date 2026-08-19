@@ -12,7 +12,7 @@ import sys
 import tempfile
 import unittest
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import FrozenInstanceError, fields, replace
 from pathlib import Path
 from typing import get_type_hints
 from unittest import mock
@@ -77,6 +77,8 @@ from story_writing_agents.interactive_terminal import (
     InteractiveErrorCode,
     InteractiveTerminal,
 )
+from story_writing_agents import interactive_terminal as terminal_module
+from story_writing_agents.interactive_terminal._render import render_plain
 from story_writing_agents.session_lifecycle import (
     SessionAccessState,
     SessionDurableState,
@@ -161,14 +163,24 @@ def _default_relative(session_id: str) -> str:
     return f"{_CONVERSATION_DEFAULT_DIRECTORY}/{session_id}.json"
 
 
-def _error_record(code: InteractiveErrorCode) -> str:
+def _error_record(code: InteractiveErrorCode, *, width: int = 80) -> str:
     """Return the exact default terminal record for one typed error code."""
 
     spec = INTERACTIVE_ERROR_SPECS[code]
-    return (
-        f"[error {code.value}] {spec.summary}\n"
-        f"[hint] {spec.hint}\n"
+    component = terminal_module.Panel(
+        "Interactive error",
+        (
+            terminal_module.Notice(
+                spec.summary,
+                label=f"error {code.value}",
+                role=terminal_module.SemanticRole.ERROR,
+                state=terminal_module.ViewState.ERROR,
+            ),
+            terminal_module.Notice(spec.hint, label="hint"),
+        ),
+        state=terminal_module.ViewState.ERROR,
     )
+    return f"{render_plain(component, width=width).text}\n"
 
 
 def _lifecycle(
@@ -609,6 +621,138 @@ class ControllerContractTests(ControllerTestCase):
                 controller.run_session_lobby()
             close.assert_called_once_with()
 
+    def test_runtime_inspection_facts_are_exact_frozen_internal_contracts(
+        self,
+    ) -> None:
+        debate_type = runtime_policy_module.DebateInspectionFacts
+        context_type = runtime_policy_module.DebateContextInspectionFacts
+        self.assertEqual(
+            tuple(field.name for field in fields(debate_type)),
+            (
+                "session_id",
+                "debate_id",
+                "status",
+                "terminal",
+                "input_kind",
+                "revision_id",
+                "rounds_completed",
+                "artifact",
+            ),
+        )
+        self.assertEqual(
+            tuple(field.name for field in fields(context_type)),
+            (
+                "conversation_id",
+                "mode",
+                "event_count",
+                "complete_turns",
+                "retained_turns",
+                "omitted_turns",
+                "retained_utf8_bytes",
+                "truncated",
+            ),
+        )
+        self.assertNotIn("DebateInspectionFacts", controller_package.__all__)
+        self.assertNotIn("DebateContextInspectionFacts", controller_package.__all__)
+
+        debate = runtime_policy_module.validate_debate_inspection(
+            {
+                "session_id": "session",
+                "debate_id": "debate_1",
+                "status": "not_found",
+                "terminal": False,
+                "state": None,
+                "result": None,
+                "messages": [],
+            },
+            session_id="session",
+            debate_id="debate_1",
+        )
+        self.assertEqual(
+            debate,
+            debate_type(
+                session_id="session",
+                debate_id="debate_1",
+                status="not_found",
+                terminal=False,
+                input_kind=None,
+                revision_id=None,
+                rounds_completed=0,
+                artifact=None,
+            ),
+        )
+        context = runtime_policy_module.validate_debate_context_inspection(
+            {
+                "schema_version": 1,
+                "session_id": "session",
+                "debate_id": "debate_1",
+                "conversation_id": "c_0123456789",
+                "mode": "fresh",
+                "snapshot": None,
+            },
+            session_id="session",
+            debate_id="debate_1",
+        )
+        self.assertEqual(
+            context,
+            context_type(
+                conversation_id="c_0123456789",
+                mode=runtime_policy_module.DebateContextMode.FRESH,
+                event_count=0,
+                complete_turns=0,
+                retained_turns=0,
+                omitted_turns=0,
+                retained_utf8_bytes=0,
+                truncated=False,
+            ),
+        )
+        with self.assertRaises(FrozenInstanceError):
+            debate.status = "active"  # type: ignore[misc]
+        with self.assertRaises(FrozenInstanceError):
+            context.truncated = True  # type: ignore[misc]
+
+    def test_only_approved_generic_status_sites_remain_after_view_migration(
+        self,
+    ) -> None:
+        source_root = (
+            Path(__file__).resolve().parents[1]
+            / "src"
+            / "story_writing_agents"
+        )
+        controller_tree = ast.parse(
+            (source_root / "interactive_controller" / "_core.py").read_text(
+                encoding="utf-8"
+            )
+        )
+        terminal_tree = ast.parse(
+            (source_root / "interactive_terminal" / "_core.py").read_text(
+                encoding="utf-8"
+            )
+        )
+
+        deferred_controller_calls = [
+            node
+            for node in ast.walk(controller_tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "write_status"
+            and isinstance(node.func.value, ast.Attribute)
+            and isinstance(node.func.value.value, ast.Name)
+            and node.func.value.value.id == "self"
+            and node.func.value.attr == "_terminal"
+        ]
+        deferred_composer_calls = [
+            node
+            for node in ast.walk(terminal_tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "write_status"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "self"
+        ]
+        self.assertEqual(len(deferred_controller_calls), 11)
+        self.assertEqual(len(deferred_composer_calls), 4)
+
     def test_five_unit_responsibilities_dependencies_and_policy_state(self) -> None:
         source_root = (
             Path(__file__).resolve().parents[1]
@@ -739,6 +883,8 @@ class ControllerContractTests(ControllerTestCase):
                 "visible_conversation_handle",
             ],
             runtime_policy_module: [
+                "DebateContextInspectionFacts",
+                "DebateInspectionFacts",
                 "classify_advisory_turn_failure",
                 "classify_consensus_execution_failure",
                 "classify_inspection_failure",
@@ -775,7 +921,10 @@ class ControllerContractTests(ControllerTestCase):
                 "ConversationInputFailure",
                 "ConversationResolutionFailure",
             },
-            "interactive_controller._runtime_policy": set(),
+            "interactive_controller._runtime_policy": {
+                "DebateContextInspectionFacts",
+                "DebateInspectionFacts",
+            },
         }
         for module_name in expected_policy_assignments:
             tree = trees[module_name]
@@ -1127,7 +1276,7 @@ class ControllerStartupTests(ControllerTestCase):
                     )
                 self.assertEqual(result, 0 if recoverable else 2)
                 rendered = "".join(callbacks.records)
-                self.assertIn(_error_record(code), rendered)
+                self.assertIn(_error_record(code, width=200), rendered)
                 self.assertNotIn("secret-token-from-backend", rendered)
                 self.assertFalse(workspace.path(_CONTEXT_PATH).exists())
                 if recoverable:
@@ -1288,12 +1437,12 @@ class ControllerConversationStartupTests(ControllerTestCase):
                 scopes = [
                     record
                     for record in callbacks.records
-                    if record.startswith("[context]")
+                    if record.startswith("Conversation scope\n")
                 ]
                 if label == "active":
                     self.assertEqual(len(scopes), 1)
                     for fact in (
-                        "[context] Session: session",
+                        "Session: session",
                         "Conversation: c_fedcba9876",
                         "Subject: Opening scene",
                         "Agent: lead",
@@ -1304,8 +1453,10 @@ class ControllerConversationStartupTests(ControllerTestCase):
                     self.assertEqual(
                         scopes,
                         [
-                            "[context] Session: session | Conversation: "
-                            "none | Agent: lead\n"
+                            "Conversation scope\n"
+                            "  Session: session\n"
+                            "  Conversation: none\n"
+                            "  Agent: lead\n"
                         ],
                     )
                 if persist_file:
@@ -1622,8 +1773,10 @@ class ControllerConversationStartupTests(ControllerTestCase):
         rendered = "".join(callbacks.records)
         self.assertIn("Subject: Source subject", rendered)
         self.assertIn(
-            "[context] Session: destination | Conversation: none | "
-            "Agent: lead\n",
+            "Conversation scope\n"
+            "  Session: destination\n"
+            "  Conversation: none\n"
+            "  Agent: lead\n",
             rendered,
         )
         self.assertNotIn("[error conversation_archived]", rendered)
@@ -2621,7 +2774,10 @@ class ControllerConversationCommandTests(ControllerTestCase):
         )
         rendered = "".join(callbacks.records)
         self.assertEqual(rendered.count("Created and focused"), 2)
-        self.assertIn("Subject: Opening scene | Agent: lead", rendered)
+        self.assertIn(
+            "  Subject: Opening scene\n  Agent: lead\n",
+            rendered,
+        )
         self.assertEqual(list(workspace.root.rglob("transcript.jsonl")), [])
         self.assertEqual(list(workspace.root.rglob("*.result.json")), [])
         self.assertEqual(list(workspace.root.rglob("*.state.json")), [])
@@ -2675,7 +2831,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
         self.assertEqual(catalog.entries, [])
         self.assertFalse(workspace.path(_default_relative("session")).exists())
         self.assertIn(
-            _error_record(InteractiveErrorCode.CONVERSATION_INVALID),
+            _error_record(InteractiveErrorCode.CONVERSATION_INVALID, width=200),
             callbacks.records,
         )
 
@@ -2692,7 +2848,10 @@ class ControllerConversationCommandTests(ControllerTestCase):
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
         self.assertIn(
-            _error_record(InteractiveErrorCode.CONVERSATION_CREATE_FAILED),
+            _error_record(
+                InteractiveErrorCode.CONVERSATION_CREATE_FAILED,
+                width=200,
+            ),
             callbacks.records,
         )
         self.assertNotIn("allocation-secret", "".join(callbacks.records))
@@ -2723,7 +2882,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
         self.assertIn("was created but did not become the default", rendered)
         self.assertIn("[error workspace_invalid]", rendered)
         self.assertNotIn("selection-secret", rendered)
-        self.assertIn("Conversation: none | Agent: lead", rendered)
+        self.assertIn("  Conversation: none\n  Agent: lead\n", rendered)
 
     def test_list_normalizes_queries_preserves_order_and_uses_global_collisions(
         self,
@@ -2815,7 +2974,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
             InteractiveErrorCode.CONVERSATION_ARCHIVED,
         ):
             with self.subTest(code=code):
-                self.assertIn(_error_record(code), rendered)
+                self.assertIn(_error_record(code, width=200), rendered)
         self.assertIn(f"Current focus: {_COLLIDING_A} | Subject: First", rendered)
         self.assertIn("Current focus: c_fedcba9876 | Subject: Unique", rendered)
         self.assertEqual(
@@ -2855,7 +3014,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
         self.assertFalse(any(event.startswith("rename:") for event in catalog.events))
         rendered = "".join(callbacks.records)
         self.assertIn(
-            _error_record(InteractiveErrorCode.WORKSPACE_INVALID),
+            _error_record(InteractiveErrorCode.WORKSPACE_INVALID, width=200),
             rendered,
         )
         self.assertGreaterEqual(rendered.count("Subject: Prior"), 2)
@@ -2910,10 +3069,12 @@ class ControllerConversationCommandTests(ControllerTestCase):
                     any(event.startswith("rename:") for event in catalog.events)
                 )
                 rendered = "".join(callbacks.records)
-                self.assertIn(_error_record(expected_code), rendered)
+                self.assertIn(_error_record(expected_code, width=200), rendered)
                 self.assertIn(
-                    "[context] Session: session | Conversation: none | "
-                    "Agent: lead\n",
+                    "Conversation scope\n"
+                    "  Session: session\n"
+                    "  Conversation: none\n"
+                    "  Agent: lead\n",
                     rendered,
                 )
 
@@ -2947,7 +3108,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
         )
         rendered = "".join(callbacks.records)
         self.assertIn(
-            _error_record(InteractiveErrorCode.WORKSPACE_INVALID),
+            _error_record(InteractiveErrorCode.WORKSPACE_INVALID, width=200),
             rendered,
         )
         self.assertIn("original conversation remains focused", rendered)
@@ -3000,7 +3161,10 @@ class ControllerConversationCommandTests(ControllerTestCase):
         )
         self.assertEqual(restarted.run_session_lobby(), 0)
         self.assertIn(
-            "[context] Session: session | Conversation: none | Agent: lead\n",
+            "Conversation scope\n"
+            "  Session: session\n"
+            "  Conversation: none\n"
+            "  Agent: lead\n",
             restarted_callbacks.records,
         )
         self.assertEqual(
@@ -3063,7 +3227,10 @@ class ControllerConversationCommandTests(ControllerTestCase):
                 if retained:
                     detach.assert_called_once_with("session")
                     self.assertIn(
-                        _error_record(InteractiveErrorCode.WORKSPACE_INVALID),
+                        _error_record(
+                            InteractiveErrorCode.WORKSPACE_INVALID,
+                            width=200,
+                        ),
                         rendered,
                     )
                 else:
@@ -3116,7 +3283,10 @@ class ControllerConversationCommandTests(ControllerTestCase):
                 close.assert_called_once_with()
                 rendered = "".join(callbacks.records)
                 self.assertIn(
-                    _error_record(InteractiveErrorCode.INTERNAL_ERROR),
+                    _error_record(
+                        InteractiveErrorCode.INTERNAL_ERROR,
+                        width=200,
+                    ),
                     rendered,
                 )
                 self.assertNotIn("foreign-secret", rendered)
@@ -3277,7 +3447,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
         )
         rendered = "".join(callbacks.records)
         self.assertIn(
-            _error_record(InteractiveErrorCode.CONVERSATION_INVALID),
+            _error_record(InteractiveErrorCode.CONVERSATION_INVALID, width=200),
             rendered,
         )
         self.assertIn("Renamed c_fedcba9876 | Subject: Revised subject", rendered)
@@ -3441,11 +3611,26 @@ class ControllerConversationCommandTests(ControllerTestCase):
                         )
                     )
 
+                real_write_component = (
+                    terminal_module.InteractiveSemanticOutput.write_component
+                )
+
+                def fail_committed_notice(output, component):
+                    """Fail only the post-commit conversation acknowledgement."""
+
+                    if (
+                        type(component) is terminal_module.Notice
+                        and component.label == "conversation"
+                    ):
+                        raise RuntimeError("writer-secret")
+                    return real_write_component(output, component)
+
                 with (
                     mock.patch.object(
-                        InteractiveTerminal,
-                        "write_status",
-                        side_effect=RuntimeError("writer-secret"),
+                        terminal_module.InteractiveSemanticOutput,
+                        "write_component",
+                        autospec=True,
+                        side_effect=fail_committed_notice,
                     ),
                     mock.patch.object(
                         backend,
@@ -3458,7 +3643,10 @@ class ControllerConversationCommandTests(ControllerTestCase):
                 detach.assert_called_once_with("session")
                 rendered = "".join(callbacks.records)
                 self.assertIn(
-                    _error_record(InteractiveErrorCode.INTERNAL_ERROR),
+                    _error_record(
+                        InteractiveErrorCode.INTERNAL_ERROR,
+                        width=200,
+                    ),
                     rendered,
                 )
                 self.assertNotIn("writer-secret", rendered)
@@ -3665,7 +3853,13 @@ class ControllerSwitchTests(ControllerTestCase):
         self.assertEqual(_tree_snapshot(workspace.root), before)
         self.assertEqual(load_cli_context(workspace).default_session_id, "source")
         rendered = "".join(callbacks.records)
-        self.assertIn(_error_record(InteractiveErrorCode.SESSION_ACCESS_BLOCKED), rendered)
+        self.assertIn(
+            _error_record(
+                InteractiveErrorCode.SESSION_ACCESS_BLOCKED,
+                width=200,
+            ),
+            rendered,
+        )
         self.assertNotIn("secret-owner-token", rendered)
         self.assertEqual(rendered.count("Session: source (opened)\n"), 1)
 
@@ -4111,7 +4305,10 @@ class ControllerContentionTests(ControllerTestCase):
         self.assertEqual(nested["access_before"], nested["access_after"])
         self.assertEqual(nested["context_after"], context_before)
         self.assertIn(
-            _error_record(InteractiveErrorCode.SESSION_ACCESS_BLOCKED),
+            _error_record(
+                InteractiveErrorCode.SESSION_ACCESS_BLOCKED,
+                width=200,
+            ),
             nested["records"],
         )
         self.assertIn("Session: lobby\n", nested["records"])
