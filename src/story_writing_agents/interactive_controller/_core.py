@@ -1344,9 +1344,9 @@ class InteractiveController:
                     "Model",
                     scope=AGENT_SPECS[agent_id].display_name,
                     instruction=(
-                        "Enter an exact model or leave blank for provider default."
+                        "Enter an exact model or leave blank to inherit the system setting."
                     ),
-                    default=current or "provider default",
+                    default=current or "inherit",
                 ),
                 context=(self._settings_panel(state),),
             )
@@ -1363,7 +1363,7 @@ class InteractiveController:
                 ), False
             except ConfigurationError:
                 self._write_settings_validation(
-                    "Codex model must be safe nonempty text, or blank for default."
+                    "Codex model must be safe nonempty text, or blank to inherit."
                 )
 
     def _edit_settings_agent_reasoning(
@@ -1371,7 +1371,7 @@ class InteractiveController:
         state: SettingsState,
         agent_id: str,
     ) -> tuple[SettingsState, bool]:
-        """Select one agent's fixed reasoning level or provider default."""
+        """Select one agent's fixed reasoning level or inherited system value."""
 
         pending = state.pending.agent_configs[agent_id].codex_reasoning_effort
         selected = "default" if pending is None else pending
@@ -1379,10 +1379,10 @@ class InteractiveController:
             Prompt(
                 "Reasoning effort",
                 scope=AGENT_SPECS[agent_id].display_name,
-                instruction="Choose provider default or one fixed effort level.",
+                instruction="Choose inheritance or one fixed effort level.",
             ),
             (
-                Choice("default", "Provider default"),
+                Choice("default", "Inherit"),
                 *tuple(
                     Choice(effort, effort)
                     for effort in SETTINGS_REASONING_EFFORTS
