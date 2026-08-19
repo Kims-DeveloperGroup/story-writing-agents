@@ -2295,6 +2295,65 @@ class ControllerSettingsTests(ControllerTestCase):
         )
         self.assertTrue(backend._closed)
 
+    def test_settings_routes_picker_and_prompt_inputs_as_transient_only(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        controller, _backend, _callbacks = self.make_controller(
+            workspace,
+            "/settings",
+            "3",
+            "0",
+            "5",
+            "/quit",
+            terminal_width=120,
+        )
+        original_picker = terminal_module.InteractivePickerInput.read_picker
+        original_prompt = terminal_module.InteractivePromptInput.read_prompt
+        with (
+            mock.patch.object(
+                terminal_module.InteractivePickerInput,
+                "read_picker",
+                autospec=True,
+                side_effect=original_picker,
+            ) as picker,
+            mock.patch.object(
+                terminal_module.InteractivePromptInput,
+                "read_prompt",
+                autospec=True,
+                side_effect=original_prompt,
+            ) as prompt,
+        ):
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        self.assertGreaterEqual(len(picker.call_args_list), 2)
+        self.assertTrue(
+            all(call.kwargs.get("transient") is True for call in picker.call_args_list)
+        )
+        self.assertEqual(len(prompt.call_args_list), 1)
+        self.assertIs(prompt.call_args.kwargs.get("transient"), True)
+
+        ordinary_controller, _ordinary_backend, _ordinary_callbacks = (
+            self.make_controller(workspace, "/help", "/quit", terminal_width=120)
+        )
+        with (
+            mock.patch.object(
+                terminal_module.InteractivePickerInput,
+                "read_picker",
+                autospec=True,
+                side_effect=original_picker,
+            ) as ordinary_picker,
+            mock.patch.object(
+                terminal_module.InteractivePromptInput,
+                "read_prompt",
+                autospec=True,
+                side_effect=original_prompt,
+            ) as ordinary_prompt,
+        ):
+            self.assertEqual(ordinary_controller.run_session_lobby(), 0)
+        ordinary_picker.assert_not_called()
+        ordinary_prompt.assert_not_called()
+
     def test_settings_edit_save_isolated_candidate_and_literal_cancel_text(self) -> None:
         workspace = self.make_workspace()
         agent_configs = workspace.read_json("config/agent_configs.json")
@@ -2377,18 +2436,19 @@ class ControllerSettingsTests(ControllerTestCase):
             ),
             1,
         )
-        self.assertIn(
+        self.assertNotIn(
             "Gemini — Current saved provider; choose Codex to remediate. "
             "(disabled: Provider is not implemented.)",
             rendered,
         )
-        self.assertIn("Inherit", rendered)
+        self.assertEqual(rendered.count("Settings [open]\n"), 1)
+        self.assertNotIn("Inherit", rendered)
         self.assertNotIn("Settings cancelled", rendered)
         self.assertEqual(callbacks.reads, [])
 
     def test_nested_escape_returns_but_interrupt_and_eof_cancel_all(self) -> None:
         scenarios = (
-            (("/settings", "4", "2", "2", "\x1b", "6", "/quit"), 2),
+            (("/settings", "4", "2", "2", "\x1b", "6", "/quit"), 1),
             (("/settings", KeyboardInterrupt(), "/quit"), 1),
             (("/settings", EOFError(), "/quit"), 1),
         )

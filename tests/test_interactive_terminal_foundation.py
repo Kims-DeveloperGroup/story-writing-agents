@@ -422,6 +422,7 @@ class PublicCompatibilityFoundationTests(unittest.TestCase):
             InteractivePromptInput.read_prompt: (
                 ("prompt", positional, required),
                 ("context", keyword, ()),
+                ("transient", keyword, False),
             ),
         }
         for value, expected_shape in expected.items():
