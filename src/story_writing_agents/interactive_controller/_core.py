@@ -1425,7 +1425,9 @@ class InteractiveController:
                         f"{'yes' if context.truncated else 'no'}.",
                     ),
                 ),
-                state=ViewState.COMPLETED,
+                state=(
+                    ViewState.EMPTY if not displayed else ViewState.COMPLETED
+                ),
             ),
         )
 
