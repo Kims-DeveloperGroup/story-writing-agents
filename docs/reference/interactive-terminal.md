@@ -96,11 +96,13 @@ read_picker(prompt: Prompt, choices: tuple[Choice, ...], *,
             highlighted_id: str | None = None,
             selected_id: str | None = None,
             notice: Notice | None = None,
-            state: ViewState = ViewState.OPEN) -> ControlOutcome
+            state: ViewState = ViewState.OPEN,
+            transient: bool = False) -> ControlOutcome
 
 InteractivePromptInput(terminal: InteractiveTerminal) -> None
 read_prompt(prompt: Prompt, *,
-            context: tuple[Panel | Section | Field | Notice, ...] = ()) -> ControlOutcome
+            context: tuple[Panel | Section | Field | Notice, ...] = (),
+            transient: bool = False) -> ControlOutcome
 ```
 
 Construction validates and retains the terminal's bound component writer but
@@ -109,7 +111,9 @@ accepted component call performs one render and one callback write, including
 the final LF; failures propagate without a retry. The picker adapter likewise
 binds only the terminal's picker reader without observing capabilities or
 acquiring I/O. The settings controller consumes both input adapters through
-the facade; neither is public API.
+the facade; neither is public API. `transient` is an opt-in settings lifecycle:
+its default `False` preserves the established picker and prompt final-frame
+behavior used by every non-settings caller.
 
 | Enum | Exact values |
 | --- | --- |
@@ -458,13 +462,23 @@ selection or highlight. The retry adds exactly:
 Enter an enabled choice number, press Enter for the highlighted choice, or enter /cancel.
 ```
 
-Both live and fallback lifecycles emit exactly one final semantic
-`completed` or `cancelled` frame after commit or cancel. Interrupt, EOF, and
-failures clear any transient live display and emit no final picker state;
-restoration failure remains fatal. Callback, non-TTY, `TERM=dumb`, non-POSIX,
-uncertain-capability, and safely recovered activation paths use the numbered
-fallback without acquiring raw input. The unified driver remains the only raw
-resource owner and picker reads do not inspect or mutate main history,
+The default picker lifecycle renders one final `completed` or `cancelled` frame
+after commit or cancel. Settings opts into a transient lifecycle for its
+pickers and prompts. Capable terminal reads clear the transient rows before
+returning the typed outcome, so no duplicate final frame is emitted. Callback
+and line-fallback readers cannot erase prior output; transient picker fallback
+therefore omits its synthetic final frame rather than duplicating it. Nested
+settings Escape returns to the parent silently, while top-level Save or
+whole-flow cancellation is reported by the controller's single Current/Pending
+snapshot. Non-settings calls retain the default final-frame behavior.
+
+For the default lifecycle, live and fallback readers emit exactly one final
+semantic `completed` or `cancelled` frame after commit or cancel. Interrupt,
+EOF, and failures clear any transient live display and emit no final picker
+state; restoration failure remains fatal. Callback, non-TTY, `TERM=dumb`,
+non-POSIX, uncertain-capability, and safely recovered activation paths use the
+numbered fallback without acquiring raw input. The unified driver remains the
+only raw resource owner and picker reads do not inspect or mutate main history,
 completion, parser, provider, runtime, filesystem, storage, or network state.
 
 <a id="exact-search-and-transcript-records"></a>
