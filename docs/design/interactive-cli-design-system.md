@@ -9,9 +9,9 @@
 > #73 supplies contextual composition previews through the unified driver.
 > #84 now applies the same system to help, roster, lists, search, transcript,
 > and focused history. #85 adds bounded process-local main-command history.
-> Composer/confirmation component integration (#86), selectable completion
-> (#79), and pickers (#87) remain planned. The settings UI (#93) is planned and
-> blocked by #87 plus its
+> #86 integrates line-oriented composition and confirmation with semantic input
+> views and pure controls. Selectable completion (#79) and pickers (#87) remain
+> planned. The settings UI (#93) is planned and blocked by #87 plus its
 > workspace Codex-settings prerequisite (#94). The
 > [interactive terminal reference](../reference/interactive-terminal.md) and
 > [terminal safety rules](../operations/terminal-safety.md) describe current
@@ -24,8 +24,8 @@ confirmation, suggestions, fixed choices, command history, and pickers one
 semantic model.
 
 The words **must**, **must not**, and **may** below constrain the delivery
-issues. Requirements beyond the implemented #82, #83, #84, #85, and #73 slices
-do not describe current production behavior.
+issues. Requirements beyond the implemented #82, #83, #84, #85, #86, and #73
+slices do not describe current production behavior.
 
 ## Delivery status
 
@@ -36,7 +36,7 @@ do not describe current production behavior.
 | #84 information-dense view migration | Implemented: semantic full/context help, agent roster, session/conversation lists, search, transcript, and focused history preserve exact facts, copy, order, callback boundaries, cancellation, and empty behavior across responsive plain/fixed-ANSI rendering. |
 | #85 input history | Implemented: each stream-backed terminal/editor driver owns one isolated, bounded 100-entry main-command store; capable main input uses Up/Down older/newer navigation with exact draft restoration. The current suggestion list remains preview-only, and non-main input stays history-free. |
 | Prerequisite #73 | Implemented: RUN/CHAT composition uses the fixed preview-only `/send`, `/cancel` projection through explicit call-local routing. |
-| #86 composer/confirmation integration | Planned: existing line-oriented composition and confirmation behavior remains unchanged beyond #73 previews. |
+| #86 composer/confirmation integration | Implemented: RUN/CHAT composition and yes/no confirmation build ordered semantic input views, render equivalent plain/fixed-ANSI projections at the active width, and use pure history-free controls. Established results, signatures, `/send`, `/cancel`, `/say`, defaults, Ctrl-C, EOF, callback cardinality, and controller/runtime behavior remain unchanged. |
 | #79 selectable completion | Planned: the current slash suggestion list is preview-only; Tab application, Up/Down palette navigation, and fixed-value completion are not implemented. Shift-Tab has no palette action in the target behavior. |
 | #87 pickers | Planned: semantic picker values and rendering exist internally, but no interactive picker transition or consumer is implemented. |
 | #94 workspace Codex settings | Planned: extend the existing workspace configuration contract with optional Codex model and reasoning defaults. No model/reasoning workspace setting is currently available. |
@@ -132,8 +132,11 @@ compatibility facade may independently acquire or restore the terminal.
 the established insertion, deletion, cursor, Enter, Ctrl-C, and EOF behavior;
 its suggestion projection preserves the current preview list. #85 adds the
 pure main-input/history transition and one bounded store to each stream-backed
-driver. Up/Down now navigate history on capable main reads. Tab, Shift-Tab, and
-Escape remain no-ops until #79, and palette/picker behavior remains planned.
+driver. #86 adds pure composer-line and confirmation-answer transitions plus a
+history-free semantic input route. Up/Down navigate history only on capable
+main reads. Up/Down, Tab, Shift-Tab, and Escape remain no-ops for composition
+and confirmation; Tab, Shift-Tab, and Escape remain no-ops at the main prompt
+until #79. Palette and picker behavior remains planned.
 
 Controls receive normalized key events such as text, Enter, Backspace, Delete,
 Left, Right, Home, End, Up, Down, Tab, Shift-Tab, Escape, Ctrl-C, and EOF. Their
@@ -165,17 +168,17 @@ record into multiple caller-visible callback records.
 ## Key and commit semantics
 
 The following table is the complete target interaction contract. The existing
-one-line editing, composition, confirmation, non-selectable slash preview, and
-#85 main-command history are observable. Selectable palette and picker rows
-remain planned as identified above.
+one-line editing, semantic composition and confirmation controls,
+non-selectable slash preview, and #85 main-command history are observable.
+Selectable palette and picker rows remain planned as identified above.
 
 | Focused control | Navigation and editing | Commit | Cancel or terminal event |
 | --- | --- | --- | --- |
 | Main one-line input | Text, Backspace/Delete, Left/Right, and Home/End edit. Up/Down navigate history only while no palette is open. Slash-prefixed input may open a palette; Tab applies its highlighted completion. | Enter, or configured VEOF with a nonempty buffer, submits the exact visible buffer to the existing parser once. | Ctrl-C, configured VEOF on an empty buffer, and physical EOF retain their established typed outcomes; no text is parsed. |
 | `SuggestionPalette` anchored to main input | Opening highlights the first eligible candidate without editing. Up/Down moves the highlight among eligible candidates without replacement; Tab applies the highlighted candidate to the applicable span. Shift-Tab has no palette action. | Enter submits the current visible buffer, never an unapplied highlighted candidate. | Escape closes the palette and restores the prefix captured before the first completion replacement. |
 | `Picker` | Up/Down changes highlight among enabled items. Highlight never selects or commits. | Enter selects and commits the highlighted enabled item. | Escape cancels. Ctrl-C and EOF leave without commit and retain the invoking API's typed semantics. |
-| Line-oriented composer | Each ordinary line appends exact content. No raw full-screen editing or command-history traversal is introduced. | `/send` commits the exact LF-joined content when nonblank. | `/cancel`, Ctrl-C, and EOF preserve established discard outcomes and counts. |
-| Confirmation | Existing accepted yes/no input and blank-default behavior remain authoritative. Invalid input rerenders a notice and asks again. | A valid answer or blank default returns the established `yes` or `no` result. | Ctrl-C and EOF return the established `interrupt` or `eof` result. |
+| Line-oriented composer | Each ordinary line appends exact content. Up/Down, Tab, Shift-Tab, and Escape are no-ops; no full-screen editing or command-history traversal is introduced. | `/send` commits the exact LF-joined content when nonblank. | `/cancel`, Ctrl-C, and EOF preserve established discard outcomes and counts. |
+| Confirmation | Existing accepted yes/no input and blank-default behavior remain authoritative. Up/Down, Tab, Shift-Tab, and Escape are no-ops. Invalid input marks the choices as erroneous, writes one hint, and asks again. | A valid answer or blank default returns the established `yes` or `no` result. | Ctrl-C and EOF return the established `interrupt` or `eof` result. |
 
 `/say /send` and `/say /cancel` in composition continue to append literal
 `/send` and `/cancel` lines. The composer remains line-oriented; preview,
@@ -222,6 +225,38 @@ file.
   overlay is marked open; #79, not #85, will connect that seam to the selectable
   palette.
   Until then Tab, Shift-Tab, and Escape have no main-input action.
+
+### Composer and confirmation controls
+
+> **Implemented by #86:** composition and confirmation now use ordered semantic
+> input views without changing their public APIs or established outcomes.
+
+Each RUN or CHAT composition attempt renders `Mode`, optional `Target`, `Next
+line`, `Lines`, `Characters`, guidance, then the final focused numbered prompt.
+The exact accumulated lines live only in immutable call-local composer state;
+they are LF-joined for `/send` and discarded for `/cancel`, Ctrl-C, or EOF.
+Composition retains the fixed ordered `/send`, `/cancel` preview, but the
+preview is not selectable and `/say` remains ordinary composer input.
+
+Each confirmation attempt renders `Question`, `Choices`, `Default`, then the
+final focused prompt. It has no suggestion provider. Invalid input writes one
+semantic error hint, marks `Choices` as erroneous on the retry view, and reads
+again. A valid answer, blank default, Ctrl-C, or EOF retains its established
+typed result and adds no final confirmation event.
+
+Both controls are history-free. Their semantic input renderer produces one
+plain projection and an optional fixed-theme projection with equal content,
+width-aware wrapping, a final prompt space, and no final LF. Callback and safe
+line-fallback reads receive the plain projection once; capable live reads use
+the trusted fixed-theme projection for redraw while keeping dynamic input
+sanitized. Each read remains call-local, and suggestions, rendering, and retry
+state perform no parser, runtime, provider, filesystem, or storage action.
+
+Composer lifecycle output is now four semantic `Notice` events: `open` on
+entry, `error` for an empty `/send`, `completed` on send, and `cancelled` on
+discard. Each event and each invalid-confirmation hint remains one render and
+one callback write. The public generic `write_status` method remains for
+compatibility, but no internal composer call site uses it.
 
 ### Main-command palette and fixed choices
 
@@ -377,19 +412,19 @@ automatic save.
 
 ## Rendering and capability policy
 
-#82 implements three capability profiles and a package-private semantic
-renderer. #83 and #84 route all migrated output view groups through that
-renderer; capable real CLI streams may therefore show their structured
-fixed-ANSI form, while `NO_COLOR` and plain/fallback consumers retain the same
-structured text. The controller has no generic `write_status` call site;
-`write_status` remains only for four deferred terminal-composer records owned
-by #86.
+#82 implements three capability profiles and package-private semantic output and
+input renderers. #83 and #84 route all migrated output view groups through that
+foundation, and #86 routes composition, confirmation, and their lifecycle
+records through it. Capable real CLI streams may therefore show their
+structured fixed-ANSI form, while `NO_COLOR` and plain/fallback consumers retain
+the same semantic text. Neither the controller nor the terminal composer has an
+internal generic `write_status` call site.
 
 | Profile | Selection | Output and input behavior |
 | --- | --- | --- |
 | Capable interactive ANSI | Real CLI with trusted TTY capability and non-`dumb` `TERM`; `NO_COLOR` absent for decoration | Structured layout plus fixed foreground/emphasis SGR. Safe functional cursor controls may support the focused live control. |
 | Capable interactive plain | Same interactive capability with `NO_COLOR` present | The identical semantic structure without decorative SGR. Safe functional cursor controls may remain because `NO_COLOR` governs color, not editing capability. |
-| Plain line fallback | Non-TTY, `TERM=dumb`, missing capability, or any uncertain capability result | Structured plain records and ordinary line input. No raw mode, cursor movement, live overlay, or terminal mutation. |
+| Plain line fallback | Non-TTY, `TERM=dumb`, missing capability, or any uncertain capability result | Structured plain records; semantic composition/confirmation prompts pass once through the ordinary line callback. No raw mode, cursor movement, live overlay, or terminal mutation. |
 
 The non-TTY profile does not bypass the installed shell's documented
 [TTY guard](../operations/terminal-safety.md#the-tty-guard-comes-first). It
@@ -433,8 +468,8 @@ measurements.
 The real CLI detects terminal width, falls back to 80 columns when no reliable
 positive width is available, and caps detected width at 120 columns. A resize
 is observed on the next live-input or semantic-render operation; no
-signal-driven resize loop is added. The four deferred composer status records
-retain their established construction width until #86.
+signal-driven resize loop is added. Composer/confirmation input and composer
+lifecycle events use the current capability width for their next render.
 Narrow layouts degrade in this order: remove decorative alignment, stack
 `Field` label/value pairs, reduce indentation, wrap content with visible
 continuation structure, and window long selectable lists with position cues.
@@ -533,6 +568,12 @@ retains an `InteractiveTerminal` writer without rendering, observing streams,
 or acquiring a resource; each `write_component(component)` call renders and
 writes exactly one component.
 
+#86 adds package-private `ComposerState`, `InputPromptView`, and
+`RenderedInputFrame` contracts. Those types remain outside the package facade,
+root facade, public `__all__`, and closed `Component` union;
+`ControlOutcomeKind.REJECTED` is likewise internal. The established public
+result types, constructor, and method signatures remain exact.
+
 ### `interactive_line_editor` compatibility facade
 
 `story_writing_agents.interactive_line_editor` remains importable with this
@@ -570,11 +611,11 @@ dependency direction are fixed as follows:
 | Unit | Responsibility |
 | --- | --- |
 | `interactive_terminal.__init__` | Compatibility facade with the exact existing public surface plus one package-internal real-CLI stream factory. It owns no import-time resource or state. |
-| `interactive_terminal._model` | Immutable semantic components, bounded main-history/control state, key/focus values, and transition/render results. No I/O. |
-| `interactive_terminal._controls` | Pure established line-input transitions, bounded history append/navigation/draft restoration, future-overlay arrow suppression, and exact slash-suggestion projection. Selectable palette, composer, confirmation, and picker transitions remain future work. |
-| `interactive_terminal._render` | Pure safe responsive renderers for plain and fixed ANSI profiles. It sanitizes dynamic content before styling and returns render data without writing. |
-| `interactive_terminal._driver` | Sole owner of raw streams, capability/width detection, key decoding, cursor controls, raw mode, restoration, writes, flushes, and one bounded process-local main-history store per instance. |
-| `interactive_terminal._core` | `InteractiveTerminal`, established public-operation orchestration, package-internal stream factory, semantic render seam, and resource-free `InteractiveSemanticOutput` adapter. It routes main reads to the driver's history-aware path and composition to its history-free path without owning another store or raw implementation. |
+| `interactive_terminal._model` | Immutable semantic components, bounded main-history/control state, composer state, semantic input/render frames, key/focus values, and transition/render results. No I/O. |
+| `interactive_terminal._controls` | Pure established line-input, main-history, composer-line, and confirmation-answer transitions; bounded history append/navigation/draft restoration; future-overlay arrow suppression; and exact slash-suggestion projection. Selectable palette and picker transitions remain future work. |
+| `interactive_terminal._render` | Pure safe responsive output and semantic input renderers for plain and fixed ANSI profiles. It sanitizes dynamic content before styling and returns render data without writing. |
+| `interactive_terminal._driver` | Sole owner of raw streams, capability/width detection, key decoding, cursor controls, raw mode, restoration, writes, flushes, and one bounded process-local main-history store per instance. It accepts the trusted semantic renderer per history-free input read. |
+| `interactive_terminal._core` | `InteractiveTerminal`, established public-operation orchestration, semantic composer/confirmation view construction and event mapping, package-internal stream factory, semantic render seam, and resource-free `InteractiveSemanticOutput` adapter. It routes main reads to the driver's history-aware path and composition/confirmation to history-free semantic paths without owning another store or raw implementation. |
 | `interactive_line_editor` | Standalone/public compatibility-only facade over the same unified terminal implementation and one per-editor driver/history store. |
 
 The allowed graph is:
@@ -630,15 +671,15 @@ Controller policy leaves still consume only facade error contracts.
 Issue #82 delivered the common models, renderer/capability profiles, driver
 seam, package facade, and module-index reconciliation. Issues #83 and #84
 delivered their output rows below without redistributing runtime or storage
-responsibility, and #85 delivered main-command history within the existing
-driver/control boundary. The remaining control slices and #93/#94 settings work
-remain planned.
+responsibility, #85 delivered main-command history, and #86 delivered semantic
+composer/confirmation controls within the existing driver/control boundary.
+Selectable completion, pickers, and #93/#94 settings work remain planned.
 
 ### View groups
 
 | Current view group | Semantic construction | Required states or constraints | Delivery issue |
 | --- | --- | --- | --- |
-| Shell scaffold | `Panel`, `Section`, `Prompt`, `Notice` | Idle/focused scope, plain structure, scrollback preserved | #83 (implemented output scaffold; prompts remain established input) |
+| Shell scaffold | `Panel`, `Section`, `Prompt`, `Notice` | Idle/focused scope, plain structure, scrollback preserved | #83 (implemented output scaffold; main/subject prompts remain established input, composer/confirmation input implemented by #86) |
 | Lobby/session/conversation orientation | `Panel`, `Section`, `Field`, `Notice` | Current workspace, attachment, focus, and next action remain textual | #83 (implemented) |
 | Help and command reference | `Panel`, `Section`, `Field`, `ListView`, `Record` | Grouping, syntax, aliases, effects, examples, empty/error | #84 (implemented) |
 | Session/conversation/agent lists and rosters | `ListView`, `Record`, `Field`, `Notice` | Counts, active/focused/archived/empty meaning and stable order | #84 (implemented) |
@@ -657,8 +698,8 @@ remain planned.
 | --- | --- | --- | --- |
 | Main one-line input and editing | `Prompt`, optional `Panel`/`Notice` | Unified key/focus state, editable buffer, parser-once commit | #85 (implemented existing editing plus history integration) |
 | Process-local main history | Main `Prompt` buffer state | Up/Down, 100 exact nonblank entries, draft/cursor restoration, non-main isolation | #85 (implemented) |
-| Line-oriented composer | `Panel`, `Prompt`, `Section`, `Notice` | Exact line collection and established send/cancel events | #86 |
-| Confirmation | `Panel`, `Prompt`, `Field`, `Notice` | Fixed yes/no/default validation and typed terminal events | #86 |
+| Line-oriented composer | `Field`, `Notice`, `Prompt` | Ordered context, exact line collection, fixed preview, and semantic open/error/completed/cancelled events | #86 (implemented) |
+| Confirmation | `Field`, `Prompt`, `Notice` | Ordered question/choices/default, invalid retry, no suggestions, and typed terminal events | #86 (implemented) |
 | Main command/subcommand palette | `SuggestionPalette`, `Prompt`, `Notice` | Slash-open, Up/Down highlight, Tab replacement, Escape restoration | #79 |
 | Fixed command values | `SuggestionPalette`, `Field` | Canonical finite grammar choices, including metadata-exposed agent IDs/aliases; preview has no effects | #79 |
 | Single-select and selectable-list choices | `Picker`, `ListView`, `Record`, `Notice` | Up/Down highlight, Enter commit, Escape cancel, disabled/empty/error | #87 |
@@ -666,7 +707,8 @@ remain planned.
 
 Contextual non-main-prompt suggestions from completed issue #73 use the same
 unified driver without moving parser, runtime, or storage authority into the
-terminal design system. #86 and #79 build on that prerequisite.
+terminal design system. #86 uses that prerequisite; #79 builds on the same
+foundation.
 #93 consumes #87 picker behavior and #94 workspace model/reasoning fields but
 does not broaden picker ownership or prescribe a module boundary before its
 own implementation analysis.
@@ -686,10 +728,13 @@ PTY ANSI/`NO_COLOR` behavior. #84 covers full/context help, roster and dense
 lists, positioned one-record callbacks, exact empty/result/hint/context records,
 LF preservation, and cancellation after partial output. #85 covers the bounded
 isolated store, pure navigation, live/fallback commit boundaries, parser-once
-behavior, non-main isolation, and restoration. Selectable completion,
-component-integrated composition/confirmation, and picker
-transitions remain acceptance targets for their later slices. The #93 settings
-contract remains a planned acceptance target after #87 and #94.
+behavior, non-main isolation, and restoration. #86 covers immutable composer
+state, pure composer/confirmation transitions, semantic input view order,
+plain/ANSI equivalence, safe fallback/live routing, history isolation, exact
+events and results, and unchanged public/machine contracts. Selectable
+completion and picker transitions remain acceptance targets for #79 and #87.
+The #93 settings contract remains a planned acceptance target after #87 and
+#94.
 
 | Area | Required evidence |
 | --- | --- |
@@ -702,7 +747,7 @@ contract remains a planned acceptance target after #87 and #94.
 | Picker | Highlight-versus-selection, enabled/disabled navigation, Enter commit, Escape cancel, empty/one/long list, stable rerender identity, and resize on next operation. |
 | Settings | Two-snapshot current/pending separation; exact top-level/language/reasoning/roster order; safe persona precedence and lexical order; numeric `0`, positive, blank, negative, fractional, and nonnumeric cases; Codex-enabled/reserved-Gemini-disabled provider behavior including preservation/remediation; safe model text and blank provider default; model-dependent reasoning validation; one focused control and deterministic focus return; nested and whole-panel cancellation; stale-snapshot conflict before writes; per-file atomic replacement; induced second-write failure and best-effort exact-byte rollback; pending retention; no write on open/edit/highlight/error/cancel; next-backend-only application; plain/ANSI/`NO_COLOR`/narrow/line fallback; hostile display content; and unchanged identity, thread, precedence, public, and machine contracts. |
 | Parser and mutation boundary | The exact visible committed main buffer reaches the established parser once; previews, recall, replacement, highlight, rerender, cancel, Ctrl-C, empty VEOF, and physical EOF cause no parser/runtime/storage call. |
-| Composer/confirmation | Existing `/send`, `/cancel`, `/say`, yes/no/default, invalid input, Ctrl-C, and EOF results; no full-screen or persistent state. |
+| Composer/confirmation | Ordered semantic input facts and focused prompt; equivalent width-aware plain/ANSI rendering; fallback-once and trusted-live routing; exact `/send`, `/cancel`, `/say`, yes/no/default, invalid retry, Ctrl-C, and EOF results; semantic composer events and hint cardinality; history isolation; reserved-key no-ops; no full-screen or persistent state. |
 | Restoration | Normal submit, commit, cancellation, Escape, EOF, Ctrl-C, setup failure, read/write/flush failure, render error, and restoration uncertainty, with raw attributes restored whenever acquired. |
 | Public compatibility | Exact exports and order, enum values, dataclass fields/defaults/options, signatures, exceptions, object/class identity, canonical modules, facade imports, callback construction, and no constructor resource acquisition. |
 | Noninteractive regression | Golden byte/schema/order/exit checks for `init`, `smoke`, `session`, `directive`, `inspect`, and `run`, with no SGR under any environment. |
