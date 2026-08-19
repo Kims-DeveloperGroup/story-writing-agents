@@ -175,13 +175,15 @@ flowchart LR
     ES[FilesystemConversationEventStore]
     IT[InteractiveTerminal]
 
-    IC --> RT
-    IC --> IT
-    RT --> AB
-    RT --> WS
-    WS --> FC
-    WS --> ES
+    IC -->|opens controller boundary| RT
+    IC -->|writes through| IT
+    RT -->|delegates provider orchestration to| AB
+    RT -->|uses persisted workspace state| WS
+    WS -->|provides catalog adapter| FC
+    WS -->|provides event-store adapter| ES
 ```
+
+This diagram shows the top-level runtime surface and how user interaction and persistence dependencies are connected.
 
 ### Scenario 1: Interactive command path
 
@@ -193,13 +195,15 @@ flowchart LR
     CS[RuntimeSession]
     AB[AgentBackend]
 
-    IC --> RT
-    IC --> WS
-    RT --> WS
-    RT --> AB
-    RT --> CS
-    CS --> RT
+    IC -->|calls| RT
+    IC -->|reads defaults and attachments from| WS
+    RT -->|reads/writes session data in| WS
+    RT -->|invokes| AB
+    RT -->|binds| CS
+    CS -->|returns session-bound result to| RT
 ```
+
+This is the normal interactive command lifecycle from controller entry through runtime and session orchestration.
 
 ### Scenario 2: Debate and advisory orchestration
 
@@ -221,21 +225,23 @@ flowchart LR
     CRep[ConversationReply]
     CRes[ConversationResult]
 
-    RT --> AB
-    AB --> BA
-    BA --> AD
-    RT --> CS
-    CS --> AReq
-    CS --> ARep
-    CS --> DReq
-    DReq --> DMode
-    CS --> DMsg
-    CS --> DProg
-    CS --> DRes
-    CS --> CReq
-    CS --> CRep
-    CS --> CRes
+    RT -->|sends run context to| AB
+    AB -->|loads| BA
+    BA -->|uses| AD
+    RT -->|binds| CS
+    CS -->|builds| AReq
+    CS -->|validates| ARep
+    CS -->|sets| DReq
+    DReq -->|chooses| DMode
+    CS -->|appends| DMsg
+    CS -->|emits| DProg
+    CS -->|returns| DRes
+    CS -->|sends| CReq
+    CS -->|normalizes| CRep
+    CS -->|returns| CRes
 ```
+
+This captures the debate/advice path: session invokes backend bindings, sends advisory payloads, and produces result objects.
 
 ### Scenario 3: Conversation storage and catalog
 
@@ -249,13 +255,15 @@ flowchart LR
     ESvc[ConversationEventStore]
     MMS[ConversationMemoryService]
 
-    RT --> WS
-    RT --> MMS
-    WS --> FC
-    WS --> ES
-    FC --> FCat
-    ES --> ESvc
+    RT -->|reads/writes sidecar and artifacts in| WS
+    RT -->|creates retrieval view from| MMS
+    WS -->|builds| FC
+    WS -->|builds| ES
+    FC -->|implements| FCat
+    ES -->|implements| ESvc
 ```
+
+This shows where persistence adapters live and how runtime-facing storage protocols are satisfied by workspace-backed implementations.
 
 ### Scenario 4: Bounded retrieval flow
 
@@ -275,17 +283,19 @@ flowchart LR
     AB[AgentBackend]
     BHA[ConversationRetrievalActionHandler]
 
-    CS --> CRReq
-    CRReq --> CRAct
-    CRAct --> CRS
-    CRAct --> CRR
-    CRAct --> CRA
-    CRAct --> COBS
-    CRS --> CRSObs
-    CRR --> CRRObs
-    CRRep --> CRRes
-    AB --> BHA
+    CS -->|starts retrieval turn with| CRReq
+    CRReq -->|initiates| CRAct
+    CRAct -->|delegates search to| CRS
+    CRAct -->|delegates read to| CRR
+    CRAct -->|delegates answer to| CRA
+    CRAct -->|emits| COBS
+    CRS -->|returns| CRSObs
+    CRR -->|returns| CRRObs
+    CRRep -->|materializes| CRRes
+    AB -->|routes actions via| BHA
 ```
+
+This diagram isolates retrieval protocol behavior inside one candidate turn: search/read/answer actions and observation handling.
 
 ### Object-level runtime topology (example)
 
@@ -302,20 +312,21 @@ flowchart LR
     CR[DebateContextRequest]
     DR[DebateResult]
 
-    SR --> AB
-    SR --> WS
-    SR --> SES
-    SR --> C
-    SR --> ES
-    SR --> MMS
-    SES --> CR
-    SES --> DR
-    AB --> B1
-    WS --> C
-    WS --> ES
-    SES --> SR
+    SR -->|invokes| AB
+    SR -->|stores session data in| WS
+    SR -->|exposes| SES
+    SR -->|reads catalog via| C
+    SR -->|reads events via| ES
+    SR -->|builds retrieval service from| MMS
+    SES -->|reads context| CR
+    SES -->|returns| DR
+    AB -->|binds| B1
+    WS -->|owns| C
+    WS -->|owns| ES
+    SES -->|binds to| SR
 ```
 
+This is a concrete in-memory view of one runtime object graph during a debate path.
 ### DTO-focused partials
 
 ```mermaid
@@ -341,6 +352,8 @@ classDiagram
     ConversationReply --> ConversationResult : serializes turn result
     DebateProgressEvent --> DebateResult : updates status/failure
 ```
+
+This partial maps the core debate and advisory DTOs used during runtime planning and conversation updates.
 
 ```mermaid
 classDiagram
@@ -368,3 +381,5 @@ classDiagram
     ConversationRetrievalReadObservation --> ConversationRetrievalSource : cites transcript events
     ConversationRetrievalReply --> ConversationRetrievalResult : adds source list
 ```
+
+This partial shows bounded retrieval action/observation DTO flow and how sources are attached to final results.
