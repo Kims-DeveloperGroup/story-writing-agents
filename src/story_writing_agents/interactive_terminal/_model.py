@@ -272,6 +272,126 @@ class MainInputControlState:
 
 
 @dataclass(frozen=True, slots=True)
+class CommandCompletionCandidate:
+    """Identify one replacement within one stable grammar position."""
+
+    position: str
+    replacement: str
+
+    def __post_init__(self) -> None:
+        """Require exact nonblank candidate identity values."""
+
+        _require_text("position", self.position)
+        _require_text("replacement", self.replacement)
+
+
+@dataclass(frozen=True, slots=True)
+class CommandCompletionProjection:
+    """Describe one active replacement span and its ordered candidates."""
+
+    position: str
+    start: int
+    end: int
+    candidates: tuple[CommandCompletionCandidate, ...]
+
+    def __post_init__(self) -> None:
+        """Correlate one grammar position, span, and unique candidates."""
+
+        _require_text("position", self.position)
+        for name, value in (("start", self.start), ("end", self.end)):
+            if type(value) is not int:
+                raise TypeError(f"{name} must be an integer")
+            if value < 0:
+                raise ValueError(f"{name} must not be negative")
+        if self.end < self.start:
+            raise ValueError("end must not precede start")
+        if type(self.candidates) is not tuple or any(
+            type(candidate) is not CommandCompletionCandidate
+            for candidate in self.candidates
+        ):
+            raise TypeError(
+                "candidates must be a tuple of CommandCompletionCandidate values"
+            )
+        if any(
+            candidate.position != self.position for candidate in self.candidates
+        ):
+            raise ValueError("candidate positions must match the projection")
+        replacements = [candidate.replacement for candidate in self.candidates]
+        if len(set(replacements)) != len(replacements):
+            raise ValueError("candidate replacements must be unique")
+
+
+@dataclass(frozen=True, slots=True)
+class MainCommandPaletteState:
+    """Retain one open completion cycle, highlight, and optional undo point."""
+
+    projection: CommandCompletionProjection
+    highlighted: CommandCompletionCandidate | None
+    snapshot: LineInputState | None = None
+
+    def __post_init__(self) -> None:
+        """Correlate the highlight and snapshot with the active projection."""
+
+        if type(self.projection) is not CommandCompletionProjection:
+            raise TypeError("projection must be a CommandCompletionProjection")
+        if self.highlighted is not None and type(
+            self.highlighted
+        ) is not CommandCompletionCandidate:
+            raise TypeError(
+                "highlighted must be a CommandCompletionCandidate or None"
+            )
+        if (self.highlighted is None) != (not self.projection.candidates):
+            raise ValueError(
+                "highlighted must identify a candidate exactly when candidates exist"
+            )
+        if (
+            self.highlighted is not None
+            and self.highlighted not in self.projection.candidates
+        ):
+            raise ValueError("highlighted must identify a projected candidate")
+        if self.snapshot is not None and type(self.snapshot) is not LineInputState:
+            raise TypeError("snapshot must be a LineInputState or None")
+
+
+@dataclass(frozen=True, slots=True)
+class MainCommandControlState:
+    """Correlate main history input with its completion and dismissal state."""
+
+    main_input: MainInputControlState = MainInputControlState()
+    palette: MainCommandPaletteState | None = None
+    dismissal_latch: LineInputState | None = None
+
+    def __post_init__(self) -> None:
+        """Require exactly one source of open or dismissed overlay state."""
+
+        if type(self.main_input) is not MainInputControlState:
+            raise TypeError("main_input must be a MainInputControlState")
+        if self.palette is not None and type(
+            self.palette
+        ) is not MainCommandPaletteState:
+            raise TypeError("palette must be a MainCommandPaletteState or None")
+        if self.dismissal_latch is not None and type(
+            self.dismissal_latch
+        ) is not LineInputState:
+            raise TypeError("dismissal_latch must be a LineInputState or None")
+        if self.main_input.overlay_open != (self.palette is not None):
+            raise ValueError("overlay_open must match palette presence")
+        if self.palette is not None and self.dismissal_latch is not None:
+            raise ValueError("an open palette cannot retain a dismissal latch")
+        line = self.main_input.line_state
+        if self.palette is not None and not (
+            0
+            <= self.palette.projection.start
+            <= line.cursor
+            <= self.palette.projection.end
+            <= len(line.buffer)
+        ):
+            raise ValueError("palette projection must contain the active cursor")
+        if self.dismissal_latch is not None and self.dismissal_latch != line:
+            raise ValueError("dismissal_latch must equal the current line state")
+
+
+@dataclass(frozen=True, slots=True)
 class SlashCommandSuggestion:
     """Identify one displayed slash token and its canonical registry token."""
 

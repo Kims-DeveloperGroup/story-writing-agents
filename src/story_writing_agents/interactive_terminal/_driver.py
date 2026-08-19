@@ -2,23 +2,29 @@
 
 from __future__ import annotations
 
+import codecs
 import os
+import select as _select
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TextIO, TypeAlias
 
 from ._model import (
     CapabilityProfile,
+    CommandCompletionProjection,
     ControlOutcome,
     ControlOutcomeKind,
     InputPromptView,
     KeyEvent,
     KeyKind,
     LineInputState,
+    MainCommandControlState,
     MainInputControlState,
     MainInputHistoryState,
     RenderedInputFrame,
+    RenderedFrame,
     SlashCommandSuggestion,
+    SuggestionPalette,
     TerminalCapabilities,
     display_character_width,
     sanitize_terminal_text,
@@ -37,6 +43,7 @@ _CURSOR_UP = "\x1b[A"
 _CURSOR_RIGHT = "\x1b[C"
 _DEFAULT_TERMINAL_WIDTH = 80
 _MAX_ESCAPE_SEQUENCE_LENGTH = 64
+_ESCAPE_LOOKAHEAD_SECONDS = 0.05
 _DEFAULT_TERMIOS = object()
 
 
@@ -61,7 +68,9 @@ class _TerminalConfiguration:
     termios_module: object
 
 
-_ControlState: TypeAlias = LineInputState | MainInputControlState
+_ControlState: TypeAlias = (
+    LineInputState | MainInputControlState | MainCommandControlState
+)
 _ControlTransition: TypeAlias = Callable[
     [_ControlState, KeyEvent],
     tuple[_ControlState, ControlOutcome | None],
@@ -70,9 +79,23 @@ _LineTransition: TypeAlias = Callable[
     [LineInputState, KeyEvent],
     tuple[LineInputState, ControlOutcome | None],
 ]
-_MainTransition: TypeAlias = Callable[
-    [MainInputControlState, KeyEvent, MainInputHistoryState],
-    tuple[MainInputControlState, ControlOutcome | None],
+_CompletionProvider: TypeAlias = Callable[
+    [str, int], CommandCompletionProjection | None
+]
+_MainCommandTransition: TypeAlias = Callable[
+    [
+        MainCommandControlState,
+        KeyEvent,
+        MainInputHistoryState,
+        _CompletionProvider,
+    ],
+    tuple[MainCommandControlState, ControlOutcome | None],
+]
+_PaletteProjector: TypeAlias = Callable[
+    [MainCommandControlState], SuggestionPalette | None
+]
+_PaletteRenderer: TypeAlias = Callable[
+    [SuggestionPalette, TerminalCapabilities], RenderedFrame
 ]
 _HistoryAppend: TypeAlias = Callable[
     [MainInputHistoryState, str], MainInputHistoryState
@@ -103,7 +126,7 @@ class RawTerminalDriver:
         input_stream: TextIO,
         output_stream: TextIO,
         line_transition: _LineTransition,
-        main_transition: _MainTransition,
+        main_transition: _MainCommandTransition,
         history_append: _HistoryAppend,
         *,
         termios_provider: Callable[[], object | None] | None = None,
@@ -244,16 +267,82 @@ class RawTerminalDriver:
             state: _ControlState,
             event: KeyEvent,
         ) -> tuple[_ControlState, ControlOutcome | None]:
-            if type(state) is not MainInputControlState:
-                raise TypeError("main transition requires MainInputControlState")
-            return self._main_transition(state, event, self._history_state)
+            if type(state) is not MainCommandControlState:
+                raise TypeError(
+                    "main transition requires MainCommandControlState"
+                )
+            return self._main_transition(
+                state,
+                event,
+                self._history_state,
+                _empty_command_completion,
+            )
 
         line = self._read_control_line(
             prompt,
             suggestion_provider,
-            MainInputControlState(),
+            MainCommandControlState(),
             transition,
         )
+        self._append_completed_main_history(line)
+        return line
+
+    def _read_main_command_line(
+        self,
+        prompt: str,
+        completion_provider: _CompletionProvider,
+        palette_projector: _PaletteProjector,
+        palette_renderer: _PaletteRenderer,
+    ) -> str:
+        """Read one selectable semantic main command through call-local seams."""
+
+        if not isinstance(prompt, str):
+            raise TypeError("prompt must be a string")
+        for name, collaborator in (
+            ("completion_provider", completion_provider),
+            ("palette_projector", palette_projector),
+            ("palette_renderer", palette_renderer),
+        ):
+            if not callable(collaborator):
+                raise TypeError(f"{name} must be callable")
+
+        capabilities = self.capabilities()
+        if not capabilities.raw_mode:
+            line = self._fallback_read_line(prompt)
+            self._append_completed_main_history(line)
+            return line
+
+        def transition(
+            state: _ControlState,
+            event: KeyEvent,
+        ) -> tuple[_ControlState, ControlOutcome | None]:
+            if type(state) is not MainCommandControlState:
+                raise TypeError(
+                    "main command transition requires MainCommandControlState"
+                )
+            return self._main_transition(
+                state,
+                event,
+                self._history_state,
+                completion_provider,
+            )
+
+        line = self._read_control_line(
+            prompt,
+            _empty_suggestion_preview,
+            MainCommandControlState(),
+            transition,
+            known_width=capabilities.width,
+            live_capabilities=capabilities,
+            palette_projector=palette_projector,
+            palette_renderer=palette_renderer,
+        )
+        self._append_completed_main_history(line)
+        return line
+
+    def _append_completed_main_history(self, line: object) -> None:
+        """Append one successfully returned main line after resource cleanup."""
+
         # Preserve the established downstream line-validation boundary. Invalid
         # fallback shapes or framing are returned for that boundary to reject,
         # and therefore never become successfully completed history entries.
@@ -272,7 +361,6 @@ class RawTerminalDriver:
                     "history_append must return a MainInputHistoryState"
                 )
             self._history_state = updated_history
-        return line
 
     def _read_control_line(
         self,
@@ -285,6 +373,9 @@ class RawTerminalDriver:
         *,
         rendered_input: RenderedInputFrame | None = None,
         known_width: int | None = None,
+        live_capabilities: TerminalCapabilities | None = None,
+        palette_projector: _PaletteProjector | None = None,
+        palette_renderer: _PaletteRenderer | None = None,
     ) -> str:
         """Read one exact buffer through one pure logical-state transition.
 
@@ -299,7 +390,11 @@ class RawTerminalDriver:
             raise TypeError("prompt must be a string")
         if not callable(suggestion_provider):
             raise TypeError("suggestion_provider must be callable")
-        if type(initial_state) not in {LineInputState, MainInputControlState}:
+        if type(initial_state) not in {
+            LineInputState,
+            MainInputControlState,
+            MainCommandControlState,
+        }:
             raise TypeError("initial_state must be an input control state")
         if not callable(transition):
             raise TypeError("transition must be callable")
@@ -316,6 +411,31 @@ class RawTerminalDriver:
             raise ValueError("known_width is required with rendered_input")
         if rendered_input is not None and rendered_input.width != known_width:
             raise ValueError("rendered input and known width must match")
+        if live_capabilities is not None and type(
+            live_capabilities
+        ) is not TerminalCapabilities:
+            raise TypeError(
+                "live_capabilities must be a TerminalCapabilities or None"
+            )
+        if live_capabilities is not None and (
+            known_width is None or live_capabilities.width != known_width
+        ):
+            raise ValueError("live capabilities and known width must match")
+        palette_collaborators = (
+            palette_projector,
+            palette_renderer,
+            live_capabilities,
+        )
+        if any(value is not None for value in palette_collaborators) and not all(
+            value is not None for value in palette_collaborators
+        ):
+            raise ValueError(
+                "palette projection, rendering, and capabilities must be supplied together"
+            )
+        if palette_projector is not None and not callable(palette_projector):
+            raise TypeError("palette_projector must be callable or None")
+        if palette_renderer is not None and not callable(palette_renderer):
+            raise TypeError("palette_renderer must be callable or None")
 
         try:
             configuration = _terminal_configuration(
@@ -351,6 +471,9 @@ class RawTerminalDriver:
                 initial_state,
                 transition,
                 rendered_input,
+                live_capabilities,
+                palette_projector,
+                palette_renderer,
             )
             self._finish_live_display(
                 prompt,
@@ -386,6 +509,9 @@ class RawTerminalDriver:
         initial_state: _ControlState,
         transition: _ControlTransition,
         rendered_input: RenderedInputFrame | None,
+        live_capabilities: TerminalCapabilities | None,
+        palette_projector: _PaletteProjector | None,
+        palette_renderer: _PaletteRenderer | None,
     ) -> tuple[str, LineInputState]:
         """Edit one code-point buffer until submit, interrupt, EOF, or failure.
 
@@ -397,16 +523,20 @@ class RawTerminalDriver:
         """
 
         control_state = initial_state
+        character_reader = _single_character_reader(self._input_stream)
         display_state.rendered_cursor_row = self._redraw_live_display(
             prompt,
             configuration.width,
             display_state,
-            _control_line_state(control_state),
+            control_state,
             suggestion_provider,
             rendered_input,
+            live_capabilities,
+            palette_projector,
+            palette_renderer,
         )
         while True:
-            character = self._read_character()
+            character = self._read_character(character_reader)
 
             if display_state.escape_sequence is not None:
                 event, reprocess = _consume_escape_character(
@@ -427,14 +557,39 @@ class RawTerminalDriver:
                             prompt,
                             configuration.width,
                             display_state,
-                            _control_line_state(control_state),
+                            control_state,
                             suggestion_provider,
                             rendered_input,
+                            live_capabilities,
+                            palette_projector,
+                            palette_renderer,
                         )
                 if not reprocess:
                     continue
 
             if character == "\x1b":
+                if not _escape_input_is_ready(configuration.input_descriptor):
+                    control_state, outcome, changed = _apply_control_event(
+                        control_state,
+                        KeyEvent(KeyKind.ESCAPE),
+                        transition,
+                    )
+                    completed = _completed_text_or_raise(outcome)
+                    if completed is not None:
+                        return completed, _control_line_state(control_state)
+                    if changed:
+                        display_state.rendered_cursor_row = self._redraw_live_display(
+                            prompt,
+                            configuration.width,
+                            display_state,
+                            control_state,
+                            suggestion_provider,
+                            rendered_input,
+                            live_capabilities,
+                            palette_projector,
+                            palette_renderer,
+                        )
+                    continue
                 display_state.escape_sequence = character
                 continue
             event = _key_event(character, configuration)
@@ -451,12 +606,18 @@ class RawTerminalDriver:
                     prompt,
                     configuration.width,
                     display_state,
-                    _control_line_state(control_state),
+                    control_state,
                     suggestion_provider,
                     rendered_input,
+                    live_capabilities,
+                    palette_projector,
+                    palette_renderer,
                 )
 
-    def _read_character(self) -> str:
+    def _read_character(
+        self,
+        reader: Callable[[], object] | None = None,
+    ) -> str:
         """Read one decoded code point from the borrowed active input stream.
 
         Physical EOF raises ``EOFError``. Invalid stream return shapes raise
@@ -464,7 +625,9 @@ class RawTerminalDriver:
         state and propagate the collaborator failure.
         """
 
-        character = self._input_stream.read(1)
+        character = (
+            self._input_stream.read(1) if reader is None else reader()
+        )
         if character == "":
             raise EOFError
         if not isinstance(character, str) or len(character) != 1:
@@ -476,11 +639,14 @@ class RawTerminalDriver:
         prompt: str,
         width: int,
         display_state: _LiveEditorState,
-        line_state: LineInputState,
+        control_state: _ControlState,
         suggestion_provider: Callable[
             [str], tuple[SlashCommandSuggestion, ...]
         ],
         rendered_input: RenderedInputFrame | None,
+        live_capabilities: TerminalCapabilities | None,
+        palette_projector: _PaletteProjector | None,
+        palette_renderer: _PaletteRenderer | None,
     ) -> int:
         """Replace the current editor area and return its visible cursor row.
 
@@ -492,6 +658,7 @@ class RawTerminalDriver:
         render_width = (
             max(1, width - 1) if rendered_input is None else width
         )
+        line_state = _control_line_state(control_state)
         input_lines, cursor_row, cursor_column = _editor_input_lines(
             prompt,
             rendered_input,
@@ -499,22 +666,51 @@ class RawTerminalDriver:
             line_state.cursor,
             render_width,
         )
-        suggestions = suggestion_provider(line_state.buffer)
-        if type(suggestions) is not tuple or any(
-            type(item) is not SlashCommandSuggestion for item in suggestions
-        ):
-            raise TypeError(
-                "suggestion_provider must return SlashCommandSuggestion values"
-            )
         panel_lines: list[str] = []
-        if suggestions:
-            panel_lines.extend(
-                _wrap_editor_text(_SUGGESTION_HEADER, render_width)
-            )
-            for suggestion in suggestions:
-                panel_lines.extend(
-                    _wrap_editor_text(suggestion.token, render_width)
+        if palette_projector is None:
+            suggestions = suggestion_provider(line_state.buffer)
+            if type(suggestions) is not tuple or any(
+                type(item) is not SlashCommandSuggestion for item in suggestions
+            ):
+                raise TypeError(
+                    "suggestion_provider must return SlashCommandSuggestion values"
                 )
+            if suggestions:
+                panel_lines.extend(
+                    _wrap_editor_text(_SUGGESTION_HEADER, render_width)
+                )
+                for suggestion in suggestions:
+                    panel_lines.extend(
+                        _wrap_editor_text(suggestion.token, render_width)
+                    )
+        else:
+            assert palette_renderer is not None
+            assert live_capabilities is not None
+            if type(control_state) is not MainCommandControlState:
+                raise TypeError(
+                    "semantic palette projection requires MainCommandControlState"
+                )
+            palette = palette_projector(control_state)
+            if palette is not None:
+                if type(palette) is not SuggestionPalette:
+                    raise TypeError(
+                        "palette_projector must return a SuggestionPalette or None"
+                    )
+                palette_capabilities = _capabilities_with_width(
+                    live_capabilities,
+                    render_width,
+                )
+                rendered_palette = palette_renderer(
+                    palette,
+                    palette_capabilities,
+                )
+                if type(rendered_palette) is not RenderedFrame:
+                    raise TypeError("palette_renderer must return a RenderedFrame")
+                if rendered_palette.width != render_width:
+                    raise ValueError(
+                        "rendered palette width must match the live render width"
+                    )
+                panel_lines.extend(rendered_palette.text.split("\n"))
 
         output_lines = [*input_lines, *panel_lines]
         move_to_top = _CURSOR_UP * display_state.rendered_cursor_row
@@ -609,6 +805,42 @@ class RawTerminalDriver:
         """
 
         self.write_text(text)
+
+
+def _single_character_reader(input_stream: TextIO) -> Callable[[], object]:
+    """Return one call-local code-point reader without terminal read-ahead.
+
+    ``TextIOWrapper.read(1)`` may prefetch an entire escape sequence into its
+    character buffer, which makes descriptor readiness incorrectly report a
+    standalone Escape. When its byte buffer offers ``read1``, this reader asks
+    for exactly one byte and incrementally restores the stream's configured
+    text decoding. Other stream collaborators keep their established
+    one-code-point ``read(1)`` contract.
+    """
+
+    byte_stream = getattr(input_stream, "buffer", None)
+    read_one_byte = getattr(byte_stream, "read1", None)
+    encoding = getattr(input_stream, "encoding", None)
+    if not callable(read_one_byte) or not isinstance(encoding, str) or not encoding:
+        return lambda: input_stream.read(1)
+    errors = getattr(input_stream, "errors", None)
+    if not isinstance(errors, str) or not errors:
+        errors = "strict"
+    decoder = codecs.getincrementaldecoder(encoding)(errors=errors)
+
+    def read_character() -> object:
+        while True:
+            chunk = read_one_byte(1)
+            if chunk == b"":
+                remainder = decoder.decode(b"", final=True)
+                return remainder if remainder else ""
+            if type(chunk) is not bytes or len(chunk) != 1:
+                raise TypeError("input byte stream read1(1) must return one byte")
+            character = decoder.decode(chunk, final=False)
+            if character:
+                return character
+
+    return read_character
 
 
 def detect_terminal_capabilities(
@@ -963,6 +1195,18 @@ def _consume_escape_character(
     return None, False
 
 
+def _escape_input_is_ready(input_descriptor: int) -> bool:
+    """Return whether one post-Escape code point is ready within 50 ms."""
+
+    readable, _writable, _exceptional = _select.select(
+        (input_descriptor,),
+        (),
+        (),
+        _ESCAPE_LOOKAHEAD_SECONDS,
+    )
+    return bool(readable)
+
+
 def _escape_event(sequence: str) -> KeyEvent | None:
     """Map supported fixed cursor sequences to normalized key events.
 
@@ -1020,15 +1264,14 @@ def _apply_control_event(
     event: KeyEvent,
     transition: _ControlTransition,
 ) -> tuple[_ControlState, ControlOutcome | None, bool]:
-    """Apply one pure transition and report whether its visible line changed."""
+    """Apply one pure transition and report whether its complete state changed."""
 
-    previous_line = _control_line_state(state)
     updated, outcome = transition(state, event)
     if type(updated) is not type(state):
         raise TypeError("transition must preserve the input control state type")
     if outcome is not None and type(outcome) is not ControlOutcome:
         raise TypeError("transition outcome must be a ControlOutcome or None")
-    return updated, outcome, _control_line_state(updated) != previous_line
+    return updated, outcome, updated != state
 
 
 def _control_line_state(state: _ControlState) -> LineInputState:
@@ -1038,7 +1281,49 @@ def _control_line_state(state: _ControlState) -> LineInputState:
         return state
     if type(state) is MainInputControlState:
         return state.line_state
+    if type(state) is MainCommandControlState:
+        return state.main_input.line_state
     raise TypeError("state must be an input control state")
+
+
+def _empty_suggestion_preview(
+    buffer: str,
+) -> tuple[SlashCommandSuggestion, ...]:
+    """Return no legacy preview when a semantic palette owns the redraw."""
+
+    if type(buffer) is not str:
+        raise TypeError("buffer must be a string")
+    return ()
+
+
+def _empty_command_completion(
+    buffer: str,
+    cursor: int,
+) -> CommandCompletionProjection | None:
+    """Keep the legacy preview-only driver route outside selectable control."""
+
+    if type(buffer) is not str:
+        raise TypeError("buffer must be a string")
+    if type(cursor) is not int or cursor < 0 or cursor > len(buffer):
+        raise ValueError("cursor must identify a buffer boundary")
+    return None
+
+
+def _capabilities_with_width(
+    capabilities: TerminalCapabilities,
+    width: int,
+) -> TerminalCapabilities:
+    """Retain one live capability profile at the cursor-safe render width."""
+
+    return TerminalCapabilities(
+        capabilities.profile,
+        width,
+        input_tty=capabilities.input_tty,
+        output_tty=capabilities.output_tty,
+        raw_mode=capabilities.raw_mode,
+        cursor_controls=capabilities.cursor_controls,
+        decorative_sgr=capabilities.decorative_sgr,
+    )
 
 
 def _completed_text_or_raise(outcome: ControlOutcome | None) -> str | None:

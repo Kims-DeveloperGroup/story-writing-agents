@@ -13,19 +13,28 @@ from types import MappingProxyType
 from typing import TextIO
 
 from ..agents import AGENT_SPECS
-from ..interactive_commands import AGENT_ROUTES, COMMANDS, CommandSpec
+from ..interactive_commands import (
+    AGENT_ROUTES,
+    COMMANDS,
+    CommandSpec,
+    project_command_completion,
+)
 from ._controls import (
     append_main_input_history,
     project_composition_suggestions,
+    project_main_suggestion_palette,
     project_slash_suggestions,
     transition_composer_line,
     transition_confirmation_answer,
     transition_main_input,
+    transition_main_command_input,
     transition_line_input,
 )
 from ._driver import RawTerminalDriver
 from ._model import (
     CapabilityProfile,
+    CommandCompletionCandidate,
+    CommandCompletionProjection,
     ComposerState,
     Component,
     ControlOutcomeKind,
@@ -1308,6 +1317,42 @@ def _main_slash_suggestions(
     )
 
 
+def _main_command_completion(
+    buffer: str,
+    cursor: int,
+) -> CommandCompletionProjection | None:
+    """Adapt command-owned grammar context to terminal completion values."""
+
+    context = project_command_completion(buffer, cursor)
+    if context is None:
+        return None
+    return CommandCompletionProjection(
+        context.position,
+        context.replacement_start,
+        context.replacement_end,
+        tuple(
+            CommandCompletionCandidate(context.position, replacement)
+            for replacement in context.replacements
+        ),
+    )
+
+
+def read_main_command_line(
+    driver: RawTerminalDriver,
+    prompt: str,
+) -> str:
+    """Read one canonical selectable main command through the sole driver."""
+
+    if not isinstance(driver, RawTerminalDriver):
+        raise TypeError("driver must be a RawTerminalDriver")
+    return driver._read_main_command_line(
+        prompt,
+        _main_command_completion,
+        project_main_suggestion_palette,
+        render_component,
+    )
+
+
 def build_stream_terminal(
     fallback_read_line: Callable[[str], str],
     input_stream: TextIO,
@@ -1320,7 +1365,7 @@ def build_stream_terminal(
         input_stream,
         output_stream,
         transition_line_input,
-        transition_main_input,
+        transition_main_command_input,
         append_main_input_history,
     )
     capabilities = driver.capabilities()
@@ -1328,10 +1373,7 @@ def build_stream_terminal(
         driver.read_line,
         driver.write_text,
         width=max(20, capabilities.width),
-        main_read_line=lambda prompt: driver.read_main_line(
-            prompt,
-            _main_slash_suggestions,
-        ),
+        main_read_line=lambda prompt: read_main_command_line(driver, prompt),
     )
     terminal._composition_read_line = lambda view: driver.read_input_line(
         view,

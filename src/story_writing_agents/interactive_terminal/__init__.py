@@ -33,9 +33,11 @@ from ._core import (
     build_stream_terminal,
     project_composition_suggestions,
     project_slash_suggestions,
+    read_main_command_line,
     sanitize_terminal_text,
     transition_line_input,
     transition_main_input,
+    transition_main_command_input,
 )
 
 
