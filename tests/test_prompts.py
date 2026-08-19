@@ -441,6 +441,48 @@ class RuntimeBindingTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
+    async def test_codex_defaults_do_not_change_definition_or_binding_identity(
+        self,
+    ) -> None:
+        backend = ScriptedBackend(
+            lambda request: AgentReply.approval(request.revision_id)
+        )
+        runtime = StoryRuntime(self.workspace, backend)
+        first_request = self._audit_request(runtime)
+        before = runtime.prompts.build_definition(
+            session_id=first_request.session_id,
+            agent_id=PLOT_ARCHITECT,
+        )
+
+        await runtime._invoke(first_request)
+        defaults = self.workspace.read_json("config/system_defaults.json")
+        defaults["codex_model"] = "identity-neutral-model"
+        defaults["codex_reasoning_effort"] = "xhigh"
+        self.workspace.write_json("config/system_defaults.json", defaults)
+
+        after = runtime.prompts.build_definition(
+            session_id=first_request.session_id,
+            agent_id=PLOT_ARCHITECT,
+        )
+        self.assertEqual(after, before)
+        self.assertEqual(after.fingerprint, before.fingerprint)
+        self.assertEqual(after.file_references(), before.file_references())
+        await runtime._invoke(first_request)
+        await runtime._invoke(
+            self._audit_request(
+                runtime,
+                session_id="binding_session_two",
+                debate_id="binding_debate_two",
+            )
+        )
+
+        self.assertEqual(backend.definitions, [before])
+        self.assertEqual(len(backend.bound_invocations), 3)
+        self.assertEqual(
+            [request.session_id for _, request in backend.bound_invocations],
+            ["binding_session", "binding_session", "binding_session_two"],
+        )
+
     async def test_identical_binding_is_single_flight_and_waiter_cancellation_safe(
         self,
     ) -> None:

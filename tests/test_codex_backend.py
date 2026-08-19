@@ -684,6 +684,219 @@ class ConversationModelContractTests(unittest.TestCase):
                     _conversation_request(context=context)
 
 
+class CodexBackendDefaultsTests(unittest.TestCase):
+    """Lock construction-time defaults without starting a provider process."""
+
+    def setUp(self) -> None:
+        self.workspace = initialized_workspace(self)
+
+    def write_defaults(
+        self,
+        model: object,
+        effort: object,
+        **extra: object,
+    ) -> None:
+        """Write one complete system-default schema for constructor tests."""
+
+        self.workspace.write_json(
+            "config/system_defaults.json",
+            {
+                "language": "KO",
+                "persona": "default_kim_eun_hee",
+                "max_debate_rounds": 1,
+                "codex_model": model,
+                "codex_reasoning_effort": effort,
+                **extra,
+            },
+        )
+
+    def test_model_precedence_and_explicit_none_are_exact(self) -> None:
+        cases = (
+            (None, None, {}, None),
+            ("persisted-model", None, {}, "persisted-model"),
+            ("persisted-model", None, {"model": None}, "persisted-model"),
+            (
+                "persisted-model",
+                None,
+                {"model": "explicit-model"},
+                "explicit-model",
+            ),
+        )
+        for persisted, effort, keywords, expected in cases:
+            with self.subTest(persisted=persisted, keywords=keywords):
+                self.write_defaults(persisted, effort)
+                backend = AgentBackend(self.workspace, **keywords)
+                try:
+                    self.assertEqual(backend.model, expected)
+                    self.assertIsNone(backend._codex_reasoning_effort)
+                finally:
+                    backend.close()
+
+        self.workspace.write_text(
+            "config/system_defaults.json",
+            '{"language":"KO","persona":"default_kim_eun_hee",'
+            '"max_debate_rounds":1}\n',
+        )
+        backend = AgentBackend(self.workspace)
+        try:
+            self.assertIsNone(backend.model)
+            self.assertIsNone(backend._codex_reasoning_effort)
+        finally:
+            backend.close()
+
+    def test_explicit_model_validation_retains_exact_value_error(self) -> None:
+        invalid = (
+            False,
+            7,
+            "",
+            "-gpt",
+            "gpt\x00tail",
+            "gpt\x85tail",
+            "gpt\u200etail",
+            "gpt\u2066tail",
+            "gpt\ud800tail",
+        )
+        for model in invalid:
+            with self.subTest(model=repr(model)):
+                with self.assertRaises(ValueError) as caught:
+                    AgentBackend(self.workspace, model=model)  # type: ignore[arg-type]
+                self.assertEqual(
+                    str(caught.exception),
+                    "Codex model must be safe non-empty text or None",
+                )
+
+    def test_full_persisted_schema_precedes_explicit_model_validation(self) -> None:
+        expected_effort = (
+            "codex_reasoning_effort must be null or one of: "
+            "minimal, low, medium, high, xhigh"
+        )
+        cases = (
+            (
+                "valid-persisted",
+                "ultra",
+                {},
+                "-invalid-explicit",
+                expected_effort,
+            ),
+            (
+                "-invalid-persisted",
+                None,
+                {},
+                "valid-explicit",
+                "codex_model must be safe non-empty text or null",
+            ),
+            (
+                "valid-persisted",
+                None,
+                {"unexpected": True},
+                "valid-explicit",
+                "unknown system default: unexpected",
+            ),
+        )
+        for persisted, effort, extra, explicit, expected in cases:
+            with self.subTest(expected=expected):
+                self.write_defaults(persisted, effort, **extra)
+                with self.assertRaises(ConfigurationError) as caught:
+                    AgentBackend(self.workspace, model=explicit)
+                self.assertEqual(str(caught.exception), expected)
+
+    def test_optional_model_and_reasoning_argv_are_exact_for_fresh_and_resume(
+        self,
+    ) -> None:
+        staging = self.workspace.path("staging")
+        staging.mkdir()
+        (staging / "AGENTS.md").write_text("role\n", encoding="utf-8")
+        schema_path = self.workspace.path("schema.json")
+        output_path = self.workspace.path("output.json")
+        configurations = (
+            (None, None, ()),
+            ("persisted-model", None, ("--model", "persisted-model")),
+            (
+                None,
+                "medium",
+                ("--config", 'model_reasoning_effort="medium"'),
+            ),
+            (
+                "persisted-model",
+                "xhigh",
+                (
+                    "--model",
+                    "persisted-model",
+                    "--config",
+                    'model_reasoning_effort="xhigh"',
+                ),
+            ),
+        )
+        for model, effort, optional in configurations:
+            self.write_defaults(model, effort)
+            backend = AgentBackend(self.workspace)
+            try:
+                for thread_id in (None, "thread-one"):
+                    with self.subTest(
+                        model=model,
+                        effort=effort,
+                        thread_id=thread_id,
+                    ):
+                        resume = () if thread_id is None else ("resume",)
+                        trailing_thread = () if thread_id is None else (thread_id,)
+                        expected = (
+                            "codex",
+                            "--ask-for-approval",
+                            "never",
+                            "--sandbox",
+                            "read-only",
+                            "--cd",
+                            str(staging),
+                            "exec",
+                            *optional,
+                            *resume,
+                            "--json",
+                            "--skip-git-repo-check",
+                            "--ignore-user-config",
+                            "--ignore-rules",
+                            "--disable",
+                            "apps",
+                            "--disable",
+                            "multi_agent",
+                            "--disable",
+                            "shell_tool",
+                            "--disable",
+                            "web_search",
+                            "--config",
+                            'web_search="disabled"',
+                            "--config",
+                            "project_root_markers=[]",
+                            "--config",
+                            "project_doc_max_bytes=32768",
+                            "--output-schema",
+                            str(schema_path),
+                            "--output-last-message",
+                            str(output_path),
+                            *trailing_thread,
+                            "-",
+                        )
+                        command = backend._codex_command(
+                            staging,
+                            schema_path,
+                            output_path,
+                            thread_id,
+                        )
+                        self.assertEqual(tuple(command), expected)
+                        reasoning_values = tuple(
+                            value
+                            for value in command
+                            if value.startswith("model_reasoning_effort=")
+                        )
+                        self.assertEqual(
+                            reasoning_values,
+                            ()
+                            if effort is None
+                            else (f'model_reasoning_effort="{effort}"',),
+                        )
+            finally:
+                backend.close()
+
+
 class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.workspace = initialized_workspace(self)
@@ -775,6 +988,24 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         )
         return manifest["provider_threads"][f"codex:{PLOT_ARCHITECT}"]
 
+    def write_codex_defaults(
+        self,
+        model: str | None,
+        effort: str | None,
+    ) -> None:
+        """Persist one valid complete Codex-default configuration."""
+
+        self.workspace.write_json(
+            "config/system_defaults.json",
+            {
+                "language": "KO",
+                "persona": "default_kim_eun_hee",
+                "max_debate_rounds": 1,
+                "codex_model": model,
+                "codex_reasoning_effort": effort,
+            },
+        )
+
     async def wait_for_provider_invocations(self, count: int) -> None:
         for _ in range(200):
             if len(self.provider_invocations()) >= count:
@@ -817,6 +1048,15 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         for context in contexts:
             self.assertNotIn(context, payload_text)
         argv = invocation["argv"]
+        self.assertEqual(argv[argv.index("exec") + 1], "--json")
+        self.assertNotIn("--model", argv)
+        self.assertFalse(
+            any(
+                isinstance(value, str)
+                and value.startswith("model_reasoning_effort=")
+                for value in argv
+            )
+        )
         self.assertIn("--ignore-user-config", argv)
         self.assertIn("--ignore-rules", argv)
         self.assertIn("read-only", argv)
@@ -830,6 +1070,127 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             )
         )
         self.assertNotIn("resume", argv)
+
+    async def test_backend_defaults_snapshot_refresh_and_thread_identity_are_exact(
+        self,
+    ) -> None:
+        session_id = "defaults_snapshot"
+        self.write_codex_defaults("persisted-one", "high")
+        first_definition = self.definition()
+        first = AgentBackend(self.workspace, executable=str(self.executable))
+        first.create_session_with_access(session_id)
+        first_bound = await first.bind(first_definition)
+
+        self.write_codex_defaults("persisted-two", "low")
+        await first_bound.invoke(
+            self.request(session_id=session_id, debate_id="before_edit")
+        )
+        await first_bound.invoke(
+            self.request(session_id=session_id, debate_id="after_edit")
+        )
+        first.close()
+
+        second_definition = self.definition()
+        self.assertEqual(second_definition, first_definition)
+        second = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(second.close)
+        second.acquire_session_access(session_id)
+        await (await second.bind(second_definition)).invoke(
+            self.request(session_id=session_id, debate_id="next_backend")
+        )
+
+        invocations = self.provider_invocations()
+        self.assertEqual(len(invocations), 3)
+        expected_prefixes = (
+            (
+                "exec",
+                "--model",
+                "persisted-one",
+                "--config",
+                'model_reasoning_effort="high"',
+                "--json",
+            ),
+            (
+                "exec",
+                "--model",
+                "persisted-one",
+                "--config",
+                'model_reasoning_effort="high"',
+                "resume",
+                "--json",
+            ),
+            (
+                "exec",
+                "--model",
+                "persisted-two",
+                "--config",
+                'model_reasoning_effort="low"',
+                "resume",
+                "--json",
+            ),
+        )
+        for invocation, expected in zip(
+            invocations,
+            expected_prefixes,
+            strict=True,
+        ):
+            argv = invocation["argv"]
+            start = argv.index("exec")
+            self.assertEqual(tuple(argv[start : start + len(expected)]), expected)
+
+        thread = self.thread(session_id)
+        self.assertEqual(
+            set(
+                self.workspace.read_json(
+                    "agent_states/orchestrator_state/provider_sessions/"
+                    f"{session_id}.json"
+                )["provider_threads"]
+            ),
+            {"codex:plot_architect"},
+        )
+        self.assertEqual(thread["fingerprint"], first_definition.fingerprint)
+        self.assertEqual(
+            thread["thread_id"],
+            "thread-defaults_snapshot-plot_architect",
+        )
+
+    async def test_configured_provider_rejection_is_typed_stderr_free_and_safe(
+        self,
+    ) -> None:
+        session_id = "configured_rejection"
+        model = "future-safe-model"
+        effort = "xhigh"
+        self.write_codex_defaults(model, effort)
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        backend.create_session_with_access(session_id)
+        bound = await backend.bind(self.definition())
+        captured_stderr = io.StringIO()
+
+        with (
+            mock.patch.dict(os.environ, {"STORY_FAKE_CODEX_MODE": "nonzero"}),
+            contextlib.redirect_stderr(captured_stderr),
+            self.assertRaises(BackendProtocolError) as caught,
+        ):
+            await bound.invoke(self.request(session_id=session_id))
+
+        self.assertEqual(str(caught.exception), "Codex CLI exited with status 7")
+        self.assertEqual(captured_stderr.getvalue(), "")
+        self.assertNotIn(model, str(caught.exception))
+        self.assertNotIn(effort, str(caught.exception))
+        argv = self.provider_invocations()[0]["argv"]
+        start = argv.index("exec")
+        self.assertEqual(
+            tuple(argv[start : start + 6]),
+            (
+                "exec",
+                "--model",
+                model,
+                "--config",
+                'model_reasoning_effort="xhigh"',
+                "--json",
+            ),
+        )
 
     async def test_debate_context_is_the_only_additive_payload_field(self) -> None:
         session_id = "debate_context_session"
