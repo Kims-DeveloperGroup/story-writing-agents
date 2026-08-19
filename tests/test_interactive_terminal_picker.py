@@ -741,6 +741,12 @@ class PurePickerControlTests(unittest.TestCase):
         committed, outcome = transition_picker_fallback(initial, "1")
         self.assertEqual(outcome.text, "secret-1")
         self.assertEqual(committed.picker.selected_id, "secret-1")
+        committed, outcome = transition_picker_fallback(initial, "3")
+        self.assertEqual(
+            outcome,
+            ControlOutcome(ControlOutcomeKind.COMMIT, text="secret-3"),
+        )
+        self.assertEqual(committed.picker.selected_id, "secret-3")
         cancelled, outcome = transition_picker_fallback(initial, "/cancel")
         self.assertEqual(outcome, ControlOutcome(ControlOutcomeKind.CANCEL))
         self.assertIs(cancelled.picker.state, ViewState.CANCELLED)
@@ -787,6 +793,49 @@ class PurePickerControlTests(unittest.TestCase):
         rejected, outcome = transition_picker_fallback(without_highlight, "")
         self.assertEqual(outcome.kind, ControlOutcomeKind.REJECTED)
         self.assertIs(rejected.picker.state, ViewState.EMPTY)
+
+    def test_huge_fallback_ordinal_rejects_before_integer_conversion(self) -> None:
+        initial = initialize_picker(
+            Picker(
+                Prompt("Choose"),
+                _choices()[:3],
+                highlighted_id="secret-3",
+                selected_id="secret-1",
+            )
+        )
+        with mock.patch.object(
+            _controls,
+            "int",
+            create=True,
+            side_effect=AssertionError("integer conversion must not run"),
+        ) as integer_conversion:
+            rejected, outcome = transition_picker_fallback(
+                initial,
+                "9" * 10_000,
+            )
+
+        integer_conversion.assert_not_called()
+        self.assertEqual(outcome, ControlOutcome(ControlOutcomeKind.REJECTED))
+        self.assertEqual(
+            rejected,
+            PickerControlState(
+                Picker(
+                    initial.picker.prompt,
+                    initial.picker.choices,
+                    highlighted_id="secret-3",
+                    selected_id="secret-1",
+                    notice=Notice(
+                        "Enter an enabled choice number, press Enter for the "
+                        "highlighted choice, or enter /cancel.",
+                        label="validation",
+                        role=SemanticRole.ERROR,
+                        state=ViewState.ERROR,
+                    ),
+                    state=ViewState.OPEN,
+                ),
+                initial.window_start,
+            ),
+        )
 
 
 class PickerRenderingTests(unittest.TestCase):
