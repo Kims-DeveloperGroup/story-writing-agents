@@ -123,15 +123,19 @@ prompt seams remain package-internal; `/settings` consumes them without adding
 a supported terminal API.
 
 `/settings` is alias-free, takes no argument, and is available with or without
-an attached session. It first displays immutable Current and Pending sections
-for Language, Persona, Maximum debate rounds, and Providers, then a six-choice
+an attached session. It edits isolated Current and Pending snapshots for
+Language, Persona, Maximum debate rounds, and Providers through a six-choice
 editor in this order: those four fields, Save, Cancel. `Providers` opens a
 nested canonical-agent picker, then a Provider/Model/Reasoning effort picker;
 Model and Reasoning edit only that agent and `null`/Inherit falls back to the
-system defaults. Nested Escape returns to the parent without changing that
-pending value; top-level Escape, Cancel, Ctrl-C, or EOF cancels the whole
-workflow without writing. `/cancel` is literal model text in the free-text
-prompt.
+system defaults. Settings pickers and prompts use a transient lifecycle:
+capable streams clear their transient rows before returning, while fallback
+readers omit duplicate synthetic final picker frames. Nested Escape returns to
+the parent silently without a Current/Pending snapshot or cancellation record.
+The controller emits one complete Current/Pending snapshot immediately before
+each Save attempt or whole-flow cancellation. Top-level Escape, Cancel, Ctrl-C,
+or EOF cancels the whole workflow without writing. `/cancel` is literal model
+text in the free-text prompt.
 
 Save validates the complete pending pair, then rejects any exact-byte change to
 either configuration document or any persona-catalog change since opening.

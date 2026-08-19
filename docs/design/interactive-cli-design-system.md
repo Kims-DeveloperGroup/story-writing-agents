@@ -17,7 +17,8 @@
 > and reasoning defaults. #93 adds the interactive settings workflow, immutable
 > lifecycle configuration snapshots, and guarded persistence. #105 adds
 > presentation-only strict JSON formatting for agent replies and bold
-> terminal-default agent styling. The
+> terminal-default agent styling. #106 makes settings picker and prompt editors
+> transient without changing non-settings input behavior. The
 > [interactive terminal reference](../reference/interactive-terminal.md) and
 > [terminal safety rules](../operations/terminal-safety.md) describe current
 > observable behavior.
@@ -30,7 +31,7 @@ semantic model.
 
 The words **must**, **must not**, and **may** below constrain the delivery
 issues. Requirements beyond the implemented #82, #83, #84, #85, #86, #79,
-#87, #94, #93, #105, and #73 slices do not describe current production
+#87, #94, #93, #105, #106, and #73 slices do not describe current production
 behavior.
 
 ## Delivery status
@@ -48,6 +49,7 @@ behavior.
 | #94 workspace Codex defaults | Implemented: the closed system-default schema accepts optional workspace fallback Codex model and reasoning values, new workspaces initialize both to null, legacy files remain valid and byte-preserved, and each backend validates and snapshots effective invocation values at construction. |
 | #93 settings UI | Implemented: global alias-free `/settings` edits isolated current/pending snapshots of workspace defaults and per-agent provider, model, and reasoning choices through shared picker and prompt controls. Save validates an exact opening baseline and persona catalog, writes only changed configuration documents in deterministic order, and attempts reverse exact-byte rollback after a write failure. The workflow adds no supported public save API. |
 | #105 agent reply presentation | Implemented: direct, retrieval, transcript, and focused-history agent replies use a presentation-only strict JSON object/array projection with exact unchanged fallback cases and two-space Unicode-preserving output; stored/provider content remains unchanged, and the `AGENT` role uses bold terminal-default foreground styling without background detection. |
+| #106 transient settings UI | Implemented: settings-only picker and prompt reads clear capable transient rows, suppress duplicate fallback finals, emit one complete Current/Pending snapshot per Save attempt or whole-flow cancellation, keep nested Escape silent, and preserve default non-settings lifecycles. |
 
 ## Goals and limits
 
@@ -444,9 +446,19 @@ ownership, configuration precedence, or either implemented schema.
 The presentation uses one `Panel` with `Section`, `Field`, and `Notice` values,
 plus one focused `Picker` or `Prompt`. It is not a new component or a
 general-purpose form abstraction. One section shows validated current values;
-another shows independent pending values, and the active control renders with
-that context. Any implementation need for a new semantic component must first
-revise the closed vocabulary through the repository's modularity process.
+another shows independent pending values. Controls render without the snapshot
+panel; the full Current/Pending panel appears only immediately before Save
+attempts or whole-flow cancellation. The controller keeps the snapshots
+call-local and does not emit
+the Current/Pending panel while opening, navigating, or editing. It emits one
+complete panel immediately before each Save attempt or whole-flow cancellation.
+Nested Escape returns silently to its parent without a snapshot or cancellation
+record. Settings opts into transient picker and prompt reads: capable streams
+clear transient rows before returning, while fallback readers omit duplicate
+synthetic picker final frames. The default non-settings picker and prompt
+lifecycle remains unchanged. Any implementation need for a new semantic
+component must first revise the closed vocabulary through the repository's
+modularity process.
 
 The top-level settings order is exact:
 
@@ -488,7 +500,8 @@ one control is focused:
   updates only the pending value and returns focus;
   invalid Enter leaves the prompt focused with a trusted validation notice.
   Escape restores its prior pending value.
-- Enter on Save validates both complete pending snapshots, then re-reads both
+- Enter on Save emits the one complete Current/Pending panel for that Save
+  attempt, then validates both complete pending snapshots and re-reads both
   persisted documents and the persona catalog before any write. Any exact-byte
   or catalog change from the validated opening baseline fails closed with no
   write. A valid, unchanged baseline crosses the sole mutation boundary: each
@@ -500,7 +513,8 @@ one control is focused:
   cancellation. This is a guarded two-file update, not a global transaction or
   a power-loss-safe transaction across both files.
 - Enter on Cancel, Escape from the top-level settings picker, Ctrl-C, or EOF
-  returns `cancelled` without writing. Opening, navigating, highlighting,
+  returns `cancelled` without writing; the whole-flow cancellation emits its
+  one complete Current/Pending panel. Opening, navigating, highlighting,
   editing, validation preview, nested cancellation, and rerendering likewise
   have no filesystem, runtime, provider, storage, or configuration effect.
 
@@ -847,7 +861,7 @@ the graph to 33 units.
 | Retrieval progress and summaries | `Notice`, `Record`, `ListView`, `Field` | Loading, citations/context accounting, result/error/cancelled | #83 (implemented accepted views) |
 | Consensus progress and summaries | `Panel`, `Section`, `Notice`, `Record`, `Field` | Loading, debate identity, result/cancelled/completed/error | #83 (implemented) |
 | Interactive errors and recovery hints | `Notice`, `Field` | Trusted code, redaction, error state, next action, no raw diagnostics | #83 (implemented) |
-| Settings current/pending view | `Panel`, `Section`, `Field`, `Prompt`, `Picker`, `Notice` | Exact top-level order; two current/pending snapshots; disabled provider, validation, error, cancelled, and completed meaning; guarded two-file Save boundary | #93 (implemented) |
+| Settings current/pending view | `Panel`, `Section`, `Field`, `Prompt`, `Picker`, `Notice` | Exact top-level order; one complete Current/Pending snapshot per Save attempt or whole-flow cancellation; nested Escape silent; transient cleanup and fallback no-duplicate-final behavior; disabled provider, validation, error, cancelled, and completed meaning; guarded two-file Save boundary | #93 and #106 (implemented) |
 
 ### Control groups
 
@@ -860,7 +874,7 @@ the graph to 33 units.
 | Main command/subcommand palette | `SuggestionPalette`, `Prompt`, `Notice` | Slash-open, Up/Down clamped highlight, Tab full-token replacement, Escape snapshot restoration and dismissal | #79 (implemented) |
 | Fixed command values | `SuggestionPalette`, `Field` | Canonical finite grammar choices, including metadata-exposed agent IDs/aliases; palette activity has no effects beyond call-local input state | #79 (implemented) |
 | Single-select and selectable-list choices | `Picker`, `ListView`, `Record`, `Notice` | Disabled-skipping clamped Up/Down highlight, Enter commit, Escape cancel, typed interrupt/EOF, bounded live/full fallback rendering, empty/disabled/error | #87 (implemented foundation; `/settings` consumer added by #93) |
-| Settings field and action navigation | `Panel`, `Prompt`, `Picker`, `Field`, `Notice` | Single focus; nested agent/provider and value pickers; text/numeric editors; explicit Save/Cancel; no write before guarded Save | #93 (implemented) |
+| Settings field and action navigation | `Panel`, `Prompt`, `Picker`, `Field`, `Notice` | Single focus; nested agent/provider and value pickers; transient text/numeric editors; explicit Save/Cancel; no write before guarded Save; default non-settings lifecycle unchanged | #93 and #106 (implemented) |
 
 Contextual non-main-prompt suggestions from completed issue #73 use the same
 unified driver without moving parser, runtime, or storage authority into the

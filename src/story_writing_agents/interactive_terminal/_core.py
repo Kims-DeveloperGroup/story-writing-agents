@@ -1273,8 +1273,12 @@ class InteractivePickerInput:
         selected_id: str | None = None,
         notice: Notice | None = None,
         state: ViewState = ViewState.OPEN,
+        transient: bool = False,
     ) -> ControlOutcome:
         """Read one semantic single-select value without invoking a consumer."""
+
+        if type(transient) is not bool:
+            raise TypeError("transient must be a bool")
 
         picker = Picker(
             prompt,
@@ -1284,7 +1288,12 @@ class InteractivePickerInput:
             notice=notice,
             state=state,
         )
-        outcome = self._read(initialize_picker(picker))
+        initial_state = initialize_picker(picker)
+        outcome = (
+            self._read(initial_state, transient=True)
+            if transient
+            else self._read(initial_state)
+        )
         if type(outcome) is not ControlOutcome:
             raise TypeError("picker reader must return a ControlOutcome")
         return outcome
@@ -1309,10 +1318,19 @@ class InteractivePromptInput:
         prompt: Prompt,
         *,
         context: tuple[Panel | Section | Field | Notice, ...] = (),
+        transient: bool = False,
     ) -> ControlOutcome:
         """Read one exact line with a distinct nested-cancel outcome."""
 
-        outcome = self._read(InputPromptView(context, prompt))
+        if type(transient) is not bool:
+            raise TypeError("transient must be a bool")
+
+        view = InputPromptView(context, prompt)
+        outcome = (
+            self._read(view, transient=True)
+            if transient
+            else self._read(view)
+        )
         if type(outcome) is not ControlOutcome:
             raise TypeError("prompt reader must return a ControlOutcome")
         return outcome
@@ -1389,7 +1407,13 @@ def _plain_prompt_reader(
         raise TypeError("read_line must be callable")
     capabilities = _plain_capabilities(width)
 
-    def read_prompt(view: InputPromptView) -> ControlOutcome:
+    def read_prompt(
+        view: InputPromptView,
+        *,
+        transient: bool = False,
+    ) -> ControlOutcome:
+        if type(transient) is not bool:
+            raise TypeError("transient must be a bool")
         frame = render_input_prompt(view, capabilities)
         try:
             line = _validated_input_line(read_line(frame.plain_text))
@@ -1417,9 +1441,15 @@ def _plain_picker_reader(
         raise TypeError("write_text must be callable")
     capabilities = _plain_capabilities(width)
 
-    def read_picker(initial_state: PickerControlState) -> ControlOutcome:
+    def read_picker(
+        initial_state: PickerControlState,
+        *,
+        transient: bool = False,
+    ) -> ControlOutcome:
         if type(initial_state) is not PickerControlState:
             raise TypeError("state must be a PickerControlState")
+        if type(transient) is not bool:
+            raise TypeError("transient must be a bool")
         picker_state = initial_state
         while True:
             frame = render_picker_fallback(picker_state, capabilities)
@@ -1438,7 +1468,7 @@ def _plain_picker_reader(
             if outcome.kind in {
                 ControlOutcomeKind.COMMIT,
                 ControlOutcomeKind.CANCEL,
-            }:
+            } and not transient:
                 final_frame = render_picker_fallback(
                     picker_state,
                     capabilities,
@@ -1542,19 +1572,31 @@ def build_stream_terminal(
         render_input_prompt,
         _empty_slash_suggestions,
     )
-    terminal._picker_read = lambda state: driver.read_picker(
-        state,
-        transition_picker,
-        transition_picker_fallback,
-        project_picker_viewport,
-        render_picker_viewport,
-        render_picker_fallback,
-    )
-    terminal._prompt_read = lambda view: driver.read_prompt(
-        view,
-        render_input_prompt,
-        transition_prompt_input,
-    )
+    def read_picker(state, *, transient=False):
+        arguments = (
+            state,
+            transition_picker,
+            transition_picker_fallback,
+            project_picker_viewport,
+            render_picker_viewport,
+            render_picker_fallback,
+        )
+        return (
+            driver.read_picker(*arguments, transient=True)
+            if transient
+            else driver.read_picker(*arguments)
+        )
+
+    def read_prompt(view, *, transient=False):
+        arguments = (view, render_input_prompt, transition_prompt_input)
+        return (
+            driver.read_prompt(*arguments, transient=True)
+            if transient
+            else driver.read_prompt(*arguments)
+        )
+
+    terminal._picker_read = read_picker
+    terminal._prompt_read = read_prompt
     terminal._capability_provider = driver.capabilities
     return terminal
 

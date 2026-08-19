@@ -245,7 +245,14 @@ picker at a time and for history-free text/numeric prompts with the current
 settings panel as context. Picker Escape returns from a nested editor or
 cancels at top level according to controller-owned focus. Prompt Escape returns
 from the nested editor; Ctrl-C and EOF cancel the whole workflow. No settings
-input is added to main history or command completion.
+input is added to main history or command completion. Settings alone opts into
+transient picker/prompt reads: capable streams clear the transient rows before
+returning, callback and line fallback cannot erase and therefore omit duplicate
+synthetic picker final frames, and nested Escape returns silently without a
+snapshot or cancellation record. The controller emits one complete
+Current/Pending snapshot immediately before each Save attempt or whole-flow
+cancellation. The default non-settings picker/prompt lifecycle remains
+unchanged.
 
 Capable main reads render the existing semantic `SuggestionPalette` in plain or
 fixed ANSI at the active width. `NO_COLOR` removes only decoration. Opening
@@ -267,13 +274,16 @@ The cancellable settings prompt uses ordinary one-line fallback: an exact ESC
 line cancels that nested editor, while `/cancel` is literal data. Enter commits
 the exact line, KeyboardInterrupt is interrupt, and EOF remains distinct.
 
-A picker commit or cancel clears/redraws and writes exactly one final semantic
-`completed` or `cancelled` frame. Configured VINTR/Ctrl-C and VEOF/physical EOF
-return typed internal outcomes after clearing the transient display, without a
-final picker frame. Read, render, write, flush, or decoding failures likewise
-attempt display cleanup and restore captured attributes before propagating;
-restoration uncertainty remains fatal. No second reader, thread, sleep loop,
-history store, or completion store is introduced.
+A default picker commit or cancel clears/redraws and writes exactly one final
+semantic `completed` or `cancelled` frame. Configured VINTR/Ctrl-C and
+VEOF/physical EOF return typed internal outcomes after clearing the transient
+display, without a final picker frame. Settings opts into the transient
+lifecycle: capable reads clear before returning, and fallback readers omit the
+synthetic final picker frame they cannot erase. Read, render, write, flush, or
+decoding failures likewise attempt display cleanup and restore captured
+attributes before propagating; restoration uncertainty remains fatal. No second
+reader, thread, sleep loop, history store, or completion store is introduced,
+and non-settings calls retain the default behavior.
 
 ## Other input and process-local state
 

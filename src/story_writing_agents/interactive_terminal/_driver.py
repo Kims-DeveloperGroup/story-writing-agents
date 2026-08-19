@@ -276,6 +276,8 @@ class RawTerminalDriver:
         view: InputPromptView,
         renderer: _InputRenderer,
         transition: _PromptTransition,
+        *,
+        transient: bool = False,
     ) -> ControlOutcome:
         """Read one cancellable semantic line without history or completion."""
 
@@ -285,6 +287,8 @@ class RawTerminalDriver:
             raise TypeError("renderer must be callable")
         if not callable(transition):
             raise TypeError("transition must be callable")
+        if type(transient) is not bool:
+            raise TypeError("transient must be a bool")
 
         capabilities = self.capabilities()
         rendered_input = renderer(view, capabilities)
@@ -301,6 +305,7 @@ class RawTerminalDriver:
                     transition,
                     rendered_input=rendered_input,
                     known_width=capabilities.width,
+                    transient=transient,
                 )
                 if capabilities.raw_mode
                 else self._fallback_read_line(rendered_input.plain_text)
@@ -421,11 +426,15 @@ class RawTerminalDriver:
         viewport_projector: _PickerViewportProjector,
         viewport_renderer: _PickerViewportRenderer,
         fallback_renderer: _PickerFallbackRenderer,
+        *,
+        transient: bool = False,
     ) -> ControlOutcome:
         """Read one generic picker through a dedicated history-free lifecycle."""
 
         if type(state) is not PickerControlState:
             raise TypeError("state must be a PickerControlState")
+        if type(transient) is not bool:
+            raise TypeError("transient must be a bool")
         for name, collaborator in (
             ("transition", transition),
             ("fallback_transition", fallback_transition),
@@ -443,6 +452,7 @@ class RawTerminalDriver:
                 capabilities,
                 fallback_transition,
                 fallback_renderer,
+                transient=transient,
             )
         try:
             configuration = _terminal_configuration(
@@ -458,6 +468,7 @@ class RawTerminalDriver:
                 capabilities,
                 fallback_transition,
                 fallback_renderer,
+                transient=transient,
             )
         if configuration is None:
             return self._read_picker_fallback(
@@ -465,6 +476,7 @@ class RawTerminalDriver:
                 capabilities,
                 fallback_transition,
                 fallback_renderer,
+                transient=transient,
             )
 
         try:
@@ -477,6 +489,7 @@ class RawTerminalDriver:
                     capabilities,
                     fallback_transition,
                     fallback_renderer,
+                    transient=transient,
                 )
             raise
 
@@ -496,7 +509,7 @@ class RawTerminalDriver:
             if outcome.kind in {
                 ControlOutcomeKind.COMMIT,
                 ControlOutcomeKind.CANCEL,
-            }:
+            } and not transient:
                 display_state.rendered_cursor_row = self._redraw_live_picker(
                     state,
                     display_state,
@@ -529,8 +542,13 @@ class RawTerminalDriver:
         capabilities: TerminalCapabilities,
         transition: _PickerFallbackTransition,
         renderer: _PickerFallbackRenderer,
+        *,
+        transient: bool = False,
     ) -> ControlOutcome:
         """Read complete numbered attempts without raw mode or history."""
+
+        if type(transient) is not bool:
+            raise TypeError("transient must be a bool")
 
         while True:
             frame = renderer(state, capabilities)
@@ -570,7 +588,7 @@ class RawTerminalDriver:
             if outcome.kind in {
                 ControlOutcomeKind.COMMIT,
                 ControlOutcomeKind.CANCEL,
-            }:
+            } and not transient:
                 final_frame = renderer(state, capabilities)
                 if type(final_frame) is not RenderedInputFrame:
                     raise TypeError(
@@ -619,6 +637,7 @@ class RawTerminalDriver:
         live_capabilities: TerminalCapabilities | None = None,
         palette_projector: _PaletteProjector | None = None,
         palette_renderer: _PaletteRenderer | None = None,
+        transient: bool = False,
     ) -> str:
         """Read one exact buffer through one pure logical-state transition.
 
@@ -641,6 +660,8 @@ class RawTerminalDriver:
             raise TypeError("initial_state must be an input control state")
         if not callable(transition):
             raise TypeError("transition must be callable")
+        if type(transient) is not bool:
+            raise TypeError("transient must be a bool")
         if (
             rendered_input is not None
             and type(rendered_input) is not RenderedInputFrame
@@ -718,13 +739,16 @@ class RawTerminalDriver:
                 palette_projector,
                 palette_renderer,
             )
-            self._finish_live_display(
-                prompt,
-                configuration.width,
-                display_state,
-                line_state,
-                rendered_input,
-            )
+            if transient:
+                self._clear_live_display(display_state, line_break=True)
+            else:
+                self._finish_live_display(
+                    prompt,
+                    configuration.width,
+                    display_state,
+                    line_state,
+                    rendered_input,
+                )
         except BaseException as failure:
             active_failure = failure
             try:

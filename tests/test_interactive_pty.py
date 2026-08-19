@@ -1002,6 +1002,46 @@ print("RESULT=" + outcome.kind.value)
             process.original_terminal_attributes,
         )
 
+    def test_internal_prompt_transient_clears_and_restores_repeatedly(self) -> None:
+        """Exercise transient raw prompt cleanup without a duplicate final frame."""
+
+        source = r'''
+import sys
+
+from story_writing_agents.interactive_terminal import (
+    InteractivePromptInput,
+    Prompt,
+    build_stream_terminal,
+)
+
+terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
+outcome = InteractivePromptInput(terminal).read_prompt(
+    Prompt("Transient prompt", instruction="Enter one value."),
+    transient=True,
+)
+assert outcome.text == "value"
+print("RESULT=" + outcome.kind.value)
+'''
+        for attempt in range(3):
+            with self.subTest(attempt=attempt):
+                process = self._spawn_python(
+                    source,
+                    environment_overrides={"TERM": "xterm-256color"},
+                    terminal_columns=40,
+                    decorative_color=True,
+                )
+                opened = process.wait_for_text("Transient prompt >")
+                self.assertIn("Enter one value.", opened)
+                process.send_line("value")
+                result = process.wait_for_text("RESULT=commit")
+                self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+                self.assertIn("\x1b[J", result)
+                self.assertNotIn("[completed]", result)
+                self.assertEqual(
+                    process.final_terminal_attributes,
+                    process.original_terminal_attributes,
+                )
+
     def test_semantic_views_use_ansi_and_no_color_profiles_on_real_ptys(
         self,
     ) -> None:
@@ -1088,9 +1128,12 @@ print("RESULT=" + outcome.kind.value)
                     "Choose a setting to edit, save, or cancel.",
                     after=mark,
                 )
-                self.assertIn("Settings [open]", opened)
+                self.assertIn("Settings [focused] [open]", opened)
                 self.assertIn("[highlighted] Language", opened)
-                self.assertIn(b"\x1b[1mSettings [open]\x1b[0m", process.raw_bytes)
+                self.assertIn(
+                    b"\x1b[35mSettings [focused] [open] >\x1b[0m",
+                    process.raw_bytes,
+                )
 
                 language_mark = process.output_mark()
                 process.send_text("\n")
@@ -1100,7 +1143,7 @@ print("RESULT=" + outcome.kind.value)
                 )
                 process.send_text("\x1b[B\n")
                 language_result = process.wait_for_text(
-                    "Language [focused] [completed]",
+                    "Language [focused] [open]",
                     after=language_mark,
                 )
                 self.assertIn(expected_language, language_result)

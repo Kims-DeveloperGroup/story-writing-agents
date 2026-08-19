@@ -33,12 +33,19 @@ from story_writing_agents.interactive_commands import AGENT_ROUTES
 from story_writing_agents.interactive_terminal import (
     INTERACTIVE_ERROR_SPECS,
     AttachmentKind,
+    Choice,
     ComposeMode,
     ConfirmationResult,
+    ControlOutcome,
+    ControlOutcomeKind,
     InteractiveError,
     InteractiveErrorCode,
     InteractiveErrorSpec,
+    InteractivePickerInput,
+    InteractivePromptInput,
     InteractiveTerminal,
+    Prompt,
+    RawTerminalDriver,
     TerminalAction,
     TerminalActionKind,
     TerminalMessageKind,
@@ -812,6 +819,52 @@ class PromptAndRenderingTests(unittest.TestCase):
                 lambda text: None,
                 main_read_line=object(),  # type: ignore[arg-type]
             )
+
+    def test_transient_adapter_and_driver_seams_preserve_default_routing(self) -> None:
+        picker_signature = inspect.signature(RawTerminalDriver.read_picker)
+        prompt_signature = inspect.signature(RawTerminalDriver.read_prompt)
+        for signature in (picker_signature, prompt_signature):
+            with self.subTest(signature=signature):
+                self.assertIn("transient", signature.parameters)
+                self.assertEqual(signature.parameters["transient"].default, False)
+                self.assertIs(
+                    signature.parameters["transient"].kind,
+                    inspect.Parameter.KEYWORD_ONLY,
+                )
+
+        terminal, _callbacks = make_terminal()
+        picker_calls: list[dict[str, object]] = []
+        prompt_calls: list[dict[str, object]] = []
+
+        def picker_reader(_state, **kwargs):
+            picker_calls.append(kwargs)
+            return ControlOutcome(ControlOutcomeKind.COMMIT, text="choice")
+
+        def prompt_reader(_view, **kwargs):
+            prompt_calls.append(kwargs)
+            return ControlOutcome(ControlOutcomeKind.COMMIT, text="line")
+
+        terminal._picker_read = picker_reader
+        terminal._prompt_read = prompt_reader
+        picker = InteractivePickerInput(terminal)
+        prompt = InteractivePromptInput(terminal)
+        choice = Choice("choice", "Choice")
+
+        self.assertEqual(
+            picker.read_picker(Prompt("Picker"), (choice,), transient=True).text,
+            "choice",
+        )
+        self.assertEqual(
+            picker.read_picker(Prompt("Picker"), (choice,)).text,
+            "choice",
+        )
+        self.assertEqual(
+            prompt.read_prompt(Prompt("Prompt"), transient=True).text,
+            "line",
+        )
+        self.assertEqual(prompt.read_prompt(Prompt("Prompt")).text, "line")
+        self.assertEqual(picker_calls, [{"transient": True}, {}])
+        self.assertEqual(prompt_calls, [{"transient": True}, {}])
 
     def test_main_prompts_are_exact_and_return_unparsed_lines(self) -> None:
         self.assertEqual(
