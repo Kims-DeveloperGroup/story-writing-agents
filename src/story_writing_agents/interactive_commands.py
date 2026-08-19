@@ -557,7 +557,7 @@ def project_command_completion(
         return None
 
     start, end = _completion_token_span(buffer, cursor)
-    prefix = buffer[start:cursor]
+    active_token = buffer[start:end]
     preceding = _completion_preceding_tokens(buffer, start)
 
     if start == 0:
@@ -596,7 +596,7 @@ def project_command_completion(
             _agent_completion_replacements(),
         )
     if preceding == ("/run",):
-        if prefix and not prefix.startswith("-"):
+        if active_token and not active_token.startswith("-"):
             return None
         return _completion_context(
             "run.flag",
@@ -605,7 +605,7 @@ def project_command_completion(
             (_RUN_FRESH_FLAG,),
         )
     if preceding == ("/conversation", "list"):
-        if prefix and not prefix.startswith("-"):
+        if active_token and not active_token.startswith("-"):
             return None
         return _completion_context(
             "conversation.list.flag",
@@ -621,7 +621,7 @@ def project_command_completion(
             _root_command_replacements(include_composition=True),
         )
     if preceding == ("/inspect",):
-        if prefix and not _INSPECT_LAST_ARGUMENT.startswith(prefix):
+        if active_token and not _INSPECT_LAST_ARGUMENT.startswith(active_token):
             return None
         return _completion_context(
             "inspect.argument",
@@ -632,7 +632,7 @@ def project_command_completion(
     if len(preceding) == 2 and preceding[0] == "/transcript":
         if preceding[1].startswith("--"):
             return None
-        if prefix and not prefix.startswith("-"):
+        if active_token and not active_token.startswith("-"):
             return None
         return _completion_context(
             "transcript.after_id.flag",
