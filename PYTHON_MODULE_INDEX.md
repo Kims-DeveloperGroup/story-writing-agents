@@ -264,12 +264,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   interaction, or errors to standard streams; creates backends; constructs one
   unified stream-backed terminal through its package-internal factory after a
   stdin/stdout TTY guard; constructs the interactive controller; and runs the
-  async event loop. The factory binds main and composition previews explicitly
-  through one terminal driver, which retains the existing `input` callback as
-  its unsupported-terminal fallback; subject and confirmation input remain
-  ordinary reads. The controller owns interactive backend cleanup after its
-  session-lobby run begins, while the CLI closes a backend if construction
-  fails before that ownership transfer.
+  async event loop. The factory binds main and composition previews plus
+  semantic confirmation input explicitly through one terminal driver, which
+  retains the existing `input` callback as its unsupported-terminal fallback;
+  subject input remains an ordinary read, while composition and confirmation
+  use history-free semantic input. The controller owns interactive backend
+  cleanup after its session-lobby run begins, while the CLI closes a backend if
+  construction fails before that ownership transfer.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
   `tests/test_cli_context.py`, `tests/test_smoke_cli.py`, and
   `tests/test_interactive_pty.py` for primary process-level POSIX PTY
@@ -763,14 +764,17 @@ every intermediate arrow. The current runtime graph is acyclic.
   package-supported surface. The adapter and contracts add no project-root
   export or raw-resource ownership. Its
   unlisted package-internal `build_stream_terminal` factory is the sole real-CLI
-  construction boundary. Unlisted `build_contextual_terminal` preserves the
-  completed contextual-callback seam. Unlisted `MainInputHistoryState`,
+  construction boundary and binds trusted semantic input rendering to the sole
+  raw driver without exposing renderer or driver details. Unlisted
+  `build_contextual_terminal` preserves the completed contextual-callback seam.
+  Unlisted `MainInputHistoryState`,
   `MainInputControlState`, `append_main_input_history`, and
   `transition_main_input` bindings expose the internal pure history seam to the
   standalone compatibility facade without adding root-package exports. Public
-  construction continues using `read_line` for composition, while internal
-  construction binds distinct ordinary, history-aware main, and history-free
-  composition readers without prompt inspection.
+  construction adapts `read_line` to deterministic plain semantic composition
+  and confirmation prompts, while internal construction binds distinct
+  ordinary, history-aware main, and history-free semantic composition and
+  confirmation readers without prompt inspection.
 - **Direct internal dependencies:** `interactive_terminal._core`.
 - **State, resources, and side effects:** Owns no terminal resource or mutable
   process state. Import deterministically canonicalizes supported public object
@@ -794,19 +798,25 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Responsibility:** Define immutable semantic terminal contracts.
 - **Supported surface:** Package-internal semantic roles, explicit view states,
   capability profiles, normalized keys, control outcomes, terminal
-  capabilities, line-input state, bounded `MainInputHistoryState`, correlated
-  `MainInputControlState`, `SlashCommandSuggestion`, the closed `Prompt`,
-  `Panel`, `Section`, `Field`, `Notice`, `Message`, `Record`, `ListView`,
-  `SuggestionPalette`, and `Picker` component vocabulary, shared `Choice`,
-  `RenderedFrame`, terminal-text sanitization, and deterministic physical-cell
+  capabilities, line-input state, immutable `ComposerState`, bounded
+  `MainInputHistoryState`, correlated `MainInputControlState`,
+  `SlashCommandSuggestion`, the internal rejected control outcome, the closed
+  `Prompt`, `Panel`, `Section`, `Field`, `Notice`, `Message`, `Record`,
+  `ListView`, `SuggestionPalette`, and `Picker` component vocabulary, shared
+  `Choice`, `RenderedFrame`, internal `InputPromptView` and
+  `RenderedInputFrame` transfer contracts outside the closed component
+  vocabulary, terminal-text sanitization, and deterministic physical-cell
   measurement.
 - **Direct internal dependencies:** None.
 - **State, resources, and side effects:** Immutable values and pure validation
   only. Main-input values correlate one editable line, navigation position,
   saved draft, and overlay flag and bound stored entries to 100 without
-  retaining or persisting them. Models contain no ANSI, callbacks, streams,
-  calculated layout, runtime, provider, filesystem, or storage handles and
-  perform no operational I/O.
+  retaining or persisting them. Composer values retain exact accepted lines
+  and derive joined content and code-point counts without mutation. Models
+  create no ANSI and own no callbacks, streams, calculated layout, runtime,
+  provider, filesystem, or storage handles; the rendered-input transfer value
+  only carries renderer-produced trusted/plain projections and performs no
+  operational I/O.
 - **Primary verification/documentation:**
   `tests/test_interactive_terminal_foundation.py`,
   `tests/test_interactive_terminal_history.py`,
@@ -826,9 +836,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   preview projection. `append_main_input_history` retains exact nonblank
   commits with oldest-first eviction at 100, while `transition_main_input`
   performs pure newest/older/newer history navigation, draft restoration, and
-  overlay-open arrow suppression. The current suggestion preview is not an
-  open palette; selectable completion, composer state, confirmation, and picker
-  transitions remain unimplemented.
+  overlay-open arrow suppression. `transition_composer_line` applies exact
+  `/send`, `/cancel`, `/say /send`, and `/say /cancel` semantics to immutable
+  composer state, while `transition_confirmation_answer` classifies canonical
+  yes/no/default answers and explicit rejection. The current suggestion preview
+  is not an open palette; selectable completion and picker transitions remain
+  unimplemented.
 - **Direct internal dependencies:** `interactive_terminal._model`.
 - **State, resources, and side effects:** Pure value projections only. The
   functions return new immutable history/control values and retain no store;
@@ -848,7 +861,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Supported surface:** Package-internal deterministic responsive component
   rendering for structured plain and fixed-theme ANSI profiles, exact removal
   of the allowed decorative SGR vocabulary, semantic state labels, physical-cell
-  wrapping, narrow-layout stacking, and explicit empty/selection cues.
+  wrapping, narrow-layout stacking, explicit empty/selection cues, and trusted
+  semantic input rendering with equivalent plain and styled projections.
 - **Direct internal dependencies:** `interactive_terminal._model`.
 - **State, resources, and side effects:** Pure projections only. Dynamic text
   is sanitized before wrapping or fixed styling; the module writes and flushes
@@ -868,10 +882,12 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Responsibility:** Own stream-backed terminal interaction.
 - **Supported surface:** Package-internal `RawTerminalDriver` and
   `detect_terminal_capabilities`. The driver accepts pure line, main-input, and
-  history-append collaborators at construction and an explicit suggestion
-  provider per live read. `read_main_line` performs history-aware main editing,
-  `read_live_line` remains history-free for composition, and `read_line`
-  preserves ordinary fallback. The driver provides one-write output and
+  history-append collaborators at construction and explicit suggestion
+  providers per live read. `read_main_line` performs history-aware main editing,
+  `read_live_line` remains the history-free contextual compatibility route,
+  `read_input_line` accepts an injected trusted semantic renderer for
+  history-free composition and confirmation, and `read_line` preserves ordinary
+  fallback. The driver provides one-write output and
   normalizes established editing keys plus Up, Down, Tab, Shift-Tab, and Escape
   without adding selectable completion or picker semantics.
 - **Direct internal dependencies:** `interactive_terminal._model`.
@@ -881,9 +897,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   flushes, and exact restoration. It retains exactly one bounded process-local
   main-input history store per driver instance; each main read resets only its
   call-local navigation state, and a successful fallback commit or restored
-  live commit is appended once. Composition and ordinary reads never navigate
-  or mutate that store. Construction performs no stream access or terminal
-  mutation, and history is never persisted. Missing, uncertain, non-TTY,
+  live commit is appended once. Composition, confirmation, and ordinary reads
+  never navigate or mutate that store. Semantic input resolves capability and
+  width once per read, uses the plain projection for fallback and cursor
+  measurement, and emits the trusted styled projection only on its live path.
+  Construction performs no stream access or terminal mutation, and history is
+  never persisted. Missing, uncertain, non-TTY,
   non-POSIX, or `TERM=dumb` capability safely uses ordinary line input, while
   `NO_COLOR` affects decorative SGR only.
 - **Primary verification/documentation:**
@@ -910,12 +929,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   conversation-list, search-hit, and transcript-event writers construct
   semantic components; `InteractiveSemanticOutput` binds the same private
   component writer so controller-owned components share the identical
-  render-and-one-write path. Generic status remains only on the established
-  legacy path for the four deferred composer records. The internal contextual
-  factory preserves explicit ordinary/main/composition callback routing, while
-  the real stream factory binds both preview providers plus the pure main-input
-  transitions to one driver, routing main reads through its history-aware path
-  and composition through its history-free live path.
+  render-and-one-write path. Composition opening, rejection, send, and discard
+  events plus invalid-confirmation hints use the semantic component path; the
+  generic status writer has no remaining internal composer call site. The core
+  constructs ordered structured composition and confirmation input views and
+  maps their pure control outcomes without changing public result contracts.
+  The internal contextual factory preserves explicit ordinary/main/composition
+  callback routing through deterministic plain semantic adapters, while the
+  real stream factory binds both preview providers, semantic composition and
+  confirmation input, plus the pure main-input transitions to one driver.
 - **Direct internal dependencies:** `agents`, `interactive_commands`,
   `interactive_terminal._controls`, `interactive_terminal._driver`,
   `interactive_terminal._model`, and `interactive_terminal._render`.
@@ -924,10 +946,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   and an explicit width but inspect no stream and acquire no resource.
   Stream-factory instances delegate all raw terminal state, width detection,
   keys, writes, flushes, restoration, and the bounded process-local main-input
-  history store to one driver. Main and composition providers are selected per
-  call and never retained by that driver; composition is history-free, while
-  subject and confirmation use ordinary input. Callback-constructed terminals
-  and the core itself own no history. The semantic adapter retains only the
+  history store to one driver. Main and composition providers plus semantic
+  input renderers are selected per call and never retained by that driver;
+  composition and confirmation are history-free, while subject input remains
+  ordinary. Callback-constructed terminals and the core itself own no history.
+  The semantic adapter retains only the
   terminal's bound component capability and acquires no stream or raw resource.
   There is no runtime, filesystem, persistence, subprocess, network, or
   import-time operational I/O.
@@ -1162,13 +1185,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   `interactive_terminal` package keeps its established public facade while
   `_core` consumes public `COMMANDS` and `AGENT_ROUTES` metadata plus canonical
   display names to coordinate safe presentation and explicit ordinary, main,
-  and composition reader routing. `_model`, `_controls`, and `_render` remain
-  pure; `_driver` alone owns raw streams, capabilities, functional cursor
+  composition, and confirmation reader routing. `_model`, `_controls`, and
+  `_render` remain pure; `_driver` alone owns raw streams, capabilities,
+  functional cursor
   controls, width, key decoding, writes, flushes, restoration, and one bounded
-  process-local main-input history store. It receives preview providers only
-  per read, resets navigation for each main read, and keeps composition reads
-  history-free. `_controls` supplies immutable append/navigation transitions;
-  the current preview is not an open palette, so main Up and Down remain
+  process-local main-input history store. It receives preview providers and
+  the trusted semantic input renderer only per read, resets navigation for each
+  main read, and keeps composition and confirmation reads history-free.
+  `_controls` supplies immutable history, composer, and confirmation
+  transitions; the current preview is not an open palette, so main Up and Down remain
   history keys. The real CLI constructs one stream-backed terminal rather than
   injecting a second editor. The terminal facade also
   exposes an unlisted typed semantic-output adapter and closed component
@@ -1176,11 +1201,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   `__all__`; controller code imports only that facade, never a terminal leaf.
   Counted session, conversation, search, transcript, and history output uses
   one positioned one-record list and one component write for each established
-  row callback, preserving partial-output and cancellation boundaries. Exactly
-  four generic status calls remain inside `_core` for deferred composer output;
-  the controller owns none. The controller still receives only completed
-  terminal outcomes, alone passes exact lines to the parser once, and neither
-  it nor parser or storage code owns or persists command history.
+  row callback, preserving partial-output and cancellation boundaries.
+  Composer lifecycle records and invalid-confirmation hints now use one semantic
+  component write each, with zero internal composer calls to the generic status
+  writer; the controller owns none. The controller still receives only
+  completed terminal outcomes, alone passes exact lines to the parser once, and
+  neither it nor parser or storage code owns or persists command history.
 - `interactive_controller` is the stable one-class import boundary and owns no
   shell state or resource. Its `_core` owns interactive shell action mapping,
   current in-memory attachment, current-focus conversation and sticky-target state,
