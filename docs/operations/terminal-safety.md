@@ -66,6 +66,14 @@ The internal profiles are fixed ANSI, capable plain, and line fallback. Presence
 of `NO_COLOR` disables decorative SGR only; it does not disable safe functional
 cursor controls on an otherwise capable terminal. There is no public theme API.
 
+For one advisory turn, the same capability result also gates the narrow
+terminal-owned progress indicator. A capable raw stream may show the fixed
+four-glyph `◐`/`◓`/`◑`/`◒` cycle; `NO_COLOR` leaves those plain glyphs enabled.
+Callback construction and non-TTY, `TERM=dumb`, non-POSIX, missing, or
+uncertain-capability paths await the operation silently and emit no indicator.
+The installed CLI's earlier TTY guard still rejects non-TTY shell entry before
+this component fallback can be used.
+
 ## Safe display boundary
 
 `sanitize_terminal_text()` preserves ordinary Unicode, Markdown characters,
@@ -143,18 +151,40 @@ cancellation record follows, and no unrendered row or trailing result, hint, or
 context component is written.
 
 The live driver separately emits only fixed carriage-return, cursor-up/right,
-and clear-to-end controls for functional editing. Semantic input context and its
-focused prompt arrive as one trusted fixed-theme projection; the dynamic buffer
-and suggestion text are sanitized separately before redraw, with embedded LF
-visible. No untrusted text becomes ANSI. Emulators, multiplexers, remote
-sessions, and scrollback may still retain or transform display.
+and clear-to-end controls for functional editing. During the one advisory
+indicator lifecycle it may also emit the fixed-cell carriage-return and
+clear-to-end sequence, clearing before persistent output and redrawing while
+the joined operation is pending. Semantic input context and its focused prompt
+arrive as one trusted fixed-theme projection; the dynamic buffer and suggestion
+text are sanitized separately before redraw, with embedded LF visible. No
+untrusted text becomes ANSI. Emulators, multiplexers, remote sessions, and
+scrollback may still retain or transform display.
+
+## Advisory progress boundary
+
+The indicator is advisory-only: it wraps exactly one runtime awaitable for one
+advisory turn and is not a semantic record, callback, status event, or general
+animation service. The raw driver owns the active glyph, advances the fixed
+four-frame cycle, serializes clear/redraw around semantic retrieval/progress or
+result writes, and creates no OS thread or import-time task. It clears the cell
+before final, cancellation, or error presentation, then joins both the
+operation and indicator tasks before returning.
+
+An underlying operation failure takes precedence over a simultaneous indicator
+failure. If only the indicator or its final clear fails, the driver raises the
+internal advisory-progress error after cleanup and the controller maps it to
+the existing `internal_error` path. Callback and incapable paths have no
+indicator failure surface because they await silently. Advisory turns no longer
+write `[routing]` or `[waiting]` notices; their established result, cancellation,
+context, and error records remain the authoritative output.
 
 ## Typed errors, never raw diagnostics
 
 Input/action-output `OSError` maps to `operation_interrupted`; input
-`RuntimeError` maps to `internal_error`. Both exit `2` after cleanup. Progress
-`OSError`/`KeyboardInterrupt` maps to the former; other callback failure to the
-latter. Failed diagnostics never skip cleanup.
+`RuntimeError` maps to `internal_error`. Both exit `2` after cleanup. Observer
+progress `OSError`/`KeyboardInterrupt` maps to the former; other callback
+failure to the latter. Advisory indicator failures use the internal-error path
+described above. Failed diagnostics never skip cleanup.
 
 Other failures use type/public state, never raw exception, token, or path text.
 

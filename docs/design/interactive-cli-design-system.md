@@ -19,6 +19,9 @@
 > presentation-only strict JSON formatting for agent replies and bold
 > terminal-default agent styling. #106 makes settings picker and prompt editors
 > transient without changing non-settings input behavior. The
+> #111 advisory indicator adds one narrow terminal-owned rolling glyph cycle for
+> capable advisory turns; advisory turns no longer emit `[routing]` or
+> `[waiting]` notices. The
 > [interactive terminal reference](../reference/interactive-terminal.md) and
 > [terminal safety rules](../operations/terminal-safety.md) describe current
 > observable behavior.
@@ -50,6 +53,7 @@ behavior.
 | #93 settings UI | Implemented: global alias-free `/settings` edits isolated current/pending snapshots of workspace defaults and per-agent provider, model, and reasoning choices through shared picker and prompt controls. Save validates an exact opening baseline and persona catalog, writes only changed configuration documents in deterministic order, and attempts reverse exact-byte rollback after a write failure. The workflow adds no supported public save API. |
 | #105 agent reply presentation | Implemented: direct, retrieval, transcript, and focused-history agent replies use a presentation-only strict JSON object/array projection with exact unchanged fallback cases and two-space Unicode-preserving output; stored/provider content remains unchanged, and the `AGENT` role uses bold terminal-default foreground styling without background detection. |
 | #106 transient settings UI | Implemented: settings-only picker and prompt reads clear capable transient rows, suppress duplicate fallback finals, emit one complete Current/Pending snapshot per Save attempt or whole-flow cancellation, keep nested Escape silent, and preserve default non-settings lifecycles. |
+| #111 advisory progress indicator | Implemented: one advisory-only four-glyph rolling indicator runs only on capable raw streams, including `NO_COLOR`; callback, non-TTY, `TERM=dumb`, and uncertain-capability paths remain silent, and no general animation or `[routing]`/`[waiting]` record is introduced. |
 
 ## Goals and limits
 
@@ -64,11 +68,13 @@ The design must:
 - use only the Python standard library.
 
 This remains a scrollback-friendly, line-oriented CLI, not a full-screen TUI.
-Mouse input, animation, the alternate screen, terminal queries, a
-signal-driven background loop, user-selectable themes, persistent history,
-fuzzy completion, and a full-screen composer are out of scope. Rendering must
-not assume that earlier terminal rows can be revisited after an interaction is
-committed.
+Mouse input, general-purpose animation, the alternate screen, terminal
+queries, a signal-driven background loop, user-selectable themes, persistent
+history, fuzzy completion, and a full-screen composer are out of scope. The
+narrow animated advisory indicator is the sole exception: it is a
+terminal-owned, call-local visual aid for one capable advisory operation, not a
+general animation mechanism. Rendering must not assume that earlier terminal
+rows can be revisited after an interaction is committed.
 
 ## Closed semantic vocabulary
 
@@ -113,7 +119,7 @@ from style, punctuation, or cursor position.
 | `highlighted` | A navigable candidate is the current preview target. Highlighting has no external effect. |
 | `selected` | A choice has been accepted by its control. Selection remains distinct from highlight and precedes the caller's runtime action. |
 | `disabled` | Visible but unavailable for focus, replacement, selection, or commit. Text explains the unavailable choice when needed. |
-| `loading` | Work has started and no terminal result is available yet. The view names the operation without relying on animation. |
+| `loading` | Work has started and no terminal result is available yet. The view names the operation in text; the #111 advisory glyph is optional visual reinforcement, never the only status. |
 | `empty` | A successful read produced no items or content. Empty is not an error. |
 | `error` | The control or operation ended in a trusted, user-visible failure state. |
 | `cancelled` | The interaction ended without commit. Established cancellation consequences remain authoritative. |
@@ -147,6 +153,11 @@ grammar projection with the main transition and semantic palette projection.
 dedicated history-free driver route; it does not reuse editable-line or main
 completion state. #93 consumes that route for `/settings` and adds one
 history-free cancellable prompt route through the same sole driver.
+#111 adds one unlisted advisory-progress adapter to that same driver. It wraps
+exactly one advisory awaitable, draws only on a capable raw stream, clears and
+redraws around persistent output, and joins both the operation and its
+call-local indicator task before returning. It does not add a semantic view,
+callback record, public API, or general animation facility.
 Up/Down navigate history only on capable main reads with a closed palette; an
 open palette consumes them for highlight navigation. Up/Down, Tab, Shift-Tab,
 and Escape remain no-ops for composition and confirmation. Shift-Tab remains a
@@ -621,6 +632,25 @@ Color is always redundant with words, labels, order, or symbols. Focus,
 highlight, selected, disabled, loading, empty, error, cancelled, and completed
 states remain distinguishable in plain output and under `TERM=dumb`.
 
+### Advisory progress indicator
+
+During one advisory turn, a capable raw stream may show the fixed four-glyph
+cycle `◐`, `◓`, `◑`, `◒` at the active cell. The existing raw driver owns the
+indicator state, clears it before each semantic or provider-result write, and
+redraws it while the operation remains pending. Completion, cancellation, and
+failure clear the cell before their normal records are rendered, then join the
+operation and indicator tasks before returning. `NO_COLOR` retains the same
+glyphs because it disables decorative SGR only; the indicator adds no ANSI
+styling, dynamic text, alternate screen, or background detection.
+
+Callback construction and stream paths without raw capability—including
+non-TTY, `TERM=dumb`, non-POSIX, missing, or uncertain capability—await the
+same advisory operation silently. The installed CLI's TTY guard still rejects
+non-TTY shell entry before controller work. A provider/operation failure wins
+over a simultaneous indicator failure; an indicator-only failure is converted
+to the existing internal error after cleanup. No other view or operation may
+reuse this animation lifecycle.
+
 ## Compatibility contract
 
 Human interactive layout may intentionally change as its owning migration
@@ -666,6 +696,10 @@ Enum names and values remain exact:
 | `TerminalActionKind` | `line`, `send`, `cancel`, `interrupt`, `eof` |
 | `TerminalMessageKind` | `compose`, `session`, `conversation`, `routing`, `context`, `waiting`, `result`, `cancelled`, `hint` |
 | `InteractiveErrorCode` | `tty_required`, `workspace_not_initialized`, `workspace_invalid`, `workspace_unsafe`, `workspace_version_unsupported`, `configuration_invalid`, `command_invalid`, `agent_invalid`, `session_invalid`, `session_exists`, `session_not_found`, `session_not_attached`, `session_paused`, `session_access_blocked`, `session_ownership_unknown`, `conversation_required`, `conversation_invalid`, `conversation_not_found`, `conversation_ambiguous`, `conversation_archived`, `conversation_create_failed`, `transcript_invalid`, `retrieval_invalid`, `retrieval_budget_exhausted`, `provider_preflight_failed`, `provider_exited`, `provider_timed_out`, `provider_protocol_error`, `draft_input_invalid`, `consensus_deadlock`, `consensus_failed`, `artifact_conflict`, `operation_cancelled`, `operation_interrupted`, `cleanup_failed`, `internal_error` |
+
+The `routing` and `waiting` enum values remain compatibility identities for
+their other established uses. The #111 advisory-turn path emits neither label;
+its capable-only indicator is terminal-owned and produces no semantic record.
 
 Dataclass schemas, frozen/slotted behavior, defaults, validation, and positional
 versus keyword-only construction remain exact:
@@ -857,7 +891,7 @@ the graph to 33 units.
 | Search results | `ListView`, `Record`, `Field`, `Notice` | Citation, snippet, active/archive state, truncation, empty/error | #84 (implemented) |
 | Transcript | `ListView`, `Record`, `Field`, `Notice` | Event identity/order and LF content boundaries remain intact | #84 (implemented) |
 | Focused history | `ListView`, `Record`, `Field`, `Notice` | Snapshot order, context accounting, empty/cancelled/error | #84 (implemented) |
-| Advisory turns | `Message`, `Notice`, `Field` | Routing, waiting/loading, result, cancelled/completed/error | #83 (implemented) |
+| Advisory turns | `Message`, `Notice`, `Field` | Operation result, cancelled/completed/error; optional capable-only indicator; no `[routing]` or `[waiting]` record | #83 and #111 (implemented) |
 | Retrieval progress and summaries | `Notice`, `Record`, `ListView`, `Field` | Loading, citations/context accounting, result/error/cancelled | #83 (implemented accepted views) |
 | Consensus progress and summaries | `Panel`, `Section`, `Notice`, `Record`, `Field` | Loading, debate identity, result/cancelled/completed/error | #83 (implemented) |
 | Interactive errors and recovery hints | `Notice`, `Field` | Trusted code, redaction, error state, next action, no raw diagnostics | #83 (implemented) |
@@ -928,6 +962,7 @@ contracts.
 | Palette/history coordination | Slash opening with deterministic initial highlight and unchanged buffer; filtering; empty/error; canonical metadata projection including finite agent IDs/aliases; open-palette Up/Down clamped highlight navigation without replacement or history movement; Tab application of the highlighted candidate; Shift-Tab no-op; Escape full-snapshot restoration and exact-state dismissal; closed-palette Up/Down history; edited recall; and visible-buffer-only Enter commit. |
 | Picker | Highlight-versus-selection, disabled-skipping clamped navigation, Enter commit, Escape cancel, typed interrupt/EOF, empty/all-disabled/one/long lists, exact fallback acceptance/rejection, stable identity reconciliation, selected-outside-window summary, one final completed/cancelled frame, cleanup on interrupt/EOF/failure, and resize on each live redraw. |
 | Settings | Two-snapshot current/pending separation; exact top-level/language/reasoning/roster order; safe persona precedence and lexical order; numeric `0`, positive, blank, negative, fractional, and nonnumeric cases; Codex-enabled/reserved-Gemini-disabled provider behavior including preservation/remediation; implemented safe model text and blank/null provider default; exact reasoning enumeration with model/provider-dependent `xhigh` support; one focused control and deterministic focus return; nested and whole-panel cancellation; exact-byte and catalog conflict before writes; changed-only canonical system-then-agent save; per-file atomic replacement; failing-target-inclusive reverse exact-byte rollback and rollback uncertainty; pending retention; no write on open/edit/highlight/error/cancel; next-lifecycle-only application with higher live overrides; plain/ANSI/`NO_COLOR`/narrow/line fallback; hostile display content; and unchanged identity, thread, precedence, public, and machine contracts. |
+| Advisory progress | One four-glyph cycle only for one capable raw advisory awaitable; `NO_COLOR` glyph preservation; clear/redraw around semantic writes; clear and task joining before result/cancel/error; silent callback/non-TTY/`TERM=dumb`/uncertain fallback; operation-error precedence; indicator-only internal-error mapping; no `[routing]`/`[waiting]` records or reusable animation API. |
 | Parser and mutation boundary | The exact visible committed main buffer reaches the established parser once; previews, recall, replacement, highlight, rerender, cancel, Ctrl-C, empty VEOF, and physical EOF cause no parser/runtime/storage call. |
 | Composer/confirmation | Ordered semantic input facts and focused prompt; equivalent width-aware plain/ANSI rendering; fallback-once and trusted-live routing; exact `/send`, `/cancel`, `/say`, yes/no/default, invalid retry, Ctrl-C, and EOF results; semantic composer events and hint cardinality; history isolation; reserved-key no-ops; no full-screen or persistent state. |
 | Restoration | Normal submit, commit, cancellation, Escape, EOF, Ctrl-C, setup failure, read/write/flush failure, render error, and restoration uncertainty, with raw attributes restored whenever acquired. |
