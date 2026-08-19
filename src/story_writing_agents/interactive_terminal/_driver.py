@@ -218,8 +218,16 @@ class RawTerminalDriver:
         # Preserve the established downstream line-validation boundary. Invalid
         # fallback shapes or framing are returned for that boundary to reject,
         # and therefore never become successfully completed history entries.
-        if type(line) is str and "\r" not in line and "\n" not in line:
-            updated_history = self._history_append(self._history_state, line)
+        history_line = str.__str__(line) if isinstance(line, str) else None
+        if (
+            history_line is not None
+            and "\r" not in history_line
+            and "\n" not in history_line
+        ):
+            updated_history = self._history_append(
+                self._history_state,
+                history_line,
+            )
             if type(updated_history) is not MainInputHistoryState:
                 raise TypeError(
                     "history_append must return a MainInputHistoryState"
