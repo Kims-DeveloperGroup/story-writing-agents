@@ -61,13 +61,14 @@ unexpected failure. See the [smoke guide](../guides/smoke-test.md).
 ## Interactive management, scope, and status
 
 Both streams must be TTYs before workspace/backend access or exit `2`. Capable
-POSIX main prompts and bare `/run` composition use live editing. Main prompts
-keep their registry-backed suggestions and use Up/Down for process-local command
-history; composition shows only `/send` then `/cancel`, filtered by an exact,
-case-sensitive whole-buffer slash prefix. Subject and confirmation prompts use
-ordinary reads. `TERM=dumb`, unavailable capabilities, and non-POSIX editing
-safely use `input()` without a suggestion panel or component-provided live
-arrow navigation.
+POSIX main prompts, bare `/run` composition, and yes/no confirmation use live
+editing. Main prompts keep their registry-backed suggestions and use Up/Down
+for process-local command history; composition shows only `/send` then
+`/cancel`, filtered by an exact, case-sensitive whole-buffer slash prefix.
+Confirmation has no suggestions, and the subject remains an ordinary read.
+`TERM=dumb`, unavailable capabilities, and non-POSIX editing safely use
+`input()` once per attempt; composition and confirmation pass their structured
+plain semantic prompt without a live suggestion panel or arrow navigation.
 
 The one stream terminal retains at most 100 exact nonblank main submissions for
 that process. Up recalls older entries, Down recalls newer entries, and Down
@@ -89,10 +90,11 @@ consensus output use responsive semantic layout with fixed decorative ANSI.
 Full/context help, the agent roster, session/conversation catalogs, search,
 transcript, and focused history use that layout too. `NO_COLOR` removes only
 decoration and leaves the same structured plain text; narrow output stacks and
-wraps labels without dropping facts. The only remaining generic status sites
-are four composer records, pending their component migration. These
-presentation changes do not alter command grammar, established callback order,
-or any noninteractive stdout/stderr, JSON, ordering, or exit contract.
+wraps labels without dropping facts. Composition and confirmation now use
+ordered semantic input views, and composer entry/error/send/discard records use
+semantic notices; no internal generic composer-status site remains. These
+presentation changes do not alter command grammar, established callback/read
+order, or any noninteractive stdout/stderr, JSON, ordering, or exit contract.
 
 `/help [COMMAND]` (`/?`), `/status`, and `/session list` are global. Session
 grammar is `/session list | create NAME | open [NAME] | pause`. Explicit
@@ -149,10 +151,13 @@ takes no action; composer Ctrl-C or `/cancel` discards its buffer; EOF cleans up
 Missing cancellation proof is fatal. Exact terminal records are in the
 [terminal reference](interactive-terminal.md#exact-cancellation-records).
 
-The composition panel is a preview, not completion or dispatch. `/say` is not
-suggested; `/say /send` and `/say /cancel` remain literal escapes. Typing,
-editing, or clearing the preview has no provider, runtime, filesystem, or
-storage effect.
+Each composition attempt shows `Mode`, `Next line`, `Lines`, `Characters`,
+guidance, then the focused numbered prompt. The `/send`, `/cancel` panel is a
+preview, not completion or dispatch. `/say` is not suggested; `/say /send` and
+`/say /cancel` remain literal escapes. Typing, editing, or clearing the preview
+has no provider, runtime, filesystem, or storage effect. Up/Down, Tab,
+Shift-Tab, and Escape are no-ops in composition and confirmation; those routes
+remain history-free.
 
 ## Workspace, noninteractive behavior, and exits
 

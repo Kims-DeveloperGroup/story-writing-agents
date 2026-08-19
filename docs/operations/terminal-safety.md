@@ -57,8 +57,8 @@ missing or failing query selects ordinary-line fallback, while a returned
 nonpositive or invalid column count uses 80. Capability observation and
 live-input setup repeat on the next operation, so resize is noticed without a
 signal loop. Semantic rendering also asks for current capabilities on its next
-render. The four deferred composer status records retain their established
-construction width until #86.
+render. Composer/confirmation input and composer lifecycle notices therefore
+use the current capability width on their next render.
 
 The internal profiles are fixed ANSI, capable plain, and line fallback. Presence
 of `NO_COLOR` disables decorative SGR only; it does not disable safe functional
@@ -82,6 +82,9 @@ The result is strict UTF-8, and sanitizing it again changes nothing.
 Established plain record writers and the semantic component adapter each send
 one sanitized rendered string and final LF. Records may retain internal LF;
 inline values display it as `\x0a`. Wrapping never creates commands.
+Semantic composition and confirmation input frames are distinct: their plain
+and fixed-theme projections share line topology, end in the focused prompt's
+required space, and contain no final LF.
 
 Transcript content follows a stricter primitive boundary: it must be an exact
 nonempty string, but whitespace-only content is valid. Sanitization makes
@@ -99,14 +102,15 @@ retain no cursor. Exact dense-view fields and callback behavior live in the
 #83 routes orientation, interactive status/inspection, central errors/recovery,
 and accepted management, advisory, retrieval, and consensus output through the
 semantic renderer. #84 does the same for full/context help, roster,
-session/conversation lists, search, transcript, and focused history. The only
-generic status records still deferred are four composer calls owned by #86.
-The semantic renderer produces the same structured text in plain and fixed ANSI
-profiles: it sanitizes dynamic content before wrapping or styling, counts ANSI
-as zero display cells, uses local resets, and permits only reset, bold emphasis,
-and foreground SGR 31 through 37. It emits no background, dim, blink, OSC,
-query, or cursor sequence. Removing those allowed decorative sequences yields
-the exact plain structure.
+session/conversation lists, search, transcript, and focused history. #86 routes
+composer lifecycle notices plus composition and confirmation input through the
+same foundation; no internal generic composer-status call remains. The semantic
+renderer produces the same structured text in plain and fixed ANSI profiles: it
+sanitizes dynamic content before wrapping or styling, counts ANSI as zero
+display cells, uses local resets, and permits only reset, bold emphasis, and
+foreground SGR 31 through 37. It emits no background, dim, blink, OSC, query, or
+cursor sequence. Removing those allowed decorative sequences yields the exact
+plain structure.
 
 The controller constructs semantic components only from trusted roles/states
 and validated facts. Its unlisted `InteractiveSemanticOutput` adapter acquires
@@ -121,10 +125,11 @@ cancellation record follows, and no unrendered row or trailing result, hint, or
 context component is written.
 
 The live driver separately emits only fixed carriage-return, cursor-up/right,
-and clear-to-end controls for functional editing. Prompt, buffer, and suggestion
-text is sanitized first, with embedded LF visible. No untrusted text becomes
-ANSI. Emulators, multiplexers, remote sessions, and scrollback may still retain
-or transform display.
+and clear-to-end controls for functional editing. Semantic input context and its
+focused prompt arrive as one trusted fixed-theme projection; the dynamic buffer
+and suggestion text are sanitized separately before redraw, with embedded LF
+visible. No untrusted text becomes ANSI. Emulators, multiplexers, remote
+sessions, and scrollback may still retain or transform display.
 
 ## Typed errors, never raw diagnostics
 
@@ -161,22 +166,24 @@ dual-TTY guard still exits before editor construction. Recoverable activation
 failure restores first, then falls back.
 
 One unified driver instance is the sole owner of raw terminal resources. The
-terminal selects the main or composition suggestion provider for each read;
-the driver retains no provider or operation mode. The terminal routes completed
-main and composition reads explicitly, without inspecting prompt text, while
-subject and confirmation input remains on the ordinary reader. The standalone
-line-editor compatibility facade delegates to this same driver implementation.
+terminal selects the main, composition, or empty confirmation suggestion
+provider for each read; the driver retains no provider or operation mode. The
+terminal routes completed main, composition, and confirmation reads explicitly,
+without inspecting prompt text, while subject input remains on the ordinary
+reader. Each composition/confirmation call injects its semantic renderer only
+for that read. The standalone line-editor compatibility facade delegates to
+this same driver implementation.
 
 An active read disables canonical input and echo, keeps a Unicode
 code-point buffer, and supports insertion, Left/Right, Home/End,
 Backspace/Delete, Enter, and configured VINTR/VEOF. On main input, Up/Down also
-navigate the driver's history; on composition they remain history-free. Enter
-submits; VEOF submits nonempty text or returns EOF when empty; VINTR returns
-interrupt. Submission clears the panel; failure attempts it; both restore
-captured attributes. A successful live main commit is appended only after
-display cleanup and terminal restoration complete. Active failures propagate
-after restoration; restoration uncertainty is fatal `internal_error`. See the
-exact
+navigate the driver's history. Composition and confirmation remain history-free;
+Up/Down, Tab, Shift-Tab, and Escape are no-ops there. Enter submits; VEOF
+submits nonempty text or returns EOF when empty; VINTR returns interrupt.
+Submission clears the panel; failure attempts it; both restore captured
+attributes. A successful live main commit is appended only after display
+cleanup and terminal restoration complete. Active failures propagate after
+restoration; restoration uncertainty is fatal `internal_error`. See the exact
 [main](../reference/interactive-terminal.md#main-prompt-live-suggestions) and
 [composition](../reference/interactive-terminal.md#composition-live-suggestions)
 tokens.
@@ -187,6 +194,13 @@ It changes only call-local editor/terminal state; the exact buffer is passed
 once to the terminal/controller boundary. Main command previews remain
 registry-backed. Composition preview is the fixed ordered `/send`, `/cancel`
 set, and whitespace or a nonmatch clears it.
+
+Before input, composition and confirmation each build one ordered semantic view
+whose final control is focused. The renderer is pure and produces equivalent
+plain/fixed-theme text at the observed width. Unsupported or safely recoverable
+setup passes that plain projection to the fallback reader once. A capable live
+read uses the trusted fixed-theme projection and keeps its renderer, buffer,
+cursor, and preview state call-local. Confirmation supplies no suggestions.
 
 The current main preview is not an open selectable overlay. Up/Down therefore
 navigate history even while `[suggestions]` is visible. Tab, Shift-Tab, and
@@ -199,6 +213,13 @@ the current preview.
 Escaping does not change a returned `TerminalAction`. Composition keeps exact
 LF-joined lines per call; discard returns counts, not text. This is not secure
 erasure because terminal/process memory may retain copies.
+
+Composer state is immutable and call-local. Its entry, empty-send error,
+successful send, and discard are semantic `open`, `error`, `completed`, and
+`cancelled` notices, each with one render and one callback write. Confirmation
+invalidity writes one semantic error hint, marks the next choices field as an
+error, and retries; a valid/default/interrupt/EOF result writes no final
+confirmation event.
 
 The driver stores at most 100 exact nonblank completed main buffers. Invalid
 commands, duplicates, `/quit`, fallback results, and nonempty configured VEOF

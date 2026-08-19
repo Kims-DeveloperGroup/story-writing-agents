@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ._model import (
+    ComposerState,
     ControlOutcome,
     ControlOutcomeKind,
     KeyEvent,
@@ -245,6 +246,63 @@ def project_composition_suggestions(
         for token in _COMPOSITION_SUGGESTION_TOKENS
         if token.startswith(buffer)
     )
+
+
+def transition_composer_line(
+    state: ComposerState,
+    line: str,
+) -> tuple[ComposerState, ControlOutcome | None]:
+    """Apply one exact composer line without I/O or external side effects."""
+
+    if type(state) is not ComposerState:
+        raise TypeError("state must be a ComposerState")
+    if not isinstance(line, str):
+        raise TypeError("line must be a string")
+    line = str.__str__(line)
+    if "\r" in line or "\n" in line:
+        raise ValueError("line must not contain CR or LF")
+
+    if line == "/send":
+        if not state.content or state.content.isspace():
+            return state, ControlOutcome(ControlOutcomeKind.REJECTED)
+        return state, ControlOutcome(
+            ControlOutcomeKind.COMMIT,
+            text=state.content,
+        )
+    if line == "/cancel":
+        return state, ControlOutcome(ControlOutcomeKind.CANCEL)
+    if line == "/say /send":
+        line = "/send"
+    elif line == "/say /cancel":
+        line = "/cancel"
+    return ComposerState((*state.lines, line)), None
+
+
+def transition_confirmation_answer(
+    answer: str,
+    *,
+    default: bool,
+) -> ControlOutcome:
+    """Classify one exact confirmation answer without reading or writing."""
+
+    if not isinstance(answer, str):
+        raise TypeError("answer must be a string")
+    answer = str.__str__(answer)
+    if "\r" in answer or "\n" in answer:
+        raise ValueError("answer must not contain CR or LF")
+    if type(default) is not bool:
+        raise TypeError("default must be a bool")
+
+    normalized = answer.strip().casefold()
+    if not normalized:
+        normalized = "yes" if default else "no"
+    elif normalized == "y":
+        normalized = "yes"
+    elif normalized == "n":
+        normalized = "no"
+    if normalized in {"yes", "no"}:
+        return ControlOutcome(ControlOutcomeKind.COMMIT, text=normalized)
+    return ControlOutcome(ControlOutcomeKind.REJECTED)
 
 
 __all__ = [

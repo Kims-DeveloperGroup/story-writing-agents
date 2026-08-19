@@ -18,20 +18,26 @@ from ._controls import (
     append_main_input_history,
     project_composition_suggestions,
     project_slash_suggestions,
+    transition_composer_line,
+    transition_confirmation_answer,
     transition_main_input,
     transition_line_input,
 )
 from ._driver import RawTerminalDriver
 from ._model import (
     CapabilityProfile,
+    ComposerState,
     Component,
+    ControlOutcomeKind,
     Field,
+    InputPromptView,
     ListView,
     MainInputControlState,
     MainInputHistoryState,
     Message,
     Notice,
     Panel,
+    Prompt,
     Record,
     Section,
     SemanticRole,
@@ -40,7 +46,7 @@ from ._model import (
     ViewState,
     sanitize_terminal_text,
 )
-from ._render import render_component
+from ._render import render_component, render_input_prompt
 
 
 class AttachmentKind(StrEnum):
@@ -411,6 +417,7 @@ class InteractiveTerminal:
     __slots__ = (
         "_capability_provider",
         "_composition_read_line",
+        "_confirmation_read_line",
         "_main_read_line",
         "_read_line",
         "_width",
@@ -448,7 +455,8 @@ class InteractiveTerminal:
         self._main_read_line = (
             read_line if main_read_line is None else main_read_line
         )
-        self._composition_read_line = read_line
+        self._composition_read_line = _plain_input_reader(read_line, width)
+        self._confirmation_read_line = _plain_input_reader(read_line, width)
         self._write_text = write_text
         self._width = width
         self._capability_provider = lambda: _plain_capabilities(width)
@@ -508,28 +516,40 @@ class InteractiveTerminal:
         prompt_message = _inline_text(_required_text("message", message))
         if type(default) is not bool:
             raise TypeError("default must be a bool")
-        suffix = "[Y/n] " if default else "[y/N] "
-        prompt = f"{prompt_message} {suffix}"
+        invalid = False
         while True:
             try:
-                answer = _validated_input_line(self._read_line(prompt))
+                answer = _validated_input_line(
+                    self._confirmation_read_line(
+                        _confirmation_input_view(
+                            prompt_message,
+                            default=default,
+                            invalid=invalid,
+                        )
+                    )
+                )
             except KeyboardInterrupt:
                 return ConfirmationResult.INTERRUPT
             except EOFError:
                 return ConfirmationResult.EOF
 
-            normalized = answer.strip().casefold()
-            if not normalized:
-                return (
-                    ConfirmationResult.YES
-                    if default
-                    else ConfirmationResult.NO
+            outcome = transition_confirmation_answer(answer, default=default)
+            if outcome.kind is ControlOutcomeKind.COMMIT:
+                assert outcome.text is not None
+                return ConfirmationResult(outcome.text)
+            if outcome.kind is not ControlOutcomeKind.REJECTED:
+                raise RuntimeError(
+                    "confirmation transition returned an unsupported outcome"
                 )
-            if normalized in {"y", "yes"}:
-                return ConfirmationResult.YES
-            if normalized in {"n", "no"}:
-                return ConfirmationResult.NO
-            self._write_block("[hint] Enter y, yes, n, or no.")
+            self._write_component(
+                Notice(
+                    "Enter y, yes, n, or no.",
+                    label="hint",
+                    role=SemanticRole.ERROR,
+                    state=ViewState.ERROR,
+                )
+            )
+            invalid = True
 
     def compose(
         self,
@@ -549,63 +569,75 @@ class InteractiveTerminal:
             introduction = (
                 "Consensus run. Use /send to submit or /cancel to discard."
             )
-        self.write_status(TerminalMessageKind.COMPOSE, introduction)
+        self._write_component(
+            Notice(
+                introduction,
+                label="compose",
+                role=SemanticRole.INFO,
+                state=ViewState.OPEN,
+            )
+        )
 
-        lines: list[str] = []
+        state = ComposerState()
         while True:
-            prompt = _compose_prompt(mode, alias, len(lines) + 1)
             try:
                 line = _validated_input_line(
-                    self._composition_read_line(prompt)
+                    self._composition_read_line(
+                        _composer_input_view(mode, alias, state)
+                    )
                 )
             except KeyboardInterrupt:
                 return self._record_discarded_composition(
                     TerminalActionKind.INTERRUPT,
-                    lines,
+                    state,
                 )
             except EOFError:
                 return self._record_discarded_composition(
                     TerminalActionKind.EOF,
-                    lines,
+                    state,
                 )
 
-            if line == "/send":
-                content = "\n".join(lines)
-                if not content or content.isspace():
-                    self.write_status(
-                        TerminalMessageKind.COMPOSE,
+            state, outcome = transition_composer_line(state, line)
+            if outcome is None:
+                continue
+            if outcome.kind is ControlOutcomeKind.REJECTED:
+                self._write_component(
+                    Notice(
                         "Nothing to send.",
+                        label="compose",
+                        role=SemanticRole.ERROR,
+                        state=ViewState.ERROR,
                     )
-                    continue
+                )
+                continue
+            if outcome.kind is ControlOutcomeKind.COMMIT:
+                assert outcome.text == state.content
                 action = TerminalAction(
                     TerminalActionKind.SEND,
-                    text=content,
-                    line_count=len(lines),
-                    character_count=len(content),
+                    text=state.content,
+                    line_count=state.line_count,
+                    character_count=state.character_count,
                 )
                 target = alias if alias is not None else "consensus"
-                self.write_status(
-                    TerminalMessageKind.COMPOSE,
-                    (
+                self._write_component(
+                    Notice(
                         f"Sending {action.line_count} "
                         f"{_plural(action.line_count, 'line')}, "
                         f"{action.character_count} "
                         f"{_plural(action.character_count, 'character')} "
-                        f"to {target}."
-                    ),
+                        f"to {target}.",
+                        label="compose",
+                        role=SemanticRole.SUCCESS,
+                        state=ViewState.COMPLETED,
+                    )
                 )
                 return action
-
-            if line == "/cancel":
+            if outcome.kind is ControlOutcomeKind.CANCEL:
                 return self._record_discarded_composition(
                     TerminalActionKind.CANCEL,
-                    lines,
+                    state,
                 )
-            if line == "/say /send":
-                line = "/send"
-            elif line == "/say /cancel":
-                line = "/cancel"
-            lines.append(line)
+            raise RuntimeError("composer transition returned an unsupported outcome")
 
     def write_lobby_orientation(self, workspace: str) -> None:
         """Render the stable startup orientation for an unattached lobby."""
@@ -1087,23 +1119,24 @@ class InteractiveTerminal:
     def _record_discarded_composition(
         self,
         kind: TerminalActionKind,
-        lines: list[str],
+        state: ComposerState,
     ) -> TerminalAction:
         """Report a discarded compose buffer and return its count-only action."""
 
-        content = "\n".join(lines)
         action = TerminalAction(
             kind,
-            line_count=len(lines),
-            character_count=len(content),
+            line_count=state.line_count,
+            character_count=state.character_count,
         )
-        self.write_status(
-            TerminalMessageKind.COMPOSE,
-            (
+        self._write_component(
+            Notice(
                 f"Discarded {action.line_count} "
                 f"{_plural(action.line_count, 'line')}. "
-                "No message was saved or sent."
-            ),
+                "No message was saved or sent.",
+                label="compose",
+                role=SemanticRole.WARNING,
+                state=ViewState.CANCELLED,
+            )
         )
         return action
 
@@ -1212,7 +1245,10 @@ def build_contextual_terminal(
         width=width,
         main_read_line=main_read_line,
     )
-    terminal._composition_read_line = composition_read_line
+    terminal._composition_read_line = _plain_input_reader(
+        composition_read_line,
+        width,
+    )
     return terminal
 
 
@@ -1228,6 +1264,33 @@ def _plain_capabilities(width: int) -> TerminalCapabilities:
         cursor_controls=False,
         decorative_sgr=False,
     )
+
+
+def _plain_input_reader(
+    read_line: Callable[[str], str],
+    width: int,
+) -> Callable[[InputPromptView], str]:
+    """Adapt one borrowed string reader to deterministic semantic input."""
+
+    if not callable(read_line):
+        raise TypeError("read_line must be callable")
+    capabilities = _plain_capabilities(width)
+
+    def read_input(view: InputPromptView) -> str:
+        frame = render_input_prompt(view, capabilities)
+        return read_line(frame.plain_text)
+
+    return read_input
+
+
+def _empty_slash_suggestions(
+    buffer: str,
+) -> tuple[SlashCommandSuggestion, ...]:
+    """Return the fixed empty preview set for confirmation input."""
+
+    if type(buffer) is not str:
+        raise TypeError("buffer must be a string")
+    return ()
 
 
 def _main_slash_suggestions(
@@ -1270,9 +1333,15 @@ def build_stream_terminal(
             _main_slash_suggestions,
         ),
     )
-    terminal._composition_read_line = lambda prompt: driver.read_live_line(
-        prompt,
+    terminal._composition_read_line = lambda view: driver.read_input_line(
+        view,
+        render_input_prompt,
         project_composition_suggestions,
+    )
+    terminal._confirmation_read_line = lambda view: driver.read_input_line(
+        view,
+        render_input_prompt,
+        _empty_slash_suggestions,
     )
     terminal._capability_provider = driver.capabilities
     return terminal
@@ -1396,6 +1465,58 @@ def _compose_prompt(mode: ComposeMode, alias: str | None, line_number: int) -> s
         assert alias is not None
         return f"compose[chat:{alias}:{line_number}]> "
     return f"compose[run:{line_number}]> "
+
+
+def _composer_input_view(
+    mode: ComposeMode,
+    alias: str | None,
+    state: ComposerState,
+) -> InputPromptView:
+    """Project exact composer facts before one focused numbered prompt."""
+
+    items: list[Field | Notice] = [Field("Mode", mode.value)]
+    if alias is not None:
+        items.append(Field("Target", alias))
+    items.extend(
+        (
+            Field("Next line", str(state.line_count + 1)),
+            Field("Lines", str(state.line_count)),
+            Field("Characters", str(state.character_count)),
+            Notice("Use /send to submit or /cancel to discard."),
+        )
+    )
+    identity = _compose_prompt(mode, alias, state.line_count + 1).removesuffix(" ")
+    return InputPromptView(tuple(items), Prompt(identity))
+
+
+def _confirmation_input_view(
+    message: str,
+    *,
+    default: bool,
+    invalid: bool,
+) -> InputPromptView:
+    """Project question, choices, default, invalid state, and focused answer."""
+
+    if type(default) is not bool:
+        raise TypeError("default must be a bool")
+    if type(invalid) is not bool:
+        raise TypeError("invalid must be a bool")
+    choice_role = SemanticRole.ERROR if invalid else SemanticRole.DEFAULT
+    choice_state = ViewState.ERROR if invalid else ViewState.IDLE
+    suffix = "[Y/n]" if default else "[y/N]"
+    return InputPromptView(
+        (
+            Field("Question", message),
+            Field(
+                "Choices",
+                "y/yes or n/no",
+                role=choice_role,
+                state=choice_state,
+            ),
+            Field("Default", "yes" if default else "no"),
+        ),
+        Prompt(f"confirm {suffix}>"),
+    )
 
 
 def _plural(count: int, singular: str) -> str:

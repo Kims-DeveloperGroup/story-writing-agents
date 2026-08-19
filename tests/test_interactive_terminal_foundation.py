@@ -49,6 +49,7 @@ from story_writing_agents.interactive_terminal._driver import (
 from story_writing_agents.interactive_terminal._model import (
     CapabilityProfile,
     Choice,
+    ComposerState,
     ControlOutcome,
     ControlOutcomeKind,
     Field,
@@ -74,6 +75,7 @@ from story_writing_agents.interactive_terminal._model import (
 )
 from story_writing_agents.interactive_terminal._render import (
     render_component,
+    render_input_prompt,
     render_plain,
     strip_decorative_sgr,
 )
@@ -928,9 +930,10 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             "/status",
             "/help",
         )
-        driver.read_live_line.side_effect = (
+        driver.read_input_line.side_effect = (
             "composition line",
             "/send",
+            "yes",
         )
         fallback = mock.Mock()
         input_stream = object()
@@ -954,7 +957,6 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             transition_main_input,
             append_main_input_history,
         )
-        driver.capabilities.assert_called_once_with()
         self.assertIsInstance(terminal, InteractiveTerminal)
         self.assertEqual(
             terminal.read_main(),
@@ -977,7 +979,12 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             terminal.request_conversation_subject(),
             TerminalAction(TerminalActionKind.LINE, text="subject"),
         )
+        self.assertIs(
+            terminal.request_confirmation("Continue?", default=False),
+            ConfirmationResult.YES,
+        )
         terminal.write_status(TerminalMessageKind.RESULT, "ready")
+        self.assertEqual(driver.capabilities.call_count, 3)
         self.assertEqual(
             driver.read_main_line.call_args_list,
             [
@@ -992,15 +999,34 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             ],
         )
         self.assertEqual(
-            driver.read_live_line.call_args_list,
+            driver.read_input_line.call_args_list,
             [
                 mock.call(
-                    "compose[run:1]> ",
+                    _core._composer_input_view(
+                        ComposeMode.RUN,
+                        None,
+                        ComposerState(),
+                    ),
+                    render_input_prompt,
                     _controls.project_composition_suggestions,
                 ),
                 mock.call(
-                    "compose[run:2]> ",
+                    _core._composer_input_view(
+                        ComposeMode.RUN,
+                        None,
+                        ComposerState(("composition line",)),
+                    ),
+                    render_input_prompt,
                     _controls.project_composition_suggestions,
+                ),
+                mock.call(
+                    _core._confirmation_input_view(
+                        "Continue?",
+                        default=False,
+                        invalid=False,
+                    ),
+                    render_input_prompt,
+                    _core._empty_slash_suggestions,
                 ),
             ],
         )
@@ -1009,11 +1035,12 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             driver.write_text.call_args_list,
             [
                 mock.call(
-                    "[compose] Consensus run. Use /send to submit or "
-                    "/cancel to discard.\n"
+                    "\x1b[36m[compose] Consensus run. Use /send to submit or "
+                    "/cancel to discard.\x1b[0m\n"
                 ),
                 mock.call(
-                    "[compose] Sending 1 line, 16 characters to consensus.\n"
+                    "\x1b[32m[compose] Sending 1 line, 16 characters to "
+                    "consensus.\x1b[0m\n"
                 ),
                 mock.call("[result] ready\n"),
             ],

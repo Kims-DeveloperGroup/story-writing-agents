@@ -6,8 +6,8 @@
 > consensus output use its semantic renderer. Full/context help, agent roster,
 > session/conversation lists, search, transcript, and focused history now do as
 > well. Capable main input now provides bounded process-local Up/Down command
-> history. Four composer-only generic status records retain their established
-> presentation pending component integration.
+> history. Line-oriented RUN/CHAT composition and yes/no confirmation now use
+> semantic input views, and composer lifecycle records use semantic notices.
 
 ## Public API
 
@@ -44,11 +44,14 @@ sanitize_terminal_text(text: str) -> str
 ```
 
 `main_read_line` defaults to `read_line` and serves only `read_main`; public
-construction continues to use `read_line` for composition, subjects, and
-confirmation. The CLI's package-internal wiring separates ordinary, main, and
-composition reads without changing this signature or `__all__`. Record width
-starts at 20. Callback-constructed terminals own no history, lifecycle, or
-storage; the stream driver's process-local history is internal.
+construction continues to use `read_line` for subjects and as the underlying
+callback for composition and confirmation. Each composition or confirmation
+attempt first renders its full semantic view to one structured plain prompt and
+passes that prompt to `read_line` once. The CLI's package-internal wiring
+separates ordinary subject, main, composition, and confirmation reads without
+changing this signature or `__all__`. Record width starts at 20.
+Callback-constructed terminals own no history, lifecycle, or storage; the
+stream driver's process-local history is internal.
 
 The exact `interactive_line_editor.__all__` remains
 `SlashCommandSuggestion`, `slash_command_suggestions`, and
@@ -85,14 +88,14 @@ the final LF; failures propagate without a retry.
 | `TerminalActionKind` | `line`, `send`, `cancel`, `interrupt`, `eof` |
 | `TerminalMessageKind` | `compose`, `session`, `conversation`, `routing`, `context`, `waiting`, `result`, `cancelled`, `hint` |
 
-## Implemented semantic output and deferred presentation
+## Implemented semantic output and input
 
-The import-compatible package contains private immutable semantic components
-and states, pure one-line and main-history transitions, exact slash-prefix
-projection, a responsive structured plain/fixed-ANSI renderer, capability
-profiles, one raw driver, and one real-CLI stream factory. These internal seams
-support architecture and deterministic testing; they add no public theme API
-or public component/control types.
+The import-compatible package contains private immutable semantic components,
+input views, composer/history states, pure one-line, main-history, composer, and
+confirmation transitions, exact slash-prefix projection, responsive structured
+plain/fixed-ANSI renderers, capability profiles, one raw driver, and one real-CLI
+stream factory. These internal seams support architecture and deterministic
+testing; they add no public theme API or public component/control types.
 
 The real CLI factory constructs one `InteractiveTerminal` around one raw
 driver. That driver alone owns its streams, capability/width observation, key
@@ -138,16 +141,16 @@ the same structure in plain text at its fixed width.
 The five dense-view terminal writer families now accept the same primitive
 arguments and emit the same fact order through semantic `Panel`, `ListView`, or
 `Record` values. Controller list commands emit one positioned, one-record
-`ListView` for each established row callback. The four `write_status` calls in
-the terminal composer remain established plain records pending #86; the
-controller has no generic `write_status` call site. Contextual composition
-previews and main-command history are implemented as documented below.
-Selectable palettes/fixed values, component-integrated composer/confirmation,
-pickers, and `/settings` are not currently available.
+`ListView` for each established row callback. The terminal composer now emits
+semantic `open`, `error`, `completed`, and `cancelled` notices instead of its
+four generic-status call sites; the controller also has no generic
+`write_status` call site. Composition and confirmation build ordered semantic
+input views and use pure history-free controls as documented below. Selectable
+palettes/fixed values, pickers, and `/settings` are not currently available.
 
-## Prompts and ordinary presentation
+## Prompts and semantic input presentation
 
-Exact prompts include their final space:
+Exact ordinary and focused prompt identities include their final space:
 
 ```python
 "story[lobby]> "
@@ -155,10 +158,21 @@ f"story[{session_id}:{alias}]> "
 "conversation[subject]> "
 f"compose[chat:{alias}:{line_number}]> "
 f"compose[run:{line_number}]> "
+"confirm [Y/n]> " or "confirm [y/N]> "
 ```
 
-Confirmation shows `[Y/n] ` or `[y/N] `; blank selects its default. Ctrl-C/EOF
-return typed outcomes.
+Each composition attempt renders, in order, `Mode`, optional `Target`, `Next
+line`, `Lines`, `Characters`, `[info] Use /send to submit or /cancel to
+discard.`, and the final focused numbered prompt. Each confirmation attempt
+renders `Question`, `Choices: y/yes or n/no`, `Default`, and the final focused
+`confirm [Y/n]> ` or `confirm [y/N]> ` prompt. Blank selects the displayed
+default. Ctrl-C/EOF return typed outcomes.
+
+Plain and fixed-ANSI input projections contain the same semantic text, wrap to
+the active width, end in the focused prompt's required space, and have no final
+LF. Safe line fallback receives the plain projection once. Capable live input
+uses the trusted fixed-theme projection for redraw and sanitizes the dynamic
+buffer separately.
 
 ## Current semantic plain shapes
 
@@ -223,8 +237,9 @@ Case-sensitive prefixes filter. Whitespace, no match, or submission clears the
 list; every edit or history recall recomputes it from the exact visible buffer.
 Tokens neither complete nor reflect scope gates; `/help` remains authoritative.
 The main-invalid `/compose`, `/send`, and `/cancel` are excluded. Composition
-uses the separate fixed preview below; subject and confirmation prompts keep
-ordinary line reads. Editing, control keys, fallbacks, and restoration are in
+uses the separate fixed preview below; confirmation uses a history-free semantic
+read with no suggestions, and the subject keeps its ordinary line read.
+Editing, control keys, fallbacks, and restoration are in
 [Terminal safety](../operations/terminal-safety.md#live-editor-boundary).
 The list is not a selectable overlay: Up/Down navigate command history even
 while it is visible. Tab does not apply a suggestion; Tab, Shift-Tab, and Escape
@@ -287,7 +302,27 @@ Enter submits the unchanged buffer to the existing composition rules. The
 installed shell enters RUN composition through bare `/run`; CHAT composition
 remains a module-supported terminal operation. At the editor boundary,
 unsupported, `TERM=dumb`, non-TTY, and non-POSIX reads use ordinary line input
-without a panel; the installed CLI's earlier dual-TTY guard still applies.
+with the structured plain semantic prompt once and without a suggestion panel;
+the installed CLI's earlier dual-TTY guard still applies.
+
+Composition remains line-oriented and history-free. Up/Down, Tab, Shift-Tab,
+and Escape are no-ops. An ordinary line updates the next view's exact line and
+character counts. `/send` commits only nonblank LF-joined content; an empty
+send writes one semantic error notice and retries. `/cancel`, Ctrl-C, and EOF
+discard with counts only. `/say /send` and `/say /cancel` append literal
+`/send` and `/cancel` lines. Entry, empty-send, send, and discard each retain
+one semantic notice and one callback write.
+
+## Confirmation input
+
+Confirmation uses the same history-free semantic input route with an empty
+suggestion set. Up/Down, Tab, Shift-Tab, and Escape are no-ops. The exact
+accepted values remain case-insensitive `y`, `yes`, `n`, and `no` after
+surrounding whitespace is ignored; blank selects the displayed default.
+Invalid input writes one `[hint] Enter y, yes, n, or no.` semantic error notice,
+marks `Choices` with error state in the next view, and reads again. A valid
+answer produces `yes` or `no`; Ctrl-C and EOF produce `interrupt` or `eof`.
+None of those terminal results adds a final confirmation notice.
 
 <a id="exact-search-and-transcript-records"></a>
 

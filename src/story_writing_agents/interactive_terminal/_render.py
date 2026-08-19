@@ -9,6 +9,7 @@ from ._model import (
     Choice,
     Component,
     Field,
+    InputPromptView,
     ListView,
     Message,
     Notice,
@@ -17,6 +18,7 @@ from ._model import (
     Prompt,
     Record,
     RenderedFrame,
+    RenderedInputFrame,
     Section,
     SemanticRole,
     SuggestionPalette,
@@ -77,6 +79,44 @@ def render_plain(component: Component, *, width: int = 80) -> RenderedFrame:
             cursor_controls=False,
             decorative_sgr=False,
         ),
+    )
+
+
+def render_input_prompt(
+    view: InputPromptView,
+    capabilities: TerminalCapabilities,
+) -> RenderedInputFrame:
+    """Render ordered context and one final focused prompt for input."""
+
+    if type(view) is not InputPromptView:
+        raise TypeError("view must be an InputPromptView")
+    if type(capabilities) is not TerminalCapabilities:
+        raise TypeError("capabilities must be TerminalCapabilities")
+
+    lines: list[tuple[str, SemanticRole]] = []
+    for item in view.context:
+        lines.extend(_component_lines(item, capabilities.width, indent=0))
+    lines.extend(_input_prompt_lines(view.prompt, capabilities.width))
+    plain = "\n".join(line for line, _role in lines)
+    if not plain.endswith(" "):
+        raise RuntimeError("input rendering lost its trailing space")
+
+    if capabilities.decorative_sgr:
+        decorated = [
+            _decorate(line, role) for line, role in lines[:-1]
+        ]
+        final_line, final_role = lines[-1]
+        decorated.append(f"{_decorate(final_line[:-1], final_role)} ")
+        text = "\n".join(decorated)
+        if strip_decorative_sgr(text) != plain:
+            raise RuntimeError("decorative input rendering changed semantic text")
+    else:
+        text = plain
+    return RenderedInputFrame(
+        text,
+        plain,
+        capabilities.width,
+        len(lines),
     )
 
 
@@ -148,6 +188,34 @@ def _prompt_lines(
             )
         )
     return rendered
+
+
+def _input_prompt_lines(
+    prompt: Prompt,
+    width: int,
+) -> list[tuple[str, SemanticRole]]:
+    """Render prompt guidance first and its active input identity last."""
+
+    lines: list[tuple[str, SemanticRole]] = []
+    if prompt.instruction is not None:
+        lines.extend(
+            (line, SemanticRole.MUTED)
+            for line in _wrap(prompt.instruction, width, indent=0)
+        )
+    if prompt.default is not None:
+        lines.extend(
+            (line, SemanticRole.MUTED)
+            for line in _wrap(f"Default: {prompt.default}", width, indent=0)
+        )
+    scope = f" [{_inline(prompt.scope)}]" if prompt.scope is not None else ""
+    identity = f"{_inline(prompt.name)}{scope}"
+    if not identity.endswith(">"):
+        identity = f"{identity} >"
+    lines.extend(
+        (line, SemanticRole.COMMAND)
+        for line in _wrap(f"{identity} ", width, indent=0)
+    )
+    return lines
 
 
 def _panel_lines(

@@ -104,6 +104,19 @@ _COLLIDING_B = "c_0123456789" + ("b" * 22)
 _UNIQUE_C = "c_fedcba9876" + ("c" * 22)
 
 
+def _confirmation_prompt(message: str, *, default: bool) -> str:
+    """Return one exact callback-profile semantic confirmation prompt."""
+
+    suffix = "[Y/n]" if default else "[y/N]"
+    default_text = "yes" if default else "no"
+    return (
+        f"Question: {message}\n"
+        "Choices: y/yes or n/no\n"
+        f"Default: {default_text}\n"
+        f"confirm {suffix}> "
+    )
+
+
 class ScriptedTerminalCallbacks:
     """Record terminal traffic and supply scripted text, events, or callbacks."""
 
@@ -711,7 +724,7 @@ class ControllerContractTests(ControllerTestCase):
         with self.assertRaises(FrozenInstanceError):
             context.truncated = True  # type: ignore[misc]
 
-    def test_controller_has_no_generic_status_sites_and_composer_keeps_four(
+    def test_controller_and_composer_have_no_generic_status_sites(
         self,
     ) -> None:
         source_root = (
@@ -751,7 +764,7 @@ class ControllerContractTests(ControllerTestCase):
             and node.func.value.id == "self"
         ]
         self.assertEqual(deferred_controller_calls, [])
-        self.assertEqual(len(deferred_composer_calls), 4)
+        self.assertEqual(deferred_composer_calls, [])
 
     def test_five_unit_responsibilities_dependencies_and_policy_state(self) -> None:
         source_root = (
@@ -1198,7 +1211,10 @@ class ControllerStartupTests(ControllerTestCase):
                 self.assertEqual(controller.run_session_lobby(), 0)
                 self.assertEqual(
                     callbacks.prompts[0],
-                    "Open default session saved? [Y/n] ",
+                    _confirmation_prompt(
+                        "Open default session saved?",
+                        default=True,
+                    ),
                 )
                 self.assertEqual(
                     workspace.read_json(_manifest_relative("saved"))[
@@ -2150,7 +2166,12 @@ class ControllerCommandTests(ControllerTestCase):
         self.assertIn("[cancelled] Session open cancelled.\n", rendered)
         self.assertIn("Session: saved (reopened)\n", rendered)
         self.assertEqual(
-            callbacks.prompts.count("Open default session saved? [Y/n] "),
+            callbacks.prompts.count(
+                _confirmation_prompt(
+                    "Open default session saved?",
+                    default=True,
+                )
+            ),
             1,
         )
 
@@ -4680,7 +4701,10 @@ class ControllerEndAndCleanupTests(ControllerTestCase):
                     workspace.path(_access_relative("session")).exists()
                 )
                 self.assertIn(
-                    "Pause session session? [y/N] ",
+                    _confirmation_prompt(
+                        "Pause session session?",
+                        default=False,
+                    ),
                     callbacks.prompts,
                 )
                 rendered = "".join(callbacks.records)

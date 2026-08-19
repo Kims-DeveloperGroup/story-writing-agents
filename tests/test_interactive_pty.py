@@ -1106,7 +1106,18 @@ print(
             environment_overrides={"TERM": "xterm-256color"},
             terminal_columns=20,
         )
-        process.wait_for_text("compose[chat:plot:1\n]> ")
+        initial_prompt = process.wait_for_text("se[chat:plot:1]> ")
+        collapsed_prompt = "".join(initial_prompt.split())
+        for fact in (
+            "Mode:chat",
+            "Target:plot",
+            "Nextline:1",
+            "Lines:0",
+            "Characters:0",
+            "Use/sendtosubmitor/canceltodiscard.",
+            "compose[chat:plot:1]>",
+        ):
+            self.assertIn(fact, collapsed_prompt)
         assert termios is not None
         active_attributes = termios.tcgetattr(process.master_fd)
         self.assertFalse(active_attributes[3] & termios.ICANON)
@@ -1126,18 +1137,18 @@ print(
         clear_mark = process.output_mark()
         process.send_text("\x7f")
         cleared = process.wait_for_text(
-            "compose[chat:plot:1\n]> ",
+            "se[chat:plot:1]> ",
             after=clear_mark,
         )
         self.assertIn("\x1b[J", cleared)
         self.assertNotIn("[suggestions]", cleared)
 
         process.send_line("/say /send")
-        process.wait_for_text("compose[chat:plot:2\n]> ")
+        process.wait_for_text("se[chat:plot:2]> ")
         process.send_text("韓界e\u0301\x00")
         process.wait_for_text(r"\x00")
         process.send_text("\n")
-        process.wait_for_text("compose[chat:plot:3\n]> ")
+        process.wait_for_text("se[chat:plot:3]> ")
 
         edit_mark = process.output_mark()
         process.send_text("/sX\x1b[D\x7fsend\x1b[3~")
@@ -1160,6 +1171,145 @@ print(
                 "line_count": 2,
                 "character_count": 11,
             },
+        )
+        self.assertEqual(_durable_tree(self.workspace.root), before)
+        self.assertFalse(self.provider_log.exists())
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
+    def test_no_color_composer_confirmation_reserved_keys_and_invalid_retry(
+        self,
+    ) -> None:
+        """Exercise both semantic input routes without decorative SGR/history."""
+
+        source = r'''
+import json
+import sys
+
+from story_writing_agents.interactive_terminal import (
+    ComposeMode,
+    build_stream_terminal,
+)
+
+terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
+action = terminal.compose(ComposeMode.RUN)
+confirmation = terminal.request_confirmation("Continue?", default=False)
+print(
+    "RESULT="
+    + json.dumps(
+        {
+            "kind": action.kind.value,
+            "text": action.text,
+            "line_count": action.line_count,
+            "character_count": action.character_count,
+            "confirmation": confirmation.value,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+)
+'''
+        before = _durable_tree(self.workspace.root)
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "xterm-256color", "NO_COLOR": "1"},
+            terminal_columns=40,
+        )
+        mark = process.output_mark()
+        opened = process.wait_for_text("compose[run:1]> ", after=mark)
+        self.assertIn("Mode: run", opened)
+        self.assertIn("Next line: 1", opened)
+        self.assertNotRegex(opened, r"\x1b\[(?:0|1|3[1-7])m")
+
+        process.send_text("\x1b[A\x1b[B\t\x1b[Z\x1bexact line\n")
+        process.wait_for_text("compose[run:2]> ", after=mark)
+        process.send_line("/send")
+        confirmation = process.wait_for_text("confirm [y/N]> ", after=mark)
+        self.assertIn("Question: Continue?", confirmation)
+        self.assertIn("Choices: y/yes or n/no", confirmation)
+        self.assertNotRegex(confirmation, r"\x1b\[(?:0|1|3[1-7])m")
+
+        invalid_mark = process.output_mark()
+        process.send_text("\x1b[A\x1b[B\t\x1b[Zmaybe\n")
+        invalid = process.wait_for_text("Choices [error]:", after=invalid_mark)
+        self.assertIn("Choices [error]:", invalid)
+        self.assertIn("[hint] Enter y, yes, n, or no.", invalid)
+        process.send_line("yes")
+        result = process.wait_for_text("RESULT=", after=mark)
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        match = re.search(r"RESULT=(\{[^\n]+\})", result)
+        self.assertIsNotNone(match, result)
+        assert match is not None
+        self.assertEqual(
+            json.loads(match.group(1)),
+            {
+                "kind": "send",
+                "text": "exact line",
+                "line_count": 1,
+                "character_count": 10,
+                "confirmation": "yes",
+            },
+        )
+        self.assertEqual(_durable_tree(self.workspace.root), before)
+        self.assertFalse(self.provider_log.exists())
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
+    def test_dumb_terminal_semantic_inputs_use_plain_fallback_without_controls(
+        self,
+    ) -> None:
+        """Keep structured composer and confirmation facts on line fallback."""
+
+        source = r'''
+import json
+import sys
+
+from story_writing_agents.interactive_terminal import (
+    ComposeMode,
+    build_stream_terminal,
+)
+
+terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
+action = terminal.compose(ComposeMode.RUN)
+confirmation = terminal.request_confirmation("Continue?", default=True)
+print(
+    "RESULT="
+    + json.dumps(
+        {
+            "text": action.text,
+            "confirmation": confirmation.value,
+        },
+        separators=(",", ":"),
+    )
+)
+'''
+        before = _durable_tree(self.workspace.root)
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "dumb"},
+            terminal_columns=40,
+        )
+        mark = process.output_mark()
+        opened = process.wait_for_text("compose[run:1]> ", after=mark)
+        self.assertIn("Mode: run", opened)
+        self.assertNotIn("\x1b", opened)
+        process.send_line("fallback line")
+        process.wait_for_text("compose[run:2]> ", after=mark)
+        process.send_line("/send")
+        confirmation = process.wait_for_text("confirm [Y/n]> ", after=mark)
+        self.assertIn("Question: Continue?", confirmation)
+        self.assertIn("Default: yes", confirmation)
+        self.assertNotIn("\x1b", confirmation)
+        process.send_line("")
+        result = process.wait_for_text("RESULT=", after=mark)
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertIn(
+            'RESULT={"text":"fallback line","confirmation":"yes"}',
+            result,
         )
         self.assertEqual(_durable_tree(self.workspace.root), before)
         self.assertFalse(self.provider_log.exists())
@@ -1207,7 +1357,9 @@ print(
         process.wait_for_text("Subject: Renamed Subject", after=mark)
         mark = process.output_mark()
         process.send_line("/conversation archive")
-        process.wait_for_text("[y/N] ", after=mark)
+        confirmation = process.wait_for_text("confirm [y/N]> ", after=mark)
+        self.assertIn("Choices: y/yes or n/no", confirmation)
+        self.assertIn("Default: no", confirmation)
         process.send_line("yes")
         process.wait_for_text("Archived ", after=mark)
         process.wait_for_text("Subject: Second Subject", after=mark)
@@ -1331,7 +1483,10 @@ print(
 
         mark = process.output_mark()
         process.send_line("/session pause")
-        process.wait_for_text("Pause session alpha? [y/N] ", after=mark)
+        confirmation = process.wait_for_text("confirm [y/N]> ", after=mark)
+        self.assertIn("Question: Pause session alpha?", confirmation)
+        self.assertIn("Choices: y/yes or n/no", confirmation)
+        self.assertIn("Default: no", confirmation)
         process.send_line("y")
         process.wait_for_text("[session] Paused alpha; default retained.", after=mark)
         process.wait_for_text("story[lobby]> ", after=mark)
@@ -1515,7 +1670,8 @@ print(
         process.send_line("")
         process.wait_for_text("compose[run:2]> ", after=mark)
         process.send_line("/send")
-        process.wait_for_text("[compose] Nothing to send.", after=mark)
+        rejected = process.wait_for_text("send.", after=mark)
+        self.assertIn("[compose]Nothingtosend.", "".join(rejected.split()))
         process.send_line("/say /send")
         process.wait_for_text("compose[run:3]> ", after=mark)
         process.send_line("/say /cancel")
@@ -1523,10 +1679,13 @@ print(
         process.send_line("final literal line")
         process.wait_for_text("compose[run:5]> ", after=mark)
         process.send_line("/send")
-        process.wait_for_text("[compose] Sending 4 lines", after=mark)
         process.wait_for_text("core updates:", after=mark)
         successful_output = process.wait_for_text("Conversation scope", after=mark)
         collapsed = "".join(successful_output.split())
+        self.assertIn(
+            "[compose]Sending4lines,33characterstoconsensus.",
+            collapsed,
+        )
         ordered_fragments = (
             "Startedpromptconsensus.",
             "Draftedrevisionr0.",
@@ -1550,7 +1709,11 @@ print(
         process.send_line("discarded by slash command")
         process.wait_for_text("compose[run:2]> ", after=mark)
         process.send_line("/cancel")
-        process.wait_for_text("Discarded 1 line.", after=mark)
+        discarded = process.wait_for_text("r sent.", after=mark)
+        self.assertIn(
+            "[compose]Discarded1line.Nomessagewassavedorsent.",
+            "".join(discarded.split()),
+        )
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         self.assertEqual(
             _durable_tree_without_access(self.workspace.root),
@@ -1563,7 +1726,11 @@ print(
         process.send_line("discarded by interrupt")
         process.wait_for_text("compose[run:2]> ", after=mark)
         process.send_interrupt()
-        process.wait_for_text("Discarded 1 line.", after=mark)
+        discarded = process.wait_for_text("r sent.", after=mark)
+        self.assertIn(
+            "[compose]Discarded1line.Nomessagewassavedorsent.",
+            "".join(discarded.split()),
+        )
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         self.assertEqual(
             _durable_tree_without_access(self.workspace.root),
@@ -1577,7 +1744,10 @@ print(
         process.wait_for_text("compose[run:2]> ", after=mark)
         process.send_eof()
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
-        self.assertIn("Discarded 1 line.", process.text_after(mark))
+        self.assertIn(
+            "[compose]Discarded1line.Nomessagewassavedorsent.",
+            "".join(process.text_after(mark).split()),
+        )
         self.assertEqual(
             _durable_tree_without_access(self.workspace.root),
             durable_after_success,
