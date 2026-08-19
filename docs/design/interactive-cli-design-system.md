@@ -30,7 +30,8 @@ semantic model.
 
 The words **must**, **must not**, and **may** below constrain the delivery
 issues. Requirements beyond the implemented #82, #83, #84, #85, #86, #79,
-#87, #94, #93, and #73 slices do not describe current production behavior.
+#87, #94, #93, #105, and #73 slices do not describe current production
+behavior.
 
 ## Delivery status
 
