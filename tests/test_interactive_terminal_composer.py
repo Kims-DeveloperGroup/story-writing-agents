@@ -783,6 +783,36 @@ class SemanticInputDriverTests(unittest.TestCase):
 
     def test_bad_renderer_provider_and_width_results_do_not_mutate_history(self) -> None:
         view = InputPromptView((), Prompt("input>"))
+        driver, input_stream, output, fallback, termios_double, size_calls = _driver(
+            "unused"
+        )
+        rendered_input = RenderedInputFrame("input> ", "input> ", 80, 1)
+        provider = mock.Mock(return_value=())
+        transition = mock.Mock()
+        with self.assertRaisesRegex(
+            ValueError,
+            "^known_width is required with rendered_input$",
+        ):
+            driver._read_control_line(
+                rendered_input.plain_text,
+                provider,
+                _model.LineInputState(),
+                transition,
+                rendered_input=rendered_input,
+            )
+        provider.assert_not_called()
+        transition.assert_not_called()
+        fallback.assert_not_called()
+        self.assertEqual(input_stream.read_calls, 0)
+        self.assertEqual(input_stream.tty_calls, 0)
+        self.assertEqual(input_stream.fileno_calls, 0)
+        self.assertEqual(output.records, [])
+        self.assertEqual(output.flush_calls, 0)
+        self.assertEqual(termios_double.get_calls, [])
+        self.assertEqual(termios_double.set_calls, [])
+        self.assertEqual(size_calls, [])
+        self.assertEqual(driver._history_state, MainInputHistoryState())
+
         cases = (
             (mock.Mock(return_value=object()), lambda _buffer: (), TypeError),
             (
