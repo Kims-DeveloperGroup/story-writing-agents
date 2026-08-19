@@ -262,6 +262,50 @@ def make_terminal(
     return terminal, callbacks
 
 
+def expected_composer_prompt(
+    mode: str,
+    *,
+    line: int,
+    line_count: int,
+    character_count: int,
+    target: str | None = None,
+) -> str:
+    """Return the exact wide callback projection for one composer read."""
+
+    fields = [f"Mode: {mode}"]
+    if target is not None:
+        fields.append(f"Target: {target}")
+    fields.extend(
+        (
+            f"Next line: {line}",
+            f"Lines: {line_count}",
+            f"Characters: {character_count}",
+            "[info] Use /send to submit or /cancel to discard.",
+        )
+    )
+    scope = f"chat:{target}:{line}" if target is not None else f"run:{line}"
+    return "\n".join(fields) + f"\ncompose[{scope}]> "
+
+
+def expected_confirmation_prompt(
+    message: str,
+    *,
+    default: bool,
+    invalid: bool = False,
+) -> str:
+    """Return the exact wide callback projection for one confirmation read."""
+
+    suffix = "[Y/n]" if default else "[y/N]"
+    choices = "Choices [error]" if invalid else "Choices"
+    default_text = "yes" if default else "no"
+    return (
+        f"Question: {message}\n"
+        f"{choices}: y/yes or n/no\n"
+        f"Default: {default_text}\n"
+        f"confirm {suffix}> "
+    )
+
+
 def expected_session_orientation(
     *,
     attachment: AttachmentKind,
@@ -836,8 +880,18 @@ class PromptAndRenderingTests(unittest.TestCase):
             general_callbacks.prompts,
             [
                 "conversation[subject]> ",
-                "compose[run:1]> ",
-                "compose[run:2]> ",
+                expected_composer_prompt(
+                    "run",
+                    line=1,
+                    line_count=0,
+                    character_count=0,
+                ),
+                expected_composer_prompt(
+                    "run",
+                    line=2,
+                    line_count=1,
+                    character_count=16,
+                ),
             ],
         )
         self.assertEqual(main_callbacks.records, [])
@@ -903,15 +957,40 @@ class PromptAndRenderingTests(unittest.TestCase):
         self.assertEqual(
             composition_callbacks.prompts,
             [
-                "compose[run:1]> ",
-                "compose[run:2]> ",
-                "compose[chat:plot:1]> ",
-                "compose[chat:plot:2]> ",
+                expected_composer_prompt(
+                    "run",
+                    line=1,
+                    line_count=0,
+                    character_count=0,
+                ),
+                expected_composer_prompt(
+                    "run",
+                    line=2,
+                    line_count=1,
+                    character_count=8,
+                ),
+                expected_composer_prompt(
+                    "chat",
+                    target="plot",
+                    line=1,
+                    line_count=0,
+                    character_count=0,
+                ),
+                expected_composer_prompt(
+                    "chat",
+                    target="plot",
+                    line=2,
+                    line_count=1,
+                    character_count=9,
+                ),
             ],
         )
         self.assertEqual(
             ordinary_callbacks.prompts,
-            ["conversation[subject]> ", "Continue? [y/N] "],
+            [
+                "conversation[subject]> ",
+                expected_confirmation_prompt("Continue?", default=False),
+            ],
         )
 
     def test_main_read_maps_terminal_events_and_propagates_bad_collaborators(
@@ -1004,8 +1083,10 @@ class PromptAndRenderingTests(unittest.TestCase):
                     terminal.request_confirmation("Continue?", default=default),
                     expected,
                 )
-                suffix = "[Y/n] " if default else "[y/N] "
-                self.assertEqual(callbacks.prompts, [f"Continue? {suffix}"])
+                self.assertEqual(
+                    callbacks.prompts,
+                    [expected_confirmation_prompt("Continue?", default=default)],
+                )
                 self.assertEqual(callbacks.records, [])
 
         terminal, callbacks = make_terminal("later", " MAYBE ", "yes")
@@ -1015,7 +1096,19 @@ class PromptAndRenderingTests(unittest.TestCase):
         )
         self.assertEqual(
             callbacks.prompts,
-            ["Resume? [y/N] ", "Resume? [y/N] ", "Resume? [y/N] "],
+            [
+                expected_confirmation_prompt("Resume?", default=False),
+                expected_confirmation_prompt(
+                    "Resume?",
+                    default=False,
+                    invalid=True,
+                ),
+                expected_confirmation_prompt(
+                    "Resume?",
+                    default=False,
+                    invalid=True,
+                ),
+            ],
         )
         self.assertEqual(
             callbacks.records,
@@ -1031,7 +1124,15 @@ class PromptAndRenderingTests(unittest.TestCase):
             terminal.request_confirmation("unsafe\n\x1b?", default=True),
             ConfirmationResult.INTERRUPT,
         )
-        self.assertEqual(callbacks.prompts, ["unsafe\\x0a\\x1b? [Y/n] "])
+        self.assertEqual(
+            callbacks.prompts,
+            [
+                expected_confirmation_prompt(
+                    "unsafe\\x0a\\x1b?",
+                    default=True,
+                )
+            ],
+        )
         self.assertEqual(callbacks.records, [])
 
         terminal, callbacks = make_terminal(EOFError())
@@ -1039,7 +1140,10 @@ class PromptAndRenderingTests(unittest.TestCase):
             terminal.request_confirmation("End?", default=False),
             ConfirmationResult.EOF,
         )
-        self.assertEqual(callbacks.prompts, ["End? [y/N] "])
+        self.assertEqual(
+            callbacks.prompts,
+            [expected_confirmation_prompt("End?", default=False)],
+        )
         self.assertEqual(callbacks.records, [])
 
     def test_confirmation_rejects_bad_inputs_and_propagates_collaborator_failures(
@@ -1639,9 +1743,27 @@ class CompositionTests(unittest.TestCase):
         self.assertEqual(
             callbacks.prompts,
             [
-                "compose[chat:plot:1]> ",
-                "compose[chat:plot:2]> ",
-                "compose[chat:plot:3]> ",
+                expected_composer_prompt(
+                    "chat",
+                    target="plot",
+                    line=1,
+                    line_count=0,
+                    character_count=0,
+                ),
+                expected_composer_prompt(
+                    "chat",
+                    target="plot",
+                    line=2,
+                    line_count=1,
+                    character_count=5,
+                ),
+                expected_composer_prompt(
+                    "chat",
+                    target="plot",
+                    line=3,
+                    line_count=2,
+                    character_count=12,
+                ),
             ],
         )
         self.assertEqual(
@@ -1667,7 +1789,20 @@ class CompositionTests(unittest.TestCase):
         )
         self.assertEqual(
             callbacks.prompts,
-            ["compose[run:1]> ", "compose[run:2]> "],
+            [
+                expected_composer_prompt(
+                    "run",
+                    line=1,
+                    line_count=0,
+                    character_count=0,
+                ),
+                expected_composer_prompt(
+                    "run",
+                    line=2,
+                    line_count=1,
+                    character_count=3,
+                ),
+            ],
         )
         self.assertEqual(
             callbacks.records,
@@ -1699,11 +1834,36 @@ class CompositionTests(unittest.TestCase):
         self.assertEqual(
             callbacks.prompts,
             [
-                "compose[run:1]> ",
-                "compose[run:2]> ",
-                "compose[run:3]> ",
-                "compose[run:3]> ",
-                "compose[run:4]> ",
+                expected_composer_prompt(
+                    "run",
+                    line=1,
+                    line_count=0,
+                    character_count=0,
+                ),
+                expected_composer_prompt(
+                    "run",
+                    line=2,
+                    line_count=1,
+                    character_count=0,
+                ),
+                expected_composer_prompt(
+                    "run",
+                    line=3,
+                    line_count=2,
+                    character_count=3,
+                ),
+                expected_composer_prompt(
+                    "run",
+                    line=3,
+                    line_count=2,
+                    character_count=3,
+                ),
+                expected_composer_prompt(
+                    "run",
+                    line=4,
+                    line_count=3,
+                    character_count=11,
+                ),
             ],
         )
         self.assertEqual(callbacks.records[1], "[compose] Nothing to send.\n")
