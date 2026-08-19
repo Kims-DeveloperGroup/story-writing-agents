@@ -329,6 +329,7 @@ class AgentBackend:
         if not isinstance(executable, str) or not executable:
             raise ValueError("Codex executable must be non-empty text")
         manager = ConfigManager(self.workspace)
+        defaults = manager.load_system_defaults()
         try:
             explicit_model = manager.validate_codex_model(model)
         except ConfigurationError as exc:
@@ -354,7 +355,6 @@ class AgentBackend:
                 for agent_id, backend in raw_overrides.items()
             }
         )
-        defaults = manager.load_system_defaults()
         self.executable = executable
         self.model = (
             explicit_model
