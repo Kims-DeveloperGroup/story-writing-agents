@@ -62,10 +62,18 @@ language/persona and backend-routing cascades. First non-null value wins:
 Passing `model=None` is inheritance, not an explicit request to clear a
 persisted model. There is no reasoning CLI flag, constructor argument, session
 runtime override, directive, or per-agent model/reasoning setting. Each
-`AgentBackend` validates the complete persisted system-default object and
-snapshots the effective values once during construction. Later file edits do
-not change that backend, its existing bindings, provider threads, fingerprints,
-or request payloads; a newly constructed backend observes the new valid values.
+`AgentBackend` validates and snapshots the complete persisted system-default
+and per-agent configuration pair once during construction. Later direct edits
+or `/settings` saves do not change that backend or its runtime's persisted
+provider, language, persona, round, model, or reasoning defaults. Even late
+persisted corruption does not reconfigure the active lifecycle; the next
+backend construction reads and validates the then-persisted pair.
+
+Session-wide and per-agent runtime language/persona overrides remain live above
+that snapshot, and explicit backend and run arguments retain their higher
+precedence. `/settings` changes persistent fallbacks only; it does not clear or
+rewrite those overrides, refresh provider threads, or alter the precedence
+table.
 
 ## Exact standalone directives
 

@@ -2,8 +2,8 @@
 
 > **Availability:** containment and no-symlink checks, exclusive manuscript and
 > conversation creation, serialized transcript replacement, atomic per-file
-> default/metadata replacement, and best-effort artifact rollback are
-> implemented.
+> default/metadata replacement, guarded interactive settings persistence, and
+> best-effort rollback are implemented.
 
 Key terms: **containment**—keeping paths beneath the workspace root; **symlink**—
 a filesystem alias the runtime rejects; **exclusive creation**—failure instead
@@ -90,6 +90,26 @@ Session and conversation default saves also replace one complete fixed JSON
 file. A conversation-default failure preserves its prior bytes and cannot
 alter catalog metadata; operations spanning both files are not atomic. See
 [Persistence](../design/persistence.md) for the cross-file consequence.
+
+`/settings` coordinates `config/system_defaults.json` and
+`config/agent_configs.json` more narrowly. Opening captures both files' exact
+strict-UTF-8 bytes, their fully validated values, and the safe persona catalog.
+Save validates the complete pending pair before rereading anything, then
+requires both byte snapshots and the catalog to match the opening baseline.
+Any mismatch or read failure reports a conflict and performs no write.
+
+An unchanged candidate performs no write. Otherwise, only changed documents
+are serialized as canonical sorted, indented JSON and atomically replaced,
+system defaults before agent configs. If a write reports failure, every
+attempted target—including the failing target, because replacement may already
+have occurred—is restored from its exact opening bytes in reverse order. All
+restorations are attempted even after one fails. Complete restoration reports a
+write failure; any restoration failure reports rollback uncertainty and
+requires inspection of both files.
+
+This is guarded optimistic coordination, not one cross-file transaction. Each
+replacement is atomic, but an abrupt process, operating-system, hardware,
+filesystem, or power failure can still leave the pair partially durable.
 
 Invalid identifiers raise `SessionIdError`; unsafe paths or symlinks raise
 `WorkspaceSecurityError`; malformed or path-mismatched persisted data raises

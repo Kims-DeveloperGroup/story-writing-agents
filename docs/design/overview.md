@@ -41,11 +41,12 @@ revision; all must approve. Blackboard and owner-isolated history stay separate.
 | `interactive_controller._session_policy` | Pure lifecycle validation, next actions, and typed failure classification |
 | `interactive_controller._conversation_policy` | Pure catalog, reference, search, transcript, and failure interpretation |
 | `interactive_controller._runtime_policy` | Pure progress, result, failure interpretation, and frozen validated inspection facts |
+| `interactive_settings` | Package-internal immutable current/pending configuration snapshots, safe persona catalog, exact conflict detection, and guarded changed-only persistence with reverse exact-byte rollback |
 | `cli_context`, catalog, memory service, event store | Defaults, identity, scoped reads, and authoritative events |
-| `interactive_terminal` | Stable package-supported facade, package-internal real-CLI factory, and unlisted internal semantic output/picker adapter and component identities |
-| `interactive_terminal._core` | Established terminal API behavior, explicit ordinary/main/composition/confirmation routing, canonical completion adaptation, semantic input-view and lifecycle-event construction, resource-free semantic output and picker adapters, and terminal-leaf coordination |
-| `interactive_terminal._model`, `_controls`, `_render` | Immutable semantic/history/completion/composer/picker foundation; pure line, palette, history, composer, confirmation, and picker transitions; bounded picker viewport; and pure safe responsive output/input rendering |
-| `interactive_terminal._driver` | Sole real-CLI raw streams, capabilities, width, incremental byte/key decoding, fixed Escape readiness wait, cursor controls, writes, flushes, restoration, one bounded process-local main-history store, and a dedicated history-free picker lifecycle |
+| `interactive_terminal` | Stable package-supported facade, package-internal real-CLI factory, and unlisted internal semantic output, picker, and cancellable-prompt adapters and component identities |
+| `interactive_terminal._core` | Established terminal API behavior, explicit ordinary/main/composition/confirmation routing, canonical completion adaptation, semantic input-view and lifecycle-event construction, resource-free semantic output/picker/prompt adapters, and terminal-leaf coordination |
+| `interactive_terminal._model`, `_controls`, `_render` | Immutable semantic/history/completion/composer/picker foundation; pure line, palette, history, composer, confirmation, prompt, and picker transitions; bounded picker viewport; and pure safe responsive output/input rendering |
+| `interactive_terminal._driver` | Sole real-CLI raw streams, capabilities, width, incremental byte/key decoding, fixed Escape readiness wait, cursor controls, writes, flushes, restoration, one bounded process-local main-history store, and dedicated history-free picker/prompt lifecycles |
 | `interactive_line_editor` | Standalone compatibility facade over the same supported main-command reader and one unified per-editor driver/history store |
 | `StoryRuntime`, `AgentBackend` | Orchestration/retrieval authority and provider resources |
 
@@ -82,9 +83,17 @@ package. It keeps opaque choice identities out of rendered text, separates
 selection from highlight, exposes at most seven choices in a live viewport,
 and uses a complete numbered list with exact retry grammar in line fallback.
 Its resource-free adapter binds these pure controls and renderers to the sole
-driver without history or completion state. It is unlisted internal API: no
-installed shell command consumes it, and `/settings` remains unavailable
-pending the separate settings/default work.
+driver without history or completion state. Global `/settings` is its first
+installed consumer and also uses the internal cancellable-prompt seam; neither
+seam is supported public API.
+
+The controller owns settings focus and semantic presentation. It delegates the
+call-local immutable baseline, pending candidate, persona catalog, exact
+stale-state checks, deterministic changed-only writes, and rollback to the
+package-internal `interactive_settings` module. The active backend and runtime
+retain their construction-time configuration snapshot, while session and
+explicit runtime overrides remain live. A save affects only a later shell or
+backend construction.
 
 The core gives immutable facts to policy validators and receives validated
 values, typed failures/errors, actions, or safe summaries. Leaves retain
@@ -131,10 +140,12 @@ renderer plus composition and empty confirmation preview providers per read,
 without retaining prompt mode. Main reads use the driver's pure selectable
 palette/history transition; composition and confirmation use history-free
 semantic input views with a call-local injected renderer, while subject input
-remains ordinary. The package-internal picker adapter likewise supplies its
-state transitions and live/fallback renderers call-locally to the driver's
-dedicated picker route; no controller or CLI consumer is installed. The
-controller sends one typed component per established
+remains ordinary. The package-internal picker and cancellable-prompt adapters
+likewise supply their transitions and live/fallback renderers call-locally to
+the sole driver. The controller uses those seams for `/settings` and calls
+`interactive_settings` directly for validation and persistence; that module
+depends only on agents, configuration, errors, and workspace. The controller
+sends one typed component per established
 callback through the adapter and otherwise depends downward on runtime,
 presentation, and storage. Retrieval's handler port prevents
 backend-to-orchestrator access.

@@ -1,7 +1,8 @@
 # Story sessions and conversations
 
-> **Availability:** the TTY shell supports session management and local reads;
-> advisory turns and consensus also require current focus on an active conversation.
+> **Availability:** the TTY shell supports session management, persistent
+> settings, and local reads; advisory turns and consensus also require current
+> focus on an active conversation.
 
 Key terms: **defaults** are persisted fallbacks; **current attachment** is the
 session held by this shell; **current focus** and **agent focus** select the
@@ -42,6 +43,36 @@ Escape restores the first pre-completion snapshot when present and dismisses
 that exact state; the palette does not enforce runtime scope. Plain fallback
 has no palette. See the
 [terminal contract](../reference/interactive-terminal.md#main-prompt-live-suggestions).
+
+## Edit persistent settings
+
+`/settings` is global, alias-free, provider-free, and works in the lobby or
+while attached. It shows separate Current and Pending values for Language,
+Persona, Maximum debate rounds, Providers, Codex model, and Codex reasoning
+effort. The top-level choices are those six rows followed by Save and Cancel.
+
+On a capable terminal, Up/Down moves the current picker highlight and Enter
+opens or commits it. Escape from a nested picker or prompt restores that
+field's prior pending value and returns to its parent. Escape at the top level,
+Cancel, Ctrl-C, or EOF cancels the whole workflow without saving. Plain
+fallback uses the picker's numbered grammar. In the Codex model text prompt,
+blank means provider default and `/cancel` is literal model text rather than a
+command.
+
+Language offers `KO`, `EN`, `JA`, `ZH`, `ES`, `FR`, `DE`, `PT`, `IT`, and `RU`.
+Persona uses the safe lexical template catalog. Debate rounds accept a
+nonnegative ASCII integer, including audit-only `0`. Providers are edited per
+agent in roster order: Codex is enabled; reserved Gemini is disabled for new
+selection, while an existing Gemini route may be preserved or remediated to
+Codex. Reasoning offers Provider default, `minimal`, `low`, `medium`, `high`,
+and `xhigh`.
+
+Save fails closed if either configuration file or the persona catalog changed
+after opening. A successful save affects only the next shell/backend
+construction; the active shell keeps its construction-time configuration
+snapshot, and live session or explicit overrides still take precedence. See
+[Agent configuration](../reference/configuration/agent-configuration.md) and
+[Filesystem safety](../operations/filesystem-safety.md).
 
 ## Manage conversations and routing
 

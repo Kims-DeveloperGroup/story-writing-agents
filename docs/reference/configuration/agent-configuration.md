@@ -1,7 +1,8 @@
 # Agent configuration
 
-> **Availability:** JSON defaults, per-agent routing, editable role prompts, and
-> persona templates are implemented. Codex is the only working provider.
+> **Availability:** JSON defaults, per-agent routing, interactive guarded
+> settings, editable role prompts, and persona templates are implemented. Codex
+> is the only working provider.
 
 Key terms: **system default**—the final fallback value; **agent configuration**—
 one role's persistent provider/language/persona choices; **role prompt**—that
@@ -36,9 +37,15 @@ hidden by `--codex-model` or `AgentBackend(model=...)`.
 
 Existing three-key files remain valid: missing Codex keys resolve as `null`.
 Running `story init` again, including with `--overwrite-prompts`, does not
-rewrite or migrate existing system-default bytes. There is no system-default
-save API or `/settings` command yet; #93 will add the guarded UI/save workflow
-for this canonical five-key object.
+rewrite or migrate existing system-default bytes. Global `/settings` edits this
+canonical five-key object through an isolated current/pending view; it adds no
+supported public save API. The ten language choices are exactly `KO`, `EN`,
+`JA`, `ZH`, `ES`, `FR`, `DE`, `PT`, `IT`, and `RU`. Persona choices come from
+the safe lexical catalog with top-level-template precedence. An existing
+schema-valid language outside the UI list remains visible and preservable but
+is not synthesized as a choice. Maximum debate rounds accepts a nonnegative
+ASCII integer, including `0`. Blank Codex model stores `null`; reasoning offers
+Provider default followed by `minimal`, `low`, `medium`, `high`, and `xhigh`.
 
 ## Per-agent configuration
 
@@ -75,6 +82,21 @@ An omitted canonical agent is an empty object. Each agent object permits only
 Gemini fails before provider invocation. Unknown agent IDs, fields, or backend
 names are errors.
 
+The `/settings` Providers editor follows canonical roster order. Codex is
+enabled; Gemini is visible but disabled for new selection. An existing Gemini
+value remains visible and may be preserved by returning without a change or
+remediated by selecting Codex. The settings workflow does not edit per-agent
+language/persona values or add per-agent model/reasoning values.
+
+Opening `/settings` captures exact bytes for both configuration documents, a
+fully validated immutable pair, and the safe persona catalog. Save revalidates
+the complete pending pair and requires all three opening facts to remain exact.
+It writes only changed documents, canonically, in system-defaults then
+agent-configs order. A failed write triggers reverse-order restoration of every
+attempted target, including the failing target, from its exact opening bytes;
+rollback uncertainty is reported separately. This is guarded coordination of
+two atomic per-file replacements, not a public API or cross-file transaction.
+
 ## Role prompts
 
 Each role owns static strict-UTF-8 Markdown at
@@ -85,12 +107,15 @@ allowlisted core documents.
 
 Normal `story init` creates a missing prompt and preserves existing content.
 `story init --overwrite-prompts` replaces all four canonical prompt files,
-even if only one changed, while preserving every other existing file. Current
-language/persona/backend configuration and referenced files are resolved before
-every phase, so a changed effective definition input causes a new binding on
-the next call. Workspace Codex model/reasoning defaults are different: a
-backend snapshots them at construction, and they do not change definition or
-binding identity.
+even if only one changed, while preserving every other existing file. One
+backend construction validates and snapshots the complete persisted system and
+agent configuration pair. That active backend and its runtime keep the snapshot
+for provider route, language, persona, debate-round, Codex model, and Codex
+reasoning defaults; later valid edits, settings saves, or persisted corruption
+do not reconfigure it. A later backend construction reads and validates the
+then-persisted pair. Session and explicit runtime overrides remain live and
+higher precedence, while referenced role, persona, and core-document content
+continues to participate in definition binding as documented.
 
 The packaged `default_kim_eun_hee` persona describes strict, logical, candid,
 skeptical writing-room behavior; it is not biographical impersonation.
