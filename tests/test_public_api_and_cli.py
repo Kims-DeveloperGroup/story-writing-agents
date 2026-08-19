@@ -218,6 +218,44 @@ class PublicApiTests(unittest.TestCase):
                     issubclass(getattr(story_writing_agents, name), base_error)
                 )
 
+    def test_agent_backend_signature_and_configuration_exports_are_unchanged(
+        self,
+    ) -> None:
+        signature = inspect.signature(story_writing_agents.AgentBackend)
+        self.assertEqual(
+            tuple(signature.parameters),
+            (
+                "workspace",
+                "executable",
+                "model",
+                "timeout_seconds",
+                "backend_overrides",
+            ),
+        )
+        self.assertIs(
+            signature.parameters["workspace"].kind,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        )
+        for name in (
+            "executable",
+            "model",
+            "timeout_seconds",
+            "backend_overrides",
+        ):
+            with self.subTest(parameter=name):
+                self.assertIs(
+                    signature.parameters[name].kind,
+                    inspect.Parameter.KEYWORD_ONLY,
+                )
+        self.assertEqual(signature.parameters["executable"].default, "codex")
+        self.assertIsNone(signature.parameters["model"].default)
+        self.assertEqual(signature.parameters["timeout_seconds"].default, 300)
+        self.assertIsNone(signature.parameters["backend_overrides"].default)
+        for internal in ("ConfigManager", "SystemDefaults"):
+            with self.subTest(internal=internal):
+                self.assertNotIn(internal, story_writing_agents.__all__)
+                self.assertFalse(hasattr(story_writing_agents, internal))
+
     def test_debate_context_and_progress_public_models_are_exact(self) -> None:
         required = {
             "DebateContextMode",
@@ -861,6 +899,20 @@ class CliTests(unittest.TestCase):
             },
         )
 
+        for arguments in (
+            ["chat", "--codex-reasoning-effort", "high"],
+            ["run", "--draft", "draft", "--codex-reasoning-effort", "high"],
+        ):
+            stderr = io.StringIO()
+            with (
+                self.subTest(arguments=arguments),
+                contextlib.redirect_stderr(stderr),
+                self.assertRaises(SystemExit) as raised,
+            ):
+                parser.parse_args(arguments)
+            self.assertEqual(raised.exception.code, 2)
+            self.assertIn("unrecognized arguments", stderr.getvalue())
+
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr):
             with self.assertRaises(SystemExit) as raised:
@@ -890,6 +942,10 @@ class CliTests(unittest.TestCase):
                 )
                 self.assertEqual(completed.returncode, 0, completed.stderr)
                 self.assertIn("usage:", completed.stdout)
+                self.assertNotIn(
+                    "--codex-reasoning-effort",
+                    completed.stdout,
+                )
 
     def test_non_tty_guard_precedes_input_options_workspace_and_backend(self) -> None:
         cases = (

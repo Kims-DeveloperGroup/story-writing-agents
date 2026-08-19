@@ -20,12 +20,39 @@ await BoundAgent.converse_with_retrieval(request, handler) -> ConversationRetrie
 AgentBackend.close() -> None
 ```
 
-`model=None` uses Codex's default. Timeout is positive. Overrides map canonical
-agents to providers; reserved `gemini` fails configuration validation. A bound
-agent exposes `backend`, `definition`, `vendor`, and `staging_directory`.
+`model=None` inherits `codex_model` from the workspace system defaults; if
+both are null, Codex chooses its provider default. A non-null constructor model
+has precedence over the persisted model. Timeout is positive. Overrides map
+canonical agents to providers; reserved `gemini` fails configuration
+validation. A bound agent exposes `backend`, `definition`, `vendor`, and
+`staging_directory`.
 Provider calls require ready access already held by the backend. Runtime owns
 transcripts and retrieval authorization; backend owns provider metadata,
 processes, access claims, and per-thread serialization.
+
+Construction first validates the complete five-key
+`config/system_defaults.json` object, even when a non-null constructor model
+would override its model field. It then snapshots the resolved model and the
+persisted `codex_reasoning_effort` for that backend's lifetime. Editing the file
+does not refresh an active backend, existing binding, provider thread,
+fingerprint, or request payload; the next backend construction observes the
+new valid values.
+
+When present, the optional invocation arguments are inserted in this exact
+order immediately after `exec` and before any `resume` marker:
+
+```text
+--model MODEL
+--config model_reasoning_effort="LEVEL"
+```
+
+Either line is omitted when its effective value is null. The reasoning levels
+are exactly `minimal`, `low`, `medium`, `high`, and `xhigh`; model/provider
+support for `xhigh` is not inferred by workspace validation. The configured
+values change only the invocation arguments and do not become definition,
+thread-identity, lifecycle, or request-payload fields. Validation and the
+workspace schema are specified in
+[Agent configuration](configuration/agent-configuration.md#system-defaults).
 
 ## Lifecycle value contracts
 

@@ -115,6 +115,8 @@ DEFAULT_SYSTEM_CONFIG: dict[str, Any] = {
     "language": "KO",
     "persona": "default_kim_eun_hee",
     "max_debate_rounds": 1,
+    "codex_model": None,
+    "codex_reasoning_effort": None,
 }
 
 DEFAULT_AGENT_CONFIGS: dict[str, dict[str, str | None]] = {

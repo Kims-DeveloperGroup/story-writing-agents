@@ -189,8 +189,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 - **Source:** `src/story_writing_agents/backend.py`
 - **Responsibility:** Adapt immutable agent definitions to provider invocation
-  and own provider-session durable state, process-access claims, and provider
-  thread persistence.
+  and own provider-session durable state, process-access claims, provider
+  thread persistence, and each backend instance's resolved Codex defaults.
 - **Supported surface:** Package-supported `AgentBackend` and `BoundAgent`.
   `BoundAgent` exposes structured debate `invoke` and one-turn conversation
   `converse` operations plus additive bounded
@@ -233,7 +233,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   nonzero Codex exit; it receives no memory service and performs no retrieval
   search or transcript-storage call. Debate requests add the canonical
   included-context event list to provider payloads only when present; absent
-  and fresh context requests retain the exact context-free payload.
+  and fresh context requests retain the exact context-free payload. At
+  construction it validates and snapshots the complete workspace system
+  defaults once, resolves a non-null explicit model over the persisted model,
+  and retains the persisted reasoning effort for the backend lifetime. Optional
+  `--model` and `--config model_reasoning_effort="LEVEL"` arguments are emitted
+  in that order immediately after `exec` and before any resume marker; neither
+  value changes provider-thread identity, bindings, fingerprints, manifests,
+  or request payloads.
 - **Primary verification/documentation:** `tests/test_codex_backend.py`,
   `tests/test_session_lifecycle.py`, `docs/reference/backend-and-sessions.md`,
   `docs/reference/conversation-retrieval.md`,
@@ -310,6 +317,10 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Responsibility:** Validate and resolve cascading runtime configuration.
 - **Supported surface:** Internal `ConfigManager`, `SystemDefaults`,
   `AgentConfig`, `ResolvedAgentConfig`, and `KNOWN_AGENT_BACKENDS`.
+  `SystemDefaults` retains its established positional fields and adds trailing
+  optional `codex_model` and `codex_reasoning_effort` fields. `ConfigManager`
+  owns the complete five-key system-default schema plus the shared safe-model
+  and fixed reasoning-effort validators.
 - **Direct internal dependencies:** `agents`, `errors`, and `workspace`.
 - **State, resources, and side effects:** Reads workspace configuration and
   owns no persistence.
@@ -1241,9 +1252,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   colliding files, and return `None` when absent for legacy debates. A
   guarded process-wide weak lock registry serializes operations per
   workspace/session/conversation. The fixed initialized topology includes
-  `agent_states/orchestrator_state/conversation_defaults`; `cli_context` owns
-  the schema stored there. The backend-owned story-session process-access
-  claim remains the cross-process same-session write guard.
+  `agent_states/orchestrator_state/conversation_defaults`; new workspaces also
+  receive the canonical five-key system-default document with null Codex model
+  and reasoning values, while existing system-default bytes are never migrated
+  or rewritten by initialization. `cli_context` owns the schema stored in the
+  conversation-default directory. The backend-owned story-session
+  process-access claim remains the cross-process same-session write guard.
   Catalog and absent-transcript reads do not create storage. Transcript access
   validates catalog identity, and appends atomically replace the complete file.
   `FilesystemConversationEventStore.read_context` retains its event lock across
@@ -1262,6 +1276,14 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 ## Consistency Notes
 
+- `Workspace` initializes the canonical five-key system-default document but
+  never rewrites an existing one. `ConfigManager` owns full schema validation
+  and the shared Codex model/reasoning validators. Each `AgentBackend` validates
+  and snapshots those workspace-wide values once at construction, applies a
+  non-null explicit model over the persisted model, and alone projects the
+  resolved optional values into invocation-scoped Codex arguments. No model or
+  reasoning value enters agent configuration, bindings, fingerprints, thread
+  keys, lifecycle artifacts, request payloads, or active-backend refresh.
 - `interactive_commands` owns canonical command and agent-route metadata, parse
   rules, typed parsed actions, and the pure cursor-aware completion grammar and
   replacement spans derived from that same metadata. `interactive_line_editor`
