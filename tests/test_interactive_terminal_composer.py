@@ -22,7 +22,12 @@ from story_writing_agents.interactive_terminal import (
     TerminalAction,
     TerminalActionKind,
 )
-from story_writing_agents.interactive_terminal import _controls, _core, _model
+from story_writing_agents.interactive_terminal import (
+    _controls,
+    _core,
+    _driver as driver_module,
+    _model,
+)
 from story_writing_agents.interactive_terminal._controls import (
     append_main_input_history,
     transition_composer_line,
@@ -655,9 +660,23 @@ class SemanticInputDriverTests(unittest.TestCase):
         renderer = mock.Mock(wraps=render_input_prompt)
         provider = mock.Mock(return_value=())
 
+        with mock.patch.object(
+            driver_module._select,
+            "select",
+            side_effect=(
+                ((7,), (), ()),
+                ((7,), (), ()),
+                ((7,), (), ()),
+                ((), (), ()),
+            ),
+        ) as readiness:
+            self.assertEqual(
+                driver.read_input_line(view, renderer, provider),
+                "界e\u0301",
+            )
         self.assertEqual(
-            driver.read_input_line(view, renderer, provider),
-            "界e\u0301",
+            readiness.call_args_list,
+            [mock.call((7,), (), (), 0.05)] * 4,
         )
         renderer.assert_called_once()
         self.assertIs(renderer.call_args.args[1].profile, CapabilityProfile.ANSI)

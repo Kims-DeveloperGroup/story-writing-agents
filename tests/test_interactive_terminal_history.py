@@ -15,6 +15,7 @@ from story_writing_agents.interactive_terminal import _controls, _model
 from story_writing_agents.interactive_terminal._controls import (
     append_main_input_history,
     transition_line_input,
+    transition_main_command_input,
     transition_main_input,
 )
 from story_writing_agents.interactive_terminal._driver import RawTerminalDriver
@@ -76,7 +77,7 @@ def _fallback_driver(
         input_stream,  # type: ignore[arg-type]
         output_stream,  # type: ignore[arg-type]
         transition_line_input,
-        transition_main_input,
+        transition_main_command_input,
         history_append,
         termios_provider=lambda: None,
         os_provider=lambda: SimpleNamespace(name="nt", environ={}),
@@ -122,6 +123,20 @@ class MainInputHistoryContractTests(unittest.TestCase):
         self.assertEqual(
             tuple(inspect.signature(RawTerminalDriver.read_main_line).parameters),
             ("self", "prompt", "suggestion_provider"),
+        )
+        self.assertEqual(
+            tuple(
+                inspect.signature(
+                    RawTerminalDriver.read_main_command_line
+                ).parameters
+            ),
+            (
+                "self",
+                "prompt",
+                "completion_provider",
+                "palette_projector",
+                "palette_renderer",
+            ),
         )
         self.assertEqual(
             tuple(inspect.signature(RawTerminalDriver.read_live_line).parameters),
