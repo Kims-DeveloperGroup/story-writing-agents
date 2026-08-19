@@ -97,6 +97,13 @@ approvals, ignored project/user configuration, and disabled shell, web, app,
 and multi-agent tools. Installation-level or vendor-global instructions can
 still apply, and the vendor may retain remote conversations.
 
+Workspace Codex model and reasoning defaults are plaintext configuration. An
+`AgentBackend` passes their effective non-null values to the local Codex
+process as `--model` and `--config model_reasoning_effort="LEVEL"` arguments;
+they are not inserted into request payloads, definitions, fingerprints, or
+provider-thread identity. Treat them as locally exposed process configuration,
+not as a place to store secrets.
+
 Use `codex login` or process-environment `CODEX_API_KEY`. Never put credentials
 in story content, configuration, filenames, prompts, replies, transcripts, or
 logs. Public models have no hidden-reasoning field; ordinary returned content is

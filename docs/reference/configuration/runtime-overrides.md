@@ -2,7 +2,8 @@
 
 > **Availability:** session-wide and per-agent language/persona overrides,
 > standalone directives, attached shell directive commands, backend run
-> overrides, and round limits are implemented.
+> overrides, round limits, and workspace-wide Codex model/reasoning defaults
+> are implemented.
 
 Key terms: **session override**—temporary configuration persisted for one story
 session; **precedence**—which source wins; **directive**—an exact message that
@@ -49,6 +50,22 @@ Backend routing is separate: `AgentBackend` one-run override, then per-agent
 configured backend, then `codex`. The repeatable CLI
 `--backend CANONICAL_AGENT_ID=BACKEND` supplies only the first level and never
 rewrites configuration.
+
+Codex model and reasoning resolution is workspace-wide and independent of the
+language/persona and backend-routing cascades. First non-null value wins:
+
+| Effective value | Precedence |
+| --- | --- |
+| Codex model | Explicit `--codex-model` or non-null `AgentBackend(model=...)`; then `codex_model` in `config/system_defaults.json`; then the Codex provider default. |
+| Codex reasoning | `codex_reasoning_effort` in `config/system_defaults.json`; then the Codex provider default. |
+
+Passing `model=None` is inheritance, not an explicit request to clear a
+persisted model. There is no reasoning CLI flag, constructor argument, session
+runtime override, directive, or per-agent model/reasoning setting. Each
+`AgentBackend` validates the complete persisted system-default object and
+snapshots the effective values once during construction. Later file edits do
+not change that backend, its existing bindings, provider threads, fingerprints,
+or request payloads; a newly constructed backend observes the new valid values.
 
 ## Exact standalone directives
 

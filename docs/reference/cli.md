@@ -56,6 +56,24 @@ Implicit workspaces are removed; explicit ones retain plaintext diagnostics.
 Exit `0` passes, `1` names a failed invariant, and `2` covers usage/setup or an
 unexpected failure. See the [smoke guide](../guides/smoke-test.md).
 
+## Codex defaults and model override
+
+Every installed command that constructs an `AgentBackend` validates and
+snapshots the workspace's optional `codex_model` and
+`codex_reasoning_effort` system defaults. A non-null `--codex-model` on
+`story chat` or `story run` overrides the persisted model for that backend;
+omitting the option inherits the persisted model, then the Codex provider
+default. Persisted reasoning similarly falls back to the provider default when
+null. Existing three-key system-default files inherit both provider defaults.
+
+There is no `--codex-reasoning-effort` option and no `/settings` command or
+system-default save API yet. Until the planned #93 UI lands, edit the validated
+five-key JSON document directly; an active backend keeps its construction-time
+snapshot. Exact fields, validation, and initialization compatibility are in
+[Agent configuration](configuration/agent-configuration.md#system-defaults),
+and invocation precedence is in
+[Runtime overrides](configuration/runtime-overrides.md#resolution-precedence).
+
 <a id="interactive-streams"></a>
 
 ## Interactive management, scope, and status
@@ -94,8 +112,8 @@ saves the full buffer/cursor snapshot; edits in the same grammar position keep
 it, and a grammar-position change resets it. Enter submits only the visible
 buffer to the parser once. A generic single-select picker foundation now exists
 behind an unlisted package-internal terminal seam, but no installed shell
-command consumes it. `/settings` and workspace Codex settings defaults remain
-future work.
+command consumes it. `/settings` remains planned; the workspace Codex defaults
+it will edit are already implemented.
 
 On capable real-CLI streams, orientation/current context, `/status`, `/inspect`,
 central errors/recovery, and accepted management, advisory, retrieval, and
