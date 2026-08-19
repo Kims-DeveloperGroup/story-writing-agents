@@ -1954,10 +1954,7 @@ print(
             after=mark,
         )
         process.wait_for_text("story[alpha:plot]> ", after=mark)
-        self.assertIn(
-            "stickytargetremainsplot_architect.",
-            "".join(routed.split()),
-        )
+        self.assertNotIn("[routing] One-shot route", routed)
 
         mark = process.output_mark()
         process.send_line("show visible controls")
@@ -2087,7 +2084,8 @@ print(
 
         selected = self._seed_default_session()
         process = self._spawn_cli(
-            ("chat", "alpha", "--workspace", str(self.workspace.root))
+            ("chat", "alpha", "--workspace", str(self.workspace.root)),
+            environment_overrides={"TERM": "xterm-256color"},
         )
         process.wait_for_text("story[alpha:lead]> ")
 
@@ -2165,6 +2163,13 @@ print(
         retrieval_output = process.text_after(mark)
         self.assertIn(f"Conversation: {selected.conversation_id}", retrieval_output)
         self.assertIn("Sequence: 1", retrieval_output)
+        self.assertNotIn("[waiting]", retrieval_output)
+        self.assertNotIn("[routing] One-shot route", retrieval_output)
+        self.assertIn("\x1b[K", retrieval_output)
+        self.assertLess(
+            retrieval_output.index("retrieval-assisted answer"),
+            retrieval_output.index("[context] Source 1 [completed]"),
+        )
 
         started = [
             record
@@ -2385,6 +2390,82 @@ print(
         )
         self.assertFalse(self.provider_log.exists())
 
+    def test_capable_advisory_progress_animates_all_frames_and_joins_repeatedly(
+        self,
+    ) -> None:
+        """Prove capable PTYs animate, serialize writes, and leave no workers."""
+
+        source = r'''
+import asyncio
+import sys
+
+from story_writing_agents.interactive_terminal import build_stream_terminal
+
+
+async def main():
+    terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
+    for label in ("one", "two"):
+        async def operation(label=label):
+            await asyncio.sleep(0.38)
+            terminal._write_text("answer-" + label + "\\n")
+            return label
+
+        result = await terminal._advisory_progress(operation())
+        print("RESULT=" + result)
+
+
+asyncio.run(main())
+'''
+        for attempt in range(2):
+            with self.subTest(attempt=attempt):
+                process = self._spawn_python(
+                    source,
+                    environment_overrides={"TERM": "xterm-256color"},
+                    terminal_columns=40,
+                )
+                mark = process.output_mark()
+                output = process.wait_for_text("RESULT=two", after=mark)
+                self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+                positions = tuple(
+                    output.index(frame) for frame in ("◐", "◓", "◑", "◒")
+                )
+                self.assertEqual(positions, tuple(sorted(positions)))
+                self.assertIn("answer-one", output)
+                self.assertIn("answer-two", output)
+                self.assertNotIn("[routing]", output)
+                self.assertNotIn("[waiting]", output)
+                self.assertGreaterEqual(output.count("\x1b[K"), 4)
+                self.assertNotIn("Task was destroyed", process.normalized_text)
+
+    def test_term_dumb_advisory_progress_is_silent(self) -> None:
+        """Prove a non-capable terminal receives only the advisory result."""
+
+        source = r'''
+import asyncio
+import sys
+
+from story_writing_agents.interactive_terminal import build_stream_terminal
+
+
+async def main():
+    terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
+
+    async def operation():
+        await asyncio.sleep(0.2)
+        return "done"
+
+    result = await terminal._advisory_progress(operation())
+    print("RESULT=" + result)
+
+
+asyncio.run(main())
+'''
+        process = self._spawn_python(source, environment_overrides={"TERM": "dumb"})
+        output = process.wait_for_text("RESULT=done")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertNotRegex(output, r"[◐◓◑◒]")
+        self.assertNotIn("\x1b[K", output)
+
     def test_advisory_vintr_terminates_provider_taints_then_restarts_thread(
         self,
     ) -> None:
@@ -2392,7 +2473,8 @@ print(
 
         selected = self._seed_default_session()
         process = self._spawn_cli(
-            ("chat", "alpha", "--workspace", str(self.workspace.root))
+            ("chat", "alpha", "--workspace", str(self.workspace.root)),
+            environment_overrides={"TERM": "xterm-256color"},
         )
         process.wait_for_text("story[alpha:lead]> ")
         mark = process.output_mark()
@@ -2415,10 +2497,9 @@ print(
         records_before_cancel = len(self._provider_records())
         mark = process.output_mark()
         process.send_line("cancel advisory")
-        process.wait_for_text(
-            "Plot & Structure Architect is responding; Ctrl-C cancels this turn.",
-            after=mark,
-        )
+        progress_output = process.wait_for_text("◐", after=mark)
+        self.assertNotIn("responding; Ctrl-C", progress_output)
+        self.assertNotIn("[routing] ", progress_output)
 
         def is_cancelled_invocation(record: dict[str, Any]) -> bool:
             """Identify the blocking advisory provider invocation by payload."""
@@ -2440,6 +2521,8 @@ print(
             "[cancelled] Plot & Structure Architect turn was interrupted.",
             after=mark,
         )
+        self.assertNotIn("[waiting] ", cancelled_output)
+        self.assertNotIn("[routing] ", cancelled_output)
         process.wait_for_text(
             "[hint] The story session remains attached;",
             after=mark,
