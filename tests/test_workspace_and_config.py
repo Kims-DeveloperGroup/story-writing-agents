@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from dataclasses import FrozenInstanceError, fields
 from pathlib import Path
+from types import MappingProxyType
 from unittest import mock
 
 from story_writing_agents import (
@@ -29,7 +30,12 @@ from story_writing_agents import (
     parse_directive,
 )
 from story_writing_agents.agents import CORE_DOCUMENTS
-from story_writing_agents.config import ConfigManager, SystemDefaults
+from story_writing_agents.config import (
+    AgentConfig,
+    ConfigurationSnapshot,
+    ConfigManager,
+    SystemDefaults,
+)
 from story_writing_agents.directives import DirectiveKind
 from story_writing_agents.errors import (
     ConfigurationError,
@@ -725,6 +731,129 @@ class ConfigurationCascadeTests(unittest.TestCase):
         with self.assertRaises(FrozenInstanceError):
             legacy.codex_model = "changed"
         self.assertEqual(pickle.loads(pickle.dumps(legacy)), legacy)
+
+    def test_full_snapshot_is_exact_frozen_roster_complete_and_copy_isolated(
+        self,
+    ) -> None:
+        snapshot_fields = fields(ConfigurationSnapshot)
+        self.assertEqual(
+            tuple(field.name for field in snapshot_fields),
+            ("system_defaults", "agent_configs"),
+        )
+        configs = {agent_id: AgentConfig() for agent_id in ROSTER}
+        defaults = SystemDefaults("KO", "global_persona", 1)
+        snapshot = ConfigurationSnapshot(defaults, configs)
+        configs[PLOT_ARCHITECT] = AgentConfig(backend="gemini")
+
+        self.assertFalse(hasattr(snapshot, "__dict__"))
+        self.assertIs(snapshot.system_defaults, defaults)
+        self.assertIsInstance(snapshot.agent_configs, MappingProxyType)
+        self.assertEqual(tuple(snapshot.agent_configs), ROSTER)
+        self.assertIsNone(snapshot.agent_configs[PLOT_ARCHITECT].backend)
+        with self.assertRaises(FrozenInstanceError):
+            snapshot.system_defaults = defaults  # type: ignore[misc]
+        with self.assertRaises(TypeError):
+            snapshot.agent_configs[PLOT_ARCHITECT] = AgentConfig()  # type: ignore[index]
+
+        invalid = (
+            lambda: ConfigurationSnapshot(object(), configs),
+            lambda: ConfigurationSnapshot(defaults, object()),
+            lambda: ConfigurationSnapshot(
+                defaults,
+                {agent_id: AgentConfig() for agent_id in ROSTER[:-1]},
+            ),
+            lambda: ConfigurationSnapshot(
+                defaults,
+                {
+                    agent_id: (
+                        object() if agent_id == PLOT_ARCHITECT else AgentConfig()
+                    )
+                    for agent_id in ROSTER
+                },
+            ),
+        )
+        for factory in invalid:
+            with self.subTest(factory=factory), self.assertRaises(
+                (TypeError, ValueError)
+            ):
+                factory()
+
+    def test_complete_pair_is_read_once_and_snapshot_resolution_does_not_reread(
+        self,
+    ) -> None:
+        original_read = self.workspace.read_json
+        with mock.patch.object(
+            self.workspace,
+            "read_json",
+            wraps=original_read,
+        ) as read:
+            snapshot = self.manager.load_configuration_snapshot()
+            self.assertEqual(
+                [call.args[0] for call in read.call_args_list],
+                ["config/system_defaults.json", "config/agent_configs.json"],
+            )
+
+            defaults = self.workspace.read_json("config/system_defaults.json")
+            defaults["language"] = "DE"
+            self.workspace.write_json("config/system_defaults.json", defaults)
+            agents = self.workspace.read_json("config/agent_configs.json")
+            agents[PLOT_ARCHITECT]["backend"] = "gemini"
+            agents[PLOT_ARCHITECT]["language"] = "FR"
+            self.workspace.write_json("config/agent_configs.json", agents)
+            reads_before_resolution = read.call_count
+
+            persisted = self.manager.resolve_from_snapshot(
+                snapshot,
+                PLOT_ARCHITECT,
+            )
+            overridden = self.manager.resolve_from_snapshot(
+                snapshot,
+                PLOT_ARCHITECT,
+                {
+                    "language": "ES",
+                    "agents": {
+                        PLOT_ARCHITECT: {
+                            "language": "PT",
+                            "persona": "runtime_persona",
+                        }
+                    },
+                },
+                {PLOT_ARCHITECT: "gemini"},
+            )
+
+        self.assertEqual(read.call_count, reads_before_resolution)
+        self.assertEqual(
+            (persisted.backend, persisted.language, persisted.persona),
+            ("codex", "JA", "agent_persona"),
+        )
+        self.assertEqual(
+            (overridden.backend, overridden.language, overridden.persona),
+            ("gemini", "PT", "runtime_persona"),
+        )
+
+    def test_complete_pair_validation_rejects_each_invalid_document(self) -> None:
+        system_value = self.workspace.read_json("config/system_defaults.json")
+        agent_value = self.workspace.read_json("config/agent_configs.json")
+        snapshot = self.manager.validate_configuration(system_value, agent_value)
+        self.assertIsInstance(snapshot, ConfigurationSnapshot)
+
+        invalid_system = dict(system_value, unexpected=True)
+        with self.assertRaisesRegex(ConfigurationError, "unexpected"):
+            self.manager.validate_configuration(invalid_system, agent_value)
+
+        invalid_agents = dict(agent_value)
+        invalid_agents[PLOT_ARCHITECT] = dict(
+            invalid_agents[PLOT_ARCHITECT],
+            backend="unknown",
+        )
+        with self.assertRaisesRegex(ConfigurationError, "backend"):
+            self.manager.validate_configuration(system_value, invalid_agents)
+
+        with self.assertRaises(TypeError):
+            self.manager.resolve_from_snapshot(  # type: ignore[arg-type]
+                object(),
+                PLOT_ARCHITECT,
+            )
 
     def test_codex_defaults_accept_missing_null_exact_enum_and_unicode(self) -> None:
         legacy = self.manager.load_system_defaults()

@@ -33,6 +33,7 @@ from ._controls import (
     transition_picker,
     transition_picker_fallback,
     transition_line_input,
+    transition_prompt_input,
 )
 from ._driver import RawTerminalDriver
 from ._model import (
@@ -442,6 +443,7 @@ class InteractiveTerminal:
         "_confirmation_read_line",
         "_main_read_line",
         "_picker_read",
+        "_prompt_read",
         "_read_line",
         "_width",
         "_write_text",
@@ -481,6 +483,7 @@ class InteractiveTerminal:
         self._composition_read_line = _plain_input_reader(read_line, width)
         self._confirmation_read_line = _plain_input_reader(read_line, width)
         self._picker_read = _plain_picker_reader(read_line, write_text, width)
+        self._prompt_read = _plain_prompt_reader(read_line, width)
         self._write_text = write_text
         self._width = width
         self._capability_provider = lambda: _plain_capabilities(width)
@@ -1286,6 +1289,34 @@ class InteractivePickerInput:
         return outcome
 
 
+class InteractivePromptInput:
+    """Retain only one terminal's package-internal cancellable line input."""
+
+    __slots__ = ("_read",)
+
+    def __init__(self, terminal: InteractiveTerminal) -> None:
+        """Bind prompt input without inspecting capabilities or acquiring I/O."""
+
+        if not isinstance(terminal, InteractiveTerminal):
+            raise TypeError("terminal must be an InteractiveTerminal")
+        self._read: Callable[[InputPromptView], ControlOutcome] = (
+            terminal._prompt_read
+        )
+
+    def read_prompt(
+        self,
+        prompt: Prompt,
+        *,
+        context: tuple[Panel | Section | Field | Notice, ...] = (),
+    ) -> ControlOutcome:
+        """Read one exact line with a distinct nested-cancel outcome."""
+
+        outcome = self._read(InputPromptView(context, prompt))
+        if type(outcome) is not ControlOutcome:
+            raise TypeError("prompt reader must return a ControlOutcome")
+        return outcome
+
+
 def build_contextual_terminal(
     read_line: Callable[[str], str],
     write_text: Callable[[str], None],
@@ -1345,6 +1376,31 @@ def _plain_input_reader(
         return read_line(frame.plain_text)
 
     return read_input
+
+
+def _plain_prompt_reader(
+    read_line: Callable[[str], str],
+    width: int,
+) -> Callable[[InputPromptView], ControlOutcome]:
+    """Adapt one borrowed line callback to cancellable semantic input."""
+
+    if not callable(read_line):
+        raise TypeError("read_line must be callable")
+    capabilities = _plain_capabilities(width)
+
+    def read_prompt(view: InputPromptView) -> ControlOutcome:
+        frame = render_input_prompt(view, capabilities)
+        try:
+            line = _validated_input_line(read_line(frame.plain_text))
+        except KeyboardInterrupt:
+            return ControlOutcome(ControlOutcomeKind.INTERRUPT)
+        except EOFError:
+            return ControlOutcome(ControlOutcomeKind.EOF)
+        if line == "\x1b":
+            return ControlOutcome(ControlOutcomeKind.CANCEL)
+        return ControlOutcome(ControlOutcomeKind.COMMIT, text=line)
+
+    return read_prompt
 
 
 def _plain_picker_reader(
@@ -1492,6 +1548,11 @@ def build_stream_terminal(
         project_picker_viewport,
         render_picker_viewport,
         render_picker_fallback,
+    )
+    terminal._prompt_read = lambda view: driver.read_prompt(
+        view,
+        render_input_prompt,
+        transition_prompt_input,
     )
     terminal._capability_provider = driver.capabilities
     return terminal

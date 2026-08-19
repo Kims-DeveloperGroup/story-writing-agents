@@ -81,6 +81,7 @@ COMMAND_NAMES = {
     "language": "/language",
     "persona": "/persona",
     "reset": "/reset",
+    "settings": "/settings",
     "run": "/run",
     "draft-file": "/draft-file",
     "session": "/session",
@@ -139,6 +140,7 @@ ACTION_RULES = {
     ActionKind.INSPECT: ({"argument"}, set()),
     ActionKind.HISTORY: ({"count"}, set()),
     ActionKind.STATUS: (set(), set()),
+    ActionKind.SETTINGS: (set(), set()),
     ActionKind.SET_LANGUAGE: ({"argument"}, {"argument"}),
     ActionKind.SET_PERSONA: (
         {"agent_id", "argument"},
@@ -249,6 +251,7 @@ class ActionContractTests(unittest.TestCase):
             "INSPECT": "inspect",
             "HISTORY": "history",
             "STATUS": "status",
+            "SETTINGS": "settings",
             "SET_LANGUAGE": "set_language",
             "SET_PERSONA": "set_persona",
             "RESET": "reset",
@@ -425,7 +428,7 @@ class ActionContractTests(unittest.TestCase):
 
 
 class CommandRegistryTests(unittest.TestCase):
-    def test_registry_is_the_exact_ordered_twenty_row_contract(self) -> None:
+    def test_registry_is_the_exact_ordered_twenty_one_row_contract(self) -> None:
         expected = (
             CommandSpec("Conversation", "/compose", (), False, False, "/compose"),
             CommandSpec("Conversation", "/send", (), False, False, "/send"),
@@ -464,6 +467,14 @@ class CommandRegistryTests(unittest.TestCase):
                 "/persona plot meticulous",
             ),
             CommandSpec("Agents", "/reset", (), False, False, "/reset"),
+            CommandSpec(
+                "Agents",
+                "/settings",
+                (),
+                False,
+                True,
+                "/settings",
+            ),
             CommandSpec(
                 "Consensus",
                 "/run [PROMPT] | /run --fresh PROMPT",
@@ -569,12 +580,18 @@ class CommandRegistryTests(unittest.TestCase):
                 for name, spec in zip(canonical, COMMANDS)
                 if spec.may_write_artifacts
             },
-            {"/run", "/draft-file"},
+            {"/settings", "/run", "/draft-file"},
         )
+        settings = next(
+            spec for spec in COMMANDS if spec.syntax == "/settings"
+        )
+        self.assertFalse(settings.may_call_provider)
+        self.assertTrue(settings.may_write_artifacts)
         self.assertTrue(
             all(
                 not spec.may_write_artifacts or spec.may_call_provider
                 for spec in COMMANDS
+                if spec is not settings
             )
         )
         self.assertNotIn("message", canonical)
@@ -657,6 +674,7 @@ class SuccessfulParsingTests(unittest.TestCase):
             ),
             ("/history 20", InteractiveAction(ActionKind.HISTORY, count=20)),
             ("/status", InteractiveAction(ActionKind.STATUS)),
+            ("/settings", InteractiveAction(ActionKind.SETTINGS)),
             (
                 "/language ko-KR",
                 InteractiveAction(ActionKind.SET_LANGUAGE, argument="ko-KR"),
@@ -1101,6 +1119,7 @@ class InvalidInputTests(ParserAssertions, unittest.TestCase):
             "/cancel",
             "/status",
             "/reset",
+            "/settings",
             "/session list",
             "/session pause",
             "/quit",
@@ -1508,6 +1527,7 @@ class CommandCompletionProjectionTests(unittest.TestCase):
         "/language",
         "/persona",
         "/reset",
+        "/settings",
         "/run",
         "/draft-file",
         "/session",

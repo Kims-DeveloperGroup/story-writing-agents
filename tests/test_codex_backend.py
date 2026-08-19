@@ -9,6 +9,7 @@ import inspect
 import io
 import json
 import os
+import sys
 import tempfile
 import unittest
 import warnings
@@ -49,6 +50,7 @@ from story_writing_agents import (
     FilesystemConversationEventStore,
     PLOT_ARCHITECT,
     Phase,
+    ROSTER,
     SessionAccessState,
     SessionDurableState,
     Verdict,
@@ -64,6 +66,8 @@ from story_writing_agents.conversation_search import (
     ConversationSearchScope,
 )
 from story_writing_agents.cli import _parse_backend_overrides, build_parser, main
+from story_writing_agents.backend import backend_configuration_snapshot
+from story_writing_agents.config import ConfigManager
 from story_writing_agents.errors import (
     BackendProtocolError,
     ConfigurationError,
@@ -799,6 +803,103 @@ class CodexBackendDefaultsTests(unittest.TestCase):
                 with self.assertRaises(ConfigurationError) as caught:
                     AgentBackend(self.workspace, model=explicit)
                 self.assertEqual(str(caught.exception), expected)
+
+        self.write_defaults("persisted", "low")
+        agent_configs = self.workspace.read_json("config/agent_configs.json")
+        agent_configs[PLOT_ARCHITECT]["backend"] = "invalid-provider"
+        self.workspace.write_json("config/agent_configs.json", agent_configs)
+        with self.assertRaises(ConfigurationError) as caught:
+            AgentBackend(self.workspace, model="-invalid-explicit")
+        self.assertEqual(
+            str(caught.exception),
+            "backend must be one of: codex, gemini",
+        )
+
+    def test_backend_runtime_and_prompts_share_one_snapshot_until_next_lifecycle(
+        self,
+    ) -> None:
+        original_load = ConfigManager.load_configuration_snapshot
+        with mock.patch.object(
+            ConfigManager,
+            "load_configuration_snapshot",
+            autospec=True,
+            side_effect=original_load,
+        ) as load:
+            backend = AgentBackend(self.workspace, executable=sys.executable)
+            runtime = StoryRuntime(self.workspace, backend)
+        self.addCleanup(backend.close)
+        load.assert_called_once()
+        snapshot = backend_configuration_snapshot(backend)
+        self.assertIs(runtime._configuration_snapshot, snapshot)
+        self.assertIs(runtime.prompts.configuration_snapshot, snapshot)
+
+        before = runtime.prompts.build_definition(
+            session_id="snapshot_session",
+            agent_id=PLOT_ARCHITECT,
+        )
+        self.assertEqual((before.backend, before.language), ("codex", "KO"))
+
+        replacement_persona = "next_lifecycle_persona"
+        self.workspace.write_text(
+            "config/persona_templates/alternative_templates/"
+            f"{replacement_persona}.md",
+            "next",
+        )
+        defaults = self.workspace.read_json("config/system_defaults.json")
+        defaults.update(
+            {
+                "language": "DE",
+                "persona": replacement_persona,
+                "max_debate_rounds": 0,
+                "codex_model": "next-model",
+                "codex_reasoning_effort": "high",
+            }
+        )
+        self.workspace.write_json("config/system_defaults.json", defaults)
+        agents = self.workspace.read_json("config/agent_configs.json")
+        agents[PLOT_ARCHITECT].update(
+            {
+                "backend": "gemini",
+                "language": "FR",
+                "persona": replacement_persona,
+            }
+        )
+        self.workspace.write_json("config/agent_configs.json", agents)
+
+        self.assertTrue(backend.validate_provider_configuration("snapshot_session"))
+        after = runtime.prompts.build_definition(
+            session_id="snapshot_session",
+            agent_id=PLOT_ARCHITECT,
+        )
+        self.assertEqual(after, before)
+        self.assertIsNone(backend.model)
+        self.assertIsNone(backend._codex_reasoning_effort)
+
+        self.workspace.save_session_overrides(
+            "override_session",
+            {
+                "language": "ES",
+                "persona": replacement_persona,
+                "agents": {},
+            },
+        )
+        live_override = runtime.prompts.build_definition(
+            session_id="override_session",
+            agent_id=PLOT_ARCHITECT,
+        )
+        self.assertEqual(live_override.language, "ES")
+        self.assertEqual(live_override.persona_file.path.name, "next_lifecycle_persona.md")
+
+        next_backend = AgentBackend(self.workspace, executable=sys.executable)
+        self.addCleanup(next_backend.close)
+        self.assertEqual(next_backend.model, "next-model")
+        self.assertEqual(next_backend._codex_reasoning_effort, "high")
+        with self.assertRaises(ConfigurationError) as caught:
+            next_backend.validate_provider_configuration("snapshot_session")
+        self.assertEqual(
+            str(caught.exception),
+            "agent backend is not implemented: gemini",
+        )
 
     def test_optional_model_and_reasoning_argv_are_exact_for_fresh_and_resume(
         self,

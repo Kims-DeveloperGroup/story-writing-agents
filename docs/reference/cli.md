@@ -1,7 +1,8 @@
 # CLI reference
 
 > **Availability:** bare `story` and `story chat` open the TTY shell for session
-> and conversation management, advisory/local reads, and focused-context consensus.
+> and conversation management, persistent settings, advisory/local reads, and
+> focused-context consensus.
 
 `story` and `story-writing-agents` are aliases for
 `story_writing_agents.cli:main`.
@@ -66,10 +67,12 @@ omitting the option inherits the persisted model, then the Codex provider
 default. Persisted reasoning similarly falls back to the provider default when
 null. Existing three-key system-default files inherit both provider defaults.
 
-There is no `--codex-reasoning-effort` option and no `/settings` command or
-system-default save API yet. Until the planned #93 UI lands, edit the validated
-five-key JSON document directly; an active backend keeps its construction-time
-snapshot. Exact fields, validation, and initialization compatibility are in
+There is no `--codex-reasoning-effort` option or supported public
+system-default save API. Global `/settings` provides the installed interactive
+edit/save workflow; direct edits to the validated five-key JSON document remain
+possible. An active backend and runtime keep their construction-time
+configuration snapshot. Exact fields, validation, and initialization
+compatibility are in
 [Agent configuration](configuration/agent-configuration.md#system-defaults),
 and invocation precedence is in
 [Runtime overrides](configuration/runtime-overrides.md#resolution-precedence).
@@ -99,21 +102,38 @@ past newest restores the exact pre-navigation draft and cursor. Recalls are
 editable copies with the cursor at the end. Invalid commands, duplicates,
 `/quit`, fallback commits, and nonempty VEOF commits are eligible; whitespace
 is preserved. Empty/blank input, Ctrl-C, empty VEOF, physical EOF, failures,
-composition, subjects, and confirmations are excluded. The 101st entry evicts
-only the oldest. Nothing is persisted.
+composition, subjects, confirmations, and nested settings input are excluded.
+The 101st entry evicts only the oldest. Nothing is persisted.
 
 Main matching is exact and case-sensitive at the cursor, with ASCII space/tab
-token boundaries. Root offers 20 main-available registry tokens, help offers 23
+token boundaries. Root offers 21 main-available registry tokens, help offers 24
 including the composition-only commands, and agent-valued positions offer the
 10 canonical IDs and aliases; runtime values are not synthesized. Fixed-only
 no-match positions show an empty open palette, while mixed free-value slots
 close it. Filtering retains an eligible highlight. The first changing Tab
 saves the full buffer/cursor snapshot; edits in the same grammar position keep
 it, and a grammar-position change resets it. Enter submits only the visible
-buffer to the parser once. A generic single-select picker foundation now exists
-behind an unlisted package-internal terminal seam, but no installed shell
-command consumes it. `/settings` remains planned; the workspace Codex defaults
-it will edit are already implemented.
+buffer to the parser once. The generic single-select picker and cancellable
+prompt seams remain package-internal; `/settings` consumes them without adding
+a supported terminal API.
+
+`/settings` is alias-free, takes no argument, and is available with or without
+an attached session. It first displays immutable Current and Pending sections
+for Language, Persona, Maximum debate rounds, Providers, Codex model, and Codex
+reasoning effort, then an eight-choice editor in this order: those six fields,
+Save, Cancel. Nested Escape returns to the parent without changing that pending
+value; top-level Escape, Cancel, Ctrl-C, or EOF cancels the whole workflow
+without writing. `/cancel` is literal model text in the free-text prompt.
+
+Save validates the complete pending pair, then rejects any exact-byte change to
+either configuration document or any persona-catalog change since opening.
+Only changed documents are canonically replaced, in system-defaults then
+agent-configs order. A write failure attempts reverse-order restoration of
+every attempted target, including the failing target; rollback uncertainty is
+reported separately. Success returns to the main prompt and applies to the next
+shell/backend construction only. It does not refresh the active backend or
+runtime, call a provider, alter session/explicit overrides, or add credentials,
+model discovery, or automatic save.
 
 On capable real-CLI streams, orientation/current context, `/status`, `/inspect`,
 central errors/recovery, and accepted management, advisory, retrieval, and
@@ -127,8 +147,8 @@ semantic notices; no internal generic composer-status site remains. These
 presentation changes do not alter command grammar, established callback/read
 order, or any noninteractive stdout/stderr, JSON, ordering, or exit contract.
 
-`/help [COMMAND]` (`/?`), `/status`, and `/session list` are global. Session
-grammar is `/session list | create NAME | open [NAME] | pause`. Explicit
+`/help [COMMAND]` (`/?`), `/status`, `/settings`, and `/session list` are global.
+Session grammar is `/session list | create NAME | open [NAME] | pause`. Explicit
 `story chat SESSION` creates an absent session or opens a persisted one. Bare
 entry opens a ready default and asks before reopening a paused default.
 

@@ -9,8 +9,9 @@
 > coordinated with bounded process-local history. Line-oriented RUN/CHAT
 > composition and yes/no confirmation use semantic input views, and composer
 > lifecycle records use semantic notices. A generic single-select picker
-> foundation is also implemented behind an unlisted package-internal adapter.
-> No installed shell command consumes it, and `/settings` remains unavailable.
+> foundation and a cancellable prompt seam are implemented behind unlisted
+> package-internal adapters. `/settings` consumes both without changing the
+> supported public terminal API.
 
 ## Public API
 
@@ -48,8 +49,8 @@ sanitize_terminal_text(text: str) -> str
 
 `main_read_line` defaults to `read_line` and serves only `read_main`; public
 construction continues to use `read_line` for subjects and as the underlying
-callback for composition, confirmation, and the internal picker's line
-fallback. Each composition or confirmation
+callback for composition, confirmation, and the internal picker and prompt
+line fallbacks. Each composition or confirmation
 attempt first renders its full semantic view to one structured plain prompt and
 passes that prompt to `read_line` once. The CLI's package-internal wiring
 separates ordinary subject, main, composition, and confirmation reads without
@@ -78,10 +79,11 @@ unlisted internal bindings for the shared selectable main route. Its completion
 models remain package-private and outside the closed `Component` union; only
 their projected existing `SuggestionPalette` is rendered.
 The facade also exposes the unlisted `Choice`, `Prompt`, `ControlOutcome`,
-`ControlOutcomeKind`, and `InteractivePickerInput` identities for the generic
-picker seam. `PickerControlState` and `PickerViewport` remain package-private;
-the existing semantic `Picker` remains a `Component`. None of these additions
-changes public `__all__`, root exports, or supported signatures.
+`ControlOutcomeKind`, `InteractivePickerInput`, and `InteractivePromptInput`
+identities for the generic picker and cancellable-line seams.
+`PickerControlState` and `PickerViewport` remain package-private; the existing
+semantic `Picker` remains a `Component`. None of these additions changes public
+`__all__`, root exports, or supported signatures.
 
 The narrow internal adapters have these signatures:
 
@@ -95,6 +97,10 @@ read_picker(prompt: Prompt, choices: tuple[Choice, ...], *,
             selected_id: str | None = None,
             notice: Notice | None = None,
             state: ViewState = ViewState.OPEN) -> ControlOutcome
+
+InteractivePromptInput(terminal: InteractiveTerminal) -> None
+read_prompt(prompt: Prompt, *,
+            context: tuple[Panel | Section | Field | Notice, ...] = ()) -> ControlOutcome
 ```
 
 Construction validates and retains the terminal's bound component writer but
@@ -102,8 +108,8 @@ does not render, read, write, observe a stream, or acquire a resource. Each
 accepted component call performs one render and one callback write, including
 the final LF; failures propagate without a retry. The picker adapter likewise
 binds only the terminal's picker reader without observing capabilities or
-acquiring I/O. Its method is package-internal and has no direct application
-consumer.
+acquiring I/O. The settings controller consumes both input adapters through
+the facade; neither is public API.
 
 | Enum | Exact values |
 | --- | --- |
@@ -174,9 +180,8 @@ four generic-status call sites; the controller also has no generic
 `write_status` call site. Composition and confirmation build ordered semantic
 input views and use pure history-free controls as documented below. Selectable
 main-command palettes and finite fixed options are available on capable main
-reads. The generic picker foundation is available only through its unlisted
-internal seam; no installed command uses it, and `/settings` is not currently
-available.
+reads. The generic picker and cancellable-prompt foundations remain available
+only through unlisted internal seams; `/settings` is their installed consumer.
 
 ## Prompts and semantic input presentation
 
@@ -209,6 +214,13 @@ bounded viewport at the current observed width; plain callback, non-TTY,
 `TERM=dumb`, non-POSIX, and safely recovered activation paths render the
 complete numbered list through the ordinary line callback. Opaque choice
 identities are control state and are never rendered.
+
+Settings free-text and numeric values use a separate semantic `Prompt` with the
+current Settings panel as context. That route is history- and
+completion-free. Enter commits the exact line, Escape cancels only the nested
+editor, and Ctrl-C or EOF cancels the whole settings workflow. In fallback an
+exact ESC line cancels, while `/cancel` remains literal input. The same sole
+driver owns raw input, redraw, cleanup, and restoration.
 
 ## Current semantic plain shapes
 
@@ -265,12 +277,12 @@ at capable POSIX main prompts. A root `/` opens with its first candidate
 highlighted. Compact registry order (not output layout):
 
 ```text
-/say /to /agent /agents /language /persona /reset /run /draft-file /session
+/say /to /agent /agents /language /persona /reset /settings /run /draft-file /session
 /conversation /search /transcript /inspect /history /status /help /? /quit /exit
 ```
 
-Exact case-sensitive prefixes filter in stable order. Root provides the 20
-tokens above; help provides 23 including `/compose`, `/send`, and `/cancel`;
+Exact case-sensitive prefixes filter in stable order. Root provides the 21
+tokens above; help provides 24 including `/compose`, `/send`, and `/cancel`;
 agent-valued positions provide the 10 canonical IDs and accepted aliases.
 Static finite positions also provide session and conversation subcommands,
 `--fresh`, `--all`, `last`, and `--from`. Dynamic session, conversation,
@@ -387,9 +399,10 @@ None of those terminal results adds a final confirmation notice.
 
 ## Generic internal picker foundation
 
-This foundation is package-internal and has no installed command, controller,
-or settings consumer. A caller supplies one semantic prompt and immutable
-choices whose opaque identities are returned on commit but never rendered.
+This foundation is package-internal; `/settings` consumes it through the
+controller and unlisted terminal facade adapter. A caller supplies one semantic
+prompt and immutable choices whose opaque identities are returned on commit but
+never rendered.
 Initialization highlights an explicit enabled choice, otherwise an enabled
 selection, otherwise the first enabled choice. Empty and all-disabled choice
 sets remain explicit `empty` and `disabled` states.

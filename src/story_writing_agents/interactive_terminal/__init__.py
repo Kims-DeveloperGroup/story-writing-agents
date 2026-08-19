@@ -15,6 +15,7 @@ from ._core import (
     InteractiveErrorCode,
     InteractiveErrorSpec,
     InteractivePickerInput,
+    InteractivePromptInput,
     InteractiveSemanticOutput,
     InteractiveTerminal,
     ListView,

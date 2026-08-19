@@ -39,7 +39,7 @@ else:
     _msvcrt = None
 
 from .agents import CORE_DOCUMENTS, ROSTER
-from .config import ConfigManager
+from .config import ConfigurationSnapshot, ConfigManager
 from .conversation_retrieval import (
     CONVERSATION_RETRIEVAL_POLICY,
     ConversationRetrievalAction,
@@ -329,7 +329,8 @@ class AgentBackend:
         if not isinstance(executable, str) or not executable:
             raise ValueError("Codex executable must be non-empty text")
         manager = ConfigManager(self.workspace)
-        defaults = manager.load_system_defaults()
+        configuration = manager.load_configuration_snapshot()
+        defaults = configuration.system_defaults
         try:
             explicit_model = manager.validate_codex_model(model)
         except ConfigurationError as exc:
@@ -355,6 +356,7 @@ class AgentBackend:
                 for agent_id, backend in raw_overrides.items()
             }
         )
+        self._configuration_snapshot = configuration
         self.executable = executable
         self.model = (
             explicit_model
@@ -1904,7 +1906,8 @@ class AgentBackend:
         manager = ConfigManager(self.workspace)
         resolved_backends: set[str] = set()
         for agent_id in ROSTER:
-            resolved = manager.resolve(
+            resolved = manager.resolve_from_snapshot(
+                self._configuration_snapshot,
                 agent_id,
                 runtime_overrides,
                 self.backend_overrides,
@@ -2771,6 +2774,17 @@ class AgentBackend:
         """Return the access-claim path for a validated session ID."""
 
         return f"{_SESSION_DIRECTORY}/{session_id}.access.json"
+
+
+def backend_configuration_snapshot(
+    backend: AgentBackend,
+) -> ConfigurationSnapshot:
+    """Return one backend's immutable construction-time configuration."""
+
+    if not isinstance(backend, AgentBackend):
+        raise TypeError("backend must be an AgentBackend")
+    return backend._configuration_snapshot
+
 
 def _parse_timestamp(value: Any, *, label: str) -> datetime:
     """Return an offset-aware timestamp or raise ``WorkspaceFormatError``.

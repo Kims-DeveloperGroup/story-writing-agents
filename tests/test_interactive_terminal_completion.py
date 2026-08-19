@@ -54,6 +54,7 @@ ROOT_REPLACEMENTS = (
     "/language",
     "/persona",
     "/reset",
+    "/settings",
     "/run",
     "/draft-file",
     "/session",
@@ -345,7 +346,7 @@ class CompletionControlTests(unittest.TestCase):
         assert state.palette is not None
         self.assertEqual(
             tuple(item.replacement for item in state.palette.projection.candidates),
-            ("/say", "/session", "/search", "/status"),
+            ("/say", "/settings", "/session", "/search", "/status"),
         )
         self.assertEqual(
             state.palette.highlighted.replacement,  # type: ignore[union-attr]
@@ -354,7 +355,7 @@ class CompletionControlTests(unittest.TestCase):
         moved, _ = self.apply(state, KeyEvent(KeyKind.DOWN))
         self.assertEqual(
             moved.palette.highlighted.replacement,  # type: ignore[union-attr]
-            "/session",
+            "/settings",
         )
         for _ in range(10):
             moved, _ = self.apply(moved, KeyEvent(KeyKind.DOWN))
@@ -378,7 +379,13 @@ class CompletionControlTests(unittest.TestCase):
                 "/s",
                 tuple(
                     Choice(f"root.command:{replacement}", replacement)
-                    for replacement in ("/say", "/session", "/search", "/status")
+                    for replacement in (
+                        "/say",
+                        "/settings",
+                        "/session",
+                        "/search",
+                        "/status",
+                    )
                 ),
                 highlighted_id="root.command:/say",
                 state=ViewState.OPEN,

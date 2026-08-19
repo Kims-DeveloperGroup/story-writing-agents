@@ -179,12 +179,14 @@ terminal supplies the canonical completion provider and semantic palette
 renderer to the supported main read, or the composition/empty-confirmation
 suggestion provider and semantic input renderer to a history-free read. Its
 package-internal picker adapter supplies picker transitions, viewport
-projection, and live/fallback renderers to the driver's dedicated picker read.
+projection, and live/fallback renderers to the driver's dedicated picker read;
+its cancellable-prompt adapter supplies the settings free-text/numeric route.
 Every collaborator is call-local; the driver retains no provider, renderer, or
-operation mode. The terminal routes completed main, composition, and
-confirmation reads explicitly, without inspecting prompt text, while subject
-input remains on the ordinary reader. The standalone line-editor compatibility
-facade delegates to this same main reader and driver implementation.
+operation mode. The terminal routes completed main, composition,
+confirmation, picker, and settings prompt reads explicitly, without inspecting
+prompt text, while subject input remains on the ordinary reader. The standalone
+line-editor compatibility facade delegates to this same main reader and driver
+implementation.
 
 An active read disables canonical input and echo, keeps a Unicode code-point
 buffer, and supports insertion, Left/Right, Home/End, Backspace/Delete, Enter,
@@ -201,7 +203,9 @@ dismissal/restoration; Shift-Tab has no action. Composition and confirmation
 remain history-free, and Up/Down, Tab, Shift-Tab, and Escape are no-ops there.
 The separate internal picker uses Up/Down for disabled-skipping clamped
 highlight movement, Enter to commit, and Escape to cancel; edit and completion
-keys are no-ops. It consults neither history nor completion state.
+keys are no-ops. The settings prompt uses ordinary line editing, but Escape has
+a distinct nested-cancel outcome. Neither route consults history or completion
+state.
 Enter submits; VEOF submits nonempty text or returns EOF when empty; VINTR
 returns interrupt.
 Submission clears the panel; failure attempts it; both restore captured
@@ -227,6 +231,13 @@ setup passes that plain projection to the fallback reader once. A capable live
 read uses the trusted fixed-theme projection and keeps its renderer, buffer,
 cursor, and preview state call-local. Confirmation supplies no suggestions.
 
+`/settings` uses the same renderer and sole driver for one top-level or nested
+picker at a time and for history-free text/numeric prompts with the current
+settings panel as context. Picker Escape returns from a nested editor or
+cancels at top level according to controller-owned focus. Prompt Escape returns
+from the nested editor; Ctrl-C and EOF cancel the whole workflow. No settings
+input is added to main history or command completion.
+
 Capable main reads render the existing semantic `SuggestionPalette` in plain or
 fixed ANSI at the active width. `NO_COLOR` removes only decoration. Opening
 sets the first highlight; open-palette Up/Down clamps highlight without
@@ -242,6 +253,10 @@ exact validation notice. Callback, non-TTY, `TERM=dumb`, non-POSIX, uncertain
 capability, and recovered activation paths use this full numbered fallback; it
 does not acquire raw input or expose choice identities. See the exact
 [picker contract](../reference/interactive-terminal.md#generic-internal-picker-foundation).
+
+The cancellable settings prompt uses ordinary one-line fallback: an exact ESC
+line cancels that nested editor, while `/cancel` is literal data. Enter commits
+the exact line, KeyboardInterrupt is interrupt, and EOF remains distinct.
 
 A picker commit or cancel clears/redraws and writes exactly one final semantic
 `completed` or `cancelled` frame. Configured VINTR/Ctrl-C and VEOF/physical EOF
@@ -269,7 +284,8 @@ commands, duplicates, `/quit`, fallback results, and nonempty configured VEOF
 commits are eligible because storage occurs at the completed read boundary
 before the parser. Empty/blank input, Ctrl-C, empty VEOF, physical stream EOF,
 invalid fallback framing, and failed operations are excluded. Composition,
-subject, confirmation, and picker input never navigate or mutate the store.
+subject, confirmation, picker, and settings prompt input never navigate or
+mutate the store.
 The store
 has no filesystem, environment, transcript, configuration, provider-session,
 or user-history-file representation and ends with its driver instance. The

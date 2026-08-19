@@ -53,19 +53,40 @@ from ..interactive_commands import (
     InteractiveAction,
     parse_interactive_line,
 )
+from ..interactive_settings import (
+    SETTINGS_LANGUAGES,
+    SETTINGS_REASONING_EFFORTS,
+    SettingsError,
+    SettingsErrorKind,
+    SettingsState,
+    load_settings_state,
+    save_settings_state,
+    update_agent_backend,
+    update_codex_model,
+    update_codex_reasoning_effort,
+    update_language,
+    update_max_debate_rounds,
+    update_persona,
+)
 from ..interactive_terminal import (
     AttachmentKind,
+    Choice,
     ComposeMode,
     ConfirmationResult,
+    ControlOutcome,
+    ControlOutcomeKind,
     Field,
     InteractiveError,
     InteractiveErrorCode,
+    InteractivePickerInput,
+    InteractivePromptInput,
     InteractiveSemanticOutput,
     InteractiveTerminal,
     ListView,
     Message,
     Notice,
     Panel,
+    Prompt,
     Record,
     Section,
     SemanticRole,
@@ -186,6 +207,8 @@ class InteractiveController:
         "_conversation_memory_service",
         "_context",
         "_last_started_debate_by_session",
+        "_picker_input",
+        "_prompt_input",
         "_runner",
         "_runtime",
         "_semantic_output",
@@ -228,6 +251,8 @@ class InteractiveController:
         self._backend = backend
         self._terminal = terminal
         self._semantic_output = InteractiveSemanticOutput(terminal)
+        self._picker_input = InteractivePickerInput(terminal)
+        self._prompt_input = InteractivePromptInput(terminal)
         resolved_catalog = (
             FilesystemConversationCatalog(workspace)
             if conversation_catalog is None
@@ -904,6 +929,9 @@ class InteractiveController:
         if action.kind is ActionKind.LIST_AGENTS:
             self._terminal.write_agent_roster()
             return False
+        if action.kind is ActionKind.SETTINGS:
+            self._run_settings()
+            return False
         if action.kind is ActionKind.SESSION_LIST:
             self._list_story_sessions()
             return False
@@ -1008,6 +1036,463 @@ class InteractiveController:
             return False
         self._write_unavailable_lobby_command_error()
         return False
+
+    def _run_settings(self) -> None:
+        """Edit one isolated configuration candidate and save only on request."""
+
+        try:
+            state = load_settings_state(self._workspace)
+        except ConfigurationError:
+            self._terminal.write_error(
+                InteractiveError(InteractiveErrorCode.CONFIGURATION_INVALID)
+            )
+            return
+        except WorkspaceSecurityError:
+            self._terminal.write_error(
+                InteractiveError(InteractiveErrorCode.WORKSPACE_UNSAFE)
+            )
+            return
+        except (WorkspaceFormatError, OSError):
+            self._terminal.write_error(
+                InteractiveError(InteractiveErrorCode.WORKSPACE_INVALID)
+            )
+            return
+
+        top_highlight = "language"
+        choices = (
+            Choice("language", "Language"),
+            Choice("persona", "Persona"),
+            Choice("max_debate_rounds", "Maximum debate rounds"),
+            Choice("providers", "Providers"),
+            Choice("codex_model", "Codex model"),
+            Choice("codex_reasoning_effort", "Codex reasoning effort"),
+            Choice("save", "Save"),
+            Choice("cancel", "Cancel"),
+        )
+        while True:
+            self._semantic_output.write_component(
+                self._settings_panel(state)
+            )
+            outcome = self._picker_input.read_picker(
+                Prompt(
+                    "Settings",
+                    instruction="Choose a setting to edit, save, or cancel.",
+                ),
+                choices,
+                highlighted_id=top_highlight,
+            )
+            if outcome.kind in {
+                ControlOutcomeKind.CANCEL,
+                ControlOutcomeKind.INTERRUPT,
+                ControlOutcomeKind.EOF,
+            }:
+                self._write_settings_cancelled()
+                return
+            selected = self._require_settings_commit(outcome)
+            top_highlight = selected
+            if selected == "cancel":
+                self._write_settings_cancelled()
+                return
+            if selected == "save":
+                try:
+                    save_settings_state(self._workspace, state)
+                except SettingsError as failure:
+                    self._write_settings_error(failure.kind)
+                    continue
+                self._semantic_output.write_component(
+                    Panel(
+                        "Settings",
+                        (
+                            Notice(
+                                "Settings saved. Changes apply to the next shell.",
+                                label="saved",
+                                role=SemanticRole.SUCCESS,
+                                state=ViewState.COMPLETED,
+                            ),
+                        ),
+                        state=ViewState.COMPLETED,
+                    )
+                )
+                return
+            state, cancelled = self._edit_settings_value(
+                state,
+                selected,
+            )
+            if cancelled:
+                self._write_settings_cancelled()
+                return
+
+    def _edit_settings_value(
+        self,
+        state: SettingsState,
+        selected: str,
+    ) -> tuple[SettingsState, bool]:
+        """Run one nested editor and report whole-settings cancellation."""
+
+        if selected == "language":
+            return self._edit_settings_language(state)
+        if selected == "persona":
+            return self._edit_settings_persona(state)
+        if selected == "max_debate_rounds":
+            return self._edit_settings_rounds(state)
+        if selected == "providers":
+            return self._edit_settings_provider(state)
+        if selected == "codex_model":
+            return self._edit_settings_model(state)
+        if selected == "codex_reasoning_effort":
+            return self._edit_settings_reasoning(state)
+        raise _ControllerAbort(
+            InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+        )
+
+    def _edit_settings_language(
+        self,
+        state: SettingsState,
+    ) -> tuple[SettingsState, bool]:
+        """Select one of the fixed workspace language choices."""
+
+        pending = state.pending.system_defaults.language
+        outcome = self._picker_input.read_picker(
+            Prompt("Language", instruction="Choose the workspace language."),
+            tuple(Choice(language, language) for language in SETTINGS_LANGUAGES),
+            highlighted_id=pending,
+            selected_id=pending,
+        )
+        value, whole_cancel = self._nested_settings_value(outcome)
+        if whole_cancel:
+            return state, True
+        if value is None:
+            return state, False
+        return update_language(state, value), False
+
+    def _edit_settings_persona(
+        self,
+        state: SettingsState,
+    ) -> tuple[SettingsState, bool]:
+        """Select one persona from the immutable opening catalog."""
+
+        pending = state.pending.system_defaults.persona
+        choices = tuple(
+            Choice(
+                entry.name,
+                entry.name,
+                description=entry.relative_path,
+            )
+            for entry in state.baseline.persona_catalog
+        )
+        outcome = self._picker_input.read_picker(
+            Prompt("Persona", instruction="Choose a persona template."),
+            choices,
+            highlighted_id=pending,
+            selected_id=pending,
+        )
+        value, whole_cancel = self._nested_settings_value(outcome)
+        if whole_cancel:
+            return state, True
+        if value is None:
+            return state, False
+        return update_persona(state, value), False
+
+    def _edit_settings_rounds(
+        self,
+        state: SettingsState,
+    ) -> tuple[SettingsState, bool]:
+        """Read and validate one pending nonnegative debate limit."""
+
+        while True:
+            outcome = self._prompt_input.read_prompt(
+                Prompt(
+                    "Maximum debate rounds",
+                    scope="settings",
+                    instruction="Enter a nonnegative integer; 0 is audit-only.",
+                    default=str(
+                        state.pending.system_defaults.max_debate_rounds
+                    ),
+                ),
+                context=(self._settings_panel(state),),
+            )
+            value, whole_cancel = self._nested_settings_value(outcome)
+            if whole_cancel:
+                return state, True
+            if value is None:
+                return state, False
+            if not value or any(character not in "0123456789" for character in value):
+                self._write_settings_validation(
+                    "Maximum debate rounds must be a nonnegative ASCII integer."
+                )
+                continue
+            try:
+                rounds = int(value)
+            except ValueError:
+                self._write_settings_validation(
+                    "Maximum debate rounds is too large."
+                )
+                continue
+            return update_max_debate_rounds(state, rounds), False
+
+    def _edit_settings_provider(
+        self,
+        state: SettingsState,
+    ) -> tuple[SettingsState, bool]:
+        """Select one agent and its currently supported provider route."""
+
+        agent_highlight = ROSTER[0]
+        while True:
+            agent_outcome = self._picker_input.read_picker(
+                Prompt(
+                    "Providers",
+                    instruction="Choose an agent provider route to edit.",
+                ),
+                tuple(
+                    Choice(agent_id, AGENT_SPECS[agent_id].display_name)
+                    for agent_id in ROSTER
+                ),
+                highlighted_id=agent_highlight,
+            )
+            agent_id, whole_cancel = self._nested_settings_value(agent_outcome)
+            if whole_cancel:
+                return state, True
+            if agent_id is None:
+                return state, False
+            agent_highlight = agent_id
+            current = state.pending.agent_configs[agent_id].backend
+            provider_outcome = self._picker_input.read_picker(
+                Prompt(
+                    "Provider",
+                    scope=AGENT_SPECS[agent_id].display_name,
+                    instruction="Choose Codex or return without changing.",
+                ),
+                (
+                    Choice(
+                        "codex",
+                        "Codex",
+                        description=(
+                            "Current saved provider."
+                            if current == "codex"
+                            else "Available provider."
+                        ),
+                    ),
+                    Choice(
+                        "gemini",
+                        "Gemini",
+                        description=(
+                            "Current saved provider; choose Codex to remediate."
+                            if current == "gemini"
+                            else "Reserved provider."
+                        ),
+                        enabled=False,
+                        disabled_reason="Provider is not implemented.",
+                    ),
+                ),
+                highlighted_id="codex",
+                selected_id=(None if current == "gemini" else "codex"),
+            )
+            provider, whole_cancel = self._nested_settings_value(
+                provider_outcome
+            )
+            if whole_cancel:
+                return state, True
+            if provider is None:
+                continue
+            return update_agent_backend(state, agent_id, provider), False
+
+    def _edit_settings_model(
+        self,
+        state: SettingsState,
+    ) -> tuple[SettingsState, bool]:
+        """Read an exact Codex model or clear it with an empty commit."""
+
+        while True:
+            current = state.pending.system_defaults.codex_model
+            outcome = self._prompt_input.read_prompt(
+                Prompt(
+                    "Codex model",
+                    scope="settings",
+                    instruction=(
+                        "Enter an exact model or leave blank for provider default."
+                    ),
+                    default=current or "provider default",
+                ),
+                context=(self._settings_panel(state),),
+            )
+            value, whole_cancel = self._nested_settings_value(outcome)
+            if whole_cancel:
+                return state, True
+            if value is None:
+                return state, False
+            try:
+                return update_codex_model(
+                    state,
+                    None if value == "" else value,
+                ), False
+            except ConfigurationError:
+                self._write_settings_validation(
+                    "Codex model must be safe nonempty text, or blank for default."
+                )
+
+    def _edit_settings_reasoning(
+        self,
+        state: SettingsState,
+    ) -> tuple[SettingsState, bool]:
+        """Select one fixed Codex reasoning level or provider default."""
+
+        pending = state.pending.system_defaults.codex_reasoning_effort
+        selected = "default" if pending is None else pending
+        outcome = self._picker_input.read_picker(
+            Prompt(
+                "Codex reasoning effort",
+                instruction="Choose provider default or one fixed effort level.",
+            ),
+            (
+                Choice("default", "Provider default"),
+                *tuple(
+                    Choice(effort, effort)
+                    for effort in SETTINGS_REASONING_EFFORTS
+                ),
+            ),
+            highlighted_id=selected,
+            selected_id=selected,
+        )
+        value, whole_cancel = self._nested_settings_value(outcome)
+        if whole_cancel:
+            return state, True
+        if value is None:
+            return state, False
+        return update_codex_reasoning_effort(
+            state,
+            None if value == "default" else value,
+        ), False
+
+    @staticmethod
+    def _require_settings_commit(outcome: ControlOutcome) -> str:
+        """Return a validated settings commit or abort on protocol drift."""
+
+        if (
+            type(outcome) is not ControlOutcome
+            or outcome.kind is not ControlOutcomeKind.COMMIT
+            or outcome.text is None
+        ):
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            )
+        return outcome.text
+
+    def _nested_settings_value(
+        self,
+        outcome: ControlOutcome,
+    ) -> tuple[str | None, bool]:
+        """Classify a nested commit, return, or whole-settings cancel."""
+
+        if type(outcome) is not ControlOutcome:
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            )
+        if outcome.kind in {
+            ControlOutcomeKind.INTERRUPT,
+            ControlOutcomeKind.EOF,
+        }:
+            return None, True
+        if outcome.kind is ControlOutcomeKind.CANCEL:
+            return None, False
+        return self._require_settings_commit(outcome), False
+
+    @staticmethod
+    def _settings_panel(state: SettingsState) -> Panel:
+        """Project current and pending values without relying on color."""
+
+        current = state.baseline.configuration
+        pending = state.pending
+
+        def fields(configuration) -> tuple[Field, ...]:
+            defaults = configuration.system_defaults
+            providers = ", ".join(
+                (
+                    f"{AGENT_SPECS[agent_id].display_name}: "
+                    f"{configuration.agent_configs[agent_id].backend or 'codex (default)'}"
+                )
+                for agent_id in ROSTER
+            )
+            return (
+                Field("Language", defaults.language),
+                Field("Persona", defaults.persona),
+                Field(
+                    "Maximum debate rounds",
+                    str(defaults.max_debate_rounds),
+                ),
+                Field("Providers", providers),
+                Field(
+                    "Codex model",
+                    defaults.codex_model or "provider default",
+                ),
+                Field(
+                    "Codex reasoning effort",
+                    defaults.codex_reasoning_effort or "provider default",
+                ),
+            )
+
+        return Panel(
+            "Settings",
+            (
+                Section("Current", fields(current)),
+                Section("Pending", fields(pending)),
+                Notice(
+                    "Pending changes affect only the next shell after Save.",
+                    label="activation",
+                    role=SemanticRole.MUTED,
+                ),
+            ),
+            state=ViewState.OPEN,
+        )
+
+    def _write_settings_validation(self, text: str) -> None:
+        """Render one trusted validation notice while retaining pending state."""
+
+        self._semantic_output.write_component(
+            Notice(
+                text,
+                label="validation",
+                role=SemanticRole.ERROR,
+                state=ViewState.ERROR,
+            )
+        )
+
+    def _write_settings_error(self, kind: SettingsErrorKind) -> None:
+        """Render one fixed persistence failure without raw diagnostics."""
+
+        messages = {
+            SettingsErrorKind.VALIDATION: (
+                "Pending settings are invalid; correct them before saving."
+            ),
+            SettingsErrorKind.CONFLICT: (
+                "Settings changed on disk; cancel and reopen /settings."
+            ),
+            SettingsErrorKind.WRITE: (
+                "Settings could not be saved; pending values were retained."
+            ),
+            SettingsErrorKind.ROLLBACK: (
+                "Settings rollback failed; inspect both configuration files."
+            ),
+        }
+        self._semantic_output.write_component(
+            Notice(
+                messages[kind],
+                label="settings error",
+                role=SemanticRole.ERROR,
+                state=ViewState.ERROR,
+            )
+        )
+
+    def _write_settings_cancelled(self) -> None:
+        """Render one semantic whole-settings cancellation notice."""
+
+        self._semantic_output.write_component(
+            Notice(
+                "Settings cancelled; no pending changes were saved.",
+                label="cancelled",
+                role=SemanticRole.WARNING,
+                state=ViewState.CANCELLED,
+            )
+        )
 
     def _write_runtime_status(self) -> None:
         """Render a read-only lifecycle record followed by detailed scope facts."""

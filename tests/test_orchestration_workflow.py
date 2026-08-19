@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import sys
 import unittest
 
 from story_writing_agents import (
     CONVERSATION_EVENT_SCHEMA_VERSION,
+    AgentBackend,
     AgentReply,
     ConversationContextWindow,
     ConversationEvent,
@@ -688,6 +690,82 @@ class RevisionWorkflowTests(unittest.IsolatedAsyncioTestCase):
                     )
                 else:
                     self.assertEqual(all_manuscripts(workspace), [])
+
+    async def test_backend_bound_round_default_is_active_snapshot_and_explicit_wins(
+        self,
+    ) -> None:
+        workspace = initialized_workspace(self)
+        defaults = workspace.read_json("config/system_defaults.json")
+        defaults["max_debate_rounds"] = 0
+        workspace.write_json("config/system_defaults.json", defaults)
+
+        def respond(request):
+            if request.phase is Phase.AUDIT:
+                if (
+                    request.revision_id != "r2"
+                    and request.agent_id == PLOT_ARCHITECT
+                ):
+                    return AgentReply.conflict(
+                        request.revision_id,
+                        "round-conflict",
+                    )
+                return AgentReply.approval(request.revision_id)
+            if request.phase is Phase.PROPOSE_REVISION:
+                return AgentReply.candidate(request.revision_id, "proposal")
+            if request.phase is Phase.SYNTHESIZE:
+                return AgentReply.candidate(
+                    request.revision_id,
+                    f"candidate-{request.revision_id}",
+                )
+            if request.phase is Phase.FINALIZE:
+                return AgentReply.finalization(request.revision_id)
+            raise AssertionError(f"unexpected phase: {request.phase}")
+
+        active_backend = AgentBackend(workspace, executable=sys.executable)
+        self.addCleanup(active_backend.close)
+        active = StoryRuntime(workspace, active_backend)
+        active_scripted = ScriptedBackend(respond)
+        active.backend = active_scripted
+
+        defaults["max_debate_rounds"] = 2
+        workspace.write_json("config/system_defaults.json", defaults)
+        active_result = await active.run_draft(
+            "active_snapshot",
+            "candidate-r0",
+            debate_id="active_snapshot_debate",
+        )
+        self.assertEqual(active_result.status, DebateStatus.DEADLOCK)
+        self.assertEqual(active_result.rounds_completed, 0)
+        self.assertFalse(phase_requests(active_scripted, Phase.SYNTHESIZE))
+
+        next_backend = AgentBackend(workspace, executable=sys.executable)
+        self.addCleanup(next_backend.close)
+        next_runtime = StoryRuntime(workspace, next_backend)
+        next_scripted = ScriptedBackend(respond)
+        next_runtime.backend = next_scripted
+        next_result = await next_runtime.run_draft(
+            "next_snapshot",
+            "candidate-r0",
+            debate_id="next_snapshot_debate",
+        )
+        self.assertEqual(next_result.status, DebateStatus.CONSENSUS)
+        self.assertEqual(next_result.rounds_completed, 2)
+        self.assertEqual(
+            len(phase_requests(next_scripted, Phase.SYNTHESIZE)),
+            2,
+        )
+
+        explicit_scripted = ScriptedBackend(respond)
+        next_runtime.backend = explicit_scripted
+        explicit = await next_runtime.run_draft(
+            "explicit_snapshot",
+            "candidate-r0",
+            debate_id="explicit_snapshot_debate",
+            max_debate_rounds=0,
+        )
+        self.assertEqual(explicit.status, DebateStatus.DEADLOCK)
+        self.assertEqual(explicit.rounds_completed, 0)
+        self.assertFalse(phase_requests(explicit_scripted, Phase.SYNTHESIZE))
 
 
 if __name__ == "__main__":

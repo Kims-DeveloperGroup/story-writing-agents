@@ -22,14 +22,16 @@ parse_interactive_line(line: str) -> InteractiveAction
 ```
 
 Actions, metadata, and parser are package exports; routes are module-supported.
-Management dispatch changes no parser, terminal, or facade surface.
+`SETTINGS` and its registry row are additive supported parser surface, including
+through the existing root-facade exports. Export names/order and the terminal
+supported surface remain unchanged.
 
 `ActionKind` values:
 
 ```text
 ignored message routed_message set_target list_agents compose send cancel
 run run_fresh draft_file search transcript inspect history status set_language
-    set_persona reset session_list session_create session_open session_pause
+    set_persona reset settings session_list session_create session_open session_pause
 conversation_new conversation_list conversation_list_all conversation_use
 conversation_subject conversation_archive help quit parse_error
 ```
@@ -48,7 +50,7 @@ conversation_subject conversation_archive help quit parse_error
 | Group | Canonical registry rows |
 | --- | --- |
 | Conversation | `/compose`; `/send`; `/cancel`; `/say TEXT` |
-| Agents | `/to NAME`; `/agents`; `/language LANG`; `/persona AGENT NAME`; `/reset` |
+| Agents | `/to NAME`; `/agents`; `/language LANG`; `/persona AGENT NAME`; `/reset`; `/settings` |
 | Consensus | `/run [PROMPT] \| /run --fresh PROMPT`; `/draft-file PATH` |
 | Sessions | `/session list \| create NAME \| open [NAME] \| pause` |
 | Conversations | `/conversation new [SUBJECT] \| list [--all] [QUERY] \| use ID \| subject SUBJECT \| archive [ID]` |
@@ -57,6 +59,8 @@ conversation_subject conversation_archive help quit parse_error
 
 `/agent`, `/?`, and `/exit` alias `/to`, `/help`, and `/quit`. Flags describe
 possible provider/artifact use, not shell gates. Parsing performs no I/O.
+`/settings` is provider-free and has `may_write_artifacts=True` because an
+explicit Save may replace configuration documents.
 
 Registry membership is not main-prompt availability: the installed shell
 rejects standalone `/compose`, `/send`, and `/cancel`. Bare `/run` composition
@@ -88,13 +92,13 @@ positions are:
 
 | Position | Ordered replacements |
 | --- | --- |
-| Root command | The 20 main-available canonical commands and aliases in registry order; standalone `/compose`, `/send`, and `/cancel` are excluded. |
+| Root command | The 21 main-available canonical commands and aliases in registry order; standalone `/compose`, `/send`, and `/cancel` are excluded. |
 | `/session` | `list`, `create`, `open`, `pause` |
 | `/conversation` | `new`, `list`, `use`, `subject`, `archive` |
 | `/to`, `/agent`, `/persona` agent | The 10 canonical IDs and accepted aliases in route order. |
 | `/run` option | `--fresh` |
 | `/conversation list` option | `--all` |
-| `/help`, `/?` command | The 20 root replacements plus `/compose`, `/send`, and `/cancel` in registry order. |
+| `/help`, `/?` command | The 21 root replacements plus `/compose`, `/send`, and `/cancel` in registry order. |
 | `/inspect` argument | `last` |
 | `/transcript ID [COUNT]` option | `--from` |
 
@@ -129,11 +133,14 @@ Identity resolution, archive status, and storage are not parser concerns.
 optional leading slash. Omission requests full grouped help; otherwise the
 action carries the canonical command.
 
-`/status` and `/reset` take no argument. `/language ARG` takes one control-free
-token; `/persona AGENT ARG` takes a route alias and token, returning the
-canonical ID. `/history [COUNT]` takes an optional positive ASCII integer;
-omission means all. `/inspect [ID|last]` takes at most one control-free token.
-Runtime [gates](cli.md#interactive-streams) are not parser concerns.
+`/status`, `/reset`, and alias-free `/settings` take no argument. `/settings`
+returns the additive `settings` action and is global; its interactive editing,
+validation, and persistence are controller/settings concerns. `/language ARG`
+takes one control-free token; `/persona AGENT ARG` takes a route alias and
+token, returning the canonical ID. `/history [COUNT]` takes an optional positive
+ASCII integer; omission means all. `/inspect [ID|last]` takes at most one
+control-free token. Runtime [gates](cli.md#interactive-streams) are not parser
+concerns.
 
 ## Other grammar and failures
 

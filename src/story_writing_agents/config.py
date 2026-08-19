@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Mapping
 
 from .agents import AGENT_SPECS, ROSTER
@@ -45,6 +46,37 @@ class ResolvedAgentConfig:
     backend: str
     language: str
     persona: str
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigurationSnapshot:
+    """Retain one immutable, roster-complete persisted configuration pair."""
+
+    system_defaults: SystemDefaults
+    agent_configs: Mapping[str, AgentConfig]
+
+    def __post_init__(self) -> None:
+        if type(self.system_defaults) is not SystemDefaults:
+            raise TypeError("system_defaults must be a SystemDefaults")
+        if not isinstance(self.agent_configs, Mapping):
+            raise TypeError("agent_configs must be a mapping")
+        if set(self.agent_configs) != set(ROSTER):
+            raise ValueError("agent_configs must contain the complete roster")
+        if any(
+            type(self.agent_configs[agent_id]) is not AgentConfig
+            for agent_id in ROSTER
+        ):
+            raise TypeError("agent_configs values must be AgentConfig values")
+        object.__setattr__(
+            self,
+            "agent_configs",
+            MappingProxyType(
+                {
+                    agent_id: self.agent_configs[agent_id]
+                    for agent_id in ROSTER
+                }
+            ),
+        )
 
 
 class ConfigManager:
@@ -103,7 +135,13 @@ class ConfigManager:
         return value
 
     def load_system_defaults(self) -> SystemDefaults:
-        value = self.workspace.read_json("config/system_defaults.json")
+        return self._validate_system_defaults(
+            self.workspace.read_json("config/system_defaults.json")
+        )
+
+    def _validate_system_defaults(self, value: Any) -> SystemDefaults:
+        """Validate one complete system-default document without I/O."""
+
         if not isinstance(value, dict):
             raise ConfigurationError("system_defaults.json must contain an object")
         unknown = set(value).difference(
@@ -137,7 +175,18 @@ class ConfigManager:
         )
 
     def load_agent_configs(self) -> dict[str, AgentConfig]:
-        value = self.workspace.read_json("config/agent_configs.json")
+        return dict(
+            self._validate_agent_configs(
+                self.workspace.read_json("config/agent_configs.json")
+            )
+        )
+
+    def _validate_agent_configs(
+        self,
+        value: Any,
+    ) -> Mapping[str, AgentConfig]:
+        """Validate one roster-complete agent document without I/O."""
+
         if not isinstance(value, dict):
             raise ConfigurationError("agent_configs.json must contain an object")
         unknown = set(value).difference(ROSTER)
@@ -173,7 +222,27 @@ class ConfigManager:
                 language=language,
                 persona=persona,
             )
-        return configs
+        return MappingProxyType(configs)
+
+    def validate_configuration(
+        self,
+        system_value: Any,
+        agent_value: Any,
+    ) -> ConfigurationSnapshot:
+        """Validate both complete persisted documents before publication."""
+
+        return ConfigurationSnapshot(
+            self._validate_system_defaults(system_value),
+            self._validate_agent_configs(agent_value),
+        )
+
+    def load_configuration_snapshot(self) -> ConfigurationSnapshot:
+        """Read and validate one immutable persisted configuration pair."""
+
+        return self.validate_configuration(
+            self.workspace.read_json("config/system_defaults.json"),
+            self.workspace.read_json("config/agent_configs.json"),
+        )
 
     def validate_runtime_overrides(
         self, value: Mapping[str, Any] | Any
@@ -233,10 +302,28 @@ class ConfigManager:
         runtime_overrides: Mapping[str, Any] | None = None,
         backend_overrides: Mapping[str, str] | None = None,
     ) -> ResolvedAgentConfig:
+        return self.resolve_from_snapshot(
+            self.load_configuration_snapshot(),
+            agent_id,
+            runtime_overrides,
+            backend_overrides,
+        )
+
+    def resolve_from_snapshot(
+        self,
+        snapshot: ConfigurationSnapshot,
+        agent_id: str,
+        runtime_overrides: Mapping[str, Any] | None = None,
+        backend_overrides: Mapping[str, str] | None = None,
+    ) -> ResolvedAgentConfig:
+        """Resolve live overrides over one immutable persisted snapshot."""
+
+        if type(snapshot) is not ConfigurationSnapshot:
+            raise TypeError("snapshot must be a ConfigurationSnapshot")
         if agent_id not in AGENT_SPECS:
             raise ConfigurationError(f"unknown agent: {agent_id}")
-        defaults = self.load_system_defaults()
-        agent = self.load_agent_configs()[agent_id]
+        defaults = snapshot.system_defaults
+        agent = snapshot.agent_configs[agent_id]
         runtime = self.validate_runtime_overrides(runtime_overrides or {})
         runtime_agent = runtime["agents"].get(agent_id, {})
         backend_override = (backend_overrides or {}).get(agent_id)

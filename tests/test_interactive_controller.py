@@ -18,6 +18,7 @@ from typing import get_type_hints
 from unittest import mock
 
 import story_writing_agents
+from story_writing_agents.agents import AGENT_SPECS, PLOT_ARCHITECT, ROSTER
 from story_writing_agents import interactive_controller as controller_package
 from story_writing_agents.backend import AgentBackend
 from story_writing_agents.cli_context import (
@@ -72,6 +73,7 @@ from story_writing_agents.interactive_controller import (
 from story_writing_agents.interactive_controller import (
     _session_policy as session_policy_module,
 )
+from story_writing_agents import interactive_settings as settings_module
 from story_writing_agents.interactive_terminal import (
     INTERACTIVE_ERROR_SPECS,
     InteractiveErrorCode,
@@ -815,6 +817,7 @@ class ControllerContractTests(ControllerTestCase):
                 "conversations",
                 "errors",
                 "interactive_commands",
+                "interactive_settings",
                 "interactive_controller._conversation_policy",
                 "interactive_controller._runtime_policy",
                 "interactive_controller._session_policy",
@@ -1093,7 +1096,7 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 32)
+        self.assertEqual(len(modules), 33)
 
 
 class ControllerStartupTests(ControllerTestCase):
@@ -2174,6 +2177,281 @@ class ControllerCommandTests(ControllerTestCase):
             ),
             1,
         )
+
+
+class ControllerSettingsTests(ControllerTestCase):
+    """Verify isolated settings UI, validation, persistence, and cancellation."""
+
+    @staticmethod
+    def expected_panel(state) -> object:
+        """Return the exact public semantic tree for one settings snapshot."""
+
+        def configuration_fields(configuration):
+            defaults = configuration.system_defaults
+            providers = ", ".join(
+                f"{AGENT_SPECS[agent_id].display_name}: "
+                f"{configuration.agent_configs[agent_id].backend or 'codex (default)'}"
+                for agent_id in ROSTER
+            )
+            return (
+                terminal_module.Field("Language", defaults.language),
+                terminal_module.Field("Persona", defaults.persona),
+                terminal_module.Field(
+                    "Maximum debate rounds",
+                    str(defaults.max_debate_rounds),
+                ),
+                terminal_module.Field("Providers", providers),
+                terminal_module.Field(
+                    "Codex model",
+                    defaults.codex_model or "provider default",
+                ),
+                terminal_module.Field(
+                    "Codex reasoning effort",
+                    defaults.codex_reasoning_effort or "provider default",
+                ),
+            )
+
+        return terminal_module.Panel(
+            "Settings",
+            (
+                terminal_module.Section(
+                    "Current",
+                    configuration_fields(state.baseline.configuration),
+                ),
+                terminal_module.Section(
+                    "Pending",
+                    configuration_fields(state.pending),
+                ),
+                terminal_module.Notice(
+                    "Pending changes affect only the next shell after Save.",
+                    label="activation",
+                    role=terminal_module.SemanticRole.MUTED,
+                ),
+            ),
+            state=terminal_module.ViewState.OPEN,
+        )
+
+    def test_settings_open_is_exact_eight_row_provider_free_snapshot(self) -> None:
+        workspace = self.make_workspace()
+        before = _tree_snapshot(workspace.root)
+        state = settings_module.load_settings_state(workspace)
+        expected_panel = self.expected_panel(state)
+        controller, backend, callbacks = self.make_controller(
+            workspace,
+            "/settings",
+            "8",
+            "/quit",
+            terminal_width=120,
+        )
+        components: list[object] = []
+        real_write = terminal_module.InteractiveSemanticOutput.write_component
+
+        def capture_component(output, component):
+            components.append(component)
+            return real_write(output, component)
+
+        with (
+            mock.patch.object(
+                terminal_module.InteractiveSemanticOutput,
+                "write_component",
+                autospec=True,
+                side_effect=capture_component,
+            ),
+            mock.patch.object(
+                controller_core_module,
+                "parse_interactive_line",
+                wraps=controller_core_module.parse_interactive_line,
+            ) as parse_line,
+            mock.patch.object(subprocess, "Popen") as popen,
+            mock.patch.object(subprocess, "run") as run,
+            mock.patch.object(socket, "create_connection") as connect,
+        ):
+            self.assertEqual(controller.run_session_lobby(), 0)
+        self.assertEqual(parse_line.call_args_list, [mock.call("/settings"), mock.call("/quit")])
+        popen.assert_not_called()
+        run.assert_not_called()
+        connect.assert_not_called()
+        self.assertEqual(_tree_snapshot(workspace.root), before)
+        self.assertEqual(
+            [component for component in components if type(component) is terminal_module.Panel],
+            [expected_panel],
+        )
+        self.assertIn(f"{render_plain(expected_panel, width=120).text}\n", callbacks.records)
+        self.assertEqual(
+            callbacks.prompts[1],
+            "Choices (highlighted 1/8) [open]\n"
+            "  1. [highlighted] Language\n"
+            "  2. [available] Persona\n"
+            "  3. [available] Maximum debate rounds\n"
+            "  4. [available] Providers\n"
+            "  5. [available] Codex model\n"
+            "  6. [available] Codex reasoning effort\n"
+            "  7. [available] Save\n"
+            "  8. [available] Cancel\n"
+            "[input] Enter a choice number, press Enter for the highlighted choice, or enter /cancel.\n"
+            "Choose a setting to edit, save, or cancel.\n"
+            "Settings > ",
+        )
+        self.assertEqual(
+            "".join(callbacks.records).count(
+                "[cancelled] Settings cancelled; no pending changes were saved.\n"
+            ),
+            1,
+        )
+        self.assertTrue(backend._closed)
+
+    def test_settings_edit_save_isolated_candidate_and_literal_cancel_text(self) -> None:
+        workspace = self.make_workspace()
+        agent_configs = workspace.read_json("config/agent_configs.json")
+        agent_configs[PLOT_ARCHITECT]["backend"] = "gemini"
+        workspace.write_json("config/agent_configs.json", agent_configs)
+        before = _tree_snapshot(workspace.root)
+        controller, _backend, callbacks = self.make_controller(
+            workspace,
+            "/settings",
+            "1",
+            "2",
+            "3",
+            "bad",
+            "0",
+            "4",
+            "2",
+            "1",
+            "5",
+            "/cancel",
+            "6",
+            "6",
+            "7",
+            "/quit",
+            terminal_width=160,
+        )
+        real_save = settings_module.save_settings_state
+
+        def save_after_isolation(saved_workspace, state):
+            self.assertEqual(_tree_snapshot(workspace.root), before)
+            return real_save(saved_workspace, state)
+
+        with (
+            mock.patch.object(
+                controller_core_module,
+                "save_settings_state",
+                autospec=True,
+                side_effect=save_after_isolation,
+            ) as save,
+            mock.patch.object(subprocess, "Popen") as popen,
+            mock.patch.object(subprocess, "run") as run,
+            mock.patch.object(socket, "create_connection") as connect,
+        ):
+            self.assertEqual(controller.run_session_lobby(), 0)
+        save.assert_called_once()
+        popen.assert_not_called()
+        run.assert_not_called()
+        connect.assert_not_called()
+        configured = settings_module.load_settings_state(workspace).pending
+        self.assertEqual(configured.system_defaults.language, "EN")
+        self.assertEqual(configured.system_defaults.max_debate_rounds, 0)
+        self.assertEqual(configured.system_defaults.codex_model, "/cancel")
+        self.assertEqual(configured.system_defaults.codex_reasoning_effort, "xhigh")
+        self.assertEqual(
+            configured.agent_configs[PLOT_ARCHITECT].backend,
+            "codex",
+        )
+        rendered = "".join(callbacks.records)
+        self.assertEqual(
+            rendered.count(
+                "[validation] Maximum debate rounds must be a nonnegative ASCII integer.\n"
+            ),
+            1,
+        )
+        self.assertEqual(
+            rendered.count(
+                "[saved] Settings saved. Changes apply to the next shell.\n"
+            ),
+            1,
+        )
+        self.assertIn(
+            "Gemini — Current saved provider; choose Codex to remediate. "
+            "(disabled: Provider is not implemented.)",
+            rendered,
+        )
+        self.assertNotIn("Settings cancelled", rendered)
+        self.assertEqual(callbacks.reads, [])
+
+    def test_nested_escape_returns_but_interrupt_and_eof_cancel_all(self) -> None:
+        scenarios = (
+            (("/settings", "5", "\x1b", "8", "/quit"), 2),
+            (("/settings", KeyboardInterrupt(), "/quit"), 1),
+            (("/settings", EOFError(), "/quit"), 1),
+        )
+        for reads, panel_count in scenarios:
+            with self.subTest(reads=reads):
+                workspace = self.make_workspace()
+                before = _tree_snapshot(workspace.root)
+                controller, _backend, callbacks = self.make_controller(
+                    workspace,
+                    *reads,
+                    terminal_width=160,
+                )
+                self.assertEqual(controller.run_session_lobby(), 0)
+                self.assertEqual(_tree_snapshot(workspace.root), before)
+                rendered = "".join(callbacks.records)
+                self.assertEqual(rendered.count("Settings [open]\n"), panel_count)
+                self.assertEqual(
+                    rendered.count(
+                        "[cancelled] Settings cancelled; no pending changes were saved.\n"
+                    ),
+                    1,
+                )
+
+    def test_each_typed_save_failure_retains_candidate_and_redacts_details(self) -> None:
+        messages = {
+            settings_module.SettingsErrorKind.VALIDATION: (
+                "Pending settings are invalid; correct them before saving."
+            ),
+            settings_module.SettingsErrorKind.CONFLICT: (
+                "Settings changed on disk; cancel and reopen /settings."
+            ),
+            settings_module.SettingsErrorKind.WRITE: (
+                "Settings could not be saved; pending values were retained."
+            ),
+            settings_module.SettingsErrorKind.ROLLBACK: (
+                "Settings rollback failed; inspect both configuration files."
+            ),
+        }
+        for kind, message in messages.items():
+            with self.subTest(kind=kind):
+                workspace = self.make_workspace()
+                before = _tree_snapshot(workspace.root)
+                controller, _backend, callbacks = self.make_controller(
+                    workspace,
+                    "/settings",
+                    "1",
+                    "2",
+                    "7",
+                    "8",
+                    "/quit",
+                    terminal_width=160,
+                )
+                with mock.patch.object(
+                    controller_core_module,
+                    "save_settings_state",
+                    side_effect=settings_module.SettingsError(kind),
+                ) as save:
+                    self.assertEqual(controller.run_session_lobby(), 0)
+                save.assert_called_once()
+                self.assertEqual(_tree_snapshot(workspace.root), before)
+                rendered = "".join(callbacks.records)
+                self.assertEqual(
+                    rendered.count(f"[settings error] {message}\n"),
+                    1,
+                )
+                self.assertNotIn("settings validation failed", rendered)
+                self.assertEqual(
+                    rendered.count(
+                        "[cancelled] Settings cancelled; no pending changes were saved.\n"
+                    ),
+                    1,
+                )
 
 
 class ControllerSearchAndTranscriptTests(ControllerTestCase):
