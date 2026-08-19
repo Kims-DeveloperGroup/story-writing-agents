@@ -38,6 +38,8 @@ class AgentConfig:
     backend: str | None = None
     language: str | None = None
     persona: str | None = None
+    codex_model: str | None = None
+    codex_reasoning_effort: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,7 +201,13 @@ class ConfigManager:
             if not isinstance(raw, dict):
                 raise ConfigurationError(f"{agent_id} config must contain an object")
             unknown_fields = set(raw).difference(
-                {"backend", "language", "persona"}
+                {
+                    "backend",
+                    "language",
+                    "persona",
+                    "codex_model",
+                    "codex_reasoning_effort",
+                }
             )
             if unknown_fields:
                 raise ConfigurationError(
@@ -217,10 +225,16 @@ class ConfigManager:
                 if persona_value is None
                 else self._validate_persona(persona_value)
             )
+            codex_model = self.validate_codex_model(raw.get("codex_model"))
+            codex_reasoning_effort = self.validate_codex_reasoning_effort(
+                raw.get("codex_reasoning_effort")
+            )
             configs[agent_id] = AgentConfig(
                 backend=backend,
                 language=language,
                 persona=persona,
+                codex_model=codex_model,
+                codex_reasoning_effort=codex_reasoning_effort,
             )
         return MappingProxyType(configs)
 

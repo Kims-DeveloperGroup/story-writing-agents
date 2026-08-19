@@ -62,8 +62,8 @@ from ..interactive_settings import (
     load_settings_state,
     save_settings_state,
     update_agent_backend,
-    update_codex_model,
-    update_codex_reasoning_effort,
+    update_agent_codex_model,
+    update_agent_codex_reasoning_effort,
     update_language,
     update_max_debate_rounds,
     update_persona,
@@ -1064,8 +1064,6 @@ class InteractiveController:
             Choice("persona", "Persona"),
             Choice("max_debate_rounds", "Maximum debate rounds"),
             Choice("providers", "Providers"),
-            Choice("codex_model", "Codex model"),
-            Choice("codex_reasoning_effort", "Codex reasoning effort"),
             Choice("save", "Save"),
             Choice("cancel", "Cancel"),
         )
@@ -1137,10 +1135,6 @@ class InteractiveController:
             return self._edit_settings_rounds(state)
         if selected == "providers":
             return self._edit_settings_provider(state)
-        if selected == "codex_model":
-            return self._edit_settings_model(state)
-        if selected == "codex_reasoning_effort":
-            return self._edit_settings_reasoning(state)
         raise _ControllerAbort(
             InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
         )
@@ -1234,7 +1228,7 @@ class InteractiveController:
         self,
         state: SettingsState,
     ) -> tuple[SettingsState, bool]:
-        """Select one agent and its currently supported provider route."""
+        """Select one agent, then one provider/model/reasoning setting."""
 
         agent_highlight = ROSTER[0]
         while True:
@@ -1255,59 +1249,100 @@ class InteractiveController:
             if agent_id is None:
                 return state, False
             agent_highlight = agent_id
-            current = state.pending.agent_configs[agent_id].backend
-            provider_outcome = self._picker_input.read_picker(
+            field_outcome = self._picker_input.read_picker(
                 Prompt(
-                    "Provider",
+                    "Agent settings",
                     scope=AGENT_SPECS[agent_id].display_name,
-                    instruction="Choose Codex or return without changing.",
+                    instruction="Choose a provider, model, or reasoning setting.",
                 ),
                 (
-                    Choice(
-                        "codex",
-                        "Codex",
-                        description=(
-                            "Current saved provider."
-                            if current == "codex"
-                            else "Available provider."
-                        ),
-                    ),
-                    Choice(
-                        "gemini",
-                        "Gemini",
-                        description=(
-                            "Current saved provider; choose Codex to remediate."
-                            if current == "gemini"
-                            else "Reserved provider."
-                        ),
-                        enabled=False,
-                        disabled_reason="Provider is not implemented.",
-                    ),
+                    Choice("provider", "Provider"),
+                    Choice("model", "Model"),
+                    Choice("reasoning", "Reasoning effort"),
                 ),
-                highlighted_id="codex",
-                selected_id=(None if current == "gemini" else "codex"),
+                highlighted_id="provider",
             )
-            provider, whole_cancel = self._nested_settings_value(
-                provider_outcome
-            )
+            field, whole_cancel = self._nested_settings_value(field_outcome)
             if whole_cancel:
                 return state, True
-            if provider is None:
-                continue
-            return update_agent_backend(state, agent_id, provider), False
+            if field is None:
+                return state, False
+            if field == "provider":
+                state, whole_cancel = self._edit_settings_agent_provider(
+                    state,
+                    agent_id,
+                )
+            elif field == "model":
+                state, whole_cancel = self._edit_settings_agent_model(
+                    state,
+                    agent_id,
+                )
+            else:
+                state, whole_cancel = self._edit_settings_agent_reasoning(
+                    state,
+                    agent_id,
+                )
+            if whole_cancel:
+                return state, True
+            return state, False
 
-    def _edit_settings_model(
+    def _edit_settings_agent_provider(
         self,
         state: SettingsState,
+        agent_id: str,
     ) -> tuple[SettingsState, bool]:
-        """Read an exact Codex model or clear it with an empty commit."""
+        """Edit one agent's provider while preserving Gemini values on cancel."""
+
+        current = state.pending.agent_configs[agent_id].backend
+        outcome = self._picker_input.read_picker(
+            Prompt(
+                "Provider",
+                scope=AGENT_SPECS[agent_id].display_name,
+                instruction="Choose Codex or return without changing.",
+            ),
+            (
+                Choice(
+                    "codex",
+                    "Codex",
+                    description=(
+                        "Current saved provider."
+                        if current == "codex"
+                        else "Available provider."
+                    ),
+                ),
+                Choice(
+                    "gemini",
+                    "Gemini",
+                    description=(
+                        "Current saved provider; choose Codex to remediate."
+                        if current == "gemini"
+                        else "Reserved provider."
+                    ),
+                    enabled=False,
+                    disabled_reason="Provider is not implemented.",
+                ),
+            ),
+            highlighted_id="codex",
+            selected_id=(None if current == "gemini" else "codex"),
+        )
+        provider, whole_cancel = self._nested_settings_value(outcome)
+        if whole_cancel or provider is None:
+            return state, whole_cancel
+        return update_agent_backend(state, agent_id, provider), False
+
+    def _edit_settings_agent_model(
+        self,
+        state: SettingsState,
+        agent_id: str,
+    ) -> tuple[SettingsState, bool]:
+        """Read one agent's exact Codex model or clear it with blank input."""
 
         while True:
-            current = state.pending.system_defaults.codex_model
+            current = state.pending.agent_configs[agent_id].codex_model
             outcome = self._prompt_input.read_prompt(
                 Prompt(
-                    "Codex model",
-                    scope="settings",
+                    "Model",
+                    scope=AGENT_SPECS[agent_id].display_name,
                     instruction=(
                         "Enter an exact model or leave blank for provider default."
                     ),
@@ -1321,8 +1356,9 @@ class InteractiveController:
             if value is None:
                 return state, False
             try:
-                return update_codex_model(
+                return update_agent_codex_model(
                     state,
+                    agent_id,
                     None if value == "" else value,
                 ), False
             except ConfigurationError:
@@ -1330,17 +1366,19 @@ class InteractiveController:
                     "Codex model must be safe nonempty text, or blank for default."
                 )
 
-    def _edit_settings_reasoning(
+    def _edit_settings_agent_reasoning(
         self,
         state: SettingsState,
+        agent_id: str,
     ) -> tuple[SettingsState, bool]:
-        """Select one fixed Codex reasoning level or provider default."""
+        """Select one agent's fixed reasoning level or provider default."""
 
-        pending = state.pending.system_defaults.codex_reasoning_effort
+        pending = state.pending.agent_configs[agent_id].codex_reasoning_effort
         selected = "default" if pending is None else pending
         outcome = self._picker_input.read_picker(
             Prompt(
-                "Codex reasoning effort",
+                "Reasoning effort",
+                scope=AGENT_SPECS[agent_id].display_name,
                 instruction="Choose provider default or one fixed effort level.",
             ),
             (
@@ -1358,8 +1396,9 @@ class InteractiveController:
             return state, True
         if value is None:
             return state, False
-        return update_codex_reasoning_effort(
+        return update_agent_codex_reasoning_effort(
             state,
+            agent_id,
             None if value == "default" else value,
         ), False
 
@@ -1420,14 +1459,6 @@ class InteractiveController:
                     str(defaults.max_debate_rounds),
                 ),
                 Field("Providers", providers),
-                Field(
-                    "Codex model",
-                    defaults.codex_model or "provider default",
-                ),
-                Field(
-                    "Codex reasoning effort",
-                    defaults.codex_reasoning_effort or "provider default",
-                ),
             )
 
         return Panel(

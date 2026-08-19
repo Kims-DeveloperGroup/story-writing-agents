@@ -227,6 +227,49 @@ def update_agent_backend(
     )
 
 
+def update_agent_codex_model(
+    state: SettingsState,
+    agent_id: str,
+    codex_model: str | None,
+) -> SettingsState:
+    """Return pending state with one validated per-agent Codex model."""
+
+    _require_state(state)
+    if agent_id not in ROSTER:
+        raise ConfigurationError(f"unknown agent: {agent_id}")
+    validated = ConfigManager.validate_codex_model(codex_model)
+    configs = dict(state.pending.agent_configs)
+    configs[agent_id] = replace(configs[agent_id], codex_model=validated)
+    return SettingsState(
+        state.baseline,
+        ConfigurationSnapshot(state.pending.system_defaults, configs),
+    )
+
+
+def update_agent_codex_reasoning_effort(
+    state: SettingsState,
+    agent_id: str,
+    codex_reasoning_effort: str | None,
+) -> SettingsState:
+    """Return pending state with one validated per-agent reasoning effort."""
+
+    _require_state(state)
+    if agent_id not in ROSTER:
+        raise ConfigurationError(f"unknown agent: {agent_id}")
+    validated = ConfigManager.validate_codex_reasoning_effort(
+        codex_reasoning_effort
+    )
+    configs = dict(state.pending.agent_configs)
+    configs[agent_id] = replace(
+        configs[agent_id],
+        codex_reasoning_effort=validated,
+    )
+    return SettingsState(
+        state.baseline,
+        ConfigurationSnapshot(state.pending.system_defaults, configs),
+    )
+
+
 def update_codex_model(
     state: SettingsState,
     codex_model: str | None,
@@ -436,6 +479,8 @@ def _agent_value(snapshot: ConfigurationSnapshot) -> dict[str, dict[str, Any]]:
             "backend": snapshot.agent_configs[agent_id].backend,
             "language": snapshot.agent_configs[agent_id].language,
             "persona": snapshot.agent_configs[agent_id].persona,
+            "codex_model": snapshot.agent_configs[agent_id].codex_model,
+            "codex_reasoning_effort": snapshot.agent_configs[agent_id].codex_reasoning_effort,
         }
         for agent_id in ROSTER
     }
