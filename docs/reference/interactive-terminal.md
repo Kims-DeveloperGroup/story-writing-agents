@@ -3,8 +3,10 @@
 > **Availability:** this package-supported component owns shell input, safe
 > records, and bare `/run` composition. Orientation, status/inspection,
 > central errors/recovery, and accepted management, advisory, retrieval, and
-> consensus output now use its semantic renderer. Information-dense views and
-> remaining generic status records retain their established presentation.
+> consensus output use its semantic renderer. Full/context help, agent roster,
+> session/conversation lists, search, transcript, and focused history now do as
+> well. Four composer-only generic status records retain their established
+> presentation pending component integration.
 
 ## Public API
 
@@ -54,8 +56,9 @@ supported API.
 
 For controller wiring, the package facade also exposes the unlisted canonical
 identities `InteractiveSemanticOutput`, `Field`, `Message`, `Notice`, `Panel`,
-`Record`, `Section`, `SemanticRole`, and `ViewState`. They are package-internal,
-absent from `__all__` and the root package, and are not a supported public API.
+`Record`, `Section`, `ListView`, `SemanticRole`, and `ViewState`. They are
+package-internal, absent from `__all__` and the root package, and are not a
+supported public API.
 The narrow internal adapter has these signatures:
 
 ```python
@@ -106,6 +109,16 @@ and performs no stream observation or resource acquisition.
 - retrieval progress and cited-source records; and
 - consensus progress, inspection, cancellation, and terminal summaries.
 
+#84 uses the same foundation for:
+
+- full registry-backed help and one-command contextual help;
+- the canonical four-agent roster;
+- positioned session and conversation catalog rows plus explicit empty lists;
+- positioned search hits followed by their result and optional truncation hint;
+- positioned transcript events followed by their result and optional
+  continuation hint; and
+- positioned focused-history events followed by one context-accounting record.
+
 The controller composes typed components and sends one component through the
 adapter for each established callback record. The plain form preserves the
 established facts, copy, order, and callback boundaries while adding explicit
@@ -114,12 +127,15 @@ structure and applicable `loading`, `empty`, `error`, `cancelled`, and
 ANSI; `NO_COLOR` removes only that decoration. Callback construction renders
 the same structure in plain text at its fixed width.
 
-Help, agent roster, session/conversation lists, search results, transcript,
-focused history, and the remaining generic `write_status` sites still use the
-exact established plain record renderers. Contextual composition previews are
-implemented as documented below. History navigation, selectable palettes/fixed
-values, component-integrated composer/confirmation, and pickers are not
-currently available.
+The five dense-view terminal writer families now accept the same primitive
+arguments and emit the same fact order through semantic `Panel`, `ListView`, or
+`Record` values. Controller list commands emit one positioned, one-record
+`ListView` for each established row callback. The four `write_status` calls in
+the terminal composer remain established plain records pending #86; the
+controller has no generic `write_status` call site. Contextual composition
+previews are implemented as documented below. History navigation, selectable
+palettes/fixed values, component-integrated composer/confirmation, pickers, and
+`/settings` are not currently available.
 
 ## Prompts and ordinary presentation
 
@@ -160,6 +176,29 @@ uses `[run DEBATE_ID] [completed] [success]`, interrupted inspection uses
 `[cancelled] [warning]`, failed/deadlocked inspection uses `[error]`, active
 inspection uses `[loading] [info]`, and a missing debate uses `[empty]`. These
 markers are present in plain and `NO_COLOR` output; color is redundant.
+
+Full help is one completed `Help` panel. It retains registry group order; each
+completed group section contains one completed `Commands` list whose records
+retain syntax, aliases, provider-call, and artifact-write facts. Context help is
+one completed `Help` panel containing one command record in `Group`, `Syntax`,
+`Aliases`, `Calls provider`, `May write artifacts`, `Example` order. Agent
+roster is one completed `Agents` list in canonical route order; each record
+retains display name, `ID`, `Aliases`, and `Advisory domain`.
+
+Session, conversation, search, transcript, and focused-history rows use this
+positioned form, with one row per callback:
+
+```text
+TITLE (POSITION/TOTAL) [completed]
+  [RECORD] [completed]
+    LABEL: VALUE
+```
+
+Wide output keeps label/value pairs inline; narrow output stacks them instead
+of dropping facts. Empty session and conversation catalogs are one explicit
+empty `ListView`. Empty search and transcript results emit their exact empty
+result notice without a synthetic row. Empty focused history emits no History
+row and still emits the context record with `History displayed: 0/0 events`.
 
 ## Main-prompt live suggestions
 
@@ -210,27 +249,44 @@ remains a module-supported terminal operation. At the editor boundary,
 unsupported, `TERM=dumb`, non-TTY, and non-POSIX reads use ordinary line input
 without a panel; the installed CLI's earlier dual-TTY guard still applies.
 
-## Exact search and transcript records
+<a id="exact-search-and-transcript-records"></a>
 
-These templates are safely wrapped after substitution; each remains one record.
+## Dense search, transcript, and history records
+
+Search rows retain these fields in exact order: `Status`, `Match`, `Subject`,
+`Citation`, `Snippet`. A conversation-level citation is
+`conversation HANDLE`; a transcript citation adds `turn TURN, sequence
+SEQUENCE, kind EVENT_KIND`. Each hit is one completed positioned `Search
+results` list and one callback. Rows are followed, in separate callbacks, by:
 
 ```text
-[search {HANDLE}] Status: {active|archived} | Match: {MATCH} | Subject: {SUBJECT} | Citation: conversation {HANDLE}
-[snippet] {SNIPPET}
-
-[search {HANDLE}] Status: active | Match: transcript | Subject: {SUBJECT} | Citation: conversation {HANDLE}, turn {TURN}, sequence {SEQUENCE}, kind {EVENT_KIND}
-[snippet] {SNIPPET}
-
 [result] Search returned {HITS} of {MATCHES} matching conversations.
 [hint] Search was truncated by fixed scan or result limits; refine the query.
+```
 
-[transcript {HANDLE}] Sequence: {SEQUENCE} | Turn: {TURN} | Kind: {KIND} | Sender: {SENDER} | Recipient: {RECIPIENT}
-[content] {CONTENT}
+The hint appears only when the established limits truncate the result.
+
+Transcript and focused-history rows retain `Sequence`, `Turn`, `Kind`,
+`Sender`, `Recipient`, then `Content`, in that order. Each event is one
+completed positioned `Transcript` or `History` list and one callback. A
+transcript page then emits:
+
+```text
 [result] Transcript page returned {EVENTS} events.
 [hint] Continue with /transcript {HANDLE} {COUNT} --from {NEXT}.
 ```
 
-Whitespace/LF remain; controls are visible and never joined.
+The continuation hint appears only when the page has a next cursor. Focused
+history instead emits one `[context]` record with `History displayed`,
+`Complete turns`, `Context retained`, `Omitted turns`, `UTF-8 bytes`, `Turn
+cap`, and `Truncated` in that order. Source whitespace and LF remain; controls
+are visible, events are never joined, and content remains inside its one
+callback record.
+
+If Ctrl-C interrupts search, transcript, or history row delivery, all already
+completed row callbacks remain visible. The controller writes exactly one
+matching cancellation record and omits every unrendered row plus the trailing
+result, hint, or context record. Attached state remains unchanged.
 
 ## Exact cancellation records
 

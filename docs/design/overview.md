@@ -65,9 +65,12 @@ contains no second raw-terminal lifecycle.
 The semantic models, responsive plain/fixed-ANSI renderer, and capability
 profiles are implemented. Orientation, status/inspection, central errors and
 recovery, and accepted management, advisory, retrieval, and consensus output
-now use them. Help, roster, lists, search, transcript, focused history, and the
-remaining generic status sites retain their established plain records pending
-their owning migrations. There is no public theme API.
+use them. Full/context help, roster, session/conversation lists, search,
+transcript, and focused history now use them too. The controller sends each
+dense row as one positioned, one-record `ListView` callback; empty and
+interrupted outcomes remain explicit. Only four composer `write_status` sites
+retain their established plain records pending #86. There is no public theme
+API.
 
 The core gives immutable facts to policy validators and receives validated
 values, typed failures/errors, actions, or safe summaries. Leaves retain
