@@ -446,8 +446,10 @@ ownership, configuration precedence, or either implemented schema.
 The presentation uses one `Panel` with `Section`, `Field`, and `Notice` values,
 plus one focused `Picker` or `Prompt`. It is not a new component or a
 general-purpose form abstraction. One section shows validated current values;
-another shows independent pending values, and the active control renders with
-that context. The controller keeps the snapshots call-local and does not emit
+another shows independent pending values. Controls render without the snapshot
+panel; the full Current/Pending panel appears only immediately before Save
+attempts or whole-flow cancellation. The controller keeps the snapshots
+call-local and does not emit
 the Current/Pending panel while opening, navigating, or editing. It emits one
 complete panel immediately before each Save attempt or whole-flow cancellation.
 Nested Escape returns silently to its parent without a snapshot or cancellation
