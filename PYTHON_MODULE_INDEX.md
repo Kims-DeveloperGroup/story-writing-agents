@@ -783,6 +783,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Primary verification/documentation:** `tests/test_interactive_terminal.py`,
   `tests/test_interactive_line_editor.py`, `tests/test_public_api_and_cli.py`,
   `tests/test_interactive_terminal_foundation.py`,
+  `tests/test_interactive_terminal_composer.py`,
   `tests/test_interactive_terminal_history.py`,
   `tests/test_interactive_terminal_views.py`, `tests/test_interactive_pty.py`,
   `docs/design/overview.md`,
@@ -819,6 +820,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   operational I/O.
 - **Primary verification/documentation:**
   `tests/test_interactive_terminal_foundation.py`,
+  `tests/test_interactive_terminal_composer.py`,
   `tests/test_interactive_terminal_history.py`,
   `tests/test_interactive_terminal_views.py`, and
   `docs/design/interactive-cli-design-system.md`; focused component, renderer,
@@ -850,6 +852,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Primary verification/documentation:**
   `tests/test_interactive_line_editor.py`,
   `tests/test_interactive_terminal_foundation.py`,
+  `tests/test_interactive_terminal_composer.py`,
   `tests/test_interactive_terminal_history.py`,
   `docs/design/interactive-cli-design-system.md`, and
   `docs/reference/interactive-command-parser.md`.
@@ -871,6 +874,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   state.
 - **Primary verification/documentation:**
   `tests/test_interactive_terminal_foundation.py`,
+  `tests/test_interactive_terminal_composer.py`,
   `tests/test_interactive_terminal_views.py`,
   `docs/design/interactive-cli-design-system.md`, and
   `docs/operations/terminal-safety.md`; focused rich/plain/narrow/wide coverage
@@ -908,6 +912,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Primary verification/documentation:**
   `tests/test_interactive_line_editor.py`,
   `tests/test_interactive_terminal_foundation.py`,
+  `tests/test_interactive_terminal_composer.py`,
   `tests/test_interactive_terminal_history.py`,
   `tests/test_interactive_pty.py`,
   `docs/design/interactive-cli-design-system.md`, and
@@ -957,6 +962,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Primary verification/documentation:** `tests/test_interactive_terminal.py`,
   `tests/test_interactive_line_editor.py`, `tests/test_public_api_and_cli.py`,
   `tests/test_interactive_terminal_foundation.py`,
+  `tests/test_interactive_terminal_composer.py`,
   `tests/test_interactive_terminal_views.py`, `tests/test_interactive_pty.py`,
   `docs/design/overview.md`,
   `docs/reference/interactive-terminal.md`,
