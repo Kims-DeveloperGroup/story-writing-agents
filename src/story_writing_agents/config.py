@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -12,6 +13,13 @@ from .workspace import Workspace
 
 
 _LANGUAGE = re.compile(r"[A-Za-z][A-Za-z0-9-]{0,15}")
+_CODEX_REASONING_EFFORTS: tuple[str, ...] = (
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+)
 KNOWN_AGENT_BACKENDS: tuple[str, ...] = ("codex", "gemini")
 
 
@@ -20,6 +28,8 @@ class SystemDefaults:
     language: str
     persona: str
     max_debate_rounds: int
+    codex_model: str | None = None
+    codex_reasoning_effort: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,12 +72,48 @@ class ConfigManager:
             raise ConfigurationError(f"backend must be one of: {expected}")
         return value
 
+    @staticmethod
+    def validate_codex_model(value: Any) -> str | None:
+        if value is None:
+            return None
+        if (
+            not isinstance(value, str)
+            or not value
+            or value.startswith("-")
+            or any(
+                unicodedata.category(character) in {"Cc", "Cf", "Cs"}
+                for character in value
+            )
+        ):
+            raise ConfigurationError(
+                "codex_model must be safe non-empty text or null"
+            )
+        return value
+
+    @staticmethod
+    def validate_codex_reasoning_effort(value: Any) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str) or value not in _CODEX_REASONING_EFFORTS:
+            expected = ", ".join(_CODEX_REASONING_EFFORTS)
+            raise ConfigurationError(
+                "codex_reasoning_effort must be null or one of: "
+                f"{expected}"
+            )
+        return value
+
     def load_system_defaults(self) -> SystemDefaults:
         value = self.workspace.read_json("config/system_defaults.json")
         if not isinstance(value, dict):
             raise ConfigurationError("system_defaults.json must contain an object")
         unknown = set(value).difference(
-            {"language", "persona", "max_debate_rounds"}
+            {
+                "language",
+                "persona",
+                "max_debate_rounds",
+                "codex_model",
+                "codex_reasoning_effort",
+            }
         )
         if unknown:
             raise ConfigurationError(
@@ -78,10 +124,16 @@ class ConfigManager:
         rounds = value.get("max_debate_rounds", 1)
         if isinstance(rounds, bool) or not isinstance(rounds, int) or rounds < 0:
             raise ConfigurationError("max_debate_rounds must be a non-negative integer")
+        codex_model = self.validate_codex_model(value.get("codex_model"))
+        codex_reasoning_effort = self.validate_codex_reasoning_effort(
+            value.get("codex_reasoning_effort")
+        )
         return SystemDefaults(
             language=language,
             persona=persona,
             max_debate_rounds=rounds,
+            codex_model=codex_model,
+            codex_reasoning_effort=codex_reasoning_effort,
         )
 
     def load_agent_configs(self) -> dict[str, AgentConfig]:

@@ -99,7 +99,6 @@ _UNSUPPORTED_V1_ACCESS_CLAIM_GUARD = (
     f"{_SESSION_DIRECTORY}/.lease-claims.lock"
 )
 _WINDOWS_LOCK_RETRY_SECONDS = 0.05
-_CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _ACCESS_DIAGNOSTIC_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
 _SAFE_THREAD_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 _SAFE_FINGERPRINT = re.compile(r"[0-9a-f]{64}")
@@ -329,15 +328,13 @@ class AgentBackend:
         )
         if not isinstance(executable, str) or not executable:
             raise ValueError("Codex executable must be non-empty text")
-        if model is not None and (
-            not isinstance(model, str)
-            or not model
-            or model.startswith("-")
-            or _CONTROL_CHARACTERS.search(model) is not None
-        ):
+        manager = ConfigManager(self.workspace)
+        try:
+            explicit_model = manager.validate_codex_model(model)
+        except ConfigurationError as exc:
             raise ValueError(
                 "Codex model must be safe non-empty text or None"
-            )
+            ) from exc
         if (
             isinstance(timeout_seconds, bool)
             or not isinstance(timeout_seconds, (int, float))
@@ -351,15 +348,20 @@ class AgentBackend:
             raise ConfigurationError(
                 f"unknown backend override agent: {sorted(unknown_agents)[0]}"
             )
-        manager = ConfigManager(self.workspace)
         self.backend_overrides = MappingProxyType(
             {
                 agent_id: manager.validate_backend(backend)
                 for agent_id, backend in raw_overrides.items()
             }
         )
+        defaults = manager.load_system_defaults()
         self.executable = executable
-        self.model = model
+        self.model = (
+            explicit_model
+            if explicit_model is not None
+            else defaults.codex_model
+        )
+        self._codex_reasoning_effort = defaults.codex_reasoning_effort
         self.timeout_seconds = float(timeout_seconds)
         self._access_claim_tokens: dict[str, str] = {}
         self._thread_locks: dict[tuple[str, str, str], asyncio.Lock] = {}
@@ -1196,6 +1198,18 @@ class AgentBackend:
             str(staging_directory),
             "exec",
         ]
+        if self.model is not None:
+            command.extend(["--model", self.model])
+        if self._codex_reasoning_effort is not None:
+            command.extend(
+                [
+                    "--config",
+                    (
+                        "model_reasoning_effort="
+                        f'"{self._codex_reasoning_effort}"'
+                    ),
+                ]
+            )
         if thread_id is not None:
             command.append("resume")
         command.extend(
@@ -1227,8 +1241,6 @@ class AgentBackend:
                 str(output_path),
             ]
         )
-        if self.model is not None:
-            command.extend(["--model", self.model])
         if thread_id is not None:
             command.append(thread_id)
         command.append("-")
