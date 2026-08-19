@@ -713,6 +713,47 @@ class CompletionDriverTests(unittest.TestCase):
             (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
         )
 
+    def test_malformed_default_and_incremental_readers_share_exact_diagnostic(
+        self,
+    ) -> None:
+        for source in ("default", "incremental"):
+            with self.subTest(source=source):
+                driver, input_stream, output, fallback, termios, _os = make_driver("")
+                incremental_reader = mock.Mock(return_value="two")
+                reader_patch = (
+                    mock.patch.object(
+                        _driver,
+                        "_single_character_reader",
+                        return_value=incremental_reader,
+                    )
+                    if source == "incremental"
+                    else mock.patch.object(
+                        input_stream,
+                        "read",
+                        return_value=object(),
+                    )
+                )
+
+                with reader_patch as collaborator:
+                    with self.assertRaisesRegex(
+                        TypeError,
+                        "^input reader must return one character$",
+                    ):
+                        self.read(driver)
+
+                if source == "incremental":
+                    collaborator.assert_called_once_with(input_stream)
+                    incremental_reader.assert_called_once_with()
+                else:
+                    collaborator.assert_called_once_with(1)
+                fallback.assert_not_called()
+                self.assertEqual(driver._history_state, MainInputHistoryState())
+                self.assertEqual(
+                    tuple(call[1] for call in termios.set_calls),
+                    (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
+                )
+                self.assertEqual(output.records[-1], "\r\r\x1b[J\n")
+
     def test_line_fallback_bypasses_all_completion_and_live_collaborators(self) -> None:
         driver, input_stream, output, fallback, termios, os_module = make_driver(
             "unused",
