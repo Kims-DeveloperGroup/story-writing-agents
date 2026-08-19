@@ -638,8 +638,8 @@ During one advisory turn, a capable raw stream may show the fixed four-glyph
 cycle `◐`, `◓`, `◑`, `◒` at the active cell. The existing raw driver owns the
 indicator state, clears it before each semantic or provider-result write, and
 redraws it while the operation remains pending. Completion, cancellation, and
-failure clear the cell before their normal records are rendered, then join the
-operation and indicator tasks before returning. `NO_COLOR` retains the same
+failure join the operation and indicator tasks, then clear the cell before
+their normal records are rendered. `NO_COLOR` retains the same
 glyphs because it disables decorative SGR only; the indicator adds no ANSI
 styling, dynamic text, alternate screen, or background detection.
 

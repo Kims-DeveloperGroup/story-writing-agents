@@ -166,9 +166,9 @@ The indicator is advisory-only: it wraps exactly one runtime awaitable for one
 advisory turn and is not a semantic record, callback, status event, or general
 animation service. The raw driver owns the active glyph, advances the fixed
 four-frame cycle, serializes clear/redraw around semantic retrieval/progress or
-result writes, and creates no OS thread or import-time task. It clears the cell
-before final, cancellation, or error presentation, then joins both the
-operation and indicator tasks before returning.
+result writes, and creates no OS thread or import-time task. It joins both the
+operation and indicator tasks, then clears the cell before final, cancellation,
+or error presentation; the wrapper returns after this cleanup.
 
 An underlying operation failure takes precedence over a simultaneous indicator
 failure. If only the indicator or its final clear fails, the driver raises the
