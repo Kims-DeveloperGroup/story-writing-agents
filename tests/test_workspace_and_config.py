@@ -964,6 +964,52 @@ class ConfigurationCascadeTests(unittest.TestCase):
                     self.manager.load_system_defaults()
                 self.assertEqual(str(caught.exception), expected)
 
+    def test_agent_codex_fields_accept_legacy_documents_and_validate_trailing_fields(
+        self,
+    ) -> None:
+        legacy = self.workspace.read_json("config/agent_configs.json")
+        self.assertEqual(
+            set(legacy[PLOT_ARCHITECT]),
+            {"language", "persona"},
+        )
+        loaded_legacy = self.manager.load_agent_configs()
+        self.assertIsNone(loaded_legacy[PLOT_ARCHITECT].codex_model)
+        self.assertIsNone(loaded_legacy[PLOT_ARCHITECT].codex_reasoning_effort)
+
+        trailing = dict(legacy)
+        trailing[PLOT_ARCHITECT] = {
+            "backend": "codex",
+            "language": "JA",
+            "persona": "agent_persona",
+            "codex_model": "agent-model",
+            "codex_reasoning_effort": "xhigh",
+        }
+        self.workspace.write_json("config/agent_configs.json", trailing)
+        loaded = self.manager.load_agent_configs()[PLOT_ARCHITECT]
+        self.assertEqual(
+            loaded,
+            AgentConfig(
+                backend="codex",
+                language="JA",
+                persona="agent_persona",
+                codex_model="agent-model",
+                codex_reasoning_effort="xhigh",
+            ),
+        )
+
+        for field, value in (
+            ("codex_model", "-unsafe"),
+            ("codex_reasoning_effort", "default"),
+        ):
+            with self.subTest(field=field):
+                invalid = dict(trailing)
+                invalid[PLOT_ARCHITECT] = dict(trailing[PLOT_ARCHITECT], **{field: value})
+                with self.assertRaises(ConfigurationError):
+                    self.manager.validate_configuration(
+                        self.workspace.read_json("config/system_defaults.json"),
+                        invalid,
+                    )
+
     def test_language_and_persona_cascade_independently(self) -> None:
         defaults = self.manager.resolve(CHARACTER_CUSTODIAN)
         self.assertEqual(defaults.backend, "codex")

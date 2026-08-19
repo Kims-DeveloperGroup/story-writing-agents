@@ -2,7 +2,8 @@
 
 > **Availability:** session-wide and per-agent language/persona overrides,
 > standalone directives, attached shell directive commands, backend run
-> overrides, round limits, and workspace-wide Codex model/reasoning defaults
+> overrides, round limits, and Codex model/reasoning defaults with per-agent
+> fallback
 > are implemented.
 
 Key terms: **session override**—temporary configuration persisted for one story
@@ -51,23 +52,27 @@ configured backend, then `codex`. The repeatable CLI
 `--backend CANONICAL_AGENT_ID=BACKEND` supplies only the first level and never
 rewrites configuration.
 
-Codex model and reasoning resolution is workspace-wide and independent of the
-language/persona and backend-routing cascades. First non-null value wins:
+Codex model and reasoning resolution is independent of the language/persona
+and backend-routing cascades. Per-agent persisted values are the first
+configuration layer; the legacy workspace system defaults remain the fallback
+layer, followed by the Codex provider default. First non-null value wins:
 
 | Effective value | Precedence |
 | --- | --- |
-| Codex model | Explicit `--codex-model` or non-null `AgentBackend(model=...)`; then `codex_model` in `config/system_defaults.json`; then the Codex provider default. |
-| Codex reasoning | `codex_reasoning_effort` in `config/system_defaults.json`; then the Codex provider default. |
+| Codex model | Explicit `--codex-model` or non-null `AgentBackend(model=...)` for every agent; then that agent's `codex_model` in `config/agent_configs.json`; then workspace `codex_model` in `config/system_defaults.json`; then the Codex provider default. |
+| Codex reasoning | That agent's `codex_reasoning_effort` in `config/agent_configs.json`; then workspace `codex_reasoning_effort` in `config/system_defaults.json`; then the Codex provider default. |
 
 Passing `model=None` is inheritance, not an explicit request to clear a
 persisted model. There is no reasoning CLI flag, constructor argument, session
-runtime override, directive, or per-agent model/reasoning setting. Each
-`AgentBackend` validates and snapshots the complete persisted system-default
-and per-agent configuration pair once during construction. Later direct edits
-or `/settings` saves do not change that backend or its runtime's persisted
-provider, language, persona, round, model, or reasoning defaults. Even late
-persisted corruption does not reconfigure the active lifecycle; the next
-backend construction reads and validates the then-persisted pair.
+runtime override, or directive. The interactive `/settings Providers` editor
+is the installed workflow for changing an agent's persisted model or reasoning
+value. Each `AgentBackend` validates and snapshots the complete persisted
+system-default and per-agent configuration pair once during construction.
+Later direct edits or `/settings` saves do not change that backend or its
+runtime's persisted provider, language, persona, round, model, or reasoning
+defaults. Even late persisted corruption does not reconfigure the active
+lifecycle; the next backend construction reads and validates the then-persisted
+pair.
 
 Session-wide and per-agent runtime language/persona overrides remain live above
 that snapshot, and explicit backend and run arguments retain their higher

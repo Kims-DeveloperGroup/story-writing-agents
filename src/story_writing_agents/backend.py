@@ -358,6 +358,7 @@ class AgentBackend:
         )
         self._configuration_snapshot = configuration
         self.executable = executable
+        self._explicit_model = explicit_model
         self.model = (
             explicit_model
             if explicit_model is not None
@@ -1020,6 +1021,7 @@ class AgentBackend:
                 schema_path,
                 output_path,
                 thread_id,
+                bound_agent.definition.agent_id,
             )
             try:
                 process = await asyncio.create_subprocess_exec(
@@ -1189,6 +1191,7 @@ class AgentBackend:
         schema_path: Path,
         output_path: Path,
         thread_id: str | None,
+        agent_id: str | None = None,
     ) -> list[str]:
         command = [
             self.executable,
@@ -1200,15 +1203,16 @@ class AgentBackend:
             str(staging_directory),
             "exec",
         ]
-        if self.model is not None:
-            command.extend(["--model", self.model])
-        if self._codex_reasoning_effort is not None:
+        model, reasoning_effort = self._codex_invocation_settings(agent_id)
+        if model is not None:
+            command.extend(["--model", model])
+        if reasoning_effort is not None:
             command.extend(
                 [
                     "--config",
                     (
                         "model_reasoning_effort="
-                        f'"{self._codex_reasoning_effort}"'
+                        f'"{reasoning_effort}"'
                     ),
                 ]
             )
@@ -1247,6 +1251,29 @@ class AgentBackend:
             command.append(thread_id)
         command.append("-")
         return command
+
+    def _codex_invocation_settings(
+        self,
+        agent_id: str | None,
+    ) -> tuple[str | None, str | None]:
+        """Resolve Codex flags from the construction snapshot for one agent."""
+
+        if agent_id is None:
+            return self.model, self._codex_reasoning_effort
+        if agent_id not in ROSTER:
+            raise ConfigurationError(f"unknown agent: {agent_id}")
+        agent = self._configuration_snapshot.agent_configs[agent_id]
+        model = (
+            self._explicit_model
+            if self._explicit_model is not None
+            else agent.codex_model
+            or self._configuration_snapshot.system_defaults.codex_model
+        )
+        reasoning_effort = (
+            agent.codex_reasoning_effort
+            or self._configuration_snapshot.system_defaults.codex_reasoning_effort
+        )
+        return model, reasoning_effort
 
     @staticmethod
     async def _stop_process(process: asyncio.subprocess.Process) -> None:

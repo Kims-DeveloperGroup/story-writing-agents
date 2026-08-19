@@ -13,8 +13,8 @@
 > #86 integrates line-oriented composition and confirmation with semantic input
 > views and pure controls. #79 adds selectable main-command completion. #87
 > delivers the generic package-internal picker foundation without installing a
-> shell consumer. #94 adds validated persisted workspace-wide Codex model and
-> reasoning defaults. #93 adds the interactive settings workflow, immutable
+> shell consumer. #94 adds validated persisted workspace Codex fallback model
+> and reasoning defaults. #93 adds the interactive settings workflow, immutable
 > lifecycle configuration snapshots, and guarded persistence. The
 > [interactive terminal reference](../reference/interactive-terminal.md) and
 > [terminal safety rules](../operations/terminal-safety.md) describe current
@@ -42,8 +42,8 @@ issues. Requirements beyond the implemented #82, #83, #84, #85, #86, #79,
 | #86 composer/confirmation integration | Implemented: RUN/CHAT composition and yes/no confirmation build ordered semantic input views, render equivalent plain/fixed-ANSI projections at the active width, and use pure history-free controls. Established results, signatures, `/send`, `/cancel`, `/say`, defaults, Ctrl-C, EOF, callback cardinality, and controller/runtime behavior remain unchanged. |
 | #79 selectable completion | Implemented: capable main input projects canonical root, subcommand, and finite fixed-option candidates into a semantic palette. Up/Down moves its clamped highlight, Tab applies the highlighted candidate, Escape restores the first pre-completion snapshot when present and dismisses the exact state, and closed-palette Up/Down retains history behavior. Shift-Tab has no action. |
 | #87 picker foundation | Implemented: package-internal immutable picker/control/viewport state, pure initialization/reconciliation/live/fallback transitions, responsive live/full-list rendering, a dedicated history-free sole-driver lifecycle, and an unlisted resource-free adapter. #93 supplies its first installed consumer. |
-| #94 workspace Codex defaults | Implemented: the closed system-default schema accepts optional workspace-wide Codex model and reasoning values, new workspaces initialize both to null, legacy files remain valid and byte-preserved, and each backend validates and snapshots effective invocation values at construction. |
-| #93 settings UI | Implemented: global alias-free `/settings` edits isolated current/pending snapshots of workspace defaults and per-agent provider choices through shared picker and prompt controls. Save validates an exact opening baseline and persona catalog, writes only changed configuration documents in deterministic order, and attempts reverse exact-byte rollback after a write failure. The workflow adds no supported public save API. |
+| #94 workspace Codex defaults | Implemented: the closed system-default schema accepts optional workspace fallback Codex model and reasoning values, new workspaces initialize both to null, legacy files remain valid and byte-preserved, and each backend validates and snapshots effective invocation values at construction. |
+| #93 settings UI | Implemented: global alias-free `/settings` edits isolated current/pending snapshots of workspace defaults and per-agent provider, model, and reasoning choices through shared picker and prompt controls. Save validates an exact opening baseline and persona catalog, writes only changed configuration documents in deterministic order, and attempts reverse exact-byte rollback after a write failure. The workflow adds no supported public save API. |
 
 ## Goals and limits
 
@@ -377,12 +377,16 @@ storage, or network code.
 > bytes.
 
 A non-null explicit `AgentBackend(model=...)` or CLI `--codex-model` wins over
-the persisted model, which wins over the provider default. Persisted reasoning
-wins over the provider default; no reasoning CLI or constructor override is
+all persisted model values. Otherwise each agent's optional values in
+`config/agent_configs.json` inherit the corresponding workspace system default
+and then the provider default. No reasoning CLI or constructor override is
 added. Model text is preserved without trimming or catalog lookup and must be
 nonempty, not start with `-`, and contain no Unicode control, format, or
 surrogate character. Reasoning is null or exactly `minimal`, `low`, `medium`,
-`high`, or `xhigh`; actual `xhigh` support is model/provider-dependent.
+`high`, or `xhigh`; actual `xhigh` support is model/provider-dependent. The
+complete system-default and agent-configuration pair is validated and
+snapshotted at backend construction; later saves apply only to the next
+backend.
 
 Every backend validates the complete persisted schema before applying an
 explicit model and snapshots both effective values at construction. The
@@ -400,19 +404,20 @@ preserving those public and lifecycle boundaries.
 > **Implemented by #93:** global alias-free `/settings` provides this
 > interaction and guarded persistence workflow without adding a supported
 > settings/save object API. #87 supplies the generic internal picker foundation,
-> and #94 supplies the validated workspace Codex model/reasoning fields.
+> and #94 supplies the validated workspace Codex fallback model/reasoning
+> fields.
 
 The settings view edits two persistent documents through validated Current and
 Pending configuration snapshots: the `config/system_defaults.json` defaults
 described by
-[Agent configuration](../reference/configuration/agent-configuration.md), and
-the existing per-agent provider selections in `config/agent_configs.json`. The
-system snapshot contains required `language` and `persona`, optional
-`max_debate_rounds`, and the implemented optional workspace Codex
-model/reasoning defaults. Provider selection remains per agent; model and
-reasoning remain workspace defaults. A successful save writes the canonical
-five-key system object. The view does not change identity, thread ownership,
-configuration precedence, or either implemented schema.
+[Agent configuration](../reference/configuration/agent-configuration.md), and the existing
+per-agent provider, model, and reasoning selections in
+`config/agent_configs.json`. The system snapshot contains required `language`
+and `persona`, optional `max_debate_rounds`, and the optional workspace Codex
+fallback model/reasoning values. Provider, model, and reasoning selection is
+per agent. A successful save writes the canonical five-key system object and
+the canonical agent object. The view does not change identity, thread
+ownership, configuration precedence, or either implemented schema.
 
 The presentation uses one `Panel` with `Section`, `Field`, and `Notice` values,
 plus one focused `Picker` or `Prompt`. It is not a new component or a
@@ -428,8 +433,6 @@ Language
 Persona
 Maximum debate rounds
 Providers
-Codex model
-Codex reasoning effort
 Save
 Cancel
 ```
@@ -439,9 +442,9 @@ Cancel
 | Language | The picker candidates are exactly `KO`, `EN`, `JA`, `ZH`, `ES`, `FR`, `DE`, `PT`, `IT`, `RU`, in that order. A schema-valid existing value outside this UI catalog remains visible and may be preserved, but is not synthesized as a candidate. |
 | Persona | Candidates come only from the existing safe persona-template catalog. Duplicate identifiers resolve with the top-level template taking precedence over `alternative_templates`; the resulting identifiers are ordered lexically. The picker does not read, preview, create, or edit template content. |
 | Maximum debate rounds | A numeric `Prompt` accepts a pending nonnegative integer under the existing validation rule. Blank, negative, fractional, and nonnumeric values produce an inline error `Notice` and retain focus without changing the pending value. `0` remains valid and means audit-only consensus. |
-| Providers | A nested agent picker follows canonical `ROSTER` order, then a provider picker edits only that agent's pending `agent_configs` selection. Codex is enabled. Reserved Gemini is visible but disabled for new selection; a pre-existing Gemini value remains visible and may be preserved or changed to Codex for remediation. The UI neither invents providers nor changes roster identity. |
-| Codex model | A free-text `Prompt` uses the implemented safe-model validator; blank stores null and means the provider default. It performs no network lookup and does not offer a model catalog. |
-| Codex reasoning effort | Picker order is exactly Provider default, `minimal`, `low`, `medium`, `high`, `xhigh`. The implemented schema accepts those exact values; actual `xhigh` support remains model/provider-dependent. The UI does not add a CLI reasoning flag. |
+| Providers | A nested agent picker follows canonical `ROSTER` order, then a Provider/Model/Reasoning effort picker edits only that agent's pending `agent_configs` values. Codex is enabled. Reserved Gemini is visible but disabled for new selection; a pre-existing Gemini value remains visible and may be preserved or changed to Codex for remediation. The UI neither invents providers nor changes roster identity. |
+| Agent Model | A nested free-text `Prompt` uses the implemented safe-model validator; blank stores null and inherits the workspace system model. It performs no network lookup and does not offer a model catalog. |
+| Agent Reasoning effort | A nested picker offers Inherit, `minimal`, `low`, `medium`, `high`, and `xhigh`; Inherit uses the workspace system reasoning value, then the provider default. The UI does not add a CLI reasoning flag. |
 
 Opening the panel reads and validates both current snapshots. Failure to read or
 validate either snapshot, or to enumerate the safe persona catalog, reports
@@ -452,14 +455,15 @@ one control is focused:
 
 - Up/Down moves only the current picker's highlight; highlighting does not edit
   pending values or write configuration.
-- Enter on Language, Persona, Providers, or Codex reasoning effort transfers focus to
-  the corresponding nested picker. Provider editing transfers first to the
-  canonical agent picker and then to that agent's provider picker. Enter
-  updates only the applicable pending value and returns focus to its parent;
+- Enter on Language, Persona, or Providers transfers focus to the corresponding
+  nested picker. Provider editing transfers first to the canonical agent
+  picker, then to that agent's Provider/Model/Reasoning effort picker, and
+  finally to the selected editor. Enter updates only the applicable pending
+  value and returns focus to its parent;
   Escape restores that editor's prior pending value and returns focus without
   a write.
-- Enter on Maximum debate rounds or Codex model transfers focus to its
-  `Prompt`. Valid Enter updates only the pending value and returns focus;
+- Enter on Maximum debate rounds transfers focus to its `Prompt`. Valid Enter
+  updates only the pending value and returns focus;
   invalid Enter leaves the prompt focused with a trusted validation notice.
   Escape restores its prior pending value.
 - Enter on Save validates both complete pending snapshots, then re-reads both
@@ -484,8 +488,8 @@ snapshot; even later persisted corruption does not reconfigure that lifecycle,
 while the next construction reads and validates the then-persisted pair.
 Session and explicit overrides remain live and higher precedence. Save does not
 mutate an existing provider thread or current identity. The view manages no
-credentials, provider network access, model catalog, per-agent model/reasoning
-override, provider implementation, persona file editing, theme, key binding,
+credentials, provider network access, model catalog, provider implementation,
+persona file editing, theme, key binding,
 or automatic save.
 
 The same current/pending labels, choice identity, validation meaning, disabled

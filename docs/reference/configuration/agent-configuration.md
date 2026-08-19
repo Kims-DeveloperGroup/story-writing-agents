@@ -28,24 +28,27 @@ initialized with:
 | `language` | Required string satisfying the language identifier rule. |
 | `persona` | Required safe template identifier that resolves to an existing template. |
 | `max_debate_rounds` | Optional; absent means `1`. A present value is a nonnegative integer and not a boolean. |
-| `codex_model` | Optional; absent or `null` means the Codex provider default. A string must be nonempty, must not begin with `-`, and must contain no Unicode `Cc`, `Cf`, or `Cs` character. The exact string is preserved: it is not trimmed, normalized, or checked against a model catalog. |
-| `codex_reasoning_effort` | Optional; absent or `null` means the Codex provider default. The only string values are exactly `minimal`, `low`, `medium`, `high`, and `xhigh`. Whether `xhigh` is supported depends on the selected model/provider. |
+| `codex_model` | Optional workspace fallback; absent or `null` means no workspace model fallback. A string must be nonempty, must not begin with `-`, and must contain no Unicode `Cc`, `Cf`, or `Cs` character. The exact string is preserved: it is not trimmed, normalized, or checked against a model catalog. |
+| `codex_reasoning_effort` | Optional workspace fallback; absent or `null` means no workspace reasoning fallback. The only string values are exactly `minimal`, `low`, `medium`, `high`, and `xhigh`. Whether `xhigh` is supported depends on the selected model/provider. |
 
 Unknown fields are rejected. The complete object is validated before a backend
 accepts any explicit model override, so a malformed persisted field is never
 hidden by `--codex-model` or `AgentBackend(model=...)`.
 
-Existing three-key files remain valid: missing Codex keys resolve as `null`.
+Existing three-key files remain valid: missing Codex keys resolve as `null` and
+remain the fallback layer for agents that do not set their own Codex values.
 Running `story init` again, including with `--overwrite-prompts`, does not
 rewrite or migrate existing system-default bytes. Global `/settings` edits this
-canonical five-key object through an isolated current/pending view; it adds no
-supported public save API. The ten language choices are exactly `KO`, `EN`,
+canonical five-key object and the per-agent object through an isolated
+current/pending view; it adds no supported public save API. The ten language
+choices are exactly `KO`, `EN`,
 `JA`, `ZH`, `ES`, `FR`, `DE`, `PT`, `IT`, and `RU`. Persona choices come from
 the safe lexical catalog with top-level-template precedence. An existing
 schema-valid language outside the UI list remains visible and preservable but
 is not synthesized as a choice. Maximum debate rounds accepts a nonnegative
-ASCII integer, including `0`. Blank Codex model stores `null`; reasoning offers
-Provider default followed by `minimal`, `low`, `medium`, `high`, and `xhigh`.
+ASCII integer, including `0`. Blank per-agent Codex model stores `null` and
+inherits the system model; Reasoning offers Inherit followed by `minimal`,
+`low`, `medium`, `high`, and `xhigh`.
 
 ## Per-agent configuration
 
@@ -56,37 +59,50 @@ Provider default followed by `minimal`, `low`, `medium`, `high`, and `xhigh`.
   "character_custodian": {
     "backend": "codex",
     "language": null,
-    "persona": null
+    "persona": null,
+    "codex_model": null,
+    "codex_reasoning_effort": null
   },
   "execution_specialist": {
     "backend": "codex",
     "language": null,
-    "persona": null
+    "persona": null,
+    "codex_model": null,
+    "codex_reasoning_effort": null
   },
   "lead_orchestrator": {
     "backend": "codex",
     "language": null,
-    "persona": null
+    "persona": null,
+    "codex_model": null,
+    "codex_reasoning_effort": null
   },
   "plot_architect": {
     "backend": "codex",
     "language": null,
-    "persona": null
+    "persona": null,
+    "codex_model": null,
+    "codex_reasoning_effort": null
   }
 }
 ```
 
 An omitted canonical agent is an empty object. Each agent object permits only
-`backend`, `language`, and `persona`; `null` inherits. Omitted backend becomes
-`codex`. Allowed backend names are `codex` and reserved `gemini`; selecting
-Gemini fails before provider invocation. Unknown agent IDs, fields, or backend
-names are errors.
+`backend`, `language`, `persona`, `codex_model`, and
+`codex_reasoning_effort`; `null` inherits the corresponding system default
+(and ultimately the Codex provider default). Omitted backend becomes `codex`.
+Allowed backend names are `codex` and reserved `gemini`; selecting Gemini fails
+before provider invocation. Unknown agent IDs, fields, or backend names are
+errors.
 
-The `/settings` Providers editor follows canonical roster order. Codex is
+The `/settings` Providers editor follows canonical roster order. It first
+selects an agent, then offers Provider, Model, and Reasoning effort. Codex is
 enabled; Gemini is visible but disabled for new selection. An existing Gemini
 value remains visible and may be preserved by returning without a change or
-remediated by selecting Codex. The settings workflow does not edit per-agent
-language/persona values or add per-agent model/reasoning values.
+remediated by selecting Codex. Model accepts exact safe text or blank to inherit
+the system model; Reasoning offers Inherit followed by `minimal`, `low`,
+`medium`, `high`, and `xhigh`. These edits update only the selected agent's
+pending configuration.
 
 Opening `/settings` captures exact bytes for both configuration documents, a
 fully validated immutable pair, and the safe persona catalog. Save revalidates
@@ -110,11 +126,12 @@ Normal `story init` creates a missing prompt and preserves existing content.
 even if only one changed, while preserving every other existing file. One
 backend construction validates and snapshots the complete persisted system and
 agent configuration pair. That active backend and its runtime keep the snapshot
-for provider route, language, persona, debate-round, Codex model, and Codex
-reasoning defaults; later valid edits, settings saves, or persisted corruption
-do not reconfigure it. A later backend construction reads and validates the
-then-persisted pair. Session and explicit runtime overrides remain live and
-higher precedence, while referenced role, persona, and core-document content
+for provider route, language, persona, debate-round, workspace fallbacks, and
+each agent's Codex model/reasoning values; later valid edits, settings saves,
+or persisted corruption do not reconfigure it. A later backend construction
+reads and validates the then-persisted pair. Session language and persona
+overrides remain live, and an explicit CLI/constructor model remains higher
+precedence, while referenced role, persona, and core-document content
 continues to participate in definition binding as documented.
 
 The packaged `default_kim_eun_hee` persona describes strict, logical, candid,

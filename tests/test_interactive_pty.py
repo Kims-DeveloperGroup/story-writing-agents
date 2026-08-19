@@ -1099,16 +1099,17 @@ print("RESULT=" + outcome.kind.value)
                     after=language_mark,
                 )
                 process.send_text("\x1b[B\n")
-                process.wait_for_text(
-                    f"[selected] [highlighted] {expected_language}",
+                language_result = process.wait_for_text(
+                    "Language [focused] [completed]",
                     after=language_mark,
                 )
+                self.assertIn(expected_language, language_result)
                 process.wait_for_text(
                     "Choose a setting to edit, save, or cancel.",
                     after=language_mark,
                 )
                 returned_mark = process.output_mark()
-                process.send_text(("\x1b[B" * 6) + "\n")
+                process.send_text(("\x1b[B" * 4) + "\n")
                 process.wait_for_text(
                     "[saved] Settings saved.",
                     after=returned_mark,
@@ -1205,19 +1206,25 @@ print("RESULT=" + outcome.kind.value)
         process.wait_for_text("story[lobby]> ")
         mark = process.output_mark()
         process.send_line("/settings")
-        process.wait_for_text("8. [available] Cancel", after=mark)
-        process.send_line("5")
-        process.wait_for_text("Codex model [settings] > ", after=mark)
+        process.wait_for_text("6. [available] Cancel", after=mark)
+        process.send_line("4")
+        process.wait_for_text("Providers > ", after=mark)
+        process.send_line("2")
+        process.wait_for_text("Agent settings", after=mark)
+        process.send_line("2")
+        process.wait_for_text("Model [Plot & Structure Architect] >", after=mark)
         model_mark = process.output_mark()
         process.send_line("/cancel")
-        process.wait_for_text("8. [available] Cancel", after=model_mark)
-        process.send_line("7")
+        process.wait_for_text("6. [available] Cancel", after=model_mark)
+        process.send_line("5")
         process.wait_for_text("Settings saved", after=mark)
         process.wait_for_text("story[lobby]> ", after=mark)
         process.send_line("/quit")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
         self.assertEqual(
-            self.workspace.read_json("config/system_defaults.json")["codex_model"],
+            self.workspace.read_json("config/agent_configs.json")["plot_architect"][
+                "codex_model"
+            ],
             "/cancel",
         )
         self.assertNotIn("\x1b", process.text_after(mark))

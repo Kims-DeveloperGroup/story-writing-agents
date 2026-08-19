@@ -37,8 +37,8 @@ from story_writing_agents.interactive_settings import (
     load_settings_state,
     save_settings_state,
     update_agent_backend,
-    update_codex_model,
-    update_codex_reasoning_effort,
+    update_agent_codex_model,
+    update_agent_codex_reasoning_effort,
     update_language,
     update_max_debate_rounds,
     update_persona,
@@ -129,9 +129,10 @@ class SettingsModelContractTests(SettingsTestCase):
             update_persona: ("state", "persona"),
             update_max_debate_rounds: ("state", "max_debate_rounds"),
             update_agent_backend: ("state", "agent_id", "backend"),
-            update_codex_model: ("state", "codex_model"),
-            update_codex_reasoning_effort: (
+            update_agent_codex_model: ("state", "agent_id", "codex_model"),
+            update_agent_codex_reasoning_effort: (
                 "state",
+                "agent_id",
                 "codex_reasoning_effort",
             ),
             save_settings_state: ("workspace", "state"),
@@ -365,13 +366,13 @@ class SettingsLoadingAndUpdateTests(SettingsTestCase):
                 "gemini",
             ),
             (
-                update_codex_model(state, " GPT-e\u0301 한🙂 "),
-                lambda value: value.system_defaults.codex_model,
+                update_agent_codex_model(state, PLOT_ARCHITECT, " GPT-e\u0301 한🙂 "),
+                lambda value: value.agent_configs[PLOT_ARCHITECT].codex_model,
                 " GPT-e\u0301 한🙂 ",
             ),
             (
-                update_codex_reasoning_effort(state, "xhigh"),
-                lambda value: value.system_defaults.codex_reasoning_effort,
+                update_agent_codex_reasoning_effort(state, PLOT_ARCHITECT, "xhigh"),
+                lambda value: value.agent_configs[PLOT_ARCHITECT].codex_reasoning_effort,
                 "xhigh",
             ),
         )
@@ -381,11 +382,11 @@ class SettingsLoadingAndUpdateTests(SettingsTestCase):
                 self.assertEqual(project(updated.pending), expected)
                 self.assertEqual(state.pending, original)
 
-        cleared_model = update_codex_model(cases[4][0], None)
-        cleared_effort = update_codex_reasoning_effort(cases[5][0], None)
-        self.assertIsNone(cleared_model.pending.system_defaults.codex_model)
+        cleared_model = update_agent_codex_model(cases[4][0], PLOT_ARCHITECT, None)
+        cleared_effort = update_agent_codex_reasoning_effort(cases[5][0], PLOT_ARCHITECT, None)
+        self.assertIsNone(cleared_model.pending.agent_configs[PLOT_ARCHITECT].codex_model)
         self.assertIsNone(
-            cleared_effort.pending.system_defaults.codex_reasoning_effort
+            cleared_effort.pending.agent_configs[PLOT_ARCHITECT].codex_reasoning_effort
         )
         agent_before = state.pending.agent_configs[PLOT_ARCHITECT]
         agent_after = cases[3][0].pending.agent_configs[PLOT_ARCHITECT]
@@ -408,10 +409,10 @@ class SettingsLoadingAndUpdateTests(SettingsTestCase):
                 lambda: update_agent_backend(state, PLOT_ARCHITECT, "CODEX"),
                 ConfigurationError,
             ),
-            (lambda: update_codex_model(state, "-unsafe"), ConfigurationError),
-            (lambda: update_codex_model(state, "bad\x1b"), ConfigurationError),
+            (lambda: update_agent_codex_model(state, PLOT_ARCHITECT, "-unsafe"), ConfigurationError),
+            (lambda: update_agent_codex_model(state, PLOT_ARCHITECT, "bad\x1b"), ConfigurationError),
             (
-                lambda: update_codex_reasoning_effort(state, "default"),
+                lambda: update_agent_codex_reasoning_effort(state, PLOT_ARCHITECT, "default"),
                 ConfigurationError,
             ),
             (lambda: update_language(object(), "EN"), TypeError),
@@ -479,13 +480,20 @@ class SettingsPersistenceTests(SettingsTestCase):
         for agent_id in ROSTER:
             self.assertEqual(
                 set(persisted_agents[agent_id]),
-                {"backend", "language", "persona"},
+                {
+                    "backend",
+                    "language",
+                    "persona",
+                    "codex_model",
+                    "codex_reasoning_effort",
+                },
             )
 
     def test_two_file_save_is_canonical_system_then_agent(self) -> None:
         state = update_agent_backend(
-            update_codex_reasoning_effort(
-                update_codex_model(update_language(self.load(), "JA"), "gpt-5"),
+            update_agent_codex_reasoning_effort(
+                update_agent_codex_model(update_language(self.load(), "JA"), PLOT_ARCHITECT, "gpt-5"),
+                PLOT_ARCHITECT,
                 "high",
             ),
             PLOT_ARCHITECT,
@@ -508,11 +516,14 @@ class SettingsPersistenceTests(SettingsTestCase):
                     "language": "JA",
                     "persona": "default_kim_eun_hee",
                     "max_debate_rounds": 1,
-                    "codex_model": "gpt-5",
-                    "codex_reasoning_effort": "high",
+                    "codex_model": None,
+                    "codex_reasoning_effort": None,
                 }
             ),
         )
+        persisted_agent = self.workspace.read_json(_AGENT_PATH)[PLOT_ARCHITECT]
+        self.assertEqual(persisted_agent["codex_model"], "gpt-5")
+        self.assertEqual(persisted_agent["codex_reasoning_effort"], "high")
         self.assertFalse(tuple(self.workspace.root.rglob("*.tmp")))
 
     def test_candidate_validation_precedes_reads_and_exact_conflicts_precede_writes(
@@ -566,7 +577,11 @@ class SettingsPersistenceTests(SettingsTestCase):
 
     def test_post_replace_failures_restore_every_attempted_target_exactly(self) -> None:
         state = update_agent_backend(
-            update_language(self.load(), "IT"),
+            update_agent_codex_reasoning_effort(
+                update_agent_codex_model(update_language(self.load(), "IT"), PLOT_ARCHITECT, "agent-model"),
+                PLOT_ARCHITECT,
+                "high",
+            ),
             PLOT_ARCHITECT,
             "gemini",
         )
