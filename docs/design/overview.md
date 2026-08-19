@@ -233,19 +233,29 @@ classDiagram
 
 ```mermaid
 flowchart LR
-    SR["sr: StoryRuntime"] --> AB["backend: AgentBackend"]
-    SR --> WS["ws: Workspace"]
-    SR --> SES["se: RuntimeSession"]
-    SR --> C["catalog: FilesystemConversationCatalog"]
-    SR --> ES["events: FilesystemConversationEventStore"]
-    SR --> MMS["searchSvc: ConversationMemoryService"]
-    SES --> CR["contextReq: DebateContextRequest"]
-    SES --> DR["result: DebateResult"]
-    AB --> B1["lead: BoundAgent"]
+    SR[StoryRuntime]
+    SES[RuntimeSession]
+    AB[AgentBackend]
+    WS[Workspace]
+    C[FilesystemConversationCatalog]
+    ES[FilesystemConversationEventStore]
+    B1[BoundAgent]
+    MMS[ConversationMemoryService]
+    CR[DebateContextRequest]
+    DR[DebateResult]
+
+    SR --> AB
+    SR --> WS
+    SR --> SES
+    SR --> C
+    SR --> ES
+    SR --> MMS
+    SES --> CR
+    SES --> DR
+    AB --> B1
     WS --> C
     WS --> ES
-
-    SES -.->|session('session-id')| SR
+    SES --> SR
 ```
 
 ### DTO-focused partials
@@ -253,16 +263,16 @@ flowchart LR
 ```mermaid
 classDiagram
     direction LR
-    class DebateContextRequest <<DTO>>
-    class DebateContextMode <<Enum>>
-    class DebateProgressEvent <<DTO>>
-    class DebateMessage <<DTO>>
-    class DebateResult <<DTO>>
-    class AgentRequest <<DTO>>
-    class AgentReply <<DTO>>
-    class ConversationRequest <<DTO>>
-    class ConversationReply <<DTO>>
-    class ConversationResult <<DTO>>
+    class DebateContextRequest
+    class DebateContextMode
+    class DebateProgressEvent
+    class DebateMessage
+    class DebateResult
+    class AgentRequest
+    class AgentReply
+    class ConversationRequest
+    class ConversationReply
+    class ConversationResult
 
     DebateContextRequest --> DebateContextMode : mode
     DebateProgressEvent --> DebateMessage : attaches revision state
@@ -277,25 +287,25 @@ classDiagram
 ```mermaid
 classDiagram
     direction LR
-    class ConversationRetrievalRequest <<DTO>>
-    class ConversationRetrievalAction <<DTO>>
-    class ConversationRetrievalSearchAction <<DTO>>
-    class ConversationRetrievalReadAction <<DTO>>
-    class ConversationRetrievalAnswerAction <<DTO>>
-    class ConversationRetrievalObservation <<DTO>>
-    class ConversationRetrievalSearchObservation <<DTO>>
-    class ConversationRetrievalReadObservation <<DTO>>
-    class ConversationRetrievalSource <<DTO>>
-    class ConversationRetrievalResult <<DTO>>
-    class ConversationRetrievalReply <<DTO>>
+    class ConversationRetrievalRequest
+    class ConversationRetrievalAction
+    class ConversationRetrievalSearchAction
+    class ConversationRetrievalReadAction
+    class ConversationRetrievalAnswerAction
+    class ConversationRetrievalObservation
+    class ConversationRetrievalSearchObservation
+    class ConversationRetrievalReadObservation
+    class ConversationRetrievalSource
+    class ConversationRetrievalResult
+    class ConversationRetrievalReply
 
     ConversationRetrievalRequest --> ConversationRetrievalAction : action loop
-    ConversationRetrievalAction <|-- ConversationRetrievalSearchAction
-    ConversationRetrievalAction <|-- ConversationRetrievalReadAction
-    ConversationRetrievalAction <|-- ConversationRetrievalAnswerAction
+    ConversationRetrievalSearchAction --> ConversationRetrievalAction
+    ConversationRetrievalReadAction --> ConversationRetrievalAction
+    ConversationRetrievalAnswerAction --> ConversationRetrievalAction
     ConversationRetrievalAction --> ConversationRetrievalObservation : returns untrusted event
-    ConversationRetrievalObservation <|-- ConversationRetrievalSearchObservation
-    ConversationRetrievalObservation <|-- ConversationRetrievalReadObservation
+    ConversationRetrievalSearchObservation --> ConversationRetrievalObservation
+    ConversationRetrievalReadObservation --> ConversationRetrievalObservation
     ConversationRetrievalSearchObservation --> ConversationRetrievalSource : produces source hits
     ConversationRetrievalReadObservation --> ConversationRetrievalSource : cites transcript events
     ConversationRetrievalReply --> ConversationRetrievalResult : adds source list
