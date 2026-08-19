@@ -70,7 +70,7 @@ from ..interactive_settings import (
     update_persona,
 )
 from ..interactive_terminal import (
-    _format_agent_reply_content,
+    format_agent_reply_content,
     AttachmentKind,
     Choice,
     ComposeMode,
@@ -1908,7 +1908,7 @@ class InteractiveController:
                         Field("Content", ""),
                     ),
                     content=(
-                        _format_agent_reply_content(event.content)
+                        format_agent_reply_content(event.content)
                         if event.kind is ConversationEventKind.AGENT_REPLY
                         else event.content
                     ),
@@ -2332,7 +2332,7 @@ class InteractiveController:
         self._semantic_output.write_component(
             Message(
                 _AGENT_PROMPT_ALIASES[agent_id],
-                _format_agent_reply_content(result.content),
+                format_agent_reply_content(result.content),
                 role=SemanticRole.AGENT,
                 state=ViewState.COMPLETED,
             )
@@ -3175,7 +3175,7 @@ class InteractiveController:
                             Field("Content", ""),
                         ),
                         content=(
-                            _format_agent_reply_content(event.content)
+                            format_agent_reply_content(event.content)
                             if event.kind is ConversationEventKind.AGENT_REPLY
                             else event.content
                         ),

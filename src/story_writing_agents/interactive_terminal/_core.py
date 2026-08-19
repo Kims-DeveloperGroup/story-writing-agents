@@ -65,7 +65,7 @@ from ._model import (
     sanitize_terminal_text,
 )
 from ._render import (
-    format_agent_reply_content as _format_agent_reply_content,
+    format_agent_reply_content,
     render_component,
     render_input_prompt,
     render_picker_fallback,
@@ -1029,7 +1029,7 @@ class InteractiveTerminal:
         self._write_component(
             Message(
                 alias,
-                _format_agent_reply_content(_required_text("text", text)),
+                format_agent_reply_content(_required_text("text", text)),
                 role=SemanticRole.AGENT,
                 state=ViewState.COMPLETED,
             )
