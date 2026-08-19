@@ -241,9 +241,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   included-context event list to provider payloads only when present; absent
   and fresh context requests retain the exact context-free payload. At
   construction it validates and snapshots the complete workspace system and
-  per-agent configuration once, resolves a non-null explicit model over the
-  persisted model, and retains the persisted reasoning effort and provider
-  routes for the backend lifetime. Optional
+  per-agent configuration once and retains any non-null explicit model
+  separately. Each bound Codex invocation resolves that explicit model over
+  its agent model and then the legacy system model, while reasoning resolves
+  from the agent and then the legacy system value; provider routes use their
+  existing explicit-over-agent-over-Codex precedence. All values remain fixed
+  for the backend lifetime. Optional
   `--model` and `--config model_reasoning_effort="LEVEL"` arguments are emitted
   in that order immediately after `exec` and before any resume marker; neither
   value changes provider-thread identity, bindings, fingerprints, manifests,
@@ -325,10 +328,12 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Supported surface:** Internal `ConfigManager`, `SystemDefaults`,
   `AgentConfig`, `ResolvedAgentConfig`, immutable roster-complete
   `ConfigurationSnapshot`, and `KNOWN_AGENT_BACKENDS`.
-  `SystemDefaults` retains its established positional fields and adds trailing
-  optional `codex_model` and `codex_reasoning_effort` fields. `ConfigManager`
-  owns the complete five-key system-default schema plus the shared safe-model
-  and fixed reasoning-effort validators. Package-internal
+  `SystemDefaults` retains its established positional fields and trailing
+  optional `codex_model` and `codex_reasoning_effort` fields. `AgentConfig`
+  likewise retains its first three positional fields and adds trailing optional
+  per-agent `codex_model` and `codex_reasoning_effort` fields. `ConfigManager`
+  owns both complete persisted schemas plus the shared safe-model and fixed
+  reasoning-effort validators. Package-internal
   `validate_configuration` validates both persisted documents as one complete
   candidate, `load_configuration_snapshot` reads and publishes one immutable
   pair, and `resolve_from_snapshot` applies live runtime and explicit backend
@@ -569,6 +574,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ListView` containing one `Record` per established callback, so the controller
   owns result counts and interruption boundaries without any remaining
   `write_status` or specialized dense-row call.
+  The settings editor exposes the exact six-row top level Language, Persona,
+  Maximum debate rounds, Providers, Save, and Cancel; Providers selects one
+  roster agent and then its Provider, Model, or Reasoning effort without
+  changing the active backend or runtime snapshot.
 - **Direct internal dependencies:** `agents`, `backend`, `cli_context`,
   `conversation_retrieval`, `conversation_search`, `conversations`, `errors`,
   `interactive_commands`, `interactive_controller._conversation_policy`,
@@ -800,7 +809,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   redacted `SettingsError`; the exact ordered `SETTINGS_LANGUAGES` and
   `SETTINGS_REASONING_EFFORTS`; `load_settings_state`, `update_language`,
   `update_persona`, `update_max_debate_rounds`, `update_agent_backend`,
-  `update_codex_model`, `update_codex_reasoning_effort`, and
+  `update_agent_codex_model`, `update_agent_codex_reasoning_effort`, and
   `save_settings_state`. The module has no package-facade export.
 - **Direct internal dependencies:** `agents`, `config`, `errors`, and
   `workspace`.
@@ -808,7 +817,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   UTF-8 bytes of both persisted configuration documents, one fully validated
   immutable configuration snapshot, and a safe lexical persona catalog with
   top-level-template precedence. Pure update operations replace only the
-  pending immutable candidate. Saving completely validates that candidate,
+  pending immutable candidate, including one agent's provider, model, or
+  reasoning value at a time. Legacy system model/reasoning values remain
+  unchanged fallback data rather than editable settings. Saving completely
+  validates that candidate,
   rereads both documents and the catalog for exact stale-state detection, and
   performs no write when the candidate is unchanged. Changed documents are
   serialized canonically and atomically replaced through `Workspace` in system-
@@ -1356,14 +1368,15 @@ every intermediate arrow. The current runtime graph is acyclic.
 ## Consistency Notes
 
 - `Workspace` initializes the canonical five-key system-default document but
-  never rewrites an existing one. `ConfigManager` owns full schema validation
-  and the shared Codex model/reasoning validators plus immutable complete
-  system-and-agent snapshots. Each `AgentBackend` validates and snapshots those
-  workspace-wide values once at construction, applies a
-  non-null explicit model over the persisted model, and alone projects the
-  resolved optional values into invocation-scoped Codex arguments. No model or
-  reasoning value enters agent configuration, bindings, fingerprints, thread
-  keys, lifecycle artifacts, request payloads, or active-backend refresh. A
+  never rewrites an existing one. `ConfigManager` owns full system and per-agent
+  schema validation and the shared Codex model/reasoning validators plus
+  immutable complete snapshots. Each `AgentBackend` validates and snapshots
+  those values once at construction and alone projects the per-bound-agent
+  invocation settings: a non-null explicit model precedes the per-agent and
+  legacy system model, while per-agent reasoning precedes the legacy system
+  value. Provider routing retains explicit-over-agent-over-Codex precedence.
+  Model and reasoning values do not enter bindings, fingerprints, thread keys,
+  lifecycle artifacts, request payloads, or active-backend refresh. A
   backend-bound `StoryRuntime` and its `PromptAssembler` reuse that same
   construction-time snapshot for provider routes, language, persona, and round
   defaults while session and explicit overrides remain live; settings saves
