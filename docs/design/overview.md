@@ -44,9 +44,9 @@ revision; all must approve. Blackboard and owner-isolated history stay separate.
 | `cli_context`, catalog, memory service, event store | Defaults, identity, scoped reads, and authoritative events |
 | `interactive_terminal` | Stable package-supported facade, package-internal real-CLI factory, and unlisted internal semantic adapter/component identities |
 | `interactive_terminal._core` | Established terminal API behavior, explicit ordinary/main/composition routing, resource-free semantic adapter, and terminal-leaf coordination |
-| `interactive_terminal._model`, `_controls`, `_render` | Immutable semantic foundation, pure current line transitions/main and composition suggestion projection, and pure safe responsive rendering |
-| `interactive_terminal._driver` | Sole real-CLI raw streams, capabilities, width, keys, cursor controls, writes, flushes, and restoration |
-| `interactive_line_editor` | Standalone compatibility facade over the unified driver |
+| `interactive_terminal._model`, `_controls`, `_render` | Immutable semantic/history foundation, pure line editing and bounded main-history transitions, main/composition suggestion projection, and pure safe responsive rendering |
+| `interactive_terminal._driver` | Sole real-CLI raw streams, capabilities, width, keys, cursor controls, writes, flushes, restoration, and one bounded process-local main-history store per instance |
+| `interactive_line_editor` | Standalone compatibility facade over one unified per-editor driver/history store |
 | `StoryRuntime`, `AgentBackend` | Orchestration/retrieval authority and provider resources |
 
 The supported import remains `from story_writing_agents.interactive_controller import InteractiveController`.
@@ -60,7 +60,9 @@ Its package facade preserves the exact existing public objects and signatures;
 package leaves are internal. The CLI calls one package-internal factory to
 construct a stream-backed terminal around one `RawTerminalDriver`. The
 standalone line-editor facade delegates to that same driver implementation and
-contains no second raw-terminal lifecycle.
+contains no second raw-terminal lifecycle. Each constructed stream terminal or
+standalone editor has one isolated 100-entry process-local main-command store;
+the callback-only terminal and controller have none.
 
 The semantic models, responsive plain/fixed-ANSI renderer, and capability
 profiles are implemented. Orientation, status/inspection, central errors and
@@ -113,10 +115,12 @@ component identities and resource-free semantic adapter; its policy leaves use
 facade error contracts rather than terminal package leaves. Terminal core
 depends on its pure controls, renderer, model, sole driver, and canonical
 command/agent metadata. It binds main and composition preview providers per
-read without retaining prompt mode; subject and confirmation reads remain
-ordinary. The controller sends one typed component per established callback
-through the adapter and otherwise depends downward on runtime, presentation,
-and storage. Retrieval's handler port prevents backend-to-orchestrator access.
+read without retaining prompt mode. Main reads use the driver's pure bounded
+history transition; composition remains history-free, and subject and
+confirmation reads remain ordinary. The controller sends one typed component
+per established callback through the adapter and otherwise depends downward on
+runtime, presentation, and storage. Retrieval's handler port prevents
+backend-to-orchestrator access.
 
 This supports deterministic collaborators, not a dynamic plugin system. Exact
 imports live in [Package API](../reference/package-api.md), lifecycle meaning in

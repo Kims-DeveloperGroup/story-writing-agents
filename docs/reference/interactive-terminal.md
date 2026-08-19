@@ -5,7 +5,8 @@
 > central errors/recovery, and accepted management, advisory, retrieval, and
 > consensus output use its semantic renderer. Full/context help, agent roster,
 > session/conversation lists, search, transcript, and focused history now do as
-> well. Four composer-only generic status records retain their established
+> well. Capable main input now provides bounded process-local Up/Down command
+> history. Four composer-only generic status records retain their established
 > presentation pending component integration.
 
 ## Public API
@@ -46,19 +47,24 @@ sanitize_terminal_text(text: str) -> str
 construction continues to use `read_line` for composition, subjects, and
 confirmation. The CLI's package-internal wiring separates ordinary, main, and
 composition reads without changing this signature or `__all__`. Record width
-starts at 20. The terminal owns no lifecycle or storage.
+starts at 20. Callback-constructed terminals own no history, lifecycle, or
+storage; the stream driver's process-local history is internal.
 
 The exact `interactive_line_editor.__all__` remains
 `SlashCommandSuggestion`, `slash_command_suggestions`, and
 `InteractiveMainLineEditor`; its constructor and `read_line(prompt)` are
-unchanged. Composition-provider selection is package-internal, not an added
-supported API.
+unchanged. Its public `read_line()` uses one per-editor process-local main
+history store; composition-provider selection and the history-free contextual
+route are package-internal, not added supported API.
 
 For controller wiring, the package facade also exposes the unlisted canonical
 identities `InteractiveSemanticOutput`, `Field`, `Message`, `Notice`, `Panel`,
 `Record`, `Section`, `ListView`, `SemanticRole`, and `ViewState`. They are
 package-internal, absent from `__all__` and the root package, and are not a
-supported public API.
+supported public API. The facade also binds the package-internal
+`MainInputHistoryState`, `MainInputControlState`,
+`append_main_input_history`, and `transition_main_input` identities used by the
+compatibility editor; they likewise remain unlisted and unsupported.
 The narrow internal adapter has these signatures:
 
 ```python
@@ -82,16 +88,18 @@ the final LF; failures propagate without a retry.
 ## Implemented semantic output and deferred presentation
 
 The import-compatible package contains private immutable semantic components
-and states, pure current one-line transitions and exact slash-prefix
+and states, pure one-line and main-history transitions, exact slash-prefix
 projection, a responsive structured plain/fixed-ANSI renderer, capability
 profiles, one raw driver, and one real-CLI stream factory. These internal seams
 support architecture and deterministic testing; they add no public theme API
-or public component types.
+or public component/control types.
 
 The real CLI factory constructs one `InteractiveTerminal` around one raw
 driver. That driver alone owns its streams, capability/width observation, key
 decoding, functional cursor sequences, raw-mode activation/restoration, writes,
-and flushes. `interactive_line_editor.InteractiveMainLineEditor` remains a
+flushes, and one bounded process-local main history store. Each separate stream
+terminal or compatibility editor therefore has an isolated store.
+`interactive_line_editor.InteractiveMainLineEditor` remains a
 standalone compatibility facade with its exact constructor and `read_line`
 surface, delegating to the same driver implementation rather than owning a
 second terminal lifecycle. Callback construction remains deterministic plain
@@ -133,9 +141,9 @@ arguments and emit the same fact order through semantic `Panel`, `ListView`, or
 `ListView` for each established row callback. The four `write_status` calls in
 the terminal composer remain established plain records pending #86; the
 controller has no generic `write_status` call site. Contextual composition
-previews are implemented as documented below. History navigation, selectable
-palettes/fixed values, component-integrated composer/confirmation, pickers, and
-`/settings` are not currently available.
+previews and main-command history are implemented as documented below.
+Selectable palettes/fixed values, component-integrated composer/confirmation,
+pickers, and `/settings` are not currently available.
 
 ## Prompts and ordinary presentation
 
@@ -211,17 +219,49 @@ registry order (not output layout):
 /conversation /search /transcript /inspect /history /status /help /? /quit /exit
 ```
 
-Case-sensitive prefixes filter; whitespace, no match, submission,
-or control clears it. Tokens neither complete nor reflect scope gates; `/help`
-remains authoritative.
+Case-sensitive prefixes filter. Whitespace, no match, or submission clears the
+list; every edit or history recall recomputes it from the exact visible buffer.
+Tokens neither complete nor reflect scope gates; `/help` remains authoritative.
 The main-invalid `/compose`, `/send`, and `/cancel` are excluded. Composition
 uses the separate fixed preview below; subject and confirmation prompts keep
 ordinary line reads. Editing, control keys, fallbacks, and restoration are in
 [Terminal safety](../operations/terminal-safety.md#live-editor-boundary).
-The lists are not selectable: Tab does not apply a suggestion, Shift-Tab has no
-palette action, and Up/Down history is unavailable in the current foundation.
-Future palette/history coordination is specified in the
+The list is not a selectable overlay: Up/Down navigate command history even
+while it is visible. Tab does not apply a suggestion; Tab, Shift-Tab, and Escape
+have no current main-input action. Future palette/history coordination is
+specified in the
 [design contract](../design/interactive-cli-design-system.md#main-command-palette-and-fixed-choices).
+
+## Main-command history
+
+Each real stream terminal and each `InteractiveMainLineEditor` owns one
+driver-local store of at most 100 main-prompt entries. Up recalls older entries;
+Down recalls newer entries. The first Up saves the exact current draft and
+cursor, and Down past the newest entry restores both. Recalled text is an
+editable copy with the cursor at its end. Further navigation can replace that
+edited copy without changing the stored entry.
+
+The driver records each successfully completed exact nonblank main buffer once,
+before the existing parser runs. Leading and trailing whitespace are preserved;
+invalid command text, duplicates, `/quit`, ordinary-line fallback results, and
+a nonempty configured VEOF commit are therefore eligible. The 101st entry
+evicts only the oldest. The exact visible submitted buffer still reaches the
+parser once.
+
+Empty or whitespace-only input, Ctrl-C, empty configured VEOF, physical stream
+EOF, incomplete input, invalid fallback framing, and operations that fail
+without returning an accepted line are not recorded. Composition and its
+contextual suggestions, conversation subject, confirmation, previews, and
+uncommitted edits neither navigate nor mutate the store. A line-fallback main
+read can add an entry, but the component supplies no live arrow navigation in
+that fallback; the same entry can be recalled on a later capable read from the
+same driver.
+
+History lasts only for that driver instance and is never persisted to the
+workspace, transcripts, configuration, environment, provider sessions, or a
+user history file. The pure internal future-overlay seam suppresses history
+arrows by consuming them when marked open, but the current preview never opens
+it; #79 will connect that seam when selectable palettes are implemented.
 
 ## Composition live suggestions
 

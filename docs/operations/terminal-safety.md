@@ -32,6 +32,11 @@ flush, or restoration implementation. Constructing either callback terminal or
 driver retains collaborators without reading, writing, flushing, inspecting a
 stream, or changing terminal attributes.
 
+Each stream terminal or compatibility editor constructs one driver, and that
+driver owns one isolated bounded main-command history store alongside its raw
+resources. The callback-only `InteractiveTerminal` and controller own no
+history. Construction still performs no I/O, and the store is never persisted.
+
 Capability observation evaluates input and output independently. Live raw mode
 requires a complete POSIX `termios` interface, a nonempty non-`dumb` `TERM`,
 capable input and output TTY descriptors, a readable input, a writable/flushable
@@ -39,6 +44,11 @@ output, and reliable size access. Missing, non-TTY, `TERM=dumb`, non-POSIX, or
 uncertain capability selects safe ordinary-line fallback without raw mode or
 cursor controls. This component fallback does not bypass the installed CLI's
 earlier two-stream TTY guard.
+
+A successful ordinary-line fallback main read is eligible for the same
+driver-local history store. The fallback itself provides no component-owned
+live Up/Down navigation; if a later read on that driver becomes capable, its
+live editor can recall the earlier commit.
 
 The output descriptor supplies width. During capability observation, a missing,
 failing, nonpositive, or invalid result falls back to 80 columns; a reliable
@@ -159,11 +169,14 @@ line-editor compatibility facade delegates to this same driver implementation.
 
 An active read disables canonical input and echo, keeps a Unicode
 code-point buffer, and supports insertion, Left/Right, Home/End,
-Backspace/Delete, Enter, and configured VINTR/VEOF. Enter submits; VEOF submits
-nonempty text or returns EOF when empty; VINTR returns interrupt. Submission
-clears the panel; failure attempts it; both restore captured attributes.
-Active failures propagate after restoration; restoration uncertainty is fatal
-`internal_error`. See the exact
+Backspace/Delete, Enter, and configured VINTR/VEOF. On main input, Up/Down also
+navigate the driver's history; on composition they remain history-free. Enter
+submits; VEOF submits nonempty text or returns EOF when empty; VINTR returns
+interrupt. Submission clears the panel; failure attempts it; both restore
+captured attributes. A successful live main commit is appended only after
+display cleanup and terminal restoration complete. Active failures propagate
+after restoration; restoration uncertainty is fatal `internal_error`. See the
+exact
 [main](../reference/interactive-terminal.md#main-prompt-live-suggestions) and
 [composition](../reference/interactive-terminal.md#composition-live-suggestions)
 tokens.
@@ -175,14 +188,28 @@ once to the terminal/controller boundary. Main command previews remain
 registry-backed. Composition preview is the fixed ordered `/send`, `/cancel`
 set, and whitespace or a nonmatch clears it.
 
+The current main preview is not an open selectable overlay. Up/Down therefore
+navigate history even while `[suggestions]` is visible. Tab, Shift-Tab, and
+Escape have no current completion action. The pure overlay-open transition seam
+suppresses history arrows for future #79 integration but is not connected to
+the current preview.
+
 ## Other input and process-local state
 
 Escaping does not change a returned `TerminalAction`. Composition keeps exact
 LF-joined lines per call; discard returns counts, not text. This is not secure
 erasure because terminal/process memory may retain copies.
 
-The component stores no search index, transcript, or history. Command-looking
-content and replies are never reparsed or executed.
+The driver stores at most 100 exact nonblank completed main buffers. Invalid
+commands, duplicates, `/quit`, fallback results, and nonempty configured VEOF
+commits are eligible because storage occurs at the completed read boundary
+before the parser. Empty/blank input, Ctrl-C, empty VEOF, physical stream EOF,
+invalid fallback framing, and failed operations are excluded. Composition,
+subject, and confirmation input never navigate or mutate the store. The store
+has no filesystem, environment, transcript, configuration, provider-session,
+or user-history-file representation and ends with its driver instance. The
+component stores no search index or story transcript. Command-looking content
+and replies are never reparsed or executed.
 
 Terminal errors are presentation-only, not transcript `runtime_error` events.
 Stored runtime diagnostics use separate redaction and a 4096-character cap;
