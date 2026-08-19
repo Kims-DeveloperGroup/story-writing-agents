@@ -1291,7 +1291,7 @@ class SuggestionTests(ParserAssertions, unittest.TestCase):
             ("/euit", None),
             ("/Run", "/run"),
             ("/RUN", None),
-            ("@plto text", "@plot_architect"),
+            ("@plto text", "@plot"),
             ("@plxxx text", None),
             ("@lat text", None),
             ("/help rnx", "/run"),
@@ -1325,7 +1325,9 @@ class SuggestionTests(ParserAssertions, unittest.TestCase):
                 )
 
         agent_candidates = {
-            alias: f"@{agent_id}" for alias, agent_id in AGENT_ALIASES.items()
+            alias: f"@{route.prompt_alias}"
+            for route in EXPECTED_AGENT_ROUTES
+            for alias in route.aliases
         }
         agent_mutations: set[str] = set()
         for candidate in agent_candidates:
@@ -1545,15 +1547,9 @@ class CommandCompletionProjectionTests(unittest.TestCase):
     HELP = ("/compose", "/send", "/cancel", *ROOT)
     AGENTS = (
         "lead",
-        "orchestrator",
-        "lead_orchestrator",
         "plot",
-        "plot_architect",
         "character",
-        "character_custodian",
         "execution",
-        "prose",
-        "execution_specialist",
     )
 
     def test_context_model_is_exact_frozen_slotted_picklable_and_internal(self) -> None:
@@ -1619,6 +1615,8 @@ class CommandCompletionProjectionTests(unittest.TestCase):
         cases = (
             ("/session list", 9, "session.subcommand", 9, 13),
             ("/help run", 6, "help.command", 6, 9),
+            ("/to plot_architect", 6, "target.agent", 4, 18),
+            ("/persona character_custodian", 12, "persona.agent", 9, 28),
             ("/run --fresh", 5, "run.flag", 5, 12),
             ("/session create tail", 11, "session.subcommand", 9, 15),
             ("/session\tlist", 9, "session.subcommand", 9, 13),
