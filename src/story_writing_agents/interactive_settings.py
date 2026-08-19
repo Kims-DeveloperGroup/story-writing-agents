@@ -301,22 +301,34 @@ def save_settings_state(workspace: Workspace, state: SettingsState) -> None:
 
     system_text = _canonical_json(system_value)
     agent_text = _canonical_json(agent_value)
-    system_written = False
+    attempted: list[tuple[str, str]] = []
     try:
         if system_changed:
-            workspace.write_text(_SYSTEM_DEFAULTS_PATH, system_text)
-            system_written = True
-        if agent_changed:
-            workspace.write_text(_AGENT_CONFIGS_PATH, agent_text)
-    except Exception as write_failure:
-        if system_written:
-            try:
-                workspace.write_text(
+            attempted.append(
+                (
                     _SYSTEM_DEFAULTS_PATH,
                     state.baseline.system_defaults_bytes.decode("utf-8"),
                 )
-            except Exception as rollback_failure:
-                raise SettingsError(SettingsErrorKind.ROLLBACK) from rollback_failure
+            )
+            workspace.write_text(_SYSTEM_DEFAULTS_PATH, system_text)
+        if agent_changed:
+            attempted.append(
+                (
+                    _AGENT_CONFIGS_PATH,
+                    state.baseline.agent_configs_bytes.decode("utf-8"),
+                )
+            )
+            workspace.write_text(_AGENT_CONFIGS_PATH, agent_text)
+    except Exception as write_failure:
+        rollback_failure: Exception | None = None
+        for relative, original_text in reversed(attempted):
+            try:
+                workspace.write_text(relative, original_text)
+            except Exception as failure:
+                if rollback_failure is None:
+                    rollback_failure = failure
+        if rollback_failure is not None:
+            raise SettingsError(SettingsErrorKind.ROLLBACK) from rollback_failure
         raise SettingsError(SettingsErrorKind.WRITE) from write_failure
 
 
