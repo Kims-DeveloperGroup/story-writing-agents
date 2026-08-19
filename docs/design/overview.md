@@ -159,74 +159,112 @@ imports live in [Package API](../reference/package-api.md), lifecycle meaning in
 
 ## Core component relations (class, object, DTO)
 
-### Overall class-level ownership
+### Overall relations split by scenario
+
+This section is intentionally partitioned by scenario so each diagram stays small and focused.
+
+### Scenario 1: Interactive command path
 
 ```mermaid
-classDiagram
-    direction LR
-    class StoryRuntime
-    class RuntimeSession
-    class AgentBackend
-    class BoundAgent
-    class Workspace
-    class FilesystemConversationCatalog
-    class FilesystemConversationEventStore
-    class ConversationCatalog
-    class ConversationEventStore
-    class ConversationMemoryService
-    class InteractiveController
+flowchart LR
+    IC[InteractiveController]
+    RT[StoryRuntime]
+    WS[Workspace]
+    CS[RuntimeSession]
+    AB[AgentBackend]
 
-    class DebateContextRequest
-    class DebateContextMode
-    class DebateResult
-    class DebateMessage
-    class DebateProgressEvent
-    class AgentDefinition
-    class AgentRequest
-    class AgentReply
-    class ConversationRequest
-    class ConversationReply
-    class ConversationResult
-    class ConversationRetrievalRequest
-    class ConversationRetrievalReply
-    class ConversationRetrievalResult
-    class ConversationRetrievalAction
-    class ConversationRetrievalObservation
+    IC --> RT
+    IC --> WS
+    RT --> WS
+    RT --> AB
+    RT --> CS
+    CS --> RT
+```
 
-    StoryRuntime o-- RuntimeSession : owns
-    StoryRuntime --> AgentBackend : delegates provider orchestration
-    StoryRuntime --> Workspace : persistence boundary
-    StoryRuntime --> ConversationMemoryService : search/read scope
-    StoryRuntime --> ConversationCatalog : catalog operations
-    StoryRuntime --> ConversationEventStore : transcript operations
-    StoryRuntime --> DebateContextRequest : context controls
-    StoryRuntime --> DebateResult : results
-    StoryRuntime --> ConversationRetrievalRequest : optional bounded turns
+### Scenario 2: Debate and advisory orchestration
 
-    RuntimeSession --> StoryRuntime : bound session context
-    RuntimeSession --> AgentRequest : build advisory payload
-    RuntimeSession --> AgentReply : validates reply
-    RuntimeSession --> DebateMessage : debate messages
-    RuntimeSession --> DebateProgressEvent : emits progress
-    RuntimeSession --> DebateContextRequest : optional debate context
-    RuntimeSession --> DebateResult : returns result
-    RuntimeSession --> ConversationRequest : send plain turns
-    RuntimeSession --> ConversationReply : validates reply
-    RuntimeSession --> ConversationResult : returns result
-    RuntimeSession --> ConversationRetrievalReply : returns bounded result
+```mermaid
+flowchart LR
+    RT[StoryRuntime]
+    CS[RuntimeSession]
+    AB[AgentBackend]
+    BA[BoundAgent]
+    AD[AgentDefinition]
+    AReq[AgentRequest]
+    ARep[AgentReply]
+    DReq[DebateContextRequest]
+    DMode[DebateContextMode]
+    DMsg[DebateMessage]
+    DProg[DebateProgressEvent]
+    DRes[DebateResult]
+    CReq[ConversationRequest]
+    CRep[ConversationReply]
+    CRes[ConversationResult]
 
-    AgentBackend --> BoundAgent : manages per-agent bindings
-    BoundAgent --> AgentDefinition : role configuration
-    AgentBackend --> ConversationRetrievalAction : handles retrieval actions
-    BoundAgent --> ConversationRetrievalObservation : receives untrusted observations
+    RT --> AB
+    AB --> BA
+    BA --> AD
+    RT --> CS
+    CS --> AReq
+    CS --> ARep
+    CS --> DReq
+    DReq --> DMode
+    CS --> DMsg
+    CS --> DProg
+    CS --> DRes
+    CS --> CReq
+    CS --> CRep
+    CS --> CRes
+```
 
-    Workspace --> FilesystemConversationCatalog : constructs
-    Workspace --> FilesystemConversationEventStore : constructs
-    FilesystemConversationCatalog ..|> ConversationCatalog
-    FilesystemConversationEventStore ..|> ConversationEventStore
+### Scenario 3: Conversation storage and catalog
 
-    InteractiveController --> StoryRuntime : session/runtime commands
-    InteractiveController --> Workspace : local attachment scope
+```mermaid
+flowchart LR
+    RT[StoryRuntime]
+    WS[Workspace]
+    FC[FilesystemConversationCatalog]
+    FCat[ConversationCatalog]
+    ES[FilesystemConversationEventStore]
+    ESvc[ConversationEventStore]
+    MMS[ConversationMemoryService]
+
+    RT --> WS
+    RT --> MMS
+    WS --> FC
+    WS --> ES
+    FC --> FCat
+    ES --> ESvc
+```
+
+### Scenario 4: Bounded retrieval flow
+
+```mermaid
+flowchart LR
+    CS[RuntimeSession]
+    CRReq[ConversationRetrievalRequest]
+    CRAct[ConversationRetrievalAction]
+    CRS[ConversationRetrievalSearchAction]
+    CRR[ConversationRetrievalReadAction]
+    CRA[ConversationRetrievalAnswerAction]
+    COBS[ConversationRetrievalObservation]
+    CRSObs[ConversationRetrievalSearchObservation]
+    CRRObs[ConversationRetrievalReadObservation]
+    CRRep[ConversationRetrievalReply]
+    CRRes[ConversationRetrievalResult]
+    AB[AgentBackend]
+    BHA[ConversationRetrievalActionHandler]
+
+    CS --> CRReq
+    CRReq --> CRAct
+    CRAct --> CRS
+    CRAct --> CRR
+    CRAct --> CRA
+    CRAct --> COBS
+    CRS --> CRSObs
+    CRR --> CRRObs
+    CRRep --> CRRes
+    AB --> BHA
 ```
 
 ### Object-level runtime topology (example)
