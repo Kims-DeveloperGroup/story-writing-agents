@@ -804,6 +804,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_interactive_terminal_foundation.py`,
   `tests/test_interactive_terminal_composer.py`,
   `tests/test_interactive_terminal_history.py`,
+  `tests/test_interactive_terminal_picker.py`,
   `tests/test_interactive_terminal_views.py`, `tests/test_interactive_pty.py`,
   `docs/design/overview.md`,
   `docs/reference/interactive-terminal.md`,
@@ -852,6 +853,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_interactive_terminal_foundation.py`,
   `tests/test_interactive_terminal_composer.py`,
   `tests/test_interactive_terminal_history.py`,
+  `tests/test_interactive_terminal_picker.py`,
   `tests/test_interactive_terminal_views.py`, and
   `docs/design/interactive-cli-design-system.md`; focused component, renderer,
   control, capability, and compatibility coverage belongs to the interactive
@@ -895,6 +897,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_interactive_terminal_foundation.py`,
   `tests/test_interactive_terminal_composer.py`,
   `tests/test_interactive_terminal_history.py`,
+  `tests/test_interactive_terminal_picker.py`,
   `docs/design/interactive-cli-design-system.md`, and
   `docs/reference/interactive-command-parser.md`.
 
@@ -923,6 +926,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_interactive_terminal_completion.py`,
   `tests/test_interactive_terminal_foundation.py`,
   `tests/test_interactive_terminal_composer.py`,
+  `tests/test_interactive_terminal_picker.py`,
   `tests/test_interactive_terminal_views.py`,
   `docs/design/interactive-cli-design-system.md`, and
   `docs/operations/terminal-safety.md`; focused rich/plain/narrow/wide coverage
@@ -975,6 +979,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_interactive_terminal_foundation.py`,
   `tests/test_interactive_terminal_composer.py`,
   `tests/test_interactive_terminal_history.py`,
+  `tests/test_interactive_terminal_picker.py`,
   `tests/test_interactive_pty.py`,
   `docs/design/interactive-cli-design-system.md`, and
   `docs/operations/terminal-safety.md`.
@@ -1037,6 +1042,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_interactive_terminal_completion.py`,
   `tests/test_interactive_terminal_foundation.py`,
   `tests/test_interactive_terminal_composer.py`,
+  `tests/test_interactive_terminal_picker.py`,
   `tests/test_interactive_terminal_views.py`, `tests/test_interactive_pty.py`,
   `docs/design/overview.md`,
   `docs/reference/interactive-terminal.md`,
