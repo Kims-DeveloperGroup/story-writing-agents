@@ -339,6 +339,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   owns no persistence.
 - **Primary verification/documentation:** `tests/test_workspace_and_config.py`,
   `tests/test_prompts.py`, `tests/test_codex_backend.py`,
+  `tests/test_interactive_settings.py`,
   `docs/reference/configuration/agent-configuration.md`, and
   `docs/reference/configuration/runtime-overrides.md`.
 
@@ -816,9 +817,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   restoration failure produces the fixed rollback category. The module owns no
   terminal, controller, backend, runtime, provider, network, subprocess, or
   import-time operational resource.
-- **Primary verification/documentation:** No dedicated checked-in verification
-  or documentation reference exists yet; sequential test and documentation
-  passes own that coverage.
+- **Primary verification/documentation:** `tests/test_interactive_settings.py`,
+  `docs/design/interactive-cli-design-system.md`,
+  `docs/reference/configuration/agent-configuration.md`, and
+  `docs/operations/filesystem-safety.md`.
 
 ### `story_writing_agents.interactive_terminal`
 
