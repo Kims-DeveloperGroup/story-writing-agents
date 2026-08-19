@@ -670,7 +670,10 @@ def _completion_token_span(buffer: str, cursor: int) -> tuple[int, int]:
     """Return the maximal ASCII-delimited token active at one boundary."""
 
     if cursor > 0 and buffer[cursor - 1] in " \t":
-        return cursor, cursor
+        end = cursor
+        while end < len(buffer) and buffer[end] not in " \t":
+            end += 1
+        return cursor, end
     start = cursor
     while start > 0 and buffer[start - 1] not in " \t":
         start -= 1
