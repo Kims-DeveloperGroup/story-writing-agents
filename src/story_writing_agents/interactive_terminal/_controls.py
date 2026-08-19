@@ -554,12 +554,13 @@ def transition_picker_fallback(
     ):
         return _reject_picker(state)
 
-    try:
-        ordinal = int(answer)
-    except ValueError:
+    choice_count_text = str(len(state.picker.choices))
+    if len(answer) > len(choice_count_text) or (
+        len(answer) == len(choice_count_text)
+        and answer > choice_count_text
+    ):
         return _reject_picker(state)
-    if ordinal > len(state.picker.choices):
-        return _reject_picker(state)
+    ordinal = int(answer)
     choice = state.picker.choices[ordinal - 1]
     if not choice.enabled:
         return _reject_picker(state)
