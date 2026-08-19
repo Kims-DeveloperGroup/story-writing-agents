@@ -111,9 +111,11 @@ The 101st entry evicts only the oldest. Nothing is persisted.
 Main matching is exact and case-sensitive at the cursor, with ASCII space/tab
 token boundaries. Root offers 21 main-available registry tokens, help offers 24
 including the composition-only commands, and agent-valued positions offer the
-10 canonical IDs and aliases; runtime values are not synthesized. Fixed-only
-no-match positions show an empty open palette, while mixed free-value slots
-close it. Filtering retains an eligible highlight. The first changing Tab
+four preferred prompt aliases—`lead`, `plot`, `character`, and `execution`—in
+route order. The parser still accepts all ten declared route aliases; runtime
+values are not synthesized. Fixed-only no-match positions show an empty open
+palette, while mixed free-value slots close it. Filtering retains an eligible
+highlight. The first changing Tab
 saves the full buffer/cursor snapshot; edits in the same grammar position keep
 it, and a grammar-position change resets it. Enter submits only the visible
 buffer to the parser once. The generic single-select picker and cancellable

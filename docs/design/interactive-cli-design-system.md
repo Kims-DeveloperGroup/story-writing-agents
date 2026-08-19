@@ -276,12 +276,13 @@ compatibility, but no internal composer call site uses it.
 A leading slash automatically opens `SuggestionPalette` at a recognized
 grammar position. Root candidates are the 21 main-available command tokens in
 registry order. Help offers those 21 plus `/compose`, `/send`, and `/cancel`;
-agent-valued positions expose the 10 canonical IDs and accepted aliases in
-route order. Other implemented finite positions expose their static
-subcommands or options. Runtime values such as session, conversation, debate,
-query, prompt, subject, and file-path text are never candidates. Fixed-only
-positions retain an open empty palette when a prefix has no match; mixed
-fixed/free positions close the palette for a free-value slot.
+agent-valued positions expose the four preferred prompt aliases—`lead`, `plot`,
+`character`, and `execution`—in route order. The parser continues to accept all
+ten declared route aliases. Other implemented finite positions expose their
+static subcommands or options. Runtime values such as session, conversation,
+debate, query, prompt, subject, and file-path text are never candidates.
+Fixed-only positions retain an open empty palette when a prefix has no match;
+mixed fixed/free positions close the palette for a free-value slot.
 
 Candidate and active-token matching are exact and case-sensitive. ASCII space
 and tab alone delimit the cursor-aware replacement span. Completion replaces
@@ -314,9 +315,10 @@ Fixed command arguments are palette candidates only when the existing grammar
 exposes a finite canonical set. They do not add parser rules, authorization,
 runtime actions, or fuzzy matching. Confirmation choices remain owned by the
 confirmation control rather than the main-command palette. Finite choices
-include canonical agent identifiers and accepted aliases for agent-target
-positions when exposed by canonical command-route metadata; the palette
-projects that metadata and does not duplicate parser grammar.
+include the preferred agent prompt aliases for agent-target positions when
+exposed by canonical command-route metadata; all ten declared route aliases
+remain parser-compatible, and the palette does not duplicate those aliases or
+otherwise duplicate parser grammar.
 
 ### Picker semantics
 
