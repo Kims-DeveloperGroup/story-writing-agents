@@ -1617,18 +1617,72 @@ class CommandCompletionProjectionTests(unittest.TestCase):
                     (position, start, end),
                 )
 
+        fixed_cases = (
+            ("/run --fresh", (5, 8, 12), "run.flag", 5, 12, ("--fresh",)),
+            (
+                "/conversation list --all",
+                (19, 22, 24),
+                "conversation.list.flag",
+                19,
+                24,
+                ("--all",),
+            ),
+            (
+                "/transcript c --from",
+                (14, 17, 20),
+                "transcript.after_id.flag",
+                14,
+                20,
+                ("--from",),
+            ),
+            (
+                "/transcript c 24 --from",
+                (17, 20, 23),
+                "transcript.after_count.flag",
+                17,
+                23,
+                ("--from",),
+            ),
+            ("/inspect la", (9, 10, 11), "inspect.argument", 9, 11, ("last",)),
+            ("/inspect last", (9, 11, 13), "inspect.argument", 9, 13, ("last",)),
+        )
+        for buffer, cursors, position, start, end, replacements in fixed_cases:
+            for cursor in cursors:
+                with self.subTest(buffer=buffer, cursor=cursor):
+                    self.assertEqual(
+                        project_command_completion(buffer, cursor),
+                        CommandCompletionContext(
+                            position,
+                            start,
+                            end,
+                            replacements,
+                        ),
+                    )
+
     def test_dynamic_and_invalid_grammar_positions_have_no_projection(self) -> None:
         cases = (
             ("", 0), ("ordinary", 3), (" /", 2), ("/say ", 5),
-            ("/to plot ", 9), ("/persona plot ", 14), ("/run prompt", 6),
-            ("/conversation list query", 20), ("/conversation use ", 18),
-            ("/inspect debate", 10), ("/transcript --from ", 19),
+            ("/to plot ", 9), ("/persona plot ", 14),
+            ("/conversation use ", 18), ("/transcript --from ", 19),
             ("/transcript c nope ", 19), ("/transcript c 0 ", 16),
             ("/session list ", 14), ("/HELP ", 6),
         )
         for buffer, cursor in cases:
             with self.subTest(buffer=buffer, cursor=cursor):
                 self.assertIsNone(project_command_completion(buffer, cursor))
+
+        free_cases = (
+            ("/run prompt", (5, 8, 11)),
+            ("/conversation list query", (19, 21, 24)),
+            ("/transcript c 24", (14, 15, 16)),
+            ("/inspect debate", (9, 12, 15)),
+        )
+        for buffer, cursors in free_cases:
+            for cursor in cursors:
+                with self.subTest(buffer=buffer, cursor=cursor):
+                    self.assertIsNone(
+                        project_command_completion(buffer, cursor)
+                    )
 
     def test_partial_tokens_preserve_full_order_for_control_side_filtering(
         self,
