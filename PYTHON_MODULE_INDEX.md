@@ -521,13 +521,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   retrieval-source, and other presentation validation helpers are package
   internal, and the project-root facade does not re-export this class or module.
   The controller constructs closed semantic components for the migrated
-  high-frequency scope, status, inspection, management, directive, routing,
-  advisory, retrieval, and consensus records through the terminal facade's
-  unlisted `InteractiveSemanticOutput`; it retains that adapter alongside the
-  same terminal used for input and deferred legacy writers. Thirty-five
-  migrated status sites use this typed seam, while the eleven focused-history,
-  list, search, and transcript sites remain exact `write_status` calls for the
-  deferred information-dense view migration.
+  high-frequency and information-dense scope, status, inspection, management,
+  directive, routing, advisory, retrieval, consensus, focused-history, list,
+  search, and transcript records through the terminal facade's unlisted
+  `InteractiveSemanticOutput`; it retains that adapter alongside the same
+  terminal used for input and terminal-owned semantic writers. Ordered session,
+  conversation, search, transcript, and focused-history rows use one positioned
+  `ListView` containing one `Record` per established callback, so the controller
+  owns result counts and interruption boundaries without any remaining
+  `write_status` or specialized dense-row call.
 - **Direct internal dependencies:** `agents`, `backend`, `cli_context`,
   `conversation_retrieval`, `conversation_search`, `conversations`, `errors`,
   `interactive_commands`, `interactive_controller._conversation_policy`,
@@ -560,8 +562,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   unsuccessfully interrupted Runner close retains its private reference.
   `AgentBackend` retains the actual access claim, manifest, subprocess, and
   provider-thread resources. Through public collaborators the controller reads
-  and parses terminal input, submits typed presentation facts and legacy
-  records to terminal-owned rendering, sequences session and nested
+  and parses terminal input, submits typed presentation facts and invokes
+  terminal-owned semantic writers, sequences session and nested
   conversation transitions, performs
   configuration validation, pre-read, access acquisition, and correlated
   post-read in that exact order, and compensates only access newly acquired by
@@ -651,13 +653,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   `classify_conversation_failure`,
   `classify_memory_catalog_or_reference_failure`,
   `classify_search_service_failure`, `classify_transcript_service_failure`,
-  `format_transcript_context_status`, `normalize_conversation_input`,
-  `resolve_conversation_reference`, `validate_catalog_entries`,
+  `normalize_conversation_input`, `resolve_conversation_reference`,
+  `validate_catalog_entries`,
   `validate_catalog_metadata`, `validate_conversation_reference`,
   `validate_search_result_handles`, `validate_transcript_page`, and
   `visible_conversation_handle`. Reference validation remains pure and
   precedes the core-owned catalog read; all collection/result inputs are
-  interpreted without mutation.
+  interpreted without mutation or presentation formatting.
 - **Direct internal dependencies:** `conversation_search`, `conversations`,
   `errors`, `interactive_terminal`, and `workspace`.
 - **State, resources, and side effects:** Immutable minimum-prefix policy and
@@ -750,10 +752,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   exports the defining objects without wrapper subclasses and preserves their
   canonical `story_writing_agents.interactive_terminal` identities. The
   unlisted `InteractiveSemanticOutput` binds one terminal's semantic write
-  capability for controller use, and the existing `Field`, `Message`,
-  `Notice`, `Panel`, `Record`, `Section`, `SemanticRole`, and `ViewState`
-  contracts are likewise facade-bound but omitted from `__all__`. The adapter
-  and contracts add no project-root export or raw-resource ownership. Its
+  capability for controller use, and the existing `Field`, `ListView`,
+  `Message`, `Notice`, `Panel`, `Record`, `Section`, `SemanticRole`, and
+  `ViewState` contracts are likewise facade-bound but omitted from `__all__`.
+  These bindings support count-aware dense semantic views without changing the
+  package-supported surface. The adapter and contracts add no project-root
+  export or raw-resource ownership. Its
   unlisted package-internal `build_stream_terminal` factory is the sole real-CLI
   construction boundary. Unlisted `build_contextual_terminal` preserves the
   completed contextual-callback seam; package-internal control/driver/model
@@ -878,11 +882,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   callback-width semantics remain compatible. Its package-internal stream
   factory coordinates the driver, controls, command metadata, and current
   capability profile. Lobby, attached-session, and conversation-scope
-  orientation plus specialized run, agent, and typed-error writers now
-  construct semantic components; `InteractiveSemanticOutput` binds the same
-  private component writer so controller-owned components share the identical
-  render-and-one-write path. Generic status and deferred information-dense
-  writers remain on their established legacy path. The internal contextual
+  orientation plus specialized run, agent, typed-error, help, agent-roster,
+  conversation-list, search-hit, and transcript-event writers construct
+  semantic components; `InteractiveSemanticOutput` binds the same private
+  component writer so controller-owned components share the identical
+  render-and-one-write path. Generic status remains only on the established
+  legacy path for the four deferred composer records. The internal contextual
   factory preserves explicit ordinary/main/composition callback routing, while
   the real stream factory binds both preview providers to one driver.
 - **Direct internal dependencies:** `agents`, `interactive_commands`,
@@ -1135,9 +1140,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   preview providers only per read. The real CLI constructs one stream-backed
   terminal rather than injecting a second editor. The terminal facade also
   exposes an unlisted typed semantic-output adapter and closed component
-  bindings for package consumers without expanding `__all__`; controller code
-  imports only that facade, never a terminal leaf. The controller still receives
-  only completed terminal outcomes and alone passes exact lines to the parser.
+  bindings, including `ListView`, for package consumers without expanding
+  `__all__`; controller code imports only that facade, never a terminal leaf.
+  Counted session, conversation, search, transcript, and history output uses
+  one positioned one-record list and one component write for each established
+  row callback, preserving partial-output and cancellation boundaries. Exactly
+  four generic status calls remain inside `_core` for deferred composer output;
+  the controller owns none. The controller still receives only completed
+  terminal outcomes and alone passes exact lines to the parser.
 - `interactive_controller` is the stable one-class import boundary and owns no
   shell state or resource. Its `_core` owns interactive shell action mapping,
   current in-memory attachment, current-focus conversation and sticky-target state,
@@ -1162,11 +1172,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   operation join, while every uncertain state fails closed.
   The `_session_policy`, `_conversation_policy`, and `_runtime_policy` leaves
   interpret immutable collaborator facts and safe failure categories without
-  retaining state, performing I/O, mutating progress collections, importing
-  `_core`, or depending on one another. `_runtime_policy` returns typed debate
-  and context inspection facts without formatting; `_core` alone constructs
-  their semantic presentation and commits canonical results to controller-owned
-  process state, while the terminal remains the rendering and emission owner.
+  retaining state, performing I/O, formatting presentation text, mutating
+  progress collections, importing `_core`, or depending on one another.
+  `_runtime_policy` returns typed debate and context inspection facts;
+  `_core` alone constructs their semantic presentation and focused-history
+  context accounting and commits canonical results to controller-owned process
+  state, while the terminal remains the rendering and emission owner.
   Provider-free `/search` and `/transcript` inspection crosses only public
   `ConversationMemoryService.search` and
   `ConversationMemoryService.read_transcript` boundaries. Provider-free
