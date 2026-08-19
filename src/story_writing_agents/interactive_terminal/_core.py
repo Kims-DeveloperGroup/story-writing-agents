@@ -1345,7 +1345,7 @@ def read_main_command_line(
 
     if not isinstance(driver, RawTerminalDriver):
         raise TypeError("driver must be a RawTerminalDriver")
-    return driver._read_main_command_line(
+    return driver.read_main_command_line(
         prompt,
         _main_command_completion,
         project_main_suggestion_palette,

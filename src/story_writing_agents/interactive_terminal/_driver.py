@@ -287,7 +287,7 @@ class RawTerminalDriver:
         self._append_completed_main_history(line)
         return line
 
-    def _read_main_command_line(
+    def read_main_command_line(
         self,
         prompt: str,
         completion_provider: _CompletionProvider,
