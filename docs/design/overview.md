@@ -232,29 +232,20 @@ classDiagram
 ### Object-level runtime topology (example)
 
 ```mermaid
-objectDiagram
-object "sr : StoryRuntime" as SR
-object "se : RuntimeSession" as SES
-object "backend : AgentBackend" as AB
-object "ws : Workspace" as WS
-object "catalog : FilesystemConversationCatalog" as C
-object "events : FilesystemConversationEventStore" as ES
-object "lead : BoundAgent" as B1
-object "searchSvc : ConversationMemoryService" as MMS
-object "contextReq : DebateContextRequest" as CR
-object "result : DebateResult" as DR
+flowchart LR
+    SR["sr: StoryRuntime"] --> AB["backend: AgentBackend"]
+    SR --> WS["ws: Workspace"]
+    SR --> SES["se: RuntimeSession"]
+    SR --> C["catalog: FilesystemConversationCatalog"]
+    SR --> ES["events: FilesystemConversationEventStore"]
+    SR --> MMS["searchSvc: ConversationMemoryService"]
+    SES --> CR["contextReq: DebateContextRequest"]
+    SES --> DR["result: DebateResult"]
+    AB --> B1["lead: BoundAgent"]
+    WS --> C
+    WS --> ES
 
-SR --> AB : backend
-SR --> WS : workspace
-SR --> SES : session('session-id')
-SR --> C : catalog view
-SR --> ES : event store
-SR --> MMS : memory service
-SES --> CR : passes context mode
-SES --> DR : returns final artifact state
-AB --> B1 : bound lead_orchestrator
-WS --> C : owns
-WS --> ES : owns
+    SES -.->|session('session-id')| SR
 ```
 
 ### DTO-focused partials
