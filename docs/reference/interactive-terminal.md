@@ -283,7 +283,9 @@ highlighted. Compact registry order (not output layout):
 
 Exact case-sensitive prefixes filter in stable order. Root provides the 21
 tokens above; help provides 24 including `/compose`, `/send`, and `/cancel`;
-agent-valued positions provide the 10 canonical IDs and accepted aliases.
+agent-valued positions provide the four preferred prompt aliases—`lead`,
+`plot`, `character`, and `execution`—in route order. The parser still accepts
+all ten declared route aliases; completion does not duplicate those aliases.
 Static finite positions also provide session and conversation subcommands,
 `--fresh`, `--all`, `last`, and `--from`. Dynamic session, conversation,
 debate, count, sequence, query, prompt, subject, and path values are not

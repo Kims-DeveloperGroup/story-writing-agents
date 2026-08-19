@@ -488,9 +488,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   `CommandCompletionContext` and `project_command_completion` derive the
   canonical cursor-aware completion grammar, exact replacement spans, stable
   grammar-position identities, and ordered fixed candidates from the same
-  command and route metadata without parsing. Other parser helpers and
-  command-alias maps are internal; agent parsing and canonical validation
-  derive from the route registry. Search and transcript actions extend the
+  command and route metadata without parsing. Agent-valued completion positions
+  project exactly each route's preferred prompt alias in roster order, while
+  all ordered aliases remain valid parser inputs and fuzzy agent suggestions
+  present the preferred alias. Other parser helpers and command-alias maps are
+  internal; agent parsing and canonical validation derive from the route
+  registry. Search and transcript actions extend the
   frozen, slotted `InteractiveAction` with the optional positive
   `start_sequence` field;
   existing action payloads remain compatible. `/search QUERY` and
@@ -1389,7 +1392,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   settings unit has no controller, terminal, backend, runtime, or parser edge.
 - `interactive_commands` owns canonical command and agent-route metadata, parse
   rules, typed parsed actions, and the pure cursor-aware completion grammar and
-  replacement spans derived from that same metadata. `interactive_line_editor`
+  replacement spans derived from that same metadata. Agent-valued completion
+  and fuzzy guidance expose only preferred prompt aliases in roster order while
+  parsing retains every accepted route alias. `interactive_line_editor`
   preserves its legacy main suggestion projection while delegating actual main
   reads to the shared selectable terminal route; `_controls` owns the fixed
   ordered `/send`, `/cancel` composition projection. The facade delegates all

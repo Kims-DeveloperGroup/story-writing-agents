@@ -459,6 +459,22 @@ class CompletionControlTests(unittest.TestCase):
         self.assertEqual(outcome.text, "/session list")  # type: ignore[union-attr]
         self.assertIsNone(committed.palette)
 
+    def test_agent_alias_completion_uses_preferred_candidate_and_tab_span(self) -> None:
+        state = self.type_text("/to pl")
+        self.assertIsNotNone(state.palette)
+        assert state.palette is not None
+        self.assertEqual(
+            (state.palette.projection.start, state.palette.projection.end),
+            (4, 6),
+        )
+        self.assertEqual(
+            tuple(item.replacement for item in state.palette.projection.candidates),
+            ("plot",),
+        )
+        selected, outcome = self.apply(state, KeyEvent(KeyKind.TAB))
+        self.assertIsNone(outcome)
+        self.assertEqual(selected.main_input.line_state, LineInputState("/to plot", 8))
+
     def test_provider_validation_is_eager_and_has_no_hidden_retry(self) -> None:
         state = MainCommandControlState()
         provider = mock.Mock(return_value=object())
