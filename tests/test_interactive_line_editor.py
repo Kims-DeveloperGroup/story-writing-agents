@@ -27,6 +27,7 @@ from story_writing_agents.interactive_line_editor import (
     composition_slash_command_suggestions,
     slash_command_suggestions,
 )
+from story_writing_agents.interactive_terminal import _driver as driver_module
 from story_writing_agents.interactive_terminal._model import MainInputHistoryState
 
 
@@ -208,6 +209,15 @@ def capable_terminal(
             editor_module.os,
             "get_terminal_size",
             return_value=os.terminal_size((width, 24)),
+        ),
+        mock.patch.object(
+            driver_module._select,
+            "select",
+            side_effect=lambda readable, writable, exceptional, _timeout: (
+                readable,
+                writable,
+                exceptional,
+            ),
         ),
     ):
         yield
@@ -456,10 +466,10 @@ class SuggestionContractTests(unittest.TestCase):
                 side_effect=lambda _self, prompt, _provider: prompt,
             ) as internal_read,
             mock.patch.object(
-                editor_module.RawTerminalDriver,
-                "read_main_line",
+                editor_module,
+                "read_main_command_line",
                 autospec=True,
-                side_effect=lambda _driver, prompt, _provider: prompt,
+                side_effect=lambda _driver, prompt: prompt,
             ) as main_read,
         ):
             first_reader = bind_suggestion_reader(editor, first_provider)
@@ -478,7 +488,6 @@ class SuggestionContractTests(unittest.TestCase):
         main_read.assert_called_once_with(
             editor._driver,
             "story[lobby]> ",
-            slash_command_suggestions,
         )
         self.assertEqual(
             InteractiveMainLineEditor.__slots__,
@@ -519,15 +528,15 @@ class LiveEditingTests(unittest.TestCase):
             self.assertEqual(editor.read_line("main[3]> "), "draft-Xtail")
             self.assertEqual(editor.read_line("main[4]> "), "saved!")
             self.assertEqual(editor.read_line("main[5]> "), "abx")
-            self.assertEqual(editor.read_line("main[6]> "), "abx")
+            self.assertEqual(editor.read_line("main[6]> "), "/")
 
         self.assertEqual(
             editor._driver._history_state,
             MainInputHistoryState(
-                ("first", "second", "draft-Xtail", "saved!", "abx", "abx")
+                ("first", "second", "draft-Xtail", "saved!", "abx", "/")
             ),
         )
-        self.assertTrue(any("[suggestions]" in record for record in output.records))
+        self.assertTrue(any("Suggestions [open]" in record for record in output.records))
         fallback.assert_not_called()
 
     def test_composition_history_isolated_and_stores_are_per_editor(self) -> None:
@@ -692,6 +701,7 @@ class LiveEditingTests(unittest.TestCase):
         editor, _input, output, _fallback = make_editor("/\n")
         with (
             mock.patch.object(editor_module, "COMMANDS", registry),
+            mock.patch.object(commands_module, "COMMANDS", registry),
             capable_terminal(FakeTermios(), width=40),
         ):
             self.assertEqual(editor.read_line("p> "), "/")
@@ -906,7 +916,9 @@ class CapabilityAndFailureTests(unittest.TestCase):
         self.assertEqual(output.records, [])
         self.assertEqual(termios_double.set_calls, [])
 
-    def test_unsupported_platform_and_size_failures_fallback_without_ansi(self) -> None:
+    def test_unsupported_platform_falls_back_and_size_failure_uses_default(
+        self,
+    ) -> None:
         unsupported_platforms = ((None, "posix"), (FakeTermios(), "nt"))
         for unsupported_termios, platform_name in unsupported_platforms:
             with self.subTest(
@@ -924,7 +936,7 @@ class CapabilityAndFailureTests(unittest.TestCase):
                 self.assertEqual(input_stream.read_calls, 0)
                 self.assertEqual(output.records, [])
 
-        editor, input_stream, output, fallback = make_editor("unused")
+        editor, input_stream, output, fallback = make_editor("\n")
         with (
             mock.patch.object(editor_module, "_termios", FakeTermios()),
             mock.patch.object(editor_module.os, "name", "posix"),
@@ -935,10 +947,10 @@ class CapabilityAndFailureTests(unittest.TestCase):
                 side_effect=OSError("size unavailable"),
             ),
         ):
-            self.assertEqual(editor.read_line("p> "), "fallback")
-        fallback.assert_called_once_with("p> ")
-        self.assertEqual(input_stream.read_calls, 0)
-        self.assertEqual(output.records, [])
+            self.assertEqual(editor.read_line("p> "), "")
+        fallback.assert_not_called()
+        self.assertEqual(input_stream.read_calls, 1)
+        self.assertTrue(output.records)
 
     def test_recoverable_activation_failure_restores_then_uses_fallback(self) -> None:
         editor, input_stream, output, fallback = make_editor("unused")
@@ -1092,23 +1104,6 @@ class CapabilityAndFailureTests(unittest.TestCase):
         )
         with capable_terminal(FakeTermios()):
             with self.assertRaisesRegex(OSError, "^flush failed$"):
-                failed.read_line("p> ")
-        self.assertEqual(failed._driver._history_state, MainInputHistoryState())
-        failed_fallback.assert_not_called()
-
-        failed, _input, _output, failed_fallback = make_editor("candidate\n")
-        with (
-            mock.patch.object(
-                editor_module,
-                "slash_command_suggestions",
-                return_value=(object(),),
-            ),
-            capable_terminal(FakeTermios()),
-        ):
-            with self.assertRaisesRegex(
-                TypeError,
-                "^suggestion_provider must return SlashCommandSuggestion values$",
-            ):
                 failed.read_line("p> ")
         self.assertEqual(failed._driver._history_state, MainInputHistoryState())
         failed_fallback.assert_not_called()

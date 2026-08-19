@@ -13,8 +13,9 @@ from .interactive_terminal import (
     append_main_input_history,
     project_composition_suggestions,
     project_slash_suggestions,
+    read_main_command_line,
     transition_line_input,
-    transition_main_input,
+    transition_main_command_input,
 )
 
 try:
@@ -77,7 +78,7 @@ class InteractiveMainLineEditor:
             input_stream,
             output_stream,
             transition_line_input,
-            transition_main_input,
+            transition_main_command_input,
             append_main_input_history,
             termios_provider=lambda: _termios,
             os_provider=lambda: os,
@@ -86,7 +87,7 @@ class InteractiveMainLineEditor:
     def read_line(self, prompt: str) -> str:
         """Read and return one exact Unicode main-input buffer."""
 
-        return self._driver.read_main_line(prompt, slash_command_suggestions)
+        return read_main_command_line(self._driver, prompt)
 
     def _read_line(
         self,

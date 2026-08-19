@@ -849,7 +849,8 @@ class InteractiveCliPtyTests(unittest.TestCase):
         process.send_text("/")
         process.wait_for_text("/exit", after=preview_mark)
         preview = process.text_after(preview_mark)
-        self.assertIn("[suggestions]", preview)
+        self.assertIn("Suggestions [open]", preview)
+        compact_preview = "".join(preview.split())
         for token in (
             "/say",
             "/to",
@@ -873,7 +874,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
             "/exit",
         ):
             with self.subTest(token=token):
-                self.assertIn(token, preview)
+                self.assertIn(token, compact_preview)
         self.assertNotIn("/compose", preview)
         self.assertNotIn("/send", preview)
         self.assertNotIn("/cancel", preview)
@@ -887,11 +888,11 @@ class InteractiveCliPtyTests(unittest.TestCase):
         )
         backspace_mark = process.output_mark()
         process.send_text("\x7f")
-        process.wait_for_text("/status", after=backspace_mark)
+        process.wait_for_text("Suggestions [open]", after=backspace_mark)
         edited = process.text_after(backspace_mark)
-        self.assertIn("[suggestions]", edited)
+        self.assertIn("Suggestions [open]", edited)
         self.assertIn("story[lobby]> /stat\nu", edited)
-        self.assertIn("/status", edited)
+        self.assertIn("/status", "".join(edited.split()))
         process.send_text("s")
         process.wait_for_text(
             "story[lobby]> /stat\nus",
@@ -903,7 +904,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
         submitted = process.wait_for_text("[session]\n", after=submit_mark)
         process.wait_for_text("story[lobby]> ", after=submit_mark)
         self.assertIn("\x1b[J", submitted)
-        self.assertNotIn("[suggestions]", submitted)
+        self.assertNotIn("Suggestions [open]", submitted)
         self.assertEqual(_durable_tree(self.workspace.root), before)
         self.assertFalse(self.provider_log.exists())
 
@@ -937,6 +938,9 @@ class InteractiveCliPtyTests(unittest.TestCase):
         process.send_text("draft-tail" + "\x1b[D" * 4)
         process.send_text("\x1b[A")
         process.wait_for_text("story[lobby]> /status", after=draft_mark)
+        close_mark = process.output_mark()
+        process.send_text("\x1b")
+        process.wait_for_text("story[lobby]> /status", after=close_mark)
         process.send_text("\x1b[BX")
         process.wait_for_text("story[lobby]> draft-Xtail", after=draft_mark)
         process.send_text("\n")
@@ -945,7 +949,12 @@ class InteractiveCliPtyTests(unittest.TestCase):
 
         preview_mark = process.output_mark()
         process.send_text("/")
-        process.wait_for_text("[suggestions]", after=preview_mark)
+        process.wait_for_text("Suggestions [open]", after=preview_mark)
+        process.send_text("\x1b[B")
+        process.wait_for_text("[highlighted] /to", after=preview_mark)
+        close_mark = process.output_mark()
+        process.send_text("\x1b")
+        process.wait_for_text("story[lobby]> /", after=close_mark)
         process.send_text("\x1b[A")
         recalled = process.wait_for_text(
             "story[lobby]> draft-Xtail",
@@ -981,6 +990,87 @@ class InteractiveCliPtyTests(unittest.TestCase):
                 for path in self.temporary_root.rglob("*")
             )
         )
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
+    def test_main_completion_navigates_tabs_restores_snapshot_and_commits(self) -> None:
+        """Exercise selectable ANSI completion through the real public CLI."""
+
+        before = _durable_tree(self.workspace.root)
+        process = self._spawn_cli(
+            (),
+            environment_overrides={"TERM": "xterm-256color"},
+            decorative_color=True,
+            terminal_columns=40,
+        )
+        process.wait_for_text("story[lobby]> ")
+
+        mark = process.output_mark()
+        process.send_text("/")
+        process.wait_for_text("Suggestions [open]", after=mark)
+        process.send_text("\x1b[B")
+        process.wait_for_text("[highlighted] /to", after=mark)
+        process.send_text("\t")
+        process.wait_for_text("story[lobby]> /to", after=mark)
+        snapshot_mark = process.output_mark()
+        process.send_text("\x1b")
+        process.wait_for_text("story[lobby]> /", after=snapshot_mark)
+        self.assertNotIn("Suggestions [open]", process.text_after(snapshot_mark))
+
+        process.send_text("stat\t\n")
+        process.wait_for_text("story[lobby]> /status", after=snapshot_mark)
+        process.wait_for_text("[session]", after=snapshot_mark)
+        process.wait_for_text("story[lobby]> ", after=snapshot_mark)
+        self.assertEqual(_durable_tree(self.workspace.root), before)
+        self.assertFalse(self.provider_log.exists())
+
+        process.send_line("/quit")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
+    def test_main_completion_no_color_narrow_empty_and_interrupt_cleanup(self) -> None:
+        """Keep narrow palettes legible without decorative SGR on a real PTY."""
+
+        before = _durable_tree(self.workspace.root)
+        process = self._spawn_cli(
+            (),
+            environment_overrides={"TERM": "xterm-256color", "NO_COLOR": "1"},
+            terminal_columns=18,
+        )
+        process.wait_for_text("story[lobby]> ")
+        mark = process.output_mark()
+        process.send_text("/s")
+        process.wait_for_text("Suggestions [open", after=mark)
+        process.wait_for_text("[highlighted]", after=mark)
+        narrow = "".join(process.text_after(mark).split())
+        self.assertIn("Suggestions[open]", narrow)
+        self.assertIn("[highlighted]/say", narrow)
+        process.send_text("z")
+        process.wait_for_text("[empty]", after=mark)
+        self.assertIn(
+            "[empty]Nosuggestions.",
+            "".join(process.text_after(mark).split()),
+        )
+        output = bytes(process.raw_bytes[mark:])
+        for decorative_sgr in (b"\x1b[35m", b"\x1b[36m", b"\x1b[0m"):
+            self.assertNotIn(decorative_sgr, output)
+
+        process.send_interrupt()
+        process.wait_for_text("[cancelled]", after=mark)
+        self.assertIn(
+            "[cancelled]Noactionwastaken.",
+            "".join(process.text_after(mark).split()),
+        )
+        process.wait_for_text("story[lobby]> ", after=mark)
+        self.assertEqual(_durable_tree(self.workspace.root), before)
+        self.assertFalse(self.provider_log.exists())
+        process.send_line("/quit")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
         self.assertEqual(
             process.final_terminal_attributes,
             process.original_terminal_attributes,

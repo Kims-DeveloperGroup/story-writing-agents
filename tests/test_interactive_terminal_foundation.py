@@ -40,6 +40,7 @@ from story_writing_agents.interactive_terminal._controls import (
     append_main_input_history,
     project_slash_suggestions,
     transition_line_input,
+    transition_main_command_input,
     transition_main_input,
 )
 from story_writing_agents.interactive_terminal._driver import (
@@ -926,7 +927,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             width=120,
         )
         driver.read_line.return_value = "subject"
-        driver.read_main_line.side_effect = (
+        driver.read_main_command_line.side_effect = (
             "/status",
             "/help",
         )
@@ -954,7 +955,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             input_stream,
             output_stream,
             transition_line_input,
-            transition_main_input,
+            transition_main_command_input,
             append_main_input_history,
         )
         self.assertIsInstance(terminal, InteractiveTerminal)
@@ -986,15 +987,19 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
         terminal.write_status(TerminalMessageKind.RESULT, "ready")
         self.assertEqual(driver.capabilities.call_count, 3)
         self.assertEqual(
-            driver.read_main_line.call_args_list,
+            driver.read_main_command_line.call_args_list,
             [
                 mock.call(
                     "story[lobby]> ",
-                    _core._main_slash_suggestions,
+                    _core._main_command_completion,
+                    _controls.project_main_suggestion_palette,
+                    render_component,
                 ),
                 mock.call(
                     "story[lobby]> ",
-                    _core._main_slash_suggestions,
+                    _core._main_command_completion,
+                    _controls.project_main_suggestion_palette,
+                    render_component,
                 ),
             ],
         )
@@ -1092,7 +1097,13 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             for node in ast.walk(read_line)
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
         }
-        self.assertEqual(called_attributes, {"read_main_line"})
+        self.assertEqual(called_attributes, set())
+        called_names = {
+            node.func.id
+            for node in ast.walk(read_line)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        self.assertEqual(called_names, {"read_main_command_line"})
         for duplicated_primitive in (
             "tcgetattr",
             "tcsetattr",

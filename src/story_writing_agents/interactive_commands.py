@@ -334,6 +334,42 @@ class CommandSpec:
     example: str
 
 
+@dataclass(frozen=True, slots=True)
+class CommandCompletionContext:
+    """Describe one cursor-active command token and ordered replacements."""
+
+    position: str
+    replacement_start: int
+    replacement_end: int
+    replacements: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        """Require one bounded span and exact unique replacement literals."""
+
+        if type(self.position) is not str:
+            raise TypeError("position must be a string")
+        if not self.position:
+            raise ValueError("position must be a nonempty string")
+        for name, value in (
+            ("replacement_start", self.replacement_start),
+            ("replacement_end", self.replacement_end),
+        ):
+            if type(value) is not int:
+                raise TypeError(f"{name} must be an integer")
+            if value < 0:
+                raise ValueError(f"{name} must not be negative")
+        if self.replacement_end < self.replacement_start:
+            raise ValueError("replacement_end must not precede replacement_start")
+        if type(self.replacements) is not tuple or any(
+            type(value) is not str for value in self.replacements
+        ):
+            raise TypeError("replacements must be a tuple of strings")
+        if any(not value for value in self.replacements):
+            raise ValueError("replacements must not contain empty strings")
+        if len(set(self.replacements)) != len(self.replacements):
+            raise ValueError("replacements must be unique")
+
+
 COMMANDS: tuple[CommandSpec, ...] = (
     CommandSpec("Conversation", "/compose", (), False, False, "/compose"),
     CommandSpec("Conversation", "/send", (), False, False, "/send"),
@@ -491,6 +527,187 @@ _CONVERSATION_COMMANDS: dict[str, str] = {
     "subject": "/conversation subject",
     "archive": "/conversation archive",
 }
+
+_MAIN_COMPLETION_EXCLUSIONS = frozenset({"/compose", "/send", "/cancel"})
+_RUN_FRESH_FLAG = "--fresh"
+_CONVERSATION_ALL_FLAG = "--all"
+_TRANSCRIPT_FROM_FLAG = "--from"
+_INSPECT_LAST_ARGUMENT = "last"
+
+
+def project_command_completion(
+    buffer: str,
+    cursor: int,
+) -> CommandCompletionContext | None:
+    """Project the fixed command grammar active at one exact cursor boundary.
+
+    The result contains grammar-owned ordered literals and the complete active
+    token span. It performs no parsing, fuzzy matching, catalog lookup, I/O, or
+    mutation. Dynamic grammar positions return ``None``.
+    """
+
+    if not isinstance(buffer, str):
+        raise TypeError("buffer must be a string")
+    buffer = str.__str__(buffer)
+    if type(cursor) is not int:
+        raise TypeError("cursor must be an integer")
+    if cursor < 0 or cursor > len(buffer):
+        raise ValueError("cursor must identify a buffer boundary")
+    if not buffer.startswith("/"):
+        return None
+
+    start, end = _completion_token_span(buffer, cursor)
+    active_token = buffer[start:end]
+    preceding = _completion_preceding_tokens(buffer, start)
+
+    if start == 0:
+        return _completion_context(
+            "root.command",
+            start,
+            end,
+            _root_command_replacements(include_composition=False),
+        )
+    if preceding == ("/session",):
+        return _completion_context(
+            "session.subcommand",
+            start,
+            end,
+            tuple(_SESSION_COMMANDS),
+        )
+    if preceding == ("/conversation",):
+        return _completion_context(
+            "conversation.subcommand",
+            start,
+            end,
+            tuple(_CONVERSATION_COMMANDS),
+        )
+    if preceding in {("/to",), ("/agent",)}:
+        return _completion_context(
+            "target.agent",
+            start,
+            end,
+            _agent_completion_replacements(),
+        )
+    if preceding == ("/persona",):
+        return _completion_context(
+            "persona.agent",
+            start,
+            end,
+            _agent_completion_replacements(),
+        )
+    if preceding == ("/run",):
+        if active_token and not active_token.startswith("-"):
+            return None
+        return _completion_context(
+            "run.flag",
+            start,
+            end,
+            (_RUN_FRESH_FLAG,),
+        )
+    if preceding == ("/conversation", "list"):
+        if active_token and not active_token.startswith("-"):
+            return None
+        return _completion_context(
+            "conversation.list.flag",
+            start,
+            end,
+            (_CONVERSATION_ALL_FLAG,),
+        )
+    if preceding in {("/help",), ("/?",)}:
+        return _completion_context(
+            "help.command",
+            start,
+            end,
+            _root_command_replacements(include_composition=True),
+        )
+    if preceding == ("/inspect",):
+        if active_token and not _INSPECT_LAST_ARGUMENT.startswith(active_token):
+            return None
+        return _completion_context(
+            "inspect.argument",
+            start,
+            end,
+            (_INSPECT_LAST_ARGUMENT,),
+        )
+    if len(preceding) == 2 and preceding[0] == "/transcript":
+        if preceding[1].startswith("--"):
+            return None
+        if active_token and not active_token.startswith("-"):
+            return None
+        return _completion_context(
+            "transcript.after_id.flag",
+            start,
+            end,
+            (_TRANSCRIPT_FROM_FLAG,),
+        )
+    if (
+        len(preceding) == 3
+        and preceding[0] == "/transcript"
+        and not preceding[1].startswith("--")
+        and _positive_ascii_integer(preceding[2]) is not None
+    ):
+        return _completion_context(
+            "transcript.after_count.flag",
+            start,
+            end,
+            (_TRANSCRIPT_FROM_FLAG,),
+        )
+    return None
+
+
+def _completion_context(
+    position: str,
+    start: int,
+    end: int,
+    replacements: tuple[str, ...],
+) -> CommandCompletionContext:
+    """Build one validated command completion context without side effects."""
+
+    return CommandCompletionContext(position, start, end, replacements)
+
+
+def _completion_token_span(buffer: str, cursor: int) -> tuple[int, int]:
+    """Return the maximal ASCII-delimited token active at one boundary."""
+
+    if cursor > 0 and buffer[cursor - 1] in " \t":
+        end = cursor
+        while end < len(buffer) and buffer[end] not in " \t":
+            end += 1
+        return cursor, end
+    start = cursor
+    while start > 0 and buffer[start - 1] not in " \t":
+        start -= 1
+    end = cursor
+    while end < len(buffer) and buffer[end] not in " \t":
+        end += 1
+    return start, end
+
+
+def _completion_preceding_tokens(buffer: str, start: int) -> tuple[str, ...]:
+    """Return exact complete ASCII-delimited tokens before the active span."""
+
+    value = buffer[:start].strip(" \t")
+    if not value:
+        return ()
+    return tuple(re.split(r"[ \t]+", value))
+
+
+def _root_command_replacements(*, include_composition: bool) -> tuple[str, ...]:
+    """Return canonical and alias tokens in exact public registry order."""
+
+    replacements: list[str] = []
+    for spec in COMMANDS:
+        canonical = spec.syntax.split(maxsplit=1)[0]
+        if include_composition or canonical not in _MAIN_COMPLETION_EXCLUSIONS:
+            replacements.append(canonical)
+            replacements.extend(spec.aliases)
+    return tuple(replacements)
+
+
+def _agent_completion_replacements() -> tuple[str, ...]:
+    """Return all accepted agent aliases in roster and alias order."""
+
+    return tuple(alias for route in AGENT_ROUTES for alias in route.aliases)
 
 def parse_interactive_line(line: str) -> InteractiveAction:
     """Parse one input line without performing I/O or raising parse errors."""
@@ -681,7 +898,7 @@ def _parse_run(tail: str | None) -> InteractiveAction:
     first_token = prompt[first_start:first_end]
     if not first_token.startswith("--"):
         return InteractiveAction(ActionKind.RUN, text=prompt)
-    if first_token != "--fresh":
+    if first_token != _RUN_FRESH_FLAG:
         return _parse_error(f"unknown /run flag: {first_token}")
     if first_end == len(prompt):
         return _parse_error("/run --fresh requires a prompt")
@@ -762,9 +979,12 @@ def _parse_conversation(tail: str | None) -> InteractiveAction:
         if query is None:
             return InteractiveAction(ActionKind.CONVERSATION_LIST)
         first_token, query_tail = _split_head(query)
-        if first_token == "--all":
+        if first_token == _CONVERSATION_ALL_FLAG:
             all_query = _remainder_after_ascii_delimiters(query_tail)
-            if all_query is not None and "--all" in _tokens(all_query):
+            if (
+                all_query is not None
+                and _CONVERSATION_ALL_FLAG in _tokens(all_query)
+            ):
                 return _parse_error(
                     "/conversation list --all must appear once and first"
                 )
@@ -776,7 +996,7 @@ def _parse_conversation(tail: str | None) -> InteractiveAction:
             return _parse_error(
                 f"unknown /conversation list flag: {first_token}"
             )
-        if "--all" in _tokens(query):
+        if _CONVERSATION_ALL_FLAG in _tokens(query):
             return _parse_error(
                 "/conversation list --all must appear once and first"
             )
@@ -865,7 +1085,7 @@ def _parse_transcript(tail: str | None) -> InteractiveAction:
     remaining = tokens[1:]
     count: int | None = None
     start_sequence: int | None = None
-    if remaining and remaining[0] != "--from":
+    if remaining and remaining[0] != _TRANSCRIPT_FROM_FLAG:
         if remaining[0].startswith("--"):
             return _parse_error(
                 f"unknown /transcript flag: {remaining[0]}"
@@ -878,7 +1098,7 @@ def _parse_transcript(tail: str | None) -> InteractiveAction:
         remaining = remaining[1:]
 
     if remaining:
-        if remaining[0] != "--from":
+        if remaining[0] != _TRANSCRIPT_FROM_FLAG:
             if remaining[0].startswith("--"):
                 return _parse_error(
                     f"unknown /transcript flag: {remaining[0]}"

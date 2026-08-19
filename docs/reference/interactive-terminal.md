@@ -5,9 +5,10 @@
 > central errors/recovery, and accepted management, advisory, retrieval, and
 > consensus output use its semantic renderer. Full/context help, agent roster,
 > session/conversation lists, search, transcript, and focused history now do as
-> well. Capable main input now provides bounded process-local Up/Down command
-> history. Line-oriented RUN/CHAT composition and yes/no confirmation now use
-> semantic input views, and composer lifecycle records use semantic notices.
+> well. Capable main input now provides selectable semantic command completion
+> coordinated with bounded process-local history. Line-oriented RUN/CHAT
+> composition and yes/no confirmation use semantic input views, and composer
+> lifecycle records use semantic notices.
 
 ## Public API
 
@@ -57,8 +58,9 @@ The exact `interactive_line_editor.__all__` remains
 `SlashCommandSuggestion`, `slash_command_suggestions`, and
 `InteractiveMainLineEditor`; its constructor and `read_line(prompt)` are
 unchanged. Its public `read_line()` uses one per-editor process-local main
-history store; composition-provider selection and the history-free contextual
-route are package-internal, not added supported API.
+history store and the same supported internal main completion route;
+composition-provider selection and the history-free contextual route are
+package-internal, not added supported API.
 
 For controller wiring, the package facade also exposes the unlisted canonical
 identities `InteractiveSemanticOutput`, `Field`, `Message`, `Notice`, `Panel`,
@@ -68,6 +70,10 @@ supported public API. The facade also binds the package-internal
 `MainInputHistoryState`, `MainInputControlState`,
 `append_main_input_history`, and `transition_main_input` identities used by the
 compatibility editor; they likewise remain unlisted and unsupported.
+`transition_main_command_input` and `read_main_command_line` are additional
+unlisted internal bindings for the shared selectable main route. Its completion
+models remain package-private and outside the closed `Component` union; only
+their projected existing `SuggestionPalette` is rendered.
 The narrow internal adapter has these signatures:
 
 ```python
@@ -91,11 +97,12 @@ the final LF; failures propagate without a retry.
 ## Implemented semantic output and input
 
 The import-compatible package contains private immutable semantic components,
-input views, composer/history states, pure one-line, main-history, composer, and
-confirmation transitions, exact slash-prefix projection, responsive structured
-plain/fixed-ANSI renderers, capability profiles, one raw driver, and one real-CLI
-stream factory. These internal seams support architecture and deterministic
-testing; they add no public theme API or public component/control types.
+input views, composer/history/completion states, pure one-line, selectable
+main/history, composer, and confirmation transitions, cursor-aware canonical
+grammar projection, responsive structured plain/fixed-ANSI renderers,
+capability profiles, one raw driver, and one real-CLI stream factory. These
+internal seams support architecture and deterministic testing; they add no
+public theme API or public component/control types.
 
 The real CLI factory constructs one `InteractiveTerminal` around one raw
 driver. That driver alone owns its streams, capability/width observation, key
@@ -146,7 +153,8 @@ semantic `open`, `error`, `completed`, and `cancelled` notices instead of its
 four generic-status call sites; the controller also has no generic
 `write_status` call site. Composition and confirmation build ordered semantic
 input views and use pure history-free controls as documented below. Selectable
-palettes/fixed values, pickers, and `/settings` are not currently available.
+main-command palettes and finite fixed options are available on capable main
+reads; pickers and `/settings` are not currently available.
 
 ## Prompts and semantic input presentation
 
@@ -224,27 +232,51 @@ row and still emits the context record with `History displayed: 0/0 events`.
 
 ## Main-prompt live suggestions
 
-The unified driver provides the existing preview at main prompts. On capable
-POSIX, buffer `/` displays `[suggestions]` followed by one token per row. Compact
-registry order (not output layout):
+The unified driver provides a selectable semantic `Suggestions [open]` palette
+at capable POSIX main prompts. A root `/` opens with its first candidate
+highlighted. Compact registry order (not output layout):
 
 ```text
 /say /to /agent /agents /language /persona /reset /run /draft-file /session
 /conversation /search /transcript /inspect /history /status /help /? /quit /exit
 ```
 
-Case-sensitive prefixes filter. Whitespace, no match, or submission clears the
-list; every edit or history recall recomputes it from the exact visible buffer.
-Tokens neither complete nor reflect scope gates; `/help` remains authoritative.
-The main-invalid `/compose`, `/send`, and `/cancel` are excluded. Composition
-uses the separate fixed preview below; confirmation uses a history-free semantic
-read with no suggestions, and the subject keeps its ordinary line read.
-Editing, control keys, fallbacks, and restoration are in
-[Terminal safety](../operations/terminal-safety.md#live-editor-boundary).
-The list is not a selectable overlay: Up/Down navigate command history even
-while it is visible. Tab does not apply a suggestion; Tab, Shift-Tab, and Escape
-have no current main-input action. Future palette/history coordination is
-specified in the
+Exact case-sensitive prefixes filter in stable order. Root provides the 20
+tokens above; help provides 23 including `/compose`, `/send`, and `/cancel`;
+agent-valued positions provide the 10 canonical IDs and accepted aliases.
+Static finite positions also provide session and conversation subcommands,
+`--fresh`, `--all`, `last`, and `--from`. Dynamic session, conversation,
+debate, count, sequence, query, prompt, subject, and path values are not
+synthesized. Fixed-only positions remain open with an explicit empty palette on
+no match; mixed fixed/free positions close when the active slot is free text.
+Tokens do not reflect runtime scope gates; `/help` remains authoritative.
+
+The active token is the maximal ASCII-space/tab-delimited span around the
+cursor. Tab replaces that full span with the highlighted candidate and adds no
+whitespace. Help permits a bare prefix to select a slash replacement, for
+example `/help ru` to `/help /run`. Up/Down moves the highlight and clamps at
+the ends without replacing text or traversing history. Filtering keeps the
+highlight when its identity remains eligible; otherwise the first match is
+highlighted. Tab is a no-op for an exact candidate or no highlight, and
+Shift-Tab is always a no-op.
+
+The first Tab that changes text retains the complete pre-completion buffer and
+cursor. Edits in the same grammar position keep that snapshot; a position
+change resets it. Escape restores the snapshot when present, otherwise leaves
+the buffer unchanged, then closes the palette and latches that exact line state
+dismissed. An edit or history change clears the latch and permits reopening.
+Closed-palette Up/Down resumes command-history navigation. Enter commits only
+the visible buffer to the established parser once, never an unapplied
+highlight.
+
+Plain, fixed-ANSI, `NO_COLOR`, narrow, and empty palette rendering preserve the
+same semantic candidate order and highlight. Ordinary-line fallback receives
+no palette projection and owns none of these keys. Composition uses the
+separate preview-only fixed suggestions below; confirmation has no suggestions,
+and the subject keeps its ordinary line read. Editing, decoding, fallback, and
+restoration details are in
+[Terminal safety](../operations/terminal-safety.md#live-editor-boundary); the
+pure control contract is in the
 [design contract](../design/interactive-cli-design-system.md#main-command-palette-and-fixed-choices).
 
 ## Main-command history
@@ -274,9 +306,8 @@ same driver.
 
 History lasts only for that driver instance and is never persisted to the
 workspace, transcripts, configuration, environment, provider sessions, or a
-user history file. The pure internal future-overlay seam suppresses history
-arrows by consuming them when marked open, but the current preview never opens
-it; #79 will connect that seam when selectable palettes are implemented.
+user history file. An open main palette consumes Up/Down for clamped highlight
+navigation; closed-palette Up/Down retains the history behavior above.
 
 ## Composition live suggestions
 

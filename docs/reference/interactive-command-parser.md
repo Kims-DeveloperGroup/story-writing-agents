@@ -73,6 +73,40 @@ Keywords are case-sensitive; ASCII space/tab delimit grammar. Fixed commands
 reject arguments; tokens reject Unicode whitespace and `Cc` controls. There is
 no quoting, expansion, shell, provider, or file access.
 
+## Main-command completion projection
+
+The module also supplies a package-internal, pure completion projection for
+capable main-prompt editing. It does not extend the supported public contract
+above, call `parse_interactive_line()`, or perform fuzzy matching, catalog
+lookup, I/O, authorization, or mutation. Given an exact buffer and cursor, it
+returns one grammar-position identity, the complete active-token span, and
+ordered literal replacements, or `None` for a dynamic/free-value position.
+
+ASCII space and tab alone delimit the cursor-aware span, matching the parser's
+command grammar. Matching is exact and case-sensitive. The implemented finite
+positions are:
+
+| Position | Ordered replacements |
+| --- | --- |
+| Root command | The 20 main-available canonical commands and aliases in registry order; standalone `/compose`, `/send`, and `/cancel` are excluded. |
+| `/session` | `list`, `create`, `open`, `pause` |
+| `/conversation` | `new`, `list`, `use`, `subject`, `archive` |
+| `/to`, `/agent`, `/persona` agent | The 10 canonical IDs and accepted aliases in route order. |
+| `/run` option | `--fresh` |
+| `/conversation list` option | `--all` |
+| `/help`, `/?` command | The 20 root replacements plus `/compose`, `/send`, and `/cancel` in registry order. |
+| `/inspect` argument | `last` |
+| `/transcript ID [COUNT]` option | `--from` |
+
+Fixed-only positions keep their projection when a typed prefix has no match,
+allowing the terminal to render an explicit empty palette. Mixed fixed/free
+positions project only option-looking or still-matching fixed text; prompt,
+query, subject, path, identity, count, sequence, and other runtime values stay
+free text with no palette. Help additionally accepts a bare active prefix for
+slash-prefixed replacement, so `/help ru` can become `/help /run`. Completion
+replaces input only; Enter still sends the final visible buffer to the parser
+once.
+
 ## Search and transcript grammar
 
 `/search QUERY` removes exactly one ASCII delimiter and preserves the remaining

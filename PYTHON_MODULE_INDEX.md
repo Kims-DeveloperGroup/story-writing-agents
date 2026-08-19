@@ -454,10 +454,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   `AgentRouteSpec` and `AGENT_ROUTES` at their owning path. `AgentRouteSpec` is
   frozen and slotted; `AGENT_ROUTES` is immutable, follows canonical roster
   order, and owns each route's canonical ID, preferred prompt alias, ordered
-  aliases, and advisory-domain copy. Parser helpers and command-alias maps are
-  internal; agent parsing and canonical validation derive from the route
-  registry. Search and transcript actions extend the frozen, slotted
-  `InteractiveAction` with the optional positive `start_sequence` field;
+  aliases, and advisory-domain copy. The unlisted package-internal
+  `CommandCompletionContext` and `project_command_completion` derive the
+  canonical cursor-aware completion grammar, exact replacement spans, stable
+  grammar-position identities, and ordered fixed candidates from the same
+  command and route metadata without parsing. Other parser helpers and
+  command-alias maps are internal; agent parsing and canonical validation
+  derive from the route registry. Search and transcript actions extend the
+  frozen, slotted `InteractiveAction` with the optional positive
+  `start_sequence` field;
   existing action payloads remain compatible. `/search QUERY` and
   `/transcript ID [COUNT] [--from SEQUENCE]` participate in the same immutable
   help registry and exact parser. Story-session parsing recognizes exactly
@@ -466,9 +471,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   does not re-export the route metadata.
 - **Direct internal dependencies:** `agents`.
 - **State, resources, and side effects:** Immutable command and agent-route
-  metadata only; owns no process state and performs no provider, filesystem,
-  persistence, environment, or import-time operational side effects.
+  metadata only. Completion projection is pure and call-local; the module owns
+  no editor, palette, history, process state, or external resource and performs
+  no provider, filesystem, persistence, environment, or import-time
+  operational side effects.
 - **Primary verification/documentation:** `tests/test_interactive_commands.py`,
+  `tests/test_interactive_terminal_completion.py`,
   `tests/test_public_api_and_cli.py`, and
   `docs/reference/interactive-command-parser.md`.
 
@@ -721,8 +729,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   `/send` then `/cancel` from exact whole-buffer prefixes, while
   `bind_suggestion_reader` binds an explicit provider to an editor without
   exposing private members to consumers. Public `read_line` uses the driver's
-  history-aware main-input route, while the bound contextual reader remains
-  history-free. The public `__all__` remains exact.
+  shared history-aware selectable main-command route while preserving the
+  legacy `slash_command_suggestions` projection, and the bound contextual
+  reader remains history-free and nonselectable. The public `__all__` remains
+  exact.
 - **Direct internal dependencies:** `interactive_commands` and
   `interactive_terminal`.
 - **State, resources, and side effects:** The facade retains one unified raw
@@ -732,12 +742,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   history store for the editor lifetime; public `read_line` records successful
   exact nonblank commits, while the internal binding supplies a provider to a
   history-free contextual read without retaining it. The unified driver
-  preserves exact fallback, editing, interrupt, EOF, output-failure, and
-  restoration behavior. The history is not persisted, and the facade performs
-  no provider, filesystem,
-  persistence, subprocess, network, or import-time operational side effect.
+  preserves exact fallback, selectable-palette, editing, interrupt, EOF,
+  output-failure, and restoration behavior. The history is not persisted, and
+  the facade performs no provider, filesystem, persistence, subprocess,
+  network, or import-time operational side effect.
 - **Primary verification/documentation:** `tests/test_interactive_line_editor.py`,
   `tests/test_interactive_terminal.py`,
+  `tests/test_interactive_terminal_completion.py`,
   `tests/test_interactive_terminal_foundation.py`,
   `tests/test_public_api_and_cli.py`, and `tests/test_interactive_pty.py`;
   `docs/reference/interactive-terminal.md`, `docs/reference/cli.md`,
@@ -770,7 +781,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   Unlisted `MainInputHistoryState`,
   `MainInputControlState`, `append_main_input_history`, and
   `transition_main_input` bindings expose the internal pure history seam to the
-  standalone compatibility facade without adding root-package exports. Public
+  standalone compatibility facade without adding root-package exports.
+  Unlisted `transition_main_command_input` and `read_main_command_line`
+  bindings provide the shared selectable main-command control and driver
+  adapters without exposing a terminal leaf. Public
   construction adapts `read_line` to deterministic plain semantic composition
   and confirmation prompts, while internal construction binds distinct
   ordinary, history-aware main, and history-free semantic composition and
@@ -782,6 +796,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   persistence, subprocess, network, or application-startup operation.
 - **Primary verification/documentation:** `tests/test_interactive_terminal.py`,
   `tests/test_interactive_line_editor.py`, `tests/test_public_api_and_cli.py`,
+  `tests/test_interactive_terminal_completion.py`,
   `tests/test_interactive_terminal_foundation.py`,
   `tests/test_interactive_terminal_composer.py`,
   `tests/test_interactive_terminal_history.py`,
@@ -801,7 +816,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   capability profiles, normalized keys, control outcomes, terminal
   capabilities, line-input state, immutable `ComposerState`, bounded
   `MainInputHistoryState`, correlated `MainInputControlState`,
-  `SlashCommandSuggestion`, the internal rejected control outcome, the closed
+  `SlashCommandSuggestion`, internal `CommandCompletionCandidate`,
+  `CommandCompletionProjection`, `MainCommandPaletteState`, and correlated
+  `MainCommandControlState`, the internal rejected control outcome, the closed
   `Prompt`, `Panel`, `Section`, `Field`, `Notice`, `Message`, `Record`,
   `ListView`, `SuggestionPalette`, and `Picker` component vocabulary, shared
   `Choice`, `RenderedFrame`, internal `InputPromptView` and
@@ -812,13 +829,17 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **State, resources, and side effects:** Immutable values and pure validation
   only. Main-input values correlate one editable line, navigation position,
   saved draft, and overlay flag and bound stored entries to 100 without
-  retaining or persisting them. Composer values retain exact accepted lines
+  retaining or persisting them. Command-completion values correlate grammar
+  position, replacement literal and span, highlighted candidate, pre-change
+  buffer/cursor snapshot, and restored-state latch without owning projection or
+  I/O. Composer values retain exact accepted lines
   and derive joined content and code-point counts without mutation. Models
   create no ANSI and own no callbacks, streams, calculated layout, runtime,
   provider, filesystem, or storage handles; the rendered-input transfer value
   only carries renderer-produced trusted/plain projections and performs no
   operational I/O.
 - **Primary verification/documentation:**
+  `tests/test_interactive_terminal_completion.py`,
   `tests/test_interactive_terminal_foundation.py`,
   `tests/test_interactive_terminal_composer.py`,
   `tests/test_interactive_terminal_history.py`,
@@ -838,12 +859,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   preview projection. `append_main_input_history` retains exact nonblank
   commits with oldest-first eviction at 100, while `transition_main_input`
   performs pure newest/older/newer history navigation, draft restoration, and
-  overlay-open arrow suppression. `transition_composer_line` applies exact
-  `/send`, `/cancel`, `/say /send`, and `/say /cancel` semantics to immutable
-  composer state, while `transition_confirmation_answer` classifies canonical
-  yes/no/default answers and explicit rejection. The current suggestion preview
-  is not an open palette; selectable completion and picker transitions remain
-  unimplemented.
+  overlay-open arrow suppression. `project_main_suggestion_palette` turns one
+  correlated completion projection into the existing semantic palette, while
+  `transition_main_command_input` owns palette open/filter/highlight/clamp,
+  Tab replacement and snapshot, Escape restoration and latch, and the exact
+  open-palette versus closed-history arrow routing. `transition_composer_line`
+  applies exact `/send`, `/cancel`, `/say /send`, and `/say /cancel` semantics
+  to immutable composer state, while `transition_confirmation_answer`
+  classifies canonical yes/no/default answers and explicit rejection.
+  Composition suggestions remain preview-only and nonselectable; picker
+  transitions remain unimplemented.
 - **Direct internal dependencies:** `interactive_terminal._model`.
 - **State, resources, and side effects:** Pure value projections only. The
   functions return new immutable history/control values and retain no store;
@@ -851,6 +876,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   cursor resource, filesystem, process, or network resource.
 - **Primary verification/documentation:**
   `tests/test_interactive_line_editor.py`,
+  `tests/test_interactive_terminal_completion.py`,
   `tests/test_interactive_terminal_foundation.py`,
   `tests/test_interactive_terminal_composer.py`,
   `tests/test_interactive_terminal_history.py`,
@@ -873,6 +899,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   and owns no environment, terminal, runtime, provider, filesystem, or storage
   state.
 - **Primary verification/documentation:**
+  `tests/test_interactive_terminal_completion.py`,
   `tests/test_interactive_terminal_foundation.py`,
   `tests/test_interactive_terminal_composer.py`,
   `tests/test_interactive_terminal_views.py`,
@@ -886,14 +913,16 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Responsibility:** Own stream-backed terminal interaction.
 - **Supported surface:** Package-internal `RawTerminalDriver` and
   `detect_terminal_capabilities`. The driver accepts pure line, main-input, and
-  history-append collaborators at construction and explicit suggestion
-  providers per live read. `read_main_line` performs history-aware main editing,
+  history-append collaborators at construction and explicit suggestion or
+  completion/palette collaborators per live read. `read_main_line` preserves
+  the history-aware compatibility route; package-internal supported
+  `read_main_command_line` performs selectable history-aware main editing,
   `read_live_line` remains the history-free contextual compatibility route,
   `read_input_line` accepts an injected trusted semantic renderer for
   history-free composition and confirmation, and `read_line` preserves ordinary
-  fallback. The driver provides one-write output and
-  normalizes established editing keys plus Up, Down, Tab, Shift-Tab, and Escape
-  without adding selectable completion or picker semantics.
+  fallback. The driver provides one-write output, redraws on the full immutable
+  main-command control state, and normalizes established editing keys plus Up,
+  Down, Tab, Shift-Tab, and Escape without adding picker semantics.
 - **Direct internal dependencies:** `interactive_terminal._model`.
 - **State, resources, and side effects:** Sole owner of borrowed input/output
   streams, independent capability checks, detected width, normalized physical
@@ -901,7 +930,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   flushes, and exact restoration. It retains exactly one bounded process-local
   main-input history store per driver instance; each main read resets only its
   call-local navigation state, and a successful fallback commit or restored
-  live commit is appended once. Composition, confirmation, and ordinary reads
+  live commit is appended once. The same read loop owns call-local one-byte
+  incremental decoding and the fixed 50-millisecond Escape readiness lookahead,
+  so available ordinary bytes are reprocessed without a second reader or sleep
+  loop. Completion, control, and palette collaborators are call-local and
+  retain no prompt mode. Composition, confirmation, and ordinary reads
   never navigate or mutate that store. Semantic input resolves capability and
   width once per read, uses the plain projection for fallback and cursor
   measurement, and emits the trusted styled projection only on its live path.
@@ -911,6 +944,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `NO_COLOR` affects decorative SGR only.
 - **Primary verification/documentation:**
   `tests/test_interactive_line_editor.py`,
+  `tests/test_interactive_terminal_completion.py`,
   `tests/test_interactive_terminal_foundation.py`,
   `tests/test_interactive_terminal_composer.py`,
   `tests/test_interactive_terminal_history.py`,
@@ -939,10 +973,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   generic status writer has no remaining internal composer call site. The core
   constructs ordered structured composition and confirmation input views and
   maps their pure control outcomes without changing public result contracts.
+  Its package-internal command-completion adapter translates canonical command
+  contexts into terminal completion models, and its unlisted facade adapter
+  supplies the pure selectable control projection plus existing semantic
+  palette renderer to the driver.
   The internal contextual factory preserves explicit ordinary/main/composition
   callback routing through deterministic plain semantic adapters, while the
-  real stream factory binds both preview providers, semantic composition and
-  confirmation input, plus the pure main-input transitions to one driver.
+  real stream factory binds the selectable main-command route, both preview
+  providers, semantic composition and confirmation input, plus the pure
+  main-input transitions to one driver.
 - **Direct internal dependencies:** `agents`, `interactive_commands`,
   `interactive_terminal._controls`, `interactive_terminal._driver`,
   `interactive_terminal._model`, and `interactive_terminal._render`.
@@ -950,8 +989,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   borrowed synchronous read/write callbacks, deterministic plain capabilities,
   and an explicit width but inspect no stream and acquire no resource.
   Stream-factory instances delegate all raw terminal state, width detection,
-  keys, writes, flushes, restoration, and the bounded process-local main-input
-  history store to one driver. Main and composition providers plus semantic
+  keys, writes, flushes, restoration, readiness, incremental decoding, and the
+  bounded process-local main-input history store to one driver. Main completion,
+  palette, and composition providers plus semantic
   input renderers are selected per call and never retained by that driver;
   composition and confirmation are history-free, while subject input remains
   ordinary. Callback-constructed terminals and the core itself own no history.
@@ -961,6 +1001,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   import-time operational I/O.
 - **Primary verification/documentation:** `tests/test_interactive_terminal.py`,
   `tests/test_interactive_line_editor.py`, `tests/test_public_api_and_cli.py`,
+  `tests/test_interactive_terminal_completion.py`,
   `tests/test_interactive_terminal_foundation.py`,
   `tests/test_interactive_terminal_composer.py`,
   `tests/test_interactive_terminal_views.py`, `tests/test_interactive_pty.py`,
@@ -1183,11 +1224,13 @@ every intermediate arrow. The current runtime graph is acyclic.
 ## Consistency Notes
 
 - `interactive_commands` owns canonical command and agent-route metadata, parse
-  rules, and typed parsed actions. `interactive_line_editor` projects the
-  main-eligible canonical tokens and declared aliases directly from `COMMANDS`,
-  while `_controls` owns the fixed ordered `/send`, `/cancel` composition
-  projection. The facade delegates all raw terminal behavior to the unified
-  terminal driver and creates no registry or parser edge. The
+  rules, typed parsed actions, and the pure cursor-aware completion grammar and
+  replacement spans derived from that same metadata. `interactive_line_editor`
+  preserves its legacy main suggestion projection while delegating actual main
+  reads to the shared selectable terminal route; `_controls` owns the fixed
+  ordered `/send`, `/cancel` composition projection. The facade delegates all
+  raw terminal behavior to the unified terminal driver and creates no registry
+  or parser edge. The
   `interactive_terminal` package keeps its established public facade while
   `_core` consumes public `COMMANDS` and `AGENT_ROUTES` metadata plus canonical
   display names to coordinate safe presentation and explicit ordinary, main,
@@ -1195,13 +1238,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   `_render` remain pure; `_driver` alone owns raw streams, capabilities,
   functional cursor
   controls, width, key decoding, writes, flushes, restoration, and one bounded
-  process-local main-input history store. It receives preview providers and
-  the trusted semantic input renderer only per read, resets navigation for each
-  main read, and keeps composition and confirmation reads history-free.
-  `_controls` supplies immutable history, composer, and confirmation
-  transitions; the current preview is not an open palette, so main Up and Down remain
-  history keys. The real CLI constructs one stream-backed terminal rather than
-  injecting a second editor. The terminal facade also
+  process-local main-input history store, fixed 50-millisecond Escape readiness
+  lookahead, and call-local incremental decoder. It receives completion,
+  palette, preview, and trusted semantic input collaborators only per read,
+  resets navigation for each main read, and keeps composition and confirmation
+  reads history-free. `_controls` supplies immutable history, selectable
+  palette, composer, and confirmation transitions: open-palette Up and Down
+  move the clamped highlight, while closed-palette Up and Down remain history
+  keys. Composition preview remains nonselectable. The real CLI constructs one
+  stream-backed terminal rather than injecting a second editor. The terminal
+  facade also
   exposes an unlisted typed semantic-output adapter and closed component
   bindings, including `ListView`, for package consumers without expanding
   `__all__`; controller code imports only that facade, never a terminal leaf.

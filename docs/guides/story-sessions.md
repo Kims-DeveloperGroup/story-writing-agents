@@ -35,9 +35,13 @@ a ready default and asks before reopening a paused default.
 defaults remain. Restarting establishes a new attachment and restores an active
 default conversation. `/status` separates defaults from process scope.
 
-On capable POSIX main prompts, `/` opens `[suggestions]`; an exact,
-case-sensitive prefix narrows tokens. It does not complete arguments or enforce
-scope. See the [terminal contract](../reference/interactive-terminal.md#main-prompt-live-suggestions).
+On capable POSIX main prompts, `/` opens a selectable command palette. Exact,
+case-sensitive prefixes narrow canonical root, subcommand, and finite-option
+candidates. Up/Down moves the highlight, Tab completes the active token, and
+Escape restores the first pre-completion snapshot when present and dismisses
+that exact state; the palette does not enforce runtime scope. Plain fallback
+has no palette. See the
+[terminal contract](../reference/interactive-terminal.md#main-prompt-live-suggestions).
 
 ## Manage conversations and routing
 
