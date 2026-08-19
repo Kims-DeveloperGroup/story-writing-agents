@@ -2201,14 +2201,6 @@ class ControllerSettingsTests(ControllerTestCase):
                     str(defaults.max_debate_rounds),
                 ),
                 terminal_module.Field("Providers", providers),
-                terminal_module.Field(
-                    "Codex model",
-                    defaults.codex_model or "provider default",
-                ),
-                terminal_module.Field(
-                    "Codex reasoning effort",
-                    defaults.codex_reasoning_effort or "provider default",
-                ),
             )
 
         return terminal_module.Panel(
@@ -2231,7 +2223,7 @@ class ControllerSettingsTests(ControllerTestCase):
             state=terminal_module.ViewState.OPEN,
         )
 
-    def test_settings_open_is_exact_eight_row_provider_free_snapshot(self) -> None:
+    def test_settings_open_is_exact_six_item_provider_free_snapshot(self) -> None:
         workspace = self.make_workspace()
         before = _tree_snapshot(workspace.root)
         state = settings_module.load_settings_state(workspace)
@@ -2239,7 +2231,7 @@ class ControllerSettingsTests(ControllerTestCase):
         controller, backend, callbacks = self.make_controller(
             workspace,
             "/settings",
-            "8",
+            "6",
             "/quit",
             terminal_width=120,
         )
@@ -2279,15 +2271,13 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertIn(f"{render_plain(expected_panel, width=120).text}\n", callbacks.records)
         self.assertEqual(
             callbacks.prompts[1],
-            "Choices (highlighted 1/8) [open]\n"
+            "Choices (highlighted 1/6) [open]\n"
             "  1. [highlighted] Language\n"
             "  2. [available] Persona\n"
             "  3. [available] Maximum debate rounds\n"
             "  4. [available] Providers\n"
-            "  5. [available] Codex model\n"
-            "  6. [available] Codex reasoning effort\n"
-            "  7. [available] Save\n"
-            "  8. [available] Cancel\n"
+            "  5. [available] Save\n"
+            "  6. [available] Cancel\n"
             "[input] Enter a choice number, press Enter for the highlighted choice, or enter /cancel.\n"
             "Choose a setting to edit, save, or cancel.\n"
             "Settings > ",
@@ -2317,11 +2307,16 @@ class ControllerSettingsTests(ControllerTestCase):
             "4",
             "2",
             "1",
-            "5",
+            "1",
+            "4",
+            "2",
+            "2",
             "/cancel",
+            "4",
+            "2",
+            "3",
             "6",
-            "6",
-            "7",
+            "5",
             "/quit",
             terminal_width=160,
         )
@@ -2350,8 +2345,16 @@ class ControllerSettingsTests(ControllerTestCase):
         configured = settings_module.load_settings_state(workspace).pending
         self.assertEqual(configured.system_defaults.language, "EN")
         self.assertEqual(configured.system_defaults.max_debate_rounds, 0)
-        self.assertEqual(configured.system_defaults.codex_model, "/cancel")
-        self.assertEqual(configured.system_defaults.codex_reasoning_effort, "xhigh")
+        self.assertIsNone(configured.system_defaults.codex_model)
+        self.assertIsNone(configured.system_defaults.codex_reasoning_effort)
+        self.assertEqual(
+            configured.agent_configs[PLOT_ARCHITECT].codex_model,
+            "/cancel",
+        )
+        self.assertEqual(
+            configured.agent_configs[PLOT_ARCHITECT].codex_reasoning_effort,
+            "xhigh",
+        )
         self.assertEqual(
             configured.agent_configs[PLOT_ARCHITECT].backend,
             "codex",
@@ -2374,12 +2377,13 @@ class ControllerSettingsTests(ControllerTestCase):
             "(disabled: Provider is not implemented.)",
             rendered,
         )
+        self.assertIn("Inherit", rendered)
         self.assertNotIn("Settings cancelled", rendered)
         self.assertEqual(callbacks.reads, [])
 
     def test_nested_escape_returns_but_interrupt_and_eof_cancel_all(self) -> None:
         scenarios = (
-            (("/settings", "5", "\x1b", "8", "/quit"), 2),
+            (("/settings", "4", "2", "2", "\x1b", "6", "/quit"), 2),
             (("/settings", KeyboardInterrupt(), "/quit"), 1),
             (("/settings", EOFError(), "/quit"), 1),
         )
@@ -2425,10 +2429,8 @@ class ControllerSettingsTests(ControllerTestCase):
                 controller, _backend, callbacks = self.make_controller(
                     workspace,
                     "/settings",
-                    "1",
-                    "2",
-                    "7",
-                    "8",
+                    "5",
+                    "6",
                     "/quit",
                     terminal_width=160,
                 )
