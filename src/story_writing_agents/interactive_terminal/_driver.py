@@ -826,6 +826,8 @@ class RawTerminalDriver:
         while True:
             try:
                 character = self._read_character(character_reader)
+            except KeyboardInterrupt:
+                return state, ControlOutcome(ControlOutcomeKind.INTERRUPT)
             except EOFError:
                 return state, ControlOutcome(ControlOutcomeKind.EOF)
 
