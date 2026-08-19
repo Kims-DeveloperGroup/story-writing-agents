@@ -23,8 +23,16 @@ from ._driver import RawTerminalDriver
 from ._model import (
     CapabilityProfile,
     Component,
+    Field,
+    Message,
+    Notice,
+    Panel,
+    Record,
+    Section,
+    SemanticRole,
     SlashCommandSuggestion,
     TerminalCapabilities,
+    ViewState,
     sanitize_terminal_text,
 )
 from ._render import render_component
@@ -598,19 +606,22 @@ class InteractiveTerminal:
         """Render the stable startup orientation for an unattached lobby."""
 
         workspace_text = _inline_text(_required_text("workspace", workspace))
-        self._write_block(
-            "\n".join(
+        self._write_component(
+            Panel(
+                "Story chat",
                 (
-                    "Story chat",
-                    f"Workspace: {workspace_text}",
-                    "Session: lobby",
-                    (
-                        "Provider calls are unavailable in the lobby. Use "
-                        "/session create NAME, /session open [NAME], or "
-                        "/session list."
+                    Field("Workspace", workspace_text),
+                    Field("Session", "lobby"),
+                    Notice(
+                        (
+                            "Provider calls are unavailable in the lobby. Use "
+                            "/session create NAME, /session open [NAME], or "
+                            "/session list."
+                        ),
+                        role=SemanticRole.WARNING,
                     ),
-                    "Type /help for commands; /quit exits.",
-                )
+                    Notice("Type /help for commands; /quit exits."),
+                ),
             )
         )
 
@@ -641,29 +652,35 @@ class InteractiveTerminal:
         if history_count is not None and history_count < 0:
             raise ValueError("history_count must not be negative")
 
-        lines = [
-            "Story chat",
-            f"Workspace: {workspace_text}",
-            f"Session: {safe_session} ({attachment.value})",
-            f"Target: {_AGENT_DISPLAY_NAMES[agent_id]}",
+        items: list[Field | Notice] = [
+            Field("Workspace", workspace_text),
+            Field("Session", f"{safe_session} ({attachment.value})"),
+            Field("Target", _AGENT_DISPLAY_NAMES[agent_id]),
         ]
         if history_count is not None:
-            lines.extend(
+            items.extend(
                 (
-                    (
-                        f"History: {history_count} visible room "
-                        f"{_plural(history_count, 'event')}"
+                    Field(
+                        "History",
+                        (
+                            f"{history_count} visible room "
+                            f"{_plural(history_count, 'event')}"
+                        ),
                     ),
-                    (
-                        "Room messages are saved locally and shared with "
-                        "addressed agents."
+                    Notice(
+                        (
+                            "Room messages are saved locally and shared with "
+                            "addressed agents."
+                        )
                     ),
                 )
             )
-        lines.append(
-            "Type /help for commands; /quit releases access without pausing."
+        items.append(
+            Notice(
+                "Type /help for commands; /quit releases access without pausing."
+            )
         )
-        self._write_block("\n".join(lines))
+        self._write_component(Panel("Story chat", tuple(items)))
 
     def write_conversation_scope(
         self,
@@ -684,9 +701,10 @@ class InteractiveTerminal:
         safe_session = _safe_identifier("session_id", session_id)
         agent_alias = _agent_alias(agent_id)
         if conversation_handle is None and conversation_subject is None:
-            scope = (
-                f"Session: {safe_session} | Conversation: none | "
-                f"Agent: {agent_alias}"
+            fields = (
+                Field("Session", safe_session),
+                Field("Conversation", "none"),
+                Field("Agent", agent_alias),
             )
         elif conversation_handle is None or conversation_subject is None:
             raise ValueError(
@@ -700,13 +718,13 @@ class InteractiveTerminal:
             safe_subject = _inline_text(
                 _required_text("conversation_subject", conversation_subject)
             )
-            scope = (
-                f"Session: {safe_session} | Conversation: {safe_handle} | "
-                f"Subject: {safe_subject} | Agent: {agent_alias}"
+            fields = (
+                Field("Session", safe_session),
+                Field("Conversation", safe_handle),
+                Field("Subject", safe_subject),
+                Field("Agent", agent_alias),
             )
-        self._write_block(
-            "\n".join(_wrap_prefixed("[context] ", scope, self._width))
-        )
+        self._write_component(Panel("Conversation scope", fields))
 
     def write_conversation_list_entry(
         self,
@@ -912,13 +930,25 @@ class InteractiveTerminal:
         """Write one trusted consensus-run record."""
 
         safe_id = _safe_identifier("debate_id", debate_id)
-        self._write_block(f"[run {safe_id}] {_required_text('text', text)}")
+        self._write_component(
+            Record(
+                f"run {safe_id}",
+                content=_required_text("text", text),
+            )
+        )
 
     def write_agent(self, agent_id: str, text: str) -> None:
         """Write one validated agent response without parsing its content."""
 
         alias = _agent_alias(agent_id)
-        self._write_block(f"{alias}> {_required_text('text', text)}")
+        self._write_component(
+            Message(
+                alias,
+                _required_text("text", text),
+                role=SemanticRole.AGENT,
+                state=ViewState.COMPLETED,
+            )
+        )
 
     def write_help(self, command: str | None = None) -> None:
         """Render full or contextual help from the parser-owned registry."""
@@ -954,13 +984,21 @@ class InteractiveTerminal:
             variants,
             _HINT_LIMIT,
         )
-        lines = _wrap_prefixed(
-            f"[error {error.code.value}] ",
-            summary,
-            self._width,
+        self._write_component(
+            Panel(
+                "Interactive error",
+                (
+                    Notice(
+                        summary,
+                        label=f"error {error.code.value}",
+                        role=SemanticRole.ERROR,
+                        state=ViewState.ERROR,
+                    ),
+                    Notice(hint, label="hint"),
+                ),
+                state=ViewState.ERROR,
+            )
         )
-        lines.extend(_wrap_prefixed("[hint] ", hint, self._width))
-        self._write_block("\n".join(lines))
 
     def _record_discarded_composition(
         self,
@@ -1047,6 +1085,24 @@ class InteractiveTerminal:
 
         frame = render_component(component, self._capability_provider())
         self._write_text(f"{frame.text}\n")
+
+
+class InteractiveSemanticOutput:
+    """Retain only one terminal's package-internal semantic write capability."""
+
+    __slots__ = ("_write",)
+
+    def __init__(self, terminal: InteractiveTerminal) -> None:
+        """Bind semantic output without inspecting capabilities or streams."""
+
+        if not isinstance(terminal, InteractiveTerminal):
+            raise TypeError("terminal must be an InteractiveTerminal")
+        self._write: Callable[[Component], None] = terminal._write_component
+
+    def write_component(self, component: Component) -> None:
+        """Delegate one closed semantic component to exactly one terminal write."""
+
+        self._write(component)
 
 
 def build_contextual_terminal(

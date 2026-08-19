@@ -520,6 +520,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   directive-result, inspection, trusted debate/retrieval progress and result,
   retrieval-source, and other presentation validation helpers are package
   internal, and the project-root facade does not re-export this class or module.
+  The controller constructs closed semantic components for the migrated
+  high-frequency scope, status, inspection, management, directive, routing,
+  advisory, retrieval, and consensus records through the terminal facade's
+  unlisted `InteractiveSemanticOutput`; it retains that adapter alongside the
+  same terminal used for input and deferred legacy writers. Thirty-five
+  migrated status sites use this typed seam, while the eleven focused-history,
+  list, search, and transcript sites remain exact `write_status` calls for the
+  deferred information-dense view migration.
 - **Direct internal dependencies:** `agents`, `backend`, `cli_context`,
   `conversation_retrieval`, `conversation_search`, `conversations`, `errors`,
   `interactive_commands`, `interactive_controller._conversation_policy`,
@@ -551,9 +559,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   while a cleanup `BaseException` propagates after later stages run and an
   unsuccessfully interrupted Runner close retains its private reference.
   `AgentBackend` retains the actual access claim, manifest, subprocess, and
-  provider-thread resources. Through public
-  collaborators the controller reads and parses terminal input, renders safe
-  output, sequences session and nested conversation transitions, performs
+  provider-thread resources. Through public collaborators the controller reads
+  and parses terminal input, submits typed presentation facts and legacy
+  records to terminal-owned rendering, sequences session and nested
+  conversation transitions, performs
   configuration validation, pre-read, access acquisition, and correlated
   post-read in that exact order, and compensates only access newly acquired by
   a failed transition. Create/open update the persisted session default only
@@ -574,18 +583,18 @@ every intermediate arrow. The current runtime graph is acyclic.
   `StoryRuntime.converse_with_retrieval` operation per accepted advisory content
   turn through the retained Runner. It passes the exact attachment-scoped
   service plus a synchronous sink, validates trusted progress/results, and
-  renders fixed progress and ordered source copy through existing terminal
-  status output. Before advisory coroutine entry, the established fixed
-  cancelled/hint copy returns attached only when public Runner task inspection
-  proves quiescence; that path calls no provider and mutates no controller or
-  persistent state. After entry, returning attached requires the runtime to
-  receive `CancelledError` and the operation to join; every other advisory
-  cancellation state fails closed. Provider-free search, transcript, and
-  focused-history interruption stops further rendering and returns to the
-  same prompt without persistence mutation. The controller also delegates draft
-  reads to `run_inputs` and submits each accepted consensus action through the
-  same Runner. A trusted `INTERRUPTED` progress event, which may be first after
-  reservation, is its sole durable-interruption proof; only `STARTED` updates
+  constructs fixed progress and ordered source components through the retained
+  semantic-output adapter. Before advisory coroutine entry, the established
+  fixed cancelled/hint copy returns attached only when public Runner task
+  inspection proves quiescence; that path calls no provider and mutates no
+  controller or persistent state. After entry, returning attached requires the
+  runtime to receive `CancelledError` and the operation to join; every other
+  advisory cancellation state fails closed. Provider-free search, transcript,
+  and focused-history interruption stops further rendering and returns to the
+  same prompt without persistence mutation. The controller also delegates
+  draft reads to `run_inputs` and submits each accepted consensus action
+  through the same Runner. A trusted `INTERRUPTED` progress event, which may be
+  first after reservation, is its sole durable-interruption proof; only `STARTED` updates
   the process-local latest-debate map, pre-entry cancellation remains
   provider-free, and an entered cancellation without proof fails closed through
   `operation_interrupted` and `cleanup_failed`. `StoryRuntime` owns context
@@ -665,7 +674,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:** `src/story_writing_agents/interactive_controller/_runtime_policy.py`
 - **Responsibility:** Interpret runtime progress, result, and inspection facts.
 - **Supported surface:** No project-public import. Its exact package-internal
-  `__all__` contains `classify_advisory_turn_failure`,
+  `__all__` contains the frozen, slotted `DebateContextInspectionFacts` and
+  `DebateInspectionFacts` contracts plus `classify_advisory_turn_failure`,
   `classify_consensus_execution_failure`, `classify_inspection_failure`,
   `classify_progress_callback_failure`,
   `interactive_code_for_debate_failure`, `validate_consensus_result`,
@@ -674,8 +684,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   `validate_debate_context_inspection`, `validate_debate_inspection`,
   `validate_debate_progress`, and `validate_session_inspection`. Validators
   reconstruct exact immutable contracts, consume only a previous event or
-  immutable progress tuple, and return canonical facts or whitelisted safe
-  summaries; they never render, append, retain, or call the runtime.
+  immutable progress tuple, and return canonical typed facts. Debate and
+  context inspection validators return the whitelisted fact contracts without
+  flattening presentation text; the module never renders, appends, retains, or
+  calls the runtime.
 - **Direct internal dependencies:** `conversation_retrieval`,
   `conversation_search`, `errors`, `interactive_terminal`, `models`, and
   `workspace`.
@@ -736,7 +748,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   `INTERACTIVE_ERROR_SPECS`, `InteractiveError`, `sanitize_terminal_text`, and
   `InteractiveTerminal` in the exact established `__all__` order. The facade
   exports the defining objects without wrapper subclasses and preserves their
-  canonical `story_writing_agents.interactive_terminal` identities. Its
+  canonical `story_writing_agents.interactive_terminal` identities. The
+  unlisted `InteractiveSemanticOutput` binds one terminal's semantic write
+  capability for controller use, and the existing `Field`, `Message`,
+  `Notice`, `Panel`, `Record`, `Section`, `SemanticRole`, and `ViewState`
+  contracts are likewise facade-bound but omitted from `__all__`. The adapter
+  and contracts add no project-root export or raw-resource ownership. Its
   unlisted package-internal `build_stream_terminal` factory is the sole real-CLI
   construction boundary. Unlisted `build_contextual_terminal` preserves the
   completed contextual-callback seam; package-internal control/driver/model
@@ -752,7 +769,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Primary verification/documentation:** `tests/test_interactive_terminal.py`,
   `tests/test_interactive_line_editor.py`, `tests/test_public_api_and_cli.py`,
   `tests/test_interactive_terminal_foundation.py`,
-  `tests/test_interactive_pty.py`, `docs/design/overview.md`,
+  `tests/test_interactive_terminal_views.py`, `tests/test_interactive_pty.py`,
+  `docs/design/overview.md`,
   `docs/reference/interactive-terminal.md`,
   `docs/design/interactive-cli-design-system.md`, and
   `docs/operations/terminal-safety.md`; `tests/test_interactive_commands.py`
@@ -775,7 +793,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   only. Models contain no ANSI, callbacks, streams, calculated layout, runtime,
   provider, filesystem, or storage handles and perform no operational I/O.
 - **Primary verification/documentation:**
-  `tests/test_interactive_terminal_foundation.py` and
+  `tests/test_interactive_terminal_foundation.py`,
+  `tests/test_interactive_terminal_views.py`, and
   `docs/design/interactive-cli-design-system.md`; focused component, renderer,
   control, capability, and compatibility coverage belongs to the interactive
   terminal test suites.
@@ -817,6 +836,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   state.
 - **Primary verification/documentation:**
   `tests/test_interactive_terminal_foundation.py`,
+  `tests/test_interactive_terminal_views.py`,
   `docs/design/interactive-cli-design-system.md`, and
   `docs/operations/terminal-safety.md`; focused rich/plain/narrow/wide coverage
   belongs to the interactive terminal test suites.
@@ -857,10 +877,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   error redaction/caps, composition behavior, callback granularity, and fixed
   callback-width semantics remain compatible. Its package-internal stream
   factory coordinates the driver, controls, command metadata, and current
-  capability profile; semantic rendering is available without migrating the
-  established views in this foundation slice. The internal contextual factory
-  preserves explicit ordinary/main/composition callback routing, while the real
-  stream factory binds both preview providers to one driver.
+  capability profile. Lobby, attached-session, and conversation-scope
+  orientation plus specialized run, agent, and typed-error writers now
+  construct semantic components; `InteractiveSemanticOutput` binds the same
+  private component writer so controller-owned components share the identical
+  render-and-one-write path. Generic status and deferred information-dense
+  writers remain on their established legacy path. The internal contextual
+  factory preserves explicit ordinary/main/composition callback routing, while
+  the real stream factory binds both preview providers to one driver.
 - **Direct internal dependencies:** `agents`, `interactive_commands`,
   `interactive_terminal._controls`, `interactive_terminal._driver`,
   `interactive_terminal._model`, and `interactive_terminal._render`.
@@ -870,12 +894,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   Stream-factory instances delegate all raw terminal state, width detection,
   keys, writes, flushes, and restoration to one driver. Main and composition
   providers are selected per call and never retained by that driver; subject
-  and confirmation use ordinary input. There is no history, runtime, filesystem,
-  persistence, subprocess, network, or import-time operational I/O.
+  and confirmation use ordinary input. The semantic adapter retains only the
+  terminal's bound component capability and acquires no stream or raw resource.
+  There is no history, runtime, filesystem, persistence, subprocess, network,
+  or import-time operational I/O.
 - **Primary verification/documentation:** `tests/test_interactive_terminal.py`,
   `tests/test_interactive_line_editor.py`, `tests/test_public_api_and_cli.py`,
   `tests/test_interactive_terminal_foundation.py`,
-  `tests/test_interactive_pty.py`, `docs/design/overview.md`,
+  `tests/test_interactive_terminal_views.py`, `tests/test_interactive_pty.py`,
+  `docs/design/overview.md`,
   `docs/reference/interactive-terminal.md`,
   `docs/design/interactive-cli-design-system.md`, and
   `docs/operations/terminal-safety.md`.
@@ -1106,7 +1133,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   pure; `_driver` alone owns raw streams, capabilities, functional cursor
   controls, width, key decoding, writes, flushes, and restoration and receives
   preview providers only per read. The real CLI constructs one stream-backed
-  terminal rather than injecting a second editor. The controller still receives
+  terminal rather than injecting a second editor. The terminal facade also
+  exposes an unlisted typed semantic-output adapter and closed component
+  bindings for package consumers without expanding `__all__`; controller code
+  imports only that facade, never a terminal leaf. The controller still receives
   only completed terminal outcomes and alone passes exact lines to the parser.
 - `interactive_controller` is the stable one-class import boundary and owns no
   shell state or resource. Its `_core` owns interactive shell action mapping,
@@ -1133,8 +1163,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   The `_session_policy`, `_conversation_policy`, and `_runtime_policy` leaves
   interpret immutable collaborator facts and safe failure categories without
   retaining state, performing I/O, mutating progress collections, importing
-  `_core`, or depending on one another; `_core` alone renders and commits their
-  canonical results to controller-owned process state.
+  `_core`, or depending on one another. `_runtime_policy` returns typed debate
+  and context inspection facts without formatting; `_core` alone constructs
+  their semantic presentation and commits canonical results to controller-owned
+  process state, while the terminal remains the rendering and emission owner.
   Provider-free `/search` and `/transcript` inspection crosses only public
   `ConversationMemoryService.search` and
   `ConversationMemoryService.read_transcript` boundaries. Provider-free

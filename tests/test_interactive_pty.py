@@ -620,6 +620,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
         stdout_is_terminal: bool = True,
         environment_overrides: Mapping[str, str] | None = None,
         terminal_columns: int = 80,
+        decorative_color: bool = False,
     ) -> PtyCliProcess:
         """Spawn the package entry with independently configurable terminal streams."""
 
@@ -630,6 +631,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
             stdout_is_terminal=stdout_is_terminal,
             environment_overrides=environment_overrides,
             terminal_columns=terminal_columns,
+            decorative_color=decorative_color,
         )
 
     def _spawn_python(
@@ -657,6 +659,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
         stdout_is_terminal: bool = True,
         environment_overrides: Mapping[str, str] | None = None,
         terminal_columns: int = 80,
+        decorative_color: bool = False,
     ) -> PtyCliProcess:
         """Spawn an exact child command with independently configurable streams."""
 
@@ -703,6 +706,8 @@ class InteractiveCliPtyTests(unittest.TestCase):
         environment = self._environment()
         if environment_overrides:
             environment.update(environment_overrides)
+        if decorative_color:
+            environment.pop("NO_COLOR", None)
         try:
             process = subprocess.Popen(
                 command,
@@ -728,6 +733,42 @@ class InteractiveCliPtyTests(unittest.TestCase):
         self._processes.append(harness)
         return harness
 
+    def test_semantic_views_use_ansi_and_no_color_profiles_on_real_ptys(
+        self,
+    ) -> None:
+        """Prove decorative SGR is optional and terminal restoration is exact."""
+
+        ansi = self._spawn_cli(
+            (),
+            environment_overrides={"TERM": "xterm-256color"},
+            decorative_color=True,
+        )
+        ansi.wait_for_text("story[lobby]> ")
+        self.assertIn(b"\x1b[1mStory chat\x1b[0m", ansi.raw_bytes)
+        self.assertIn(b"\x1b[33m  [warning]", ansi.raw_bytes)
+        self.assertIn(b"\x1b[0m", ansi.raw_bytes)
+        ansi.send_line("/quit")
+        self.assertEqual(ansi.wait_for_exit(), 0, ansi.normalized_text)
+        self.assertEqual(
+            ansi.final_terminal_attributes,
+            ansi.original_terminal_attributes,
+        )
+
+        no_color = self._spawn_cli(
+            (),
+            environment_overrides={"TERM": "xterm-256color"},
+        )
+        no_color.wait_for_text("story[lobby]> ")
+        self.assertIn("Story chat\n", no_color.normalized_text)
+        self.assertNotIn(b"\x1b[1mStory chat", no_color.raw_bytes)
+        self.assertNotIn(b"\x1b[33m  [warning]", no_color.raw_bytes)
+        no_color.send_line("/quit")
+        self.assertEqual(no_color.wait_for_exit(), 0, no_color.normalized_text)
+        self.assertEqual(
+            no_color.final_terminal_attributes,
+            no_color.original_terminal_attributes,
+        )
+
     def test_bare_entry_creates_session_then_quit_releases_only_access(
         self,
     ) -> None:
@@ -737,8 +778,8 @@ class InteractiveCliPtyTests(unittest.TestCase):
         process.wait_for_text("story[lobby]> ")
         self.assertIn("Story chat\n", process.normalized_text)
         self.assertIn(
-            f"Workspace: {self.workspace.root}\n",
-            process.normalized_text,
+            f"Workspace:{self.workspace.root}",
+            "".join(process.normalized_text.split()),
         )
         self.assertIn("Session: lobby\n", process.normalized_text)
 
@@ -830,7 +871,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
 
         submit_mark = process.output_mark()
         process.send_text("\n")
-        submitted = process.wait_for_text("[session] ", after=submit_mark)
+        submitted = process.wait_for_text("[session]\n", after=submit_mark)
         process.wait_for_text("story[lobby]> ", after=submit_mark)
         self.assertIn("\x1b[J", submitted)
         self.assertNotIn("[suggestions]", submitted)
@@ -1014,17 +1055,20 @@ print(
 
         mark = process.output_mark()
         process.send_line("ordinary sticky turn")
-        process.wait_for_text("plot> deterministic advisory reply", after=mark)
+        process.wait_for_text("plot [completed]> deterministic advisory reply", after=mark)
         process.wait_for_text("story[alpha:plot]> ", after=mark)
 
         mark = process.output_mark()
         process.send_line("@character one-shot turn")
         routed = process.wait_for_text(
-            "character> deterministic advisory reply",
+            "character [completed]> deterministic advisory reply",
             after=mark,
         )
         process.wait_for_text("story[alpha:plot]> ", after=mark)
-        self.assertIn("sticky target remains plot_architect", routed)
+        self.assertIn(
+            "stickytargetremainsplot_architect.",
+            "".join(routed.split()),
+        )
 
         mark = process.output_mark()
         process.send_line("show visible controls")
@@ -1096,8 +1140,8 @@ print(
         )
         process.wait_for_text("story[alpha:lead]> ")
         self.assertIn(
-            f"Workspace: {self.workspace.root}\n",
-            process.normalized_text,
+            f"Workspace:{self.workspace.root}",
+            "".join(process.normalized_text.split()),
         )
         self.assertIn("Session: alpha (opened)", process.normalized_text)
         self.assertIn(selected.subject, process.normalized_text)
@@ -1157,7 +1201,7 @@ print(
 
         mark = process.output_mark()
         process.send_line("harbor beacon beside the vessel")
-        process.wait_for_text("lead> deterministic advisory reply", after=mark)
+        process.wait_for_text("lead [completed]> deterministic advisory reply", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         provider_calls_before_reads = len(
             [
@@ -1218,8 +1262,8 @@ print(
         )
         process.wait_for_text("Retrieval read action 2 started.", after=mark)
         process.wait_for_text("Retrieval read action 2 completed:", after=mark)
-        process.wait_for_text("lead> retrieval-assisted answer", after=mark)
-        process.wait_for_text("[context] Source 1:", after=mark)
+        process.wait_for_text("lead [completed]> retrieval-assisted answer", after=mark)
+        process.wait_for_text("[context] Source 1 [completed]", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         retrieval_output = process.text_after(mark)
         self.assertIn(f"Conversation: {selected.conversation_id}", retrieval_output)
@@ -1308,21 +1352,21 @@ print(
         process.wait_for_text("compose[run:5]> ", after=mark)
         process.send_line("/send")
         process.wait_for_text("[compose] Sending 4 lines", after=mark)
-        successful_output = process.wait_for_text(
-            "Consensus | revision:",
-            after=mark,
-        )
-        process.wait_for_text("story[alpha:lead]> ", after=mark)
-        collapsed = " ".join(successful_output.split())
+        process.wait_for_text("core updates:", after=mark)
+        successful_output = process.wait_for_text("Conversation scope", after=mark)
+        collapsed = "".join(successful_output.split())
         ordered_fragments = (
-            "Started prompt consensus.",
-            "Drafted revision r0.",
-            "Audit started for r0 at round 0.",
-            "Audit completed for r0 at round 0; conflicts: none.",
-            "Artifacts committed for r0:",
-            "Consensus reached on r0 after 0 revision rounds.",
-            "Consensus | revision: r0",
+            "Startedpromptconsensus.",
+            "Draftedrevisionr0.",
+            "Auditstartedforr0atround0.",
+            "Auditcompletedforr0atround0;conflicts:none.",
+            "Artifactscommittedforr0:",
+            "Consensusreachedonr0after0revisionrounds.",
+            "Consensus[completed][success]revision:r0",
         )
+        for fragment in ordered_fragments:
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, collapsed)
         offsets = [collapsed.index(fragment) for fragment in ordered_fragments]
         self.assertEqual(offsets, sorted(offsets))
         self.assertNotIn("[waiting]", successful_output)
@@ -1445,7 +1489,7 @@ print(
 
         mark = process.output_mark()
         process.send_line("seed advisory")
-        process.wait_for_text("plot> deterministic advisory reply", after=mark)
+        process.wait_for_text("plot [completed]> deterministic advisory reply", after=mark)
         process.wait_for_text("story[alpha:plot]> ", after=mark)
         manifest_path = f"{_SESSION_DIRECTORY}/alpha.json"
         manifest = self.workspace.read_json(manifest_path)
@@ -1485,11 +1529,15 @@ print(
             after=mark,
         )
         process.wait_for_text(
-            "affected provider thread may restart on the next message.",
+            "[hint] The story session remains attached;",
             after=mark,
         )
         process.wait_for_text("story[alpha:plot]> ", after=mark)
-        self.assertIn("story session remains attached", process.text_after(mark))
+        self.assertIn(
+            "thestorysessionremainsattached;theaffectedproviderthreadmay"
+            "restartonthenextmessage.",
+            "".join(process.text_after(mark).casefold().split()),
+        )
 
         blocked_pid = blocked["pid"]
 
@@ -1534,7 +1582,7 @@ print(
         self._set_provider_control(mode="auto")
         mark = process.output_mark()
         process.send_line("after cancellation")
-        process.wait_for_text("plot> deterministic advisory reply", after=mark)
+        process.wait_for_text("plot [completed]> deterministic advisory reply", after=mark)
         process.wait_for_text("story[alpha:plot]> ", after=mark)
         manifest = self.workspace.read_json(manifest_path)
         self.assertIs(
@@ -1575,11 +1623,11 @@ print(
 
         mark = process.output_mark()
         process.send_line("/run seed consensus")
-        process.wait_for_text("Consensus | revision: r0", after=mark)
+        process.wait_for_text("Consensus [completed] [success]", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         mark = process.output_mark()
         process.send_line("establish current lead thread")
-        process.wait_for_text("lead> deterministic advisory reply", after=mark)
+        process.wait_for_text("lead [completed]> deterministic advisory reply", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         core_after_seed = self.workspace.read_text(
             "core_documents/global_outline.md"
@@ -1672,7 +1720,7 @@ print(
         self._set_provider_control(mode="auto")
         mark = process.output_mark()
         process.send_line("/run recovered consensus")
-        process.wait_for_text("Consensus | revision: r0", after=mark)
+        process.wait_for_text("Consensus [completed] [success]", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         manifest = self.workspace.read_json(manifest_path)
         self.assertIs(
@@ -1952,7 +2000,7 @@ print(
         self._set_provider_control(mode="auto")
         mark = process.output_mark()
         process.send_line("recovered provider turn")
-        process.wait_for_text("lead> deterministic advisory reply", after=mark)
+        process.wait_for_text("lead [completed]> deterministic advisory reply", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         self.assertEqual(
             len(
@@ -2006,7 +2054,7 @@ print(
         self._set_provider_control(mode="auto")
         mark = process.output_mark()
         process.send_line("recovered malformed provider turn")
-        process.wait_for_text("lead> deterministic advisory reply", after=mark)
+        process.wait_for_text("lead [completed]> deterministic advisory reply", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
 
         transcript_path = self.workspace.path(
@@ -2028,7 +2076,7 @@ print(
         error_lines = [
             line
             for line in process.normalized_text.splitlines()
-            if line.startswith(("[error ", "[hint] "))
+            if line.lstrip().startswith(("[error ", "[hint] "))
         ]
         self.assertTrue(error_lines)
         self.assertTrue(all(len(line) <= 80 for line in error_lines))

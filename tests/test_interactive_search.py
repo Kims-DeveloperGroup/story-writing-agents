@@ -23,6 +23,8 @@ from story_writing_agents.interactive_terminal import (
     InteractiveErrorCode,
     InteractiveTerminal,
 )
+from story_writing_agents import interactive_terminal as terminal_module
+from story_writing_agents.interactive_terminal._render import render_plain
 from story_writing_agents.workspace import (
     FilesystemConversationCatalog,
     FilesystemConversationEventStore,
@@ -73,7 +75,20 @@ def _error_record(code: InteractiveErrorCode) -> str:
     """Return the exact default record for one typed interactive error."""
 
     spec = INTERACTIVE_ERROR_SPECS[code]
-    return f"[error {code.value}] {spec.summary}\n[hint] {spec.hint}\n"
+    component = terminal_module.Panel(
+        "Interactive error",
+        (
+            terminal_module.Notice(
+                spec.summary,
+                label=f"error {code.value}",
+                role=terminal_module.SemanticRole.ERROR,
+                state=terminal_module.ViewState.ERROR,
+            ),
+            terminal_module.Notice(spec.hint, label="hint"),
+        ),
+        state=terminal_module.ViewState.ERROR,
+    )
+    return f"{render_plain(component, width=240).text}\n"
 
 
 def _persistent_file_snapshot(root: Path) -> dict[str, tuple[bytes, int]]:

@@ -44,6 +44,7 @@ from story_writing_agents.interactive_terminal import (
     TerminalMessageKind,
     sanitize_terminal_text,
 )
+from story_writing_agents.interactive_terminal._render import render_plain
 
 
 PUBLIC_EXPORTS = (
@@ -270,13 +271,42 @@ def expected_session_orientation(
     event_word = "event" if history_count == 1 else "events"
     return (
         "Story chat\n"
-        "Workspace: /stories/example\n"
-        f"Session: SESSION ({attachment.value})\n"
-        f"Target: {display_name}\n"
-        f"History: {history_count} visible room {event_word}\n"
-        "Room messages are saved locally and shared with addressed agents.\n"
-        "Type /help for commands; /quit releases access without pausing.\n"
+        "  Workspace: /stories/example\n"
+        f"  Session: SESSION ({attachment.value})\n"
+        f"  Target: {display_name}\n"
+        f"  History: {history_count} visible room {event_word}\n"
+        "  [info] Room messages are saved locally and shared with addressed agents.\n"
+        "  [info] Type /help for commands; /quit releases access without pausing.\n"
     )
+
+
+def expected_error_record(
+    code: InteractiveErrorCode,
+    *,
+    width: int,
+    summary: str | None = None,
+    hint: str | None = None,
+) -> str:
+    """Render the exact stabilized semantic tree for one typed error."""
+
+    spec = INTERACTIVE_ERROR_SPECS[code]
+    component = terminal_module.Panel(
+        "Interactive error",
+        (
+            terminal_module.Notice(
+                spec.summary if summary is None else summary,
+                label=f"error {code.value}",
+                role=terminal_module.SemanticRole.ERROR,
+                state=terminal_module.ViewState.ERROR,
+            ),
+            terminal_module.Notice(
+                spec.hint if hint is None else hint,
+                label="hint",
+            ),
+        ),
+        state=terminal_module.ViewState.ERROR,
+    )
+    return f"{render_plain(component, width=width).text}\n"
 
 
 def visible_escape(character: str) -> str:
@@ -1056,11 +1086,12 @@ class PromptAndRenderingTests(unittest.TestCase):
             callbacks.records,
             [
                 "Story chat\n"
-                "Workspace: /stories/example\n"
-                "Session: lobby\n"
-                "Provider calls are unavailable in the lobby. Use "
-                "/session create NAME, /session open [NAME], or /session list.\n"
-                "Type /help for commands; /quit exits.\n"
+                "  Workspace: /stories/example\n"
+                "  Session: lobby\n"
+                "  [warning] Provider calls are unavailable in the lobby. Use "
+                "/session create NAM\n"
+                "            E, /session open [NAME], or /session list.\n"
+                "  [info] Type /help for commands; /quit exits.\n"
             ],
         )
 
@@ -1125,10 +1156,10 @@ class PromptAndRenderingTests(unittest.TestCase):
             callbacks.records,
             [
                 "Story chat\n"
-                "Workspace: /stories/example\n"
-                "Session: SESSION (created)\n"
-                "Target: Lead Orchestrator\n"
-                "Type /help for commands; /quit releases access without pausing.\n"
+                "  Workspace: /stories/example\n"
+                "  Session: SESSION (created)\n"
+                "  Target: Lead Orchestrator\n"
+                "  [info] Type /help for commands; /quit releases access without pausing.\n"
             ],
         )
         self.assertNotIn("History:", callbacks.records[0])
@@ -1162,10 +1193,15 @@ class PromptAndRenderingTests(unittest.TestCase):
         self.assertEqual(
             callbacks.records,
             [
-                "[context] Session: SESSION | Conversation: c_0123456789 | "
-                "Subject: Opening scene | Agent: plot\n",
-                "[context] Session: SESSION | Conversation: none | "
-                "Agent: lead\n",
+                "Conversation scope\n"
+                "  Session: SESSION\n"
+                "  Conversation: c_0123456789\n"
+                "  Subject: Opening scene\n"
+                "  Agent: plot\n",
+                "Conversation scope\n"
+                "  Session: SESSION\n"
+                "  Conversation: none\n"
+                "  Agent: lead\n",
             ],
         )
 
@@ -1179,7 +1215,7 @@ class PromptAndRenderingTests(unittest.TestCase):
         rendered = callbacks.records[0]
         self.assertIn("Subject:", rendered)
         self.assertIn("Unsafe\\x0asubject\\x1b", rendered)
-        self.assertTrue(rendered.startswith("[context] "))
+        self.assertTrue(rendered.startswith("Conversation scope\n"))
         self.assertTrue(rendered.endswith("\n"))
         rendered.encode("utf-8", errors="strict")
 
@@ -1494,13 +1530,16 @@ class PromptAndRenderingTests(unittest.TestCase):
 
         terminal, callbacks = make_terminal()
         terminal.write_run("DEBATE-1", "complete")
-        self.assertEqual(callbacks.records, ["[run DEBATE-1] complete\n"])
+        self.assertEqual(callbacks.records, ["[run DEBATE-1]\n  complete\n"])
 
         for agent_id, alias, _display_name in AGENT_CASES:
             with self.subTest(agent_id=agent_id):
                 terminal, callbacks = make_terminal()
                 terminal.write_agent(agent_id, "reply")
-                self.assertEqual(callbacks.records, [f"{alias}> reply\n"])
+                self.assertEqual(
+                    callbacks.records,
+                    [f"{alias} [completed]> reply\n"],
+                )
 
     def test_every_written_block_is_sanitized_and_gets_one_record_lf(self) -> None:
         terminal, callbacks = make_terminal()
@@ -1830,10 +1869,7 @@ class HelpAndErrorTests(unittest.TestCase):
                 spec = INTERACTIVE_ERROR_SPECS[code]
                 self.assertEqual(
                     callbacks.records,
-                    [
-                        f"[error {code.value}] {spec.summary}\n"
-                        f"[hint] {spec.hint}\n"
-                    ],
+                    [expected_error_record(code, width=1000)],
                 )
 
         terminal, _callbacks = make_terminal()
@@ -1865,9 +1901,10 @@ class HelpAndErrorTests(unittest.TestCase):
         self.assertEqual(
             callbacks.records,
             [
-                "[error internal_error] raw=<redacted> escaped=<redacted> "
+                "Interactive error [error]\n"
+                "  [error internal_error] raw=<redacted> escaped=<redacted> "
                 "long=<redacted> short=<redacted>\n"
-                "[hint] escaped-control=<redacted>\n"
+                "  [hint] escaped-control=<redacted>\n"
             ],
         )
 
@@ -1880,10 +1917,14 @@ class HelpAndErrorTests(unittest.TestCase):
         self.assertEqual(
             callbacks.records,
             [
-                f"[error internal_error] {spec.summary}\n"
-                f"[hint] {spec.hint}\n",
-                f"[error internal_error] {spec.summary}\n"
-                f"[hint] {spec.hint}\n",
+                expected_error_record(
+                    InteractiveErrorCode.INTERNAL_ERROR,
+                    width=1000,
+                ),
+                expected_error_record(
+                    InteractiveErrorCode.INTERNAL_ERROR,
+                    width=1000,
+                ),
             ],
         )
 
@@ -1904,9 +1945,10 @@ class HelpAndErrorTests(unittest.TestCase):
                 hint="h" * 300,
             )
         )
-        summary_line, hint_line = callbacks.records[0].splitlines()
-        summary = summary_line.removeprefix("[error internal_error] ")
-        hint = hint_line.removeprefix("[hint] ")
+        title_line, summary_line, hint_line = callbacks.records[0].splitlines()
+        self.assertEqual(title_line, "Interactive error [error]")
+        summary = summary_line.removeprefix("  [error internal_error] ")
+        hint = hint_line.removeprefix("  [hint] ")
         self.assertEqual(len(summary), 512)
         self.assertEqual(len(hint), 256)
         self.assertTrue(summary.endswith(" ...[truncated]"))
@@ -1923,12 +1965,14 @@ class HelpAndErrorTests(unittest.TestCase):
         self.assertEqual(
             callbacks.records,
             [
-                "[error internal_error] one two\n"
-                "                       three\n"
-                "                       four five\n"
-                "                       six seven\n"
-                "[hint] alpha beta gamma delta\n"
-                "       epsilon\n"
+                "Interactive error [error]\n"
+                " [error internal_error] one two \n"
+                "                        three fo\n"
+                "                        ur five \n"
+                "                        six seve\n"
+                "                        n\n"
+                " [hint] alpha beta gamma delta e\n"
+                "        psilon\n"
             ],
         )
 
