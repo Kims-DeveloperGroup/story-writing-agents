@@ -501,7 +501,6 @@ class SemanticModelFoundationTests(unittest.TestCase):
         )
         for deferred_name in (
             "transition_palette",
-            "transition_picker",
             "persistent_history",
         ):
             self.assertFalse(hasattr(_controls, deferred_name))

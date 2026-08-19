@@ -346,6 +346,19 @@ class PtyCliProcess:
 
         os.write(self.master_fd, self.veof)
 
+    def resize(self, columns: int) -> None:
+        """Change this PTY's reported width for the next explicit redraw."""
+
+        if type(columns) is not int or columns <= 0:
+            raise ValueError("columns must be a positive integer")
+        assert fcntl is not None
+        assert termios is not None
+        fcntl.ioctl(
+            self.master_fd,
+            termios.TIOCSWINSZ,
+            struct.pack("HHHH", 24, columns, 0, 0),
+        )
+
     def wait_for_text(
         self,
         expected: str,
@@ -640,6 +653,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
         *,
         terminal_columns: int = 80,
         environment_overrides: Mapping[str, str] | None = None,
+        decorative_color: bool = False,
     ) -> PtyCliProcess:
         """Spawn one source-backed package integration probe on a real PTY."""
 
@@ -648,6 +662,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
             cwd=self.workspace.root,
             environment_overrides=environment_overrides,
             terminal_columns=terminal_columns,
+            decorative_color=decorative_color,
         )
 
     def _spawn_command(
@@ -732,6 +747,260 @@ class InteractiveCliPtyTests(unittest.TestCase):
         )
         self._processes.append(harness)
         return harness
+
+    def test_internal_picker_ansi_resizes_navigates_commits_and_restores_repeatedly(
+        self,
+    ) -> None:
+        """Exercise the unlisted stream adapter, live window, and final commit."""
+
+        source = r'''
+import sys
+
+from story_writing_agents.interactive_terminal import (
+    Choice,
+    InteractivePickerInput,
+    Prompt,
+    build_stream_terminal,
+)
+
+choices = (
+    Choice("secret-1", "Alpha"),
+    Choice("secret-2", "Beta", enabled=False, disabled_reason="Unavailable"),
+    Choice("secret-3", "Gamma"),
+    Choice("secret-4", "Delta"),
+    Choice("secret-5", "Epsilon"),
+    Choice("secret-6", "Zeta"),
+    Choice("secret-7", "Eta"),
+    Choice("secret-8", "Theta"),
+    Choice("secret-9", "Iota"),
+    Choice("secret-10", "Kappa"),
+)
+terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
+outcome = InteractivePickerInput(terminal).read_picker(
+    Prompt("Choose route"),
+    choices,
+    highlighted_id="secret-1",
+    selected_id="secret-10",
+)
+assert outcome.text == "secret-10"
+print("RESULT=" + outcome.kind.value)
+'''
+        for attempt in range(3):
+            with self.subTest(attempt=attempt):
+                before = _durable_tree(self.workspace.root)
+                process = self._spawn_python(
+                    source,
+                    environment_overrides={"TERM": "xterm-256color"},
+                    terminal_columns=60,
+                    decorative_color=True,
+                )
+                initial = process.wait_for_text(
+                    "Choices (highlighted 1/10; showing 1-7/10) [open]"
+                )
+                self.assertIn(
+                    "Selected outside view: 10. [selected] Kappa",
+                    initial,
+                )
+                assert termios is not None
+                active = termios.tcgetattr(process.master_fd)
+                self.assertFalse(active[3] & termios.ICANON)
+                self.assertFalse(active[3] & termios.ECHO)
+
+                process.send_text("\x1b[B" * 7)
+                process.wait_for_text(
+                    "Choices (highlighted 9/10; showing 3-9/10) [open]"
+                )
+                process.resize(20)
+                resize_mark = process.output_mark()
+                process.send_text("\x1b[B")
+                resized = process.wait_for_text(
+                    "d 10/10; showing 4-",
+                    after=resize_mark,
+                )
+                self.assertIn("10/10) [open]", resized)
+                process.send_text("\n")
+                final = process.wait_for_text("RESULT=commit", after=resize_mark)
+                self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+                collapsed = "".join(
+                    re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", final).split()
+                )
+                self.assertIn("[selected][highlighted]Kappa", collapsed)
+                self.assertIn("[completed]", collapsed)
+                self.assertNotIn("secret-", process.normalized_text)
+                self.assertIn(b"\x1b[35m", process.raw_bytes)
+                self.assertNotIn(b"\x1b[?1049", process.raw_bytes)
+                self.assertNotIn(b"\x1b[2J", process.raw_bytes)
+                self.assertEqual(_durable_tree(self.workspace.root), before)
+                self.assertFalse(self.provider_log.exists())
+                self.assertEqual(
+                    process.final_terminal_attributes,
+                    process.original_terminal_attributes,
+                )
+
+    def test_internal_picker_no_color_narrow_cancel_sanitizes_and_restores_repeatedly(
+        self,
+    ) -> None:
+        """Keep combined cues and hostile text visible without decorative SGR."""
+
+        source = r'''
+import sys
+
+from story_writing_agents.interactive_terminal import (
+    Choice,
+    InteractivePickerInput,
+    Prompt,
+    build_stream_terminal,
+)
+
+terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
+outcome = InteractivePickerInput(terminal).read_picker(
+    Prompt("Choose unsafe"),
+    (
+        Choice(
+            "opaque-id",
+            "界e\u0301 bad\x1b]0;owned\x07\u202e",
+            description="desc\x00",
+        ),
+    ),
+    selected_id="opaque-id",
+)
+assert outcome.text is None
+print("RESULT=" + outcome.kind.value)
+'''
+        for attempt in range(3):
+            with self.subTest(attempt=attempt):
+                process = self._spawn_python(
+                    source,
+                    environment_overrides={"TERM": "xterm-256color"},
+                    terminal_columns=20,
+                )
+                opened = process.wait_for_text(r"desc\x00", timeout=12)
+                self.assertIn("b]0;owned\\", opened)
+                self.assertIn(r"x07\u202e", opened)
+                self.assertIn(r"desc\x00", opened)
+                self.assertNotIn("opaque-id", opened)
+                process.send_text("\x1b")
+                result = process.wait_for_text("RESULT=cancel")
+                self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+                visible = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", result)
+                collapsed = "".join(visible.split())
+                self.assertIn("[selected][highlighted]", collapsed)
+                self.assertIn("[cancelled]", collapsed)
+                self.assertNotIn("opaque-id", process.normalized_text)
+                self.assertNotRegex(
+                    process.normalized_text,
+                    r"\x1b\[(?:0|1|3[1-7])m",
+                )
+                self.assertFalse(self.provider_log.exists())
+                self.assertEqual(
+                    process.final_terminal_attributes,
+                    process.original_terminal_attributes,
+                )
+
+    def test_internal_picker_vintr_and_veof_clear_without_final_frame_repeatedly(
+        self,
+    ) -> None:
+        """Return typed terminal events with raw restoration and no final record."""
+
+        source = r'''
+import sys
+
+from story_writing_agents.interactive_terminal import (
+    Choice,
+    InteractivePickerInput,
+    Prompt,
+    build_stream_terminal,
+)
+
+terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
+outcome = InteractivePickerInput(terminal).read_picker(
+    Prompt("Choose event"),
+    (Choice("opaque-id", "Visible choice"),),
+)
+assert outcome.text is None
+print("RESULT=" + outcome.kind.value)
+'''
+        for event_name in ("interrupt", "eof"):
+            for attempt in range(3):
+                with self.subTest(event=event_name, attempt=attempt):
+                    process = self._spawn_python(
+                        source,
+                        environment_overrides={"TERM": "xterm-256color"},
+                        terminal_columns=40,
+                    )
+                    process.wait_for_text("Visible choice")
+                    mark = process.output_mark()
+                    if event_name == "interrupt":
+                        process.send_interrupt()
+                    else:
+                        process.send_eof()
+                    result = process.wait_for_text(f"RESULT={event_name}", after=mark)
+                    self.assertEqual(
+                        process.wait_for_exit(),
+                        0,
+                        process.normalized_text,
+                    )
+                    self.assertIn("\x1b[J", result)
+                    self.assertNotIn("[completed]", result)
+                    self.assertNotIn("[cancelled]", result)
+                    self.assertNotIn("opaque-id", process.normalized_text)
+                    self.assertFalse(self.provider_log.exists())
+                    self.assertEqual(
+                        process.final_terminal_attributes,
+                        process.original_terminal_attributes,
+                    )
+
+    def test_internal_picker_dumb_fallback_retries_disabled_then_commits(self) -> None:
+        """Use complete numbered line input without cursor or identity output."""
+
+        source = r'''
+import sys
+
+from story_writing_agents.interactive_terminal import (
+    Choice,
+    InteractivePickerInput,
+    Prompt,
+    build_stream_terminal,
+)
+
+terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
+outcome = InteractivePickerInput(terminal).read_picker(
+    Prompt("Choose fallback"),
+    (
+        Choice("secret-1", "Alpha"),
+        Choice("secret-2", "Beta", enabled=False, disabled_reason="Unavailable"),
+        Choice("secret-3", "Gamma"),
+    ),
+)
+assert outcome.text == "secret-3"
+print("RESULT=" + outcome.kind.value)
+'''
+        before = _durable_tree(self.workspace.root)
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "dumb"},
+            terminal_columns=40,
+        )
+        initial = process.wait_for_text("3. [available] Gamma")
+        self.assertIn("1. [highlighted] Alpha", initial)
+        self.assertIn("2. [disabled] Beta", initial)
+        self.assertNotIn("secret-", initial)
+        process.send_line("2")
+        retry = process.wait_for_text("[validation]")
+        self.assertEqual(retry.count("[validation]"), 1)
+        process.send_line("3")
+        result = process.wait_for_text("RESULT=commit")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertIn("[completed]", result)
+        self.assertIn("3. [selected] [highlighted] Gamma", result)
+        self.assertNotIn("secret-", process.normalized_text)
+        self.assertNotIn("\x1b[J", process.normalized_text)
+        self.assertEqual(_durable_tree(self.workspace.root), before)
+        self.assertFalse(self.provider_log.exists())
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
 
     def test_semantic_views_use_ansi_and_no_color_profiles_on_real_ptys(
         self,
