@@ -21,6 +21,8 @@ from ._model import (
     MainCommandControlState,
     MainInputControlState,
     MainInputHistoryState,
+    PickerControlState,
+    PickerViewport,
     RenderedInputFrame,
     RenderedFrame,
     SlashCommandSuggestion,
@@ -102,6 +104,23 @@ _HistoryAppend: TypeAlias = Callable[
 ]
 _InputRenderer: TypeAlias = Callable[
     [InputPromptView, TerminalCapabilities], RenderedInputFrame
+]
+_PickerTransition: TypeAlias = Callable[
+    [PickerControlState, KeyEvent],
+    tuple[PickerControlState, ControlOutcome | None],
+]
+_PickerFallbackTransition: TypeAlias = Callable[
+    [PickerControlState, str],
+    tuple[PickerControlState, ControlOutcome],
+]
+_PickerViewportProjector: TypeAlias = Callable[
+    [PickerControlState], PickerViewport
+]
+_PickerViewportRenderer: TypeAlias = Callable[
+    [PickerViewport, TerminalCapabilities], RenderedFrame
+]
+_PickerFallbackRenderer: TypeAlias = Callable[
+    [PickerControlState, TerminalCapabilities], RenderedInputFrame
 ]
 
 
@@ -339,6 +358,176 @@ class RawTerminalDriver:
         )
         self._append_completed_main_history(line)
         return line
+
+    def read_picker(
+        self,
+        state: PickerControlState,
+        transition: _PickerTransition,
+        fallback_transition: _PickerFallbackTransition,
+        viewport_projector: _PickerViewportProjector,
+        viewport_renderer: _PickerViewportRenderer,
+        fallback_renderer: _PickerFallbackRenderer,
+    ) -> ControlOutcome:
+        """Read one generic picker through a dedicated history-free lifecycle."""
+
+        if type(state) is not PickerControlState:
+            raise TypeError("state must be a PickerControlState")
+        for name, collaborator in (
+            ("transition", transition),
+            ("fallback_transition", fallback_transition),
+            ("viewport_projector", viewport_projector),
+            ("viewport_renderer", viewport_renderer),
+            ("fallback_renderer", fallback_renderer),
+        ):
+            if not callable(collaborator):
+                raise TypeError(f"{name} must be callable")
+
+        capabilities = self.capabilities()
+        if not capabilities.raw_mode:
+            return self._read_picker_fallback(
+                state,
+                capabilities,
+                fallback_transition,
+                fallback_renderer,
+            )
+        try:
+            configuration = _terminal_configuration(
+                self._input_stream,
+                self._output_stream,
+                termios_module=self._termios_provider(),
+                os_module=self._os_provider(),
+                width=capabilities.width,
+            )
+        except Exception:
+            return self._read_picker_fallback(
+                state,
+                capabilities,
+                fallback_transition,
+                fallback_renderer,
+            )
+        if configuration is None:
+            return self._read_picker_fallback(
+                state,
+                capabilities,
+                fallback_transition,
+                fallback_renderer,
+            )
+
+        try:
+            _activate_terminal(configuration)
+        except BaseException as setup_failure:
+            _restore_terminal_or_raise(configuration, setup_failure)
+            if isinstance(setup_failure, Exception):
+                return self._read_picker_fallback(
+                    state,
+                    capabilities,
+                    fallback_transition,
+                    fallback_renderer,
+                )
+            raise
+
+        display_state = _LiveEditorState()
+        outcome: ControlOutcome | None = None
+        active_failure: BaseException | None = None
+        try:
+            state, outcome = self._read_live_picker(
+                state,
+                configuration,
+                display_state,
+                capabilities,
+                transition,
+                viewport_projector,
+                viewport_renderer,
+            )
+            if outcome.kind in {
+                ControlOutcomeKind.COMMIT,
+                ControlOutcomeKind.CANCEL,
+            }:
+                display_state.rendered_cursor_row = self._redraw_live_picker(
+                    state,
+                    display_state,
+                    capabilities,
+                    viewport_projector,
+                    viewport_renderer,
+                )
+                self._write_live_text("\n")
+                display_state.rendered_cursor_row = 0
+            else:
+                self._clear_live_display(display_state, line_break=True)
+        except BaseException as failure:
+            active_failure = failure
+            try:
+                self._clear_live_display(display_state, line_break=True)
+            except BaseException:
+                # Preserve the active picker failure when the output channel is
+                # the collaborator that already failed.
+                pass
+
+        _restore_terminal_or_raise(configuration, active_failure)
+        if active_failure is not None:
+            raise active_failure
+        assert outcome is not None
+        return outcome
+
+    def _read_picker_fallback(
+        self,
+        state: PickerControlState,
+        capabilities: TerminalCapabilities,
+        transition: _PickerFallbackTransition,
+        renderer: _PickerFallbackRenderer,
+    ) -> ControlOutcome:
+        """Read complete numbered attempts without raw mode or history."""
+
+        while True:
+            frame = renderer(state, capabilities)
+            if type(frame) is not RenderedInputFrame:
+                raise TypeError(
+                    "fallback_renderer must return a RenderedInputFrame"
+                )
+            if frame.width != capabilities.width:
+                raise ValueError(
+                    "rendered picker fallback width must match capabilities"
+                )
+            try:
+                answer = self._fallback_read_line(frame.plain_text)
+            except KeyboardInterrupt:
+                return ControlOutcome(ControlOutcomeKind.INTERRUPT)
+            except EOFError:
+                return ControlOutcome(ControlOutcomeKind.EOF)
+            if not isinstance(answer, str):
+                raise TypeError("read_line must return a string")
+            answer = str.__str__(answer)
+            if "\r" in answer or "\n" in answer:
+                raise ValueError(
+                    "read_line must return one line without CR or LF"
+                )
+            updated, outcome = transition(state, answer)
+            if type(updated) is not PickerControlState:
+                raise TypeError(
+                    "fallback_transition must return a PickerControlState"
+                )
+            if type(outcome) is not ControlOutcome:
+                raise TypeError(
+                    "fallback_transition must return a ControlOutcome"
+                )
+            state = updated
+            if outcome.kind is ControlOutcomeKind.REJECTED:
+                continue
+            if outcome.kind in {
+                ControlOutcomeKind.COMMIT,
+                ControlOutcomeKind.CANCEL,
+            }:
+                final_frame = renderer(state, capabilities)
+                if type(final_frame) is not RenderedInputFrame:
+                    raise TypeError(
+                        "fallback_renderer must return a RenderedInputFrame"
+                    )
+                if final_frame.width != capabilities.width:
+                    raise ValueError(
+                        "rendered picker fallback width must match capabilities"
+                    )
+                self.write_text(f"{final_frame.text}\n")
+            return outcome
 
     def _append_completed_main_history(self, line: object) -> None:
         """Append one successfully returned main line after resource cleanup."""
@@ -613,6 +802,146 @@ class RawTerminalDriver:
                     palette_projector,
                     palette_renderer,
                 )
+
+    def _read_live_picker(
+        self,
+        state: PickerControlState,
+        configuration: _TerminalConfiguration,
+        display_state: _LiveEditorState,
+        capabilities: TerminalCapabilities,
+        transition: _PickerTransition,
+        viewport_projector: _PickerViewportProjector,
+        viewport_renderer: _PickerViewportRenderer,
+    ) -> tuple[PickerControlState, ControlOutcome]:
+        """Drive one picker without fabricating an editable-line control."""
+
+        character_reader = _single_character_reader(self._input_stream)
+        display_state.rendered_cursor_row = self._redraw_live_picker(
+            state,
+            display_state,
+            capabilities,
+            viewport_projector,
+            viewport_renderer,
+        )
+        while True:
+            try:
+                character = self._read_character(character_reader)
+            except KeyboardInterrupt:
+                return state, ControlOutcome(ControlOutcomeKind.INTERRUPT)
+            except EOFError:
+                return state, ControlOutcome(ControlOutcomeKind.EOF)
+
+            if display_state.escape_sequence is not None:
+                event, reprocess = _consume_escape_character(
+                    display_state,
+                    character,
+                )
+                if event is not None:
+                    state, outcome, changed = _apply_picker_event(
+                        state,
+                        event,
+                        transition,
+                    )
+                    if outcome is not None and (
+                        outcome.kind is not ControlOutcomeKind.REJECTED
+                    ):
+                        return state, outcome
+                    if changed:
+                        display_state.rendered_cursor_row = (
+                            self._redraw_live_picker(
+                                state,
+                                display_state,
+                                capabilities,
+                                viewport_projector,
+                                viewport_renderer,
+                            )
+                        )
+                if not reprocess:
+                    continue
+
+            if character == "\x1b":
+                if not _escape_input_is_ready(configuration.input_descriptor):
+                    state, outcome, changed = _apply_picker_event(
+                        state,
+                        KeyEvent(KeyKind.ESCAPE),
+                        transition,
+                    )
+                    if outcome is not None and (
+                        outcome.kind is not ControlOutcomeKind.REJECTED
+                    ):
+                        return state, outcome
+                    if changed:
+                        display_state.rendered_cursor_row = (
+                            self._redraw_live_picker(
+                                state,
+                                display_state,
+                                capabilities,
+                                viewport_projector,
+                                viewport_renderer,
+                            )
+                        )
+                    continue
+                display_state.escape_sequence = character
+                continue
+
+            event = _key_event(character, configuration)
+            state, outcome, changed = _apply_picker_event(
+                state,
+                event,
+                transition,
+            )
+            if outcome is not None and (
+                outcome.kind is not ControlOutcomeKind.REJECTED
+            ):
+                return state, outcome
+            if changed:
+                display_state.rendered_cursor_row = self._redraw_live_picker(
+                    state,
+                    display_state,
+                    capabilities,
+                    viewport_projector,
+                    viewport_renderer,
+                )
+
+    def _redraw_live_picker(
+        self,
+        state: PickerControlState,
+        display_state: _LiveEditorState,
+        capabilities: TerminalCapabilities,
+        viewport_projector: _PickerViewportProjector,
+        viewport_renderer: _PickerViewportRenderer,
+    ) -> int:
+        """Replace one transient picker frame using a freshly observed width."""
+
+        observed = self.capabilities()
+        render_width = max(1, observed.width - 1)
+        render_capabilities = _capabilities_with_width(
+            capabilities,
+            render_width,
+        )
+        viewport = viewport_projector(state)
+        if type(viewport) is not PickerViewport:
+            raise TypeError(
+                "viewport_projector must return a PickerViewport"
+            )
+        frame = viewport_renderer(viewport, render_capabilities)
+        if type(frame) is not RenderedFrame:
+            raise TypeError(
+                "viewport_renderer must return a RenderedFrame"
+            )
+        if frame.width != render_width:
+            raise ValueError("rendered picker width must match the live width")
+        payload = "".join(
+            (
+                _CARRIAGE_RETURN,
+                _CURSOR_UP * display_state.rendered_cursor_row,
+                _CARRIAGE_RETURN,
+                _CLEAR_TO_END,
+                frame.text,
+            )
+        )
+        self._write_live_text(payload)
+        return frame.line_count - 1
 
     def _read_character(
         self,
@@ -1269,6 +1598,21 @@ def _apply_control_event(
     updated, outcome = transition(state, event)
     if type(updated) is not type(state):
         raise TypeError("transition must preserve the input control state type")
+    if outcome is not None and type(outcome) is not ControlOutcome:
+        raise TypeError("transition outcome must be a ControlOutcome or None")
+    return updated, outcome, updated != state
+
+
+def _apply_picker_event(
+    state: PickerControlState,
+    event: KeyEvent,
+    transition: _PickerTransition,
+) -> tuple[PickerControlState, ControlOutcome | None, bool]:
+    """Apply one pure picker transition and validate its exact result shape."""
+
+    updated, outcome = transition(state, event)
+    if type(updated) is not PickerControlState:
+        raise TypeError("transition must return a PickerControlState")
     if outcome is not None and type(outcome) is not ControlOutcome:
         raise TypeError("transition outcome must be a ControlOutcome or None")
     return updated, outcome, updated != state

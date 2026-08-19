@@ -788,7 +788,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   construction adapts `read_line` to deterministic plain semantic composition
   and confirmation prompts, while internal construction binds distinct
   ordinary, history-aware main, and history-free semantic composition and
-  confirmation readers without prompt inspection.
+  confirmation readers without prompt inspection. Unlisted
+  `InteractivePickerInput`, `Choice`, `Prompt`, `ControlOutcome`, and
+  `ControlOutcomeKind` bindings provide one resource-free generic picker input
+  boundary without exposing opaque choice identities, terminal leaves, or a
+  new package-supported API.
 - **Direct internal dependencies:** `interactive_terminal._core`.
 - **State, resources, and side effects:** Owns no terminal resource or mutable
   process state. Import deterministically canonicalizes supported public object
@@ -800,6 +804,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_interactive_terminal_foundation.py`,
   `tests/test_interactive_terminal_composer.py`,
   `tests/test_interactive_terminal_history.py`,
+  `tests/test_interactive_terminal_picker.py`,
   `tests/test_interactive_terminal_views.py`, `tests/test_interactive_pty.py`,
   `docs/design/overview.md`,
   `docs/reference/interactive-terminal.md`,
@@ -818,7 +823,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   `MainInputHistoryState`, correlated `MainInputControlState`,
   `SlashCommandSuggestion`, internal `CommandCompletionCandidate`,
   `CommandCompletionProjection`, `MainCommandPaletteState`, and correlated
-  `MainCommandControlState`, the internal rejected control outcome, the closed
+  `MainCommandControlState`, internal `PickerControlState` and bounded
+  `PickerViewport` transfer values, the internal rejected control outcome, the
+  closed
   `Prompt`, `Panel`, `Section`, `Field`, `Notice`, `Message`, `Record`,
   `ListView`, `SuggestionPalette`, and `Picker` component vocabulary, shared
   `Choice`, `RenderedFrame`, internal `InputPromptView` and
@@ -832,17 +839,21 @@ every intermediate arrow. The current runtime graph is acyclic.
   retaining or persisting them. Command-completion values correlate grammar
   position, replacement literal and span, highlighted candidate, pre-change
   buffer/cursor snapshot, and restored-state latch without owning projection or
-  I/O. Composer values retain exact accepted lines
+  I/O. Picker-control values retain one validated semantic picker and its
+  call-local window origin, while viewport values carry one contiguous
+  at-most-seven-choice slice; stable choice identities remain internal
+  correlation keys. Composer values retain exact accepted lines
   and derive joined content and code-point counts without mutation. Models
-  create no ANSI and own no callbacks, streams, calculated layout, runtime,
-  provider, filesystem, or storage handles; the rendered-input transfer value
-  only carries renderer-produced trusted/plain projections and performs no
-  operational I/O.
+  create no ANSI and own no callbacks, streams, rendering calculation, runtime,
+  provider, filesystem, or storage handles; viewport and rendered-input
+  transfer values only carry pure precomputed bounds or renderer-produced
+  trusted/plain projections and perform no operational I/O.
 - **Primary verification/documentation:**
   `tests/test_interactive_terminal_completion.py`,
   `tests/test_interactive_terminal_foundation.py`,
   `tests/test_interactive_terminal_composer.py`,
   `tests/test_interactive_terminal_history.py`,
+  `tests/test_interactive_terminal_picker.py`,
   `tests/test_interactive_terminal_views.py`, and
   `docs/design/interactive-cli-design-system.md`; focused component, renderer,
   control, capability, and compatibility coverage belongs to the interactive
@@ -867,8 +878,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   applies exact `/send`, `/cancel`, `/say /send`, and `/say /cancel` semantics
   to immutable composer state, while `transition_confirmation_answer`
   classifies canonical yes/no/default answers and explicit rejection.
-  Composition suggestions remain preview-only and nonselectable; picker
-  transitions remain unimplemented.
+  `initialize_picker`, `reconcile_picker`, `transition_picker`,
+  `transition_picker_fallback`, and `project_picker_viewport` own the pure
+  generic single-select lifecycle: deterministic enabled highlight selection,
+  stable-identity refresh, disabled-row skipping with clamped navigation,
+  minimal at-most-seven-row window movement, exact numbered or blank fallback
+  commit, `/cancel`, and one semantic rejected-attempt notice. Choice identities
+  are correlation-only and never become presentation text. Composition
+  suggestions remain preview-only and nonselectable.
 - **Direct internal dependencies:** `interactive_terminal._model`.
 - **State, resources, and side effects:** Pure value projections only. The
   functions return new immutable history/control values and retain no store;
@@ -880,6 +897,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_interactive_terminal_foundation.py`,
   `tests/test_interactive_terminal_composer.py`,
   `tests/test_interactive_terminal_history.py`,
+  `tests/test_interactive_terminal_picker.py`,
   `docs/design/interactive-cli-design-system.md`, and
   `docs/reference/interactive-command-parser.md`.
 
@@ -892,6 +910,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   of the allowed decorative SGR vocabulary, semantic state labels, physical-cell
   wrapping, narrow-layout stacking, explicit empty/selection cues, and trusted
   semantic input rendering with equivalent plain and styled projections.
+  `render_picker_viewport` renders at most seven numbered live choices with
+  absolute position/range facts, simultaneous selected and highlighted cues,
+  and an ordinal/label-only selected-outside-window summary;
+  `render_picker_fallback` renders the complete numbered list and semantic input
+  prompt. Both keep opaque identities internal and preserve equivalent
+  sanitized plain and fixed-ANSI meaning.
 - **Direct internal dependencies:** `interactive_terminal._model`.
 - **State, resources, and side effects:** Pure projections only. Dynamic text
   is sanitized before wrapping or fixed styling; the module writes and flushes
@@ -902,6 +926,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_interactive_terminal_completion.py`,
   `tests/test_interactive_terminal_foundation.py`,
   `tests/test_interactive_terminal_composer.py`,
+  `tests/test_interactive_terminal_picker.py`,
   `tests/test_interactive_terminal_views.py`,
   `docs/design/interactive-cli-design-system.md`, and
   `docs/operations/terminal-safety.md`; focused rich/plain/narrow/wide coverage
@@ -920,9 +945,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   `read_live_line` remains the history-free contextual compatibility route,
   `read_input_line` accepts an injected trusted semantic renderer for
   history-free composition and confirmation, and `read_line` preserves ordinary
-  fallback. The driver provides one-write output, redraws on the full immutable
-  main-command control state, and normalizes established editing keys plus Up,
-  Down, Tab, Shift-Tab, and Escape without adding picker semantics.
+  fallback. Supported package-internal `read_picker` accepts pure call-local
+  transitions, viewport projection, and live/fallback renderers for a dedicated
+  generic single-select lifecycle that does not reuse editable-line state. The
+  driver provides one-write output, redraws on the full immutable main-command
+  or picker control state, and normalizes established editing and picker keys.
 - **Direct internal dependencies:** `interactive_terminal._model`.
 - **State, resources, and side effects:** Sole owner of borrowed input/output
   streams, independent capability checks, detected width, normalized physical
@@ -935,7 +962,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   so available ordinary bytes are reprocessed without a second reader or sleep
   loop. Completion, control, and palette collaborators are call-local and
   retain no prompt mode. Composition, confirmation, and ordinary reads
-  never navigate or mutate that store. Semantic input resolves capability and
+  never navigate or mutate that store. Picker input likewise never consults or
+  mutates history or completion state; its live path reuses the sole driver's
+  decoding, raw-mode, cursor, write, flush, and restoration lifecycle, observes
+  width again for each redraw, and its safe line fallback renders the complete
+  numbered choices. Semantic input resolves capability and
   width once per read, uses the plain projection for fallback and cursor
   measurement, and emits the trusted styled projection only on its live path.
   Construction performs no stream access or terminal mutation, and history is
@@ -948,6 +979,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_interactive_terminal_foundation.py`,
   `tests/test_interactive_terminal_composer.py`,
   `tests/test_interactive_terminal_history.py`,
+  `tests/test_interactive_terminal_picker.py`,
   `tests/test_interactive_pty.py`,
   `docs/design/interactive-cli-design-system.md`, and
   `docs/operations/terminal-safety.md`.
@@ -981,7 +1013,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   callback routing through deterministic plain semantic adapters, while the
   real stream factory binds the selectable main-command route, both preview
   providers, semantic composition and confirmation input, plus the pure
-  main-input transitions to one driver.
+  main-input transitions to one driver. Resource-free `InteractivePickerInput`
+  validates and initializes one generic picker, then delegates only its
+  immutable control state; callback construction binds deterministic plain
+  complete-list picker input, and stream construction binds the same adapter to
+  the sole driver's dedicated picker lifecycle with pure control and rendering
+  collaborators.
 - **Direct internal dependencies:** `agents`, `interactive_commands`,
   `interactive_terminal._controls`, `interactive_terminal._driver`,
   `interactive_terminal._model`, and `interactive_terminal._render`.
@@ -993,8 +1030,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   bounded process-local main-input history store to one driver. Main completion,
   palette, and composition providers plus semantic
   input renderers are selected per call and never retained by that driver;
-  composition and confirmation are history-free, while subject input remains
-  ordinary. Callback-constructed terminals and the core itself own no history.
+  composition, confirmation, and picker input are history-free, while subject
+  input remains ordinary. Callback-constructed terminals and the core itself
+  own no history.
   The semantic adapter retains only the
   terminal's bound component capability and acquires no stream or raw resource.
   There is no runtime, filesystem, persistence, subprocess, network, or
@@ -1004,6 +1042,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_interactive_terminal_completion.py`,
   `tests/test_interactive_terminal_foundation.py`,
   `tests/test_interactive_terminal_composer.py`,
+  `tests/test_interactive_terminal_picker.py`,
   `tests/test_interactive_terminal_views.py`, `tests/test_interactive_pty.py`,
   `docs/design/overview.md`,
   `docs/reference/interactive-terminal.md`,
@@ -1242,10 +1281,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   lookahead, and call-local incremental decoder. It receives completion,
   palette, preview, and trusted semantic input collaborators only per read,
   resets navigation for each main read, and keeps composition and confirmation
-  reads history-free. `_controls` supplies immutable history, selectable
-  palette, composer, and confirmation transitions: open-palette Up and Down
+  reads history-free. It also owns the dedicated picker lifecycle, observes
+  picker width on each redraw, and keeps picker input separate from editable
+  line, history, and completion state. `_controls` supplies immutable history,
+  selectable palette, composer, confirmation, and generic picker transitions:
+  open-palette Up and Down
   move the clamped highlight, while closed-palette Up and Down remain history
-  keys. Composition preview remains nonselectable. The real CLI constructs one
+  keys; picker Up and Down skip disabled choices and clamp within their own
+  at-most-seven-row viewport. Opaque choice identities remain internal
+  correlation keys and are never rendered. Composition preview remains
+  nonselectable. The real CLI constructs one
   stream-backed terminal rather than injecting a second editor. The terminal
   facade also
   exposes an unlisted typed semantic-output adapter and closed component

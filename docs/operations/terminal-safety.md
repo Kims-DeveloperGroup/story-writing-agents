@@ -58,7 +58,9 @@ nonpositive or invalid column count uses 80. Capability observation and
 live-input setup repeat on the next operation, so resize is noticed without a
 signal loop. Semantic rendering also asks for current capabilities on its next
 render. Composer/confirmation input and composer lifecycle notices therefore
-use the current capability width on their next render.
+use the current capability width on their next render. The internal live
+picker observes capability and width on every redraw and limits its contiguous
+viewport to seven choices; its line fallback renders the complete list.
 
 The internal profiles are fixed ANSI, capable plain, and line fallback. Presence
 of `NO_COLOR` disables decorative SGR only; it does not disable safe functional
@@ -85,6 +87,11 @@ inline values display it as `\x0a`. Wrapping never creates commands.
 Semantic composition and confirmation input frames are distinct: their plain
 and fixed-theme projections share line topology, end in the focused prompt's
 required space, and contain no final LF.
+Picker projections sanitize prompt, labels, descriptions, disabled reasons,
+and notices before measurement or styling. Opaque choice identities never
+enter rendered text. A selected choice outside the live viewport is summarized
+only by its ordinal and sanitized label; line fallback renders every numbered
+choice and ends with its focused prompt space without a final LF.
 
 Transcript content follows a stricter primitive boundary: it must be an exact
 nonempty string, but whitespace-only content is valid. Sanitization makes
@@ -104,8 +111,10 @@ and accepted management, advisory, retrieval, and consensus output through the
 semantic renderer. #84 does the same for full/context help, roster,
 session/conversation lists, search, transcript, and focused history. #86 routes
 composer lifecycle notices plus composition and confirmation input through the
-same foundation; no internal generic composer-status call remains. The semantic
-renderer produces the same structured text in plain and fixed ANSI profiles: it
+same foundation; no internal generic composer-status call remains. #87 uses
+that safe renderer for bounded live and complete numbered picker projections
+without installing a shell consumer. The semantic renderer produces the same
+structured text in plain and fixed ANSI profiles: it
 sanitizes dynamic content before wrapping or styling, counts ANSI as zero
 display cells, uses local resets, and permits only reset, bold emphasis, and
 foreground SGR 31 through 37. It emits no background, dim, blink, OSC, query, or
@@ -168,8 +177,10 @@ failure restores first, then falls back.
 One unified driver instance is the sole owner of raw terminal resources. The
 terminal supplies the canonical completion provider and semantic palette
 renderer to the supported main read, or the composition/empty-confirmation
-suggestion provider and semantic input renderer to a history-free read. Every
-collaborator is call-local; the driver retains no provider, renderer, or
+suggestion provider and semantic input renderer to a history-free read. Its
+package-internal picker adapter supplies picker transitions, viewport
+projection, and live/fallback renderers to the driver's dedicated picker read.
+Every collaborator is call-local; the driver retains no provider, renderer, or
 operation mode. The terminal routes completed main, composition, and
 confirmation reads explicitly, without inspecting prompt text, while subject
 input remains on the ordinary reader. The standalone line-editor compatibility
@@ -188,6 +199,9 @@ On main input, closed-palette Up/Down navigates the driver's history. An open
 palette instead owns Up/Down highlight movement, Tab completion, and Escape
 dismissal/restoration; Shift-Tab has no action. Composition and confirmation
 remain history-free, and Up/Down, Tab, Shift-Tab, and Escape are no-ops there.
+The separate internal picker uses Up/Down for disabled-skipping clamped
+highlight movement, Enter to commit, and Escape to cancel; edit and completion
+keys are no-ops. It consults neither history nor completion state.
 Enter submits; VEOF submits nonempty text or returns EOF when empty; VINTR
 returns interrupt.
 Submission clears the panel; failure attempts it; both restore captured
@@ -221,6 +235,22 @@ and Escape restores the first pre-completion snapshot and dismisses that exact
 line state. Plain fallback bypasses the completion provider, palette projector,
 and renderer completely; it receives the prompt once and returns one line.
 
+The internal picker has its own safe fallback grammar: exact `/cancel`, blank
+for the current enabled highlight, or an in-range enabled ASCII decimal ordinal
+without a leading zero. Every other line is rejected and rerendered with one
+exact validation notice. Callback, non-TTY, `TERM=dumb`, non-POSIX, uncertain
+capability, and recovered activation paths use this full numbered fallback; it
+does not acquire raw input or expose choice identities. See the exact
+[picker contract](../reference/interactive-terminal.md#generic-internal-picker-foundation).
+
+A picker commit or cancel clears/redraws and writes exactly one final semantic
+`completed` or `cancelled` frame. Configured VINTR/Ctrl-C and VEOF/physical EOF
+return typed internal outcomes after clearing the transient display, without a
+final picker frame. Read, render, write, flush, or decoding failures likewise
+attempt display cleanup and restore captured attributes before propagating;
+restoration uncertainty remains fatal. No second reader, thread, sleep loop,
+history store, or completion store is introduced.
+
 ## Other input and process-local state
 
 Escaping does not change a returned `TerminalAction`. Composition keeps exact
@@ -239,7 +269,8 @@ commands, duplicates, `/quit`, fallback results, and nonempty configured VEOF
 commits are eligible because storage occurs at the completed read boundary
 before the parser. Empty/blank input, Ctrl-C, empty VEOF, physical stream EOF,
 invalid fallback framing, and failed operations are excluded. Composition,
-subject, and confirmation input never navigate or mutate the store. The store
+subject, confirmation, and picker input never navigate or mutate the store.
+The store
 has no filesystem, environment, transcript, configuration, provider-session,
 or user-history-file representation and ends with its driver instance. The
 component stores no search index or story transcript. Command-looking content

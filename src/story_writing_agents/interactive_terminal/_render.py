@@ -15,6 +15,8 @@ from ._model import (
     Notice,
     Panel,
     Picker,
+    PickerControlState,
+    PickerViewport,
     Prompt,
     Record,
     RenderedFrame,
@@ -120,12 +122,281 @@ def render_input_prompt(
     )
 
 
+def render_picker_viewport(
+    viewport: PickerViewport,
+    capabilities: TerminalCapabilities,
+) -> RenderedFrame:
+    """Render one bounded live picker without exposing choice identities."""
+
+    if type(viewport) is not PickerViewport:
+        raise TypeError("viewport must be a PickerViewport")
+    if type(capabilities) is not TerminalCapabilities:
+        raise TypeError("capabilities must be TerminalCapabilities")
+    lines = _picker_viewport_lines(viewport, capabilities.width)
+    return _render_semantic_lines(lines, capabilities)
+
+
+def render_picker_fallback(
+    state: PickerControlState,
+    capabilities: TerminalCapabilities,
+) -> RenderedInputFrame:
+    """Render the complete numbered picker and one final fallback prompt."""
+
+    if type(state) is not PickerControlState:
+        raise TypeError("state must be a PickerControlState")
+    if type(capabilities) is not TerminalCapabilities:
+        raise TypeError("capabilities must be TerminalCapabilities")
+    lines = _picker_fallback_lines(state.picker, capabilities.width)
+    plain = "\n".join(line for line, _role in lines)
+    if not plain.endswith(" "):
+        raise RuntimeError("picker fallback rendering lost its trailing space")
+    if capabilities.decorative_sgr:
+        decorated = [_decorate(line, role) for line, role in lines[:-1]]
+        final_line, final_role = lines[-1]
+        decorated.append(f"{_decorate(final_line[:-1], final_role)} ")
+        text = "\n".join(decorated)
+        if strip_decorative_sgr(text) != plain:
+            raise RuntimeError(
+                "decorative picker fallback rendering changed semantic text"
+            )
+    else:
+        text = plain
+    return RenderedInputFrame(
+        text,
+        plain,
+        capabilities.width,
+        len(lines),
+    )
+
+
 def strip_decorative_sgr(text: str) -> str:
     """Remove exactly the fixed decorative SGR vocabulary."""
 
     if type(text) is not str:
         raise TypeError("text must be a string")
     return _DECORATIVE_SGR.sub("", text)
+
+
+def _render_semantic_lines(
+    lines: list[tuple[str, SemanticRole]],
+    capabilities: TerminalCapabilities,
+) -> RenderedFrame:
+    """Render validated semantic lines with equivalent fixed decoration."""
+
+    if not lines:
+        lines = [("", SemanticRole.DEFAULT)]
+    plain = "\n".join(line for line, _role in lines)
+    if capabilities.decorative_sgr:
+        text = "\n".join(_decorate(line, role) for line, role in lines)
+        if strip_decorative_sgr(text) != plain:
+            raise RuntimeError("decorative rendering changed semantic text")
+    else:
+        text = plain
+    return RenderedFrame(text, capabilities.width, len(lines))
+
+
+def _picker_viewport_lines(
+    viewport: PickerViewport,
+    width: int,
+) -> list[tuple[str, SemanticRole]]:
+    """Project one live picker window into safe semantic rows."""
+
+    picker = viewport.picker
+    lines = _prompt_lines(
+        picker.prompt,
+        width,
+        indent=0,
+        additional_state=picker.state,
+    )
+    lines.extend(
+        _picker_header_lines(
+            picker,
+            viewport.start,
+            viewport.stop,
+            width,
+        )
+    )
+    child_indent = _child_indent(width, 0)
+    for index in range(viewport.start, viewport.stop):
+        choice = picker.choices[index]
+        lines.extend(
+            _numbered_picker_choice_lines(
+                choice,
+                index + 1,
+                width,
+                indent=child_indent,
+                highlighted=choice.identity == picker.highlighted_id,
+                selected=choice.identity == picker.selected_id,
+            )
+        )
+    lines.extend(
+        _picker_empty_or_notice_lines(
+            picker,
+            width,
+            indent=child_indent,
+        )
+    )
+    if picker.selected_id is not None:
+        selected_index = next(
+            index
+            for index, choice in enumerate(picker.choices)
+            if choice.identity == picker.selected_id
+        )
+        if not viewport.start <= selected_index < viewport.stop:
+            selected = picker.choices[selected_index]
+            lines.extend(
+                (line, SemanticRole.SUCCESS)
+                for line in _wrap(
+                    selected.label,
+                    width,
+                    indent=child_indent,
+                    initial_prefix=(
+                        "Selected outside view: "
+                        f"{selected_index + 1}. [selected] "
+                    ),
+                    continuation_prefix="  ",
+                )
+            )
+    return lines
+
+
+def _picker_fallback_lines(
+    picker: Picker,
+    width: int,
+) -> list[tuple[str, SemanticRole]]:
+    """Project a complete numbered list followed by one active input prompt."""
+
+    lines = _picker_header_lines(picker, 0, len(picker.choices), width)
+    child_indent = _child_indent(width, 0)
+    for index, choice in enumerate(picker.choices):
+        lines.extend(
+            _numbered_picker_choice_lines(
+                choice,
+                index + 1,
+                width,
+                indent=child_indent,
+                highlighted=choice.identity == picker.highlighted_id,
+                selected=choice.identity == picker.selected_id,
+            )
+        )
+    lines.extend(
+        _picker_empty_or_notice_lines(
+            picker,
+            width,
+            indent=child_indent,
+        )
+    )
+    lines.extend(
+        (line, SemanticRole.MUTED)
+        for line in _wrap(
+            "Enter a choice number, press Enter for the highlighted choice, "
+            "or enter /cancel.",
+            width,
+            indent=0,
+            initial_prefix="[input] ",
+            continuation_prefix="        ",
+        )
+    )
+    lines.extend(_input_prompt_lines(picker.prompt, width))
+    return lines
+
+
+def _picker_header_lines(
+    picker: Picker,
+    start: int,
+    stop: int,
+    width: int,
+) -> list[tuple[str, SemanticRole]]:
+    """Render total, absolute highlight, and optional window range facts."""
+
+    total = len(picker.choices)
+    if picker.highlighted_id is None:
+        facts = f"{total} items"
+    else:
+        highlighted = next(
+            index
+            for index, choice in enumerate(picker.choices)
+            if choice.identity == picker.highlighted_id
+        )
+        facts = f"highlighted {highlighted + 1}/{total}"
+    if total > stop - start:
+        facts += f"; showing {start + 1}-{stop}/{total}"
+    return [
+        (line, SemanticRole.EMPHASIS)
+        for line in _wrap(
+            f"Choices ({facts}){_state_suffix(picker.state)}",
+            width,
+            indent=0,
+        )
+    ]
+
+
+def _numbered_picker_choice_lines(
+    choice: Choice,
+    ordinal: int,
+    width: int,
+    *,
+    indent: int,
+    highlighted: bool,
+    selected: bool,
+) -> list[tuple[str, SemanticRole]]:
+    """Render one absolute ordinal with explicit non-color-only state cues."""
+
+    if not choice.enabled:
+        cues = "[disabled]"
+        role = SemanticRole.MUTED
+    else:
+        states: list[str] = []
+        if selected:
+            states.append("[selected]")
+        if highlighted:
+            states.append("[highlighted]")
+        cues = " ".join(states) if states else "[available]"
+        role = (
+            SemanticRole.SUCCESS
+            if selected
+            else SemanticRole.INFO
+            if highlighted
+            else SemanticRole.DEFAULT
+        )
+    text = choice.label
+    if choice.description is not None:
+        text += f" — {choice.description}"
+    if choice.disabled_reason is not None:
+        text += f" (disabled: {choice.disabled_reason})"
+    prefix = f"{ordinal}. {cues} "
+    return [
+        (line, role)
+        for line in _wrap(
+            text,
+            width,
+            indent=indent,
+            initial_prefix=prefix,
+            continuation_prefix=" " * len(prefix),
+        )
+    ]
+
+
+def _picker_empty_or_notice_lines(
+    picker: Picker,
+    width: int,
+    *,
+    indent: int,
+) -> list[tuple[str, SemanticRole]]:
+    """Render exactly one explicit empty or supplied semantic notice."""
+
+    if picker.notice is not None:
+        return _notice_lines(picker.notice, width, indent=indent)
+    if not picker.choices:
+        return [
+            (line, SemanticRole.MUTED)
+            for line in _wrap(
+                "[empty] No choices available.",
+                width,
+                indent=indent,
+            )
+        ]
+    return []
 
 
 def _component_lines(
