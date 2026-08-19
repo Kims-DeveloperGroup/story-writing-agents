@@ -98,12 +98,25 @@ synchronous sink returns `None`. Later observer failure stores a safe error.
 
 ```text
 [context] Retrieval search action N started.
-[context] Retrieval search action N completed: H hits; B observation bytes; truncated: yes|no.
+[context] [completed]
+  Retrieval search action N completed: H hits; B observation bytes; truncated: yes|no.
 [context] Retrieval read action N started.
-[context] Retrieval read action N completed: T turns; E events; B observation bytes; truncated: yes|no.
-[context] Source N: Subject: SUBJECT | Conversation: ID
-[context] Source N: Subject: SUBJECT | Conversation: ID | Turn: ID | Sequence: N | Kind: KIND
+[context] [completed]
+  Retrieval read action N completed: T turns; E events; B observation bytes; truncated: yes|no.
+[context] Source N [completed]
+  Subject: SUBJECT
+  Conversation: ID
+[context] Source N [completed]
+  Subject: SUBJECT
+  Conversation: ID
+  Turn: ID
+  Sequence: N
+  Kind: KIND
 ```
+
+These are the structured plain shapes; capable interactive output may add only
+fixed decorative ANSI, and `NO_COLOR` removes that decoration without changing
+the text. Each progress event or source remains one ordered callback record.
 
 `ConversationRetrievalError` says `conversation retrieval failed`. Subclasses
 say `conversation retrieval semantic validation failed`, `conversation retrieval

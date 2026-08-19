@@ -37,13 +37,13 @@ revision; all must approve. Blackboard and owner-isolated history stay separate.
 | --- | --- |
 | `interactive_commands` | Pure grammar and canonical agent-route metadata |
 | `interactive_controller` | Stable `InteractiveController` import facade; no state or I/O |
-| `interactive_controller._core` | Sole controller state, dispatch, transition order, I/O sequencing, resources, and cleanup |
+| `interactive_controller._core` | Sole controller state, dispatch, transition order, I/O sequencing, resources, cleanup, and typed semantic output composition |
 | `interactive_controller._session_policy` | Pure lifecycle validation, next actions, and typed failure classification |
 | `interactive_controller._conversation_policy` | Pure catalog, reference, search, transcript, and failure interpretation |
-| `interactive_controller._runtime_policy` | Pure progress, result, inspection, and failure interpretation |
+| `interactive_controller._runtime_policy` | Pure progress, result, failure interpretation, and frozen validated inspection facts |
 | `cli_context`, catalog, memory service, event store | Defaults, identity, scoped reads, and authoritative events |
-| `interactive_terminal` | Stable package-supported facade and package-internal real-CLI factory |
-| `interactive_terminal._core` | Established terminal API behavior, explicit ordinary/main/composition routing, and terminal-leaf coordination |
+| `interactive_terminal` | Stable package-supported facade, package-internal real-CLI factory, and unlisted internal semantic adapter/component identities |
+| `interactive_terminal._core` | Established terminal API behavior, explicit ordinary/main/composition routing, resource-free semantic adapter, and terminal-leaf coordination |
 | `interactive_terminal._model`, `_controls`, `_render` | Immutable semantic foundation, pure current line transitions/main and composition suggestion projection, and pure safe responsive rendering |
 | `interactive_terminal._driver` | Sole real-CLI raw streams, capabilities, width, keys, cursor controls, writes, flushes, and restoration |
 | `interactive_line_editor` | Standalone compatibility facade over the unified driver |
@@ -63,9 +63,11 @@ standalone line-editor facade delegates to that same driver implementation and
 contains no second raw-terminal lifecycle.
 
 The semantic models, responsive plain/fixed-ANSI renderer, and capability
-profiles are implemented foundations. Existing public terminal view methods
-still produce their established plain records until their owning migration
-slices adopt the semantic renderer; there is no public theme API.
+profiles are implemented. Orientation, status/inspection, central errors and
+recovery, and accepted management, advisory, retrieval, and consensus output
+now use them. Help, roster, lists, search, transcript, focused history, and the
+remaining generic status sites retain their established plain records pending
+their owning migrations. There is no public theme API.
 
 The core gives immutable facts to policy validators and receives validated
 values, typed failures/errors, actions, or safe summaries. Leaves retain
@@ -98,17 +100,20 @@ provider ownership.
 
 Controller dependency is exactly facade → stateful core → three leaves. Leaves
 depend only on lower-layer contracts. Lifecycle consumers use canonical
-`session_lifecycle`; `models` does not forward its objects.
+`session_lifecycle`; `models` does not forward its objects. The runtime-policy
+leaf returns frozen validated inspection facts to the core and does not format
+terminal text.
 
 CLI constructs one unified stream-backed terminal before controller
-construction. The controller core imports the terminal facade; its policy
-leaves use facade error contracts rather than terminal package leaves. Terminal
-core depends on its pure controls, renderer, model, sole driver, and canonical
+construction. The controller core imports the terminal facade's unlisted
+component identities and resource-free semantic adapter; its policy leaves use
+facade error contracts rather than terminal package leaves. Terminal core
+depends on its pure controls, renderer, model, sole driver, and canonical
 command/agent metadata. It binds main and composition preview providers per
 read without retaining prompt mode; subject and confirmation reads remain
-ordinary. The controller receives typed actions and depends downward on
-runtime, presentation, and storage. Retrieval's handler port prevents
-backend-to-orchestrator access.
+ordinary. The controller sends one typed component per established callback
+through the adapter and otherwise depends downward on runtime, presentation,
+and storage. Retrieval's handler port prevents backend-to-orchestrator access.
 
 This supports deterministic collaborators, not a dynamic plugin system. Exact
 imports live in [Package API](../reference/package-api.md), lifecycle meaning in

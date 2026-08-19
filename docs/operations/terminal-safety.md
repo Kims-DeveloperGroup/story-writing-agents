@@ -1,7 +1,8 @@
 # Terminal display safety
 
-> **Availability:** these rules protect shell live editing and
-> package-supported terminal records. They do not make scrollback private.
+> **Availability:** these rules protect shell live editing, migrated semantic
+> output, and established package-supported terminal records. They do not make
+> scrollback private.
 
 Key terms: **TTY guard**—check for interactive streams; **typed error**—trusted
 public code instead of exception prose; **display escaping**—showing a control
@@ -45,9 +46,9 @@ result is capped at 120. Live-input setup rechecks size before raw activation: a
 missing or failing query selects ordinary-line fallback, while a returned
 nonpositive or invalid column count uses 80. Capability observation and
 live-input setup repeat on the next operation, so resize is noticed without a
-signal loop. Package-private semantic rendering also asks for current
-capabilities on its next render. Existing public record methods retain their
-established construction width until their later view migrations.
+signal loop. Semantic rendering also asks for current capabilities on its next
+render. Deferred plain record methods retain their established construction
+width until their later view migrations.
 
 The internal profiles are fixed ANSI, capable plain, and line fallback. Presence
 of `NO_COLOR` disables decorative SGR only; it does not disable safe functional
@@ -68,9 +69,9 @@ U+2028/U+2029 with a visible lowercase escape:
 For example, `ESC[31m` displays as `\x1b[31m` and cannot act as an ANSI escape.
 The result is strict UTF-8, and sanitizing it again changes nothing.
 
-Primitive record writers send one sanitized string and final LF. Records may
-retain internal LF; inline values display it as `\x0a`. Wrapping never creates
-commands.
+Established plain record writers and the semantic component adapter each send
+one sanitized rendered string and final LF. Records may retain internal LF;
+inline values display it as `\x0a`. Wrapping never creates commands.
 
 Transcript content follows a stricter primitive boundary: it must be an exact
 nonempty string, but whitespace-only content is valid. Sanitization makes
@@ -80,19 +81,28 @@ one callback record. Events are never joined, trimmed, or split into storage
 records by the terminal.
 
 Search/history/transcript renderers validate IDs, sequences, metadata, and
-citations. Controller-validated management summaries reuse primitives; raw
-structures never reach the terminal. Renderers open no file and retain no
-cursor. Exact templates live in the
+citations. Migrated controller views construct typed semantic components from
+validated facts; deferred controller summaries reuse established primitives.
+Raw structures never reach the terminal. Renderers open no file and retain no
+cursor. Exact deferred templates live in the
 [terminal reference](../reference/interactive-terminal.md#exact-search-and-transcript-records).
 
-Current public record presentation remains feature-blind plain text. The
-package-private semantic renderer supports the same structured text in plain
-and fixed ANSI profiles: it sanitizes dynamic content before wrapping or
-styling, counts ANSI as zero display cells, uses local resets, and permits only
-reset, bold emphasis, and foreground SGR 31 through 37. It emits no background,
-dim, blink, OSC, query, or cursor sequence. Removing those allowed decorative
-sequences yields the exact plain structure. This foundation is not yet a broad
-public-view color migration.
+#83 routes orientation, interactive status/inspection, central errors/recovery,
+and accepted management, advisory, retrieval, and consensus output through the
+semantic renderer. Help, roster, list, search, transcript, focused-history, and
+remaining generic status records stay on their established feature-blind plain
+renderers until later migrations. The semantic renderer produces the same
+structured text in plain and fixed ANSI profiles: it sanitizes dynamic content
+before wrapping or styling, counts ANSI as zero display cells, uses local
+resets, and permits only reset, bold emphasis, and foreground SGR 31 through
+37. It emits no background, dim, blink, OSC, query, or cursor sequence.
+Removing those allowed decorative sequences yields the exact plain structure.
+
+The controller constructs semantic components only from trusted roles/states
+and validated facts. Its unlisted `InteractiveSemanticOutput` adapter acquires
+no resource when constructed and performs exactly one render and one callback
+write for each established component record. It neither reads input nor owns a
+second stream, raw mode, cursor, width, or restoration lifecycle.
 
 The live driver separately emits only fixed carriage-return, cursor-up/right,
 and clear-to-end controls for functional editing. Prompt, buffer, and suggestion
@@ -112,8 +122,10 @@ Other failures use type/public state, never raw exception, token, or path text.
 `write_error()` accepts a trusted error and explicit secret strings. It builds
 raw, JSON, visible-escape, collapsed, and control-normalized variants; replaces
 longer variants first with `<redacted>`; reduces summary and hint to one line;
-caps them at 512 and 256 characters; then sanitizes and wraps the record.
-Redaction covers supplied variants, not unknown credentials.
+caps them at 512 and 256 characters; then sanitizes and renders one semantic
+error panel containing the trusted code, summary, and hint. The panel remains
+one callback record. Redaction covers supplied variants, not unknown
+credentials.
 
 Conversation failures distinguish invalid, missing, ambiguous, archived, and
 transcript-invalid input from workspace state. The terminal never classifies
