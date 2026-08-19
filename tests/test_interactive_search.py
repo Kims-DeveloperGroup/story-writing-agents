@@ -16,6 +16,15 @@ from story_writing_agents.cli_context import (
     load_cli_context,
     save_default_session,
 )
+from story_writing_agents.conversation_search import (
+    ConversationCitation,
+    ConversationSearchHit,
+    ConversationSearchMatchKind,
+    ConversationSearchQuery,
+    ConversationSearchResult,
+)
+from story_writing_agents.conversations import ConversationEventKind
+from story_writing_agents.interactive_commands import parse_interactive_line
 from story_writing_agents.interactive_controller import InteractiveController
 from story_writing_agents.interactive_controller import _core as controller_core_module
 from story_writing_agents.interactive_terminal import (
@@ -281,6 +290,69 @@ class InteractiveSearchFilesystemTests(unittest.TestCase):
         self.assertIn("[result] Transcript page returned 0 events.\n", rendered)
         self.assertIn(_error_record(InteractiveErrorCode.TRANSCRIPT_INVALID), rendered)
         self.assertNotIn("[error conversation_required]", rendered)
+
+    def test_search_rejects_tampered_partial_event_citation_before_output(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        catalog = FilesystemConversationCatalog(workspace)
+        with mock.patch.object(
+            workspace_module,
+            "uuid4",
+            return_value=UUID(hex=_A[2:]),
+        ):
+            metadata = catalog.create(_SESSION, "Council Vessel")
+        query = ConversationSearchQuery("council")
+        citation = ConversationCitation(
+            _SESSION,
+            metadata.conversation_id,
+            "turn_1",
+            1,
+            ConversationEventKind.USER_MESSAGE,
+        )
+        hit = ConversationSearchHit(
+            citation,
+            metadata.subject,
+            metadata.subject_revision,
+            metadata.status,
+            metadata.updated_at,
+            ConversationSearchMatchKind.TRANSCRIPT,
+            "council vessel",
+        )
+        result = ConversationSearchResult(
+            query,
+            "council",
+            (hit,),
+            1,
+            1,
+            1,
+            False,
+            False,
+        )
+        self.assertIs(type(result), ConversationSearchResult)
+        self.assertIs(type(result.hits[0]), ConversationSearchHit)
+        self.assertIs(type(result.hits[0].citation), ConversationCitation)
+        object.__setattr__(citation, "sequence", None)
+
+        controller, _backend, callbacks = self.make_controller(
+            workspace,
+            catalog,
+        )
+        memory = mock.Mock()
+        memory.search.return_value = result
+        controller._attached_session_id = _SESSION
+        controller._conversation_memory_service = memory
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "^citation turn ID, sequence, and kind must be present together$",
+        ):
+            controller._search_attached_conversations(
+                parse_interactive_line("/search council"),
+            )
+
+        memory.search.assert_called_once_with(query)
+        self.assertEqual(callbacks.records, [])
 
     def test_resolution_is_case_sensitive_and_includes_archived_collisions(
         self,
