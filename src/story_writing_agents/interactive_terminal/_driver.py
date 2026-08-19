@@ -631,7 +631,7 @@ class RawTerminalDriver:
         if character == "":
             raise EOFError
         if not isinstance(character, str) or len(character) != 1:
-            raise TypeError("input_stream.read(1) must return one character")
+            raise TypeError("input reader must return one character")
         return character
 
     def _redraw_live_display(

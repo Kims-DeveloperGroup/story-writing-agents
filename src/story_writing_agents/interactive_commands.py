@@ -1055,8 +1055,6 @@ def _parse_inspect(tail: str | None) -> InteractiveAction:
     argument = tokens[0]
     if not _is_valid_token(argument):
         return _parse_error("/inspect debate must be a control-free token")
-    if argument == _INSPECT_LAST_ARGUMENT:
-        return InteractiveAction(ActionKind.INSPECT, argument=argument)
     return InteractiveAction(ActionKind.INSPECT, argument=argument)
 
 
