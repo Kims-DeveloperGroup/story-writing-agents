@@ -156,3 +156,156 @@ imports live in [Package API](../reference/package-api.md), lifecycle meaning in
 [Conversation search](../reference/conversation-search.md),
 [Conversation transcripts](../reference/conversation-transcripts.md), and
 [Bounded retrieval](../reference/conversation-retrieval.md).
+
+## Core component relations (class, object, DTO)
+
+### Overall class-level ownership
+
+```mermaid
+classDiagram
+    direction LR
+    class StoryRuntime
+    class RuntimeSession
+    class AgentBackend
+    class BoundAgent
+    class Workspace
+    class FilesystemConversationCatalog
+    class FilesystemConversationEventStore
+    class ConversationCatalog <<Protocol>>
+    class ConversationEventStore <<Protocol>>
+    class ConversationMemoryService <<Protocol>>
+    class InteractiveController
+
+    class DebateContextRequest <<DTO>>
+    class DebateContextMode <<DTO>>
+    class DebateResult <<DTO>>
+    class DebateMessage <<DTO>>
+    class DebateProgressEvent <<DTO>>
+    class AgentDefinition <<DTO>>
+    class AgentRequest <<DTO>>
+    class AgentReply <<DTO>>
+    class ConversationRequest <<DTO>>
+    class ConversationReply <<DTO>>
+    class ConversationResult <<DTO>>
+    class ConversationRetrievalRequest <<DTO>>
+    class ConversationRetrievalReply <<DTO>>
+    class ConversationRetrievalResult <<DTO>>
+    class ConversationRetrievalAction <<DTO>>
+    class ConversationRetrievalObservation <<DTO>>
+
+    StoryRuntime o-- RuntimeSession : owns
+    StoryRuntime --> AgentBackend : delegates provider orchestration
+    StoryRuntime --> Workspace : persistence boundary
+    StoryRuntime --> ConversationMemoryService : search/read scope
+    StoryRuntime --> ConversationCatalog : catalog operations
+    StoryRuntime --> ConversationEventStore : transcript operations
+    StoryRuntime --> DebateContextRequest : context controls
+    StoryRuntime --> DebateResult : results
+    StoryRuntime --> ConversationRetrievalRequest : optional bounded turns
+
+    RuntimeSession --> StoryRuntime : bound session context
+    RuntimeSession --> AgentRequest : build advisory payload
+    RuntimeSession --> AgentReply : validates reply
+    RuntimeSession --> DebateMessage : debate messages
+    RuntimeSession --> DebateProgressEvent : emits progress
+    RuntimeSession --> DebateContextRequest : optional debate context
+    RuntimeSession --> DebateResult : returns result
+    RuntimeSession --> ConversationRequest : send plain turns
+    RuntimeSession --> ConversationReply : validates reply
+    RuntimeSession --> ConversationResult : returns result
+    RuntimeSession --> ConversationRetrievalReply : returns bounded result
+
+    AgentBackend --> BoundAgent : manages per-agent bindings
+    BoundAgent --> AgentDefinition : role configuration
+    AgentBackend --> ConversationRetrievalAction : handles retrieval actions
+    BoundAgent --> ConversationRetrievalObservation : receives untrusted observations
+
+    Workspace --> FilesystemConversationCatalog : constructs
+    Workspace --> FilesystemConversationEventStore : constructs
+    FilesystemConversationCatalog ..|> ConversationCatalog
+    FilesystemConversationEventStore ..|> ConversationEventStore
+
+    InteractiveController --> StoryRuntime : session/runtime commands
+    InteractiveController --> Workspace : local attachment scope
+```
+
+### Object-level runtime topology (example)
+
+```mermaid
+objectDiagram
+object "sr : StoryRuntime" as SR
+object "se : RuntimeSession" as SES
+object "backend : AgentBackend" as AB
+object "ws : Workspace" as WS
+object "catalog : FilesystemConversationCatalog" as C
+object "events : FilesystemConversationEventStore" as ES
+object "lead : BoundAgent" as B1
+object "searchSvc : ConversationMemoryService" as MMS
+object "contextReq : DebateContextRequest" as CR
+object "result : DebateResult" as DR
+
+SR --> AB : backend
+SR --> WS : workspace
+SR --> SES : session('session-id')
+SR --> C : catalog view
+SR --> ES : event store
+SR --> MMS : memory service
+SES --> CR : passes context mode
+SES --> DR : returns final artifact state
+AB --> B1 : bound lead_orchestrator
+WS --> C : owns
+WS --> ES : owns
+```
+
+### DTO-focused partials
+
+```mermaid
+classDiagram
+    direction LR
+    class DebateContextRequest <<DTO>>
+    class DebateContextMode <<Enum>>
+    class DebateProgressEvent <<DTO>>
+    class DebateMessage <<DTO>>
+    class DebateResult <<DTO>>
+    class AgentRequest <<DTO>>
+    class AgentReply <<DTO>>
+    class ConversationRequest <<DTO>>
+    class ConversationReply <<DTO>>
+    class ConversationResult <<DTO>>
+
+    DebateContextRequest --> DebateContextMode : mode
+    DebateProgressEvent --> DebateMessage : attaches revision state
+    DebateMessage --> DebateResult : contributes candidate history
+    AgentRequest --> ConversationRequest : wraps user input + context
+    ConversationRequest --> DebateMessage : appends to debate log
+    AgentReply --> ConversationReply : normalizes candidate text
+    ConversationReply --> ConversationResult : serializes turn result
+    DebateProgressEvent --> DebateResult : updates status/failure
+```
+
+```mermaid
+classDiagram
+    direction LR
+    class ConversationRetrievalRequest <<DTO>>
+    class ConversationRetrievalAction <<DTO>>
+    class ConversationRetrievalSearchAction <<DTO>>
+    class ConversationRetrievalReadAction <<DTO>>
+    class ConversationRetrievalAnswerAction <<DTO>>
+    class ConversationRetrievalObservation <<DTO>>
+    class ConversationRetrievalSearchObservation <<DTO>>
+    class ConversationRetrievalReadObservation <<DTO>>
+    class ConversationRetrievalSource <<DTO>>
+    class ConversationRetrievalResult <<DTO>>
+    class ConversationRetrievalReply <<DTO>>
+
+    ConversationRetrievalRequest --> ConversationRetrievalAction : action loop
+    ConversationRetrievalAction <|-- ConversationRetrievalSearchAction
+    ConversationRetrievalAction <|-- ConversationRetrievalReadAction
+    ConversationRetrievalAction <|-- ConversationRetrievalAnswerAction
+    ConversationRetrievalAction --> ConversationRetrievalObservation : returns untrusted event
+    ConversationRetrievalObservation <|-- ConversationRetrievalSearchObservation
+    ConversationRetrievalObservation <|-- ConversationRetrievalReadObservation
+    ConversationRetrievalSearchObservation --> ConversationRetrievalSource : produces source hits
+    ConversationRetrievalReadObservation --> ConversationRetrievalSource : cites transcript events
+    ConversationRetrievalReply --> ConversationRetrievalResult : adds source list
+```
