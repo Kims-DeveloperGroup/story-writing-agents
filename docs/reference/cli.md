@@ -60,19 +60,22 @@ unexpected failure. See the [smoke guide](../guides/smoke-test.md).
 ## Codex defaults and model override
 
 Every installed command that constructs an `AgentBackend` validates and
-snapshots the workspace's optional `codex_model` and
-`codex_reasoning_effort` system defaults. A non-null `--codex-model` on
-`story chat` or `story run` overrides the persisted model for that backend;
-omitting the option inherits the persisted model, then the Codex provider
-default. Persisted reasoning similarly falls back to the provider default when
-null. Existing three-key system-default files inherit both provider defaults.
+snapshots both the workspace system defaults and the per-agent configuration.
+For each agent, a non-null `--codex-model` on `story chat` or `story run`
+overrides all persisted model values for that backend; otherwise the agent's
+`codex_model` inherits the workspace `codex_model`, then the Codex provider
+default. Reasoning resolves from the agent's `codex_reasoning_effort`, then the
+workspace system default, then the provider default. Existing three-key
+system-default files remain valid and provide no model/reasoning fallback until
+one is configured.
 
 There is no `--codex-reasoning-effort` option or supported public
 system-default save API. Global `/settings` provides the installed interactive
-edit/save workflow; direct edits to the validated five-key JSON document remain
-possible. An active backend and runtime keep their construction-time
-configuration snapshot. Exact fields, validation, and initialization
-compatibility are in
+edit/save workflow; choose `Providers`, then an agent, then `Model` or
+`Reasoning effort` to edit per-agent Codex settings. Direct edits to the
+validated JSON documents remain possible. An active backend and runtime keep
+their construction-time configuration snapshot. Exact fields, validation, and
+initialization compatibility are in
 [Agent configuration](configuration/agent-configuration.md#system-defaults),
 and invocation precedence is in
 [Runtime overrides](configuration/runtime-overrides.md#resolution-precedence).
@@ -119,11 +122,14 @@ a supported terminal API.
 
 `/settings` is alias-free, takes no argument, and is available with or without
 an attached session. It first displays immutable Current and Pending sections
-for Language, Persona, Maximum debate rounds, Providers, Codex model, and Codex
-reasoning effort, then an eight-choice editor in this order: those six fields,
-Save, Cancel. Nested Escape returns to the parent without changing that pending
-value; top-level Escape, Cancel, Ctrl-C, or EOF cancels the whole workflow
-without writing. `/cancel` is literal model text in the free-text prompt.
+for Language, Persona, Maximum debate rounds, and Providers, then a six-choice
+editor in this order: those four fields, Save, Cancel. `Providers` opens a
+nested canonical-agent picker, then a Provider/Model/Reasoning effort picker;
+Model and Reasoning edit only that agent and `null`/Inherit falls back to the
+system defaults. Nested Escape returns to the parent without changing that
+pending value; top-level Escape, Cancel, Ctrl-C, or EOF cancels the whole
+workflow without writing. `/cancel` is literal model text in the free-text
+prompt.
 
 Save validates the complete pending pair, then rejects any exact-byte change to
 either configuration document or any persona-catalog change since opening.

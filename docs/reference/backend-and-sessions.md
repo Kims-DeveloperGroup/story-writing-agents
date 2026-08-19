@@ -20,20 +20,24 @@ await BoundAgent.converse_with_retrieval(request, handler) -> ConversationRetrie
 AgentBackend.close() -> None
 ```
 
-`model=None` inherits `codex_model` from the workspace system defaults; if
-both are null, Codex chooses its provider default. A non-null constructor model
-has precedence over the persisted model. Timeout is positive. Overrides map
-canonical agents to providers; reserved `gemini` fails configuration
-validation. A bound agent exposes `backend`, `definition`, `vendor`, and
-`staging_directory`.
+`model=None` resolves separately for each bound agent: that agent's
+`codex_model`, then the workspace `codex_model` system default, then the Codex
+provider default. A non-null constructor model has precedence over every
+persisted agent and system model. The persisted reasoning value resolves the
+same way, from per-agent `codex_reasoning_effort` to the workspace system
+default and then the provider default; there is no constructor reasoning
+argument. Timeout is positive. Overrides map canonical agents to providers;
+reserved `gemini` fails configuration validation. A bound agent exposes
+`backend`, `definition`, `vendor`, and `staging_directory`.
 Provider calls require ready access already held by the backend. Runtime owns
 transcripts and retrieval authorization; backend owns provider metadata,
 processes, access claims, and per-thread serialization.
 
 Construction first validates the complete five-key
-`config/system_defaults.json` object, even when a non-null constructor model
-would override its model field. It then snapshots the resolved model and the
-persisted `codex_reasoning_effort` for that backend's lifetime. Editing the file
+`config/system_defaults.json` object and the complete roster in
+`config/agent_configs.json`, even when a non-null constructor model would
+override persisted model fields. It then snapshots the resolved per-agent
+model and reasoning values for that backend's lifetime. Editing either file
 does not refresh an active backend, existing binding, provider thread,
 fingerprint, or request payload; the next backend construction observes the
 new valid values.
