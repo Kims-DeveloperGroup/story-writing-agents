@@ -270,39 +270,6 @@ def update_agent_codex_reasoning_effort(
     )
 
 
-def update_codex_model(
-    state: SettingsState,
-    codex_model: str | None,
-) -> SettingsState:
-    """Return pending state with one exact validated Codex model value."""
-
-    _require_state(state)
-    validated = ConfigManager.validate_codex_model(codex_model)
-    return _with_system_defaults(
-        state,
-        replace(state.pending.system_defaults, codex_model=validated),
-    )
-
-
-def update_codex_reasoning_effort(
-    state: SettingsState,
-    codex_reasoning_effort: str | None,
-) -> SettingsState:
-    """Return pending state with one exact Codex reasoning value."""
-
-    _require_state(state)
-    validated = ConfigManager.validate_codex_reasoning_effort(
-        codex_reasoning_effort
-    )
-    return _with_system_defaults(
-        state,
-        replace(
-            state.pending.system_defaults,
-            codex_reasoning_effort=validated,
-        ),
-    )
-
-
 def save_settings_state(workspace: Workspace, state: SettingsState) -> None:
     """Validate, conflict-check, and atomically replace changed documents."""
 
