@@ -15,7 +15,9 @@
 > delivers the generic package-internal picker foundation without installing a
 > shell consumer. #94 adds validated persisted workspace Codex fallback model
 > and reasoning defaults. #93 adds the interactive settings workflow, immutable
-> lifecycle configuration snapshots, and guarded persistence. The
+> lifecycle configuration snapshots, and guarded persistence. #105 adds
+> presentation-only strict JSON formatting for agent replies and bold
+> terminal-default agent styling. The
 > [interactive terminal reference](../reference/interactive-terminal.md) and
 > [terminal safety rules](../operations/terminal-safety.md) describe current
 > observable behavior.
@@ -28,7 +30,8 @@ semantic model.
 
 The words **must**, **must not**, and **may** below constrain the delivery
 issues. Requirements beyond the implemented #82, #83, #84, #85, #86, #79,
-#87, #94, #93, and #73 slices do not describe current production behavior.
+#87, #94, #93, #105, and #73 slices do not describe current production
+behavior.
 
 ## Delivery status
 
@@ -44,6 +47,7 @@ issues. Requirements beyond the implemented #82, #83, #84, #85, #86, #79,
 | #87 picker foundation | Implemented: package-internal immutable picker/control/viewport state, pure initialization/reconciliation/live/fallback transitions, responsive live/full-list rendering, a dedicated history-free sole-driver lifecycle, and an unlisted resource-free adapter. #93 supplies its first installed consumer. |
 | #94 workspace Codex defaults | Implemented: the closed system-default schema accepts optional workspace fallback Codex model and reasoning values, new workspaces initialize both to null, legacy files remain valid and byte-preserved, and each backend validates and snapshots effective invocation values at construction. |
 | #93 settings UI | Implemented: global alias-free `/settings` edits isolated current/pending snapshots of workspace defaults and per-agent provider, model, and reasoning choices through shared picker and prompt controls. Save validates an exact opening baseline and persona catalog, writes only changed configuration documents in deterministic order, and attempts reverse exact-byte rollback after a write failure. The workflow adds no supported public save API. |
+| #105 agent reply presentation | Implemented: direct, retrieval, transcript, and focused-history agent replies use a presentation-only strict JSON object/array projection with exact unchanged fallback cases and two-space Unicode-preserving output; stored/provider content remains unchanged, and the `AGENT` role uses bold terminal-default foreground styling without background detection. |
 
 ## Goals and limits
 
@@ -266,6 +270,22 @@ entry, `error` for an empty `/send`, `completed` on send, and `cancelled` on
 discard. Each event and each invalid-confirmation hint remains one render and
 one callback write. The public generic `write_status` method remains for
 compatibility, but no internal composer call site uses it.
+
+### Agent-reply presentation
+
+Agent content is formatted only at the presentation boundary. Direct replies,
+retrieval answers, transcript pages, and focused history pass `agent_reply`
+content through one pure formatter before constructing their semantic message or
+record; provider results, retrieval observations, search data, and stored
+transcript bytes remain unchanged. The formatter accepts only a complete strict
+JSON object or array, rejects duplicate object keys and non-finite constants,
+then emits two-space-indented JSON with source key order and Unicode preserved
+without ASCII escaping. Malformed JSON, embedded prose or extra data, scalar
+JSON values, duplicate keys, non-finite values, and serialization failures are
+returned as the exact original string. The `AGENT` role is bold with
+the terminal-default foreground and never depends on background detection;
+ANSI output adds only a local reset, while plain and `NO_COLOR` output retain
+the same content.
 
 ### Main-command palette and fixed choices
 
@@ -549,9 +569,10 @@ sanitized text's zero-, one-, and two-cell measurements.
 
 The ANSI policy is intentionally fixed:
 
-- only fixed foreground colors and emphasis may be decorative SGR;
-- backgrounds, dim, blink, OSC, terminal queries, and untrusted control
-  sequences are forbidden;
+- only fixed foreground colors and emphasis may be decorative SGR; the `AGENT`
+  role uses bold with the terminal-default foreground;
+- background detection or selection, backgrounds, dim, blink, OSC, terminal
+  queries, and untrusted control sequences are forbidden;
 - `NO_COLOR` disables decorative SGR only and does not flatten the structured
   layout;
 - each styled span uses a local reset so style cannot bleed into adjacent
@@ -738,7 +759,7 @@ boundary. Responsibility and dependency direction are fixed as follows:
 | `interactive_terminal.__init__` | Compatibility facade with the exact existing public surface plus package-internal stream construction, semantic output, picker-adapter, and cancellable-prompt seams. It owns no import-time resource or state. |
 | `interactive_terminal._model` | Immutable semantic components, bounded main-history/control state, main-command completion/palette state, composer and picker control state, bounded picker viewport, semantic input/render frames, key/focus values, and transition/render results. No I/O. |
 | `interactive_terminal._controls` | Pure established line-input, main-command/history, composer-line, confirmation-answer, cancellable-prompt, and picker transitions; bounded history; completion projection; picker initialization/reconciliation, disabled-skipping live navigation, exact fallback grammar, and viewport selection. |
-| `interactive_terminal._render` | Pure safe responsive output and semantic input renderers for plain and fixed ANSI profiles, including bounded live and complete-list fallback picker projections. It sanitizes dynamic content before styling and returns render data without writing. |
+| `interactive_terminal._render` | Pure safe responsive output and semantic input renderers for plain and fixed ANSI profiles, including bounded live and complete-list fallback picker projections and the strict JSON agent-reply presentation projection. It sanitizes dynamic content before styling and returns render data without writing. |
 | `interactive_terminal._driver` | Sole owner of raw streams, capability/width detection, incremental byte/key decoding, fixed Escape readiness wait, cursor controls, raw mode, restoration, writes, flushes, and one bounded process-local main-history store per instance. Its supported main, history-free semantic prompt, and dedicated picker routes accept call-local collaborators; settings input does not consult history or completion state. |
 | `interactive_terminal._core` | `InteractiveTerminal`, established public-operation orchestration, semantic composer/confirmation view construction and event mapping, canonical command-completion adapter, package-internal stream factory, semantic render seam, resource-free `InteractiveSemanticOutput`, and unlisted resource-free `InteractivePickerInput` and `InteractivePromptInput`. It binds picker and cancellable-prompt transitions to the sole driver without owning another store/raw implementation. |
 | `interactive_line_editor` | Standalone/public compatibility-only facade over the same supported main-command reader and one per-editor driver/history store. |
@@ -887,6 +908,7 @@ contracts.
 | Capability profiles | Representative plain, fixed-ANSI, `NO_COLOR`, narrow, non-TTY, `TERM=dumb`, missing/uncertain and independent input/output capability combinations, 80-column fallback, and 120-column cap cases. |
 | Rendering safety | Hostile ESC/OSC/control/bidi-format content is visibly sanitized before ANSI; local resets prevent bleed; removing decorative SGR exactly recovers the plain structure; ANSI is zero-width; wide/combining content and cursor positions use physical columns. |
 | Semantic output | Every view group uses only the closed vocabulary; status remains understandable without color; one semantic record uses one callback write unless an explicit live-control exception is tested. |
+| Agent reply presentation | Complete strict JSON object/array formatting only; two-space indentation; preserved key order and Unicode; unchanged fallback for malformed, embedded-prose, scalar, duplicate-key, non-finite, or unserializable content; direct/retrieval/transcript/history presentation only; stored/provider bytes unchanged; bold terminal-default `AGENT` styling with no background detection. |
 | State transitions | Pure tests cover idle/focused/open/highlighted/selected/disabled/loading/empty/error/cancelled/completed states and invalid or boundary transitions. |
 | History | Exact whitespace-preserving commits including invalid commands, duplicates, `/quit`, fallback, and nonempty VEOF; blank/interrupt/empty-VEOF/physical-EOF/failure exclusion; 100-entry oldest eviction; older/newer bounds; exact draft/cursor restoration; editable copies; per-driver isolation; non-main exclusion; no persistence; and post-restoration append. |
 | Palette/history coordination | Slash opening with deterministic initial highlight and unchanged buffer; filtering; empty/error; canonical metadata projection including finite agent IDs/aliases; open-palette Up/Down clamped highlight navigation without replacement or history movement; Tab application of the highlighted candidate; Shift-Tab no-op; Escape full-snapshot restoration and exact-state dismissal; closed-palette Up/Down history; edited recall; and visible-buffer-only Enter commit. |

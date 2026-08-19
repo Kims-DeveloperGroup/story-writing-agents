@@ -741,6 +741,8 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
     def test_disclosure_waiting_result_truncation_and_sanitization_are_ordered(
         self,
     ) -> None:
+        raw_reply = '{"answer":"界", "items":[1, true]}'
+
         def result(
             session_id: str,
             conversation_id: str,
@@ -751,7 +753,7 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
                 session_id,
                 conversation_id,
                 agent_id,
-                "first line\nsecond\x1bline",
+                raw_reply,
                 context=_truncated_context(session_id, conversation_id),
             )
 
@@ -784,7 +786,7 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
         routing_index = rendered.index("[routing] ")
         waiting_index = rendered.index("[waiting] ")
         truncation_index = rendered.index("[context] [completed] [warning]")
-        reply_index = rendered.index("lead [completed]> first line")
+        reply_index = rendered.index('lead [completed]> {')
         self.assertLess(routing_index, waiting_index)
         self.assertLess(waiting_index, truncation_index)
         self.assertLess(truncation_index, reply_index)
@@ -795,8 +797,14 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
             rendered,
         )
         self.assertIn(
-            "lead [completed]> first line\n"
-            "                  second\\x1bline\n",
+            '"answer": "界",\n'
+            '                    "items": [\n'
+            '                      1,\n'
+            '                      true\n',
+            rendered,
+        )
+        self.assertNotIn(
+            'lead [completed]> {"answer":"界", "items":[1, true]}',
             rendered,
         )
         self.assertNotIn("\x1b", rendered)
@@ -861,7 +869,7 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
                 conversation_id=conversation_id,
                 turn_id=turn_id,
                 agent_id=agent_id,
-                content="cited answer",
+                content='{"answer":"界","ok":true}',
                 context=_empty_context(),
                 sources=(
                     ConversationRetrievalSource(
@@ -913,7 +921,9 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
             "[context] [completed]\n"
             "  Retrieval read action 2 completed: 2 turns; 4 events; "
             "654 observation bytes; truncated: no.\n",
-            "lead [completed]> cited answer\n",
+            '"answer": "界",\n'
+            '                    "ok": true\n'
+            '                  }\n',
             "[context] Source 1 [completed]\n"
             "  Subject: Conversation source\n"
             "  Conversation: source_conversation\n",

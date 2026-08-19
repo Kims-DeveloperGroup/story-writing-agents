@@ -572,7 +572,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   `InteractiveSemanticOutput`; it retains that adapter alongside the same
   terminal used for input and terminal-owned semantic writers. It also retains
   the facade's resource-free picker and cancellable-prompt adapters for the
-  call-local settings flow. Ordered session,
+  call-local settings flow. Retrieval results and persisted `agent_reply`
+  history/transcript rows use the facade's pure `format_agent_reply_content`
+  projection and agent semantic role without changing the stored event or
+  non-agent content. Ordered session,
   conversation, search, transcript, and focused-history rows use one positioned
   `ListView` containing one `Record` per established callback, so the controller
   owns result counts and interruption boundaries without any remaining
@@ -855,7 +858,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ViewState` contracts are likewise facade-bound but omitted from `__all__`.
   These bindings support count-aware dense semantic views without changing the
   package-supported surface. The adapter and contracts add no project-root
-  export or raw-resource ownership. Its
+  export or raw-resource ownership. Unlisted package-internal
+  `format_agent_reply_content` shares the pure strict-JSON agent-reply
+  presentation projection with controller-owned semantic records without
+  becoming a supported public export. Its
   unlisted package-internal `build_stream_terminal` factory is the sole real-CLI
   construction boundary and binds trusted semantic input rendering to the sole
   raw driver without exposing renderer or driver details. Unlisted
@@ -1003,7 +1009,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   and an ordinal/label-only selected-outside-window summary;
   `render_picker_fallback` renders the complete numbered list and semantic input
   prompt. Both keep opaque identities internal and preserve equivalent
-  sanitized plain and fixed-ANSI meaning.
+  sanitized plain and fixed-ANSI meaning. `format_agent_reply_content`
+  recognizes only a complete strict JSON object or array, rejects duplicate
+  object keys and non-finite constants, and preserves key order and Unicode in
+  a two-space-indented projection; malformed JSON, scalars, embedded prose, and
+  every other string return exactly unchanged. The fixed `AGENT` role is bold
+  terminal-default foreground with the same plain meaning and local reset.
 - **Direct internal dependencies:** `interactive_terminal._model`.
 - **State, resources, and side effects:** Pure projections only. Dynamic text
   is sanitized before wrapping or fixed styling; the module writes and flushes
@@ -1093,9 +1104,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   conversation-list, search-hit, and transcript-event writers construct
   semantic components; `InteractiveSemanticOutput` binds the same private
   component writer so controller-owned components share the identical
-  render-and-one-write path. Composition opening, rejection, send, and discard
-  events plus invalid-confirmation hints use the semantic component path; the
-  generic status writer has no remaining internal composer call site. The core
+  render-and-one-write path. The specialized agent writer applies the pure
+  strict-JSON reply projection before constructing its semantic message, and
+  the core binds that formatter through the facade for controller-owned
+  retrieval and persisted reply records. Composition opening, rejection, send,
+  and discard events plus invalid-confirmation hints use the semantic component
+  path; the generic status writer has no remaining internal composer call site.
+  The core
   constructs ordered structured composition and confirmation input views and
   maps their pure control outcomes without changing public result contracts.
   Its package-internal command-completion adapter translates canonical command
@@ -1404,7 +1419,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   `_core` consumes public `COMMANDS` and `AGENT_ROUTES` metadata plus canonical
   display names to coordinate safe presentation and explicit ordinary, main,
   composition, and confirmation reader routing. `_model`, `_controls`, and
-  `_render` remain pure; `_driver` alone owns raw streams, capabilities,
+  `_render` remain pure. `_render` alone recognizes complete strict JSON
+  object/array agent replies for two-space Unicode-preserving presentation and
+  owns the bold terminal-default `AGENT` decoration; terminal `_core` and
+  controller facade consumers apply that projection only at presentation, so
+  provider results and stored conversation events remain unchanged. `_driver`
+  alone owns raw streams, capabilities,
   functional cursor
   controls, width, key decoding, writes, flushes, restoration, and one bounded
   process-local main-input history store, fixed 50-millisecond Escape readiness

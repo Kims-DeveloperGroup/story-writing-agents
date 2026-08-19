@@ -720,6 +720,11 @@ class InteractiveHistoryAndStatusTests(InteractiveConversationTestCase):
                             terminal_module.Field("Content", ""),
                         ),
                         content=content,
+                        role=(
+                            terminal_module.SemanticRole.AGENT
+                            if kind == "agent_reply"
+                            else terminal_module.SemanticRole.DEFAULT
+                        ),
                         state=terminal_module.ViewState.COMPLETED,
                     ),
                 ),

@@ -63,6 +63,7 @@ from story_writing_agents.errors import (
     WorkspaceVersionUnsupportedError,
 )
 from story_writing_agents.interactive_controller import InteractiveController
+from story_writing_agents.interactive_commands import ActionKind, InteractiveAction
 from story_writing_agents.interactive_controller import (
     _conversation_policy as conversation_policy_module,
 )
@@ -249,6 +250,10 @@ def _stored_transcript_event(
     *,
     session_id: str = "session",
     content: str | None = None,
+    kind: ConversationEventKind = ConversationEventKind.USER_MESSAGE,
+    sender: str = "user",
+    recipient: str = "lead_orchestrator",
+    turn_id: str | None = None,
 ) -> ConversationEvent:
     """Build one valid stored event for controller page-validation tests."""
 
@@ -256,12 +261,12 @@ def _stored_transcript_event(
         schema_version=CONVERSATION_EVENT_SCHEMA_VERSION,
         session_id=session_id,
         conversation_id=conversation_id,
-        turn_id=f"turn_{sequence}",
+        turn_id=f"turn_{sequence}" if turn_id is None else turn_id,
         sequence=sequence,
         timestamp=_CREATED,
-        sender="user",
-        recipient="lead_orchestrator",
-        kind=ConversationEventKind.USER_MESSAGE,
+        sender=sender,
+        recipient=recipient,
+        kind=kind,
         content=f"event {sequence}" if content is None else content,
     )
 
@@ -2975,7 +2980,16 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
         self,
     ) -> None:
         entry = _conversation_metadata(_UNIQUE_C, "Subject")
-        first = _stored_transcript_event(entry.conversation_id, 1)
+        raw_reply = '{"answer":"界","items":[1, true]}'
+        first = _stored_transcript_event(
+            entry.conversation_id,
+            1,
+            content=raw_reply,
+            kind=ConversationEventKind.AGENT_REPLY,
+            sender="lead_orchestrator",
+            recipient="user",
+            turn_id="turn_1",
+        )
         second = _stored_transcript_event(entry.conversation_id, 2)
         outcomes = (
             _transcript_page(
@@ -3092,6 +3106,24 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                 for view in transcript_views
             )
         )
+        agent_records = [
+            item
+            for view in transcript_views
+            for item in view.items
+            if type(item) is terminal_module.Record
+            and item.role is terminal_module.SemanticRole.AGENT
+        ]
+        self.assertTrue(agent_records)
+        self.assertEqual(
+            agent_records[0].content,
+            '{\n'
+            '  "answer": "界",\n'
+            '  "items": [\n'
+            '    1,\n'
+            '    true\n'
+            '  ]\n'
+            '}',
+        )
         transcript_notices = [
             component
             for component in components
@@ -3172,6 +3204,88 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
             rendered,
         )
         self.assertNotIn("[error transcript_invalid]", rendered)
+
+    def test_history_pretty_prints_agent_reply_without_rewriting_stored_bytes(
+        self,
+    ) -> None:
+        entry = _conversation_metadata(_UNIQUE_C, "Subject")
+        raw_reply = '{"z":"界","a":[1,true]}'
+        stored_user = _stored_transcript_event(
+            entry.conversation_id,
+            1,
+            content="question",
+        )
+        stored_event = _stored_transcript_event(
+            entry.conversation_id,
+            2,
+            content=raw_reply,
+            kind=ConversationEventKind.AGENT_REPLY,
+            sender="lead_orchestrator",
+            recipient="user",
+            turn_id="turn_1",
+        )
+        _workspace, _backend, _catalog, controller, callbacks = (
+            self.prepared_attached_controller(
+                entries=(entry,),
+                selected_id=entry.conversation_id,
+            )
+        )
+        controller._attached_session_id = "session"
+        controller._focused_conversation = entry
+        components: list[object] = []
+        real_write_component = terminal_module.InteractiveSemanticOutput.write_component
+
+        def capture_component(output, component):
+            components.append(component)
+            return real_write_component(output, component)
+
+        with (
+            mock.patch.object(
+                controller._conversation_event_store,
+                "read",
+                return_value=(stored_user, stored_event),
+            ) as read,
+            mock.patch.object(
+                terminal_module.InteractiveSemanticOutput,
+                "write_component",
+                autospec=True,
+                side_effect=capture_component,
+            ),
+        ):
+            controller._write_focused_conversation_history(
+                InteractiveAction(ActionKind.HISTORY)
+            )
+
+        read.assert_called_once_with("session", entry.conversation_id)
+        history_views = [
+            component
+            for component in components
+            if type(component) is terminal_module.ListView
+            and component.title == "History"
+        ]
+        self.assertEqual(len(history_views), 2)
+        records = [
+            view.items[0]
+            for view in history_views
+            if type(view.items[0]) is terminal_module.Record
+            and view.items[0].role is terminal_module.SemanticRole.AGENT
+        ]
+        self.assertEqual(len(records), 1)
+        record = records[0]
+        self.assertIs(type(record), terminal_module.Record)
+        self.assertIs(record.role, terminal_module.SemanticRole.AGENT)
+        self.assertEqual(
+            record.content,
+            '{\n'
+            '  "z": "界",\n'
+            '  "a": [\n'
+            '    1,\n'
+            '    true\n'
+            '  ]\n'
+            '}',
+        )
+        self.assertEqual(stored_event.content, raw_reply)
+        self.assertIn('"z": "界"', "".join(callbacks.records))
 
     def test_malformed_fresh_transcript_pages_are_transcript_invalid(self) -> None:
         conversation_id = _UNIQUE_C

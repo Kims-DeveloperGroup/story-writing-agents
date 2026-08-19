@@ -29,6 +29,7 @@ from ..conversations import (
     ConversationCatalog,
     ConversationContextWindow,
     ConversationEvent,
+    ConversationEventKind,
     ConversationMetadata,
     ConversationStatus,
     normalize_conversation_subject,
@@ -69,6 +70,7 @@ from ..interactive_settings import (
     update_persona,
 )
 from ..interactive_terminal import (
+    format_agent_reply_content,
     AttachmentKind,
     Choice,
     ComposeMode,
@@ -1905,7 +1907,16 @@ class InteractiveController:
                         Field("Recipient", event.recipient),
                         Field("Content", ""),
                     ),
-                    content=event.content,
+                    content=(
+                        format_agent_reply_content(event.content)
+                        if event.kind is ConversationEventKind.AGENT_REPLY
+                        else event.content
+                    ),
+                    role=(
+                        SemanticRole.AGENT
+                        if event.kind is ConversationEventKind.AGENT_REPLY
+                        else SemanticRole.DEFAULT
+                    ),
                     state=ViewState.COMPLETED,
                 ),
                 position=position,
@@ -2321,7 +2332,7 @@ class InteractiveController:
         self._semantic_output.write_component(
             Message(
                 _AGENT_PROMPT_ALIASES[agent_id],
-                result.content,
+                format_agent_reply_content(result.content),
                 role=SemanticRole.AGENT,
                 state=ViewState.COMPLETED,
             )
@@ -3163,7 +3174,16 @@ class InteractiveController:
                             Field("Recipient", event.recipient),
                             Field("Content", ""),
                         ),
-                        content=event.content,
+                        content=(
+                            format_agent_reply_content(event.content)
+                            if event.kind is ConversationEventKind.AGENT_REPLY
+                            else event.content
+                        ),
+                        role=(
+                            SemanticRole.AGENT
+                            if event.kind is ConversationEventKind.AGENT_REPLY
+                            else SemanticRole.DEFAULT
+                        ),
                         state=ViewState.COMPLETED,
                     ),
                     position=position,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ._core import (
+    format_agent_reply_content,
     INTERACTIVE_ERROR_SPECS,
     AttachmentKind,
     Choice,

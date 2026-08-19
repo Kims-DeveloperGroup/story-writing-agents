@@ -98,7 +98,14 @@ nonempty string, but whitespace-only content is valid. Sanitization makes
 controls visible while preserving source LFs. Internal empty lines and a
 trailing LF remain lines under the `Content` field, and the complete event is
 still one callback record. Events are never joined, trimmed, or split into
-storage records by the terminal.
+storage records by the terminal. When an `agent_reply` is displayed, a
+presentation-only formatter recognizes only a complete strict JSON object or
+array. It rejects duplicate object keys and non-finite constants, emits
+accepted values with two-space indentation, preserves object-key order, and
+does not ASCII-escape Unicode. Malformed JSON, embedded prose or extra data,
+scalar JSON values, duplicate keys, non-finite values, and serialization
+failures return the original content exactly; no formatter result is written
+back to the transcript or provider result.
 
 Search/history/transcript renderers validate IDs, sequences, metadata, and
 citations. Controller views construct typed semantic components from validated
@@ -117,8 +124,10 @@ without installing a shell consumer. The semantic renderer produces the same
 structured text in plain and fixed ANSI profiles: it
 sanitizes dynamic content before wrapping or styling, counts ANSI as zero
 display cells, uses local resets, and permits only reset, bold emphasis, and
-foreground SGR 31 through 37. It emits no background, dim, blink, OSC, query, or
-cursor sequence. Removing those allowed decorative sequences yields the exact
+foreground SGR 31 through 37. The `AGENT` role uses bold with the terminal's
+default foreground and does not inspect or select a background. The renderer
+emits no background, dim, blink, OSC, query, or cursor sequence. Removing those
+allowed decorative sequences yields the exact
 plain structure.
 
 The controller constructs semantic components only from trusted roles/states

@@ -241,6 +241,23 @@ ALIAS [completed]> FIRST LINE
   CONTENT
 ```
 
+Agent replies receive a presentation-only JSON projection before the semantic
+message or record is rendered. The projection runs only when the entire
+content string parses as strict JSON whose top-level value is an object or
+array. Duplicate object keys and non-finite constants (`NaN`, `Infinity`, and
+`-Infinity`) reject the projection. Accepted values are re-emitted with two
+spaces per indentation level, preserved object-key order, and Unicode emitted
+without ASCII escaping. Malformed JSON, embedded prose or extra data, scalar
+JSON values (`null`, booleans, numbers, or strings), duplicate keys,
+non-finite values, and any serialization failure return the original string
+unchanged. The provider result and any stored transcript bytes are never
+rewritten.
+
+An `AGENT` semantic role is bold with the terminal's default foreground color;
+it does not inspect or choose a terminal background. ANSI-capable output wraps
+that emphasis in a local reset, while plain and `NO_COLOR` output retain the
+same unstyled text.
+
 Status roles and terminal states are textual. For example, consensus inspection
 uses `[run DEBATE_ID] [completed] [success]`, interrupted inspection uses
 `[cancelled] [warning]`, failed/deadlocked inspection uses `[error]`, active
@@ -482,7 +499,9 @@ history instead emits one `[context]` record with `History displayed`,
 `Complete turns`, `Context retained`, `Omitted turns`, `UTF-8 bytes`, `Turn
 cap`, and `Truncated` in that order. Source whitespace and LF remain; controls
 are visible, events are never joined, and content remains inside its one
-callback record.
+callback record. An `agent_reply` content value receives the same strict
+object/array presentation projection as a direct reply; all other event kinds
+remain unchanged.
 
 If Ctrl-C interrupts search, transcript, or history row delivery, all already
 completed row callbacks remain visible. The controller writes exactly one

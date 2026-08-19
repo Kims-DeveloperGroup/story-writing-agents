@@ -65,6 +65,7 @@ from ._model import (
     sanitize_terminal_text,
 )
 from ._render import (
+    format_agent_reply_content,
     render_component,
     render_input_prompt,
     render_picker_fallback,
@@ -1022,13 +1023,13 @@ class InteractiveTerminal:
         )
 
     def write_agent(self, agent_id: str, text: str) -> None:
-        """Write one validated agent response without parsing its content."""
+        """Write one validated and presentation-formatted agent response."""
 
         alias = _agent_alias(agent_id)
         self._write_component(
             Message(
                 alias,
-                _required_text("text", text),
+                format_agent_reply_content(_required_text("text", text)),
                 role=SemanticRole.AGENT,
                 state=ViewState.COMPLETED,
             )
