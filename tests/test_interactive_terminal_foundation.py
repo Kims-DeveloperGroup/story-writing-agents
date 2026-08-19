@@ -30,18 +30,20 @@ from story_writing_agents.interactive_terminal import (
     InteractiveError,
     InteractiveErrorCode,
     InteractiveErrorSpec,
+    InteractivePromptInput,
     InteractiveTerminal,
     TerminalAction,
     TerminalActionKind,
     TerminalMessageKind,
 )
-from story_writing_agents.interactive_terminal import _controls, _core, _model
+from story_writing_agents.interactive_terminal import _controls, _core, _driver, _model
 from story_writing_agents.interactive_terminal._controls import (
     append_main_input_history,
     project_slash_suggestions,
     transition_line_input,
     transition_main_command_input,
     transition_main_input,
+    transition_prompt_input,
 )
 from story_writing_agents.interactive_terminal._driver import (
     RawTerminalDriver,
@@ -67,6 +69,7 @@ from story_writing_agents.interactive_terminal._model import (
     Prompt,
     Record,
     RenderedFrame,
+    RenderedInputFrame,
     Section,
     SemanticRole,
     SuggestionPalette,
@@ -293,6 +296,13 @@ class PublicCompatibilityFoundationTests(unittest.TestCase):
             InteractiveMainLineEditor.__module__,
             "story_writing_agents.interactive_line_editor",
         )
+        self.assertIs(
+            terminal_facade.InteractivePromptInput,
+            InteractivePromptInput,
+        )
+        self.assertIs(InteractivePromptInput, _core.InteractivePromptInput)
+        self.assertNotIn("InteractivePromptInput", terminal_facade.__all__)
+        self.assertFalse(hasattr(__import__("story_writing_agents"), "InteractivePromptInput"))
 
     def test_public_signatures_remain_exact(self) -> None:
         positional = inspect.Parameter.POSITIONAL_OR_KEYWORD
@@ -405,6 +415,13 @@ class PublicCompatibilityFoundationTests(unittest.TestCase):
             ),
             InteractiveMainLineEditor.read_line: (
                 ("prompt", positional, required),
+            ),
+            InteractivePromptInput: (
+                ("terminal", positional, required),
+            ),
+            InteractivePromptInput.read_prompt: (
+                ("prompt", positional, required),
+                ("context", keyword, ()),
             ),
         }
         for value, expected_shape in expected.items():
@@ -627,6 +644,34 @@ class PureControlFoundationTests(unittest.TestCase):
             transition_line_input(empty, KeyEvent(KeyKind.EOF)),
             (empty, ControlOutcome(ControlOutcomeKind.EOF)),
         )
+
+    def test_cancellable_prompt_transition_adds_only_exact_escape_cancel(self) -> None:
+        state = LineInputState("draft", 2)
+        unchanged, outcome = transition_prompt_input(
+            state,
+            KeyEvent(KeyKind.ESCAPE),
+        )
+        self.assertIs(unchanged, state)
+        self.assertEqual(outcome, ControlOutcome(ControlOutcomeKind.CANCEL))
+
+        for event in (
+            KeyEvent(KeyKind.TEXT, text="x"),
+            KeyEvent(KeyKind.LEFT),
+            KeyEvent(KeyKind.ENTER),
+            KeyEvent(KeyKind.INTERRUPT),
+            KeyEvent(KeyKind.EOF),
+            KeyEvent(KeyKind.UP),
+            KeyEvent(KeyKind.TAB),
+        ):
+            with self.subTest(event=event):
+                self.assertEqual(
+                    transition_prompt_input(state, event),
+                    transition_line_input(state, event),
+                )
+        with self.assertRaises(TypeError):
+            transition_prompt_input(object(), KeyEvent(KeyKind.ESCAPE))  # type: ignore[arg-type]
+        with self.assertRaises(TypeError):
+            transition_prompt_input(state, object())  # type: ignore[arg-type]
 
     def test_reserved_later_control_keys_have_no_foundation_semantics(self) -> None:
         state = LineInputState("draft", 2)
@@ -919,6 +964,187 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
         write_text.assert_not_called()
         main_read_line.assert_not_called()
 
+        prompt_input = InteractivePromptInput(terminal)
+        self.assertEqual(prompt_input.__slots__, ("_read",))
+        read_line.assert_not_called()
+        with self.assertRaisesRegex(TypeError, "InteractiveTerminal"):
+            InteractivePromptInput(object())  # type: ignore[arg-type]
+
+    def test_prompt_adapter_and_driver_fallback_are_typed_literal_and_history_free(
+        self,
+    ) -> None:
+        reads: list[object] = ["\x1b", "/cancel", KeyboardInterrupt(), EOFError()]
+        prompts: list[str] = []
+
+        def read_line(prompt: str) -> str:
+            prompts.append(prompt)
+            value = reads.pop(0)
+            if isinstance(value, BaseException):
+                raise value
+            return value
+
+        terminal = InteractiveTerminal(read_line, lambda _text: None, width=40)
+        adapter = InteractivePromptInput(terminal)
+        prompt = Prompt(
+            "Codex model",
+            scope="settings",
+            instruction="Enter exact text.",
+            default="provider default",
+        )
+        context = (
+            Panel("Settings", (Notice("Pending"),), state=ViewState.OPEN),
+        )
+        self.assertEqual(
+            adapter.read_prompt(prompt, context=context),
+            ControlOutcome(ControlOutcomeKind.CANCEL),
+        )
+        self.assertEqual(
+            adapter.read_prompt(prompt, context=context),
+            ControlOutcome(ControlOutcomeKind.COMMIT, text="/cancel"),
+        )
+        self.assertEqual(
+            adapter.read_prompt(prompt, context=context),
+            ControlOutcome(ControlOutcomeKind.INTERRUPT),
+        )
+        self.assertEqual(
+            adapter.read_prompt(prompt, context=context),
+            ControlOutcome(ControlOutcomeKind.EOF),
+        )
+        self.assertEqual(len(prompts), 4)
+        self.assertTrue(all("Settings [open]" in value for value in prompts))
+        self.assertTrue(all("Codex model" in value for value in prompts))
+        self.assertNotIn("\x1b[", "".join(prompts))
+
+        fallback = mock.Mock(side_effect=["\x1b", "/cancel"])
+        driver = RawTerminalDriver(
+            fallback,
+            object(),  # type: ignore[arg-type]
+            object(),  # type: ignore[arg-type]
+            transition_line_input,
+            transition_main_input,
+            append_main_input_history,
+        )
+        driver._history_state = MainInputHistoryState(("/status",))
+        line_capabilities = capability(CapabilityProfile.LINE, width=40)
+        renderer = mock.Mock(
+            side_effect=lambda view, observed: render_input_prompt(view, observed)
+        )
+        view = _model.InputPromptView(context, prompt)
+        with mock.patch.object(
+            RawTerminalDriver,
+            "capabilities",
+            autospec=True,
+            return_value=line_capabilities,
+        ):
+            self.assertEqual(
+                driver.read_prompt(view, renderer, transition_prompt_input),
+                ControlOutcome(ControlOutcomeKind.CANCEL),
+            )
+            self.assertEqual(
+                driver.read_prompt(view, renderer, transition_prompt_input),
+                ControlOutcome(ControlOutcomeKind.COMMIT, text="/cancel"),
+            )
+        self.assertEqual(driver._history_state, MainInputHistoryState(("/status",)))
+        self.assertEqual(fallback.call_count, 2)
+        self.assertEqual(renderer.call_count, 2)
+
+        for failure, expected in (
+            (KeyboardInterrupt(), ControlOutcome(ControlOutcomeKind.INTERRUPT)),
+            (EOFError(), ControlOutcome(ControlOutcomeKind.EOF)),
+        ):
+            fallback.side_effect = failure
+            with (
+                self.subTest(failure=type(failure).__name__),
+                mock.patch.object(
+                    RawTerminalDriver,
+                    "capabilities",
+                    autospec=True,
+                    return_value=line_capabilities,
+                ),
+            ):
+                self.assertEqual(
+                    driver.read_prompt(view, renderer, transition_prompt_input),
+                    expected,
+                )
+
+    def test_prompt_driver_raw_delegation_validation_and_failures_are_call_local(
+        self,
+    ) -> None:
+        fallback = mock.Mock(return_value="fallback")
+        driver = RawTerminalDriver(
+            fallback,
+            object(),  # type: ignore[arg-type]
+            object(),  # type: ignore[arg-type]
+            transition_line_input,
+            transition_main_input,
+            append_main_input_history,
+        )
+        capabilities = capability(CapabilityProfile.ANSI, width=60)
+        prompt = Prompt("Maximum debate rounds", scope="settings")
+        view = _model.InputPromptView((), prompt)
+        frame = render_input_prompt(view, capabilities)
+        renderer = mock.Mock(return_value=frame)
+        with (
+            mock.patch.object(
+                RawTerminalDriver,
+                "capabilities",
+                autospec=True,
+                return_value=capabilities,
+            ),
+            mock.patch.object(
+                RawTerminalDriver,
+                "_read_control_line",
+                autospec=True,
+                side_effect=("12", "\x1b"),
+            ) as live,
+        ):
+            self.assertEqual(
+                driver.read_prompt(view, renderer, transition_prompt_input),
+                ControlOutcome(ControlOutcomeKind.COMMIT, text="12"),
+            )
+            self.assertEqual(
+                driver.read_prompt(view, renderer, transition_prompt_input),
+                ControlOutcome(ControlOutcomeKind.CANCEL),
+            )
+        fallback.assert_not_called()
+        self.assertEqual(live.call_count, 2)
+        for call in live.call_args_list:
+            self.assertIs(call.args[2], _driver._empty_suggestion_preview)
+            self.assertEqual(call.args[3], LineInputState())
+            self.assertIs(call.args[4], transition_prompt_input)
+            self.assertEqual(call.kwargs["rendered_input"], frame)
+            self.assertEqual(call.kwargs["known_width"], 60)
+
+        invalid = (
+            lambda: driver.read_prompt(object(), renderer, transition_prompt_input),
+            lambda: driver.read_prompt(view, object(), transition_prompt_input),
+            lambda: driver.read_prompt(view, renderer, object()),
+        )
+        for operation in invalid:
+            with self.subTest(operation=operation), self.assertRaises(TypeError):
+                operation()  # type: ignore[misc]
+
+        bad_renderer = mock.Mock(return_value=object())
+        with mock.patch.object(
+            RawTerminalDriver,
+            "capabilities",
+            autospec=True,
+            return_value=capabilities,
+        ):
+            with self.assertRaisesRegex(TypeError, "RenderedInputFrame"):
+                driver.read_prompt(view, bad_renderer, transition_prompt_input)
+            with self.assertRaisesRegex(ValueError, "width"):
+                driver.read_prompt(
+                    view,
+                    lambda _view, _capabilities: RenderedInputFrame(
+                        frame.text,
+                        frame.plain_text,
+                        59,
+                        frame.line_count,
+                    ),
+                    transition_prompt_input,
+                )
+
     def test_stream_factory_builds_one_terminal_around_one_driver(self) -> None:
         driver = mock.Mock(spec=RawTerminalDriver)
         driver.capabilities.return_value = capability(
@@ -934,6 +1160,10 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             "composition line",
             "/send",
             "yes",
+        )
+        driver.read_prompt.return_value = ControlOutcome(
+            ControlOutcomeKind.COMMIT,
+            text="model",
         )
         fallback = mock.Mock()
         input_stream = object()
@@ -982,6 +1212,12 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
         self.assertIs(
             terminal.request_confirmation("Continue?", default=False),
             ConfirmationResult.YES,
+        )
+        self.assertEqual(
+            InteractivePromptInput(terminal).read_prompt(
+                Prompt("Codex model", scope="settings")
+            ),
+            ControlOutcome(ControlOutcomeKind.COMMIT, text="model"),
         )
         terminal.write_status(TerminalMessageKind.RESULT, "ready")
         self.assertEqual(driver.capabilities.call_count, 3)
@@ -1035,6 +1271,14 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             ],
         )
         driver.read_line.assert_called_once_with("conversation[subject]> ")
+        driver.read_prompt.assert_called_once_with(
+            _model.InputPromptView(
+                (),
+                Prompt("Codex model", scope="settings"),
+            ),
+            render_input_prompt,
+            transition_prompt_input,
+        )
         self.assertEqual(
             driver.write_text.call_args_list,
             [

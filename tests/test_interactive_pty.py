@@ -1067,6 +1067,166 @@ print("RESULT=" + outcome.kind.value)
             line.original_terminal_attributes,
         )
 
+    def test_settings_ansi_picker_save_history_isolation_and_restore_repeatedly(
+        self,
+    ) -> None:
+        """Exercise the real settings picker, prompt boundary, and next-shell save."""
+
+        expected_languages = ("EN", "JA", "ZH")
+        for attempt, expected_language in enumerate(expected_languages):
+            with self.subTest(attempt=attempt):
+                process = self._spawn_cli(
+                    (),
+                    environment_overrides={"TERM": "xterm-256color"},
+                    terminal_columns=48,
+                    decorative_color=True,
+                )
+                process.wait_for_text("story[lobby]> ")
+                mark = process.output_mark()
+                process.send_line("/settings")
+                opened = process.wait_for_text(
+                    "Choose a setting to edit, save, or cancel.",
+                    after=mark,
+                )
+                self.assertIn("Settings [open]", opened)
+                self.assertIn("[highlighted] Language", opened)
+                self.assertIn(b"\x1b[1mSettings [open]\x1b[0m", process.raw_bytes)
+
+                language_mark = process.output_mark()
+                process.send_text("\n")
+                process.wait_for_text(
+                    "Choose the workspace language.",
+                    after=language_mark,
+                )
+                process.send_text("\x1b[B\n")
+                process.wait_for_text(
+                    f"[selected] [highlighted] {expected_language}",
+                    after=language_mark,
+                )
+                process.wait_for_text(
+                    "Choose a setting to edit, save, or cancel.",
+                    after=language_mark,
+                )
+                returned_mark = process.output_mark()
+                process.send_text(("\x1b[B" * 6) + "\n")
+                process.wait_for_text(
+                    "[saved] Settings saved.",
+                    after=returned_mark,
+                )
+                process.wait_for_text("story[lobby]> ", after=returned_mark)
+
+                history_mark = process.output_mark()
+                process.send_text("\x1b[A")
+                process.wait_for_text("story[lobby]> /settings", after=history_mark)
+                self.assertNotIn(
+                    "story[lobby]> /cancel",
+                    process.text_after(history_mark),
+                )
+                process.send_interrupt()
+                process.wait_for_text("[cancelled]", after=history_mark)
+                process.wait_for_text("story[lobby]> ", after=history_mark)
+                process.send_line("/quit")
+                self.assertEqual(
+                    process.wait_for_exit(),
+                    0,
+                    process.normalized_text,
+                )
+                self.assertEqual(
+                    self.workspace.read_json("config/system_defaults.json")[
+                        "language"
+                    ],
+                    expected_language,
+                )
+                self.assertFalse(self.provider_log.exists())
+                self.assertEqual(
+                    process.final_terminal_attributes,
+                    process.original_terminal_attributes,
+                )
+
+    def test_settings_no_color_cancel_events_clear_and_restore_repeatedly(self) -> None:
+        """Cancel settings through Escape, VINTR, and VEOF without mutation."""
+
+        for event_name in ("escape", "interrupt", "eof"):
+            for attempt in range(3):
+                with self.subTest(event=event_name, attempt=attempt):
+                    before = _durable_tree(self.workspace.root)
+                    process = self._spawn_cli(
+                        (),
+                        environment_overrides={"TERM": "xterm-256color"},
+                        terminal_columns=30,
+                    )
+                    process.wait_for_text("story[lobby]> ")
+                    mark = process.output_mark()
+                    process.send_line("/settings")
+                    process.wait_for_text(
+                        "[highlighted] Language",
+                        after=mark,
+                    )
+                    event_mark = process.output_mark()
+                    if event_name == "escape":
+                        process.send_text("\x1b")
+                    elif event_name == "interrupt":
+                        process.send_interrupt()
+                    else:
+                        process.send_eof()
+                    process.wait_for_text(
+                        "[cancelled] Settings",
+                        after=event_mark,
+                    )
+                    cancelled = process.wait_for_text(
+                        "story[lobby]> ",
+                        after=event_mark,
+                    )
+                    self.assertIn(
+                        "Settingscancelled;nopendingchangesweresaved.",
+                        "".join(cancelled.split()),
+                    )
+                    self.assertNotRegex(
+                        cancelled,
+                        r"\x1b\[(?:0|1|3[1-7])m",
+                    )
+                    process.send_line("/quit")
+                    self.assertEqual(
+                        process.wait_for_exit(),
+                        0,
+                        process.normalized_text,
+                    )
+                    self.assertEqual(_durable_tree(self.workspace.root), before)
+                    self.assertFalse(self.provider_log.exists())
+                    self.assertEqual(
+                        process.final_terminal_attributes,
+                        process.original_terminal_attributes,
+                    )
+
+    def test_settings_dumb_fallback_keeps_cancel_literal_and_provider_free(self) -> None:
+        """Use numbered settings fallback and preserve model text literally."""
+
+        process = self._spawn_cli((), terminal_columns=36)
+        process.wait_for_text("story[lobby]> ")
+        mark = process.output_mark()
+        process.send_line("/settings")
+        process.wait_for_text("8. [available] Cancel", after=mark)
+        process.send_line("5")
+        process.wait_for_text("Codex model [settings] > ", after=mark)
+        model_mark = process.output_mark()
+        process.send_line("/cancel")
+        process.wait_for_text("8. [available] Cancel", after=model_mark)
+        process.send_line("7")
+        process.wait_for_text("Settings saved", after=mark)
+        process.wait_for_text("story[lobby]> ", after=mark)
+        process.send_line("/quit")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(
+            self.workspace.read_json("config/system_defaults.json")["codex_model"],
+            "/cancel",
+        )
+        self.assertNotIn("\x1b", process.text_after(mark))
+        self.assertFalse(self.provider_log.exists())
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
     def test_bare_entry_creates_session_then_quit_releases_only_access(
         self,
     ) -> None:
@@ -1128,6 +1288,7 @@ print("RESULT=" + outcome.kind.value)
             "/language",
             "/persona",
             "/reset",
+            "/settings",
             "/run",
             "/draft-file",
             "/session",
