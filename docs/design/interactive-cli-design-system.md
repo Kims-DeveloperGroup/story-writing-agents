@@ -8,8 +8,8 @@
 > management, advisory, retrieval, and consensus output. Completed prerequisite
 > #73 supplies contextual composition previews through the unified driver.
 > Information-dense views (#84), history (#85), composer/confirmation component
-> integration (#86), selectable completion (#79), and pickers (#87) remain
-> planned. The
+> integration (#86), selectable completion (#79), pickers (#87), and the
+> picker-dependent settings UI (#93) remain planned. The
 > [interactive terminal reference](../reference/interactive-terminal.md) and
 > [terminal safety rules](../operations/terminal-safety.md) describe current
 > observable behavior.
@@ -36,6 +36,7 @@ describe current production behavior.
 | #86 composer/confirmation integration | Planned: existing line-oriented composition and confirmation behavior remains unchanged beyond #73 previews. |
 | #79 selectable completion | Planned: the current slash suggestion list is preview-only; Tab application, Up/Down palette navigation, and fixed-value completion are not implemented. Shift-Tab has no palette action in the target behavior. |
 | #87 pickers | Planned: semantic picker values and rendering exist internally, but no interactive picker transition or consumer is implemented. |
+| #93 settings UI | Planned and blocked by #87: `/settings` will edit only persistent system defaults through existing semantic components and an explicit atomic Save/Cancel boundary. No settings UI is currently available. |
 
 ## Goals and limits
 
@@ -248,6 +249,75 @@ rerenders and next-render resize handling. Long lists may render a responsive
 window with current-position and total-count cues, but must not use an
 alternate screen or erase scrollback. One-item, long-list, disabled, empty,
 cancelled, EOF, Ctrl-C, and error behavior must remain deterministic.
+
+### Settings panel
+
+> **Planned for #93 after #87:** `/settings` is not currently available. This
+> section defines its interaction contract without selecting implementation
+> modules or adding public API.
+
+The settings view edits only the persistent system defaults described by
+[Agent configuration](../reference/configuration/agent-configuration.md):
+required `language` and `persona`, plus optional `max_debate_rounds`. It does
+not edit backend selection, per-agent configuration, session/runtime overrides,
+provider or model credentials, persona files, themes, or key bindings. It does
+not change configuration schemas or override precedence.
+
+The view is one `Panel` composed from `Section`, `Field`, `Prompt`, `Picker`,
+and `Notice`. It is not a new component or a general-purpose form abstraction.
+One section shows the validated current values; another shows the independent
+pending values and the focused editor. Any implementation need for a new
+semantic component must stop #93 and first revise the closed vocabulary through
+the repository's modularity process.
+
+| Setting | Pending-value contract |
+| --- | --- |
+| Language | The picker candidates are exactly `KO`, `EN`, `JA`, `ZH`, `ES`, `FR`, `DE`, `PT`, `IT`, `RU`, in that order. A schema-valid existing value outside this UI catalog remains visible and may be preserved, but is not synthesized as a candidate. |
+| Persona | Candidates come only from the existing safe persona-template catalog. Duplicate identifiers resolve with the top-level template taking precedence over `alternative_templates`; the resulting identifiers are ordered lexically. The picker does not read, preview, create, or edit template content. |
+| Maximum debate rounds | A numeric `Prompt` accepts a pending nonnegative integer under the existing validation rule. Blank, negative, fractional, and nonnumeric values produce an inline error `Notice` and retain focus without changing the pending value. `0` remains valid and means audit-only consensus. |
+
+Opening the panel reads and validates one current settings snapshot. A failure
+to read or validate those defaults or enumerate the safe persona catalog
+reports `error` and performs no write, without exposing raw paths or exception
+text. On success, the view copies the current values into pending UI state and
+still performs no write. The first focus is a settings `Picker` whose stable
+choices are Language, Persona, Maximum debate rounds, Save, and Cancel. Exactly
+one control is focused:
+
+- Up/Down moves only the current picker's highlight; highlighting does not edit
+  pending values or write configuration.
+- Enter on Language or Persona transfers focus to that value's picker. Enter
+  selects the highlighted value into pending state and returns focus to the
+  settings picker. Escape cancels that nested selection, restores its prior
+  pending value, and returns focus without a write.
+- Enter on Maximum debate rounds transfers focus to its numeric `Prompt`.
+  Valid Enter updates only the pending value and returns focus; invalid Enter
+  leaves the prompt focused with its trusted validation notice. Escape cancels
+  the numeric edit and restores its prior pending value.
+- Enter on Save validates the complete pending candidate against the existing
+  configuration contract and crosses the sole mutation boundary. Successful
+  Save atomically replaces the persistent defaults and reports `completed`.
+  Validation or replacement failure reports `error`, leaves the prior file
+  intact, and retains the pending values for retry or cancellation.
+- Enter on Cancel, Escape from the top-level settings picker, Ctrl-C, or EOF
+  returns `cancelled` without writing. Opening, navigating, highlighting,
+  editing, validation preview, nested cancellation, and rerendering likewise
+  have no filesystem, runtime, provider, storage, or configuration effect.
+
+The same current/pending labels, choice identity, validation meaning, and
+Save/Cancel outcomes must remain visible in wide, narrow, fixed-ANSI,
+`NO_COLOR`, and structured plain output. Narrow rendering stacks fields and
+windows long persona choices without dropping the highlighted identity or
+position cues. `TERM=dumb`, non-TTY, non-POSIX, or uncertain component
+capability uses ordinary line input and structured plain records without raw
+mode or cursor controls. This fallback does not bypass the installed CLI's
+earlier two-stream TTY guard.
+
+All dynamic identifiers and error text are sanitized before measurement or
+styling. Color never carries current/pending differences, validation failure,
+error, cancelled, or completed meaning. The settings view preserves scrollback
+and adds no alternate screen, mouse handling, animation, background loop,
+dependency, persistent draft, or automatic save.
 
 ## Rendering and capability policy
 
@@ -496,7 +566,7 @@ controller policy leaves still consume only facade error contracts.
 Issue #82 delivered the common models, renderer/capability profiles, driver
 seam, package facade, and module-index reconciliation. Issue #83 delivered its
 output rows below without redistributing runtime or storage responsibility;
-#84 and the control slices remain planned.
+#84, the remaining control slices, and #93 settings remain planned.
 
 ### View groups
 
@@ -513,6 +583,7 @@ output rows below without redistributing runtime or storage responsibility;
 | Retrieval progress and summaries | `Notice`, `Record`, `ListView`, `Field` | Loading, citations/context accounting, result/error/cancelled | #83 (implemented accepted views) |
 | Consensus progress and summaries | `Panel`, `Section`, `Notice`, `Record`, `Field` | Loading, debate identity, result/cancelled/completed/error | #83 (implemented) |
 | Interactive errors and recovery hints | `Notice`, `Field` | Trusted code, redaction, error state, next action, no raw diagnostics | #83 (implemented) |
+| Settings current/pending view | `Panel`, `Section`, `Field`, `Prompt`, `Picker`, `Notice` | Stable field/value order, visible current/pending differences, validation/error/cancelled/completed meaning, atomic Save boundary | #93 (planned; blocked by #87) |
 
 ### Control groups
 
@@ -525,10 +596,13 @@ output rows below without redistributing runtime or storage responsibility;
 | Main command/subcommand palette | `SuggestionPalette`, `Prompt`, `Notice` | Slash-open, Up/Down highlight, Tab replacement, Escape restoration | #79 |
 | Fixed command values | `SuggestionPalette`, `Field` | Canonical finite grammar choices, including metadata-exposed agent IDs/aliases; preview has no effects | #79 |
 | Single-select and selectable-list choices | `Picker`, `ListView`, `Record`, `Notice` | Up/Down highlight, Enter commit, Escape cancel, disabled/empty/error | #87 |
+| Settings field and action navigation | `Panel`, `Prompt`, `Picker`, `Field`, `Notice` | Single focus; value-picker/numeric-editor transfer; explicit Save/Cancel; no write before atomic Save | #93 (planned after #87) |
 
 Contextual non-main-prompt suggestions from completed issue #73 use the same
 unified driver without moving parser, runtime, or storage authority into the
 terminal design system. #86 and #79 build on that prerequisite.
+#93 consumes #87 picker behavior but does not broaden picker ownership or
+prescribe a module boundary before its own implementation analysis.
 
 ## Verification and acceptance
 
@@ -543,7 +617,8 @@ delegation, and the package graph. #83 covers its migrated output rows,
 resource-free adapter, typed controller facts, one-write projection, and real
 PTY ANSI/`NO_COLOR` behavior. Rows involving #84 dense views, history,
 selectable completion, component-integrated composition/confirmation, and
-picker transitions remain acceptance targets for their later slices.
+picker transitions remain acceptance targets for their later slices. The #93
+settings contract remains a planned acceptance target after #87.
 
 | Area | Required evidence |
 | --- | --- |
@@ -554,6 +629,7 @@ picker transitions remain acceptance targets for their later slices.
 | History | Blank exclusion, duplicate preservation, 100-entry eviction, older/newer bounds, exact draft restoration, editable copies, and process isolation. |
 | Palette/history coordination | Slash opening with deterministic initial highlight and unchanged buffer; filtering; empty/error; canonical metadata projection including finite agent IDs/aliases; open-palette Up/Down clamped highlight navigation without replacement or history movement; Tab application of the highlighted candidate; Shift-Tab no-op; Escape prefix restoration; closed-palette Up/Down history; edited recall; and visible-buffer-only Enter commit. |
 | Picker | Highlight-versus-selection, enabled/disabled navigation, Enter commit, Escape cancel, empty/one/long list, stable rerender identity, and resize on next operation. |
+| Settings | Current/pending separation; exact language order; safe persona precedence and lexical order; numeric `0`, positive, blank, negative, fractional, and nonnumeric cases; one focused control and deterministic focus return; nested and whole-panel cancellation; Save validation; atomic success/failure; no write on open/edit/highlight/error/cancel; plain/ANSI/`NO_COLOR`/narrow/line fallback; hostile display content; and unchanged schema, precedence, backend, per-agent, public, and machine contracts. |
 | Parser and mutation boundary | The exact visible committed main buffer reaches the established parser once; previews, recall, replacement, highlight, rerender, cancel, Ctrl-C, and EOF cause no parser/runtime/storage call. |
 | Composer/confirmation | Existing `/send`, `/cancel`, `/say`, yes/no/default, invalid input, Ctrl-C, and EOF results; no full-screen or persistent state. |
 | Restoration | Normal submit, commit, cancellation, Escape, EOF, Ctrl-C, setup failure, read/write/flush failure, render error, and restoration uncertainty, with raw attributes restored whenever acquired. |
