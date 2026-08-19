@@ -358,6 +358,7 @@ class PickerModelContractTests(unittest.TestCase):
                 "viewport_projector",
                 "viewport_renderer",
                 "fallback_renderer",
+                "transient",
             ),
         )
         self.assertEqual(
@@ -374,6 +375,7 @@ class PickerModelContractTests(unittest.TestCase):
                 "selected_id",
                 "notice",
                 "state",
+                "transient",
             ),
         )
         self.assertEqual(InteractivePickerInput.__slots__, ("_read",))

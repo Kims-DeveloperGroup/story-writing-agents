@@ -47,6 +47,10 @@ conversation_subject conversation_archive help quit parse_error
 | `character_custodian` | `character`, `character_custodian` |
 | `execution_specialist` | `execution`, `prose`, `execution_specialist` |
 
+The table lists all ten accepted route aliases. Main-command completion exposes
+only the four preferred prompt aliases—`lead`, `plot`, `character`, and
+`execution`—in roster order; every listed alias remains valid parser input.
+
 | Group | Canonical registry rows |
 | --- | --- |
 | Conversation | `/compose`; `/send`; `/cancel`; `/say TEXT` |
@@ -95,7 +99,7 @@ positions are:
 | Root command | The 21 main-available canonical commands and aliases in registry order; standalone `/compose`, `/send`, and `/cancel` are excluded. |
 | `/session` | `list`, `create`, `open`, `pause` |
 | `/conversation` | `new`, `list`, `use`, `subject`, `archive` |
-| `/to`, `/agent`, `/persona` agent | The 10 canonical IDs and accepted aliases in route order. |
+| `/to`, `/agent`, `/persona` agent | The four preferred prompt aliases—`lead`, `plot`, `character`, and `execution`—in route order. Other accepted aliases remain parser-compatible but are not duplicated as completion candidates. |
 | `/run` option | `--fresh` |
 | `/conversation list` option | `--all` |
 | `/help`, `/?` command | The 21 root replacements plus `/compose`, `/send`, and `/cancel` in registry order. |
@@ -153,4 +157,6 @@ Conversation `new` and `subject` preserve their remainder. `list [--all]
 current attachment or conversation focus; the [CLI contract](cli.md#interactive-streams) does.
 
 Invalid/non-string input returns `parse_error`, never provider input. A
-suggestion requires one unique case-sensitive Levenshtein match within two.
+suggestion requires one unique case-sensitive Levenshtein match within two;
+agent route suggestions use the preferred prompt alias even when the matched
+input is another accepted alias. All ten route aliases remain accepted.

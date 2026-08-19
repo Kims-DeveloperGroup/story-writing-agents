@@ -1002,6 +1002,46 @@ print("RESULT=" + outcome.kind.value)
             process.original_terminal_attributes,
         )
 
+    def test_internal_prompt_transient_clears_and_restores_repeatedly(self) -> None:
+        """Exercise transient raw prompt cleanup without a duplicate final frame."""
+
+        source = r'''
+import sys
+
+from story_writing_agents.interactive_terminal import (
+    InteractivePromptInput,
+    Prompt,
+    build_stream_terminal,
+)
+
+terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
+outcome = InteractivePromptInput(terminal).read_prompt(
+    Prompt("Transient prompt", instruction="Enter one value."),
+    transient=True,
+)
+assert outcome.text == "value"
+print("RESULT=" + outcome.kind.value)
+'''
+        for attempt in range(3):
+            with self.subTest(attempt=attempt):
+                process = self._spawn_python(
+                    source,
+                    environment_overrides={"TERM": "xterm-256color"},
+                    terminal_columns=40,
+                    decorative_color=True,
+                )
+                opened = process.wait_for_text("Transient prompt >")
+                self.assertIn("Enter one value.", opened)
+                process.send_line("value")
+                result = process.wait_for_text("RESULT=commit")
+                self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+                self.assertIn("\x1b[J", result)
+                self.assertNotIn("[completed]", result)
+                self.assertEqual(
+                    process.final_terminal_attributes,
+                    process.original_terminal_attributes,
+                )
+
     def test_semantic_views_use_ansi_and_no_color_profiles_on_real_ptys(
         self,
     ) -> None:
@@ -1088,9 +1128,12 @@ print("RESULT=" + outcome.kind.value)
                     "Choose a setting to edit, save, or cancel.",
                     after=mark,
                 )
-                self.assertIn("Settings [open]", opened)
+                self.assertIn("Settings [focused] [open]", opened)
                 self.assertIn("[highlighted] Language", opened)
-                self.assertIn(b"\x1b[1mSettings [open]\x1b[0m", process.raw_bytes)
+                self.assertIn(
+                    b"\x1b[35mSettings [focused] [open] >\x1b[0m",
+                    process.raw_bytes,
+                )
 
                 language_mark = process.output_mark()
                 process.send_text("\n")
@@ -1099,16 +1142,17 @@ print("RESULT=" + outcome.kind.value)
                     after=language_mark,
                 )
                 process.send_text("\x1b[B\n")
-                process.wait_for_text(
-                    f"[selected] [highlighted] {expected_language}",
+                language_result = process.wait_for_text(
+                    "Language [focused] [open]",
                     after=language_mark,
                 )
+                self.assertIn(expected_language, language_result)
                 process.wait_for_text(
                     "Choose a setting to edit, save, or cancel.",
                     after=language_mark,
                 )
                 returned_mark = process.output_mark()
-                process.send_text(("\x1b[B" * 6) + "\n")
+                process.send_text(("\x1b[B" * 4) + "\n")
                 process.wait_for_text(
                     "[saved] Settings saved.",
                     after=returned_mark,
@@ -1205,19 +1249,25 @@ print("RESULT=" + outcome.kind.value)
         process.wait_for_text("story[lobby]> ")
         mark = process.output_mark()
         process.send_line("/settings")
-        process.wait_for_text("8. [available] Cancel", after=mark)
-        process.send_line("5")
-        process.wait_for_text("Codex model [settings] > ", after=mark)
+        process.wait_for_text("6. [available] Cancel", after=mark)
+        process.send_line("4")
+        process.wait_for_text("Providers > ", after=mark)
+        process.send_line("2")
+        process.wait_for_text("Agent settings", after=mark)
+        process.send_line("2")
+        process.wait_for_text("Model [Plot & Structure Architect] >", after=mark)
         model_mark = process.output_mark()
         process.send_line("/cancel")
-        process.wait_for_text("8. [available] Cancel", after=model_mark)
-        process.send_line("7")
+        process.wait_for_text("6. [available] Cancel", after=model_mark)
+        process.send_line("5")
         process.wait_for_text("Settings saved", after=mark)
         process.wait_for_text("story[lobby]> ", after=mark)
         process.send_line("/quit")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
         self.assertEqual(
-            self.workspace.read_json("config/system_defaults.json")["codex_model"],
+            self.workspace.read_json("config/agent_configs.json")["plot_architect"][
+                "codex_model"
+            ],
             "/cancel",
         )
         self.assertNotIn("\x1b", process.text_after(mark))
@@ -1904,10 +1954,7 @@ print(
             after=mark,
         )
         process.wait_for_text("story[alpha:plot]> ", after=mark)
-        self.assertIn(
-            "stickytargetremainsplot_architect.",
-            "".join(routed.split()),
-        )
+        self.assertNotIn("[routing] One-shot route", routed)
 
         mark = process.output_mark()
         process.send_line("show visible controls")
@@ -2037,7 +2084,8 @@ print(
 
         selected = self._seed_default_session()
         process = self._spawn_cli(
-            ("chat", "alpha", "--workspace", str(self.workspace.root))
+            ("chat", "alpha", "--workspace", str(self.workspace.root)),
+            environment_overrides={"TERM": "xterm-256color"},
         )
         process.wait_for_text("story[alpha:lead]> ")
 
@@ -2115,6 +2163,13 @@ print(
         retrieval_output = process.text_after(mark)
         self.assertIn(f"Conversation: {selected.conversation_id}", retrieval_output)
         self.assertIn("Sequence: 1", retrieval_output)
+        self.assertNotIn("[waiting]", retrieval_output)
+        self.assertNotIn("[routing] One-shot route", retrieval_output)
+        self.assertIn("\x1b[K", retrieval_output)
+        self.assertLess(
+            retrieval_output.index("retrieval-assisted answer"),
+            retrieval_output.index("[context] Source 1 [completed]"),
+        )
 
         started = [
             record
@@ -2335,6 +2390,82 @@ print(
         )
         self.assertFalse(self.provider_log.exists())
 
+    def test_capable_advisory_progress_animates_all_frames_and_joins_repeatedly(
+        self,
+    ) -> None:
+        """Prove capable PTYs animate, serialize writes, and leave no workers."""
+
+        source = r'''
+import asyncio
+import sys
+
+from story_writing_agents.interactive_terminal import build_stream_terminal
+
+
+async def main():
+    terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
+    for label in ("one", "two"):
+        async def operation(label=label):
+            await asyncio.sleep(0.38)
+            terminal._write_text("answer-" + label + "\\n")
+            return label
+
+        result = await terminal._advisory_progress(operation())
+        print("RESULT=" + result)
+
+
+asyncio.run(main())
+'''
+        for attempt in range(2):
+            with self.subTest(attempt=attempt):
+                process = self._spawn_python(
+                    source,
+                    environment_overrides={"TERM": "xterm-256color"},
+                    terminal_columns=40,
+                )
+                mark = process.output_mark()
+                output = process.wait_for_text("RESULT=two", after=mark)
+                self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+                positions = tuple(
+                    output.index(frame) for frame in ("◐", "◓", "◑", "◒")
+                )
+                self.assertEqual(positions, tuple(sorted(positions)))
+                self.assertIn("answer-one", output)
+                self.assertIn("answer-two", output)
+                self.assertNotIn("[routing]", output)
+                self.assertNotIn("[waiting]", output)
+                self.assertGreaterEqual(output.count("\x1b[K"), 4)
+                self.assertNotIn("Task was destroyed", process.normalized_text)
+
+    def test_term_dumb_advisory_progress_is_silent(self) -> None:
+        """Prove a non-capable terminal receives only the advisory result."""
+
+        source = r'''
+import asyncio
+import sys
+
+from story_writing_agents.interactive_terminal import build_stream_terminal
+
+
+async def main():
+    terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
+
+    async def operation():
+        await asyncio.sleep(0.2)
+        return "done"
+
+    result = await terminal._advisory_progress(operation())
+    print("RESULT=" + result)
+
+
+asyncio.run(main())
+'''
+        process = self._spawn_python(source, environment_overrides={"TERM": "dumb"})
+        output = process.wait_for_text("RESULT=done")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertNotRegex(output, r"[◐◓◑◒]")
+        self.assertNotIn("\x1b[K", output)
+
     def test_advisory_vintr_terminates_provider_taints_then_restarts_thread(
         self,
     ) -> None:
@@ -2342,7 +2473,8 @@ print(
 
         selected = self._seed_default_session()
         process = self._spawn_cli(
-            ("chat", "alpha", "--workspace", str(self.workspace.root))
+            ("chat", "alpha", "--workspace", str(self.workspace.root)),
+            environment_overrides={"TERM": "xterm-256color"},
         )
         process.wait_for_text("story[alpha:lead]> ")
         mark = process.output_mark()
@@ -2365,10 +2497,9 @@ print(
         records_before_cancel = len(self._provider_records())
         mark = process.output_mark()
         process.send_line("cancel advisory")
-        process.wait_for_text(
-            "Plot & Structure Architect is responding; Ctrl-C cancels this turn.",
-            after=mark,
-        )
+        progress_output = process.wait_for_text("◐", after=mark)
+        self.assertNotIn("responding; Ctrl-C", progress_output)
+        self.assertNotIn("[routing] ", progress_output)
 
         def is_cancelled_invocation(record: dict[str, Any]) -> bool:
             """Identify the blocking advisory provider invocation by payload."""
@@ -2390,6 +2521,8 @@ print(
             "[cancelled] Plot & Structure Architect turn was interrupted.",
             after=mark,
         )
+        self.assertNotIn("[waiting] ", cancelled_output)
+        self.assertNotIn("[routing] ", cancelled_output)
         process.wait_for_text(
             "[hint] The story session remains attached;",
             after=mark,

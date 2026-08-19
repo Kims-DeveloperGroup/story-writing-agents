@@ -66,6 +66,14 @@ The internal profiles are fixed ANSI, capable plain, and line fallback. Presence
 of `NO_COLOR` disables decorative SGR only; it does not disable safe functional
 cursor controls on an otherwise capable terminal. There is no public theme API.
 
+For one advisory turn, the same capability result also gates the narrow
+terminal-owned progress indicator. A capable raw stream may show the fixed
+four-glyph `◐`/`◓`/`◑`/`◒` cycle; `NO_COLOR` leaves those plain glyphs enabled.
+Callback construction and non-TTY, `TERM=dumb`, non-POSIX, missing, or
+uncertain-capability paths await the operation silently and emit no indicator.
+The installed CLI's earlier TTY guard still rejects non-TTY shell entry before
+this component fallback can be used.
+
 ## Safe display boundary
 
 `sanitize_terminal_text()` preserves ordinary Unicode, Markdown characters,
@@ -98,7 +106,14 @@ nonempty string, but whitespace-only content is valid. Sanitization makes
 controls visible while preserving source LFs. Internal empty lines and a
 trailing LF remain lines under the `Content` field, and the complete event is
 still one callback record. Events are never joined, trimmed, or split into
-storage records by the terminal.
+storage records by the terminal. When an `agent_reply` is displayed, a
+presentation-only formatter recognizes only a complete strict JSON object or
+array. It rejects duplicate object keys and non-finite constants, emits
+accepted values with two-space indentation, preserves object-key order, and
+does not ASCII-escape Unicode. Malformed JSON, embedded prose or extra data,
+scalar JSON values, duplicate keys, non-finite values, and serialization
+failures return the original content exactly; no formatter result is written
+back to the transcript or provider result.
 
 Search/history/transcript renderers validate IDs, sequences, metadata, and
 citations. Controller views construct typed semantic components from validated
@@ -117,8 +132,10 @@ without installing a shell consumer. The semantic renderer produces the same
 structured text in plain and fixed ANSI profiles: it
 sanitizes dynamic content before wrapping or styling, counts ANSI as zero
 display cells, uses local resets, and permits only reset, bold emphasis, and
-foreground SGR 31 through 37. It emits no background, dim, blink, OSC, query, or
-cursor sequence. Removing those allowed decorative sequences yields the exact
+foreground SGR 31 through 37. The `AGENT` role uses bold with the terminal's
+default foreground and does not inspect or select a background. The renderer
+emits no background, dim, blink, OSC, query, or cursor sequence. Removing those
+allowed decorative sequences yields the exact
 plain structure.
 
 The controller constructs semantic components only from trusted roles/states
@@ -134,18 +151,40 @@ cancellation record follows, and no unrendered row or trailing result, hint, or
 context component is written.
 
 The live driver separately emits only fixed carriage-return, cursor-up/right,
-and clear-to-end controls for functional editing. Semantic input context and its
-focused prompt arrive as one trusted fixed-theme projection; the dynamic buffer
-and suggestion text are sanitized separately before redraw, with embedded LF
-visible. No untrusted text becomes ANSI. Emulators, multiplexers, remote
-sessions, and scrollback may still retain or transform display.
+and clear-to-end controls for functional editing. During the one advisory
+indicator lifecycle it may also emit the fixed-cell carriage-return and
+clear-to-end sequence, clearing before persistent output and redrawing while
+the joined operation is pending. Semantic input context and its focused prompt
+arrive as one trusted fixed-theme projection; the dynamic buffer and suggestion
+text are sanitized separately before redraw, with embedded LF visible. No
+untrusted text becomes ANSI. Emulators, multiplexers, remote sessions, and
+scrollback may still retain or transform display.
+
+## Advisory progress boundary
+
+The indicator is advisory-only: it wraps exactly one runtime awaitable for one
+advisory turn and is not a semantic record, callback, status event, or general
+animation service. The raw driver owns the active glyph, advances the fixed
+four-frame cycle, serializes clear/redraw around semantic retrieval/progress or
+result writes, and creates no OS thread or import-time task. It joins both the
+operation and indicator tasks, then clears the cell before final, cancellation,
+or error presentation; the wrapper returns after this cleanup.
+
+An underlying operation failure takes precedence over a simultaneous indicator
+failure. If only the indicator or its final clear fails, the driver raises the
+internal advisory-progress error after cleanup and the controller maps it to
+the existing `internal_error` path. Callback and incapable paths have no
+indicator failure surface because they await silently. Advisory turns no longer
+write `[routing]` or `[waiting]` notices; their established result, cancellation,
+context, and error records remain the authoritative output.
 
 ## Typed errors, never raw diagnostics
 
 Input/action-output `OSError` maps to `operation_interrupted`; input
-`RuntimeError` maps to `internal_error`. Both exit `2` after cleanup. Progress
-`OSError`/`KeyboardInterrupt` maps to the former; other callback failure to the
-latter. Failed diagnostics never skip cleanup.
+`RuntimeError` maps to `internal_error`. Both exit `2` after cleanup. Observer
+progress `OSError`/`KeyboardInterrupt` maps to the former; other callback
+failure to the latter. Advisory indicator failures use the internal-error path
+described above. Failed diagnostics never skip cleanup.
 
 Other failures use type/public state, never raw exception, token, or path text.
 
@@ -236,7 +275,14 @@ picker at a time and for history-free text/numeric prompts with the current
 settings panel as context. Picker Escape returns from a nested editor or
 cancels at top level according to controller-owned focus. Prompt Escape returns
 from the nested editor; Ctrl-C and EOF cancel the whole workflow. No settings
-input is added to main history or command completion.
+input is added to main history or command completion. Settings alone opts into
+transient picker/prompt reads: capable streams clear the transient rows before
+returning, callback and line fallback cannot erase and therefore omit duplicate
+synthetic picker final frames, and nested Escape returns silently without a
+snapshot or cancellation record. The controller emits one complete
+Current/Pending snapshot immediately before each Save attempt or whole-flow
+cancellation. The default non-settings picker/prompt lifecycle remains
+unchanged.
 
 Capable main reads render the existing semantic `SuggestionPalette` in plain or
 fixed ANSI at the active width. `NO_COLOR` removes only decoration. Opening
@@ -258,13 +304,16 @@ The cancellable settings prompt uses ordinary one-line fallback: an exact ESC
 line cancels that nested editor, while `/cancel` is literal data. Enter commits
 the exact line, KeyboardInterrupt is interrupt, and EOF remains distinct.
 
-A picker commit or cancel clears/redraws and writes exactly one final semantic
-`completed` or `cancelled` frame. Configured VINTR/Ctrl-C and VEOF/physical EOF
-return typed internal outcomes after clearing the transient display, without a
-final picker frame. Read, render, write, flush, or decoding failures likewise
-attempt display cleanup and restore captured attributes before propagating;
-restoration uncertainty remains fatal. No second reader, thread, sleep loop,
-history store, or completion store is introduced.
+A default picker commit or cancel clears/redraws and writes exactly one final
+semantic `completed` or `cancelled` frame. Configured VINTR/Ctrl-C and
+VEOF/physical EOF return typed internal outcomes after clearing the transient
+display, without a final picker frame. Settings opts into the transient
+lifecycle: capable reads clear before returning, and fallback readers omit the
+synthetic final picker frame they cannot erase. Read, render, write, flush, or
+decoding failures likewise attempt display cleanup and restore captured
+attributes before propagating; restoration uncertainty remains fatal. No second
+reader, thread, sleep loop, history store, or completion store is introduced,
+and non-settings calls retain the default behavior.
 
 ## Other input and process-local state
 

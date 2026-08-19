@@ -97,9 +97,10 @@ approvals, ignored project/user configuration, and disabled shell, web, app,
 and multi-agent tools. Installation-level or vendor-global instructions can
 still apply, and the vendor may retain remote conversations.
 
-Workspace Codex model and reasoning defaults are plaintext configuration. An
-`AgentBackend` passes their effective non-null values to the local Codex
-process as `--model` and `--config model_reasoning_effort="LEVEL"` arguments;
+Workspace fallback and per-agent Codex model/reasoning values are plaintext
+configuration. An `AgentBackend` passes each bound agent's effective non-null
+values to the local Codex process as `--model` and
+`--config model_reasoning_effort="LEVEL"` arguments;
 they are not inserted into request payloads, definitions, fingerprints, or
 provider-thread identity. Treat them as locally exposed process configuration,
 not as a place to store secrets.

@@ -748,6 +748,42 @@ class CodexBackendDefaultsTests(unittest.TestCase):
         finally:
             backend.close()
 
+    def test_agent_model_and_reasoning_precedence_uses_immutable_snapshot(self) -> None:
+        self.write_defaults("system-model", "low")
+        configs = self.workspace.read_json("config/agent_configs.json")
+        configs[PLOT_ARCHITECT].update(
+            {
+                "codex_model": "agent-model",
+                "codex_reasoning_effort": "high",
+            }
+        )
+        self.workspace.write_json("config/agent_configs.json", configs)
+
+        backend = AgentBackend(self.workspace)
+        try:
+            self.assertEqual(
+                backend._codex_invocation_settings(PLOT_ARCHITECT),
+                ("agent-model", "high"),
+            )
+            # An explicit model wins only that setting; per-agent reasoning remains.
+            explicit = AgentBackend(self.workspace, model="explicit-model")
+            self.addCleanup(explicit.close)
+            self.assertEqual(
+                explicit._codex_invocation_settings(PLOT_ARCHITECT),
+                ("explicit-model", "high"),
+            )
+
+            configs[PLOT_ARCHITECT].update(
+                {"codex_model": "changed", "codex_reasoning_effort": "minimal"}
+            )
+            self.workspace.write_json("config/agent_configs.json", configs)
+            self.assertEqual(
+                backend._codex_invocation_settings(PLOT_ARCHITECT),
+                ("agent-model", "high"),
+            )
+        finally:
+            backend.close()
+
     def test_explicit_model_validation_retains_exact_value_error(self) -> None:
         invalid = (
             False,
@@ -996,6 +1032,40 @@ class CodexBackendDefaultsTests(unittest.TestCase):
                         )
             finally:
                 backend.close()
+
+    def test_agent_model_and_reasoning_argv_are_exact(self) -> None:
+        self.write_defaults("system-model", "low")
+        configs = self.workspace.read_json("config/agent_configs.json")
+        configs[PLOT_ARCHITECT].update(
+            {"codex_model": "agent-model", "codex_reasoning_effort": "xhigh"}
+        )
+        self.workspace.write_json("config/agent_configs.json", configs)
+        staging = self.workspace.path("staging")
+        staging.mkdir()
+        (staging / "AGENTS.md").write_text("role\n", encoding="utf-8")
+        schema_path = self.workspace.path("schema.json")
+        output_path = self.workspace.path("output.json")
+        backend = AgentBackend(self.workspace)
+        try:
+            command = backend._codex_command(
+                staging,
+                schema_path,
+                output_path,
+                "thread-one",
+                PLOT_ARCHITECT,
+            )
+            self.assertEqual(command[command.index("--model") + 1], "agent-model")
+            self.assertEqual(
+                command[command.index("--config", command.index("--model") + 1) + 1],
+                'model_reasoning_effort="xhigh"',
+            )
+            self.assertEqual(command.count("--model"), 1)
+            self.assertEqual(
+                tuple(value for value in command if value.startswith("model_reasoning_effort=")),
+                ('model_reasoning_effort="xhigh"',),
+            )
+        finally:
+            backend.close()
 
 
 class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):

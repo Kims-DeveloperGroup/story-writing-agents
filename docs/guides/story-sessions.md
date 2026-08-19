@@ -38,8 +38,11 @@ default conversation. `/status` separates defaults from process scope.
 
 On capable POSIX main prompts, `/` opens a selectable command palette. Exact,
 case-sensitive prefixes narrow canonical root, subcommand, and finite-option
-candidates. Up/Down moves the highlight, Tab completes the active token, and
-Escape restores the first pre-completion snapshot when present and dismisses
+candidates. Agent-target positions show only the four preferred prompt aliases
+`lead`, `plot`, `character`, and `execution`; all ten declared route aliases
+remain accepted by the parser. Up/Down moves the highlight, and Tab completes
+the active token. Escape restores the first pre-completion snapshot when present
+and dismisses
 that exact state; the palette does not enforce runtime scope. Plain fallback
 has no palette. See the
 [terminal contract](../reference/interactive-terminal.md#main-prompt-live-suggestions).
@@ -48,24 +51,28 @@ has no palette. See the
 
 `/settings` is global, alias-free, provider-free, and works in the lobby or
 while attached. It shows separate Current and Pending values for Language,
-Persona, Maximum debate rounds, Providers, Codex model, and Codex reasoning
-effort. The top-level choices are those six rows followed by Save and Cancel.
+Persona, Maximum debate rounds, and Providers. The top-level choices are those
+four rows followed by Save and Cancel. Choose Providers to select an agent in
+canonical roster order, then choose Provider, Model, or Reasoning effort for
+that agent.
 
 On a capable terminal, Up/Down moves the current picker highlight and Enter
 opens or commits it. Escape from a nested picker or prompt restores that
 field's prior pending value and returns to its parent. Escape at the top level,
 Cancel, Ctrl-C, or EOF cancels the whole workflow without saving. Plain
-fallback uses the picker's numbered grammar. In the Codex model text prompt,
-blank means provider default and `/cancel` is literal model text rather than a
-command.
+fallback uses the picker's numbered grammar. In the per-agent Codex model text
+prompt, blank means inherit the workspace system model and `/cancel` is literal
+model text rather than a command.
 
 Language offers `KO`, `EN`, `JA`, `ZH`, `ES`, `FR`, `DE`, `PT`, `IT`, and `RU`.
 Persona uses the safe lexical template catalog. Debate rounds accept a
 nonnegative ASCII integer, including audit-only `0`. Providers are edited per
 agent in roster order: Codex is enabled; reserved Gemini is disabled for new
 selection, while an existing Gemini route may be preserved or remediated to
-Codex. Reasoning offers Provider default, `minimal`, `low`, `medium`, `high`,
-and `xhigh`.
+Codex. Model accepts exact safe text or blank to inherit the workspace system
+model. Reasoning offers Inherit, `minimal`, `low`, `medium`, `high`, and
+`xhigh`; Inherit uses the workspace system reasoning value, then the provider
+default.
 
 Save fails closed if either configuration file or the persona catalog changed
 after opening. A successful save affects only the next shell/backend

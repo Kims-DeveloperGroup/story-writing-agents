@@ -63,6 +63,7 @@ from story_writing_agents.errors import (
     WorkspaceVersionUnsupportedError,
 )
 from story_writing_agents.interactive_controller import InteractiveController
+from story_writing_agents.interactive_commands import ActionKind, InteractiveAction
 from story_writing_agents.interactive_controller import (
     _conversation_policy as conversation_policy_module,
 )
@@ -249,6 +250,10 @@ def _stored_transcript_event(
     *,
     session_id: str = "session",
     content: str | None = None,
+    kind: ConversationEventKind = ConversationEventKind.USER_MESSAGE,
+    sender: str = "user",
+    recipient: str = "lead_orchestrator",
+    turn_id: str | None = None,
 ) -> ConversationEvent:
     """Build one valid stored event for controller page-validation tests."""
 
@@ -256,12 +261,12 @@ def _stored_transcript_event(
         schema_version=CONVERSATION_EVENT_SCHEMA_VERSION,
         session_id=session_id,
         conversation_id=conversation_id,
-        turn_id=f"turn_{sequence}",
+        turn_id=f"turn_{sequence}" if turn_id is None else turn_id,
         sequence=sequence,
         timestamp=_CREATED,
-        sender="user",
-        recipient="lead_orchestrator",
-        kind=ConversationEventKind.USER_MESSAGE,
+        sender=sender,
+        recipient=recipient,
+        kind=kind,
         content=f"event {sequence}" if content is None else content,
     )
 
@@ -2201,14 +2206,6 @@ class ControllerSettingsTests(ControllerTestCase):
                     str(defaults.max_debate_rounds),
                 ),
                 terminal_module.Field("Providers", providers),
-                terminal_module.Field(
-                    "Codex model",
-                    defaults.codex_model or "provider default",
-                ),
-                terminal_module.Field(
-                    "Codex reasoning effort",
-                    defaults.codex_reasoning_effort or "provider default",
-                ),
             )
 
         return terminal_module.Panel(
@@ -2231,7 +2228,7 @@ class ControllerSettingsTests(ControllerTestCase):
             state=terminal_module.ViewState.OPEN,
         )
 
-    def test_settings_open_is_exact_eight_row_provider_free_snapshot(self) -> None:
+    def test_settings_open_is_exact_six_item_provider_free_snapshot(self) -> None:
         workspace = self.make_workspace()
         before = _tree_snapshot(workspace.root)
         state = settings_module.load_settings_state(workspace)
@@ -2239,7 +2236,7 @@ class ControllerSettingsTests(ControllerTestCase):
         controller, backend, callbacks = self.make_controller(
             workspace,
             "/settings",
-            "8",
+            "6",
             "/quit",
             terminal_width=120,
         )
@@ -2279,15 +2276,13 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertIn(f"{render_plain(expected_panel, width=120).text}\n", callbacks.records)
         self.assertEqual(
             callbacks.prompts[1],
-            "Choices (highlighted 1/8) [open]\n"
+            "Choices (highlighted 1/6) [open]\n"
             "  1. [highlighted] Language\n"
             "  2. [available] Persona\n"
             "  3. [available] Maximum debate rounds\n"
             "  4. [available] Providers\n"
-            "  5. [available] Codex model\n"
-            "  6. [available] Codex reasoning effort\n"
-            "  7. [available] Save\n"
-            "  8. [available] Cancel\n"
+            "  5. [available] Save\n"
+            "  6. [available] Cancel\n"
             "[input] Enter a choice number, press Enter for the highlighted choice, or enter /cancel.\n"
             "Choose a setting to edit, save, or cancel.\n"
             "Settings > ",
@@ -2299,6 +2294,65 @@ class ControllerSettingsTests(ControllerTestCase):
             1,
         )
         self.assertTrue(backend._closed)
+
+    def test_settings_routes_picker_and_prompt_inputs_as_transient_only(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        controller, _backend, _callbacks = self.make_controller(
+            workspace,
+            "/settings",
+            "3",
+            "0",
+            "5",
+            "/quit",
+            terminal_width=120,
+        )
+        original_picker = terminal_module.InteractivePickerInput.read_picker
+        original_prompt = terminal_module.InteractivePromptInput.read_prompt
+        with (
+            mock.patch.object(
+                terminal_module.InteractivePickerInput,
+                "read_picker",
+                autospec=True,
+                side_effect=original_picker,
+            ) as picker,
+            mock.patch.object(
+                terminal_module.InteractivePromptInput,
+                "read_prompt",
+                autospec=True,
+                side_effect=original_prompt,
+            ) as prompt,
+        ):
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        self.assertGreaterEqual(len(picker.call_args_list), 2)
+        self.assertTrue(
+            all(call.kwargs.get("transient") is True for call in picker.call_args_list)
+        )
+        self.assertEqual(len(prompt.call_args_list), 1)
+        self.assertIs(prompt.call_args.kwargs.get("transient"), True)
+
+        ordinary_controller, _ordinary_backend, _ordinary_callbacks = (
+            self.make_controller(workspace, "/help", "/quit", terminal_width=120)
+        )
+        with (
+            mock.patch.object(
+                terminal_module.InteractivePickerInput,
+                "read_picker",
+                autospec=True,
+                side_effect=original_picker,
+            ) as ordinary_picker,
+            mock.patch.object(
+                terminal_module.InteractivePromptInput,
+                "read_prompt",
+                autospec=True,
+                side_effect=original_prompt,
+            ) as ordinary_prompt,
+        ):
+            self.assertEqual(ordinary_controller.run_session_lobby(), 0)
+        ordinary_picker.assert_not_called()
+        ordinary_prompt.assert_not_called()
 
     def test_settings_edit_save_isolated_candidate_and_literal_cancel_text(self) -> None:
         workspace = self.make_workspace()
@@ -2317,11 +2371,16 @@ class ControllerSettingsTests(ControllerTestCase):
             "4",
             "2",
             "1",
-            "5",
+            "1",
+            "4",
+            "2",
+            "2",
             "/cancel",
+            "4",
+            "2",
+            "3",
             "6",
-            "6",
-            "7",
+            "5",
             "/quit",
             terminal_width=160,
         )
@@ -2350,8 +2409,16 @@ class ControllerSettingsTests(ControllerTestCase):
         configured = settings_module.load_settings_state(workspace).pending
         self.assertEqual(configured.system_defaults.language, "EN")
         self.assertEqual(configured.system_defaults.max_debate_rounds, 0)
-        self.assertEqual(configured.system_defaults.codex_model, "/cancel")
-        self.assertEqual(configured.system_defaults.codex_reasoning_effort, "xhigh")
+        self.assertIsNone(configured.system_defaults.codex_model)
+        self.assertIsNone(configured.system_defaults.codex_reasoning_effort)
+        self.assertEqual(
+            configured.agent_configs[PLOT_ARCHITECT].codex_model,
+            "/cancel",
+        )
+        self.assertEqual(
+            configured.agent_configs[PLOT_ARCHITECT].codex_reasoning_effort,
+            "xhigh",
+        )
         self.assertEqual(
             configured.agent_configs[PLOT_ARCHITECT].backend,
             "codex",
@@ -2369,17 +2436,19 @@ class ControllerSettingsTests(ControllerTestCase):
             ),
             1,
         )
-        self.assertIn(
+        self.assertNotIn(
             "Gemini — Current saved provider; choose Codex to remediate. "
             "(disabled: Provider is not implemented.)",
             rendered,
         )
+        self.assertEqual(rendered.count("Settings [open]\n"), 1)
+        self.assertNotIn("Inherit", rendered)
         self.assertNotIn("Settings cancelled", rendered)
         self.assertEqual(callbacks.reads, [])
 
     def test_nested_escape_returns_but_interrupt_and_eof_cancel_all(self) -> None:
         scenarios = (
-            (("/settings", "5", "\x1b", "8", "/quit"), 2),
+            (("/settings", "4", "2", "2", "\x1b", "6", "/quit"), 1),
             (("/settings", KeyboardInterrupt(), "/quit"), 1),
             (("/settings", EOFError(), "/quit"), 1),
         )
@@ -2425,10 +2494,8 @@ class ControllerSettingsTests(ControllerTestCase):
                 controller, _backend, callbacks = self.make_controller(
                     workspace,
                     "/settings",
-                    "1",
-                    "2",
-                    "7",
-                    "8",
+                    "5",
+                    "6",
                     "/quit",
                     terminal_width=160,
                 )
@@ -2973,7 +3040,16 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
         self,
     ) -> None:
         entry = _conversation_metadata(_UNIQUE_C, "Subject")
-        first = _stored_transcript_event(entry.conversation_id, 1)
+        raw_reply = '{"answer":"界","items":[1, true]}'
+        first = _stored_transcript_event(
+            entry.conversation_id,
+            1,
+            content=raw_reply,
+            kind=ConversationEventKind.AGENT_REPLY,
+            sender="lead_orchestrator",
+            recipient="user",
+            turn_id="turn_1",
+        )
         second = _stored_transcript_event(entry.conversation_id, 2)
         outcomes = (
             _transcript_page(
@@ -3090,6 +3166,24 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                 for view in transcript_views
             )
         )
+        agent_records = [
+            item
+            for view in transcript_views
+            for item in view.items
+            if type(item) is terminal_module.Record
+            and item.role is terminal_module.SemanticRole.AGENT
+        ]
+        self.assertTrue(agent_records)
+        self.assertEqual(
+            agent_records[0].content,
+            '{\n'
+            '  "answer": "界",\n'
+            '  "items": [\n'
+            '    1,\n'
+            '    true\n'
+            '  ]\n'
+            '}',
+        )
         transcript_notices = [
             component
             for component in components
@@ -3170,6 +3264,88 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
             rendered,
         )
         self.assertNotIn("[error transcript_invalid]", rendered)
+
+    def test_history_pretty_prints_agent_reply_without_rewriting_stored_bytes(
+        self,
+    ) -> None:
+        entry = _conversation_metadata(_UNIQUE_C, "Subject")
+        raw_reply = '{"z":"界","a":[1,true]}'
+        stored_user = _stored_transcript_event(
+            entry.conversation_id,
+            1,
+            content="question",
+        )
+        stored_event = _stored_transcript_event(
+            entry.conversation_id,
+            2,
+            content=raw_reply,
+            kind=ConversationEventKind.AGENT_REPLY,
+            sender="lead_orchestrator",
+            recipient="user",
+            turn_id="turn_1",
+        )
+        _workspace, _backend, _catalog, controller, callbacks = (
+            self.prepared_attached_controller(
+                entries=(entry,),
+                selected_id=entry.conversation_id,
+            )
+        )
+        controller._attached_session_id = "session"
+        controller._focused_conversation = entry
+        components: list[object] = []
+        real_write_component = terminal_module.InteractiveSemanticOutput.write_component
+
+        def capture_component(output, component):
+            components.append(component)
+            return real_write_component(output, component)
+
+        with (
+            mock.patch.object(
+                controller._conversation_event_store,
+                "read",
+                return_value=(stored_user, stored_event),
+            ) as read,
+            mock.patch.object(
+                terminal_module.InteractiveSemanticOutput,
+                "write_component",
+                autospec=True,
+                side_effect=capture_component,
+            ),
+        ):
+            controller._write_focused_conversation_history(
+                InteractiveAction(ActionKind.HISTORY)
+            )
+
+        read.assert_called_once_with("session", entry.conversation_id)
+        history_views = [
+            component
+            for component in components
+            if type(component) is terminal_module.ListView
+            and component.title == "History"
+        ]
+        self.assertEqual(len(history_views), 2)
+        records = [
+            view.items[0]
+            for view in history_views
+            if type(view.items[0]) is terminal_module.Record
+            and view.items[0].role is terminal_module.SemanticRole.AGENT
+        ]
+        self.assertEqual(len(records), 1)
+        record = records[0]
+        self.assertIs(type(record), terminal_module.Record)
+        self.assertIs(record.role, terminal_module.SemanticRole.AGENT)
+        self.assertEqual(
+            record.content,
+            '{\n'
+            '  "z": "界",\n'
+            '  "a": [\n'
+            '    1,\n'
+            '    true\n'
+            '  ]\n'
+            '}',
+        )
+        self.assertEqual(stored_event.content, raw_reply)
+        self.assertIn('"z": "界"', "".join(callbacks.records))
 
     def test_malformed_fresh_transcript_pages_are_transcript_invalid(self) -> None:
         conversation_id = _UNIQUE_C

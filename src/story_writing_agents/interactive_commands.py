@@ -716,9 +716,9 @@ def _root_command_replacements(*, include_composition: bool) -> tuple[str, ...]:
 
 
 def _agent_completion_replacements() -> tuple[str, ...]:
-    """Return all accepted agent aliases in roster and alias order."""
+    """Return one preferred completion alias per agent in roster order."""
 
-    return tuple(alias for route in AGENT_ROUTES for alias in route.aliases)
+    return tuple(route.prompt_alias for route in AGENT_ROUTES)
 
 def parse_interactive_line(line: str) -> InteractiveAction:
     """Parse one input line without performing I/O or raising parse errors."""
@@ -1286,10 +1286,15 @@ def _is_valid_token(value: str) -> bool:
 
 
 def _suggest_agent(value: str) -> str | None:
-    """Return a uniquely close canonical agent mention, or ``None``."""
+    """Return a uniquely close preferred agent mention, or ``None``."""
 
-    canonical = _suggest(value, _AGENT_ALIASES)
-    return None if canonical is None else f"@{canonical}"
+    candidates = {
+        alias: f"@{route.prompt_alias}"
+        for route in AGENT_ROUTES
+        for alias in route.aliases
+    }
+    suggestion = _suggest(value, candidates)
+    return suggestion
 
 
 def _suggest(value: str, candidates: dict[str, str]) -> str | None:

@@ -118,6 +118,16 @@ These are the structured plain shapes; capable interactive output may add only
 fixed decorative ANSI, and `NO_COLOR` removes that decoration without changing
 the text. Each progress event or source remains one ordered callback record.
 
+The final retrieval answer is presented as an agent reply. Before its semantic
+message is rendered, the controller attempts the same presentation-only
+formatter used for direct replies: only a complete strict JSON object or array
+is re-emitted with two-space indentation, preserved key order, and unescaped
+Unicode. Duplicate keys, non-finite constants, malformed or embedded-prose
+content, scalar JSON values, and serialization failures fall back to the exact
+original answer string. The `ConversationRetrievalResult.content`, provider
+payloads, and any transcript bytes remain unchanged; retrieval observations
+are not rewritten by this display step.
+
 `ConversationRetrievalError` says `conversation retrieval failed`. Subclasses
 say `conversation retrieval semantic validation failed`, `conversation retrieval
 budget exhausted`, and `conversation retrieval progress observer failed`.

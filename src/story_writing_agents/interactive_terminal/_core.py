@@ -6,7 +6,7 @@ import json
 import re
 import textwrap
 import unicodedata
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import KW_ONLY, dataclass
 from enum import StrEnum
 from types import MappingProxyType
@@ -35,7 +35,7 @@ from ._controls import (
     transition_line_input,
     transition_prompt_input,
 )
-from ._driver import RawTerminalDriver
+from ._driver import AdvisoryProgressError, RawTerminalDriver
 from ._model import (
     CapabilityProfile,
     Choice,
@@ -65,7 +65,9 @@ from ._model import (
     sanitize_terminal_text,
 )
 from ._render import (
+    format_agent_reply_content,
     render_component,
+    render_advisory_progress_frame,
     render_input_prompt,
     render_picker_fallback,
     render_picker_viewport,
@@ -444,6 +446,7 @@ class InteractiveTerminal:
         "_main_read_line",
         "_picker_read",
         "_prompt_read",
+        "_advisory_progress",
         "_read_line",
         "_width",
         "_write_text",
@@ -484,6 +487,7 @@ class InteractiveTerminal:
         self._confirmation_read_line = _plain_input_reader(read_line, width)
         self._picker_read = _plain_picker_reader(read_line, write_text, width)
         self._prompt_read = _plain_prompt_reader(read_line, width)
+        self._advisory_progress = _plain_advisory_progress
         self._write_text = write_text
         self._width = width
         self._capability_provider = lambda: _plain_capabilities(width)
@@ -1022,13 +1026,13 @@ class InteractiveTerminal:
         )
 
     def write_agent(self, agent_id: str, text: str) -> None:
-        """Write one validated agent response without parsing its content."""
+        """Write one validated and presentation-formatted agent response."""
 
         alias = _agent_alias(agent_id)
         self._write_component(
             Message(
                 alias,
-                _required_text("text", text),
+                format_agent_reply_content(_required_text("text", text)),
                 role=SemanticRole.AGENT,
                 state=ViewState.COMPLETED,
             )
@@ -1272,8 +1276,12 @@ class InteractivePickerInput:
         selected_id: str | None = None,
         notice: Notice | None = None,
         state: ViewState = ViewState.OPEN,
+        transient: bool = False,
     ) -> ControlOutcome:
         """Read one semantic single-select value without invoking a consumer."""
+
+        if type(transient) is not bool:
+            raise TypeError("transient must be a bool")
 
         picker = Picker(
             prompt,
@@ -1283,7 +1291,12 @@ class InteractivePickerInput:
             notice=notice,
             state=state,
         )
-        outcome = self._read(initialize_picker(picker))
+        initial_state = initialize_picker(picker)
+        outcome = (
+            self._read(initial_state, transient=True)
+            if transient
+            else self._read(initial_state)
+        )
         if type(outcome) is not ControlOutcome:
             raise TypeError("picker reader must return a ControlOutcome")
         return outcome
@@ -1308,13 +1321,42 @@ class InteractivePromptInput:
         prompt: Prompt,
         *,
         context: tuple[Panel | Section | Field | Notice, ...] = (),
+        transient: bool = False,
     ) -> ControlOutcome:
         """Read one exact line with a distinct nested-cancel outcome."""
 
-        outcome = self._read(InputPromptView(context, prompt))
+        if type(transient) is not bool:
+            raise TypeError("transient must be a bool")
+
+        view = InputPromptView(context, prompt)
+        outcome = (
+            self._read(view, transient=True)
+            if transient
+            else self._read(view)
+        )
         if type(outcome) is not ControlOutcome:
             raise TypeError("prompt reader must return a ControlOutcome")
         return outcome
+
+
+class InteractiveAdvisoryProgress:
+    """Retain one terminal's package-internal advisory progress session."""
+
+    __slots__ = ("_run",)
+
+    def __init__(self, terminal: InteractiveTerminal) -> None:
+        """Bind progress lifecycle without inspecting streams or capabilities."""
+
+        if not isinstance(terminal, InteractiveTerminal):
+            raise TypeError("terminal must be an InteractiveTerminal")
+        self._run: Callable[[Awaitable[object]], Awaitable[object]] = (
+            terminal._advisory_progress
+        )
+
+    async def run(self, operation: Awaitable[object]) -> object:
+        """Join one advisory operation with the terminal-owned indicator."""
+
+        return await self._run(operation)
 
 
 def build_contextual_terminal(
@@ -1388,7 +1430,13 @@ def _plain_prompt_reader(
         raise TypeError("read_line must be callable")
     capabilities = _plain_capabilities(width)
 
-    def read_prompt(view: InputPromptView) -> ControlOutcome:
+    def read_prompt(
+        view: InputPromptView,
+        *,
+        transient: bool = False,
+    ) -> ControlOutcome:
+        if type(transient) is not bool:
+            raise TypeError("transient must be a bool")
         frame = render_input_prompt(view, capabilities)
         try:
             line = _validated_input_line(read_line(frame.plain_text))
@@ -1401,6 +1449,12 @@ def _plain_prompt_reader(
         return ControlOutcome(ControlOutcomeKind.COMMIT, text=line)
 
     return read_prompt
+
+
+async def _plain_advisory_progress(operation: Awaitable[object]) -> object:
+    """Keep callback and non-TTY advisory execution visually silent."""
+
+    return await operation
 
 
 def _plain_picker_reader(
@@ -1416,9 +1470,15 @@ def _plain_picker_reader(
         raise TypeError("write_text must be callable")
     capabilities = _plain_capabilities(width)
 
-    def read_picker(initial_state: PickerControlState) -> ControlOutcome:
+    def read_picker(
+        initial_state: PickerControlState,
+        *,
+        transient: bool = False,
+    ) -> ControlOutcome:
         if type(initial_state) is not PickerControlState:
             raise TypeError("state must be a PickerControlState")
+        if type(transient) is not bool:
+            raise TypeError("transient must be a bool")
         picker_state = initial_state
         while True:
             frame = render_picker_fallback(picker_state, capabilities)
@@ -1437,7 +1497,7 @@ def _plain_picker_reader(
             if outcome.kind in {
                 ControlOutcomeKind.COMMIT,
                 ControlOutcomeKind.CANCEL,
-            }:
+            } and not transient:
                 final_frame = render_picker_fallback(
                     picker_state,
                     capabilities,
@@ -1541,19 +1601,39 @@ def build_stream_terminal(
         render_input_prompt,
         _empty_slash_suggestions,
     )
-    terminal._picker_read = lambda state: driver.read_picker(
-        state,
-        transition_picker,
-        transition_picker_fallback,
-        project_picker_viewport,
-        render_picker_viewport,
-        render_picker_fallback,
-    )
-    terminal._prompt_read = lambda view: driver.read_prompt(
-        view,
-        render_input_prompt,
-        transition_prompt_input,
-    )
+    def read_picker(state, *, transient=False):
+        arguments = (
+            state,
+            transition_picker,
+            transition_picker_fallback,
+            project_picker_viewport,
+            render_picker_viewport,
+            render_picker_fallback,
+        )
+        return (
+            driver.read_picker(*arguments, transient=True)
+            if transient
+            else driver.read_picker(*arguments)
+        )
+
+    def read_prompt(view, *, transient=False):
+        arguments = (view, render_input_prompt, transition_prompt_input)
+        return (
+            driver.read_prompt(*arguments, transient=True)
+            if transient
+            else driver.read_prompt(*arguments)
+        )
+
+    terminal._picker_read = read_picker
+    terminal._prompt_read = read_prompt
+
+    async def run_advisory_progress(operation):
+        return await driver.run_advisory_progress(
+            operation,
+            render_advisory_progress_frame,
+        )
+
+    terminal._advisory_progress = run_advisory_progress
     terminal._capability_provider = driver.capabilities
     return terminal
 

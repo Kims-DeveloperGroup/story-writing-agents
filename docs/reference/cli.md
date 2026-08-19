@@ -60,19 +60,22 @@ unexpected failure. See the [smoke guide](../guides/smoke-test.md).
 ## Codex defaults and model override
 
 Every installed command that constructs an `AgentBackend` validates and
-snapshots the workspace's optional `codex_model` and
-`codex_reasoning_effort` system defaults. A non-null `--codex-model` on
-`story chat` or `story run` overrides the persisted model for that backend;
-omitting the option inherits the persisted model, then the Codex provider
-default. Persisted reasoning similarly falls back to the provider default when
-null. Existing three-key system-default files inherit both provider defaults.
+snapshots both the workspace system defaults and the per-agent configuration.
+For each agent, a non-null `--codex-model` on `story chat` or `story run`
+overrides all persisted model values for that backend; otherwise the agent's
+`codex_model` inherits the workspace `codex_model`, then the Codex provider
+default. Reasoning resolves from the agent's `codex_reasoning_effort`, then the
+workspace system default, then the provider default. Existing three-key
+system-default files remain valid and provide no model/reasoning fallback until
+one is configured.
 
 There is no `--codex-reasoning-effort` option or supported public
 system-default save API. Global `/settings` provides the installed interactive
-edit/save workflow; direct edits to the validated five-key JSON document remain
-possible. An active backend and runtime keep their construction-time
-configuration snapshot. Exact fields, validation, and initialization
-compatibility are in
+edit/save workflow; choose `Providers`, then an agent, then `Model` or
+`Reasoning effort` to edit per-agent Codex settings. Direct edits to the
+validated JSON documents remain possible. An active backend and runtime keep
+their construction-time configuration snapshot. Exact fields, validation, and
+initialization compatibility are in
 [Agent configuration](configuration/agent-configuration.md#system-defaults),
 and invocation precedence is in
 [Runtime overrides](configuration/runtime-overrides.md#resolution-precedence).
@@ -108,9 +111,11 @@ The 101st entry evicts only the oldest. Nothing is persisted.
 Main matching is exact and case-sensitive at the cursor, with ASCII space/tab
 token boundaries. Root offers 21 main-available registry tokens, help offers 24
 including the composition-only commands, and agent-valued positions offer the
-10 canonical IDs and aliases; runtime values are not synthesized. Fixed-only
-no-match positions show an empty open palette, while mixed free-value slots
-close it. Filtering retains an eligible highlight. The first changing Tab
+four preferred prompt aliases—`lead`, `plot`, `character`, and `execution`—in
+route order. The parser still accepts all ten declared route aliases; runtime
+values are not synthesized. Fixed-only no-match positions show an empty open
+palette, while mixed free-value slots close it. Filtering retains an eligible
+highlight. The first changing Tab
 saves the full buffer/cursor snapshot; edits in the same grammar position keep
 it, and a grammar-position change resets it. Enter submits only the visible
 buffer to the parser once. The generic single-select picker and cancellable
@@ -118,12 +123,19 @@ prompt seams remain package-internal; `/settings` consumes them without adding
 a supported terminal API.
 
 `/settings` is alias-free, takes no argument, and is available with or without
-an attached session. It first displays immutable Current and Pending sections
-for Language, Persona, Maximum debate rounds, Providers, Codex model, and Codex
-reasoning effort, then an eight-choice editor in this order: those six fields,
-Save, Cancel. Nested Escape returns to the parent without changing that pending
-value; top-level Escape, Cancel, Ctrl-C, or EOF cancels the whole workflow
-without writing. `/cancel` is literal model text in the free-text prompt.
+an attached session. It edits isolated Current and Pending snapshots for
+Language, Persona, Maximum debate rounds, and Providers through a six-choice
+editor in this order: those four fields, Save, Cancel. `Providers` opens a
+nested canonical-agent picker, then a Provider/Model/Reasoning effort picker;
+Model and Reasoning edit only that agent and `null`/Inherit falls back to the
+system defaults. Settings pickers and prompts use a transient lifecycle:
+capable streams clear their transient rows before returning, while fallback
+readers omit duplicate synthetic final picker frames. Nested Escape returns to
+the parent silently without a Current/Pending snapshot or cancellation record.
+The controller emits one complete Current/Pending snapshot immediately before
+each Save attempt or whole-flow cancellation. Top-level Escape, Cancel, Ctrl-C,
+or EOF cancels the whole workflow without writing. `/cancel` is literal model
+text in the free-text prompt.
 
 Save validates the complete pending pair, then rejects any exact-byte change to
 either configuration document or any persona-catalog change since opening.
@@ -146,6 +158,18 @@ ordered semantic input views, and composer entry/error/send/discard records use
 semantic notices; no internal generic composer-status site remains. These
 presentation changes do not alter command grammar, established callback/read
 order, or any noninteractive stdout/stderr, JSON, ordering, or exit contract.
+
+During one advisory turn, a capable raw stream may show the terminal-owned
+four-glyph rolling indicator `◐`, `◓`, `◑`, `◒`. The driver clears the active
+cell before each semantic/progress/result write, redraws while the operation is
+pending, and clears and joins both operation and indicator tasks before the
+final, cancelled, or error record. `NO_COLOR` keeps the glyph cycle because it
+removes decorative SGR only. Advisory turns emit no `[routing]` or `[waiting]`
+notice. Callback construction and non-TTY, `TERM=dumb`, non-POSIX, missing, or
+uncertain-capability paths await the operation silently; the installed CLI's
+TTY guard still rejects non-TTY shell entry before this point. An underlying
+operation failure takes precedence over a simultaneous indicator failure;
+indicator-only failures use the existing internal-error path after cleanup.
 
 `/help [COMMAND]` (`/?`), `/status`, `/settings`, and `/session list` are global.
 Session grammar is `/session list | create NAME | open [NAME] | pause`. Explicit

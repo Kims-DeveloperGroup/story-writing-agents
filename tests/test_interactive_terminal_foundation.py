@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import ast
+import asyncio
+import io
 import inspect
 import os
 import pickle
@@ -46,6 +48,7 @@ from story_writing_agents.interactive_terminal._controls import (
     transition_prompt_input,
 )
 from story_writing_agents.interactive_terminal._driver import (
+    AdvisoryProgressError,
     RawTerminalDriver,
     detect_terminal_capabilities,
 )
@@ -78,6 +81,7 @@ from story_writing_agents.interactive_terminal._model import (
     display_character_width,
 )
 from story_writing_agents.interactive_terminal._render import (
+    render_advisory_progress_frame,
     render_component,
     render_input_prompt,
     render_plain,
@@ -422,6 +426,7 @@ class PublicCompatibilityFoundationTests(unittest.TestCase):
             InteractivePromptInput.read_prompt: (
                 ("prompt", positional, required),
                 ("context", keyword, ()),
+                ("transient", keyword, False),
             ),
         }
         for value, expected_shape in expected.items():
@@ -716,6 +721,18 @@ class PureControlFoundationTests(unittest.TestCase):
 
 
 class RenderingFoundationTests(unittest.TestCase):
+    def test_advisory_progress_frames_are_fixed_and_strict(self) -> None:
+        self.assertEqual(
+            tuple(render_advisory_progress_frame(index) for index in range(4)),
+            ("◐", "◓", "◑", "◒"),
+        )
+        for invalid in (True, 1.0, "0", None):
+            with self.subTest(invalid=invalid), self.assertRaises(TypeError):
+                render_advisory_progress_frame(invalid)  # type: ignore[arg-type]
+        for invalid in (-1, 4):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                render_advisory_progress_frame(invalid)
+
     def test_plain_and_ansi_are_one_sanitized_structure_with_local_fixed_sgr(
         self,
     ) -> None:
@@ -1144,6 +1161,188 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
                     ),
                     transition_prompt_input,
                 )
+
+    def _progress_driver(self) -> tuple[RawTerminalDriver, io.StringIO]:
+        """Build a driver whose output can observe progress serialization."""
+
+        output = io.StringIO()
+        driver = RawTerminalDriver(
+            lambda _prompt: "",
+            io.StringIO(),
+            output,
+            transition_line_input,
+            transition_main_input,
+            append_main_input_history,
+        )
+        return driver, output
+
+    def test_advisory_progress_is_silent_for_plain_line_and_callback_terminals(
+        self,
+    ) -> None:
+        async def operation() -> str:
+            return "answer"
+
+        for profile in (CapabilityProfile.PLAIN, CapabilityProfile.LINE):
+            with self.subTest(profile=profile):
+                driver, output = self._progress_driver()
+                with mock.patch.object(
+                    RawTerminalDriver,
+                    "capabilities",
+                    autospec=True,
+                    return_value=capability(profile),
+                ):
+                    result = asyncio.run(
+                        driver.run_advisory_progress(
+                            operation(), render_advisory_progress_frame
+                        )
+                    )
+                self.assertEqual(result, "answer")
+                if profile is CapabilityProfile.PLAIN:
+                    self.assertIn("◐", output.getvalue())
+                    self.assertNotRegex(output.getvalue(), r"\x1b\[[0-9;]*m")
+                else:
+                    self.assertEqual(output.getvalue(), "")
+                self.assertFalse(driver._progress_active)
+
+        callback_output: list[str] = []
+        terminal = InteractiveTerminal(
+            lambda _prompt: "",
+            callback_output.append,
+            width=40,
+        )
+        progress = terminal_facade.InteractiveAdvisoryProgress(terminal)
+        self.assertEqual(
+            asyncio.run(progress.run(operation())),
+            "answer",
+        )
+        self.assertEqual(callback_output, [])
+
+    def test_capable_advisory_progress_orders_frames_and_serializes_writes(
+        self,
+    ) -> None:
+        driver, output = self._progress_driver()
+
+        async def operation() -> str:
+            await asyncio.sleep(0.38)
+            driver.write_text("answer\n")
+            return "done"
+
+        with mock.patch.object(
+            RawTerminalDriver,
+            "capabilities",
+            autospec=True,
+            return_value=capability(CapabilityProfile.ANSI),
+        ):
+            result = asyncio.run(
+                driver.run_advisory_progress(
+                    operation(), render_advisory_progress_frame
+                )
+            )
+        rendered = output.getvalue()
+        self.assertEqual(result, "done")
+        self.assertFalse(driver._progress_active)
+        self.assertIsNone(driver._progress_renderer)
+        positions = tuple(rendered.index(frame) for frame in ("◐", "◓", "◑", "◒"))
+        self.assertEqual(positions, tuple(sorted(positions)))
+        self.assertRegex(rendered, r"\r\x1b\[Kanswer\n\r[◐◓◑◒]")
+        self.assertTrue(rendered.endswith("\r\x1b[K"))
+
+    def test_advisory_progress_preserves_operation_failure_and_wraps_worker_failure(
+        self,
+    ) -> None:
+        driver, _output = self._progress_driver()
+        capable = mock.patch.object(
+            RawTerminalDriver,
+            "capabilities",
+            autospec=True,
+            return_value=capability(CapabilityProfile.ANSI),
+        )
+
+        async def operation_failure() -> str:
+            await asyncio.sleep(0.09)
+            raise ValueError("operation failed")
+
+        with capable, mock.patch.object(
+            RawTerminalDriver,
+            "_clear_progress_frame",
+            autospec=True,
+            side_effect=OSError("clear failed"),
+        ), self.assertRaisesRegex(ValueError, "operation failed"):
+            asyncio.run(
+                driver.run_advisory_progress(
+                    operation_failure(), render_advisory_progress_frame
+                )
+            )
+        self.assertFalse(driver._progress_active)
+
+        async def slow_operation() -> str:
+            await asyncio.sleep(0.3)
+            return "never reached"
+
+        def broken_renderer(frame: int) -> str:
+            if frame:
+                raise RuntimeError("tick failed")
+            return "◐"
+
+        with capable, self.assertRaises(AdvisoryProgressError):
+            asyncio.run(driver.run_advisory_progress(slow_operation(), broken_renderer))
+        self.assertFalse(driver._progress_active)
+        self.assertIsNone(driver._progress_renderer)
+
+        async def quick_operation() -> str:
+            await asyncio.sleep(0.09)
+            return "done"
+
+        with capable, mock.patch.object(
+            RawTerminalDriver,
+            "_draw_progress_frame",
+            autospec=True,
+            side_effect=OSError("initial draw failed"),
+        ), self.assertRaises(AdvisoryProgressError):
+            asyncio.run(
+                driver.run_advisory_progress(
+                    quick_operation(), render_advisory_progress_frame
+                )
+            )
+
+        class FailingOutput(io.StringIO):
+            def write(self, text: str) -> int:
+                if text == "answer\n":
+                    raise OSError("payload write failed")
+                return super().write(text)
+
+        failing_driver = RawTerminalDriver(
+            lambda _prompt: "",
+            io.StringIO(),
+            FailingOutput(),
+            transition_line_input,
+            transition_main_input,
+            append_main_input_history,
+        )
+
+        async def write_failure() -> str:
+            await asyncio.sleep(0.09)
+            failing_driver.write_text("answer\n")
+            return "unreachable"
+
+        with capable, self.assertRaisesRegex(OSError, "payload write failed"):
+            asyncio.run(
+                failing_driver.run_advisory_progress(
+                    write_failure(), render_advisory_progress_frame
+                )
+            )
+
+        with capable, mock.patch.object(
+            RawTerminalDriver,
+            "_clear_progress_frame",
+            autospec=True,
+            side_effect=OSError("final clear failed"),
+        ), self.assertRaises(AdvisoryProgressError):
+            asyncio.run(
+                driver.run_advisory_progress(
+                    quick_operation(), render_advisory_progress_frame
+                )
+            )
 
     def test_stream_factory_builds_one_terminal_around_one_driver(self) -> None:
         driver = mock.Mock(spec=RawTerminalDriver)

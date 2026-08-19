@@ -714,12 +714,8 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
         )
 
         rendered = "".join(callbacks.records)
-        self.assertIn(
-            "[routing] One-shot route to plot_architect; sticky target "
-            "remains lead_orchestrator. Direct routing selects the responder "
-            "in this shared room; it does not make the turn private.\n",
-            rendered,
-        )
+        self.assertNotIn("[routing] One-shot route", rendered)
+        self.assertNotIn("[waiting] ", rendered)
         self.assertIn("lead [completed]> lead reply\\x1b\n", rendered)
         self.assertNotIn("lead reply\x1b", rendered)
         main_prompts = [
@@ -741,6 +737,8 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
     def test_disclosure_waiting_result_truncation_and_sanitization_are_ordered(
         self,
     ) -> None:
+        raw_reply = '{"answer":"界", "items":[1, true]}'
+
         def result(
             session_id: str,
             conversation_id: str,
@@ -751,7 +749,7 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
                 session_id,
                 conversation_id,
                 agent_id,
-                "first line\nsecond\x1bline",
+                raw_reply,
                 context=_truncated_context(session_id, conversation_id),
             )
 
@@ -774,20 +772,18 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
         self.assertEqual(controller.run_session_lobby(), 0)
 
         self.assertEqual(len(records_at_call), 1)
-        self.assertTrue(records_at_call[0][-2].startswith("[routing] "))
-        self.assertEqual(
-            records_at_call[0][-1],
-            "[waiting] Lead Orchestrator is responding; Ctrl-C cancels "
-            "this turn.\n",
+        self.assertFalse(
+            any(
+                "[routing] " in record or "[waiting] " in record
+                for record in records_at_call[0]
+            )
         )
         rendered = "".join(callbacks.records)
-        routing_index = rendered.index("[routing] ")
-        waiting_index = rendered.index("[waiting] ")
         truncation_index = rendered.index("[context] [completed] [warning]")
-        reply_index = rendered.index("lead [completed]> first line")
-        self.assertLess(routing_index, waiting_index)
-        self.assertLess(waiting_index, truncation_index)
+        reply_index = rendered.index('lead [completed]> {')
         self.assertLess(truncation_index, reply_index)
+        self.assertNotIn("[routing] ", rendered)
+        self.assertNotIn("[waiting] ", rendered)
         self.assertIn(
             "[context] [completed] [warning]\n"
             "  Context truncated: 4 events retained across 2 turns; "
@@ -795,8 +791,14 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
             rendered,
         )
         self.assertIn(
-            "lead [completed]> first line\n"
-            "                  second\\x1bline\n",
+            '"answer": "界",\n'
+            '                    "items": [\n'
+            '                      1,\n'
+            '                      true\n',
+            rendered,
+        )
+        self.assertNotIn(
+            'lead [completed]> {"answer":"界", "items":[1, true]}',
             rendered,
         )
         self.assertNotIn("\x1b", rendered)
@@ -861,7 +863,7 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
                 conversation_id=conversation_id,
                 turn_id=turn_id,
                 agent_id=agent_id,
-                content="cited answer",
+                content='{"answer":"界","ok":true}',
                 context=_empty_context(),
                 sources=(
                     ConversationRetrievalSource(
@@ -913,7 +915,9 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
             "[context] [completed]\n"
             "  Retrieval read action 2 completed: 2 turns; 4 events; "
             "654 observation bytes; truncated: no.\n",
-            "lead [completed]> cited answer\n",
+            '"answer": "界",\n'
+            '                    "ok": true\n'
+            '                  }\n',
             "[context] Source 1 [completed]\n"
             "  Subject: Conversation source\n"
             "  Conversation: source_conversation\n",

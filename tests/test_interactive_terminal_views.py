@@ -35,6 +35,7 @@ from story_writing_agents.interactive_terminal._model import (
     TerminalCapabilities,
 )
 from story_writing_agents.interactive_terminal._render import (
+    format_agent_reply_content,
     render_component,
     render_plain,
     strip_decorative_sgr,
@@ -148,6 +149,73 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
         )
         self.assertEqual(InteractiveSemanticOutput.__slots__, ("_write",))
 
+        self.assertIs(
+            terminal_facade.format_agent_reply_content,
+            format_agent_reply_content,
+        )
+        self.assertNotIn("format_agent_reply_content", terminal_facade.__all__)
+        self.assertFalse(hasattr(story_writing_agents, "format_agent_reply_content"))
+
+    def test_agent_reply_formatter_pretty_prints_only_strict_json_containers(
+        self,
+    ) -> None:
+        object_source = '{"z": "界", "a": [1, true]}'
+        array_source = '[{"b":2,"a":1}, "é"]'
+        self.assertEqual(
+            format_agent_reply_content(object_source),
+            '{\n'
+            '  "z": "界",\n'
+            '  "a": [\n'
+            '    1,\n'
+            '    true\n'
+            '  ]\n'
+            '}',
+        )
+        self.assertEqual(
+            format_agent_reply_content(array_source),
+            '[\n'
+            '  {\n'
+            '    "b": 2,\n'
+            '    "a": 1\n'
+            '  },\n'
+            '  "é"\n'
+            ']',
+        )
+
+        for source in (
+            "42",
+            "true",
+            "null",
+            "NaN",
+            "Infinity",
+            "-Infinity",
+            '{"a": 1, "a": 2}',
+            '{not json}',
+            'prefix {"a": 1}',
+        ):
+            with self.subTest(source=source):
+                self.assertIs(format_agent_reply_content(source), source)
+
+    def test_agent_reply_rendering_uses_bold_sgr_and_plain_no_color(self) -> None:
+        source = '{"message":"界"}'
+        component = Message(
+            "plot",
+            format_agent_reply_content(source),
+            role=SemanticRole.AGENT,
+            state=ViewState.COMPLETED,
+        )
+        ansi = render_component(
+            component,
+            _capability(CapabilityProfile.ANSI, width=80),
+        )
+        plain = render_component(
+            component,
+            _capability(CapabilityProfile.PLAIN, width=80),
+        )
+        self.assertTrue(ansi.text.startswith("\x1b[1mplot [completed]> {"))
+        self.assertNotIn("\x1b", plain.text)
+        self.assertIn('  "message": "界"', plain.text)
+
     def test_adapter_construction_is_resource_free_and_each_call_writes_once(
         self,
     ) -> None:
@@ -260,8 +328,8 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
             "\x1b[1mStatus\x1b[0m\n"
             "  Workspace: /stories/界\n"
             "\x1b[33m  [warning] Unsafe\\x1b[31m text\x1b[0m\n"
-            "\x1b[34m  plot [completed]> Line one\x1b[0m\n"
-            "\x1b[34m                    line two\x1b[0m\n"
+            "\x1b[1m  plot [completed]> Line one\x1b[0m\n"
+            "\x1b[1m                    line two\x1b[0m\n"
             "\x1b[32m  [debate_1] Consensus [completed] [success]\x1b[0m\n"
             "\x1b[32m    Done.\x1b[0m",
         )

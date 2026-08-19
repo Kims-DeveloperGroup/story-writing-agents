@@ -241,9 +241,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   included-context event list to provider payloads only when present; absent
   and fresh context requests retain the exact context-free payload. At
   construction it validates and snapshots the complete workspace system and
-  per-agent configuration once, resolves a non-null explicit model over the
-  persisted model, and retains the persisted reasoning effort and provider
-  routes for the backend lifetime. Optional
+  per-agent configuration once and retains any non-null explicit model
+  separately. Each bound Codex invocation resolves that explicit model over
+  its agent model and then the legacy system model, while reasoning resolves
+  from the agent and then the legacy system value; provider routes use their
+  existing explicit-over-agent-over-Codex precedence. All values remain fixed
+  for the backend lifetime. Optional
   `--model` and `--config model_reasoning_effort="LEVEL"` arguments are emitted
   in that order immediately after `exec` and before any resume marker; neither
   value changes provider-thread identity, bindings, fingerprints, manifests,
@@ -325,10 +328,12 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Supported surface:** Internal `ConfigManager`, `SystemDefaults`,
   `AgentConfig`, `ResolvedAgentConfig`, immutable roster-complete
   `ConfigurationSnapshot`, and `KNOWN_AGENT_BACKENDS`.
-  `SystemDefaults` retains its established positional fields and adds trailing
-  optional `codex_model` and `codex_reasoning_effort` fields. `ConfigManager`
-  owns the complete five-key system-default schema plus the shared safe-model
-  and fixed reasoning-effort validators. Package-internal
+  `SystemDefaults` retains its established positional fields and trailing
+  optional `codex_model` and `codex_reasoning_effort` fields. `AgentConfig`
+  likewise retains its first three positional fields and adds trailing optional
+  per-agent `codex_model` and `codex_reasoning_effort` fields. `ConfigManager`
+  owns both complete persisted schemas plus the shared safe-model and fixed
+  reasoning-effort validators. Package-internal
   `validate_configuration` validates both persisted documents as one complete
   candidate, `load_configuration_snapshot` reads and publishes one immutable
   pair, and `resolve_from_snapshot` applies live runtime and explicit backend
@@ -483,9 +488,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   `CommandCompletionContext` and `project_command_completion` derive the
   canonical cursor-aware completion grammar, exact replacement spans, stable
   grammar-position identities, and ordered fixed candidates from the same
-  command and route metadata without parsing. Other parser helpers and
-  command-alias maps are internal; agent parsing and canonical validation
-  derive from the route registry. Search and transcript actions extend the
+  command and route metadata without parsing. Agent-valued completion positions
+  project exactly each route's preferred prompt alias in roster order, while
+  all ordered aliases remain valid parser inputs and fuzzy agent suggestions
+  present the preferred alias. Other parser helpers and command-alias maps are
+  internal; agent parsing and canonical validation derive from the route
+  registry. Search and transcript actions extend the
   frozen, slotted `InteractiveAction` with the optional positive
   `start_sequence` field;
   existing action payloads remain compatible. `/search QUERY` and
@@ -562,13 +570,28 @@ every intermediate arrow. The current runtime graph is acyclic.
   directive, routing, advisory, retrieval, consensus, focused-history, list,
   search, and transcript records through the terminal facade's unlisted
   `InteractiveSemanticOutput`; it retains that adapter alongside the same
-  terminal used for input and terminal-owned semantic writers. It also retains
+  terminal used for input and terminal-owned semantic writers. Advisory turns
+  retain the facade's unlisted `InteractiveAdvisoryProgress` adapter and wrap
+  exactly the runtime awaitable instead of emitting persistent routing and
+  waiting notices; the controller owns no indicator glyph, cursor control, or
+  animation task. It also retains
   the facade's resource-free picker and cancellable-prompt adapters for the
-  call-local settings flow. Ordered session,
+  call-local settings flow. Retrieval results and persisted `agent_reply`
+  history/transcript rows use the facade's pure `format_agent_reply_content`
+  projection and agent semantic role without changing the stored event or
+  non-agent content. Ordered session,
   conversation, search, transcript, and focused-history rows use one positioned
   `ListView` containing one `Record` per established callback, so the controller
   owns result counts and interruption boundaries without any remaining
   `write_status` or specialized dense-row call.
+  The settings editor exposes the exact six-row top level Language, Persona,
+  Maximum debate rounds, Providers, Save, and Cancel; Providers selects one
+  roster agent and then its Provider, Model, or Reasoning effort without
+  changing the active backend or runtime snapshot. Editors contain no repeated
+  Current/Pending context panel. The controller emits that complete semantic
+  snapshot exactly once for each Save attempt or whole-flow cancellation;
+  nested Escape returns to its parent without a snapshot or cancellation
+  record.
 - **Direct internal dependencies:** `agents`, `backend`, `cli_context`,
   `conversation_retrieval`, `conversation_search`, `conversations`, `errors`,
   `interactive_commands`, `interactive_controller._conversation_policy`,
@@ -627,7 +650,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   canonical context facts through `select_bounded_conversation_context`, and
   runs one synchronous
   `StoryRuntime.converse_with_retrieval` operation per accepted advisory content
-  turn through the retained Runner. It passes the exact attachment-scoped
+  turn through the retained Runner and terminal-owned progress adapter. It
+  passes the exact attachment-scoped
   service plus a synchronous sink, validates trusted progress/results, and
   constructs fixed progress and ordered source components through the retained
   semantic-output adapter. Before advisory coroutine entry, the established
@@ -800,7 +824,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   redacted `SettingsError`; the exact ordered `SETTINGS_LANGUAGES` and
   `SETTINGS_REASONING_EFFORTS`; `load_settings_state`, `update_language`,
   `update_persona`, `update_max_debate_rounds`, `update_agent_backend`,
-  `update_codex_model`, `update_codex_reasoning_effort`, and
+  `update_agent_codex_model`, `update_agent_codex_reasoning_effort`, and
   `save_settings_state`. The module has no package-facade export.
 - **Direct internal dependencies:** `agents`, `config`, `errors`, and
   `workspace`.
@@ -808,7 +832,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   UTF-8 bytes of both persisted configuration documents, one fully validated
   immutable configuration snapshot, and a safe lexical persona catalog with
   top-level-template precedence. Pure update operations replace only the
-  pending immutable candidate. Saving completely validates that candidate,
+  pending immutable candidate, including one agent's provider, model, or
+  reasoning value at a time. Legacy system model/reasoning values remain
+  unchanged fallback data rather than editable settings. Saving completely
+  validates that candidate,
   rereads both documents and the catalog for exact stale-state detection, and
   performs no write when the candidate is unchanged. Changed documents are
   serialized canonically and atomically replaced through `Workspace` in system-
@@ -840,7 +867,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ViewState` contracts are likewise facade-bound but omitted from `__all__`.
   These bindings support count-aware dense semantic views without changing the
   package-supported surface. The adapter and contracts add no project-root
-  export or raw-resource ownership. Its
+  export or raw-resource ownership. Unlisted package-internal
+  `format_agent_reply_content` shares the pure strict-JSON agent-reply
+  presentation projection with controller-owned semantic records without
+  becoming a supported public export. Its
   unlisted package-internal `build_stream_terminal` factory is the sole real-CLI
   construction boundary and binds trusted semantic input rendering to the sole
   raw driver without exposing renderer or driver details. Unlisted
@@ -863,7 +893,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   resource-free semantic cancellable-line capability for nested settings input;
   callback and stream factories respectively provide deterministic plain and
   sole-driver-backed implementations without changing the exact public
-  `__all__`.
+  `__all__`. Both unlisted input adapters accept an opt-in call-local transient
+  lifecycle used by settings: capable stream construction delegates display
+  clearing to the sole driver, while callback construction omits synthetic
+  picker final frames it cannot erase. Their default route remains unchanged.
+  Unlisted `InteractiveAdvisoryProgress` and `AdvisoryProgressError` bind one
+  advisory-only async progress lifecycle through the same facade: callback and
+  incapable terminals await silently, while stream construction injects the
+  pure fixed-glyph renderer into the sole driver. They do not expand the public
+  `__all__` or expose terminal leaves to the controller.
 - **Direct internal dependencies:** `interactive_terminal._core`.
 - **State, resources, and side effects:** Owns no terminal resource or mutable
   process state. Import deterministically canonicalizes supported public object
@@ -988,7 +1026,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   and an ordinal/label-only selected-outside-window summary;
   `render_picker_fallback` renders the complete numbered list and semantic input
   prompt. Both keep opaque identities internal and preserve equivalent
-  sanitized plain and fixed-ANSI meaning.
+  sanitized plain and fixed-ANSI meaning. `format_agent_reply_content`
+  recognizes only a complete strict JSON object or array, rejects duplicate
+  object keys and non-finite constants, and preserves key order and Unicode in
+  a two-space-indented projection; malformed JSON, scalars, embedded prose, and
+  every other string return exactly unchanged. The fixed `AGENT` role is bold
+  terminal-default foreground with the same plain meaning and local reset.
+  `render_advisory_progress_frame` projects the fixed one-cell `◐`, `◓`,
+  `◑`, and `◒` cycle without ANSI, cursor controls, dynamic content, or
+  state.
 - **Direct internal dependencies:** `interactive_terminal._model`.
 - **State, resources, and side effects:** Pure projections only. Dynamic text
   is sanitized before wrapping or fixed styling; the module writes and flushes
@@ -1027,6 +1073,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   generic single-select lifecycle that does not reuse editable-line state. The
   driver provides one-write output, redraws on the full immutable main-command
   or picker control state, and normalizes established editing and picker keys.
+  Its optional per-read transient flag clears capable picker and cancellable
+  prompt rows on completion or cancellation before returning the typed outcome;
+  line fallback cannot erase and instead omits the duplicate picker final
+  frame. The default retains the established final-frame behavior. Supported
+  package-internal `run_advisory_progress` accepts one awaitable and injected
+  fixed-glyph renderer, awaits silently without raw cursor capability, and on a
+  capable stream joins the operation with one indicator task. Internal
+  `AdvisoryProgressError` distinguishes indicator failure from provider failure
+  for controller cleanup.
 - **Direct internal dependencies:** `interactive_terminal._model`.
 - **State, resources, and side effects:** Sole owner of borrowed input/output
   streams, independent capability checks, detected width, normalized physical
@@ -1048,7 +1103,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   width once per read, uses the plain projection for fallback and cursor
   measurement, and emits the trusted styled projection only on its live path.
   Construction performs no stream access or terminal mutation, and history is
-  never persisted. Missing, uncertain, non-TTY,
+  never persisted. During one advisory operation the same driver alone retains
+  the active frame and renderer, creates and joins the call-local animation
+  task on the controller's existing event loop, serializes persistent writes by
+  clearing and redrawing the indicator, cancels and joins the peer task after a
+  worker or operation failure, and clears all indicator state before returning.
+  It creates no OS thread or import-time task. Missing, uncertain, non-TTY,
   non-POSIX, or `TERM=dumb` capability safely uses ordinary line input, while
   `NO_COLOR` affects decorative SGR only.
 - **Primary verification/documentation:**
@@ -1078,9 +1138,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   conversation-list, search-hit, and transcript-event writers construct
   semantic components; `InteractiveSemanticOutput` binds the same private
   component writer so controller-owned components share the identical
-  render-and-one-write path. Composition opening, rejection, send, and discard
-  events plus invalid-confirmation hints use the semantic component path; the
-  generic status writer has no remaining internal composer call site. The core
+  render-and-one-write path. The specialized agent writer applies the pure
+  strict-JSON reply projection before constructing its semantic message, and
+  the core binds that formatter through the facade for controller-owned
+  retrieval and persisted reply records. Composition opening, rejection, send,
+  and discard events plus invalid-confirmation hints use the semantic component
+  path; the generic status writer has no remaining internal composer call site.
+  The core
   constructs ordered structured composition and confirmation input views and
   maps their pure control outcomes without changing public result contracts.
   Its package-internal command-completion adapter translates canonical command
@@ -1099,7 +1163,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   collaborators. Resource-free `InteractivePromptInput` constructs one existing
   `InputPromptView` and returns typed commit, nested-cancel, interrupt, or EOF;
   callback and stream construction bind it to plain or driver-owned input
-  without adding a component kind or raw resource owner.
+  without adding a component kind or raw resource owner. Both adapters accept a
+  validated opt-in transient flag and pass it only to collaborators that support
+  that lifecycle; default calls retain the established picker final frame and
+  prompt behavior, while transient callback pickers omit the duplicate final
+  frame. Resource-free `InteractiveAdvisoryProgress` binds the terminal's
+  advisory awaitable wrapper: callback construction remains visually silent,
+  and stream construction injects the pure fixed-glyph renderer into the sole
+  driver without exposing capabilities or streams.
 - **Direct internal dependencies:** `agents`, `interactive_commands`,
   `interactive_terminal._controls`, `interactive_terminal._driver`,
   `interactive_terminal._model`, and `interactive_terminal._render`.
@@ -1108,7 +1179,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   and an explicit width but inspect no stream and acquire no resource.
   Stream-factory instances delegate all raw terminal state, width detection,
   keys, writes, flushes, restoration, readiness, incremental decoding, and the
-  bounded process-local main-input history store to one driver. Main completion,
+  bounded process-local main-input history store plus advisory indicator task
+  and cleanup to one driver. Main completion,
   palette, and composition providers plus semantic
   input renderers are selected per call and never retained by that driver;
   composition, confirmation, cancellable prompt, and picker input are history-
@@ -1356,14 +1428,15 @@ every intermediate arrow. The current runtime graph is acyclic.
 ## Consistency Notes
 
 - `Workspace` initializes the canonical five-key system-default document but
-  never rewrites an existing one. `ConfigManager` owns full schema validation
-  and the shared Codex model/reasoning validators plus immutable complete
-  system-and-agent snapshots. Each `AgentBackend` validates and snapshots those
-  workspace-wide values once at construction, applies a
-  non-null explicit model over the persisted model, and alone projects the
-  resolved optional values into invocation-scoped Codex arguments. No model or
-  reasoning value enters agent configuration, bindings, fingerprints, thread
-  keys, lifecycle artifacts, request payloads, or active-backend refresh. A
+  never rewrites an existing one. `ConfigManager` owns full system and per-agent
+  schema validation and the shared Codex model/reasoning validators plus
+  immutable complete snapshots. Each `AgentBackend` validates and snapshots
+  those values once at construction and alone projects the per-bound-agent
+  invocation settings: a non-null explicit model precedes the per-agent and
+  legacy system model, while per-agent reasoning precedes the legacy system
+  value. Provider routing retains explicit-over-agent-over-Codex precedence.
+  Model and reasoning values do not enter bindings, fingerprints, thread keys,
+  lifecycle artifacts, request payloads, or active-backend refresh. A
   backend-bound `StoryRuntime` and its `PromptAssembler` reuse that same
   construction-time snapshot for provider routes, language, persona, and round
   defaults while session and explicit overrides remain live; settings saves
@@ -1376,7 +1449,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   settings unit has no controller, terminal, backend, runtime, or parser edge.
 - `interactive_commands` owns canonical command and agent-route metadata, parse
   rules, typed parsed actions, and the pure cursor-aware completion grammar and
-  replacement spans derived from that same metadata. `interactive_line_editor`
+  replacement spans derived from that same metadata. Agent-valued completion
+  and fuzzy guidance expose only preferred prompt aliases in roster order while
+  parsing retains every accepted route alias. `interactive_line_editor`
   preserves its legacy main suggestion projection while delegating actual main
   reads to the shared selectable terminal route; `_controls` owns the fixed
   ordered `/send`, `/cancel` composition projection. The facade delegates all
@@ -1386,17 +1461,31 @@ every intermediate arrow. The current runtime graph is acyclic.
   `_core` consumes public `COMMANDS` and `AGENT_ROUTES` metadata plus canonical
   display names to coordinate safe presentation and explicit ordinary, main,
   composition, and confirmation reader routing. `_model`, `_controls`, and
-  `_render` remain pure; `_driver` alone owns raw streams, capabilities,
+  `_render` remain pure. `_render` alone recognizes complete strict JSON
+  object/array agent replies for two-space Unicode-preserving presentation and
+  owns the bold terminal-default `AGENT` decoration; terminal `_core` and
+  controller facade consumers apply that projection only at presentation, so
+  provider results and stored conversation events remain unchanged. `_driver`
+  alone owns raw streams, capabilities,
   functional cursor
   controls, width, key decoding, writes, flushes, restoration, and one bounded
   process-local main-input history store, fixed 50-millisecond Escape readiness
-  lookahead, and call-local incremental decoder. It receives completion,
+  lookahead, and call-local incremental decoder. For advisory progress it also
+  exclusively owns the active glyph state, operation/animation task joining,
+  cursor clear/redraw writes, and cleanup; `_render` supplies only the pure
+  injected four-glyph projection, and incapable or callback terminals remain
+  visually silent. It receives completion,
   palette, preview, and trusted semantic input collaborators only per read,
   resets navigation for each main read, and keeps composition and confirmation
   reads history-free. Cancellable settings prompt input is also history- and
   completion-free: `_controls` owns its pure Escape outcome, `_core` binds the
   resource-free facade adapter, and the sole driver owns its raw/fallback input
-  and restoration. It also owns the dedicated picker lifecycle, observes
+  and restoration. Settings alone opts into transient picker/prompt reads: the
+  driver clears capable live rows before returning, callback/line fallback
+  omits only duplicate picker final frames, and the controller owns one complete
+  Current/Pending snapshot at each Save attempt or whole-flow cancellation.
+  Nested Escape emits no snapshot, and default non-settings control behavior is
+  unchanged. The driver also owns the dedicated picker lifecycle, observes
   picker width on each redraw, and keeps picker input separate from editable
   line, history, and completion state. `_controls` supplies immutable history,
   selectable palette, composer, confirmation, and generic picker transitions:
@@ -1411,6 +1500,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   exposes an unlisted typed semantic-output adapter and closed component
   bindings, including `ListView`, for package consumers without expanding
   `__all__`; controller code imports only that facade, never a terminal leaf.
+  The same facade exposes unlisted advisory progress and error bindings: the
+  controller brackets exactly one advisory runtime awaitable without owning
+  animation mechanics, and the driver removes the indicator before result,
+  cancellation, or failure presentation. Persistent advisory routing and
+  waiting records are intentionally absent.
   Counted session, conversation, search, transcript, and history output uses
   one positioned one-record list and one component write for each established
   row callback, preserving partial-output and cancellation boundaries.

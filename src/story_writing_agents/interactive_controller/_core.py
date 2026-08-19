@@ -29,6 +29,7 @@ from ..conversations import (
     ConversationCatalog,
     ConversationContextWindow,
     ConversationEvent,
+    ConversationEventKind,
     ConversationMetadata,
     ConversationStatus,
     normalize_conversation_subject,
@@ -62,13 +63,16 @@ from ..interactive_settings import (
     load_settings_state,
     save_settings_state,
     update_agent_backend,
-    update_codex_model,
-    update_codex_reasoning_effort,
+    update_agent_codex_model,
+    update_agent_codex_reasoning_effort,
     update_language,
     update_max_debate_rounds,
     update_persona,
 )
 from ..interactive_terminal import (
+    AdvisoryProgressError,
+    InteractiveAdvisoryProgress,
+    format_agent_reply_content,
     AttachmentKind,
     Choice,
     ComposeMode,
@@ -209,6 +213,7 @@ class InteractiveController:
         "_last_started_debate_by_session",
         "_picker_input",
         "_prompt_input",
+        "_advisory_progress",
         "_runner",
         "_runtime",
         "_semantic_output",
@@ -253,6 +258,7 @@ class InteractiveController:
         self._semantic_output = InteractiveSemanticOutput(terminal)
         self._picker_input = InteractivePickerInput(terminal)
         self._prompt_input = InteractivePromptInput(terminal)
+        self._advisory_progress = InteractiveAdvisoryProgress(terminal)
         resolved_catalog = (
             FilesystemConversationCatalog(workspace)
             if conversation_catalog is None
@@ -1064,15 +1070,10 @@ class InteractiveController:
             Choice("persona", "Persona"),
             Choice("max_debate_rounds", "Maximum debate rounds"),
             Choice("providers", "Providers"),
-            Choice("codex_model", "Codex model"),
-            Choice("codex_reasoning_effort", "Codex reasoning effort"),
             Choice("save", "Save"),
             Choice("cancel", "Cancel"),
         )
         while True:
-            self._semantic_output.write_component(
-                self._settings_panel(state)
-            )
             outcome = self._picker_input.read_picker(
                 Prompt(
                     "Settings",
@@ -1080,20 +1081,30 @@ class InteractiveController:
                 ),
                 choices,
                 highlighted_id=top_highlight,
+                transient=True,
             )
             if outcome.kind in {
                 ControlOutcomeKind.CANCEL,
                 ControlOutcomeKind.INTERRUPT,
                 ControlOutcomeKind.EOF,
             }:
+                self._semantic_output.write_component(
+                    self._settings_panel(state)
+                )
                 self._write_settings_cancelled()
                 return
             selected = self._require_settings_commit(outcome)
             top_highlight = selected
             if selected == "cancel":
+                self._semantic_output.write_component(
+                    self._settings_panel(state)
+                )
                 self._write_settings_cancelled()
                 return
             if selected == "save":
+                self._semantic_output.write_component(
+                    self._settings_panel(state)
+                )
                 try:
                     save_settings_state(self._workspace, state)
                 except SettingsError as failure:
@@ -1119,6 +1130,9 @@ class InteractiveController:
                 selected,
             )
             if cancelled:
+                self._semantic_output.write_component(
+                    self._settings_panel(state)
+                )
                 self._write_settings_cancelled()
                 return
 
@@ -1137,10 +1151,6 @@ class InteractiveController:
             return self._edit_settings_rounds(state)
         if selected == "providers":
             return self._edit_settings_provider(state)
-        if selected == "codex_model":
-            return self._edit_settings_model(state)
-        if selected == "codex_reasoning_effort":
-            return self._edit_settings_reasoning(state)
         raise _ControllerAbort(
             InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
         )
@@ -1157,6 +1167,7 @@ class InteractiveController:
             tuple(Choice(language, language) for language in SETTINGS_LANGUAGES),
             highlighted_id=pending,
             selected_id=pending,
+            transient=True,
         )
         value, whole_cancel = self._nested_settings_value(outcome)
         if whole_cancel:
@@ -1185,6 +1196,7 @@ class InteractiveController:
             choices,
             highlighted_id=pending,
             selected_id=pending,
+            transient=True,
         )
         value, whole_cancel = self._nested_settings_value(outcome)
         if whole_cancel:
@@ -1209,7 +1221,7 @@ class InteractiveController:
                         state.pending.system_defaults.max_debate_rounds
                     ),
                 ),
-                context=(self._settings_panel(state),),
+                transient=True,
             )
             value, whole_cancel = self._nested_settings_value(outcome)
             if whole_cancel:
@@ -1234,7 +1246,7 @@ class InteractiveController:
         self,
         state: SettingsState,
     ) -> tuple[SettingsState, bool]:
-        """Select one agent and its currently supported provider route."""
+        """Select one agent, then one provider/model/reasoning setting."""
 
         agent_highlight = ROSTER[0]
         while True:
@@ -1248,6 +1260,7 @@ class InteractiveController:
                     for agent_id in ROSTER
                 ),
                 highlighted_id=agent_highlight,
+                transient=True,
             )
             agent_id, whole_cancel = self._nested_settings_value(agent_outcome)
             if whole_cancel:
@@ -1255,65 +1268,108 @@ class InteractiveController:
             if agent_id is None:
                 return state, False
             agent_highlight = agent_id
-            current = state.pending.agent_configs[agent_id].backend
-            provider_outcome = self._picker_input.read_picker(
+            field_outcome = self._picker_input.read_picker(
                 Prompt(
-                    "Provider",
+                    "Agent settings",
                     scope=AGENT_SPECS[agent_id].display_name,
-                    instruction="Choose Codex or return without changing.",
+                    instruction="Choose a provider, model, or reasoning setting.",
                 ),
                 (
-                    Choice(
-                        "codex",
-                        "Codex",
-                        description=(
-                            "Current saved provider."
-                            if current == "codex"
-                            else "Available provider."
-                        ),
-                    ),
-                    Choice(
-                        "gemini",
-                        "Gemini",
-                        description=(
-                            "Current saved provider; choose Codex to remediate."
-                            if current == "gemini"
-                            else "Reserved provider."
-                        ),
-                        enabled=False,
-                        disabled_reason="Provider is not implemented.",
-                    ),
+                    Choice("provider", "Provider"),
+                    Choice("model", "Model"),
+                    Choice("reasoning", "Reasoning effort"),
                 ),
-                highlighted_id="codex",
-                selected_id=(None if current == "gemini" else "codex"),
+                highlighted_id="provider",
+                transient=True,
             )
-            provider, whole_cancel = self._nested_settings_value(
-                provider_outcome
-            )
+            field, whole_cancel = self._nested_settings_value(field_outcome)
             if whole_cancel:
                 return state, True
-            if provider is None:
-                continue
-            return update_agent_backend(state, agent_id, provider), False
+            if field is None:
+                return state, False
+            if field == "provider":
+                state, whole_cancel = self._edit_settings_agent_provider(
+                    state,
+                    agent_id,
+                )
+            elif field == "model":
+                state, whole_cancel = self._edit_settings_agent_model(
+                    state,
+                    agent_id,
+                )
+            else:
+                state, whole_cancel = self._edit_settings_agent_reasoning(
+                    state,
+                    agent_id,
+                )
+            if whole_cancel:
+                return state, True
+            return state, False
 
-    def _edit_settings_model(
+    def _edit_settings_agent_provider(
         self,
         state: SettingsState,
+        agent_id: str,
     ) -> tuple[SettingsState, bool]:
-        """Read an exact Codex model or clear it with an empty commit."""
+        """Edit one agent's provider while preserving Gemini values on cancel."""
+
+        current = state.pending.agent_configs[agent_id].backend
+        outcome = self._picker_input.read_picker(
+            Prompt(
+                "Provider",
+                scope=AGENT_SPECS[agent_id].display_name,
+                instruction="Choose Codex or return without changing.",
+            ),
+            (
+                Choice(
+                    "codex",
+                    "Codex",
+                    description=(
+                        "Current saved provider."
+                        if current == "codex"
+                        else "Available provider."
+                    ),
+                ),
+                Choice(
+                    "gemini",
+                    "Gemini",
+                    description=(
+                        "Current saved provider; choose Codex to remediate."
+                        if current == "gemini"
+                        else "Reserved provider."
+                    ),
+                    enabled=False,
+                    disabled_reason="Provider is not implemented.",
+                ),
+            ),
+            highlighted_id="codex",
+            selected_id=(None if current == "gemini" else "codex"),
+            transient=True,
+        )
+        provider, whole_cancel = self._nested_settings_value(outcome)
+        if whole_cancel or provider is None:
+            return state, whole_cancel
+        return update_agent_backend(state, agent_id, provider), False
+
+    def _edit_settings_agent_model(
+        self,
+        state: SettingsState,
+        agent_id: str,
+    ) -> tuple[SettingsState, bool]:
+        """Read one agent's exact Codex model or clear it with blank input."""
 
         while True:
-            current = state.pending.system_defaults.codex_model
+            current = state.pending.agent_configs[agent_id].codex_model
             outcome = self._prompt_input.read_prompt(
                 Prompt(
-                    "Codex model",
-                    scope="settings",
+                    "Model",
+                    scope=AGENT_SPECS[agent_id].display_name,
                     instruction=(
-                        "Enter an exact model or leave blank for provider default."
+                        "Enter an exact model or leave blank to inherit the system setting."
                     ),
-                    default=current or "provider default",
+                    default=current or "inherit",
                 ),
-                context=(self._settings_panel(state),),
+                transient=True,
             )
             value, whole_cancel = self._nested_settings_value(outcome)
             if whole_cancel:
@@ -1321,30 +1377,33 @@ class InteractiveController:
             if value is None:
                 return state, False
             try:
-                return update_codex_model(
+                return update_agent_codex_model(
                     state,
+                    agent_id,
                     None if value == "" else value,
                 ), False
             except ConfigurationError:
                 self._write_settings_validation(
-                    "Codex model must be safe nonempty text, or blank for default."
+                    "Codex model must be safe nonempty text, or blank to inherit."
                 )
 
-    def _edit_settings_reasoning(
+    def _edit_settings_agent_reasoning(
         self,
         state: SettingsState,
+        agent_id: str,
     ) -> tuple[SettingsState, bool]:
-        """Select one fixed Codex reasoning level or provider default."""
+        """Select one agent's fixed reasoning level or inherited system value."""
 
-        pending = state.pending.system_defaults.codex_reasoning_effort
+        pending = state.pending.agent_configs[agent_id].codex_reasoning_effort
         selected = "default" if pending is None else pending
         outcome = self._picker_input.read_picker(
             Prompt(
-                "Codex reasoning effort",
-                instruction="Choose provider default or one fixed effort level.",
+                "Reasoning effort",
+                scope=AGENT_SPECS[agent_id].display_name,
+                instruction="Choose inheritance or one fixed effort level.",
             ),
             (
-                Choice("default", "Provider default"),
+                Choice("default", "Inherit"),
                 *tuple(
                     Choice(effort, effort)
                     for effort in SETTINGS_REASONING_EFFORTS
@@ -1352,14 +1411,16 @@ class InteractiveController:
             ),
             highlighted_id=selected,
             selected_id=selected,
+            transient=True,
         )
         value, whole_cancel = self._nested_settings_value(outcome)
         if whole_cancel:
             return state, True
         if value is None:
             return state, False
-        return update_codex_reasoning_effort(
+        return update_agent_codex_reasoning_effort(
             state,
+            agent_id,
             None if value == "default" else value,
         ), False
 
@@ -1420,14 +1481,6 @@ class InteractiveController:
                     str(defaults.max_debate_rounds),
                 ),
                 Field("Providers", providers),
-                Field(
-                    "Codex model",
-                    defaults.codex_model or "provider default",
-                ),
-                Field(
-                    "Codex reasoning effort",
-                    defaults.codex_reasoning_effort or "provider default",
-                ),
             )
 
         return Panel(
@@ -1874,7 +1927,16 @@ class InteractiveController:
                         Field("Recipient", event.recipient),
                         Field("Content", ""),
                     ),
-                    content=event.content,
+                    content=(
+                        format_agent_reply_content(event.content)
+                        if event.kind is ConversationEventKind.AGENT_REPLY
+                        else event.content
+                    ),
+                    role=(
+                        SemanticRole.AGENT
+                        if event.kind is ConversationEventKind.AGENT_REPLY
+                        else SemanticRole.DEFAULT
+                    ),
                     state=ViewState.COMPLETED,
                 ),
                 position=position,
@@ -2108,29 +2170,10 @@ class InteractiveController:
         if action.kind is ActionKind.ROUTED_MESSAGE:
             assert action.agent_id is not None
             agent_id = action.agent_id
-            routing = (
-                f"One-shot route to {agent_id}; sticky target remains "
-                f"{self._target_agent_id}. "
-            )
         else:
             assert action.kind is ActionKind.MESSAGE
             agent_id = self._target_agent_id
-            routing = f"Routing this turn to {agent_id}. "
         display_name = AGENT_SPECS[agent_id].display_name
-        routing += (
-            "Direct routing selects the responder in this shared room; "
-            "it does not make the turn private."
-        )
-        self._write_notice(
-            routing,
-            label="routing",
-            state=ViewState.COMPLETED,
-        )
-        self._write_notice(
-            f"{display_name} is responding; Ctrl-C cancels this turn.",
-            label="waiting",
-            state=ViewState.LOADING,
-        )
 
         memory_service = self._conversation_memory_service
         if type(memory_service) is not ConversationMemoryService:
@@ -2190,8 +2233,9 @@ class InteractiveController:
                 InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
             )
         operation_coroutine = run_joined_advisory_operation()
+        progress_coroutine = self._advisory_progress.run(operation_coroutine)
         try:
-            result = runner.run(operation_coroutine)
+            result = runner.run(progress_coroutine)
         except KeyboardInterrupt:
             if progress_callback_failure is not None:
                 raise _ControllerAbort(
@@ -2236,6 +2280,10 @@ class InteractiveController:
                     progress_callback_failure or exc.__cause__ or exc
                 )
             ) from None
+        except AdvisoryProgressError:
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            ) from None
         except Exception as exc:
             if progress_callback_failure is not None:
                 raise _ControllerAbort(
@@ -2248,6 +2296,7 @@ class InteractiveController:
         finally:
             if not operation_entered:
                 operation_coroutine.close()
+                progress_coroutine.close()
 
         try:
             result = validate_conversation_retrieval_result(
@@ -2290,7 +2339,7 @@ class InteractiveController:
         self._semantic_output.write_component(
             Message(
                 _AGENT_PROMPT_ALIASES[agent_id],
-                result.content,
+                format_agent_reply_content(result.content),
                 role=SemanticRole.AGENT,
                 state=ViewState.COMPLETED,
             )
@@ -3132,7 +3181,16 @@ class InteractiveController:
                             Field("Recipient", event.recipient),
                             Field("Content", ""),
                         ),
-                        content=event.content,
+                        content=(
+                            format_agent_reply_content(event.content)
+                            if event.kind is ConversationEventKind.AGENT_REPLY
+                            else event.content
+                        ),
+                        role=(
+                            SemanticRole.AGENT
+                            if event.kind is ConversationEventKind.AGENT_REPLY
+                            else SemanticRole.DEFAULT
+                        ),
                         state=ViewState.COMPLETED,
                     ),
                     position=position,

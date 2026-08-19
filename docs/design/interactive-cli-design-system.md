@@ -13,9 +13,15 @@
 > #86 integrates line-oriented composition and confirmation with semantic input
 > views and pure controls. #79 adds selectable main-command completion. #87
 > delivers the generic package-internal picker foundation without installing a
-> shell consumer. #94 adds validated persisted workspace-wide Codex model and
-> reasoning defaults. #93 adds the interactive settings workflow, immutable
-> lifecycle configuration snapshots, and guarded persistence. The
+> shell consumer. #94 adds validated persisted workspace Codex fallback model
+> and reasoning defaults. #93 adds the interactive settings workflow, immutable
+> lifecycle configuration snapshots, and guarded persistence. #105 adds
+> presentation-only strict JSON formatting for agent replies and bold
+> terminal-default agent styling. #106 makes settings picker and prompt editors
+> transient without changing non-settings input behavior. The
+> #111 advisory indicator adds one narrow terminal-owned rolling glyph cycle for
+> capable advisory turns; advisory turns no longer emit `[routing]` or
+> `[waiting]` notices. The
 > [interactive terminal reference](../reference/interactive-terminal.md) and
 > [terminal safety rules](../operations/terminal-safety.md) describe current
 > observable behavior.
@@ -28,7 +34,8 @@ semantic model.
 
 The words **must**, **must not**, and **may** below constrain the delivery
 issues. Requirements beyond the implemented #82, #83, #84, #85, #86, #79,
-#87, #94, #93, and #73 slices do not describe current production behavior.
+#87, #94, #93, #105, #106, and #73 slices do not describe current production
+behavior.
 
 ## Delivery status
 
@@ -42,8 +49,11 @@ issues. Requirements beyond the implemented #82, #83, #84, #85, #86, #79,
 | #86 composer/confirmation integration | Implemented: RUN/CHAT composition and yes/no confirmation build ordered semantic input views, render equivalent plain/fixed-ANSI projections at the active width, and use pure history-free controls. Established results, signatures, `/send`, `/cancel`, `/say`, defaults, Ctrl-C, EOF, callback cardinality, and controller/runtime behavior remain unchanged. |
 | #79 selectable completion | Implemented: capable main input projects canonical root, subcommand, and finite fixed-option candidates into a semantic palette. Up/Down moves its clamped highlight, Tab applies the highlighted candidate, Escape restores the first pre-completion snapshot when present and dismisses the exact state, and closed-palette Up/Down retains history behavior. Shift-Tab has no action. |
 | #87 picker foundation | Implemented: package-internal immutable picker/control/viewport state, pure initialization/reconciliation/live/fallback transitions, responsive live/full-list rendering, a dedicated history-free sole-driver lifecycle, and an unlisted resource-free adapter. #93 supplies its first installed consumer. |
-| #94 workspace Codex defaults | Implemented: the closed system-default schema accepts optional workspace-wide Codex model and reasoning values, new workspaces initialize both to null, legacy files remain valid and byte-preserved, and each backend validates and snapshots effective invocation values at construction. |
-| #93 settings UI | Implemented: global alias-free `/settings` edits isolated current/pending snapshots of workspace defaults and per-agent provider choices through shared picker and prompt controls. Save validates an exact opening baseline and persona catalog, writes only changed configuration documents in deterministic order, and attempts reverse exact-byte rollback after a write failure. The workflow adds no supported public save API. |
+| #94 workspace Codex defaults | Implemented: the closed system-default schema accepts optional workspace fallback Codex model and reasoning values, new workspaces initialize both to null, legacy files remain valid and byte-preserved, and each backend validates and snapshots effective invocation values at construction. |
+| #93 settings UI | Implemented: global alias-free `/settings` edits isolated current/pending snapshots of workspace defaults and per-agent provider, model, and reasoning choices through shared picker and prompt controls. Save validates an exact opening baseline and persona catalog, writes only changed configuration documents in deterministic order, and attempts reverse exact-byte rollback after a write failure. The workflow adds no supported public save API. |
+| #105 agent reply presentation | Implemented: direct, retrieval, transcript, and focused-history agent replies use a presentation-only strict JSON object/array projection with exact unchanged fallback cases and two-space Unicode-preserving output; stored/provider content remains unchanged, and the `AGENT` role uses bold terminal-default foreground styling without background detection. |
+| #106 transient settings UI | Implemented: settings-only picker and prompt reads clear capable transient rows, suppress duplicate fallback finals, emit one complete Current/Pending snapshot per Save attempt or whole-flow cancellation, keep nested Escape silent, and preserve default non-settings lifecycles. |
+| #111 advisory progress indicator | Implemented: one advisory-only four-glyph rolling indicator runs only on capable raw streams, including `NO_COLOR`; callback, non-TTY, `TERM=dumb`, and uncertain-capability paths remain silent, and no general animation or `[routing]`/`[waiting]` record is introduced. |
 
 ## Goals and limits
 
@@ -58,11 +68,13 @@ The design must:
 - use only the Python standard library.
 
 This remains a scrollback-friendly, line-oriented CLI, not a full-screen TUI.
-Mouse input, animation, the alternate screen, terminal queries, a
-signal-driven background loop, user-selectable themes, persistent history,
-fuzzy completion, and a full-screen composer are out of scope. Rendering must
-not assume that earlier terminal rows can be revisited after an interaction is
-committed.
+Mouse input, general-purpose animation, the alternate screen, terminal
+queries, a signal-driven background loop, user-selectable themes, persistent
+history, fuzzy completion, and a full-screen composer are out of scope. The
+narrow animated advisory indicator is the sole exception: it is a
+terminal-owned, call-local visual aid for one capable advisory operation, not a
+general animation mechanism. Rendering must not assume that earlier terminal
+rows can be revisited after an interaction is committed.
 
 ## Closed semantic vocabulary
 
@@ -107,7 +119,7 @@ from style, punctuation, or cursor position.
 | `highlighted` | A navigable candidate is the current preview target. Highlighting has no external effect. |
 | `selected` | A choice has been accepted by its control. Selection remains distinct from highlight and precedes the caller's runtime action. |
 | `disabled` | Visible but unavailable for focus, replacement, selection, or commit. Text explains the unavailable choice when needed. |
-| `loading` | Work has started and no terminal result is available yet. The view names the operation without relying on animation. |
+| `loading` | Work has started and no terminal result is available yet. The view names the operation in text; the #111 advisory glyph is optional visual reinforcement, never the only status. |
 | `empty` | A successful read produced no items or content. Empty is not an error. |
 | `error` | The control or operation ended in a trusted, user-visible failure state. |
 | `cancelled` | The interaction ended without commit. Established cancellation consequences remain authoritative. |
@@ -141,6 +153,11 @@ grammar projection with the main transition and semantic palette projection.
 dedicated history-free driver route; it does not reuse editable-line or main
 completion state. #93 consumes that route for `/settings` and adds one
 history-free cancellable prompt route through the same sole driver.
+#111 adds one unlisted advisory-progress adapter to that same driver. It wraps
+exactly one advisory awaitable, draws only on a capable raw stream, clears and
+redraws around persistent output, and joins both the operation and its
+call-local indicator task before returning. It does not add a semantic view,
+callback record, public API, or general animation facility.
 Up/Down navigate history only on capable main reads with a closed palette; an
 open palette consumes them for highlight navigation. Up/Down, Tab, Shift-Tab,
 and Escape remain no-ops for composition and confirmation. Shift-Tab remains a
@@ -267,6 +284,22 @@ discard. Each event and each invalid-confirmation hint remains one render and
 one callback write. The public generic `write_status` method remains for
 compatibility, but no internal composer call site uses it.
 
+### Agent-reply presentation
+
+Agent content is formatted only at the presentation boundary. Direct replies,
+retrieval answers, transcript pages, and focused history pass `agent_reply`
+content through one pure formatter before constructing their semantic message or
+record; provider results, retrieval observations, search data, and stored
+transcript bytes remain unchanged. The formatter accepts only a complete strict
+JSON object or array, rejects duplicate object keys and non-finite constants,
+then emits two-space-indented JSON with source key order and Unicode preserved
+without ASCII escaping. Malformed JSON, embedded prose or extra data, scalar
+JSON values, duplicate keys, non-finite values, and serialization failures are
+returned as the exact original string. The `AGENT` role is bold with
+the terminal-default foreground and never depends on background detection;
+ANSI output adds only a local reset, while plain and `NO_COLOR` output retain
+the same content.
+
 ### Main-command palette and fixed choices
 
 > **Implemented by #79:** capable main reads provide deterministic selectable
@@ -276,12 +309,13 @@ compatibility, but no internal composer call site uses it.
 A leading slash automatically opens `SuggestionPalette` at a recognized
 grammar position. Root candidates are the 21 main-available command tokens in
 registry order. Help offers those 21 plus `/compose`, `/send`, and `/cancel`;
-agent-valued positions expose the 10 canonical IDs and accepted aliases in
-route order. Other implemented finite positions expose their static
-subcommands or options. Runtime values such as session, conversation, debate,
-query, prompt, subject, and file-path text are never candidates. Fixed-only
-positions retain an open empty palette when a prefix has no match; mixed
-fixed/free positions close the palette for a free-value slot.
+agent-valued positions expose the four preferred prompt aliases—`lead`, `plot`,
+`character`, and `execution`—in route order. The parser continues to accept all
+ten declared route aliases. Other implemented finite positions expose their
+static subcommands or options. Runtime values such as session, conversation,
+debate, query, prompt, subject, and file-path text are never candidates.
+Fixed-only positions retain an open empty palette when a prefix has no match;
+mixed fixed/free positions close the palette for a free-value slot.
 
 Candidate and active-token matching are exact and case-sensitive. ASCII space
 and tab alone delimit the cursor-aware replacement span. Completion replaces
@@ -314,9 +348,10 @@ Fixed command arguments are palette candidates only when the existing grammar
 exposes a finite canonical set. They do not add parser rules, authorization,
 runtime actions, or fuzzy matching. Confirmation choices remain owned by the
 confirmation control rather than the main-command palette. Finite choices
-include canonical agent identifiers and accepted aliases for agent-target
-positions when exposed by canonical command-route metadata; the palette
-projects that metadata and does not duplicate parser grammar.
+include the preferred agent prompt aliases for agent-target positions when
+exposed by canonical command-route metadata; all ten declared route aliases
+remain parser-compatible, and the palette does not duplicate those aliases or
+otherwise duplicate parser grammar.
 
 ### Picker semantics
 
@@ -377,12 +412,16 @@ storage, or network code.
 > bytes.
 
 A non-null explicit `AgentBackend(model=...)` or CLI `--codex-model` wins over
-the persisted model, which wins over the provider default. Persisted reasoning
-wins over the provider default; no reasoning CLI or constructor override is
+all persisted model values. Otherwise each agent's optional values in
+`config/agent_configs.json` inherit the corresponding workspace system default
+and then the provider default. No reasoning CLI or constructor override is
 added. Model text is preserved without trimming or catalog lookup and must be
 nonempty, not start with `-`, and contain no Unicode control, format, or
 surrogate character. Reasoning is null or exactly `minimal`, `low`, `medium`,
-`high`, or `xhigh`; actual `xhigh` support is model/provider-dependent.
+`high`, or `xhigh`; actual `xhigh` support is model/provider-dependent. The
+complete system-default and agent-configuration pair is validated and
+snapshotted at backend construction; later saves apply only to the next
+backend.
 
 Every backend validates the complete persisted schema before applying an
 explicit model and snapshots both effective values at construction. The
@@ -400,26 +439,37 @@ preserving those public and lifecycle boundaries.
 > **Implemented by #93:** global alias-free `/settings` provides this
 > interaction and guarded persistence workflow without adding a supported
 > settings/save object API. #87 supplies the generic internal picker foundation,
-> and #94 supplies the validated workspace Codex model/reasoning fields.
+> and #94 supplies the validated workspace Codex fallback model/reasoning
+> fields.
 
 The settings view edits two persistent documents through validated Current and
 Pending configuration snapshots: the `config/system_defaults.json` defaults
 described by
-[Agent configuration](../reference/configuration/agent-configuration.md), and
-the existing per-agent provider selections in `config/agent_configs.json`. The
-system snapshot contains required `language` and `persona`, optional
-`max_debate_rounds`, and the implemented optional workspace Codex
-model/reasoning defaults. Provider selection remains per agent; model and
-reasoning remain workspace defaults. A successful save writes the canonical
-five-key system object. The view does not change identity, thread ownership,
-configuration precedence, or either implemented schema.
+[Agent configuration](../reference/configuration/agent-configuration.md), and the existing
+per-agent provider, model, and reasoning selections in
+`config/agent_configs.json`. The system snapshot contains required `language`
+and `persona`, optional `max_debate_rounds`, and the optional workspace Codex
+fallback model/reasoning values. Provider, model, and reasoning selection is
+per agent. A successful save writes the canonical five-key system object and
+the canonical agent object. The view does not change identity, thread
+ownership, configuration precedence, or either implemented schema.
 
 The presentation uses one `Panel` with `Section`, `Field`, and `Notice` values,
 plus one focused `Picker` or `Prompt`. It is not a new component or a
 general-purpose form abstraction. One section shows validated current values;
-another shows independent pending values, and the active control renders with
-that context. Any implementation need for a new semantic component must first
-revise the closed vocabulary through the repository's modularity process.
+another shows independent pending values. Controls render without the snapshot
+panel; the full Current/Pending panel appears only immediately before Save
+attempts or whole-flow cancellation. The controller keeps the snapshots
+call-local and does not emit
+the Current/Pending panel while opening, navigating, or editing. It emits one
+complete panel immediately before each Save attempt or whole-flow cancellation.
+Nested Escape returns silently to its parent without a snapshot or cancellation
+record. Settings opts into transient picker and prompt reads: capable streams
+clear transient rows before returning, while fallback readers omit duplicate
+synthetic picker final frames. The default non-settings picker and prompt
+lifecycle remains unchanged. Any implementation need for a new semantic
+component must first revise the closed vocabulary through the repository's
+modularity process.
 
 The top-level settings order is exact:
 
@@ -428,8 +478,6 @@ Language
 Persona
 Maximum debate rounds
 Providers
-Codex model
-Codex reasoning effort
 Save
 Cancel
 ```
@@ -439,9 +487,9 @@ Cancel
 | Language | The picker candidates are exactly `KO`, `EN`, `JA`, `ZH`, `ES`, `FR`, `DE`, `PT`, `IT`, `RU`, in that order. A schema-valid existing value outside this UI catalog remains visible and may be preserved, but is not synthesized as a candidate. |
 | Persona | Candidates come only from the existing safe persona-template catalog. Duplicate identifiers resolve with the top-level template taking precedence over `alternative_templates`; the resulting identifiers are ordered lexically. The picker does not read, preview, create, or edit template content. |
 | Maximum debate rounds | A numeric `Prompt` accepts a pending nonnegative integer under the existing validation rule. Blank, negative, fractional, and nonnumeric values produce an inline error `Notice` and retain focus without changing the pending value. `0` remains valid and means audit-only consensus. |
-| Providers | A nested agent picker follows canonical `ROSTER` order, then a provider picker edits only that agent's pending `agent_configs` selection. Codex is enabled. Reserved Gemini is visible but disabled for new selection; a pre-existing Gemini value remains visible and may be preserved or changed to Codex for remediation. The UI neither invents providers nor changes roster identity. |
-| Codex model | A free-text `Prompt` uses the implemented safe-model validator; blank stores null and means the provider default. It performs no network lookup and does not offer a model catalog. |
-| Codex reasoning effort | Picker order is exactly Provider default, `minimal`, `low`, `medium`, `high`, `xhigh`. The implemented schema accepts those exact values; actual `xhigh` support remains model/provider-dependent. The UI does not add a CLI reasoning flag. |
+| Providers | A nested agent picker follows canonical `ROSTER` order, then a Provider/Model/Reasoning effort picker edits only that agent's pending `agent_configs` values. Codex is enabled. Reserved Gemini is visible but disabled for new selection; a pre-existing Gemini value remains visible and may be preserved or changed to Codex for remediation. The UI neither invents providers nor changes roster identity. |
+| Agent Model | A nested free-text `Prompt` uses the implemented safe-model validator; blank stores null and inherits the workspace system model. It performs no network lookup and does not offer a model catalog. |
+| Agent Reasoning effort | A nested picker offers Inherit, `minimal`, `low`, `medium`, `high`, and `xhigh`; Inherit uses the workspace system reasoning value, then the provider default. The UI does not add a CLI reasoning flag. |
 
 Opening the panel reads and validates both current snapshots. Failure to read or
 validate either snapshot, or to enumerate the safe persona catalog, reports
@@ -452,17 +500,19 @@ one control is focused:
 
 - Up/Down moves only the current picker's highlight; highlighting does not edit
   pending values or write configuration.
-- Enter on Language, Persona, Providers, or Codex reasoning effort transfers focus to
-  the corresponding nested picker. Provider editing transfers first to the
-  canonical agent picker and then to that agent's provider picker. Enter
-  updates only the applicable pending value and returns focus to its parent;
+- Enter on Language, Persona, or Providers transfers focus to the corresponding
+  nested picker. Provider editing transfers first to the canonical agent
+  picker, then to that agent's Provider/Model/Reasoning effort picker, and
+  finally to the selected editor. Enter updates only the applicable pending
+  value and returns focus to its parent;
   Escape restores that editor's prior pending value and returns focus without
   a write.
-- Enter on Maximum debate rounds or Codex model transfers focus to its
-  `Prompt`. Valid Enter updates only the pending value and returns focus;
+- Enter on Maximum debate rounds transfers focus to its `Prompt`. Valid Enter
+  updates only the pending value and returns focus;
   invalid Enter leaves the prompt focused with a trusted validation notice.
   Escape restores its prior pending value.
-- Enter on Save validates both complete pending snapshots, then re-reads both
+- Enter on Save emits the one complete Current/Pending panel for that Save
+  attempt, then validates both complete pending snapshots and re-reads both
   persisted documents and the persona catalog before any write. Any exact-byte
   or catalog change from the validated opening baseline fails closed with no
   write. A valid, unchanged baseline crosses the sole mutation boundary: each
@@ -474,7 +524,8 @@ one control is focused:
   cancellation. This is a guarded two-file update, not a global transaction or
   a power-loss-safe transaction across both files.
 - Enter on Cancel, Escape from the top-level settings picker, Ctrl-C, or EOF
-  returns `cancelled` without writing. Opening, navigating, highlighting,
+  returns `cancelled` without writing; the whole-flow cancellation emits its
+  one complete Current/Pending panel. Opening, navigating, highlighting,
   editing, validation preview, nested cancellation, and rerendering likewise
   have no filesystem, runtime, provider, storage, or configuration effect.
 
@@ -484,8 +535,8 @@ snapshot; even later persisted corruption does not reconfigure that lifecycle,
 while the next construction reads and validates the then-persisted pair.
 Session and explicit overrides remain live and higher precedence. Save does not
 mutate an existing provider thread or current identity. The view manages no
-credentials, provider network access, model catalog, per-agent model/reasoning
-override, provider implementation, persona file editing, theme, key binding,
+credentials, provider network access, model catalog, provider implementation,
+persona file editing, theme, key binding,
 or automatic save.
 
 The same current/pending labels, choice identity, validation meaning, disabled
@@ -543,9 +594,10 @@ sanitized text's zero-, one-, and two-cell measurements.
 
 The ANSI policy is intentionally fixed:
 
-- only fixed foreground colors and emphasis may be decorative SGR;
-- backgrounds, dim, blink, OSC, terminal queries, and untrusted control
-  sequences are forbidden;
+- only fixed foreground colors and emphasis may be decorative SGR; the `AGENT`
+  role uses bold with the terminal-default foreground;
+- background detection or selection, backgrounds, dim, blink, OSC, terminal
+  queries, and untrusted control sequences are forbidden;
 - `NO_COLOR` disables decorative SGR only and does not flatten the structured
   layout;
 - each styled span uses a local reset so style cannot bleed into adjacent
@@ -579,6 +631,25 @@ or committed content merely to preserve a wide layout.
 Color is always redundant with words, labels, order, or symbols. Focus,
 highlight, selected, disabled, loading, empty, error, cancelled, and completed
 states remain distinguishable in plain output and under `TERM=dumb`.
+
+### Advisory progress indicator
+
+During one advisory turn, a capable raw stream may show the fixed four-glyph
+cycle `◐`, `◓`, `◑`, `◒` at the active cell. The existing raw driver owns the
+indicator state, clears it before each semantic or provider-result write, and
+redraws it while the operation remains pending. Completion, cancellation, and
+failure join the operation and indicator tasks, then clear the cell before
+their normal records are rendered. `NO_COLOR` retains the same
+glyphs because it disables decorative SGR only; the indicator adds no ANSI
+styling, dynamic text, alternate screen, or background detection.
+
+Callback construction and stream paths without raw capability—including
+non-TTY, `TERM=dumb`, non-POSIX, missing, or uncertain capability—await the
+same advisory operation silently. The installed CLI's TTY guard still rejects
+non-TTY shell entry before controller work. A provider/operation failure wins
+over a simultaneous indicator failure; an indicator-only failure is converted
+to the existing internal error after cleanup. No other view or operation may
+reuse this animation lifecycle.
 
 ## Compatibility contract
 
@@ -625,6 +696,10 @@ Enum names and values remain exact:
 | `TerminalActionKind` | `line`, `send`, `cancel`, `interrupt`, `eof` |
 | `TerminalMessageKind` | `compose`, `session`, `conversation`, `routing`, `context`, `waiting`, `result`, `cancelled`, `hint` |
 | `InteractiveErrorCode` | `tty_required`, `workspace_not_initialized`, `workspace_invalid`, `workspace_unsafe`, `workspace_version_unsupported`, `configuration_invalid`, `command_invalid`, `agent_invalid`, `session_invalid`, `session_exists`, `session_not_found`, `session_not_attached`, `session_paused`, `session_access_blocked`, `session_ownership_unknown`, `conversation_required`, `conversation_invalid`, `conversation_not_found`, `conversation_ambiguous`, `conversation_archived`, `conversation_create_failed`, `transcript_invalid`, `retrieval_invalid`, `retrieval_budget_exhausted`, `provider_preflight_failed`, `provider_exited`, `provider_timed_out`, `provider_protocol_error`, `draft_input_invalid`, `consensus_deadlock`, `consensus_failed`, `artifact_conflict`, `operation_cancelled`, `operation_interrupted`, `cleanup_failed`, `internal_error` |
+
+The `routing` and `waiting` enum values remain compatibility identities for
+their other established uses. The #111 advisory-turn path emits neither label;
+its capable-only indicator is terminal-owned and produces no semantic record.
 
 Dataclass schemas, frozen/slotted behavior, defaults, validation, and positional
 versus keyword-only construction remain exact:
@@ -732,7 +807,7 @@ boundary. Responsibility and dependency direction are fixed as follows:
 | `interactive_terminal.__init__` | Compatibility facade with the exact existing public surface plus package-internal stream construction, semantic output, picker-adapter, and cancellable-prompt seams. It owns no import-time resource or state. |
 | `interactive_terminal._model` | Immutable semantic components, bounded main-history/control state, main-command completion/palette state, composer and picker control state, bounded picker viewport, semantic input/render frames, key/focus values, and transition/render results. No I/O. |
 | `interactive_terminal._controls` | Pure established line-input, main-command/history, composer-line, confirmation-answer, cancellable-prompt, and picker transitions; bounded history; completion projection; picker initialization/reconciliation, disabled-skipping live navigation, exact fallback grammar, and viewport selection. |
-| `interactive_terminal._render` | Pure safe responsive output and semantic input renderers for plain and fixed ANSI profiles, including bounded live and complete-list fallback picker projections. It sanitizes dynamic content before styling and returns render data without writing. |
+| `interactive_terminal._render` | Pure safe responsive output and semantic input renderers for plain and fixed ANSI profiles, including bounded live and complete-list fallback picker projections and the strict JSON agent-reply presentation projection. It sanitizes dynamic content before styling and returns render data without writing. |
 | `interactive_terminal._driver` | Sole owner of raw streams, capability/width detection, incremental byte/key decoding, fixed Escape readiness wait, cursor controls, raw mode, restoration, writes, flushes, and one bounded process-local main-history store per instance. Its supported main, history-free semantic prompt, and dedicated picker routes accept call-local collaborators; settings input does not consult history or completion state. |
 | `interactive_terminal._core` | `InteractiveTerminal`, established public-operation orchestration, semantic composer/confirmation view construction and event mapping, canonical command-completion adapter, package-internal stream factory, semantic render seam, resource-free `InteractiveSemanticOutput`, and unlisted resource-free `InteractivePickerInput` and `InteractivePromptInput`. It binds picker and cancellable-prompt transitions to the sole driver without owning another store/raw implementation. |
 | `interactive_line_editor` | Standalone/public compatibility-only facade over the same supported main-command reader and one per-editor driver/history store. |
@@ -816,11 +891,11 @@ the graph to 33 units.
 | Search results | `ListView`, `Record`, `Field`, `Notice` | Citation, snippet, active/archive state, truncation, empty/error | #84 (implemented) |
 | Transcript | `ListView`, `Record`, `Field`, `Notice` | Event identity/order and LF content boundaries remain intact | #84 (implemented) |
 | Focused history | `ListView`, `Record`, `Field`, `Notice` | Snapshot order, context accounting, empty/cancelled/error | #84 (implemented) |
-| Advisory turns | `Message`, `Notice`, `Field` | Routing, waiting/loading, result, cancelled/completed/error | #83 (implemented) |
+| Advisory turns | `Message`, `Notice`, `Field` | Operation result, cancelled/completed/error; optional capable-only indicator; no `[routing]` or `[waiting]` record | #83 and #111 (implemented) |
 | Retrieval progress and summaries | `Notice`, `Record`, `ListView`, `Field` | Loading, citations/context accounting, result/error/cancelled | #83 (implemented accepted views) |
 | Consensus progress and summaries | `Panel`, `Section`, `Notice`, `Record`, `Field` | Loading, debate identity, result/cancelled/completed/error | #83 (implemented) |
 | Interactive errors and recovery hints | `Notice`, `Field` | Trusted code, redaction, error state, next action, no raw diagnostics | #83 (implemented) |
-| Settings current/pending view | `Panel`, `Section`, `Field`, `Prompt`, `Picker`, `Notice` | Exact top-level order; two current/pending snapshots; disabled provider, validation, error, cancelled, and completed meaning; guarded two-file Save boundary | #93 (implemented) |
+| Settings current/pending view | `Panel`, `Section`, `Field`, `Prompt`, `Picker`, `Notice` | Exact top-level order; one complete Current/Pending snapshot per Save attempt or whole-flow cancellation; nested Escape silent; transient cleanup and fallback no-duplicate-final behavior; disabled provider, validation, error, cancelled, and completed meaning; guarded two-file Save boundary | #93 and #106 (implemented) |
 
 ### Control groups
 
@@ -833,7 +908,7 @@ the graph to 33 units.
 | Main command/subcommand palette | `SuggestionPalette`, `Prompt`, `Notice` | Slash-open, Up/Down clamped highlight, Tab full-token replacement, Escape snapshot restoration and dismissal | #79 (implemented) |
 | Fixed command values | `SuggestionPalette`, `Field` | Canonical finite grammar choices, including metadata-exposed agent IDs/aliases; palette activity has no effects beyond call-local input state | #79 (implemented) |
 | Single-select and selectable-list choices | `Picker`, `ListView`, `Record`, `Notice` | Disabled-skipping clamped Up/Down highlight, Enter commit, Escape cancel, typed interrupt/EOF, bounded live/full fallback rendering, empty/disabled/error | #87 (implemented foundation; `/settings` consumer added by #93) |
-| Settings field and action navigation | `Panel`, `Prompt`, `Picker`, `Field`, `Notice` | Single focus; nested agent/provider and value pickers; text/numeric editors; explicit Save/Cancel; no write before guarded Save | #93 (implemented) |
+| Settings field and action navigation | `Panel`, `Prompt`, `Picker`, `Field`, `Notice` | Single focus; nested agent/provider and value pickers; transient text/numeric editors; explicit Save/Cancel; no write before guarded Save; default non-settings lifecycle unchanged | #93 and #106 (implemented) |
 
 Contextual non-main-prompt suggestions from completed issue #73 use the same
 unified driver without moving parser, runtime, or storage authority into the
@@ -881,11 +956,13 @@ contracts.
 | Capability profiles | Representative plain, fixed-ANSI, `NO_COLOR`, narrow, non-TTY, `TERM=dumb`, missing/uncertain and independent input/output capability combinations, 80-column fallback, and 120-column cap cases. |
 | Rendering safety | Hostile ESC/OSC/control/bidi-format content is visibly sanitized before ANSI; local resets prevent bleed; removing decorative SGR exactly recovers the plain structure; ANSI is zero-width; wide/combining content and cursor positions use physical columns. |
 | Semantic output | Every view group uses only the closed vocabulary; status remains understandable without color; one semantic record uses one callback write unless an explicit live-control exception is tested. |
+| Agent reply presentation | Complete strict JSON object/array formatting only; two-space indentation; preserved key order and Unicode; unchanged fallback for malformed, embedded-prose, scalar, duplicate-key, non-finite, or unserializable content; direct/retrieval/transcript/history presentation only; stored/provider bytes unchanged; bold terminal-default `AGENT` styling with no background detection. |
 | State transitions | Pure tests cover idle/focused/open/highlighted/selected/disabled/loading/empty/error/cancelled/completed states and invalid or boundary transitions. |
 | History | Exact whitespace-preserving commits including invalid commands, duplicates, `/quit`, fallback, and nonempty VEOF; blank/interrupt/empty-VEOF/physical-EOF/failure exclusion; 100-entry oldest eviction; older/newer bounds; exact draft/cursor restoration; editable copies; per-driver isolation; non-main exclusion; no persistence; and post-restoration append. |
 | Palette/history coordination | Slash opening with deterministic initial highlight and unchanged buffer; filtering; empty/error; canonical metadata projection including finite agent IDs/aliases; open-palette Up/Down clamped highlight navigation without replacement or history movement; Tab application of the highlighted candidate; Shift-Tab no-op; Escape full-snapshot restoration and exact-state dismissal; closed-palette Up/Down history; edited recall; and visible-buffer-only Enter commit. |
 | Picker | Highlight-versus-selection, disabled-skipping clamped navigation, Enter commit, Escape cancel, typed interrupt/EOF, empty/all-disabled/one/long lists, exact fallback acceptance/rejection, stable identity reconciliation, selected-outside-window summary, one final completed/cancelled frame, cleanup on interrupt/EOF/failure, and resize on each live redraw. |
 | Settings | Two-snapshot current/pending separation; exact top-level/language/reasoning/roster order; safe persona precedence and lexical order; numeric `0`, positive, blank, negative, fractional, and nonnumeric cases; Codex-enabled/reserved-Gemini-disabled provider behavior including preservation/remediation; implemented safe model text and blank/null provider default; exact reasoning enumeration with model/provider-dependent `xhigh` support; one focused control and deterministic focus return; nested and whole-panel cancellation; exact-byte and catalog conflict before writes; changed-only canonical system-then-agent save; per-file atomic replacement; failing-target-inclusive reverse exact-byte rollback and rollback uncertainty; pending retention; no write on open/edit/highlight/error/cancel; next-lifecycle-only application with higher live overrides; plain/ANSI/`NO_COLOR`/narrow/line fallback; hostile display content; and unchanged identity, thread, precedence, public, and machine contracts. |
+| Advisory progress | One four-glyph cycle only for one capable raw advisory awaitable; `NO_COLOR` glyph preservation; clear/redraw around semantic writes; clear and task joining before result/cancel/error; silent callback/non-TTY/`TERM=dumb`/uncertain fallback; operation-error precedence; indicator-only internal-error mapping; no `[routing]`/`[waiting]` records or reusable animation API. |
 | Parser and mutation boundary | The exact visible committed main buffer reaches the established parser once; previews, recall, replacement, highlight, rerender, cancel, Ctrl-C, empty VEOF, and physical EOF cause no parser/runtime/storage call. |
 | Composer/confirmation | Ordered semantic input facts and focused prompt; equivalent width-aware plain/ANSI rendering; fallback-once and trusted-live routing; exact `/send`, `/cancel`, `/say`, yes/no/default, invalid retry, Ctrl-C, and EOF results; semantic composer events and hint cardinality; history isolation; reserved-key no-ops; no full-screen or persistent state. |
 | Restoration | Normal submit, commit, cancellation, Escape, EOF, Ctrl-C, setup failure, read/write/flush failure, render error, and restoration uncertainty, with raw attributes restored whenever acquired. |

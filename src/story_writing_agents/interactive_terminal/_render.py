@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 
 from ._model import (
@@ -41,9 +42,65 @@ _ROLE_SGR = {
     SemanticRole.WARNING: "\x1b[33m",
     SemanticRole.ERROR: "\x1b[31m",
     SemanticRole.COMMAND: "\x1b[35m",
-    SemanticRole.AGENT: "\x1b[34m",
+    SemanticRole.AGENT: "\x1b[1m",
 }
 _DECORATIVE_SGR = re.compile(r"\x1b\[(?:0|1|3[1-7])m")
+_ADVISORY_PROGRESS_FRAMES = ("◐", "◓", "◑", "◒")
+
+
+def render_advisory_progress_frame(frame: int) -> str:
+    """Render one pure fixed-cell advisory progress frame."""
+
+    if type(frame) is not int:
+        raise TypeError("frame must be an integer")
+    if frame < 0 or frame >= len(_ADVISORY_PROGRESS_FRAMES):
+        raise ValueError("frame must identify one advisory progress glyph")
+    return _ADVISORY_PROGRESS_FRAMES[frame]
+
+
+def format_agent_reply_content(content: str) -> str:
+    """Pretty-print one complete strict JSON object or array, if valid."""
+
+    if type(content) is not str:
+        raise TypeError("content must be a string")
+    try:
+        value = json.loads(
+            content,
+            object_pairs_hook=_reject_duplicate_object_pairs,
+            parse_constant=_reject_nonfinite_constant,
+        )
+    except (TypeError, ValueError, json.JSONDecodeError, RecursionError):
+        return content
+    if type(value) not in {dict, list}:
+        return content
+    try:
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+            indent=2,
+            allow_nan=False,
+        )
+    except (TypeError, ValueError, UnicodeError, RecursionError):
+        return content
+
+
+def _reject_duplicate_object_pairs(
+    pairs: list[tuple[str, object]],
+) -> dict[str, object]:
+    """Reject duplicate JSON object keys while preserving source order."""
+
+    value: dict[str, object] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate JSON object key")
+        value[key] = item
+    return value
+
+
+def _reject_nonfinite_constant(value: str) -> object:
+    """Reject non-standard JSON constants such as NaN and Infinity."""
+
+    raise ValueError(f"non-finite JSON constant: {value}")
 
 
 def render_component(
