@@ -1070,9 +1070,6 @@ class InteractiveController:
             Choice("cancel", "Cancel"),
         )
         while True:
-            self._semantic_output.write_component(
-                self._settings_panel(state)
-            )
             outcome = self._picker_input.read_picker(
                 Prompt(
                     "Settings",
@@ -1080,20 +1077,30 @@ class InteractiveController:
                 ),
                 choices,
                 highlighted_id=top_highlight,
+                transient=True,
             )
             if outcome.kind in {
                 ControlOutcomeKind.CANCEL,
                 ControlOutcomeKind.INTERRUPT,
                 ControlOutcomeKind.EOF,
             }:
+                self._semantic_output.write_component(
+                    self._settings_panel(state)
+                )
                 self._write_settings_cancelled()
                 return
             selected = self._require_settings_commit(outcome)
             top_highlight = selected
             if selected == "cancel":
+                self._semantic_output.write_component(
+                    self._settings_panel(state)
+                )
                 self._write_settings_cancelled()
                 return
             if selected == "save":
+                self._semantic_output.write_component(
+                    self._settings_panel(state)
+                )
                 try:
                     save_settings_state(self._workspace, state)
                 except SettingsError as failure:
@@ -1119,6 +1126,9 @@ class InteractiveController:
                 selected,
             )
             if cancelled:
+                self._semantic_output.write_component(
+                    self._settings_panel(state)
+                )
                 self._write_settings_cancelled()
                 return
 
@@ -1153,6 +1163,7 @@ class InteractiveController:
             tuple(Choice(language, language) for language in SETTINGS_LANGUAGES),
             highlighted_id=pending,
             selected_id=pending,
+            transient=True,
         )
         value, whole_cancel = self._nested_settings_value(outcome)
         if whole_cancel:
@@ -1181,6 +1192,7 @@ class InteractiveController:
             choices,
             highlighted_id=pending,
             selected_id=pending,
+            transient=True,
         )
         value, whole_cancel = self._nested_settings_value(outcome)
         if whole_cancel:
@@ -1205,7 +1217,7 @@ class InteractiveController:
                         state.pending.system_defaults.max_debate_rounds
                     ),
                 ),
-                context=(self._settings_panel(state),),
+                transient=True,
             )
             value, whole_cancel = self._nested_settings_value(outcome)
             if whole_cancel:
@@ -1244,6 +1256,7 @@ class InteractiveController:
                     for agent_id in ROSTER
                 ),
                 highlighted_id=agent_highlight,
+                transient=True,
             )
             agent_id, whole_cancel = self._nested_settings_value(agent_outcome)
             if whole_cancel:
@@ -1263,6 +1276,7 @@ class InteractiveController:
                     Choice("reasoning", "Reasoning effort"),
                 ),
                 highlighted_id="provider",
+                transient=True,
             )
             field, whole_cancel = self._nested_settings_value(field_outcome)
             if whole_cancel:
@@ -1326,6 +1340,7 @@ class InteractiveController:
             ),
             highlighted_id="codex",
             selected_id=(None if current == "gemini" else "codex"),
+            transient=True,
         )
         provider, whole_cancel = self._nested_settings_value(outcome)
         if whole_cancel or provider is None:
@@ -1350,7 +1365,7 @@ class InteractiveController:
                     ),
                     default=current or "inherit",
                 ),
-                context=(self._settings_panel(state),),
+                transient=True,
             )
             value, whole_cancel = self._nested_settings_value(outcome)
             if whole_cancel:
@@ -1392,6 +1407,7 @@ class InteractiveController:
             ),
             highlighted_id=selected,
             selected_id=selected,
+            transient=True,
         )
         value, whole_cancel = self._nested_settings_value(outcome)
         if whole_cancel:
