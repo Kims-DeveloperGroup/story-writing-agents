@@ -171,27 +171,27 @@ classDiagram
     class Workspace
     class FilesystemConversationCatalog
     class FilesystemConversationEventStore
-    class ConversationCatalog <<Protocol>>
-    class ConversationEventStore <<Protocol>>
-    class ConversationMemoryService <<Protocol>>
+    class ConversationCatalog
+    class ConversationEventStore
+    class ConversationMemoryService
     class InteractiveController
 
-    class DebateContextRequest <<DTO>>
-    class DebateContextMode <<DTO>>
-    class DebateResult <<DTO>>
-    class DebateMessage <<DTO>>
-    class DebateProgressEvent <<DTO>>
-    class AgentDefinition <<DTO>>
-    class AgentRequest <<DTO>>
-    class AgentReply <<DTO>>
-    class ConversationRequest <<DTO>>
-    class ConversationReply <<DTO>>
-    class ConversationResult <<DTO>>
-    class ConversationRetrievalRequest <<DTO>>
-    class ConversationRetrievalReply <<DTO>>
-    class ConversationRetrievalResult <<DTO>>
-    class ConversationRetrievalAction <<DTO>>
-    class ConversationRetrievalObservation <<DTO>>
+    class DebateContextRequest
+    class DebateContextMode
+    class DebateResult
+    class DebateMessage
+    class DebateProgressEvent
+    class AgentDefinition
+    class AgentRequest
+    class AgentReply
+    class ConversationRequest
+    class ConversationReply
+    class ConversationResult
+    class ConversationRetrievalRequest
+    class ConversationRetrievalReply
+    class ConversationRetrievalResult
+    class ConversationRetrievalAction
+    class ConversationRetrievalObservation
 
     StoryRuntime o-- RuntimeSession : owns
     StoryRuntime --> AgentBackend : delegates provider orchestration
