@@ -70,6 +70,8 @@ from ..interactive_settings import (
     update_persona,
 )
 from ..interactive_terminal import (
+    AdvisoryProgressError,
+    InteractiveAdvisoryProgress,
     format_agent_reply_content,
     AttachmentKind,
     Choice,
@@ -211,6 +213,7 @@ class InteractiveController:
         "_last_started_debate_by_session",
         "_picker_input",
         "_prompt_input",
+        "_advisory_progress",
         "_runner",
         "_runtime",
         "_semantic_output",
@@ -255,6 +258,7 @@ class InteractiveController:
         self._semantic_output = InteractiveSemanticOutput(terminal)
         self._picker_input = InteractivePickerInput(terminal)
         self._prompt_input = InteractivePromptInput(terminal)
+        self._advisory_progress = InteractiveAdvisoryProgress(terminal)
         resolved_catalog = (
             FilesystemConversationCatalog(workspace)
             if conversation_catalog is None
@@ -2166,29 +2170,10 @@ class InteractiveController:
         if action.kind is ActionKind.ROUTED_MESSAGE:
             assert action.agent_id is not None
             agent_id = action.agent_id
-            routing = (
-                f"One-shot route to {agent_id}; sticky target remains "
-                f"{self._target_agent_id}. "
-            )
         else:
             assert action.kind is ActionKind.MESSAGE
             agent_id = self._target_agent_id
-            routing = f"Routing this turn to {agent_id}. "
         display_name = AGENT_SPECS[agent_id].display_name
-        routing += (
-            "Direct routing selects the responder in this shared room; "
-            "it does not make the turn private."
-        )
-        self._write_notice(
-            routing,
-            label="routing",
-            state=ViewState.COMPLETED,
-        )
-        self._write_notice(
-            f"{display_name} is responding; Ctrl-C cancels this turn.",
-            label="waiting",
-            state=ViewState.LOADING,
-        )
 
         memory_service = self._conversation_memory_service
         if type(memory_service) is not ConversationMemoryService:
@@ -2248,8 +2233,9 @@ class InteractiveController:
                 InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
             )
         operation_coroutine = run_joined_advisory_operation()
+        progress_coroutine = self._advisory_progress.run(operation_coroutine)
         try:
-            result = runner.run(operation_coroutine)
+            result = runner.run(progress_coroutine)
         except KeyboardInterrupt:
             if progress_callback_failure is not None:
                 raise _ControllerAbort(
@@ -2294,6 +2280,10 @@ class InteractiveController:
                     progress_callback_failure or exc.__cause__ or exc
                 )
             ) from None
+        except AdvisoryProgressError:
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            ) from None
         except Exception as exc:
             if progress_callback_failure is not None:
                 raise _ControllerAbort(
@@ -2306,6 +2296,7 @@ class InteractiveController:
         finally:
             if not operation_entered:
                 operation_coroutine.close()
+                progress_coroutine.close()
 
         try:
             result = validate_conversation_retrieval_result(

@@ -6,7 +6,7 @@ import json
 import re
 import textwrap
 import unicodedata
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import KW_ONLY, dataclass
 from enum import StrEnum
 from types import MappingProxyType
@@ -35,7 +35,7 @@ from ._controls import (
     transition_line_input,
     transition_prompt_input,
 )
-from ._driver import RawTerminalDriver
+from ._driver import AdvisoryProgressError, RawTerminalDriver
 from ._model import (
     CapabilityProfile,
     Choice,
@@ -67,6 +67,7 @@ from ._model import (
 from ._render import (
     format_agent_reply_content,
     render_component,
+    render_advisory_progress_frame,
     render_input_prompt,
     render_picker_fallback,
     render_picker_viewport,
@@ -445,6 +446,7 @@ class InteractiveTerminal:
         "_main_read_line",
         "_picker_read",
         "_prompt_read",
+        "_advisory_progress",
         "_read_line",
         "_width",
         "_write_text",
@@ -485,6 +487,7 @@ class InteractiveTerminal:
         self._confirmation_read_line = _plain_input_reader(read_line, width)
         self._picker_read = _plain_picker_reader(read_line, write_text, width)
         self._prompt_read = _plain_prompt_reader(read_line, width)
+        self._advisory_progress = _plain_advisory_progress
         self._write_text = write_text
         self._width = width
         self._capability_provider = lambda: _plain_capabilities(width)
@@ -1336,6 +1339,26 @@ class InteractivePromptInput:
         return outcome
 
 
+class InteractiveAdvisoryProgress:
+    """Retain one terminal's package-internal advisory progress session."""
+
+    __slots__ = ("_run",)
+
+    def __init__(self, terminal: InteractiveTerminal) -> None:
+        """Bind progress lifecycle without inspecting streams or capabilities."""
+
+        if not isinstance(terminal, InteractiveTerminal):
+            raise TypeError("terminal must be an InteractiveTerminal")
+        self._run: Callable[[Awaitable[object]], Awaitable[object]] = (
+            terminal._advisory_progress
+        )
+
+    async def run(self, operation: Awaitable[object]) -> object:
+        """Join one advisory operation with the terminal-owned indicator."""
+
+        return await self._run(operation)
+
+
 def build_contextual_terminal(
     read_line: Callable[[str], str],
     write_text: Callable[[str], None],
@@ -1426,6 +1449,12 @@ def _plain_prompt_reader(
         return ControlOutcome(ControlOutcomeKind.COMMIT, text=line)
 
     return read_prompt
+
+
+async def _plain_advisory_progress(operation: Awaitable[object]) -> object:
+    """Keep callback and non-TTY advisory execution visually silent."""
+
+    return await operation
 
 
 def _plain_picker_reader(
@@ -1597,6 +1626,14 @@ def build_stream_terminal(
 
     terminal._picker_read = read_picker
     terminal._prompt_read = read_prompt
+
+    async def run_advisory_progress(operation):
+        return await driver.run_advisory_progress(
+            operation,
+            render_advisory_progress_frame,
+        )
+
+    terminal._advisory_progress = run_advisory_progress
     terminal._capability_provider = driver.capabilities
     return terminal
 

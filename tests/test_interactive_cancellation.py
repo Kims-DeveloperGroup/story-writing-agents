@@ -1087,13 +1087,7 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
         self.assertTrue(runner.closed)
         self.assertTrue(all(task.done() for task in runner.operation_tasks))
         rendered = "".join(callbacks.records)
-        self.assertEqual(
-            rendered.count(
-                "[waiting] Plot & Structure Architect is responding; Ctrl-C "
-                "cancels this turn.\n"
-            ),
-            3,
-        )
+        self.assertNotIn("[waiting] ", rendered)
         self.assertIn(
             "[cancelled] Plot & Structure Architect turn was interrupted.\n",
             rendered,

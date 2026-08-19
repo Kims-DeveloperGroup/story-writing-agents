@@ -11,7 +11,10 @@
 > lifecycle records use semantic notices. A generic single-select picker
 > foundation and a cancellable prompt seam are implemented behind unlisted
 > package-internal adapters. `/settings` consumes both without changing the
-> supported public terminal API.
+> supported public terminal API. Advisory turns additionally use one unlisted
+> terminal-owned rolling indicator on capable raw streams; callback and
+> incapable paths remain silent, and advisory turns emit no `[routing]` or
+> `[waiting]` record.
 
 ## Public API
 
@@ -85,6 +88,11 @@ identities for the generic picker and cancellable-line seams.
 semantic `Picker` remains a `Component`. None of these additions changes public
 `__all__`, root exports, or supported signatures.
 
+The facade also binds unlisted `InteractiveAdvisoryProgress` for the
+controller's one-advisory-awaitable lifecycle. It is package-internal and does
+not expose the driver, renderer, glyphs, cursor controls, or a public animation
+API.
+
 The narrow internal adapters have these signatures:
 
 ```python
@@ -103,6 +111,9 @@ InteractivePromptInput(terminal: InteractiveTerminal) -> None
 read_prompt(prompt: Prompt, *,
             context: tuple[Panel | Section | Field | Notice, ...] = (),
             transient: bool = False) -> ControlOutcome
+
+InteractiveAdvisoryProgress(terminal: InteractiveTerminal) -> None
+run(operation: Awaitable[object]) -> object  # async, package-internal
 ```
 
 Construction validates and retains the terminal's bound component writer but
@@ -113,7 +124,9 @@ binds only the terminal's picker reader without observing capabilities or
 acquiring I/O. The settings controller consumes both input adapters through
 the facade; neither is public API. `transient` is an opt-in settings lifecycle:
 its default `False` preserves the established picker and prompt final-frame
-behavior used by every non-settings caller.
+behavior used by every non-settings caller. `InteractiveAdvisoryProgress` is
+also unlisted and binds one call-local async operation to the terminal's
+advisory indicator without changing the supported public API.
 
 | Enum | Exact values |
 | --- | --- |
@@ -122,6 +135,11 @@ behavior used by every non-settings caller.
 | `ConfirmationResult` | `yes`, `no`, `interrupt`, `eof` |
 | `TerminalActionKind` | `line`, `send`, `cancel`, `interrupt`, `eof` |
 | `TerminalMessageKind` | `compose`, `session`, `conversation`, `routing`, `context`, `waiting`, `result`, `cancelled`, `hint` |
+
+The established `routing` and `waiting` enum values remain compatibility
+identities, but #111's advisory-turn path does not emit records with either
+label. Routing acknowledgements outside an advisory turn retain their existing
+meaning.
 
 ## Implemented semantic output and input
 
@@ -153,7 +171,8 @@ and performs no stream observation or resource acquisition.
   state;
 - typed interactive errors and recovery hints;
 - accepted management acknowledgements and routing/current-context notices;
-- advisory waiting, cancellation, context disclosure, and agent replies;
+- advisory cancellation, context disclosure, and agent replies; #111 adds an
+  optional capable-only indicator without an advisory waiting record;
 - retrieval progress and cited-source records; and
 - consensus progress, inspection, cancellation, and terminal summaries.
 
@@ -174,6 +193,27 @@ structure and applicable `loading`, `empty`, `error`, `cancelled`, and
 `completed` state markers. Capable real-CLI output may add fixed decorative
 ANSI; `NO_COLOR` removes only that decoration. Callback construction renders
 the same structure in plain text at its fixed width.
+
+### Advisory progress
+
+The controller brackets exactly one advisory runtime awaitable with the
+unlisted `InteractiveAdvisoryProgress` adapter. On a capable raw stream, the
+sole driver renders the fixed `◐`/`◓`/`◑`/`◒` cycle, clears the active cell around
+semantic retrieval/progress/result writes, and clears it before final,
+cancellation, or error records. It joins the operation and indicator task on
+every exit. `NO_COLOR` leaves the glyphs unchanged because they are not SGR;
+the indicator has no dynamic text, alternate screen, background, or general
+animation API.
+
+Callback construction and incapable stream paths await the operation without
+writing indicator output. This includes non-TTY, `TERM=dumb`, non-POSIX,
+missing, and uncertain capability; the installed CLI guard still rejects
+non-TTY shell entry before controller work. An underlying operation failure
+takes precedence over a simultaneous indicator failure. If only the indicator
+fails, the adapter raises its internal `AdvisoryProgressError` after cleanup so
+the controller presents the existing `internal_error` path. Advisory turns
+emit no `[routing]` or `[waiting]` record; their ordinary result, cancellation,
+context, and error records remain unchanged.
 
 The five dense-view terminal writer families now accept the same primitive
 arguments and emit the same fact order through semantic `Panel`, `ListView`, or
@@ -527,7 +567,7 @@ result, hint, or context record. Attached state remains unchanged.
 | Boundary | Exact records in order |
 | --- | --- |
 | Main prompt / open or pause confirmation | `[cancelled] No action was taken.` / `[cancelled] Session open cancelled.` / `[cancelled] Session pause cancelled.` |
-| Recoverable advisory | `[waiting] {DISPLAY_NAME} is responding; Ctrl-C cancels this turn.`<br>`[cancelled] {DISPLAY_NAME} turn was interrupted.`<br>`[hint] The story session remains attached; the affected provider thread may restart on the next message.` |
+| Recoverable advisory | `[cancelled] {DISPLAY_NAME} turn was interrupted.`<br>`[hint] The story session remains attached; the affected provider thread may restart on the next message.` |
 | Consensus before entry | `[cancelled] Consensus run was cancelled before start.` |
 | Consensus with trusted durable proof | `[run {DEBATE_ID}] [cancelled] [warning]` then an indented `Run interrupted after durable state transition.` in that same callback record;<br>`[cancelled] Debate {DEBATE_ID} was marked interrupted.`<br>`[hint] It cannot resume. Use /run to create a new debate.`<br>`[session] "{SESSION_ID}" remains ready and attached.` |
 | Partial local render | `[cancelled] Search cancelled; attached state is unchanged.` / `[cancelled] Transcript read cancelled; attached state is unchanged.` / `[cancelled] History cancelled; attached state is unchanged.` |

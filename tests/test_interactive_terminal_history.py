@@ -153,6 +153,9 @@ class MainInputHistoryContractTests(unittest.TestCase):
                 "_main_transition",
                 "_os_provider",
                 "_output_stream",
+                "_progress_active",
+                "_progress_frame",
+                "_progress_renderer",
                 "_termios_provider",
             ),
         )

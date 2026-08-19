@@ -159,6 +159,18 @@ semantic notices; no internal generic composer-status site remains. These
 presentation changes do not alter command grammar, established callback/read
 order, or any noninteractive stdout/stderr, JSON, ordering, or exit contract.
 
+During one advisory turn, a capable raw stream may show the terminal-owned
+four-glyph rolling indicator `◐`, `◓`, `◑`, `◒`. The driver clears the active
+cell before each semantic/progress/result write, redraws while the operation is
+pending, and clears and joins both operation and indicator tasks before the
+final, cancelled, or error record. `NO_COLOR` keeps the glyph cycle because it
+removes decorative SGR only. Advisory turns emit no `[routing]` or `[waiting]`
+notice. Callback construction and non-TTY, `TERM=dumb`, non-POSIX, missing, or
+uncertain-capability paths await the operation silently; the installed CLI's
+TTY guard still rejects non-TTY shell entry before this point. An underlying
+operation failure takes precedence over a simultaneous indicator failure;
+indicator-only failures use the existing internal-error path after cleanup.
+
 `/help [COMMAND]` (`/?`), `/status`, `/settings`, and `/session list` are global.
 Session grammar is `/session list | create NAME | open [NAME] | pause`. Explicit
 `story chat SESSION` creates an absent session or opens a persisted one. Bare

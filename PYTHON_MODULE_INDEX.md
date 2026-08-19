@@ -570,7 +570,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   directive, routing, advisory, retrieval, consensus, focused-history, list,
   search, and transcript records through the terminal facade's unlisted
   `InteractiveSemanticOutput`; it retains that adapter alongside the same
-  terminal used for input and terminal-owned semantic writers. It also retains
+  terminal used for input and terminal-owned semantic writers. Advisory turns
+  retain the facade's unlisted `InteractiveAdvisoryProgress` adapter and wrap
+  exactly the runtime awaitable instead of emitting persistent routing and
+  waiting notices; the controller owns no indicator glyph, cursor control, or
+  animation task. It also retains
   the facade's resource-free picker and cancellable-prompt adapters for the
   call-local settings flow. Retrieval results and persisted `agent_reply`
   history/transcript rows use the facade's pure `format_agent_reply_content`
@@ -646,7 +650,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   canonical context facts through `select_bounded_conversation_context`, and
   runs one synchronous
   `StoryRuntime.converse_with_retrieval` operation per accepted advisory content
-  turn through the retained Runner. It passes the exact attachment-scoped
+  turn through the retained Runner and terminal-owned progress adapter. It
+  passes the exact attachment-scoped
   service plus a synchronous sink, validates trusted progress/results, and
   constructs fixed progress and ordered source components through the retained
   semantic-output adapter. Before advisory coroutine entry, the established
@@ -892,6 +897,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   lifecycle used by settings: capable stream construction delegates display
   clearing to the sole driver, while callback construction omits synthetic
   picker final frames it cannot erase. Their default route remains unchanged.
+  Unlisted `InteractiveAdvisoryProgress` and `AdvisoryProgressError` bind one
+  advisory-only async progress lifecycle through the same facade: callback and
+  incapable terminals await silently, while stream construction injects the
+  pure fixed-glyph renderer into the sole driver. They do not expand the public
+  `__all__` or expose terminal leaves to the controller.
 - **Direct internal dependencies:** `interactive_terminal._core`.
 - **State, resources, and side effects:** Owns no terminal resource or mutable
   process state. Import deterministically canonicalizes supported public object
@@ -1022,6 +1032,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   a two-space-indented projection; malformed JSON, scalars, embedded prose, and
   every other string return exactly unchanged. The fixed `AGENT` role is bold
   terminal-default foreground with the same plain meaning and local reset.
+  `render_advisory_progress_frame` projects the fixed one-cell `◐`, `◓`,
+  `◑`, and `◒` cycle without ANSI, cursor controls, dynamic content, or
+  state.
 - **Direct internal dependencies:** `interactive_terminal._model`.
 - **State, resources, and side effects:** Pure projections only. Dynamic text
   is sanitized before wrapping or fixed styling; the module writes and flushes
@@ -1063,7 +1076,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   Its optional per-read transient flag clears capable picker and cancellable
   prompt rows on completion or cancellation before returning the typed outcome;
   line fallback cannot erase and instead omits the duplicate picker final
-  frame. The default retains the established final-frame behavior.
+  frame. The default retains the established final-frame behavior. Supported
+  package-internal `run_advisory_progress` accepts one awaitable and injected
+  fixed-glyph renderer, awaits silently without raw cursor capability, and on a
+  capable stream joins the operation with one indicator task. Internal
+  `AdvisoryProgressError` distinguishes indicator failure from provider failure
+  for controller cleanup.
 - **Direct internal dependencies:** `interactive_terminal._model`.
 - **State, resources, and side effects:** Sole owner of borrowed input/output
   streams, independent capability checks, detected width, normalized physical
@@ -1085,7 +1103,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   width once per read, uses the plain projection for fallback and cursor
   measurement, and emits the trusted styled projection only on its live path.
   Construction performs no stream access or terminal mutation, and history is
-  never persisted. Missing, uncertain, non-TTY,
+  never persisted. During one advisory operation the same driver alone retains
+  the active frame and renderer, creates and joins the call-local animation
+  task on the controller's existing event loop, serializes persistent writes by
+  clearing and redrawing the indicator, cancels and joins the peer task after a
+  worker or operation failure, and clears all indicator state before returning.
+  It creates no OS thread or import-time task. Missing, uncertain, non-TTY,
   non-POSIX, or `TERM=dumb` capability safely uses ordinary line input, while
   `NO_COLOR` affects decorative SGR only.
 - **Primary verification/documentation:**
@@ -1144,7 +1167,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   validated opt-in transient flag and pass it only to collaborators that support
   that lifecycle; default calls retain the established picker final frame and
   prompt behavior, while transient callback pickers omit the duplicate final
-  frame.
+  frame. Resource-free `InteractiveAdvisoryProgress` binds the terminal's
+  advisory awaitable wrapper: callback construction remains visually silent,
+  and stream construction injects the pure fixed-glyph renderer into the sole
+  driver without exposing capabilities or streams.
 - **Direct internal dependencies:** `agents`, `interactive_commands`,
   `interactive_terminal._controls`, `interactive_terminal._driver`,
   `interactive_terminal._model`, and `interactive_terminal._render`.
@@ -1153,7 +1179,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   and an explicit width but inspect no stream and acquire no resource.
   Stream-factory instances delegate all raw terminal state, width detection,
   keys, writes, flushes, restoration, readiness, incremental decoding, and the
-  bounded process-local main-input history store to one driver. Main completion,
+  bounded process-local main-input history store plus advisory indicator task
+  and cleanup to one driver. Main completion,
   palette, and composition providers plus semantic
   input renderers are selected per call and never retained by that driver;
   composition, confirmation, cancellable prompt, and picker input are history-
@@ -1443,7 +1470,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   functional cursor
   controls, width, key decoding, writes, flushes, restoration, and one bounded
   process-local main-input history store, fixed 50-millisecond Escape readiness
-  lookahead, and call-local incremental decoder. It receives completion,
+  lookahead, and call-local incremental decoder. For advisory progress it also
+  exclusively owns the active glyph state, operation/animation task joining,
+  cursor clear/redraw writes, and cleanup; `_render` supplies only the pure
+  injected four-glyph projection, and incapable or callback terminals remain
+  visually silent. It receives completion,
   palette, preview, and trusted semantic input collaborators only per read,
   resets navigation for each main read, and keeps composition and confirmation
   reads history-free. Cancellable settings prompt input is also history- and
@@ -1469,6 +1500,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   exposes an unlisted typed semantic-output adapter and closed component
   bindings, including `ListView`, for package consumers without expanding
   `__all__`; controller code imports only that facade, never a terminal leaf.
+  The same facade exposes unlisted advisory progress and error bindings: the
+  controller brackets exactly one advisory runtime awaitable without owning
+  animation mechanics, and the driver removes the indicator before result,
+  cancellation, or failure presentation. Persistent advisory routing and
+  waiting records are intentionally absent.
   Counted session, conversation, search, transcript, and history output uses
   one positioned one-record list and one component write for each established
   row callback, preserving partial-output and cancellation boundaries.
