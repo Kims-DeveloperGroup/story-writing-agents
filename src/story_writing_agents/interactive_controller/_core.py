@@ -1486,10 +1486,11 @@ class InteractiveController:
     ) -> tuple[DebateInspectionFacts, DebateContextInspectionFacts | None]:
         """Read and whitelist one debate plus optional context-sidecar facts.
 
-        The returned lines contain only identity, lifecycle, input, revision,
-        round, artifact, and context identity/mode/count fields. Raw messages,
-        candidate/error/action values, state dictionaries, event content, and
-        provider data are validated by their owners but never copied to output.
+        The returned typed facts expose only debate identity, lifecycle, input,
+        revision, round, and artifact metadata plus optional context
+        identity/mode/count metadata. Raw messages, candidate/error/action
+        values, state dictionaries, event content, and provider data are
+        validated by their owners but never copied to output.
         """
 
         inspected = self._runtime.inspect_debate(session_id, debate_id)
