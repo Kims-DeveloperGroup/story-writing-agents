@@ -11,11 +11,13 @@ from ._model import (
     CapabilityProfile,
     ControlOutcome,
     ControlOutcomeKind,
+    InputPromptView,
     KeyEvent,
     KeyKind,
     LineInputState,
     MainInputControlState,
     MainInputHistoryState,
+    RenderedInputFrame,
     SlashCommandSuggestion,
     TerminalCapabilities,
     display_character_width,
@@ -74,6 +76,9 @@ _MainTransition: TypeAlias = Callable[
 ]
 _HistoryAppend: TypeAlias = Callable[
     [MainInputHistoryState, str], MainInputHistoryState
+]
+_InputRenderer: TypeAlias = Callable[
+    [InputPromptView, TerminalCapabilities], RenderedInputFrame
 ]
 
 
@@ -185,6 +190,40 @@ class RawTerminalDriver:
             self._line_transition,
         )
 
+    def read_input_line(
+        self,
+        view: InputPromptView,
+        renderer: _InputRenderer,
+        suggestion_provider: Callable[
+            [str], tuple[SlashCommandSuggestion, ...]
+        ],
+    ) -> str:
+        """Read one history-free line through an injected semantic renderer."""
+
+        if type(view) is not InputPromptView:
+            raise TypeError("view must be an InputPromptView")
+        if not callable(renderer):
+            raise TypeError("renderer must be callable")
+        if not callable(suggestion_provider):
+            raise TypeError("suggestion_provider must be callable")
+
+        capabilities = self.capabilities()
+        rendered_input = renderer(view, capabilities)
+        if type(rendered_input) is not RenderedInputFrame:
+            raise TypeError("renderer must return a RenderedInputFrame")
+        if rendered_input.width != capabilities.width:
+            raise ValueError("rendered input width must match current capabilities")
+        if not capabilities.raw_mode:
+            return self._fallback_read_line(rendered_input.plain_text)
+        return self._read_control_line(
+            rendered_input.plain_text,
+            suggestion_provider,
+            LineInputState(),
+            self._line_transition,
+            rendered_input=rendered_input,
+            known_width=capabilities.width,
+        )
+
     def read_main_line(
         self,
         prompt: str,
@@ -243,6 +282,9 @@ class RawTerminalDriver:
         ],
         initial_state: _ControlState,
         transition: _ControlTransition,
+        *,
+        rendered_input: RenderedInputFrame | None = None,
+        known_width: int | None = None,
     ) -> str:
         """Read one exact buffer through one pure logical-state transition.
 
@@ -261,6 +303,17 @@ class RawTerminalDriver:
             raise TypeError("initial_state must be an input control state")
         if not callable(transition):
             raise TypeError("transition must be callable")
+        if (
+            rendered_input is not None
+            and type(rendered_input) is not RenderedInputFrame
+        ):
+            raise TypeError("rendered_input must be a RenderedInputFrame or None")
+        if known_width is not None and (
+            type(known_width) is not int or known_width <= 0
+        ):
+            raise ValueError("known_width must be a positive integer or None")
+        if rendered_input is not None and rendered_input.width != known_width:
+            raise ValueError("rendered input and known width must match")
 
         try:
             configuration = _terminal_configuration(
@@ -268,6 +321,7 @@ class RawTerminalDriver:
                 self._output_stream,
                 termios_module=self._termios_provider(),
                 os_module=self._os_provider(),
+                width=known_width,
             )
         except Exception:
             return self._fallback_read_line(prompt)
@@ -294,12 +348,14 @@ class RawTerminalDriver:
                 suggestion_provider,
                 initial_state,
                 transition,
+                rendered_input,
             )
             self._finish_live_display(
                 prompt,
                 configuration.width,
                 display_state,
                 line_state,
+                rendered_input,
             )
         except BaseException as failure:
             active_failure = failure
@@ -327,6 +383,7 @@ class RawTerminalDriver:
         ],
         initial_state: _ControlState,
         transition: _ControlTransition,
+        rendered_input: RenderedInputFrame | None,
     ) -> tuple[str, LineInputState]:
         """Edit one code-point buffer until submit, interrupt, EOF, or failure.
 
@@ -344,6 +401,7 @@ class RawTerminalDriver:
             display_state,
             _control_line_state(control_state),
             suggestion_provider,
+            rendered_input,
         )
         while True:
             character = self._read_character()
@@ -369,6 +427,7 @@ class RawTerminalDriver:
                             display_state,
                             _control_line_state(control_state),
                             suggestion_provider,
+                            rendered_input,
                         )
                 if not reprocess:
                     continue
@@ -392,6 +451,7 @@ class RawTerminalDriver:
                     display_state,
                     _control_line_state(control_state),
                     suggestion_provider,
+                    rendered_input,
                 )
 
     def _read_character(self) -> str:
@@ -418,6 +478,7 @@ class RawTerminalDriver:
         suggestion_provider: Callable[
             [str], tuple[SlashCommandSuggestion, ...]
         ],
+        rendered_input: RenderedInputFrame | None,
     ) -> int:
         """Replace the current editor area and return its visible cursor row.
 
@@ -426,9 +487,12 @@ class RawTerminalDriver:
         propagates for the owning read boundary to clear and restore resources.
         """
 
-        render_width = max(1, width - 1)
-        input_lines, cursor_row, cursor_column = _wrapped_editor_input(
+        render_width = (
+            max(1, width - 1) if rendered_input is None else width
+        )
+        input_lines, cursor_row, cursor_column = _editor_input_lines(
             prompt,
+            rendered_input,
             line_state.buffer,
             line_state.cursor,
             render_width,
@@ -476,6 +540,7 @@ class RawTerminalDriver:
         width: int,
         display_state: _LiveEditorState,
         line_state: LineInputState,
+        rendered_input: RenderedInputFrame | None,
     ) -> None:
         """Remove suggestions and leave the submitted prompt line visible.
 
@@ -484,9 +549,12 @@ class RawTerminalDriver:
         owned by ``read_line``.
         """
 
-        render_width = max(1, width - 1)
-        input_lines, _cursor_row, _cursor_column = _wrapped_editor_input(
+        render_width = (
+            max(1, width - 1) if rendered_input is None else width
+        )
+        input_lines, _cursor_row, _cursor_column = _editor_input_lines(
             prompt,
+            rendered_input,
             line_state.buffer,
             len(line_state.buffer),
             render_width,
@@ -707,6 +775,7 @@ def _terminal_configuration(
     *,
     termios_module: object | None,
     os_module: object,
+    width: int | None = None,
 ) -> _TerminalConfiguration | None:
     """Return a complete POSIX live-editor setup or ``None`` for fallback.
 
@@ -750,19 +819,24 @@ def _terminal_configuration(
         original_attributes[6][termios_module.VINTR],
         "VINTR",
     )
-    columns = os_module.get_terminal_size(output_descriptor).columns
-    width = (
-        min(columns, 120)
-        if isinstance(columns, int)
-        and not isinstance(columns, bool)
-        and columns > 0
-        else _DEFAULT_TERMINAL_WIDTH
-    )
+    if width is None:
+        columns = os_module.get_terminal_size(output_descriptor).columns
+        resolved_width = (
+            min(columns, 120)
+            if isinstance(columns, int)
+            and not isinstance(columns, bool)
+            and columns > 0
+            else _DEFAULT_TERMINAL_WIDTH
+        )
+    elif type(width) is int and width > 0:
+        resolved_width = width
+    else:
+        raise ValueError("width must be a positive integer or None")
     return _TerminalConfiguration(
         input_descriptor=input_descriptor,
         original_attributes=original_attributes,
         editor_attributes=editor_attributes,
-        width=width,
+        width=resolved_width,
         eof_character=eof_character,
         interrupt_character=interrupt_character,
         termios_module=termios_module,
@@ -978,6 +1052,68 @@ def _completed_text_or_raise(outcome: ControlOutcome | None) -> str | None:
     if outcome.kind is ControlOutcomeKind.EOF:
         raise EOFError
     raise ValueError(f"unsupported control outcome: {outcome.kind.value}")
+
+
+def _editor_input_lines(
+    prompt: str,
+    rendered_input: RenderedInputFrame | None,
+    buffer: str,
+    cursor: int,
+    width: int,
+) -> tuple[list[str], int, int]:
+    """Render one legacy or trusted semantic prompt with an editable buffer."""
+
+    if rendered_input is None:
+        return _wrapped_editor_input(prompt, buffer, cursor, width)
+    if rendered_input.width != width:
+        raise ValueError("rendered input width changed during an active read")
+    return _wrapped_rendered_input(
+        rendered_input,
+        buffer,
+        cursor,
+        width,
+    )
+
+
+def _wrapped_rendered_input(
+    rendered_input: RenderedInputFrame,
+    buffer: str,
+    cursor: int,
+    width: int,
+) -> tuple[list[str], int, int]:
+    """Append sanitized dynamic input to a trusted semantic prompt frame."""
+
+    if cursor < 0 or cursor > len(buffer):
+        raise ValueError("cursor must identify a buffer boundary")
+    styled_lines = rendered_input.text.split("\n")
+    plain_lines = rendered_input.plain_text.split("\n")
+    if len(styled_lines) != len(plain_lines):
+        raise ValueError("rendered input projections must share line topology")
+
+    safe_before_cursor = "".join(
+        _editor_display_text(character) for character in buffer[:cursor]
+    )
+    safe_after_cursor = "".join(
+        _editor_display_text(character) for character in buffer[cursor:]
+    )
+    plain_prompt = plain_lines[-1]
+    dynamic_lines, cursor_row, cursor_column = _wrap_safe_text_with_cursor(
+        f"{plain_prompt}{safe_before_cursor}{safe_after_cursor}",
+        len(plain_prompt) + len(safe_before_cursor),
+        width,
+    )
+    if not dynamic_lines[0].startswith(plain_prompt):
+        raise RuntimeError("rendered input prompt did not remain the first line")
+    styled_dynamic_lines = [
+        f"{styled_lines[-1]}{dynamic_lines[0][len(plain_prompt):]}",
+        *dynamic_lines[1:],
+    ]
+    context_count = len(styled_lines) - 1
+    return (
+        [*styled_lines[:-1], *styled_dynamic_lines],
+        context_count + cursor_row,
+        cursor_column,
+    )
 
 
 def _wrapped_editor_input(

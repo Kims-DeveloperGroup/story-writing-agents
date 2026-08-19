@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import unicodedata
-from dataclasses import KW_ONLY, dataclass
+from dataclasses import KW_ONLY, dataclass, field
 from enum import StrEnum
 from typing import TypeAlias
 
@@ -73,6 +73,7 @@ class ControlOutcomeKind(StrEnum):
     CANCEL = "cancel"
     INTERRUPT = "interrupt"
     EOF = "eof"
+    REJECTED = "rejected"
 
 
 def _require_text(name: str, value: object, *, allow_blank: bool = False) -> str:
@@ -191,6 +192,31 @@ class LineInputState:
             raise TypeError("cursor must be an integer")
         if self.cursor < 0 or self.cursor > len(self.buffer):
             raise ValueError("cursor must identify a buffer boundary")
+
+
+@dataclass(frozen=True, slots=True)
+class ComposerState:
+    """Retain exact submitted lines and their derived joined counts."""
+
+    lines: tuple[str, ...] = ()
+    content: str = field(init=False)
+    line_count: int = field(init=False)
+    character_count: int = field(init=False)
+
+    def __post_init__(self) -> None:
+        """Validate one-line entries and derive immutable composition facts."""
+
+        if type(self.lines) is not tuple:
+            raise TypeError("lines must be a tuple")
+        for line in self.lines:
+            if type(line) is not str:
+                raise TypeError("composer lines must be strings")
+            if "\r" in line or "\n" in line:
+                raise ValueError("composer lines must not contain CR or LF")
+        content = "\n".join(self.lines)
+        object.__setattr__(self, "content", content)
+        object.__setattr__(self, "line_count", len(self.lines))
+        object.__setattr__(self, "character_count", len(content))
 
 
 @dataclass(frozen=True, slots=True)
@@ -530,6 +556,32 @@ class Picker:
         _require_state(self.state)
 
 
+InputContext: TypeAlias = Panel | Section | Field | Notice
+
+
+@dataclass(frozen=True, slots=True)
+class InputPromptView:
+    """Order semantic input context before one focused active prompt."""
+
+    context: tuple[InputContext, ...]
+    prompt: Prompt
+
+    def __post_init__(self) -> None:
+        """Require only approved context components and one focused prompt."""
+
+        if type(self.context) is not tuple or any(
+            type(item) not in {Panel, Section, Field, Notice}
+            for item in self.context
+        ):
+            raise TypeError(
+                "context must be a tuple of Panel, Section, Field, or Notice values"
+            )
+        if type(self.prompt) is not Prompt:
+            raise TypeError("prompt must be a Prompt")
+        if self.prompt.state is not ViewState.FOCUSED:
+            raise ValueError("input prompt must be focused")
+
+
 def _validate_choices(
     choices: object,
     highlighted_id: object,
@@ -580,6 +632,36 @@ class RenderedFrame:
             raise ValueError("line_count must be positive")
         if self.line_count != self.text.count("\n") + 1:
             raise ValueError("line_count must match rendered text")
+
+
+@dataclass(frozen=True, slots=True)
+class RenderedInputFrame:
+    """Carry trusted and plain equivalent input text with visible accounting."""
+
+    text: str
+    plain_text: str
+    width: int
+    line_count: int
+
+    def __post_init__(self) -> None:
+        """Require matching newline topology and a final input-space boundary."""
+
+        if type(self.text) is not str or type(self.plain_text) is not str:
+            raise TypeError("rendered input text must be strings")
+        if type(self.width) is not int or self.width <= 0:
+            raise ValueError("width must be positive")
+        if type(self.line_count) is not int or self.line_count <= 0:
+            raise ValueError("line_count must be positive")
+        if self.text.endswith("\n") or self.plain_text.endswith("\n"):
+            raise ValueError("rendered input text must not end with LF")
+        if not self.text.endswith(" ") or not self.plain_text.endswith(" "):
+            raise ValueError("rendered input text must preserve a trailing space")
+        if self.text.count("\n") + 1 != self.line_count:
+            raise ValueError("styled line_count must match rendered input text")
+        if self.plain_text.count("\n") + 1 != self.line_count:
+            raise ValueError("plain line_count must match rendered input text")
+        if sanitize_terminal_text(self.plain_text) != self.plain_text:
+            raise ValueError("plain input text must not contain unsafe controls")
 
 
 def sanitize_terminal_text(text: str) -> str:
