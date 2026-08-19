@@ -476,6 +476,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   no provider, filesystem, persistence, environment, or import-time
   operational side effects.
 - **Primary verification/documentation:** `tests/test_interactive_commands.py`,
+  `tests/test_interactive_terminal_completion.py`,
   `tests/test_public_api_and_cli.py`, and
   `docs/reference/interactive-command-parser.md`.
 
@@ -747,6 +748,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   network, or import-time operational side effect.
 - **Primary verification/documentation:** `tests/test_interactive_line_editor.py`,
   `tests/test_interactive_terminal.py`,
+  `tests/test_interactive_terminal_completion.py`,
   `tests/test_interactive_terminal_foundation.py`,
   `tests/test_public_api_and_cli.py`, and `tests/test_interactive_pty.py`;
   `docs/reference/interactive-terminal.md`, `docs/reference/cli.md`,
@@ -794,6 +796,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   persistence, subprocess, network, or application-startup operation.
 - **Primary verification/documentation:** `tests/test_interactive_terminal.py`,
   `tests/test_interactive_line_editor.py`, `tests/test_public_api_and_cli.py`,
+  `tests/test_interactive_terminal_completion.py`,
   `tests/test_interactive_terminal_foundation.py`,
   `tests/test_interactive_terminal_composer.py`,
   `tests/test_interactive_terminal_history.py`,
@@ -836,6 +839,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   only carries renderer-produced trusted/plain projections and performs no
   operational I/O.
 - **Primary verification/documentation:**
+  `tests/test_interactive_terminal_completion.py`,
   `tests/test_interactive_terminal_foundation.py`,
   `tests/test_interactive_terminal_composer.py`,
   `tests/test_interactive_terminal_history.py`,
@@ -872,6 +876,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   cursor resource, filesystem, process, or network resource.
 - **Primary verification/documentation:**
   `tests/test_interactive_line_editor.py`,
+  `tests/test_interactive_terminal_completion.py`,
   `tests/test_interactive_terminal_foundation.py`,
   `tests/test_interactive_terminal_composer.py`,
   `tests/test_interactive_terminal_history.py`,
@@ -894,6 +899,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   and owns no environment, terminal, runtime, provider, filesystem, or storage
   state.
 - **Primary verification/documentation:**
+  `tests/test_interactive_terminal_completion.py`,
   `tests/test_interactive_terminal_foundation.py`,
   `tests/test_interactive_terminal_composer.py`,
   `tests/test_interactive_terminal_views.py`,
@@ -938,6 +944,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `NO_COLOR` affects decorative SGR only.
 - **Primary verification/documentation:**
   `tests/test_interactive_line_editor.py`,
+  `tests/test_interactive_terminal_completion.py`,
   `tests/test_interactive_terminal_foundation.py`,
   `tests/test_interactive_terminal_composer.py`,
   `tests/test_interactive_terminal_history.py`,
@@ -994,6 +1001,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   import-time operational I/O.
 - **Primary verification/documentation:** `tests/test_interactive_terminal.py`,
   `tests/test_interactive_line_editor.py`, `tests/test_public_api_and_cli.py`,
+  `tests/test_interactive_terminal_completion.py`,
   `tests/test_interactive_terminal_foundation.py`,
   `tests/test_interactive_terminal_composer.py`,
   `tests/test_interactive_terminal_views.py`, `tests/test_interactive_pty.py`,
