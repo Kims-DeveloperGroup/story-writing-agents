@@ -62,13 +62,18 @@ unexpected failure. See the [smoke guide](../guides/smoke-test.md).
 
 Both streams must be TTYs before workspace/backend access or exit `2`. Capable
 POSIX main prompts, bare `/run` composition, and yes/no confirmation use live
-editing. Main prompts keep their registry-backed suggestions and use Up/Down
-for process-local command history; composition shows only `/send` then
-`/cancel`, filtered by an exact, case-sensitive whole-buffer slash prefix.
-Confirmation has no suggestions, and the subject remains an ordinary read.
-`TERM=dumb`, unavailable capabilities, and non-POSIX editing safely use
-`input()` once per attempt; composition and confirmation pass their structured
-plain semantic prompt without a live suggestion panel or arrow navigation.
+editing. Main prompts project canonical root, subcommand, and finite fixed-option
+candidates into a selectable semantic palette. Opening highlights the first
+match; Up/Down moves that highlight instead of history, Tab replaces the full
+active token with the highlighted candidate without adding whitespace, and
+Escape restores the first pre-completion snapshot when present and dismisses
+that exact state. Closed-palette Up/Down uses process-local command history;
+Shift-Tab has no action. Composition shows only the preview-only `/send` then `/cancel`,
+filtered by an exact, case-sensitive whole-buffer slash prefix. Confirmation
+has no suggestions, and the subject remains an ordinary read. `TERM=dumb`,
+unavailable capabilities, and non-POSIX editing safely use `input()` once per
+attempt with no palette or completion-key ownership; composition and
+confirmation pass their structured plain semantic prompt once.
 
 The one stream terminal retains at most 100 exact nonblank main submissions for
 that process. Up recalls older entries, Down recalls newer entries, and Down
@@ -79,10 +84,16 @@ is preserved. Empty/blank input, Ctrl-C, empty VEOF, physical EOF, failures,
 composition, subjects, and confirmations are excluded. The 101st entry evicts
 only the oldest. Nothing is persisted.
 
-The visible `[suggestions]` panel remains preview-only, not an open selectable
-palette, so Up/Down still navigate history while it is displayed. Tab,
-Shift-Tab, and Escape have no main-prompt completion action; #79 remains
-planned. `/settings` is not currently available.
+Main matching is exact and case-sensitive at the cursor, with ASCII space/tab
+token boundaries. Root offers 20 main-available registry tokens, help offers 23
+including the composition-only commands, and agent-valued positions offer the
+10 canonical IDs and aliases; runtime values are not synthesized. Fixed-only
+no-match positions show an empty open palette, while mixed free-value slots
+close it. Filtering retains an eligible highlight. The first changing Tab
+saves the full buffer/cursor snapshot; edits in the same grammar position keep
+it, and a grammar-position change resets it. Enter submits only the visible
+buffer to the parser once. `/settings` is not currently available; pickers and
+workspace Codex settings defaults also remain future work.
 
 On capable real-CLI streams, orientation/current context, `/status`, `/inspect`,
 central errors/recovery, and accepted management, advisory, retrieval, and

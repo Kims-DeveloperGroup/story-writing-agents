@@ -166,20 +166,30 @@ dual-TTY guard still exits before editor construction. Recoverable activation
 failure restores first, then falls back.
 
 One unified driver instance is the sole owner of raw terminal resources. The
-terminal selects the main, composition, or empty confirmation suggestion
-provider for each read; the driver retains no provider or operation mode. The
-terminal routes completed main, composition, and confirmation reads explicitly,
-without inspecting prompt text, while subject input remains on the ordinary
-reader. Each composition/confirmation call injects its semantic renderer only
-for that read. The standalone line-editor compatibility facade delegates to
-this same driver implementation.
+terminal supplies the canonical completion provider and semantic palette
+renderer to the supported main read, or the composition/empty-confirmation
+suggestion provider and semantic input renderer to a history-free read. Every
+collaborator is call-local; the driver retains no provider, renderer, or
+operation mode. The terminal routes completed main, composition, and
+confirmation reads explicitly, without inspecting prompt text, while subject
+input remains on the ordinary reader. The standalone line-editor compatibility
+facade delegates to this same main reader and driver implementation.
 
-An active read disables canonical input and echo, keeps a Unicode
-code-point buffer, and supports insertion, Left/Right, Home/End,
-Backspace/Delete, Enter, and configured VINTR/VEOF. On main input, Up/Down also
-navigate the driver's history. Composition and confirmation remain history-free;
-Up/Down, Tab, Shift-Tab, and Escape are no-ops there. Enter submits; VEOF
-submits nonempty text or returns EOF when empty; VINTR returns interrupt.
+An active read disables canonical input and echo, keeps a Unicode code-point
+buffer, and supports insertion, Left/Right, Home/End, Backspace/Delete, Enter,
+and configured VINTR/VEOF. The sole reader incrementally decodes one byte at a
+time when a byte buffer is available, so split UTF-8 remains one text event.
+After Escape it waits through `select()` for descriptor readiness for a fixed
+50 milliseconds, preserves established CSI and SS3 key mappings, and
+reprocesses an ordinary following code point after emitting standalone Escape.
+It creates no second reader, thread, or sleep loop.
+
+On main input, closed-palette Up/Down navigates the driver's history. An open
+palette instead owns Up/Down highlight movement, Tab completion, and Escape
+dismissal/restoration; Shift-Tab has no action. Composition and confirmation
+remain history-free, and Up/Down, Tab, Shift-Tab, and Escape are no-ops there.
+Enter submits; VEOF submits nonempty text or returns EOF when empty; VINTR
+returns interrupt.
 Submission clears the panel; failure attempts it; both restore captured
 attributes. A successful live main commit is appended only after display
 cleanup and terminal restoration complete. Active failures propagate after
@@ -188,12 +198,13 @@ restoration; restoration uncertainty is fatal `internal_error`. See the exact
 [composition](../reference/interactive-terminal.md#composition-live-suggestions)
 tokens.
 
-Preview neither completes, selects, nor dispatches. It calls no parser, story
-provider, runtime, filesystem, persistence, subprocess, storage, or network.
-It changes only call-local editor/terminal state; the exact buffer is passed
-once to the terminal/controller boundary. Main command previews remain
-registry-backed. Composition preview is the fixed ordered `/send`, `/cancel`
-set, and whitespace or a nonmatch clears it.
+Main palette projection, filtering, highlight, replacement, snapshot restore,
+and dismissal call no parser, story provider, runtime, filesystem, persistence,
+subprocess, storage, or network. They change only call-local editor/terminal
+state; the exact visible buffer is passed once to the terminal/controller
+boundary. Canonical command grammar supplies only static root, subcommand, and
+finite fixed-option candidates. Composition remains a preview-only fixed
+ordered `/send`, `/cancel` set, and whitespace or a nonmatch clears it.
 
 Before input, composition and confirmation each build one ordered semantic view
 whose final control is focused. The renderer is pure and produces equivalent
@@ -202,11 +213,13 @@ setup passes that plain projection to the fallback reader once. A capable live
 read uses the trusted fixed-theme projection and keeps its renderer, buffer,
 cursor, and preview state call-local. Confirmation supplies no suggestions.
 
-The current main preview is not an open selectable overlay. Up/Down therefore
-navigate history even while `[suggestions]` is visible. Tab, Shift-Tab, and
-Escape have no current completion action. The pure overlay-open transition seam
-suppresses history arrows for future #79 integration but is not connected to
-the current preview.
+Capable main reads render the existing semantic `SuggestionPalette` in plain or
+fixed ANSI at the active width. `NO_COLOR` removes only decoration. Opening
+sets the first highlight; open-palette Up/Down clamps highlight without
+history movement, Tab replaces the full cursor-active token without whitespace,
+and Escape restores the first pre-completion snapshot and dismisses that exact
+line state. Plain fallback bypasses the completion provider, palette projector,
+and renderer completely; it receives the prompt once and returns one line.
 
 ## Other input and process-local state
 
