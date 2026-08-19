@@ -14,6 +14,8 @@ from ._core import (
     InteractiveSemanticOutput,
     InteractiveTerminal,
     ListView,
+    MainInputControlState,
+    MainInputHistoryState,
     Message,
     Notice,
     Panel,
@@ -26,12 +28,14 @@ from ._core import (
     ViewState,
     RawTerminalDriver,
     SlashCommandSuggestion,
+    append_main_input_history,
     build_contextual_terminal,
     build_stream_terminal,
     project_composition_suggestions,
     project_slash_suggestions,
     sanitize_terminal_text,
     transition_line_input,
+    transition_main_input,
 )
 
 

@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
-from dataclasses import dataclass, field
-from typing import TextIO
+from dataclasses import dataclass
+from typing import TextIO, TypeAlias
 
 from ._model import (
     CapabilityProfile,
     ControlOutcome,
+    ControlOutcomeKind,
     KeyEvent,
     KeyKind,
     LineInputState,
+    MainInputControlState,
+    MainInputHistoryState,
     SlashCommandSuggestion,
     TerminalCapabilities,
     display_character_width,
@@ -37,10 +40,8 @@ _DEFAULT_TERMIOS = object()
 
 @dataclass(slots=True)
 class _LiveEditorState:
-    """Retain one call-local Unicode buffer, cursor, and redraw position."""
+    """Retain only call-local escape decoding and redraw position."""
 
-    buffer: list[str] = field(default_factory=list)
-    cursor: int = 0
     escape_sequence: str | None = None
     rendered_cursor_row: int = 0
 
@@ -58,13 +59,34 @@ class _TerminalConfiguration:
     termios_module: object
 
 
+_ControlState: TypeAlias = LineInputState | MainInputControlState
+_ControlTransition: TypeAlias = Callable[
+    [_ControlState, KeyEvent],
+    tuple[_ControlState, ControlOutcome | None],
+]
+_LineTransition: TypeAlias = Callable[
+    [LineInputState, KeyEvent],
+    tuple[LineInputState, ControlOutcome | None],
+]
+_MainTransition: TypeAlias = Callable[
+    [MainInputControlState, KeyEvent, MainInputHistoryState],
+    tuple[MainInputControlState, ControlOutcome | None],
+]
+_HistoryAppend: TypeAlias = Callable[
+    [MainInputHistoryState, str], MainInputHistoryState
+]
+
+
 class RawTerminalDriver:
     """Own one stream pair's live editing and raw terminal resource lifecycle."""
 
     __slots__ = (
         "_fallback_read_line",
+        "_history_append",
+        "_history_state",
         "_input_stream",
         "_line_transition",
+        "_main_transition",
         "_os_provider",
         "_output_stream",
         "_termios_provider",
@@ -75,10 +97,9 @@ class RawTerminalDriver:
         fallback_read_line: Callable[[str], str],
         input_stream: TextIO,
         output_stream: TextIO,
-        line_transition: Callable[
-            [LineInputState, KeyEvent],
-            tuple[LineInputState, ControlOutcome | None],
-        ],
+        line_transition: _LineTransition,
+        main_transition: _MainTransition,
+        history_append: _HistoryAppend,
         *,
         termios_provider: Callable[[], object | None] | None = None,
         os_provider: Callable[[], object] | None = None,
@@ -95,6 +116,10 @@ class RawTerminalDriver:
             raise TypeError("fallback_read_line must be callable")
         if not callable(line_transition):
             raise TypeError("line_transition must be callable")
+        if not callable(main_transition):
+            raise TypeError("main_transition must be callable")
+        if not callable(history_append):
+            raise TypeError("history_append must be callable")
         if termios_provider is not None and not callable(termios_provider):
             raise TypeError("termios_provider must be callable or None")
         if os_provider is not None and not callable(os_provider):
@@ -103,6 +128,9 @@ class RawTerminalDriver:
         self._input_stream = input_stream
         self._output_stream = output_stream
         self._line_transition = line_transition
+        self._main_transition = main_transition
+        self._history_append = history_append
+        self._history_state = MainInputHistoryState()
         self._termios_provider = (
             (lambda: _termios) if termios_provider is None else termios_provider
         )
@@ -148,7 +176,67 @@ class RawTerminalDriver:
             [str], tuple[SlashCommandSuggestion, ...]
         ],
     ) -> str:
-        """Read one exact Unicode buffer with a call-local preview provider.
+        """Read one history-free Unicode buffer with a preview provider."""
+
+        return self._read_control_line(
+            prompt,
+            suggestion_provider,
+            LineInputState(),
+            self._line_transition,
+        )
+
+    def read_main_line(
+        self,
+        prompt: str,
+        suggestion_provider: Callable[
+            [str], tuple[SlashCommandSuggestion, ...]
+        ],
+    ) -> str:
+        """Read one main line and retain its successful exact nonblank commit.
+
+        Each read starts with inactive navigation over the driver's one
+        process-local history store. The current preview list is not an open
+        selectable overlay, so Up and Down remain history keys in this slice.
+        History changes only after fallback success or live display cleanup and
+        terminal restoration have completed successfully.
+        """
+
+        def transition(
+            state: _ControlState,
+            event: KeyEvent,
+        ) -> tuple[_ControlState, ControlOutcome | None]:
+            if type(state) is not MainInputControlState:
+                raise TypeError("main transition requires MainInputControlState")
+            return self._main_transition(state, event, self._history_state)
+
+        line = self._read_control_line(
+            prompt,
+            suggestion_provider,
+            MainInputControlState(),
+            transition,
+        )
+        # Preserve the established downstream line-validation boundary. Invalid
+        # fallback shapes or framing are returned for that boundary to reject,
+        # and therefore never become successfully completed history entries.
+        if type(line) is str and "\r" not in line and "\n" not in line:
+            updated_history = self._history_append(self._history_state, line)
+            if type(updated_history) is not MainInputHistoryState:
+                raise TypeError(
+                    "history_append must return a MainInputHistoryState"
+                )
+            self._history_state = updated_history
+        return line
+
+    def _read_control_line(
+        self,
+        prompt: str,
+        suggestion_provider: Callable[
+            [str], tuple[SlashCommandSuggestion, ...]
+        ],
+        initial_state: _ControlState,
+        transition: _ControlTransition,
+    ) -> str:
+        """Read one exact buffer through one pure logical-state transition.
 
         A capable POSIX terminal is placed in call-local noncanonical/no-echo
         mode and restored after submission or every failure. Unsupported or
@@ -161,6 +249,10 @@ class RawTerminalDriver:
             raise TypeError("prompt must be a string")
         if not callable(suggestion_provider):
             raise TypeError("suggestion_provider must be callable")
+        if type(initial_state) not in {LineInputState, MainInputControlState}:
+            raise TypeError("initial_state must be an input control state")
+        if not callable(transition):
+            raise TypeError("transition must be callable")
 
         try:
             configuration = _terminal_configuration(
@@ -182,21 +274,29 @@ class RawTerminalDriver:
                 return self._fallback_read_line(prompt)
             raise
 
-        state = _LiveEditorState()
+        display_state = _LiveEditorState()
         line: str | None = None
+        line_state: LineInputState | None = None
         active_failure: BaseException | None = None
         try:
-            line = self._read_live_buffer(
+            line, line_state = self._read_live_buffer(
                 prompt,
                 configuration,
-                state,
+                display_state,
                 suggestion_provider,
+                initial_state,
+                transition,
             )
-            self._finish_live_display(prompt, configuration.width, state)
+            self._finish_live_display(
+                prompt,
+                configuration.width,
+                display_state,
+                line_state,
+            )
         except BaseException as failure:
             active_failure = failure
             try:
-                self._clear_live_display(state, line_break=True)
+                self._clear_live_display(display_state, line_break=True)
             except BaseException:
                 # The active failure remains authoritative when display cleanup
                 # cannot use the same failed output collaborator.
@@ -206,83 +306,83 @@ class RawTerminalDriver:
         if active_failure is not None:
             raise active_failure
         assert line is not None
+        assert line_state is not None
         return line
 
     def _read_live_buffer(
         self,
         prompt: str,
         configuration: _TerminalConfiguration,
-        state: _LiveEditorState,
+        display_state: _LiveEditorState,
         suggestion_provider: Callable[
             [str], tuple[SlashCommandSuggestion, ...]
         ],
-    ) -> str:
+        initial_state: _ControlState,
+        transition: _ControlTransition,
+    ) -> tuple[str, LineInputState]:
         """Edit one code-point buffer until submit, interrupt, EOF, or failure.
 
-        The method borrows the active terminal configuration and mutates only
-        ``state``. Stream failures propagate to ``read_live_line`` for display
-        and attribute cleanup; no parser, story provider, or persistence call
-        occurs.
+        The immutable logical state is the sole buffer, cursor, navigation, and
+        focus authority. ``display_state`` owns only physical escape decoding
+        and redraw position. Stream failures propagate to the owning read
+        boundary for display and attribute cleanup; no parser, story provider,
+        persistence, or history append occurs here.
         """
 
-        state.rendered_cursor_row = self._redraw_live_display(
+        control_state = initial_state
+        display_state.rendered_cursor_row = self._redraw_live_display(
             prompt,
             configuration.width,
-            state,
+            display_state,
+            _control_line_state(control_state),
             suggestion_provider,
         )
         while True:
             character = self._read_character()
 
-            if state.escape_sequence is not None:
-                action, reprocess = _consume_escape_character(
-                    state,
+            if display_state.escape_sequence is not None:
+                event, reprocess = _consume_escape_character(
+                    display_state,
                     character,
                 )
-                if action is not None:
-                    changed = _apply_editor_action(
-                        state,
-                        action,
-                        self._line_transition,
+                if event is not None:
+                    control_state, outcome, changed = _apply_control_event(
+                        control_state,
+                        event,
+                        transition,
                     )
+                    completed = _completed_text_or_raise(outcome)
+                    if completed is not None:
+                        return completed, _control_line_state(control_state)
                     if changed:
-                        state.rendered_cursor_row = self._redraw_live_display(
+                        display_state.rendered_cursor_row = self._redraw_live_display(
                             prompt,
                             configuration.width,
-                            state,
+                            display_state,
+                            _control_line_state(control_state),
                             suggestion_provider,
                         )
                 if not reprocess:
                     continue
 
             if character == "\x1b":
-                state.escape_sequence = character
+                display_state.escape_sequence = character
                 continue
-            if character in {"\r", "\n"}:
-                return "".join(state.buffer)
-            if character == configuration.interrupt_character:
-                raise KeyboardInterrupt
-            if character == configuration.eof_character:
-                if not state.buffer:
-                    raise EOFError
-                return "".join(state.buffer)
-            if character in {"\x08", "\x7f"}:
-                changed = _apply_editor_action(
-                    state,
-                    "backspace",
-                    self._line_transition,
-                )
-            else:
-                changed = _apply_key_event(
-                    state,
-                    KeyEvent(KeyKind.TEXT, text=character),
-                    self._line_transition,
-                )
+            event = _key_event(character, configuration)
+            control_state, outcome, changed = _apply_control_event(
+                control_state,
+                event,
+                transition,
+            )
+            completed = _completed_text_or_raise(outcome)
+            if completed is not None:
+                return completed, _control_line_state(control_state)
             if changed:
-                state.rendered_cursor_row = self._redraw_live_display(
+                display_state.rendered_cursor_row = self._redraw_live_display(
                     prompt,
                     configuration.width,
-                    state,
+                    display_state,
+                    _control_line_state(control_state),
                     suggestion_provider,
                 )
 
@@ -305,7 +405,8 @@ class RawTerminalDriver:
         self,
         prompt: str,
         width: int,
-        state: _LiveEditorState,
+        display_state: _LiveEditorState,
+        line_state: LineInputState,
         suggestion_provider: Callable[
             [str], tuple[SlashCommandSuggestion, ...]
         ],
@@ -320,11 +421,11 @@ class RawTerminalDriver:
         render_width = max(1, width - 1)
         input_lines, cursor_row, cursor_column = _wrapped_editor_input(
             prompt,
-            state.buffer,
-            state.cursor,
+            line_state.buffer,
+            line_state.cursor,
             render_width,
         )
-        suggestions = suggestion_provider("".join(state.buffer))
+        suggestions = suggestion_provider(line_state.buffer)
         if type(suggestions) is not tuple or any(
             type(item) is not SlashCommandSuggestion for item in suggestions
         ):
@@ -342,7 +443,7 @@ class RawTerminalDriver:
                 )
 
         output_lines = [*input_lines, *panel_lines]
-        move_to_top = _CURSOR_UP * state.rendered_cursor_row
+        move_to_top = _CURSOR_UP * display_state.rendered_cursor_row
         move_to_cursor = _CURSOR_UP * (
             len(output_lines) - 1 - cursor_row
         )
@@ -365,7 +466,8 @@ class RawTerminalDriver:
         self,
         prompt: str,
         width: int,
-        state: _LiveEditorState,
+        display_state: _LiveEditorState,
+        line_state: LineInputState,
     ) -> None:
         """Remove suggestions and leave the submitted prompt line visible.
 
@@ -377,11 +479,11 @@ class RawTerminalDriver:
         render_width = max(1, width - 1)
         input_lines, _cursor_row, _cursor_column = _wrapped_editor_input(
             prompt,
-            state.buffer,
-            len(state.buffer),
+            line_state.buffer,
+            len(line_state.buffer),
             render_width,
         )
-        move_to_top = _CURSOR_UP * state.rendered_cursor_row
+        move_to_top = _CURSOR_UP * display_state.rendered_cursor_row
         payload = "".join(
             (
                 _CARRIAGE_RETURN,
@@ -393,7 +495,7 @@ class RawTerminalDriver:
             )
         )
         self._write_live_text(payload)
-        state.rendered_cursor_row = 0
+        display_state.rendered_cursor_row = 0
 
     def _clear_live_display(
         self,
@@ -738,12 +840,13 @@ def _restore_terminal_or_raise(
 def _consume_escape_character(
     state: _LiveEditorState,
     character: str,
-) -> tuple[str | None, bool]:
-    """Consume one escape-sequence code point into an editor action decision.
+) -> tuple[KeyEvent | None, bool]:
+    """Consume one escape-sequence code point into a normalized key decision.
 
-    The returned pair is ``(action, reprocess)``. Unknown, up, and down
-    sequences are discarded; terminal-control characters may be reprocessed by
-    the ordinary input path. No buffer character is inserted here.
+    The returned pair is ``(event, reprocess)``. Known CSI and application
+    sequences become exact key kinds. Unknown sequence suffixes are discarded;
+    a standalone Escape before a non-sequence character becomes an Escape
+    event and the following character is reprocessed normally.
     """
 
     sequence = state.escape_sequence
@@ -754,7 +857,7 @@ def _consume_escape_character(
             state.escape_sequence = sequence + character
             return None, False
         state.escape_sequence = None
-        return None, ord(character) < 0x20 or character == "\x7f"
+        return KeyEvent(KeyKind.ESCAPE), True
 
     sequence += character
     state.escape_sequence = sequence
@@ -764,11 +867,11 @@ def _consume_escape_character(
 
     if sequence.startswith("\x1bO"):
         state.escape_sequence = None
-        return _escape_action(sequence), False
+        return _escape_event(sequence), False
 
     if "@" <= character <= "~":
         state.escape_sequence = None
-        return _escape_action(sequence), False
+        return _escape_event(sequence), False
     if len(sequence) >= _MAX_ESCAPE_SEQUENCE_LENGTH:
         # Keep consuming the unknown CSI until its final byte so no suffix can
         # leak into the submitted buffer.
@@ -776,81 +879,102 @@ def _consume_escape_character(
     return None, False
 
 
-def _escape_action(sequence: str) -> str | None:
-    """Map supported fixed cursor sequences to internal editor action names.
+def _escape_event(sequence: str) -> KeyEvent | None:
+    """Map supported fixed cursor sequences to normalized key events.
 
-    Unknown, up, and down sequences return ``None`` and never reach the buffer.
-    The pure mapping emits no terminal output and owns no cleanup.
-    """
-
-    return {
-        "\x1b[D": "left",
-        "\x1b[C": "right",
-        "\x1b[H": "home",
-        "\x1b[F": "end",
-        "\x1b[1~": "home",
-        "\x1b[7~": "home",
-        "\x1b[4~": "end",
-        "\x1b[8~": "end",
-        "\x1b[3~": "delete",
-        "\x1bOH": "home",
-        "\x1bOF": "end",
-    }.get(sequence)
-
-
-def _apply_editor_action(
-    state: _LiveEditorState,
-    action: str,
-    line_transition: Callable[
-        [LineInputState, KeyEvent],
-        tuple[LineInputState, ControlOutcome | None],
-    ],
-) -> bool:
-    """Apply one trusted cursor/deletion action and report visible change.
-
-    Buffer mutation removes at most one Python code point. Unknown action names
-    raise before mutation; the function performs no I/O or resource cleanup.
+    Unknown sequences return ``None`` and never reach the buffer. The pure
+    mapping emits no terminal output and owns no cleanup.
     """
 
     kinds = {
-        "left": KeyKind.LEFT,
-        "right": KeyKind.RIGHT,
-        "home": KeyKind.HOME,
-        "end": KeyKind.END,
-        "backspace": KeyKind.BACKSPACE,
-        "delete": KeyKind.DELETE,
+        "\x1b[A": KeyKind.UP,
+        "\x1b[B": KeyKind.DOWN,
+        "\x1b[C": KeyKind.RIGHT,
+        "\x1b[D": KeyKind.LEFT,
+        "\x1b[H": KeyKind.HOME,
+        "\x1b[F": KeyKind.END,
+        "\x1b[1~": KeyKind.HOME,
+        "\x1b[7~": KeyKind.HOME,
+        "\x1b[4~": KeyKind.END,
+        "\x1b[8~": KeyKind.END,
+        "\x1b[3~": KeyKind.DELETE,
+        "\x1b[Z": KeyKind.SHIFT_TAB,
+        "\x1bOA": KeyKind.UP,
+        "\x1bOB": KeyKind.DOWN,
+        "\x1bOC": KeyKind.RIGHT,
+        "\x1bOD": KeyKind.LEFT,
+        "\x1bOH": KeyKind.HOME,
+        "\x1bOF": KeyKind.END,
     }
     try:
-        kind = kinds[action]
-    except KeyError as exc:
-        raise ValueError(f"unsupported editor action: {action}") from exc
-    return _apply_key_event(state, KeyEvent(kind), line_transition)
+        return KeyEvent(kinds[sequence])
+    except KeyError:
+        return None
 
 
-def _apply_key_event(
-    state: _LiveEditorState,
+def _key_event(
+    character: str,
+    configuration: _TerminalConfiguration,
+) -> KeyEvent:
+    """Normalize one non-escape terminal character without external effects."""
+
+    if character in {"\r", "\n"}:
+        return KeyEvent(KeyKind.ENTER)
+    if character == configuration.interrupt_character:
+        return KeyEvent(KeyKind.INTERRUPT)
+    if character == configuration.eof_character:
+        return KeyEvent(KeyKind.EOF)
+    if character in {"\x08", "\x7f"}:
+        return KeyEvent(KeyKind.BACKSPACE)
+    if character == "\t":
+        return KeyEvent(KeyKind.TAB)
+    return KeyEvent(KeyKind.TEXT, text=character)
+
+
+def _apply_control_event(
+    state: _ControlState,
     event: KeyEvent,
-    line_transition: Callable[
-        [LineInputState, KeyEvent],
-        tuple[LineInputState, ControlOutcome | None],
-    ],
-) -> bool:
-    """Apply one pure line-buffer transition to the driver's redraw state."""
+    transition: _ControlTransition,
+) -> tuple[_ControlState, ControlOutcome | None, bool]:
+    """Apply one pure transition and report whether its visible line changed."""
 
-    previous = LineInputState("".join(state.buffer), state.cursor)
-    updated, outcome = line_transition(previous, event)
-    if outcome is not None:
-        raise ValueError("editing actions must not produce a terminal outcome")
-    if updated == previous:
-        return False
-    state.buffer = list(updated.buffer)
-    state.cursor = updated.cursor
-    return True
+    previous_line = _control_line_state(state)
+    updated, outcome = transition(state, event)
+    if type(updated) is not type(state):
+        raise TypeError("transition must preserve the input control state type")
+    if outcome is not None and type(outcome) is not ControlOutcome:
+        raise TypeError("transition outcome must be a ControlOutcome or None")
+    return updated, outcome, _control_line_state(updated) != previous_line
+
+
+def _control_line_state(state: _ControlState) -> LineInputState:
+    """Return the sole immutable editable line from one logical control."""
+
+    if type(state) is LineInputState:
+        return state
+    if type(state) is MainInputControlState:
+        return state.line_state
+    raise TypeError("state must be an input control state")
+
+
+def _completed_text_or_raise(outcome: ControlOutcome | None) -> str | None:
+    """Return committed text or raise the established terminal event."""
+
+    if outcome is None:
+        return None
+    if outcome.kind is ControlOutcomeKind.COMMIT:
+        assert outcome.text is not None
+        return outcome.text
+    if outcome.kind is ControlOutcomeKind.INTERRUPT:
+        raise KeyboardInterrupt
+    if outcome.kind is ControlOutcomeKind.EOF:
+        raise EOFError
+    raise ValueError(f"unsupported control outcome: {outcome.kind.value}")
 
 
 def _wrapped_editor_input(
     prompt: str,
-    buffer: list[str],
+    buffer: str,
     cursor: int,
     width: int,
 ) -> tuple[list[str], int, int]:

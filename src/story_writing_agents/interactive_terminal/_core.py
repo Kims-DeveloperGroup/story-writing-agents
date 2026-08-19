@@ -15,8 +15,10 @@ from typing import TextIO
 from ..agents import AGENT_SPECS
 from ..interactive_commands import AGENT_ROUTES, COMMANDS, CommandSpec
 from ._controls import (
+    append_main_input_history,
     project_composition_suggestions,
     project_slash_suggestions,
+    transition_main_input,
     transition_line_input,
 )
 from ._driver import RawTerminalDriver
@@ -25,6 +27,8 @@ from ._model import (
     Component,
     Field,
     ListView,
+    MainInputControlState,
+    MainInputHistoryState,
     Message,
     Notice,
     Panel,
@@ -1253,13 +1257,15 @@ def build_stream_terminal(
         input_stream,
         output_stream,
         transition_line_input,
+        transition_main_input,
+        append_main_input_history,
     )
     capabilities = driver.capabilities()
     terminal = InteractiveTerminal(
         driver.read_line,
         driver.write_text,
         width=max(20, capabilities.width),
-        main_read_line=lambda prompt: driver.read_live_line(
+        main_read_line=lambda prompt: driver.read_main_line(
             prompt,
             _main_slash_suggestions,
         ),
