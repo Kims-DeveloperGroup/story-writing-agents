@@ -2504,11 +2504,19 @@ class InteractiveController:
                 start=1,
             ):
                 citation = hit.citation
-                if citation.turn_id is None:
+                citation_values = (
+                    citation.turn_id,
+                    citation.sequence,
+                    citation.event_kind,
+                )
+                if all(value is None for value in citation_values):
                     citation_value = f"conversation {handle}"
+                elif any(value is None for value in citation_values):
+                    raise ValueError(
+                        "citation turn ID, sequence, and kind must be "
+                        "present together"
+                    )
                 else:
-                    assert citation.sequence is not None
-                    assert citation.event_kind is not None
                     citation_value = (
                         f"conversation {handle}, turn {citation.turn_id}, "
                         f"sequence {citation.sequence}, kind "
