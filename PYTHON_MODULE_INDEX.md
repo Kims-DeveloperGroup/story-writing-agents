@@ -583,7 +583,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   The settings editor exposes the exact six-row top level Language, Persona,
   Maximum debate rounds, Providers, Save, and Cancel; Providers selects one
   roster agent and then its Provider, Model, or Reasoning effort without
-  changing the active backend or runtime snapshot.
+  changing the active backend or runtime snapshot. Editors contain no repeated
+  Current/Pending context panel. The controller emits that complete semantic
+  snapshot exactly once for each Save attempt or whole-flow cancellation;
+  nested Escape returns to its parent without a snapshot or cancellation
+  record.
 - **Direct internal dependencies:** `agents`, `backend`, `cli_context`,
   `conversation_retrieval`, `conversation_search`, `conversations`, `errors`,
   `interactive_commands`, `interactive_controller._conversation_policy`,
@@ -884,7 +888,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   resource-free semantic cancellable-line capability for nested settings input;
   callback and stream factories respectively provide deterministic plain and
   sole-driver-backed implementations without changing the exact public
-  `__all__`.
+  `__all__`. Both unlisted input adapters accept an opt-in call-local transient
+  lifecycle used by settings: capable stream construction delegates display
+  clearing to the sole driver, while callback construction omits synthetic
+  picker final frames it cannot erase. Their default route remains unchanged.
 - **Direct internal dependencies:** `interactive_terminal._core`.
 - **State, resources, and side effects:** Owns no terminal resource or mutable
   process state. Import deterministically canonicalizes supported public object
@@ -1053,6 +1060,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   generic single-select lifecycle that does not reuse editable-line state. The
   driver provides one-write output, redraws on the full immutable main-command
   or picker control state, and normalizes established editing and picker keys.
+  Its optional per-read transient flag clears capable picker and cancellable
+  prompt rows on completion or cancellation before returning the typed outcome;
+  line fallback cannot erase and instead omits the duplicate picker final
+  frame. The default retains the established final-frame behavior.
 - **Direct internal dependencies:** `interactive_terminal._model`.
 - **State, resources, and side effects:** Sole owner of borrowed input/output
   streams, independent capability checks, detected width, normalized physical
@@ -1129,7 +1140,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   collaborators. Resource-free `InteractivePromptInput` constructs one existing
   `InputPromptView` and returns typed commit, nested-cancel, interrupt, or EOF;
   callback and stream construction bind it to plain or driver-owned input
-  without adding a component kind or raw resource owner.
+  without adding a component kind or raw resource owner. Both adapters accept a
+  validated opt-in transient flag and pass it only to collaborators that support
+  that lifecycle; default calls retain the established picker final frame and
+  prompt behavior, while transient callback pickers omit the duplicate final
+  frame.
 - **Direct internal dependencies:** `agents`, `interactive_commands`,
   `interactive_terminal._controls`, `interactive_terminal._driver`,
   `interactive_terminal._model`, and `interactive_terminal._render`.
@@ -1434,7 +1449,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   reads history-free. Cancellable settings prompt input is also history- and
   completion-free: `_controls` owns its pure Escape outcome, `_core` binds the
   resource-free facade adapter, and the sole driver owns its raw/fallback input
-  and restoration. It also owns the dedicated picker lifecycle, observes
+  and restoration. Settings alone opts into transient picker/prompt reads: the
+  driver clears capable live rows before returning, callback/line fallback
+  omits only duplicate picker final frames, and the controller owns one complete
+  Current/Pending snapshot at each Save attempt or whole-flow cancellation.
+  Nested Escape emits no snapshot, and default non-settings control behavior is
+  unchanged. The driver also owns the dedicated picker lifecycle, observes
   picker width on each redraw, and keeps picker input separate from editable
   line, history, and completion state. `_controls` supplies immutable history,
   selectable palette, composer, confirmation, and generic picker transitions:
