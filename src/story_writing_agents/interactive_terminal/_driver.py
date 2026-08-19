@@ -70,6 +70,10 @@ class _TerminalConfiguration:
     termios_module: object
 
 
+class _PromptCancelled(Exception):
+    """Carry one raw Escape through the shared line cleanup boundary."""
+
+
 _ControlState: TypeAlias = (
     LineInputState | MainInputControlState | MainCommandControlState
 )
@@ -81,6 +85,7 @@ _LineTransition: TypeAlias = Callable[
     [LineInputState, KeyEvent],
     tuple[LineInputState, ControlOutcome | None],
 ]
+_PromptTransition: TypeAlias = _LineTransition
 _CompletionProvider: TypeAlias = Callable[
     [str, int], CommandCompletionProjection | None
 ]
@@ -265,6 +270,55 @@ class RawTerminalDriver:
             rendered_input=rendered_input,
             known_width=capabilities.width,
         )
+
+    def read_prompt(
+        self,
+        view: InputPromptView,
+        renderer: _InputRenderer,
+        transition: _PromptTransition,
+    ) -> ControlOutcome:
+        """Read one cancellable semantic line without history or completion."""
+
+        if type(view) is not InputPromptView:
+            raise TypeError("view must be an InputPromptView")
+        if not callable(renderer):
+            raise TypeError("renderer must be callable")
+        if not callable(transition):
+            raise TypeError("transition must be callable")
+
+        capabilities = self.capabilities()
+        rendered_input = renderer(view, capabilities)
+        if type(rendered_input) is not RenderedInputFrame:
+            raise TypeError("renderer must return a RenderedInputFrame")
+        if rendered_input.width != capabilities.width:
+            raise ValueError("rendered input width must match current capabilities")
+        try:
+            line = (
+                self._read_control_line(
+                    rendered_input.plain_text,
+                    _empty_suggestion_preview,
+                    LineInputState(),
+                    transition,
+                    rendered_input=rendered_input,
+                    known_width=capabilities.width,
+                )
+                if capabilities.raw_mode
+                else self._fallback_read_line(rendered_input.plain_text)
+            )
+        except _PromptCancelled:
+            return ControlOutcome(ControlOutcomeKind.CANCEL)
+        except KeyboardInterrupt:
+            return ControlOutcome(ControlOutcomeKind.INTERRUPT)
+        except EOFError:
+            return ControlOutcome(ControlOutcomeKind.EOF)
+        if not isinstance(line, str):
+            raise TypeError("read_line must return a string")
+        line = str.__str__(line)
+        if "\r" in line or "\n" in line:
+            raise ValueError("read_line must return one line without CR or LF")
+        if line == "\x1b":
+            return ControlOutcome(ControlOutcomeKind.CANCEL)
+        return ControlOutcome(ControlOutcomeKind.COMMIT, text=line)
 
     def read_main_line(
         self,
@@ -1682,6 +1736,8 @@ def _completed_text_or_raise(outcome: ControlOutcome | None) -> str | None:
         raise KeyboardInterrupt
     if outcome.kind is ControlOutcomeKind.EOF:
         raise EOFError
+    if outcome.kind is ControlOutcomeKind.CANCEL:
+        raise _PromptCancelled
     raise ValueError(f"unsupported control outcome: {outcome.kind.value}")
 
 

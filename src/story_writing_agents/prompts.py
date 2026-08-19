@@ -7,7 +7,7 @@ import json
 from typing import Mapping
 
 from .agents import AGENT_SPECS
-from .config import ConfigManager
+from .config import ConfigurationSnapshot, ConfigManager
 from .conversations import ConversationContextWindow
 from .models import (
     AgentDefinition,
@@ -27,10 +27,18 @@ class PromptAssembler:
         workspace: Workspace,
         *,
         backend_overrides: Mapping[str, str] | None = None,
+        configuration_snapshot: ConfigurationSnapshot | None = None,
     ) -> None:
         self.workspace = workspace
         self.config = ConfigManager(workspace)
         self.backend_overrides = dict(backend_overrides or {})
+        if configuration_snapshot is not None and type(
+            configuration_snapshot
+        ) is not ConfigurationSnapshot:
+            raise TypeError(
+                "configuration_snapshot must be a ConfigurationSnapshot or None"
+            )
+        self.configuration_snapshot = configuration_snapshot
 
     def build_definition(
         self,
@@ -41,10 +49,19 @@ class PromptAssembler:
         """Resolve current config and least-context files for one binding."""
 
         runtime_overrides = self.workspace.load_session_overrides(session_id)
-        resolved = self.config.resolve(
-            agent_id,
-            runtime_overrides,
-            self.backend_overrides,
+        resolved = (
+            self.config.resolve(
+                agent_id,
+                runtime_overrides,
+                self.backend_overrides,
+            )
+            if self.configuration_snapshot is None
+            else self.config.resolve_from_snapshot(
+                self.configuration_snapshot,
+                agent_id,
+                runtime_overrides,
+                self.backend_overrides,
+            )
         )
         spec = AGENT_SPECS[agent_id]
         system_prompt_file = self._reference(spec.system_prompt_file)

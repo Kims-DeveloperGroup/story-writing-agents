@@ -100,6 +100,21 @@ def transition_line_input(
     return state, None
 
 
+def transition_prompt_input(
+    state: LineInputState,
+    event: KeyEvent,
+) -> tuple[LineInputState, ControlOutcome | None]:
+    """Apply one cancellable prompt key without history or side effects."""
+
+    if type(state) is not LineInputState:
+        raise TypeError("state must be a LineInputState")
+    if type(event) is not KeyEvent:
+        raise TypeError("event must be a KeyEvent")
+    if event.kind is KeyKind.ESCAPE:
+        return state, ControlOutcome(ControlOutcomeKind.CANCEL)
+    return transition_line_input(state, event)
+
+
 def append_main_input_history(
     history: MainInputHistoryState,
     text: str,

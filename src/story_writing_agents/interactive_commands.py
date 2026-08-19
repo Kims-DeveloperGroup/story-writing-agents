@@ -35,6 +35,7 @@ class ActionKind(StrEnum):
     INSPECT = "inspect"
     HISTORY = "history"
     STATUS = "status"
+    SETTINGS = "settings"
     SET_LANGUAGE = "set_language"
     SET_PERSONA = "set_persona"
     RESET = "reset"
@@ -282,6 +283,7 @@ _ACTION_FIELD_RULES: dict[
     ActionKind.INSPECT: (frozenset({"argument"}), _NO_FIELDS),
     ActionKind.HISTORY: (frozenset({"count"}), _NO_FIELDS),
     ActionKind.STATUS: (_NO_FIELDS, _NO_FIELDS),
+    ActionKind.SETTINGS: (_NO_FIELDS, _NO_FIELDS),
     ActionKind.SET_LANGUAGE: (
         frozenset({"argument"}),
         frozenset({"argument"}),
@@ -402,6 +404,14 @@ COMMANDS: tuple[CommandSpec, ...] = (
     ),
     CommandSpec("Agents", "/reset", (), False, False, "/reset"),
     CommandSpec(
+        "Agents",
+        "/settings",
+        (),
+        False,
+        True,
+        "/settings",
+    ),
+    CommandSpec(
         "Consensus",
         "/run [PROMPT] | /run --fresh PROMPT",
         (),
@@ -498,6 +508,7 @@ _COMMAND_ALIASES: dict[str, str] = {
     "language": "/language",
     "persona": "/persona",
     "reset": "/reset",
+    "settings": "/settings",
     "run": "/run",
     "draft-file": "/draft-file",
     "session": "/session",
@@ -764,6 +775,8 @@ def _parse_slash_command(line: str) -> InteractiveAction:
         return _parse_persona(tail)
     if command == "reset":
         return _no_argument_action(tail, ActionKind.RESET, "/reset")
+    if command == "settings":
+        return _no_argument_action(tail, ActionKind.SETTINGS, "/settings")
     if command == "run":
         return _parse_run(tail)
     if command == "draft-file":
