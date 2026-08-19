@@ -676,6 +676,92 @@ class Picker:
         _require_state(self.state)
 
 
+@dataclass(frozen=True, slots=True)
+class PickerControlState:
+    """Retain one semantic picker and its call-local live window origin."""
+
+    picker: Picker
+    window_start: int = 0
+
+    def __post_init__(self) -> None:
+        """Require a valid picker and an available absolute window origin."""
+
+        if type(self.picker) is not Picker:
+            raise TypeError("picker must be a Picker")
+        if self.picker.state not in {
+            ViewState.OPEN,
+            ViewState.EMPTY,
+            ViewState.DISABLED,
+            ViewState.ERROR,
+            ViewState.CANCELLED,
+            ViewState.COMPLETED,
+        }:
+            raise ValueError("picker has an unsupported control state")
+        if self.picker.state is ViewState.EMPTY and self.picker.choices:
+            raise ValueError("an empty picker cannot contain choices")
+        if self.picker.state is ViewState.OPEN and not any(
+            choice.enabled for choice in self.picker.choices
+        ):
+            raise ValueError("an open picker requires an enabled choice")
+        if self.picker.state is ViewState.DISABLED and (
+            not self.picker.choices
+            or any(choice.enabled for choice in self.picker.choices)
+        ):
+            raise ValueError("a disabled picker requires only disabled choices")
+        if self.picker.state is ViewState.ERROR and self.picker.notice is None:
+            raise ValueError("an error picker requires an explicit notice")
+        if self.picker.state is ViewState.COMPLETED and (
+            self.picker.selected_id is None
+            or self.picker.selected_id != self.picker.highlighted_id
+        ):
+            raise ValueError(
+                "a completed picker requires one selected highlighted choice"
+            )
+        if type(self.window_start) is not int:
+            raise TypeError("window_start must be an integer")
+        if self.window_start < 0:
+            raise ValueError("window_start must not be negative")
+        choice_count = len(self.picker.choices)
+        if choice_count == 0 and self.window_start != 0:
+            raise ValueError("an empty picker must start at zero")
+        if choice_count and self.window_start >= choice_count:
+            raise ValueError("window_start must identify one choice")
+
+
+@dataclass(frozen=True, slots=True)
+class PickerViewport:
+    """Project one picker into a bounded contiguous live-choice window."""
+
+    picker: Picker
+    start: int
+    stop: int
+
+    def __post_init__(self) -> None:
+        """Require a valid at-most-seven-row slice containing its highlight."""
+
+        if type(self.picker) is not Picker:
+            raise TypeError("picker must be a Picker")
+        for name, value in (("start", self.start), ("stop", self.stop)):
+            if type(value) is not int:
+                raise TypeError(f"{name} must be an integer")
+            if value < 0:
+                raise ValueError(f"{name} must not be negative")
+        if self.start > self.stop or self.stop > len(self.picker.choices):
+            raise ValueError("viewport must identify a valid choice slice")
+        if self.stop - self.start > 7:
+            raise ValueError("a picker viewport contains at most seven choices")
+        if self.picker.choices and self.start == self.stop:
+            raise ValueError("a nonempty picker viewport must contain a choice")
+        if self.picker.highlighted_id is not None:
+            highlighted_index = next(
+                index
+                for index, choice in enumerate(self.picker.choices)
+                if choice.identity == self.picker.highlighted_id
+            )
+            if not self.start <= highlighted_index < self.stop:
+                raise ValueError("viewport must contain the highlighted choice")
+
+
 InputContext: TypeAlias = Panel | Section | Field | Notice
 
 

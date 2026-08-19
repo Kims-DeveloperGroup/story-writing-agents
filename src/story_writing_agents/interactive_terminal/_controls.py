@@ -18,6 +18,11 @@ from ._model import (
     MainCommandPaletteState,
     MainInputControlState,
     MainInputHistoryState,
+    Notice,
+    Picker,
+    PickerControlState,
+    PickerViewport,
+    SemanticRole,
     SlashCommandSuggestion,
     SuggestionPalette,
     ViewState,
@@ -26,6 +31,12 @@ from ._model import (
 
 _COMPOSITION_SUGGESTION_TOKENS = ("/send", "/cancel")
 _MAIN_INPUT_HISTORY_LIMIT = 100
+_PICKER_WINDOW_SIZE = 7
+_PICKER_EMPTY_TEXT = "No choices available."
+_PICKER_VALIDATION_TEXT = (
+    "Enter an enabled choice number, press Enter for the highlighted choice, "
+    "or enter /cancel."
+)
 
 
 def transition_line_input(
@@ -303,6 +314,437 @@ def project_main_suggestion_palette(
         choices,
         highlighted_id=highlighted_id,
         state=ViewState.OPEN,
+    )
+
+
+def initialize_picker(picker: Picker) -> PickerControlState:
+    """Initialize one validated picker with deterministic highlight precedence."""
+
+    if type(picker) is not Picker:
+        raise TypeError("picker must be a Picker")
+    if picker.state not in {ViewState.OPEN, ViewState.ERROR}:
+        raise ValueError("an initial picker must be open or error")
+    if picker.state is ViewState.ERROR and picker.notice is None:
+        raise ValueError("an error picker requires an explicit notice")
+
+    enabled = tuple(choice for choice in picker.choices if choice.enabled)
+    highlighted_id = picker.highlighted_id
+    if highlighted_id is None and picker.selected_id is not None:
+        highlighted_id = picker.selected_id
+    if highlighted_id is None and enabled:
+        highlighted_id = enabled[0].identity
+
+    if picker.state is ViewState.ERROR:
+        state = ViewState.ERROR
+        notice = picker.notice
+    elif not picker.choices:
+        state = ViewState.EMPTY
+        notice = picker.notice or Notice(
+            _PICKER_EMPTY_TEXT,
+            label="empty",
+            role=SemanticRole.MUTED,
+            state=ViewState.EMPTY,
+        )
+    elif not enabled:
+        state = ViewState.DISABLED
+        notice = picker.notice
+    else:
+        state = ViewState.OPEN
+        notice = picker.notice
+
+    initialized = Picker(
+        picker.prompt,
+        picker.choices,
+        highlighted_id=highlighted_id,
+        selected_id=picker.selected_id,
+        notice=notice,
+        state=state,
+    )
+    window_start = _picker_window_start(
+        0,
+        _picker_highlighted_index(initialized),
+        len(initialized.choices),
+    )
+    return PickerControlState(initialized, window_start)
+
+
+def reconcile_picker(
+    state: PickerControlState,
+    choices: tuple[Choice, ...],
+) -> PickerControlState:
+    """Reconcile refreshed ordered choices by stable identity and former ordinal."""
+
+    if type(state) is not PickerControlState:
+        raise TypeError("state must be a PickerControlState")
+    if state.picker.state in {ViewState.COMPLETED, ViewState.CANCELLED}:
+        raise ValueError("a completed or cancelled picker cannot be reconciled")
+    if type(choices) is not tuple or any(
+        type(choice) is not Choice for choice in choices
+    ):
+        raise TypeError("choices must be a tuple of Choice values")
+
+    picker = state.picker
+    # Constructing the candidate vocabulary validates identity uniqueness before
+    # any reconciliation result is derived.
+    Picker(picker.prompt, choices)
+    enabled_by_id = {
+        choice.identity: choice for choice in choices if choice.enabled
+    }
+    selected_id = (
+        picker.selected_id
+        if picker.selected_id in enabled_by_id
+        else None
+    )
+    highlighted_id = (
+        picker.highlighted_id
+        if picker.highlighted_id in enabled_by_id
+        else None
+    )
+    former_index = _picker_highlighted_index(picker)
+    if former_index is None:
+        former_index = 0
+    if highlighted_id is None:
+        highlighted_id = _fallback_picker_highlight(choices, former_index)
+
+    if picker.state is ViewState.ERROR:
+        picker_state = ViewState.ERROR
+    elif not choices:
+        picker_state = ViewState.EMPTY
+    elif not enabled_by_id:
+        picker_state = ViewState.DISABLED
+    else:
+        picker_state = ViewState.OPEN
+    notice = (
+        None
+        if choices and _is_default_picker_empty_notice(picker.notice)
+        else picker.notice
+    )
+    if picker_state is ViewState.EMPTY and notice is None:
+        notice = Notice(
+            _PICKER_EMPTY_TEXT,
+            label="empty",
+            role=SemanticRole.MUTED,
+            state=ViewState.EMPTY,
+        )
+
+    reconciled = Picker(
+        picker.prompt,
+        choices,
+        highlighted_id=highlighted_id,
+        selected_id=selected_id,
+        notice=notice,
+        state=picker_state,
+    )
+    clamped_start = min(
+        state.window_start,
+        max(0, len(choices) - _PICKER_WINDOW_SIZE),
+    )
+    window_start = _picker_window_start(
+        clamped_start,
+        _picker_highlighted_index(reconciled),
+        len(choices),
+    )
+    return PickerControlState(reconciled, window_start)
+
+
+def transition_picker(
+    state: PickerControlState,
+    event: KeyEvent,
+) -> tuple[PickerControlState, ControlOutcome | None]:
+    """Apply one raw picker key without history, completion, or side effects."""
+
+    if type(state) is not PickerControlState:
+        raise TypeError("state must be a PickerControlState")
+    if type(event) is not KeyEvent:
+        raise TypeError("event must be a KeyEvent")
+
+    if event.kind is KeyKind.INTERRUPT:
+        return state, ControlOutcome(ControlOutcomeKind.INTERRUPT)
+    if event.kind is KeyKind.EOF:
+        return state, ControlOutcome(ControlOutcomeKind.EOF)
+    if event.kind is KeyKind.ESCAPE:
+        cancelled = _picker_with_state(
+            state,
+            ViewState.CANCELLED,
+            clear_validation=True,
+        )
+        return cancelled, ControlOutcome(ControlOutcomeKind.CANCEL)
+    if state.picker.state is not ViewState.OPEN:
+        return state, None
+    if event.kind is KeyKind.ENTER:
+        highlighted_id = state.picker.highlighted_id
+        if highlighted_id is None:
+            return state, None
+        return _commit_picker(state, highlighted_id)
+    if event.kind not in {KeyKind.UP, KeyKind.DOWN}:
+        return state, None
+
+    highlighted_index = _picker_highlighted_index(state.picker)
+    if highlighted_index is None:
+        return state, None
+    if event.kind is KeyKind.UP:
+        candidates = range(highlighted_index - 1, -1, -1)
+    else:
+        candidates = range(highlighted_index + 1, len(state.picker.choices))
+    moved_index = next(
+        (
+            index
+            for index in candidates
+            if state.picker.choices[index].enabled
+        ),
+        None,
+    )
+    if moved_index is None:
+        return state, None
+
+    picker = state.picker
+    moved = Picker(
+        picker.prompt,
+        picker.choices,
+        highlighted_id=picker.choices[moved_index].identity,
+        selected_id=picker.selected_id,
+        notice=picker.notice,
+        state=picker.state,
+    )
+    visible_start = project_picker_viewport(state).start
+    return (
+        PickerControlState(
+            moved,
+            _picker_window_start(
+                visible_start,
+                moved_index,
+                len(moved.choices),
+            ),
+        ),
+        None,
+    )
+
+
+def transition_picker_fallback(
+    state: PickerControlState,
+    answer: str,
+) -> tuple[PickerControlState, ControlOutcome]:
+    """Classify one exact numbered fallback answer without external effects."""
+
+    if type(state) is not PickerControlState:
+        raise TypeError("state must be a PickerControlState")
+    if not isinstance(answer, str):
+        raise TypeError("answer must be a string")
+    answer = str.__str__(answer)
+    if "\r" in answer or "\n" in answer:
+        raise ValueError("answer must not contain CR or LF")
+
+    if answer == "/cancel":
+        cancelled = _picker_with_state(
+            state,
+            ViewState.CANCELLED,
+            clear_validation=True,
+        )
+        return cancelled, ControlOutcome(ControlOutcomeKind.CANCEL)
+    if state.picker.state is not ViewState.OPEN:
+        return _reject_picker(state)
+    if answer == "":
+        if state.picker.highlighted_id is None:
+            return _reject_picker(state)
+        return _commit_picker(state, state.picker.highlighted_id)
+    if (
+        not answer.isascii()
+        or not answer.isdecimal()
+        or answer.startswith("0")
+    ):
+        return _reject_picker(state)
+
+    try:
+        ordinal = int(answer)
+    except ValueError:
+        return _reject_picker(state)
+    if ordinal > len(state.picker.choices):
+        return _reject_picker(state)
+    choice = state.picker.choices[ordinal - 1]
+    if not choice.enabled:
+        return _reject_picker(state)
+    return _commit_picker(state, choice.identity)
+
+
+def project_picker_viewport(state: PickerControlState) -> PickerViewport:
+    """Project an at-most-seven-row window that minimally contains highlight."""
+
+    if type(state) is not PickerControlState:
+        raise TypeError("state must be a PickerControlState")
+    choice_count = len(state.picker.choices)
+    if choice_count == 0:
+        return PickerViewport(state.picker, 0, 0)
+    start = _picker_window_start(
+        min(
+            state.window_start,
+            max(0, choice_count - _PICKER_WINDOW_SIZE),
+        ),
+        _picker_highlighted_index(state.picker),
+        choice_count,
+    )
+    return PickerViewport(
+        state.picker,
+        start,
+        min(choice_count, start + _PICKER_WINDOW_SIZE),
+    )
+
+
+def _fallback_picker_highlight(
+    choices: tuple[Choice, ...],
+    former_index: int,
+) -> str | None:
+    """Choose the next enabled identity at/after an ordinal, then before it."""
+
+    for index in range(min(former_index, len(choices)), len(choices)):
+        if choices[index].enabled:
+            return choices[index].identity
+    for index in range(min(former_index, len(choices)) - 1, -1, -1):
+        if choices[index].enabled:
+            return choices[index].identity
+    return None
+
+
+def _picker_highlighted_index(picker: Picker) -> int | None:
+    """Return the absolute zero-based highlighted index when present."""
+
+    if picker.highlighted_id is None:
+        return None
+    return next(
+        index
+        for index, choice in enumerate(picker.choices)
+        if choice.identity == picker.highlighted_id
+    )
+
+
+def _picker_window_start(
+    start: int,
+    highlighted_index: int | None,
+    choice_count: int,
+) -> int:
+    """Clamp a window and minimally shift it around one highlighted ordinal."""
+
+    if choice_count == 0:
+        return 0
+    start = min(start, max(0, choice_count - _PICKER_WINDOW_SIZE))
+    if highlighted_index is None:
+        return start
+    if highlighted_index < start:
+        return highlighted_index
+    if highlighted_index >= start + _PICKER_WINDOW_SIZE:
+        return highlighted_index - (_PICKER_WINDOW_SIZE - 1)
+    return start
+
+
+def _commit_picker(
+    state: PickerControlState,
+    identity: str,
+) -> tuple[PickerControlState, ControlOutcome]:
+    """Select and highlight one enabled identity in a completed picker."""
+
+    picker = state.picker
+    committed_index = next(
+        index
+        for index, choice in enumerate(picker.choices)
+        if choice.identity == identity and choice.enabled
+    )
+    notice = (
+        None
+        if _is_picker_validation_notice(picker.notice)
+        else picker.notice
+    )
+    committed = Picker(
+        picker.prompt,
+        picker.choices,
+        highlighted_id=identity,
+        selected_id=identity,
+        notice=notice,
+        state=ViewState.COMPLETED,
+    )
+    visible_start = project_picker_viewport(state).start
+    return (
+        PickerControlState(
+            committed,
+            _picker_window_start(
+                visible_start,
+                committed_index,
+                len(committed.choices),
+            ),
+        ),
+        ControlOutcome(ControlOutcomeKind.COMMIT, text=identity),
+    )
+
+
+def _reject_picker(
+    state: PickerControlState,
+) -> tuple[PickerControlState, ControlOutcome]:
+    """Preserve picker facts while scheduling one validation notice."""
+
+    picker = state.picker
+    rejected = Picker(
+        picker.prompt,
+        picker.choices,
+        highlighted_id=picker.highlighted_id,
+        selected_id=picker.selected_id,
+        notice=Notice(
+            _PICKER_VALIDATION_TEXT,
+            label="validation",
+            role=SemanticRole.ERROR,
+            state=ViewState.ERROR,
+        ),
+        state=picker.state,
+    )
+    return (
+        PickerControlState(rejected, state.window_start),
+        ControlOutcome(ControlOutcomeKind.REJECTED),
+    )
+
+
+def _picker_with_state(
+    state: PickerControlState,
+    picker_state: ViewState,
+    *,
+    clear_validation: bool,
+) -> PickerControlState:
+    """Copy one picker to a terminal state while preserving its selection."""
+
+    picker = state.picker
+    notice = picker.notice
+    if clear_validation and _is_picker_validation_notice(notice):
+        notice = None
+    return PickerControlState(
+        Picker(
+            picker.prompt,
+            picker.choices,
+            highlighted_id=picker.highlighted_id,
+            selected_id=picker.selected_id,
+            notice=notice,
+            state=picker_state,
+        ),
+        state.window_start,
+    )
+
+
+def _is_picker_validation_notice(notice: Notice | None) -> bool:
+    """Identify only the fixed fallback validation notice."""
+
+    return bool(
+        notice is not None
+        and notice.text == _PICKER_VALIDATION_TEXT
+        and notice.label == "validation"
+        and notice.role is SemanticRole.ERROR
+        and notice.state is ViewState.ERROR
+    )
+
+
+def _is_default_picker_empty_notice(notice: Notice | None) -> bool:
+    """Identify only the initializer-owned empty-state notice."""
+
+    return bool(
+        notice is not None
+        and notice.text == _PICKER_EMPTY_TEXT
+        and notice.label == "empty"
+        and notice.role is SemanticRole.MUTED
+        and notice.state is ViewState.EMPTY
     )
 
 

@@ -21,6 +21,8 @@ from ..interactive_commands import (
 )
 from ._controls import (
     append_main_input_history,
+    initialize_picker,
+    project_picker_viewport,
     project_composition_suggestions,
     project_main_suggestion_palette,
     project_slash_suggestions,
@@ -28,15 +30,19 @@ from ._controls import (
     transition_confirmation_answer,
     transition_main_input,
     transition_main_command_input,
+    transition_picker,
+    transition_picker_fallback,
     transition_line_input,
 )
 from ._driver import RawTerminalDriver
 from ._model import (
     CapabilityProfile,
+    Choice,
     CommandCompletionCandidate,
     CommandCompletionProjection,
     ComposerState,
     Component,
+    ControlOutcome,
     ControlOutcomeKind,
     Field,
     InputPromptView,
@@ -46,6 +52,8 @@ from ._model import (
     Message,
     Notice,
     Panel,
+    Picker,
+    PickerControlState,
     Prompt,
     Record,
     Section,
@@ -55,7 +63,12 @@ from ._model import (
     ViewState,
     sanitize_terminal_text,
 )
-from ._render import render_component, render_input_prompt
+from ._render import (
+    render_component,
+    render_input_prompt,
+    render_picker_fallback,
+    render_picker_viewport,
+)
 
 
 class AttachmentKind(StrEnum):
@@ -428,6 +441,7 @@ class InteractiveTerminal:
         "_composition_read_line",
         "_confirmation_read_line",
         "_main_read_line",
+        "_picker_read",
         "_read_line",
         "_width",
         "_write_text",
@@ -466,6 +480,7 @@ class InteractiveTerminal:
         )
         self._composition_read_line = _plain_input_reader(read_line, width)
         self._confirmation_read_line = _plain_input_reader(read_line, width)
+        self._picker_read = _plain_picker_reader(read_line, write_text, width)
         self._write_text = write_text
         self._width = width
         self._capability_provider = lambda: _plain_capabilities(width)
@@ -1231,6 +1246,46 @@ class InteractiveSemanticOutput:
         self._write(component)
 
 
+class InteractivePickerInput:
+    """Retain only one terminal's package-internal picker input capability."""
+
+    __slots__ = ("_read",)
+
+    def __init__(self, terminal: InteractiveTerminal) -> None:
+        """Bind picker input without inspecting capabilities or acquiring I/O."""
+
+        if not isinstance(terminal, InteractiveTerminal):
+            raise TypeError("terminal must be an InteractiveTerminal")
+        self._read: Callable[[PickerControlState], ControlOutcome] = (
+            terminal._picker_read
+        )
+
+    def read_picker(
+        self,
+        prompt: Prompt,
+        choices: tuple[Choice, ...],
+        *,
+        highlighted_id: str | None = None,
+        selected_id: str | None = None,
+        notice: Notice | None = None,
+        state: ViewState = ViewState.OPEN,
+    ) -> ControlOutcome:
+        """Read one semantic single-select value without invoking a consumer."""
+
+        picker = Picker(
+            prompt,
+            choices,
+            highlighted_id=highlighted_id,
+            selected_id=selected_id,
+            notice=notice,
+            state=state,
+        )
+        outcome = self._read(initialize_picker(picker))
+        if type(outcome) is not ControlOutcome:
+            raise TypeError("picker reader must return a ControlOutcome")
+        return outcome
+
+
 def build_contextual_terminal(
     read_line: Callable[[str], str],
     write_text: Callable[[str], None],
@@ -1290,6 +1345,51 @@ def _plain_input_reader(
         return read_line(frame.plain_text)
 
     return read_input
+
+
+def _plain_picker_reader(
+    read_line: Callable[[str], str],
+    write_text: Callable[[str], None],
+    width: int,
+) -> Callable[[PickerControlState], ControlOutcome]:
+    """Adapt borrowed callbacks to deterministic complete-list picker input."""
+
+    if not callable(read_line):
+        raise TypeError("read_line must be callable")
+    if not callable(write_text):
+        raise TypeError("write_text must be callable")
+    capabilities = _plain_capabilities(width)
+
+    def read_picker(initial_state: PickerControlState) -> ControlOutcome:
+        if type(initial_state) is not PickerControlState:
+            raise TypeError("state must be a PickerControlState")
+        picker_state = initial_state
+        while True:
+            frame = render_picker_fallback(picker_state, capabilities)
+            try:
+                answer = _validated_input_line(read_line(frame.plain_text))
+            except KeyboardInterrupt:
+                return ControlOutcome(ControlOutcomeKind.INTERRUPT)
+            except EOFError:
+                return ControlOutcome(ControlOutcomeKind.EOF)
+            picker_state, outcome = transition_picker_fallback(
+                picker_state,
+                answer,
+            )
+            if outcome.kind is ControlOutcomeKind.REJECTED:
+                continue
+            if outcome.kind in {
+                ControlOutcomeKind.COMMIT,
+                ControlOutcomeKind.CANCEL,
+            }:
+                final_frame = render_picker_fallback(
+                    picker_state,
+                    capabilities,
+                )
+                write_text(f"{final_frame.text}\n")
+            return outcome
+
+    return read_picker
 
 
 def _empty_slash_suggestions(
@@ -1384,6 +1484,14 @@ def build_stream_terminal(
         view,
         render_input_prompt,
         _empty_slash_suggestions,
+    )
+    terminal._picker_read = lambda state: driver.read_picker(
+        state,
+        transition_picker,
+        transition_picker_fallback,
+        project_picker_viewport,
+        render_picker_viewport,
+        render_picker_fallback,
     )
     terminal._capability_provider = driver.capabilities
     return terminal
