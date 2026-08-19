@@ -163,6 +163,26 @@ imports live in [Package API](../reference/package-api.md), lifecycle meaning in
 
 This section is intentionally partitioned by scenario so each diagram stays small and focused.
 
+### Overall (top-level components)
+
+```mermaid
+flowchart LR
+    IC[InteractiveController]
+    RT[StoryRuntime]
+    AB[AgentBackend]
+    WS[Workspace]
+    FC[FilesystemConversationCatalog]
+    ES[FilesystemConversationEventStore]
+    IT[InteractiveTerminal]
+
+    IC --> RT
+    IC --> IT
+    RT --> AB
+    RT --> WS
+    WS --> FC
+    WS --> ES
+```
+
 ### Scenario 1: Interactive command path
 
 ```mermaid
