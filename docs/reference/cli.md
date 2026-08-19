@@ -62,11 +62,26 @@ unexpected failure. See the [smoke guide](../guides/smoke-test.md).
 
 Both streams must be TTYs before workspace/backend access or exit `2`. Capable
 POSIX main prompts and bare `/run` composition use live editing. Main prompts
-keep their registry-backed suggestions; composition shows only `/send` then
-`/cancel`, filtered by an exact, case-sensitive whole-buffer slash prefix.
-Subject and confirmation prompts use ordinary reads. `TERM=dumb`, unavailable
-capabilities, and non-POSIX editing safely use `input()` without a suggestion
-panel.
+keep their registry-backed suggestions and use Up/Down for process-local command
+history; composition shows only `/send` then `/cancel`, filtered by an exact,
+case-sensitive whole-buffer slash prefix. Subject and confirmation prompts use
+ordinary reads. `TERM=dumb`, unavailable capabilities, and non-POSIX editing
+safely use `input()` without a suggestion panel or component-provided live
+arrow navigation.
+
+The one stream terminal retains at most 100 exact nonblank main submissions for
+that process. Up recalls older entries, Down recalls newer entries, and Down
+past newest restores the exact pre-navigation draft and cursor. Recalls are
+editable copies with the cursor at the end. Invalid commands, duplicates,
+`/quit`, fallback commits, and nonempty VEOF commits are eligible; whitespace
+is preserved. Empty/blank input, Ctrl-C, empty VEOF, physical EOF, failures,
+composition, subjects, and confirmations are excluded. The 101st entry evicts
+only the oldest. Nothing is persisted.
+
+The visible `[suggestions]` panel remains preview-only, not an open selectable
+palette, so Up/Down still navigate history while it is displayed. Tab,
+Shift-Tab, and Escape have no main-prompt completion action; #79 remains
+planned. `/settings` is not currently available.
 
 On capable real-CLI streams, orientation/current context, `/status`, `/inspect`,
 central errors/recovery, and accepted management, advisory, retrieval, and

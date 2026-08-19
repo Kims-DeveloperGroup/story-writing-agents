@@ -194,6 +194,58 @@ class LineInputState:
 
 
 @dataclass(frozen=True, slots=True)
+class MainInputHistoryState:
+    """Immutable bounded process-local main-command history."""
+
+    entries: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Require at most 100 exact nonblank entries in stored order."""
+
+        if type(self.entries) is not tuple:
+            raise TypeError("entries must be a tuple")
+        if len(self.entries) > 100:
+            raise ValueError("entries must contain at most 100 values")
+        for entry in self.entries:
+            if type(entry) is not str:
+                raise TypeError("history entries must be strings")
+            if not entry or entry.isspace():
+                raise ValueError("history entries must not be blank")
+
+
+@dataclass(frozen=True, slots=True)
+class MainInputControlState:
+    """Own one main-input line plus its inactive or active history cursor."""
+
+    line_state: LineInputState = LineInputState()
+    history_index: int | None = None
+    saved_draft: LineInputState | None = None
+    overlay_open: bool = False
+
+    def __post_init__(self) -> None:
+        """Correlate the line, navigation cursor, draft, and overlay flag."""
+
+        if type(self.line_state) is not LineInputState:
+            raise TypeError("line_state must be a LineInputState")
+        if self.history_index is not None:
+            if type(self.history_index) is not int:
+                raise TypeError("history_index must be an integer or None")
+            if self.history_index < 0:
+                raise ValueError("history_index must not be negative")
+        if (
+            self.saved_draft is not None
+            and type(self.saved_draft) is not LineInputState
+        ):
+            raise TypeError("saved_draft must be a LineInputState or None")
+        if (self.history_index is None) != (self.saved_draft is None):
+            raise ValueError(
+                "history_index and saved_draft must both be active or inactive"
+            )
+        if type(self.overlay_open) is not bool:
+            raise TypeError("overlay_open must be a bool")
+
+
+@dataclass(frozen=True, slots=True)
 class SlashCommandSuggestion:
     """Identify one displayed slash token and its canonical registry token."""
 
@@ -584,6 +636,8 @@ __all__ = [
     "TerminalCapabilities",
     "KeyEvent",
     "LineInputState",
+    "MainInputHistoryState",
+    "MainInputControlState",
     "SlashCommandSuggestion",
     "ControlOutcome",
     "Prompt",

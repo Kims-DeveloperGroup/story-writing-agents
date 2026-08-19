@@ -916,6 +916,144 @@ class InteractiveCliPtyTests(unittest.TestCase):
             process.original_terminal_attributes,
         )
 
+    def test_main_history_restores_draft_edits_preview_and_nonempty_veof(
+        self,
+    ) -> None:
+        """Exercise real CLI history without persistence or cleanup drift."""
+
+        before = _durable_tree(self.workspace.root)
+        process = self._spawn_cli(
+            (),
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=80,
+        )
+        process.wait_for_text("story[lobby]> ")
+
+        status_mark = process.output_mark()
+        process.send_line("/status")
+        process.wait_for_text("story[lobby]> ", after=status_mark)
+
+        draft_mark = process.output_mark()
+        process.send_text("draft-tail" + "\x1b[D" * 4)
+        process.send_text("\x1b[A")
+        process.wait_for_text("story[lobby]> /status", after=draft_mark)
+        process.send_text("\x1b[BX")
+        process.wait_for_text("story[lobby]> draft-Xtail", after=draft_mark)
+        process.send_text("\n")
+        process.wait_for_text("[error session_not_attached]", after=draft_mark)
+        process.wait_for_text("story[lobby]> ", after=draft_mark)
+
+        preview_mark = process.output_mark()
+        process.send_text("/")
+        process.wait_for_text("[suggestions]", after=preview_mark)
+        process.send_text("\x1b[A")
+        recalled = process.wait_for_text(
+            "story[lobby]> draft-Xtail",
+            after=preview_mark,
+        )
+        self.assertIn("\x1b[J", recalled)
+        process.send_interrupt()
+        process.wait_for_text("[cancelled] No action was taken.", after=preview_mark)
+        process.wait_for_text("story[lobby]> ", after=preview_mark)
+
+        veof_mark = process.output_mark()
+        process.send_text("/status")
+        process.send_eof()
+        process.wait_for_text("[session]", after=veof_mark)
+        process.wait_for_text("story[lobby]> ", after=veof_mark)
+        recall_mark = process.output_mark()
+        process.send_text("\x1bOA\n")
+        process.wait_for_text("story[lobby]> /status", after=recall_mark)
+        process.wait_for_text("[session]", after=recall_mark)
+
+        process.send_line("/quit")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(_durable_tree(self.workspace.root), before)
+        self.assertFalse(self.provider_log.exists())
+        self.assertFalse(
+            any(
+                path.name
+                in {
+                    ".python_history",
+                    ".story_history",
+                    ".story-writing-agents-history",
+                }
+                for path in self.temporary_root.rglob("*")
+            )
+        )
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
+    def test_editor_history_crosses_fallback_then_isolates_composition_and_instance(
+        self,
+    ) -> None:
+        """Prove fallback continuity and both contextual and instance isolation."""
+
+        source = r'''
+import json
+import os
+import sys
+
+from story_writing_agents.interactive_line_editor import (
+    InteractiveMainLineEditor,
+    bind_suggestion_reader,
+    composition_slash_command_suggestions,
+)
+
+editor = InteractiveMainLineEditor(input, sys.stdin, sys.stdout)
+os.environ["TERM"] = "dumb"
+fallback = editor.read_line("fallback> ")
+os.environ["TERM"] = "xterm-256color"
+composition = bind_suggestion_reader(
+    editor,
+    composition_slash_command_suggestions,
+)("compose> ")
+recalled = editor.read_line("main> ")
+other = InteractiveMainLineEditor(input, sys.stdin, sys.stdout)
+isolated = other.read_line("other> ")
+print(
+    "RESULT="
+    + json.dumps(
+        {
+            "fallback": fallback,
+            "composition": composition,
+            "recalled": recalled,
+            "isolated": isolated,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+)
+'''
+        before = _durable_tree(self.workspace.root)
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "xterm-256color"},
+        )
+        process.wait_for_text("fallback> ")
+        process.send_line("  fallback 🌊  ")
+        process.wait_for_text("compose> ")
+        process.send_text("\x1b[Acontext\n")
+        process.wait_for_text("main> ")
+        process.send_text("\x1b[A\n")
+        process.wait_for_text("other> ")
+        process.send_text("\x1bOA\n")
+        process.wait_for_text(
+            'RESULT={"fallback":"  fallback 🌊  ",'
+            '"composition":"context",'
+            '"recalled":"  fallback 🌊  ",'
+            '"isolated":""}'
+        )
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(_durable_tree(self.workspace.root), before)
+        self.assertFalse(self.provider_log.exists())
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
     def test_capable_chat_composer_previews_edits_sanitizes_and_restores(
         self,
     ) -> None:

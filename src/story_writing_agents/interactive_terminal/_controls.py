@@ -8,11 +8,14 @@ from ._model import (
     KeyEvent,
     KeyKind,
     LineInputState,
+    MainInputControlState,
+    MainInputHistoryState,
     SlashCommandSuggestion,
 )
 
 
 _COMPOSITION_SUGGESTION_TOKENS = ("/send", "/cancel")
+_MAIN_INPUT_HISTORY_LIMIT = 100
 
 
 def transition_line_input(
@@ -74,6 +77,103 @@ def transition_line_input(
             return state, ControlOutcome(ControlOutcomeKind.COMMIT, text=buffer)
         return state, ControlOutcome(ControlOutcomeKind.EOF)
     return state, None
+
+
+def append_main_input_history(
+    history: MainInputHistoryState,
+    text: str,
+) -> MainInputHistoryState:
+    """Append one exact nonblank main commit with oldest-first eviction."""
+
+    if type(history) is not MainInputHistoryState:
+        raise TypeError("history must be a MainInputHistoryState")
+    if type(text) is not str:
+        raise TypeError("text must be a string")
+    if not text or text.isspace():
+        return history
+    entries = (*history.entries, text)
+    return MainInputHistoryState(entries[-_MAIN_INPUT_HISTORY_LIMIT:])
+
+
+def transition_main_input(
+    state: MainInputControlState,
+    event: KeyEvent,
+    history: MainInputHistoryState,
+) -> tuple[MainInputControlState, ControlOutcome | None]:
+    """Apply one main-input key with pure history and overlay routing."""
+
+    if type(state) is not MainInputControlState:
+        raise TypeError("state must be a MainInputControlState")
+    if type(event) is not KeyEvent:
+        raise TypeError("event must be a KeyEvent")
+    if type(history) is not MainInputHistoryState:
+        raise TypeError("history must be a MainInputHistoryState")
+    if state.history_index is not None and state.history_index >= len(history.entries):
+        raise ValueError("history_index must identify a stored history entry")
+
+    if event.kind in {KeyKind.UP, KeyKind.DOWN}:
+        if state.overlay_open:
+            return state, None
+        if event.kind is KeyKind.UP:
+            if not history.entries:
+                return state, None
+            if state.history_index == 0:
+                return state, None
+            history_index = (
+                len(history.entries) - 1
+                if state.history_index is None
+                else max(0, state.history_index - 1)
+            )
+            saved_draft = (
+                state.line_state
+                if state.saved_draft is None
+                else state.saved_draft
+            )
+            recalled = history.entries[history_index]
+            return (
+                MainInputControlState(
+                    LineInputState(recalled, len(recalled)),
+                    history_index,
+                    saved_draft,
+                    overlay_open=state.overlay_open,
+                ),
+                None,
+            )
+        if state.history_index is None:
+            return state, None
+        if state.history_index == len(history.entries) - 1:
+            assert state.saved_draft is not None
+            return (
+                MainInputControlState(
+                    state.saved_draft,
+                    overlay_open=state.overlay_open,
+                ),
+                None,
+            )
+        history_index = state.history_index + 1
+        recalled = history.entries[history_index]
+        return (
+            MainInputControlState(
+                LineInputState(recalled, len(recalled)),
+                history_index,
+                state.saved_draft,
+                overlay_open=state.overlay_open,
+            ),
+            None,
+        )
+
+    line_state, outcome = transition_line_input(state.line_state, event)
+    if line_state is state.line_state:
+        return state, outcome
+    return (
+        MainInputControlState(
+            line_state,
+            state.history_index,
+            state.saved_draft,
+            overlay_open=state.overlay_open,
+        ),
+        outcome,
+    )
 
 
 def project_slash_suggestions(
@@ -149,6 +249,8 @@ def project_composition_suggestions(
 
 __all__ = [
     "transition_line_input",
+    "append_main_input_history",
+    "transition_main_input",
     "project_slash_suggestions",
     "project_composition_suggestions",
 ]
