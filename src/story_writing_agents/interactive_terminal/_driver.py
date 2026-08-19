@@ -312,6 +312,8 @@ class RawTerminalDriver:
             type(known_width) is not int or known_width <= 0
         ):
             raise ValueError("known_width must be a positive integer or None")
+        if rendered_input is not None and known_width is None:
+            raise ValueError("known_width is required with rendered_input")
         if rendered_input is not None and rendered_input.width != known_width:
             raise ValueError("rendered input and known width must match")
 
