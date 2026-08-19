@@ -45,6 +45,17 @@ _ROLE_SGR = {
     SemanticRole.AGENT: "\x1b[1m",
 }
 _DECORATIVE_SGR = re.compile(r"\x1b\[(?:0|1|3[1-7])m")
+_ADVISORY_PROGRESS_FRAMES = ("◐", "◓", "◑", "◒")
+
+
+def render_advisory_progress_frame(frame: int) -> str:
+    """Render one pure fixed-cell advisory progress frame."""
+
+    if type(frame) is not int:
+        raise TypeError("frame must be an integer")
+    if frame < 0 or frame >= len(_ADVISORY_PROGRESS_FRAMES):
+        raise ValueError("frame must identify one advisory progress glyph")
+    return _ADVISORY_PROGRESS_FRAMES[frame]
 
 
 def format_agent_reply_content(content: str) -> str:

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import codecs
 import os
 import select as _select
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import TextIO, TypeAlias
+from typing import TextIO, TypeAlias, TypeVar
 
 from ._model import (
     CapabilityProfile,
@@ -47,6 +48,13 @@ _DEFAULT_TERMINAL_WIDTH = 80
 _MAX_ESCAPE_SEQUENCE_LENGTH = 64
 _ESCAPE_LOOKAHEAD_SECONDS = 0.05
 _DEFAULT_TERMIOS = object()
+_PROGRESS_FRAME_COUNT = 4
+_PROGRESS_INTERVAL_SECONDS = 0.08
+_T = TypeVar("_T")
+
+
+class AdvisoryProgressError(RuntimeError):
+    """Mark a terminal-owned indicator failure for fatal controller cleanup."""
 
 
 @dataclass(slots=True)
@@ -141,6 +149,9 @@ class RawTerminalDriver:
         "_main_transition",
         "_os_provider",
         "_output_stream",
+        "_progress_active",
+        "_progress_frame",
+        "_progress_renderer",
         "_termios_provider",
     )
 
@@ -183,6 +194,9 @@ class RawTerminalDriver:
         self._main_transition = main_transition
         self._history_append = history_append
         self._history_state = MainInputHistoryState()
+        self._progress_active = False
+        self._progress_frame = 0
+        self._progress_renderer: Callable[[int], str] | None = None
         self._termios_provider = (
             (lambda: _termios) if termios_provider is None else termios_provider
         )
@@ -198,10 +212,185 @@ class RawTerminalDriver:
 
         if type(text) is not str:
             raise TypeError("terminal output must be a string")
+        if self._progress_active:
+            self._clear_progress_frame()
+            try:
+                self._write_raw_text(text)
+            finally:
+                self._draw_progress_frame()
+            return
+        self._write_raw_text(text)
+
+    def _write_raw_text(self, text: str) -> None:
+        """Write one payload without progress interception."""
+
         written = self._output_stream.write(text)
         if written is not None and written != len(text):
             raise OSError("interactive terminal write was incomplete")
         self._output_stream.flush()
+
+    def _clear_progress_frame(self) -> None:
+        """Clear the current one-cell indicator without adding a row."""
+
+        self._write_raw_text("\r\x1b[K")
+
+    def _draw_progress_frame(
+        self,
+        frame_renderer: Callable[[int], str] | None = None,
+    ) -> None:
+        """Draw the current fixed indicator frame at the cursor cell."""
+
+        frame_renderer = (
+            self._progress_renderer
+            if frame_renderer is None
+            else frame_renderer
+        )
+        if not callable(frame_renderer):
+            raise TypeError("frame_renderer must be callable")
+        frame = frame_renderer(self._progress_frame)
+        if type(frame) is not str or len(frame) != 1:
+            raise TypeError("frame_renderer must return one display cell")
+        self._write_raw_text(f"\r{frame}")
+
+    async def run_advisory_progress(
+        self,
+        operation: Awaitable[_T],
+        frame_renderer: Callable[[int], str],
+    ) -> _T:
+        """Join one advisory operation with a capable-terminal indicator."""
+
+        if not hasattr(operation, "__await__"):
+            raise TypeError("operation must be awaitable")
+        if not callable(frame_renderer):
+            raise TypeError("frame_renderer must be callable")
+        capabilities = self.capabilities()
+        if not capabilities.raw_mode:
+            return await operation
+
+        self._progress_active = True
+        self._progress_frame = 0
+        self._progress_renderer = frame_renderer
+        try:
+            self._draw_progress_frame(frame_renderer)
+        except BaseException as exc:
+            self._progress_active = False
+            self._progress_renderer = None
+            try:
+                self._clear_progress_frame()
+            except BaseException:
+                pass
+            close = getattr(operation, "close", None)
+            if callable(close):
+                close()
+            raise AdvisoryProgressError(
+                "advisory progress could not be displayed"
+            ) from exc
+
+        operation_task = asyncio.ensure_future(operation)
+        progress_task = asyncio.create_task(
+            self._run_progress_frames(frame_renderer)
+        )
+        operation_failure: BaseException | None = None
+        progress_failure: BaseException | None = None
+        result: _T | None = None
+        operation_succeeded = False
+        outer_failure = False
+        try:
+            while True:
+                done, _pending = await asyncio.wait(
+                    (operation_task, progress_task),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if operation_task in done:
+                    try:
+                        result = operation_task.result()
+                        operation_succeeded = True
+                    except BaseException as exc:
+                        operation_failure = exc
+                    if progress_task in done:
+                        try:
+                            progress_task.result()
+                        except asyncio.CancelledError:
+                            pass
+                        except BaseException as exc:
+                            progress_failure = exc
+                    break
+                if progress_task in done:
+                    try:
+                        progress_task.result()
+                    except asyncio.CancelledError:
+                        pass
+                    except BaseException as exc:
+                        progress_failure = exc
+                    if progress_failure is None:
+                        progress_failure = RuntimeError(
+                            "advisory progress worker stopped unexpectedly"
+                        )
+                    break
+        except BaseException as exc:
+            operation_failure = exc
+            outer_failure = True
+        finally:
+            if (operation_failure is not None or progress_failure is not None) and (
+                not operation_task.done()
+            ):
+                operation_task.cancel()
+            if not operation_task.done():
+                try:
+                    await operation_task
+                except BaseException as exc:
+                    if not outer_failure and progress_failure is None:
+                        operation_failure = operation_failure or exc
+            elif operation_failure is None and progress_failure is None:
+                try:
+                    operation_task.result()
+                except BaseException as exc:
+                    operation_failure = exc
+
+            if not progress_task.done():
+                progress_task.cancel()
+            try:
+                await progress_task
+            except asyncio.CancelledError:
+                pass
+            except BaseException as exc:
+                progress_failure = progress_failure or exc
+
+            clear_failure: BaseException | None = None
+            self._progress_active = False
+            self._progress_renderer = None
+            try:
+                self._clear_progress_frame()
+            except BaseException as exc:
+                clear_failure = exc
+            if (
+                operation_failure is None
+                and progress_failure is None
+                and clear_failure is not None
+            ):
+                progress_failure = clear_failure
+
+        if operation_failure is not None:
+            raise operation_failure
+        if progress_failure is not None:
+            raise AdvisoryProgressError(
+                "advisory progress worker failed"
+            ) from progress_failure
+        assert operation_succeeded
+        return result
+
+    async def _run_progress_frames(
+        self,
+        frame_renderer: Callable[[int], str],
+    ) -> None:
+        """Animate fixed frames until the joined operation finishes."""
+
+        while True:
+            await asyncio.sleep(_PROGRESS_INTERVAL_SECONDS)
+            self._progress_frame = (
+                self._progress_frame + 1
+            ) % _PROGRESS_FRAME_COUNT
+            self._draw_progress_frame(frame_renderer)
 
     def capabilities(self) -> TerminalCapabilities:
         """Resolve the current destination profile without acquiring raw mode."""
