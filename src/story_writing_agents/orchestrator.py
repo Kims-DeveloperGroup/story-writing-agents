@@ -17,7 +17,11 @@ from .agents import (
     ROSTER,
     SPECIALIST_IDS,
 )
-from .backend import AgentBackend, BoundAgent
+from .backend import (
+    AgentBackend,
+    BoundAgent,
+    backend_configuration_snapshot,
+)
 from .config import ConfigManager
 from .conversation_retrieval import (
     CONVERSATION_RETRIEVAL_POLICY,
@@ -1056,9 +1060,15 @@ class StoryRuntime:
         backend_overrides = (
             getattr(backend, "backend_overrides", {}) if backend is not None else {}
         )
+        self._configuration_snapshot = (
+            backend_configuration_snapshot(backend)
+            if isinstance(backend, AgentBackend)
+            else None
+        )
         self.prompts = PromptAssembler(
             self.workspace,
             backend_overrides=backend_overrides,
+            configuration_snapshot=self._configuration_snapshot,
         )
         self.config = ConfigManager(self.workspace)
         self._bound_agents: dict[tuple[str, str], BoundAgent] = {}
@@ -1496,7 +1506,11 @@ class StoryRuntime:
             if debate_id is not None
             else self._new_debate_id()
         )
-        configured_rounds = self.config.load_system_defaults().max_debate_rounds
+        configured_rounds = (
+            self.config.load_system_defaults().max_debate_rounds
+            if self._configuration_snapshot is None
+            else self._configuration_snapshot.system_defaults.max_debate_rounds
+        )
         round_limit = (
             configured_rounds
             if max_debate_rounds is None

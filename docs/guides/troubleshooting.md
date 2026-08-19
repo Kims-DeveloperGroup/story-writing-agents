@@ -26,10 +26,14 @@ Editable changes appear immediately; new script names require reinstalling.
 
 ## Slash suggestions do not appear
 
-The live panel appears only at main prompts on capable POSIX TTYs. Otherwise,
-commands still use line input. Other prompts never show it. The panel filters
-exact case-sensitive tokens, not completion or scope gates; use
-`/help`. See [terminal safety](../operations/terminal-safety.md#live-editor-boundary).
+The selectable palette appears only at main prompts on capable POSIX TTYs.
+Otherwise, commands still use plain line input with no palette or completion
+keys. Composition has its separate preview-only `/send`, `/cancel` panel;
+confirmation and subject input have none. At the main prompt, candidates filter
+by exact case-sensitive prefixes: Up/Down moves the highlight, Tab completes
+the active token, and Escape restores/dismisses the current completion cycle.
+Completion does not enforce runtime scope; use `/help`. See
+[terminal safety](../operations/terminal-safety.md#live-editor-boundary).
 
 ## No workspace, default session, or current focus
 

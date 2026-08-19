@@ -1,7 +1,8 @@
 # CLI reference
 
 > **Availability:** bare `story` and `story chat` open the TTY shell for session
-> and conversation management, advisory/local reads, and focused-context consensus.
+> and conversation management, persistent settings, advisory/local reads, and
+> focused-context consensus.
 
 `story` and `story-writing-agents` are aliases for
 `story_writing_agents.cli:main`.
@@ -56,24 +57,112 @@ Implicit workspaces are removed; explicit ones retain plaintext diagnostics.
 Exit `0` passes, `1` names a failed invariant, and `2` covers usage/setup or an
 unexpected failure. See the [smoke guide](../guides/smoke-test.md).
 
+## Codex defaults and model override
+
+Every installed command that constructs an `AgentBackend` validates and
+snapshots the workspace's optional `codex_model` and
+`codex_reasoning_effort` system defaults. A non-null `--codex-model` on
+`story chat` or `story run` overrides the persisted model for that backend;
+omitting the option inherits the persisted model, then the Codex provider
+default. Persisted reasoning similarly falls back to the provider default when
+null. Existing three-key system-default files inherit both provider defaults.
+
+There is no `--codex-reasoning-effort` option or supported public
+system-default save API. Global `/settings` provides the installed interactive
+edit/save workflow; direct edits to the validated five-key JSON document remain
+possible. An active backend and runtime keep their construction-time
+configuration snapshot. Exact fields, validation, and initialization
+compatibility are in
+[Agent configuration](configuration/agent-configuration.md#system-defaults),
+and invocation precedence is in
+[Runtime overrides](configuration/runtime-overrides.md#resolution-precedence).
+
 <a id="interactive-streams"></a>
 
 ## Interactive management, scope, and status
 
 Both streams must be TTYs before workspace/backend access or exit `2`. Capable
-POSIX main prompts and bare `/run` composition use live editing. Main prompts
-keep their registry-backed suggestions; composition shows only `/send` then
-`/cancel`, filtered by an exact, case-sensitive whole-buffer slash prefix.
-Subject and confirmation prompts use ordinary reads. `TERM=dumb`, unavailable
-capabilities, and non-POSIX editing safely use `input()` without a suggestion
-panel.
+POSIX main prompts, bare `/run` composition, and yes/no confirmation use live
+editing. Main prompts project canonical root, subcommand, and finite fixed-option
+candidates into a selectable semantic palette. Opening highlights the first
+match; Up/Down moves that highlight instead of history, Tab replaces the full
+active token with the highlighted candidate without adding whitespace, and
+Escape restores the first pre-completion snapshot when present and dismisses
+that exact state. Closed-palette Up/Down uses process-local command history;
+Shift-Tab has no action. Composition shows only the preview-only `/send` then `/cancel`,
+filtered by an exact, case-sensitive whole-buffer slash prefix. Confirmation
+has no suggestions, and the subject remains an ordinary read. `TERM=dumb`,
+unavailable capabilities, and non-POSIX editing safely use `input()` once per
+attempt with no palette or completion-key ownership; composition and
+confirmation pass their structured plain semantic prompt once.
 
-`/help [COMMAND]` (`/?`), `/status`, and `/session list` are global. Session
-grammar is `/session list | create NAME | open [NAME] | pause`. Explicit
+The one stream terminal retains at most 100 exact nonblank main submissions for
+that process. Up recalls older entries, Down recalls newer entries, and Down
+past newest restores the exact pre-navigation draft and cursor. Recalls are
+editable copies with the cursor at the end. Invalid commands, duplicates,
+`/quit`, fallback commits, and nonempty VEOF commits are eligible; whitespace
+is preserved. Empty/blank input, Ctrl-C, empty VEOF, physical EOF, failures,
+composition, subjects, confirmations, and nested settings input are excluded.
+The 101st entry evicts only the oldest. Nothing is persisted.
+
+Main matching is exact and case-sensitive at the cursor, with ASCII space/tab
+token boundaries. Root offers 21 main-available registry tokens, help offers 24
+including the composition-only commands, and agent-valued positions offer the
+10 canonical IDs and aliases; runtime values are not synthesized. Fixed-only
+no-match positions show an empty open palette, while mixed free-value slots
+close it. Filtering retains an eligible highlight. The first changing Tab
+saves the full buffer/cursor snapshot; edits in the same grammar position keep
+it, and a grammar-position change resets it. Enter submits only the visible
+buffer to the parser once. The generic single-select picker and cancellable
+prompt seams remain package-internal; `/settings` consumes them without adding
+a supported terminal API.
+
+`/settings` is alias-free, takes no argument, and is available with or without
+an attached session. It first displays immutable Current and Pending sections
+for Language, Persona, Maximum debate rounds, Providers, Codex model, and Codex
+reasoning effort, then an eight-choice editor in this order: those six fields,
+Save, Cancel. Nested Escape returns to the parent without changing that pending
+value; top-level Escape, Cancel, Ctrl-C, or EOF cancels the whole workflow
+without writing. `/cancel` is literal model text in the free-text prompt.
+
+Save validates the complete pending pair, then rejects any exact-byte change to
+either configuration document or any persona-catalog change since opening.
+Only changed documents are canonically replaced, in system-defaults then
+agent-configs order. A write failure attempts reverse-order restoration of
+every attempted target, including the failing target; rollback uncertainty is
+reported separately. Success returns to the main prompt and applies to the next
+shell/backend construction only. It does not refresh the active backend or
+runtime, call a provider, alter session/explicit overrides, or add credentials,
+model discovery, or automatic save.
+
+On capable real-CLI streams, orientation/current context, `/status`, `/inspect`,
+central errors/recovery, and accepted management, advisory, retrieval, and
+consensus output use responsive semantic layout with fixed decorative ANSI.
+Full/context help, the agent roster, session/conversation catalogs, search,
+transcript, and focused history use that layout too. `NO_COLOR` removes only
+decoration and leaves the same structured plain text; narrow output stacks and
+wraps labels without dropping facts. Composition and confirmation now use
+ordered semantic input views, and composer entry/error/send/discard records use
+semantic notices; no internal generic composer-status site remains. These
+presentation changes do not alter command grammar, established callback/read
+order, or any noninteractive stdout/stderr, JSON, ordering, or exit contract.
+
+`/help [COMMAND]` (`/?`), `/status`, `/settings`, and `/session list` are global.
+Session grammar is `/session list | create NAME | open [NAME] | pause`. Explicit
 `story chat SESSION` creates an absent session or opens a persisted one. Bare
 entry opens a ready default and asks before reopening a paused default.
 
-`/status` emits one read-only lifecycle record with fields in this exact order:
+Full help is one grouped semantic panel in command-registry order; contextual
+help is one command record with its group, syntax, aliases, provider/artifact
+effects, and example. `/agents` is one canonical roster list. Session and
+conversation catalogs, search hits, transcript events, and focused history
+emit one positioned, one-record list per established row callback. Empty
+states are explicit. If Ctrl-C interrupts search, transcript, or history after
+some rows, those completed rows remain, one cancellation record follows, and
+no trailing result, hint, or history-context record is emitted.
+
+`/status` emits one read-only semantic lifecycle record with fields in this
+exact order:
 
 ```text
 Session | Durable state | Process access | Default session | Current attachment
@@ -113,10 +202,13 @@ takes no action; composer Ctrl-C or `/cancel` discards its buffer; EOF cleans up
 Missing cancellation proof is fatal. Exact terminal records are in the
 [terminal reference](interactive-terminal.md#exact-cancellation-records).
 
-The composition panel is a preview, not completion or dispatch. `/say` is not
-suggested; `/say /send` and `/say /cancel` remain literal escapes. Typing,
-editing, or clearing the preview has no provider, runtime, filesystem, or
-storage effect.
+Each composition attempt shows `Mode`, `Next line`, `Lines`, `Characters`,
+guidance, then the focused numbered prompt. The `/send`, `/cancel` panel is a
+preview, not completion or dispatch. `/say` is not suggested; `/say /send` and
+`/say /cancel` remain literal escapes. Typing, editing, or clearing the preview
+has no provider, runtime, filesystem, or storage effect. Up/Down, Tab,
+Shift-Tab, and Escape are no-ops in composition and confirmation; those routes
+remain history-free.
 
 ## Workspace, noninteractive behavior, and exits
 

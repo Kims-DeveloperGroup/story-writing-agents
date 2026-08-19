@@ -919,10 +919,10 @@ class RecordingMixedBoundAgent:
 class RealRetainedConsensusRuntimeTests(InteractiveConversationTestCase):
     """Exercise chat and consensus on one runtime and retained Runner loop."""
 
-    def test_malformed_system_defaults_before_run_require_owned_proof(
+    def test_malformed_system_defaults_after_construction_keep_active_snapshot(
         self,
     ) -> None:
-        """Treat late workspace corruption as proven recoverable workspace failure."""
+        """Keep one constructed runtime active despite later default corruption."""
 
         run_command_returned = False
 
@@ -953,7 +953,7 @@ class RealRetainedConsensusRuntimeTests(InteractiveConversationTestCase):
         def record_summary_phase(
             session_id: str,
         ) -> object:
-            """Distinguish startup lookup from post-dispatch recovery proof."""
+            """Distinguish startup lookup from active run lifecycle reads."""
 
             summary = original_summary(session_id)
             summary_observations.append((run_command_returned, summary))
@@ -996,21 +996,32 @@ class RealRetainedConsensusRuntimeTests(InteractiveConversationTestCase):
                 and summary.access_state is SessionAccessState.HELD_HERE
             )
         ]
-        self.assertEqual(len(post_dispatch_proofs), 1)
+        self.assertEqual(len(post_dispatch_proofs), 4)
         proof = post_dispatch_proofs[0]
         self.assertIs(proof.durable_state, SessionDurableState.READY)
         self.assertIs(proof.access_state, SessionAccessState.HELD_HERE)
-        confirm_attachment.assert_called_once_with(controller)
-        reserve.assert_not_called()
+        confirm_attachment.assert_not_called()
+        reserve.assert_called_once()
+        reserve_call = reserve.call_args
+        self.assertEqual(reserve_call.args[0], "session")
+        self.assertRegex(reserve_call.args[1], r"^d[0-9]{8}T[0-9]{6}_[0-9a-f]{8}$")
+        self.assertEqual(reserve_call.kwargs["input_kind"], "prompt")
+        self.assertRegex(reserve_call.kwargs["owner_token"], r"^[0-9a-f]{32}$")
         detach.assert_called_once_with("session")
         self.assertEqual(callbacks.reads, [])
         rendered = "".join(callbacks.records)
         self.assertEqual(rendered.count("[error "), 1)
         self.assertEqual(
             rendered.count(_error_record(InteractiveErrorCode.WORKSPACE_INVALID)),
+            0,
+        )
+        self.assertEqual(
+            rendered.count(
+                _error_record(InteractiveErrorCode.PROVIDER_PROTOCOL_ERROR)
+            ),
             1,
         )
-        self.assertNotIn("Started prompt consensus.", rendered)
+        self.assertEqual(rendered.count("Started prompt consensus."), 1)
 
     def test_malformed_selected_transcript_is_not_a_workspace_failure(
         self,

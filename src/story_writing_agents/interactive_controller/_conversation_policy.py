@@ -8,8 +8,6 @@ from ..conversation_search import (
     ConversationTranscriptPage,
 )
 from ..conversations import (
-    CONVERSATION_CONTEXT_POLICY,
-    ConversationContextWindow,
     ConversationMetadata,
     ConversationStatus,
     normalize_conversation_subject,
@@ -45,27 +43,6 @@ class ConversationInputFailure(Exception):
 
 class ConversationCatalogProtocolFailure(Exception):
     """Mark an injected catalog return that violates its public protocol."""
-
-
-def format_transcript_context_status(
-    *,
-    displayed_events: int,
-    total_events: int,
-    context: ConversationContextWindow,
-) -> str:
-    """Format exact transcript and fixed-policy context counts without I/O."""
-
-    return (
-        f"History displayed: {displayed_events}/{total_events} events | "
-        f"Complete turns: {context.total_complete_turns} | "
-        f"Context retained: {context.retained_turns} turns, "
-        f"{len(context.events)} events | Omitted turns: "
-        f"{context.omitted_turns} | UTF-8 bytes: "
-        f"{context.retained_utf8_bytes}/"
-        f"{CONVERSATION_CONTEXT_POLICY.max_utf8_bytes} | Turn cap: "
-        f"{CONVERSATION_CONTEXT_POLICY.max_complete_turns} | Truncated: "
-        f"{'yes' if context.truncated else 'no'}."
-    )
 
 
 def validate_catalog_metadata(
@@ -387,7 +364,6 @@ __all__ = [
     "classify_memory_catalog_or_reference_failure",
     "classify_search_service_failure",
     "classify_transcript_service_failure",
-    "format_transcript_context_status",
     "normalize_conversation_input",
     "resolve_conversation_reference",
     "validate_catalog_entries",

@@ -39,7 +39,7 @@ else:
     _msvcrt = None
 
 from .agents import CORE_DOCUMENTS, ROSTER
-from .config import ConfigManager
+from .config import ConfigurationSnapshot, ConfigManager
 from .conversation_retrieval import (
     CONVERSATION_RETRIEVAL_POLICY,
     ConversationRetrievalAction,
@@ -99,7 +99,6 @@ _UNSUPPORTED_V1_ACCESS_CLAIM_GUARD = (
     f"{_SESSION_DIRECTORY}/.lease-claims.lock"
 )
 _WINDOWS_LOCK_RETRY_SECONDS = 0.05
-_CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _ACCESS_DIAGNOSTIC_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
 _SAFE_THREAD_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 _SAFE_FINGERPRINT = re.compile(r"[0-9a-f]{64}")
@@ -329,15 +328,15 @@ class AgentBackend:
         )
         if not isinstance(executable, str) or not executable:
             raise ValueError("Codex executable must be non-empty text")
-        if model is not None and (
-            not isinstance(model, str)
-            or not model
-            or model.startswith("-")
-            or _CONTROL_CHARACTERS.search(model) is not None
-        ):
+        manager = ConfigManager(self.workspace)
+        configuration = manager.load_configuration_snapshot()
+        defaults = configuration.system_defaults
+        try:
+            explicit_model = manager.validate_codex_model(model)
+        except ConfigurationError as exc:
             raise ValueError(
                 "Codex model must be safe non-empty text or None"
-            )
+            ) from exc
         if (
             isinstance(timeout_seconds, bool)
             or not isinstance(timeout_seconds, (int, float))
@@ -351,15 +350,20 @@ class AgentBackend:
             raise ConfigurationError(
                 f"unknown backend override agent: {sorted(unknown_agents)[0]}"
             )
-        manager = ConfigManager(self.workspace)
         self.backend_overrides = MappingProxyType(
             {
                 agent_id: manager.validate_backend(backend)
                 for agent_id, backend in raw_overrides.items()
             }
         )
+        self._configuration_snapshot = configuration
         self.executable = executable
-        self.model = model
+        self.model = (
+            explicit_model
+            if explicit_model is not None
+            else defaults.codex_model
+        )
+        self._codex_reasoning_effort = defaults.codex_reasoning_effort
         self.timeout_seconds = float(timeout_seconds)
         self._access_claim_tokens: dict[str, str] = {}
         self._thread_locks: dict[tuple[str, str, str], asyncio.Lock] = {}
@@ -1196,6 +1200,18 @@ class AgentBackend:
             str(staging_directory),
             "exec",
         ]
+        if self.model is not None:
+            command.extend(["--model", self.model])
+        if self._codex_reasoning_effort is not None:
+            command.extend(
+                [
+                    "--config",
+                    (
+                        "model_reasoning_effort="
+                        f'"{self._codex_reasoning_effort}"'
+                    ),
+                ]
+            )
         if thread_id is not None:
             command.append("resume")
         command.extend(
@@ -1227,8 +1243,6 @@ class AgentBackend:
                 str(output_path),
             ]
         )
-        if self.model is not None:
-            command.extend(["--model", self.model])
         if thread_id is not None:
             command.append(thread_id)
         command.append("-")
@@ -1892,7 +1906,8 @@ class AgentBackend:
         manager = ConfigManager(self.workspace)
         resolved_backends: set[str] = set()
         for agent_id in ROSTER:
-            resolved = manager.resolve(
+            resolved = manager.resolve_from_snapshot(
+                self._configuration_snapshot,
                 agent_id,
                 runtime_overrides,
                 self.backend_overrides,
@@ -2759,6 +2774,17 @@ class AgentBackend:
         """Return the access-claim path for a validated session ID."""
 
         return f"{_SESSION_DIRECTORY}/{session_id}.access.json"
+
+
+def backend_configuration_snapshot(
+    backend: AgentBackend,
+) -> ConfigurationSnapshot:
+    """Return one backend's immutable construction-time configuration."""
+
+    if not isinstance(backend, AgentBackend):
+        raise TypeError("backend must be an AgentBackend")
+    return backend._configuration_snapshot
+
 
 def _parse_timestamp(value: Any, *, label: str) -> datetime:
     """Return an offset-aware timestamp or raise ``WorkspaceFormatError``.

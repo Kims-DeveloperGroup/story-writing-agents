@@ -20,6 +20,7 @@ from unittest import mock
 
 import story_writing_agents
 from story_writing_agents import (
+    AGENT_SPECS,
     CHARACTER_CUSTODIAN,
     COMMANDS,
     EXECUTION_SPECIALIST,
@@ -43,6 +44,7 @@ from story_writing_agents.interactive_terminal import (
     TerminalMessageKind,
     sanitize_terminal_text,
 )
+from story_writing_agents.interactive_terminal._render import render_plain
 
 
 PUBLIC_EXPORTS = (
@@ -260,6 +262,50 @@ def make_terminal(
     return terminal, callbacks
 
 
+def expected_composer_prompt(
+    mode: str,
+    *,
+    line: int,
+    line_count: int,
+    character_count: int,
+    target: str | None = None,
+) -> str:
+    """Return the exact wide callback projection for one composer read."""
+
+    fields = [f"Mode: {mode}"]
+    if target is not None:
+        fields.append(f"Target: {target}")
+    fields.extend(
+        (
+            f"Next line: {line}",
+            f"Lines: {line_count}",
+            f"Characters: {character_count}",
+            "[info] Use /send to submit or /cancel to discard.",
+        )
+    )
+    scope = f"chat:{target}:{line}" if target is not None else f"run:{line}"
+    return "\n".join(fields) + f"\ncompose[{scope}]> "
+
+
+def expected_confirmation_prompt(
+    message: str,
+    *,
+    default: bool,
+    invalid: bool = False,
+) -> str:
+    """Return the exact wide callback projection for one confirmation read."""
+
+    suffix = "[Y/n]" if default else "[y/N]"
+    choices = "Choices [error]" if invalid else "Choices"
+    default_text = "yes" if default else "no"
+    return (
+        f"Question: {message}\n"
+        f"{choices}: y/yes or n/no\n"
+        f"Default: {default_text}\n"
+        f"confirm {suffix}> "
+    )
+
+
 def expected_session_orientation(
     *,
     attachment: AttachmentKind,
@@ -269,13 +315,42 @@ def expected_session_orientation(
     event_word = "event" if history_count == 1 else "events"
     return (
         "Story chat\n"
-        "Workspace: /stories/example\n"
-        f"Session: SESSION ({attachment.value})\n"
-        f"Target: {display_name}\n"
-        f"History: {history_count} visible room {event_word}\n"
-        "Room messages are saved locally and shared with addressed agents.\n"
-        "Type /help for commands; /quit releases access without pausing.\n"
+        "  Workspace: /stories/example\n"
+        f"  Session: SESSION ({attachment.value})\n"
+        f"  Target: {display_name}\n"
+        f"  History: {history_count} visible room {event_word}\n"
+        "  [info] Room messages are saved locally and shared with addressed agents.\n"
+        "  [info] Type /help for commands; /quit releases access without pausing.\n"
     )
+
+
+def expected_error_record(
+    code: InteractiveErrorCode,
+    *,
+    width: int,
+    summary: str | None = None,
+    hint: str | None = None,
+) -> str:
+    """Render the exact stabilized semantic tree for one typed error."""
+
+    spec = INTERACTIVE_ERROR_SPECS[code]
+    component = terminal_module.Panel(
+        "Interactive error",
+        (
+            terminal_module.Notice(
+                spec.summary if summary is None else summary,
+                label=f"error {code.value}",
+                role=terminal_module.SemanticRole.ERROR,
+                state=terminal_module.ViewState.ERROR,
+            ),
+            terminal_module.Notice(
+                spec.hint if hint is None else hint,
+                label="hint",
+            ),
+        ),
+        state=terminal_module.ViewState.ERROR,
+    )
+    return f"{render_plain(component, width=width).text}\n"
 
 
 def visible_escape(character: str) -> str:
@@ -744,7 +819,7 @@ class PromptAndRenderingTests(unittest.TestCase):
                 (
                     route.agent_id,
                     route.prompt_alias,
-                    terminal_module.AGENT_SPECS[route.agent_id].display_name,
+                    AGENT_SPECS[route.agent_id].display_name,
                 )
                 for route in AGENT_ROUTES
             ),
@@ -805,8 +880,18 @@ class PromptAndRenderingTests(unittest.TestCase):
             general_callbacks.prompts,
             [
                 "conversation[subject]> ",
-                "compose[run:1]> ",
-                "compose[run:2]> ",
+                expected_composer_prompt(
+                    "run",
+                    line=1,
+                    line_count=0,
+                    character_count=0,
+                ),
+                expected_composer_prompt(
+                    "run",
+                    line=2,
+                    line_count=1,
+                    character_count=16,
+                ),
             ],
         )
         self.assertEqual(main_callbacks.records, [])
@@ -872,15 +957,40 @@ class PromptAndRenderingTests(unittest.TestCase):
         self.assertEqual(
             composition_callbacks.prompts,
             [
-                "compose[run:1]> ",
-                "compose[run:2]> ",
-                "compose[chat:plot:1]> ",
-                "compose[chat:plot:2]> ",
+                expected_composer_prompt(
+                    "run",
+                    line=1,
+                    line_count=0,
+                    character_count=0,
+                ),
+                expected_composer_prompt(
+                    "run",
+                    line=2,
+                    line_count=1,
+                    character_count=8,
+                ),
+                expected_composer_prompt(
+                    "chat",
+                    target="plot",
+                    line=1,
+                    line_count=0,
+                    character_count=0,
+                ),
+                expected_composer_prompt(
+                    "chat",
+                    target="plot",
+                    line=2,
+                    line_count=1,
+                    character_count=9,
+                ),
             ],
         )
         self.assertEqual(
             ordinary_callbacks.prompts,
-            ["conversation[subject]> ", "Continue? [y/N] "],
+            [
+                "conversation[subject]> ",
+                expected_confirmation_prompt("Continue?", default=False),
+            ],
         )
 
     def test_main_read_maps_terminal_events_and_propagates_bad_collaborators(
@@ -973,8 +1083,10 @@ class PromptAndRenderingTests(unittest.TestCase):
                     terminal.request_confirmation("Continue?", default=default),
                     expected,
                 )
-                suffix = "[Y/n] " if default else "[y/N] "
-                self.assertEqual(callbacks.prompts, [f"Continue? {suffix}"])
+                self.assertEqual(
+                    callbacks.prompts,
+                    [expected_confirmation_prompt("Continue?", default=default)],
+                )
                 self.assertEqual(callbacks.records, [])
 
         terminal, callbacks = make_terminal("later", " MAYBE ", "yes")
@@ -984,7 +1096,19 @@ class PromptAndRenderingTests(unittest.TestCase):
         )
         self.assertEqual(
             callbacks.prompts,
-            ["Resume? [y/N] ", "Resume? [y/N] ", "Resume? [y/N] "],
+            [
+                expected_confirmation_prompt("Resume?", default=False),
+                expected_confirmation_prompt(
+                    "Resume?",
+                    default=False,
+                    invalid=True,
+                ),
+                expected_confirmation_prompt(
+                    "Resume?",
+                    default=False,
+                    invalid=True,
+                ),
+            ],
         )
         self.assertEqual(
             callbacks.records,
@@ -1000,7 +1124,15 @@ class PromptAndRenderingTests(unittest.TestCase):
             terminal.request_confirmation("unsafe\n\x1b?", default=True),
             ConfirmationResult.INTERRUPT,
         )
-        self.assertEqual(callbacks.prompts, ["unsafe\\x0a\\x1b? [Y/n] "])
+        self.assertEqual(
+            callbacks.prompts,
+            [
+                expected_confirmation_prompt(
+                    "unsafe\\x0a\\x1b?",
+                    default=True,
+                )
+            ],
+        )
         self.assertEqual(callbacks.records, [])
 
         terminal, callbacks = make_terminal(EOFError())
@@ -1008,7 +1140,10 @@ class PromptAndRenderingTests(unittest.TestCase):
             terminal.request_confirmation("End?", default=False),
             ConfirmationResult.EOF,
         )
-        self.assertEqual(callbacks.prompts, ["End? [y/N] "])
+        self.assertEqual(
+            callbacks.prompts,
+            [expected_confirmation_prompt("End?", default=False)],
+        )
         self.assertEqual(callbacks.records, [])
 
     def test_confirmation_rejects_bad_inputs_and_propagates_collaborator_failures(
@@ -1055,11 +1190,12 @@ class PromptAndRenderingTests(unittest.TestCase):
             callbacks.records,
             [
                 "Story chat\n"
-                "Workspace: /stories/example\n"
-                "Session: lobby\n"
-                "Provider calls are unavailable in the lobby. Use "
-                "/session create NAME, /session open [NAME], or /session list.\n"
-                "Type /help for commands; /quit exits.\n"
+                "  Workspace: /stories/example\n"
+                "  Session: lobby\n"
+                "  [warning] Provider calls are unavailable in the lobby. Use "
+                "/session create NAM\n"
+                "            E, /session open [NAME], or /session list.\n"
+                "  [info] Type /help for commands; /quit exits.\n"
             ],
         )
 
@@ -1124,10 +1260,10 @@ class PromptAndRenderingTests(unittest.TestCase):
             callbacks.records,
             [
                 "Story chat\n"
-                "Workspace: /stories/example\n"
-                "Session: SESSION (created)\n"
-                "Target: Lead Orchestrator\n"
-                "Type /help for commands; /quit releases access without pausing.\n"
+                "  Workspace: /stories/example\n"
+                "  Session: SESSION (created)\n"
+                "  Target: Lead Orchestrator\n"
+                "  [info] Type /help for commands; /quit releases access without pausing.\n"
             ],
         )
         self.assertNotIn("History:", callbacks.records[0])
@@ -1161,10 +1297,15 @@ class PromptAndRenderingTests(unittest.TestCase):
         self.assertEqual(
             callbacks.records,
             [
-                "[context] Session: SESSION | Conversation: c_0123456789 | "
-                "Subject: Opening scene | Agent: plot\n",
-                "[context] Session: SESSION | Conversation: none | "
-                "Agent: lead\n",
+                "Conversation scope\n"
+                "  Session: SESSION\n"
+                "  Conversation: c_0123456789\n"
+                "  Subject: Opening scene\n"
+                "  Agent: plot\n",
+                "Conversation scope\n"
+                "  Session: SESSION\n"
+                "  Conversation: none\n"
+                "  Agent: lead\n",
             ],
         )
 
@@ -1178,7 +1319,7 @@ class PromptAndRenderingTests(unittest.TestCase):
         rendered = callbacks.records[0]
         self.assertIn("Subject:", rendered)
         self.assertIn("Unsafe\\x0asubject\\x1b", rendered)
-        self.assertTrue(rendered.startswith("[context] "))
+        self.assertTrue(rendered.startswith("Conversation scope\n"))
         self.assertTrue(rendered.endswith("\n"))
         rendered.encode("utf-8", errors="strict")
 
@@ -1201,10 +1342,14 @@ class PromptAndRenderingTests(unittest.TestCase):
         self.assertEqual(
             callbacks.records,
             [
-                "[conversation] c_0123456789 | active | focused | "
-                "Subject: Opening scene\n",
-                "[conversation] c_fedcba9876 | archived | not focused | "
-                "Subject: Old\\x0asubject\\x1b\n",
+                "[conversation c_0123456789] [completed]\n"
+                "  Status: active\n"
+                "  Focus: focused\n"
+                "  Subject: Opening scene\n",
+                "[conversation c_fedcba9876] [completed]\n"
+                "  Status: archived\n"
+                "  Focus: not focused\n"
+                "  Subject: Old\\x0asubject\\x1b\n",
             ],
         )
 
@@ -1275,14 +1420,19 @@ class PromptAndRenderingTests(unittest.TestCase):
         self.assertEqual(
             callbacks.records,
             [
-                "[search c_0123456789] Status: active | Match: subject | "
-                "Subject: Opening scene | Citation: conversation "
-                "c_0123456789\n"
-                "[snippet] council vessel\n",
-                "[search c_fedcba9876] Status: archived | Match: event | "
-                "Subject: Old\\x0asubject | Citation: conversation "
-                "c_fedcba9876, turn turn_7, sequence 9, kind reply\n"
-                "[snippet] unsafe\\x1b\\x0atext\n",
+                "[search c_0123456789] [completed]\n"
+                "  Status: active\n"
+                "  Match: subject\n"
+                "  Subject: Opening scene\n"
+                "  Citation: conversation c_0123456789\n"
+                "  Snippet: council vessel\n",
+                "[search c_fedcba9876] [completed]\n"
+                "  Status: archived\n"
+                "  Match: event\n"
+                "  Subject: Old\\x0asubject\n"
+                "  Citation: conversation c_fedcba9876, turn turn_7, "
+                "sequence 9, kind reply\n"
+                "  Snippet: unsafe\\x1b\\x0atext\n",
             ],
         )
         self.assertEqual(len(callbacks.records), 2)
@@ -1355,15 +1505,20 @@ class PromptAndRenderingTests(unittest.TestCase):
             content="\x1b[31mred\x00\nlast",
         )
         header = (
-            "[transcript c_0123456789] Sequence: 2 | Turn: turn_2 | "
-            "Kind: reply | Sender: plot | Recipient: user\n"
+            "[transcript c_0123456789] [completed]\n"
+            "  Sequence: 2\n"
+            "  Turn: turn_2\n"
+            "  Kind: reply\n"
+            "  Sender: plot\n"
+            "  Recipient: user\n"
+            "  Content:\n"
         )
         self.assertEqual(
             callbacks.records,
             [
-                header + "[content]  \\x09\n",
-                header + "[content] first\n\n          third\n\n",
-                header + "[content] \\x1b[31mred\\x00\n          last\n",
+                header + "   \\x09\n",
+                header + "  first\n\n  third\n\n",
+                header + "  \\x1b[31mred\\x00\n  last\n",
             ],
         )
         self.assertEqual(len(callbacks.records), 3)
@@ -1377,16 +1532,27 @@ class PromptAndRenderingTests(unittest.TestCase):
             content="  alpha  \n   \n  beta gamma delta  ",
         )
         self.assertEqual(len(narrow_callbacks.records), 1)
-        _header, marker, rendered_content = narrow_callbacks.records[0].partition(
-            "[content] "
-        )
-        self.assertEqual(marker, "[content] ")
         self.assertEqual(
-            rendered_content,
-            "  alpha  \n"
-            "             \n"
-            "            beta gamma \n"
-            "          delta  \n",
+            narrow_callbacks.records,
+            [
+                "[transcript c_0123456789\n"
+                "] [completed]\n"
+                " Sequence:\n"
+                "  2\n"
+                " Turn:\n"
+                "  turn_2\n"
+                " Kind:\n"
+                "  reply\n"
+                " Sender:\n"
+                "  plot\n"
+                " Recipient:\n"
+                "  user\n"
+                " Content:\n"
+                "\n"
+                "   alpha  \n"
+                "    \n"
+                "   beta gamma delta  \n"
+            ],
         )
 
     def test_transcript_events_require_exact_nonempty_primitive_content(
@@ -1439,20 +1605,25 @@ class PromptAndRenderingTests(unittest.TestCase):
         self.assertEqual(
             callbacks.records,
             [
-                "[agent] Lead Orchestrator | ID: lead_orchestrator | "
-                "Aliases: lead, orchestrator, lead_orchestrator | "
-                "Advisory domain: Moderation, synthesis, and finalization.\n"
-                "[agent] Plot & Structure Architect | ID: plot_architect | "
-                "Aliases: plot, plot_architect | Advisory domain: Plot, "
-                "structure, flow, and pacing.\n"
-                "[agent] Character & World Custodian | ID: "
-                "character_custodian | Aliases: character, "
-                "character_custodian | Advisory domain: Characters, "
-                "relationships, world, and continuity.\n"
-                "[agent] Tone & Execution Specialist | ID: "
-                "execution_specialist | Aliases: execution, prose, "
-                "execution_specialist | Advisory domain: Drafting, prose, "
-                "point of view, tone, grammar, and format.\n"
+                "Agents (4) [completed]\n"
+                "  [agent] Lead Orchestrator [completed]\n"
+                "    ID: lead_orchestrator\n"
+                "    Aliases: lead, orchestrator, lead_orchestrator\n"
+                "    Advisory domain: Moderation, synthesis, and finalization.\n"
+                "  [agent] Plot & Structure Architect [completed]\n"
+                "    ID: plot_architect\n"
+                "    Aliases: plot, plot_architect\n"
+                "    Advisory domain: Plot, structure, flow, and pacing.\n"
+                "  [agent] Character & World Custodian [completed]\n"
+                "    ID: character_custodian\n"
+                "    Aliases: character, character_custodian\n"
+                "    Advisory domain: Characters, relationships, world, and "
+                "continuity.\n"
+                "  [agent] Tone & Execution Specialist [completed]\n"
+                "    ID: execution_specialist\n"
+                "    Aliases: execution, prose, execution_specialist\n"
+                "    Advisory domain: Drafting, prose, point of view, tone, "
+                "grammar, and format.\n"
             ],
         )
 
@@ -1460,26 +1631,29 @@ class PromptAndRenderingTests(unittest.TestCase):
         terminal.write_agent_roster()
         wrapped = callbacks.records[0]
         self.assertEqual(
-            [line for line in wrapped.splitlines() if line.startswith("[agent] ")],
-            [
-                "[agent] Lead Orchestrator | ID:",
-                "[agent] Plot & Structure Architect | ID:",
-                "[agent] Character & World Custodian | ID:",
-                "[agent] Tone & Execution Specialist | ID:",
-            ],
+            len(
+                [
+                    line
+                    for line in wrapped.splitlines()
+                    if line.startswith("  [agent] ")
+                ]
+            ),
+            4,
         )
+        self.assertIn("Agents (4) [completed]\n", wrapped)
         self.assertTrue(all(len(line) <= 44 for line in wrapped.splitlines()))
 
-        original = terminal_module.AGENT_SPECS[LEAD_ORCHESTRATOR]
+        original = AGENT_SPECS[LEAD_ORCHESTRATOR]
         unsafe = replace(original, display_name="Unsafe\x1bLead")
         terminal, callbacks = make_terminal(width=1000)
         with mock.patch.dict(
-            terminal_module.AGENT_SPECS,
+            AGENT_SPECS,
             {LEAD_ORCHESTRATOR: unsafe},
         ):
             terminal.write_agent_roster()
         self.assertIn(
-            "[agent] Unsafe\\x1bLead | ID: lead_orchestrator",
+            "[agent] Unsafe\\x1bLead [completed]\n"
+            "    ID: lead_orchestrator",
             callbacks.records[0],
         )
         self.assertNotIn("\x1b", callbacks.records[0])
@@ -1493,13 +1667,16 @@ class PromptAndRenderingTests(unittest.TestCase):
 
         terminal, callbacks = make_terminal()
         terminal.write_run("DEBATE-1", "complete")
-        self.assertEqual(callbacks.records, ["[run DEBATE-1] complete\n"])
+        self.assertEqual(callbacks.records, ["[run DEBATE-1]\n  complete\n"])
 
         for agent_id, alias, _display_name in AGENT_CASES:
             with self.subTest(agent_id=agent_id):
                 terminal, callbacks = make_terminal()
                 terminal.write_agent(agent_id, "reply")
-                self.assertEqual(callbacks.records, [f"{alias}> reply\n"])
+                self.assertEqual(
+                    callbacks.records,
+                    [f"{alias} [completed]> reply\n"],
+                )
 
     def test_every_written_block_is_sanitized_and_gets_one_record_lf(self) -> None:
         terminal, callbacks = make_terminal()
@@ -1566,9 +1743,27 @@ class CompositionTests(unittest.TestCase):
         self.assertEqual(
             callbacks.prompts,
             [
-                "compose[chat:plot:1]> ",
-                "compose[chat:plot:2]> ",
-                "compose[chat:plot:3]> ",
+                expected_composer_prompt(
+                    "chat",
+                    target="plot",
+                    line=1,
+                    line_count=0,
+                    character_count=0,
+                ),
+                expected_composer_prompt(
+                    "chat",
+                    target="plot",
+                    line=2,
+                    line_count=1,
+                    character_count=5,
+                ),
+                expected_composer_prompt(
+                    "chat",
+                    target="plot",
+                    line=3,
+                    line_count=2,
+                    character_count=12,
+                ),
             ],
         )
         self.assertEqual(
@@ -1594,7 +1789,20 @@ class CompositionTests(unittest.TestCase):
         )
         self.assertEqual(
             callbacks.prompts,
-            ["compose[run:1]> ", "compose[run:2]> "],
+            [
+                expected_composer_prompt(
+                    "run",
+                    line=1,
+                    line_count=0,
+                    character_count=0,
+                ),
+                expected_composer_prompt(
+                    "run",
+                    line=2,
+                    line_count=1,
+                    character_count=3,
+                ),
+            ],
         )
         self.assertEqual(
             callbacks.records,
@@ -1626,11 +1834,36 @@ class CompositionTests(unittest.TestCase):
         self.assertEqual(
             callbacks.prompts,
             [
-                "compose[run:1]> ",
-                "compose[run:2]> ",
-                "compose[run:3]> ",
-                "compose[run:3]> ",
-                "compose[run:4]> ",
+                expected_composer_prompt(
+                    "run",
+                    line=1,
+                    line_count=0,
+                    character_count=0,
+                ),
+                expected_composer_prompt(
+                    "run",
+                    line=2,
+                    line_count=1,
+                    character_count=0,
+                ),
+                expected_composer_prompt(
+                    "run",
+                    line=3,
+                    line_count=2,
+                    character_count=3,
+                ),
+                expected_composer_prompt(
+                    "run",
+                    line=3,
+                    line_count=2,
+                    character_count=3,
+                ),
+                expected_composer_prompt(
+                    "run",
+                    line=4,
+                    line_count=3,
+                    character_count=11,
+                ),
             ],
         )
         self.assertEqual(callbacks.records[1], "[compose] Nothing to send.\n")
@@ -1760,24 +1993,59 @@ class HelpAndErrorTests(unittest.TestCase):
         terminal, callbacks = make_terminal(width=200)
         terminal.write_help()
 
-        expected_lines: list[str] = []
-        current_group = None
-        for spec in COMMANDS:
-            if spec.group != current_group:
-                current_group = spec.group
-                expected_lines.append(f"{spec.group}:")
-            aliases = ", ".join(spec.aliases) if spec.aliases else "none"
-            expected_lines.extend(
+        sections = tuple(
+            terminal_module.Section(
+                group,
                 (
-                    f"  {spec.syntax}",
-                    f"    Aliases: {aliases}",
-                    "    Calls provider: "
-                    f"{'yes' if spec.may_call_provider else 'no'}",
-                    "    May write artifacts: "
-                    f"{'yes' if spec.may_write_artifacts else 'no'}",
-                )
+                    terminal_module.ListView(
+                        "Commands",
+                        tuple(
+                            terminal_module.Record(
+                                "command",
+                                title=spec.syntax,
+                                fields=(
+                                    terminal_module.Field(
+                                        "Aliases",
+                                        ", ".join(spec.aliases)
+                                        if spec.aliases
+                                        else "none",
+                                    ),
+                                    terminal_module.Field(
+                                        "Calls provider",
+                                        "yes" if spec.may_call_provider else "no",
+                                    ),
+                                    terminal_module.Field(
+                                        "May write artifacts",
+                                        "yes"
+                                        if spec.may_write_artifacts
+                                        else "no",
+                                    ),
+                                ),
+                                role=terminal_module.SemanticRole.COMMAND,
+                                state=terminal_module.ViewState.COMPLETED,
+                            )
+                            for spec in COMMANDS
+                            if spec.group == group
+                        ),
+                        total_count=sum(
+                            spec.group == group for spec in COMMANDS
+                        ),
+                        state=terminal_module.ViewState.COMPLETED,
+                    ),
+                ),
+                state=terminal_module.ViewState.COMPLETED,
             )
-        self.assertEqual(callbacks.records, ["\n".join(expected_lines) + "\n"])
+            for group in dict.fromkeys(spec.group for spec in COMMANDS)
+        )
+        expected = terminal_module.Panel(
+            "Help",
+            sections,
+            state=terminal_module.ViewState.COMPLETED,
+        )
+        self.assertEqual(
+            callbacks.records,
+            [f"{render_plain(expected, width=200).text}\n"],
+        )
         self.assertNotIn("Example:", callbacks.records[0])
 
     def test_context_help_accepts_alias_and_includes_the_registry_example(
@@ -1788,12 +2056,14 @@ class HelpAndErrorTests(unittest.TestCase):
         self.assertEqual(
             callbacks.records,
             [
-                "Group: Agents\n"
-                "Syntax: /to NAME\n"
-                "Aliases: /agent\n"
-                "Calls provider: no\n"
-                "May write artifacts: no\n"
-                "Example: /to plot\n"
+                "Help [completed]\n"
+                "  [command] [completed]\n"
+                "    Group: Agents\n"
+                "    Syntax: /to NAME\n"
+                "    Aliases: /agent\n"
+                "    Calls provider: no\n"
+                "    May write artifacts: no\n"
+                "    Example: /to plot\n"
             ],
         )
 
@@ -1808,14 +2078,21 @@ class HelpAndErrorTests(unittest.TestCase):
         self.assertEqual(
             callbacks.records,
             [
-                "Group: Consensus\n"
-                "Syntax: /run [PROMPT] | /run\n"
-                "        --fresh PROMPT\n"
-                "Aliases: none\n"
-                "Calls provider: yes\n"
-                "May write artifacts: yes\n"
-                "Example: /run Outline chapter\n"
-                "         one\n"
+                "Help [completed]\n"
+                " [command] [completed]\n"
+                "  Group:\n"
+                "   Consensus\n"
+                "  Syntax:\n"
+                "   /run [PROMPT] | /run --fresh \n"
+                "   PROMPT\n"
+                "  Aliases:\n"
+                "   none\n"
+                "  Calls provider:\n"
+                "   yes\n"
+                "  May write artifacts:\n"
+                "   yes\n"
+                "  Example:\n"
+                "   /run Outline chapter one\n"
             ],
         )
         for line in callbacks.records[0].splitlines():
@@ -1829,10 +2106,7 @@ class HelpAndErrorTests(unittest.TestCase):
                 spec = INTERACTIVE_ERROR_SPECS[code]
                 self.assertEqual(
                     callbacks.records,
-                    [
-                        f"[error {code.value}] {spec.summary}\n"
-                        f"[hint] {spec.hint}\n"
-                    ],
+                    [expected_error_record(code, width=1000)],
                 )
 
         terminal, _callbacks = make_terminal()
@@ -1864,9 +2138,10 @@ class HelpAndErrorTests(unittest.TestCase):
         self.assertEqual(
             callbacks.records,
             [
-                "[error internal_error] raw=<redacted> escaped=<redacted> "
+                "Interactive error [error]\n"
+                "  [error internal_error] raw=<redacted> escaped=<redacted> "
                 "long=<redacted> short=<redacted>\n"
-                "[hint] escaped-control=<redacted>\n"
+                "  [hint] escaped-control=<redacted>\n"
             ],
         )
 
@@ -1879,10 +2154,14 @@ class HelpAndErrorTests(unittest.TestCase):
         self.assertEqual(
             callbacks.records,
             [
-                f"[error internal_error] {spec.summary}\n"
-                f"[hint] {spec.hint}\n",
-                f"[error internal_error] {spec.summary}\n"
-                f"[hint] {spec.hint}\n",
+                expected_error_record(
+                    InteractiveErrorCode.INTERNAL_ERROR,
+                    width=1000,
+                ),
+                expected_error_record(
+                    InteractiveErrorCode.INTERNAL_ERROR,
+                    width=1000,
+                ),
             ],
         )
 
@@ -1903,9 +2182,10 @@ class HelpAndErrorTests(unittest.TestCase):
                 hint="h" * 300,
             )
         )
-        summary_line, hint_line = callbacks.records[0].splitlines()
-        summary = summary_line.removeprefix("[error internal_error] ")
-        hint = hint_line.removeprefix("[hint] ")
+        title_line, summary_line, hint_line = callbacks.records[0].splitlines()
+        self.assertEqual(title_line, "Interactive error [error]")
+        summary = summary_line.removeprefix("  [error internal_error] ")
+        hint = hint_line.removeprefix("  [hint] ")
         self.assertEqual(len(summary), 512)
         self.assertEqual(len(hint), 256)
         self.assertTrue(summary.endswith(" ...[truncated]"))
@@ -1922,12 +2202,14 @@ class HelpAndErrorTests(unittest.TestCase):
         self.assertEqual(
             callbacks.records,
             [
-                "[error internal_error] one two\n"
-                "                       three\n"
-                "                       four five\n"
-                "                       six seven\n"
-                "[hint] alpha beta gamma delta\n"
-                "       epsilon\n"
+                "Interactive error [error]\n"
+                " [error internal_error] one two \n"
+                "                        three fo\n"
+                "                        ur five \n"
+                "                        six seve\n"
+                "                        n\n"
+                " [hint] alpha beta gamma delta e\n"
+                "        psilon\n"
             ],
         )
 
@@ -1976,7 +2258,8 @@ class TerminalBoundaryTests(unittest.TestCase):
             Path(__file__).resolve().parents[1]
             / "src"
             / "story_writing_agents"
-            / "interactive_terminal.py"
+            / "interactive_terminal"
+            / "__init__.py"
         )
         tree = ast.parse(source_path.read_text(encoding="utf-8"))
         internal_dependencies = {
@@ -1986,7 +2269,7 @@ class TerminalBoundaryTests(unittest.TestCase):
         }
         self.assertEqual(
             internal_dependencies,
-            {"agents", "interactive_commands"},
+            {"_core"},
         )
         self.assertNotIn("interactive_terminal", story_writing_agents.__all__)
         for name in PUBLIC_EXPORTS:

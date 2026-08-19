@@ -16,7 +16,7 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 27.
+Importable production units indexed: 33.
 
 ## Current Dependency Direction
 
@@ -25,8 +25,7 @@ configuration, prompt, persistence, and stable contract modules:
 
 ```text
 __main__ -> cli -> interactive_controller -> interactive_controller._core
-                 -> interactive_line_editor -> interactive_commands/interactive_terminal
-                 -> interactive_terminal -> interactive_commands/agents
+                 -> interactive_terminal -> interactive_terminal._core
                  -> run_inputs -> errors
                  -> orchestrator -> conversation_retrieval -> agents/conversation_search
                  |               |                           -> conversations/errors
@@ -47,7 +46,8 @@ interactive_controller._core -> interactive_controller._session_policy
                              -> agents/backend/cli_context
                              -> conversation_retrieval/conversation_search
                              -> conversations/errors/interactive_commands
-                             -> interactive_terminal/models/orchestrator/run_inputs
+                             -> interactive_settings/interactive_terminal
+                             -> models/orchestrator/run_inputs
                              -> session_lifecycle/workspace
 interactive_controller._session_policy -> errors/interactive_terminal/session_lifecycle
 interactive_controller._conversation_policy -> conversation_search/conversations
@@ -58,7 +58,17 @@ interactive_controller._runtime_policy -> conversation_retrieval/conversation_se
 smoke -> agents/conversation_retrieval/conversation_search/conversations/models/orchestrator/session_lifecycle/workspace
 directives -> config/workspace/errors/agents
 interactive_commands -> agents
-interactive_terminal -> interactive_commands/agents
+interactive_line_editor -> interactive_commands/interactive_terminal
+interactive_settings -> agents/config/errors/workspace
+interactive_terminal -> interactive_terminal._core
+interactive_terminal._core -> agents/interactive_commands
+                           -> interactive_terminal._controls
+                           -> interactive_terminal._driver
+                           -> interactive_terminal._model
+                           -> interactive_terminal._render
+interactive_terminal._controls -> interactive_terminal._model
+interactive_terminal._driver -> interactive_terminal._model
+interactive_terminal._render -> interactive_terminal._model
 story_writing_agents facade -> interactive_commands
                             -> conversation_retrieval -> agents/conversation_search
                             |                          -> conversations/errors
@@ -181,8 +191,9 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 - **Source:** `src/story_writing_agents/backend.py`
 - **Responsibility:** Adapt immutable agent definitions to provider invocation
-  and own provider-session durable state, process-access claims, and provider
-  thread persistence.
+  and own provider-session durable state, process-access claims, provider
+  thread persistence, and each backend instance's persisted configuration
+  snapshot.
 - **Supported surface:** Package-supported `AgentBackend` and `BoundAgent`.
   `BoundAgent` exposes structured debate `invoke` and one-turn conversation
   `converse` operations plus additive bounded
@@ -194,6 +205,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   `create_session_with_access(session_id)`,
   `reopen_session_with_access(session_id)`, and
   `pause_session_and_release_access(session_id)`.
+  Unexported package-internal `backend_configuration_snapshot(backend)` exposes
+  the same immutable construction-time configuration to the bound runtime
+  without exposing the backend's private storage.
 - **Direct internal dependencies:** `agents`, `config`,
   `conversation_retrieval`, `errors`, `models`, `session_lifecycle`, and
   `workspace`.
@@ -225,7 +239,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   nonzero Codex exit; it receives no memory service and performs no retrieval
   search or transcript-storage call. Debate requests add the canonical
   included-context event list to provider payloads only when present; absent
-  and fresh context requests retain the exact context-free payload.
+  and fresh context requests retain the exact context-free payload. At
+  construction it validates and snapshots the complete workspace system and
+  per-agent configuration once, resolves a non-null explicit model over the
+  persisted model, and retains the persisted reasoning effort and provider
+  routes for the backend lifetime. Optional
+  `--model` and `--config model_reasoning_effort="LEVEL"` arguments are emitted
+  in that order immediately after `exec` and before any resume marker; neither
+  value changes provider-thread identity, bindings, fingerprints, manifests,
+  or request payloads.
 - **Primary verification/documentation:** `tests/test_codex_backend.py`,
   `tests/test_session_lifecycle.py`, `docs/reference/backend-and-sessions.md`,
   `docs/reference/conversation-retrieval.md`,
@@ -247,21 +269,22 @@ every intermediate arrow. The current runtime graph is acyclic.
   sorted, indented JSON containing only `access_state`, `durable_state`, and
   `session_id`.
 - **Direct internal dependencies:** `agents`, `backend`, `cli_context`, `config`,
-  `errors`, `interactive_controller`, `interactive_line_editor`,
-  `interactive_terminal`, `models`, `orchestrator`, `run_inputs`,
+  `errors`, `interactive_controller`, `interactive_terminal`, `models`,
+  `orchestrator`, `run_inputs`,
   `session_lifecycle`, and `workspace`; imports `smoke` lazily for the
   diagnostic command.
 - **State, resources, and side effects:** Reads terminal input and delegates
   caller-selected draft-file reads to `run_inputs`; writes JSON, plain-text
-  interaction, or errors to standard streams; creates backends; and, after a
-  stdin/stdout TTY guard, constructs one shared live editor, binds its main and
-  composition readers to their explicit providers, and builds the terminal
-  through the internal contextual factory. The editor retains the existing
-  `input` callback as its unsupported-terminal fallback; subject and
-  confirmation input remain ordinary reads. The CLI constructs the interactive
-  controller and runs the async event loop. The controller owns interactive
-  backend cleanup after its session-lobby run begins, while the CLI closes a
-  backend if construction fails before that ownership transfer.
+  interaction, or errors to standard streams; creates backends; constructs one
+  unified stream-backed terminal through its package-internal factory after a
+  stdin/stdout TTY guard; constructs the interactive controller; and runs the
+  async event loop. The factory binds main and composition previews plus
+  semantic confirmation input explicitly through one terminal driver, which
+  retains the existing `input` callback as its unsupported-terminal fallback;
+  subject input remains an ordinary read, while composition and confirmation
+  use history-free semantic input. The controller owns interactive backend
+  cleanup after its session-lobby run begins, while the CLI closes a backend if
+  construction fails before that ownership transfer.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
   `tests/test_cli_context.py`, `tests/test_smoke_cli.py`, and
   `tests/test_interactive_pty.py` for primary process-level POSIX PTY
@@ -300,12 +323,23 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:** `src/story_writing_agents/config.py`
 - **Responsibility:** Validate and resolve cascading runtime configuration.
 - **Supported surface:** Internal `ConfigManager`, `SystemDefaults`,
-  `AgentConfig`, `ResolvedAgentConfig`, and `KNOWN_AGENT_BACKENDS`.
+  `AgentConfig`, `ResolvedAgentConfig`, immutable roster-complete
+  `ConfigurationSnapshot`, and `KNOWN_AGENT_BACKENDS`.
+  `SystemDefaults` retains its established positional fields and adds trailing
+  optional `codex_model` and `codex_reasoning_effort` fields. `ConfigManager`
+  owns the complete five-key system-default schema plus the shared safe-model
+  and fixed reasoning-effort validators. Package-internal
+  `validate_configuration` validates both persisted documents as one complete
+  candidate, `load_configuration_snapshot` reads and publishes one immutable
+  pair, and `resolve_from_snapshot` applies live runtime and explicit backend
+  overrides over that pair. Existing on-demand loaders and `resolve` retain
+  their signatures and delegate to the same validation and resolution rules.
 - **Direct internal dependencies:** `agents`, `errors`, and `workspace`.
 - **State, resources, and side effects:** Reads workspace configuration and
   owns no persistence.
 - **Primary verification/documentation:** `tests/test_workspace_and_config.py`,
   `tests/test_prompts.py`, `tests/test_codex_backend.py`,
+  `tests/test_interactive_settings.py`,
   `docs/reference/configuration/agent-configuration.md`, and
   `docs/reference/configuration/runtime-overrides.md`.
 
@@ -445,21 +479,31 @@ every intermediate arrow. The current runtime graph is acyclic.
   `AgentRouteSpec` and `AGENT_ROUTES` at their owning path. `AgentRouteSpec` is
   frozen and slotted; `AGENT_ROUTES` is immutable, follows canonical roster
   order, and owns each route's canonical ID, preferred prompt alias, ordered
-  aliases, and advisory-domain copy. Parser helpers and command-alias maps are
-  internal; agent parsing and canonical validation derive from the route
-  registry. Search and transcript actions extend the frozen, slotted
-  `InteractiveAction` with the optional positive `start_sequence` field;
+  aliases, and advisory-domain copy. The unlisted package-internal
+  `CommandCompletionContext` and `project_command_completion` derive the
+  canonical cursor-aware completion grammar, exact replacement spans, stable
+  grammar-position identities, and ordered fixed candidates from the same
+  command and route metadata without parsing. Other parser helpers and
+  command-alias maps are internal; agent parsing and canonical validation
+  derive from the route registry. Search and transcript actions extend the
+  frozen, slotted `InteractiveAction` with the optional positive
+  `start_sequence` field;
   existing action payloads remain compatible. `/search QUERY` and
   `/transcript ID [COUNT] [--from SEQUENCE]` participate in the same immutable
-  help registry and exact parser. Story-session parsing recognizes exactly
+  help registry and exact parser. Global no-argument `/settings` is represented
+  by the additive `SETTINGS` action and the same help/completion grammar.
+  Story-session parsing recognizes exactly
   `/session create NAME`, `/session open [NAME]`, `/session pause`, and
   `/session list`, with no old lifecycle verbs or aliases. The package facade
   does not re-export the route metadata.
 - **Direct internal dependencies:** `agents`.
 - **State, resources, and side effects:** Immutable command and agent-route
-  metadata only; owns no process state and performs no provider, filesystem,
-  persistence, environment, or import-time operational side effects.
+  metadata only. Completion projection is pure and call-local; the module owns
+  no editor, palette, history, process state, or external resource and performs
+  no provider, filesystem, persistence, environment, or import-time
+  operational side effects.
 - **Primary verification/documentation:** `tests/test_interactive_commands.py`,
+  `tests/test_interactive_terminal_completion.py`,
   `tests/test_public_api_and_cli.py`, and
   `docs/reference/interactive-command-parser.md`.
 
@@ -495,6 +539,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   runtime directives and safe session/debate inspection; current-focus
   conversation history; roster,
   sticky-target, current-session search, and bounded transcript-read actions;
+  global attached-or-unattached persistent settings editing;
   current-focus advisory turns; and current-focus consensus
   prompt, fresh-prompt, and draft-file actions while retaining the established
   conversation commands. Search, transcript reads, directives, and inspection
@@ -512,12 +557,25 @@ every intermediate arrow. The current runtime graph is acyclic.
   directive-result, inspection, trusted debate/retrieval progress and result,
   retrieval-source, and other presentation validation helpers are package
   internal, and the project-root facade does not re-export this class or module.
+  The controller constructs closed semantic components for the migrated
+  high-frequency and information-dense scope, status, inspection, management,
+  directive, routing, advisory, retrieval, consensus, focused-history, list,
+  search, and transcript records through the terminal facade's unlisted
+  `InteractiveSemanticOutput`; it retains that adapter alongside the same
+  terminal used for input and terminal-owned semantic writers. It also retains
+  the facade's resource-free picker and cancellable-prompt adapters for the
+  call-local settings flow. Ordered session,
+  conversation, search, transcript, and focused-history rows use one positioned
+  `ListView` containing one `Record` per established callback, so the controller
+  owns result counts and interruption boundaries without any remaining
+  `write_status` or specialized dense-row call.
 - **Direct internal dependencies:** `agents`, `backend`, `cli_context`,
   `conversation_retrieval`, `conversation_search`, `conversations`, `errors`,
   `interactive_commands`, `interactive_controller._conversation_policy`,
   `interactive_controller._runtime_policy`,
-  `interactive_controller._session_policy`, `interactive_terminal`, `models`,
-  `orchestrator`, `run_inputs`, `session_lifecycle`, and `workspace`.
+  `interactive_controller._session_policy`, `interactive_settings`,
+  `interactive_terminal`, `models`, `orchestrator`, `run_inputs`,
+  `session_lifecycle`, and `workspace`.
 - **State, resources, and side effects:** Instances retain borrowed workspace,
   CLI-context, backend, and terminal collaborators plus either a borrowed
   injected catalog or a controller-constructed default filesystem catalog. It
@@ -543,9 +601,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   while a cleanup `BaseException` propagates after later stages run and an
   unsuccessfully interrupted Runner close retains its private reference.
   `AgentBackend` retains the actual access claim, manifest, subprocess, and
-  provider-thread resources. Through public
-  collaborators the controller reads and parses terminal input, renders safe
-  output, sequences session and nested conversation transitions, performs
+  provider-thread resources. The settings flow retains only one call-local
+  immutable baseline and pending candidate, constructs current/pending semantic
+  views, and delegates exact-byte conflict detection and guarded persistence to
+  `interactive_settings`; cancellation or failed saves do not mutate the active
+  backend or runtime snapshot. Through public collaborators the controller reads
+  and parses terminal input, submits typed presentation facts and invokes
+  terminal-owned semantic writers, sequences session and nested
+  conversation transitions, performs
   configuration validation, pre-read, access acquisition, and correlated
   post-read in that exact order, and compensates only access newly acquired by
   a failed transition. Create/open update the persisted session default only
@@ -566,18 +629,18 @@ every intermediate arrow. The current runtime graph is acyclic.
   `StoryRuntime.converse_with_retrieval` operation per accepted advisory content
   turn through the retained Runner. It passes the exact attachment-scoped
   service plus a synchronous sink, validates trusted progress/results, and
-  renders fixed progress and ordered source copy through existing terminal
-  status output. Before advisory coroutine entry, the established fixed
-  cancelled/hint copy returns attached only when public Runner task inspection
-  proves quiescence; that path calls no provider and mutates no controller or
-  persistent state. After entry, returning attached requires the runtime to
-  receive `CancelledError` and the operation to join; every other advisory
-  cancellation state fails closed. Provider-free search, transcript, and
-  focused-history interruption stops further rendering and returns to the
-  same prompt without persistence mutation. The controller also delegates draft
-  reads to `run_inputs` and submits each accepted consensus action through the
-  same Runner. A trusted `INTERRUPTED` progress event, which may be first after
-  reservation, is its sole durable-interruption proof; only `STARTED` updates
+  constructs fixed progress and ordered source components through the retained
+  semantic-output adapter. Before advisory coroutine entry, the established
+  fixed cancelled/hint copy returns attached only when public Runner task
+  inspection proves quiescence; that path calls no provider and mutates no
+  controller or persistent state. After entry, returning attached requires the
+  runtime to receive `CancelledError` and the operation to join; every other
+  advisory cancellation state fails closed. Provider-free search, transcript,
+  and focused-history interruption stops further rendering and returns to the
+  same prompt without persistence mutation. The controller also delegates
+  draft reads to `run_inputs` and submits each accepted consensus action
+  through the same Runner. A trusted `INTERRUPTED` progress event, which may be
+  first after reservation, is its sole durable-interruption proof; only `STARTED` updates
   the process-local latest-debate map, pre-entry cancellation remains
   provider-free, and an entered cancellation without proof fails closed through
   `operation_interrupted` and `cleanup_failed`. `StoryRuntime` owns context
@@ -634,13 +697,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   `classify_conversation_failure`,
   `classify_memory_catalog_or_reference_failure`,
   `classify_search_service_failure`, `classify_transcript_service_failure`,
-  `format_transcript_context_status`, `normalize_conversation_input`,
-  `resolve_conversation_reference`, `validate_catalog_entries`,
+  `normalize_conversation_input`, `resolve_conversation_reference`,
+  `validate_catalog_entries`,
   `validate_catalog_metadata`, `validate_conversation_reference`,
   `validate_search_result_handles`, `validate_transcript_page`, and
   `visible_conversation_handle`. Reference validation remains pure and
   precedes the core-owned catalog read; all collection/result inputs are
-  interpreted without mutation.
+  interpreted without mutation or presentation formatting.
 - **Direct internal dependencies:** `conversation_search`, `conversations`,
   `errors`, `interactive_terminal`, and `workspace`.
 - **State, resources, and side effects:** Immutable minimum-prefix policy and
@@ -657,7 +720,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:** `src/story_writing_agents/interactive_controller/_runtime_policy.py`
 - **Responsibility:** Interpret runtime progress, result, and inspection facts.
 - **Supported surface:** No project-public import. Its exact package-internal
-  `__all__` contains `classify_advisory_turn_failure`,
+  `__all__` contains the frozen, slotted `DebateContextInspectionFacts` and
+  `DebateInspectionFacts` contracts plus `classify_advisory_turn_failure`,
   `classify_consensus_execution_failure`, `classify_inspection_failure`,
   `classify_progress_callback_failure`,
   `interactive_code_for_debate_failure`, `validate_consensus_result`,
@@ -666,8 +730,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   `validate_debate_context_inspection`, `validate_debate_inspection`,
   `validate_debate_progress`, and `validate_session_inspection`. Validators
   reconstruct exact immutable contracts, consume only a previous event or
-  immutable progress tuple, and return canonical facts or whitelisted safe
-  summaries; they never render, append, retain, or call the runtime.
+  immutable progress tuple, and return canonical typed facts. Debate and
+  context inspection validators return the whitelisted fact contracts without
+  flattening presentation text; the module never renders, appends, retains, or
+  calls the runtime.
 - **Direct internal dependencies:** `conversation_retrieval`,
   `conversation_search`, `errors`, `interactive_terminal`, `models`, and
   `workspace`.
@@ -684,7 +750,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.interactive_line_editor`
 
 - **Source:** `src/story_writing_agents/interactive_line_editor.py`
-- **Responsibility:** Own contextual live-line editing operations.
+- **Responsibility:** Preserve the standalone contextual line-editor
+  compatibility surface over the unified driver.
 - **Supported surface:** Module-supported frozen, slotted
   `SlashCommandSuggestion`, pure `slash_command_suggestions`, and
   `InteractiveMainLineEditor`. Suggestions project canonical tokens and aliases
@@ -696,86 +763,372 @@ every intermediate arrow. The current runtime graph is acyclic.
   project-internal `composition_slash_command_suggestions` projects only
   `/send` then `/cancel` from exact whole-buffer prefixes, while
   `bind_suggestion_reader` binds an explicit provider to an editor without
-  exposing private members to consumers. The public `__all__` remains exact.
+  exposing private members to consumers. Public `read_line` uses the driver's
+  shared history-aware selectable main-command route while preserving the
+  legacy `slash_command_suggestions` projection, and the bound contextual
+  reader remains history-free and nonselectable. The public `__all__` remains
+  exact.
 - **Direct internal dependencies:** `interactive_commands` and
   `interactive_terminal`.
-- **State, resources, and side effects:** One CLI editor instance retains
-  borrowed fallback, input-stream, and output-stream collaborators but acquires
-  no resource during construction or import. Each capable POSIX read receives
-  its suggestion provider call-locally and owns terminal attributes, Unicode
-  buffer/cursor state, escape-sequence state, terminal width, and one transient
-  sanitized `[suggestions]` panel; no provider or operation mode is retained by
-  the editor. It supports fixed insertion, deletion, and cursor controls,
-  submits nonempty Ctrl-D buffers, and restores the exact captured terminal
-  configuration after normal or exceptional completion; restoration
-  uncertainty is fatal. Unsupported, `TERM=dumb`, or safely restored
-  pre-consumption setup paths call the existing line-input fallback without
-  ANSI output. Preview projection performs no parser, provider, filesystem,
-  persistence, subprocess, network, or import-time operational side effect.
+- **State, resources, and side effects:** The facade retains one unified raw
+  driver but contains no raw-mode, key-decoding, cursor, width, write, flush, or
+  restoration implementation. Construction performs no stream access or
+  terminal mutation. That driver owns one bounded process-local main-input
+  history store for the editor lifetime; public `read_line` records successful
+  exact nonblank commits, while the internal binding supplies a provider to a
+  history-free contextual read without retaining it. The unified driver
+  preserves exact fallback, selectable-palette, editing, interrupt, EOF,
+  output-failure, and restoration behavior. The history is not persisted, and
+  the facade performs no provider, filesystem, persistence, subprocess,
+  network, or import-time operational side effect.
 - **Primary verification/documentation:** `tests/test_interactive_line_editor.py`,
-  `tests/test_interactive_terminal.py`, `tests/test_public_api_and_cli.py`, and
-  `tests/test_interactive_pty.py`;
-  `docs/reference/interactive-terminal.md`, `docs/reference/cli.md`, and
+  `tests/test_interactive_terminal.py`,
+  `tests/test_interactive_terminal_completion.py`,
+  `tests/test_interactive_terminal_foundation.py`,
+  `tests/test_public_api_and_cli.py`, and `tests/test_interactive_pty.py`;
+  `docs/reference/interactive-terminal.md`, `docs/reference/cli.md`,
+  `docs/design/interactive-cli-design-system.md`, and
   `docs/operations/terminal-safety.md`.
+
+### `story_writing_agents.interactive_settings`
+
+- **Source:** `src/story_writing_agents/interactive_settings.py`
+- **Responsibility:** Own immutable interactive-settings candidates and guarded
+  persistence.
+- **Supported surface:** Package-internal frozen/slotted `PersonaCatalogEntry`,
+  `SettingsBaseline`, and `SettingsState`; fixed `SettingsErrorKind` and
+  redacted `SettingsError`; the exact ordered `SETTINGS_LANGUAGES` and
+  `SETTINGS_REASONING_EFFORTS`; `load_settings_state`, `update_language`,
+  `update_persona`, `update_max_debate_rounds`, `update_agent_backend`,
+  `update_codex_model`, `update_codex_reasoning_effort`, and
+  `save_settings_state`. The module has no package-facade export.
+- **Direct internal dependencies:** `agents`, `config`, `errors`, and
+  `workspace`.
+- **State, resources, and side effects:** Loading captures the exact strict-
+  UTF-8 bytes of both persisted configuration documents, one fully validated
+  immutable configuration snapshot, and a safe lexical persona catalog with
+  top-level-template precedence. Pure update operations replace only the
+  pending immutable candidate. Saving completely validates that candidate,
+  rereads both documents and the catalog for exact stale-state detection, and
+  performs no write when the candidate is unchanged. Changed documents are
+  serialized canonically and atomically replaced through `Workspace` in system-
+  then-agent order; any attempted targets are restored from exact baseline text
+  in reverse order after a write failure, all restorations are attempted, and a
+  restoration failure produces the fixed rollback category. The module owns no
+  terminal, controller, backend, runtime, provider, network, subprocess, or
+  import-time operational resource.
+- **Primary verification/documentation:** `tests/test_interactive_settings.py`,
+  `docs/design/interactive-cli-design-system.md`,
+  `docs/reference/configuration/agent-configuration.md`, and
+  `docs/operations/filesystem-safety.md`.
 
 ### `story_writing_agents.interactive_terminal`
 
-- **Source:** `src/story_writing_agents/interactive_terminal.py`
-- **Responsibility:** Provide deterministic, safe plain-text interaction
-  primitives for an interactive terminal.
-- **Supported surface:** Module-supported `AttachmentKind`, `ComposeMode`,
+- **Source:** `src/story_writing_agents/interactive_terminal/__init__.py`
+- **Responsibility:** Provide the stable interactive-terminal import and
+  construction boundary.
+- **Supported surface:** Package-supported `AttachmentKind`, `ComposeMode`,
   `ConfirmationResult`, `TerminalActionKind`, `TerminalMessageKind`,
   `InteractiveErrorCode`, `TerminalAction`, `InteractiveErrorSpec`,
   `INTERACTIVE_ERROR_SPECS`, `InteractiveError`, `sanitize_terminal_text`, and
-  `InteractiveTerminal`. Its two positional callbacks and keyword-only width
-  are stable; keyword-only `main_read_line`
-  defaults to `read_line` and is used only by `read_main`.
-  Public construction continues using `read_line` for composition. Unexported
-  project-internal `build_contextual_terminal` binds distinct main and
-  composition readers without changing the public constructor or `__all__`.
-  `InteractiveTerminal.request_confirmation` returns a typed
-  yes/no/interrupt/EOF result, and `write_session_orientation` accepts an
-  optional history count whose absence omits history claims.
-  `request_conversation_subject` performs one typed line/interrupt/EOF read;
-  `write_conversation_scope` and `write_conversation_list_entry` render bounded
-  conversation context and catalog rows using current-focus terminology, and
-  `write_agent_roster` projects the shared route registry and canonical display
-  names into one safe roster block.
-  `write_conversation_search_hit` accepts primitive `conversation_handle`,
-  `conversation_subject`, `match_kind`, and `snippet` values plus keyword-only
-  `archived` and optional citation values;
-  `write_conversation_transcript_event` accepts primitive
-  `conversation_handle`, `sequence`, `turn_id`, `kind`, `sender`, `recipient`,
-  and `content` values and preserves internal, empty, and trailing content lines
-  in one output record.
-  The immutable error registry includes the exact clean-break lifecycle codes
-  `session_not_attached`, `session_paused`, `session_access_blocked`,
-  `session_ownership_unknown`, and `workspace_version_unsupported`, alongside
-  unrelated workspace, command, conversation, retrieval, provider,
-  cancellation, and artifact categories. Renderers and validation helpers are
-  private.
-- **Direct internal dependencies:** `agents` and `interactive_commands`.
-- **State, resources, and side effects:** Instances retain borrowed synchronous
-  ordinary-line-read, main-line-read, composition-line-read, and text-write
-  callbacks plus an immutable display width; each composition call and subject
-  request own only call-local input state. `read_main` uses only the main
-  callback, `compose` uses only the composition callback, and subject and
-  confirmation operations use only the ordinary callback, without prompt-text
-  inspection or editor-resource ownership. Methods write sanitized,
-  newline-terminated plain-text blocks, including adjacent conversation scope,
-  listing rows, and the metadata-derived agent roster. Prompt aliases derive from
-  `AGENT_ROUTES`; the module owns immutable display metadata, no persistent or
-  external resource, and performs no provider, filesystem, persistence,
-  environment, or import-time operational side effects. Search-hit and
-  transcript-event blocks sanitize controls; transcript content preserves line
-  structure with deterministic hanging indentation while remaining one
-  callback record.
+  `InteractiveTerminal` in the exact established `__all__` order. The facade
+  exports the defining objects without wrapper subclasses and preserves their
+  canonical `story_writing_agents.interactive_terminal` identities. The
+  unlisted `InteractiveSemanticOutput` binds one terminal's semantic write
+  capability for controller use, and the existing `Field`, `ListView`,
+  `Message`, `Notice`, `Panel`, `Record`, `Section`, `SemanticRole`, and
+  `ViewState` contracts are likewise facade-bound but omitted from `__all__`.
+  These bindings support count-aware dense semantic views without changing the
+  package-supported surface. The adapter and contracts add no project-root
+  export or raw-resource ownership. Its
+  unlisted package-internal `build_stream_terminal` factory is the sole real-CLI
+  construction boundary and binds trusted semantic input rendering to the sole
+  raw driver without exposing renderer or driver details. Unlisted
+  `build_contextual_terminal` preserves the completed contextual-callback seam.
+  Unlisted `MainInputHistoryState`,
+  `MainInputControlState`, `append_main_input_history`, and
+  `transition_main_input` bindings expose the internal pure history seam to the
+  standalone compatibility facade without adding root-package exports.
+  Unlisted `transition_main_command_input` and `read_main_command_line`
+  bindings provide the shared selectable main-command control and driver
+  adapters without exposing a terminal leaf. Public
+  construction adapts `read_line` to deterministic plain semantic composition
+  and confirmation prompts, while internal construction binds distinct
+  ordinary, history-aware main, and history-free semantic composition and
+  confirmation readers without prompt inspection. Unlisted
+  `InteractivePickerInput`, `Choice`, `Prompt`, `ControlOutcome`, and
+  `ControlOutcomeKind` bindings provide one resource-free generic picker input
+  boundary without exposing opaque choice identities, terminal leaves, or a
+  new package-supported API. Unlisted `InteractivePromptInput` binds one
+  resource-free semantic cancellable-line capability for nested settings input;
+  callback and stream factories respectively provide deterministic plain and
+  sole-driver-backed implementations without changing the exact public
+  `__all__`.
+- **Direct internal dependencies:** `interactive_terminal._core`.
+- **State, resources, and side effects:** Owns no terminal resource or mutable
+  process state. Import deterministically canonicalizes supported public object
+  module identities and performs no stream, capability, filesystem, provider,
+  persistence, subprocess, network, or application-startup operation.
 - **Primary verification/documentation:** `tests/test_interactive_terminal.py`,
+  `tests/test_interactive_line_editor.py`, `tests/test_public_api_and_cli.py`,
+  `tests/test_interactive_terminal_completion.py`,
+  `tests/test_interactive_terminal_foundation.py`,
+  `tests/test_interactive_terminal_composer.py`,
+  `tests/test_interactive_terminal_history.py`,
+  `tests/test_interactive_terminal_picker.py`,
+  `tests/test_interactive_terminal_views.py`, `tests/test_interactive_pty.py`,
+  `docs/design/overview.md`,
   `docs/reference/interactive-terminal.md`,
-  `docs/reference/conversation-retrieval.md`, and
+  `docs/design/interactive-cli-design-system.md`, and
   `docs/operations/terminal-safety.md`; `tests/test_interactive_commands.py`
   and `docs/reference/interactive-command-parser.md` verify the consumed
   command registry contract.
+
+### `story_writing_agents.interactive_terminal._model`
+
+- **Source:** `src/story_writing_agents/interactive_terminal/_model.py`
+- **Responsibility:** Define immutable semantic terminal contracts.
+- **Supported surface:** Package-internal semantic roles, explicit view states,
+  capability profiles, normalized keys, control outcomes, terminal
+  capabilities, line-input state, immutable `ComposerState`, bounded
+  `MainInputHistoryState`, correlated `MainInputControlState`,
+  `SlashCommandSuggestion`, internal `CommandCompletionCandidate`,
+  `CommandCompletionProjection`, `MainCommandPaletteState`, and correlated
+  `MainCommandControlState`, internal `PickerControlState` and bounded
+  `PickerViewport` transfer values, the internal rejected control outcome, the
+  closed
+  `Prompt`, `Panel`, `Section`, `Field`, `Notice`, `Message`, `Record`,
+  `ListView`, `SuggestionPalette`, and `Picker` component vocabulary, shared
+  `Choice`, `RenderedFrame`, internal `InputPromptView` and
+  `RenderedInputFrame` transfer contracts outside the closed component
+  vocabulary, terminal-text sanitization, and deterministic physical-cell
+  measurement.
+- **Direct internal dependencies:** None.
+- **State, resources, and side effects:** Immutable values and pure validation
+  only. Main-input values correlate one editable line, navigation position,
+  saved draft, and overlay flag and bound stored entries to 100 without
+  retaining or persisting them. Command-completion values correlate grammar
+  position, replacement literal and span, highlighted candidate, pre-change
+  buffer/cursor snapshot, and restored-state latch without owning projection or
+  I/O. Picker-control values retain one validated semantic picker and its
+  call-local window origin, while viewport values carry one contiguous
+  at-most-seven-choice slice; stable choice identities remain internal
+  correlation keys. Composer values retain exact accepted lines
+  and derive joined content and code-point counts without mutation. Models
+  create no ANSI and own no callbacks, streams, rendering calculation, runtime,
+  provider, filesystem, or storage handles; viewport and rendered-input
+  transfer values only carry pure precomputed bounds or renderer-produced
+  trusted/plain projections and perform no operational I/O.
+- **Primary verification/documentation:**
+  `tests/test_interactive_terminal_completion.py`,
+  `tests/test_interactive_terminal_foundation.py`,
+  `tests/test_interactive_terminal_composer.py`,
+  `tests/test_interactive_terminal_history.py`,
+  `tests/test_interactive_terminal_picker.py`,
+  `tests/test_interactive_terminal_views.py`, and
+  `docs/design/interactive-cli-design-system.md`; focused component, renderer,
+  control, capability, and compatibility coverage belongs to the interactive
+  terminal test suites.
+
+### `story_writing_agents.interactive_terminal._controls`
+
+- **Source:** `src/story_writing_agents/interactive_terminal/_controls.py`
+- **Responsibility:** Apply pure interactive-control transitions.
+- **Supported surface:** Package-internal `transition_line_input` for existing
+  insertion, deletion, cursor, commit, interrupt, and EOF semantics, plus
+  `transition_prompt_input`, which reuses those line semantics while returning
+  a distinct cancel outcome for Escape without history or completion, plus
+  `project_slash_suggestions` for exact registry-supplied prefix projection and
+  `project_composition_suggestions` for fixed ordered `/send`, `/cancel`
+  preview projection. `append_main_input_history` retains exact nonblank
+  commits with oldest-first eviction at 100, while `transition_main_input`
+  performs pure newest/older/newer history navigation, draft restoration, and
+  overlay-open arrow suppression. `project_main_suggestion_palette` turns one
+  correlated completion projection into the existing semantic palette, while
+  `transition_main_command_input` owns palette open/filter/highlight/clamp,
+  Tab replacement and snapshot, Escape restoration and latch, and the exact
+  open-palette versus closed-history arrow routing. `transition_composer_line`
+  applies exact `/send`, `/cancel`, `/say /send`, and `/say /cancel` semantics
+  to immutable composer state, while `transition_confirmation_answer`
+  classifies canonical yes/no/default answers and explicit rejection.
+  `initialize_picker`, `reconcile_picker`, `transition_picker`,
+  `transition_picker_fallback`, and `project_picker_viewport` own the pure
+  generic single-select lifecycle: deterministic enabled highlight selection,
+  stable-identity refresh, disabled-row skipping with clamped navigation,
+  minimal at-most-seven-row window movement, exact numbered or blank fallback
+  commit, `/cancel`, and one semantic rejected-attempt notice. Choice identities
+  are correlation-only and never become presentation text. Composition
+  suggestions remain preview-only and nonselectable.
+- **Direct internal dependencies:** `interactive_terminal._model`.
+- **State, resources, and side effects:** Pure value projections only. The
+  functions return new immutable history/control values and retain no store;
+  they own no parser, persistence, runtime, provider, stream, terminal mode,
+  cursor resource, filesystem, process, or network resource.
+- **Primary verification/documentation:**
+  `tests/test_interactive_line_editor.py`,
+  `tests/test_interactive_terminal_completion.py`,
+  `tests/test_interactive_terminal_foundation.py`,
+  `tests/test_interactive_terminal_composer.py`,
+  `tests/test_interactive_terminal_history.py`,
+  `tests/test_interactive_terminal_picker.py`,
+  `docs/design/interactive-cli-design-system.md`, and
+  `docs/reference/interactive-command-parser.md`.
+
+### `story_writing_agents.interactive_terminal._render`
+
+- **Source:** `src/story_writing_agents/interactive_terminal/_render.py`
+- **Responsibility:** Render semantic terminal components safely.
+- **Supported surface:** Package-internal deterministic responsive component
+  rendering for structured plain and fixed-theme ANSI profiles, exact removal
+  of the allowed decorative SGR vocabulary, semantic state labels, physical-cell
+  wrapping, narrow-layout stacking, explicit empty/selection cues, and trusted
+  semantic input rendering with equivalent plain and styled projections.
+  `render_picker_viewport` renders at most seven numbered live choices with
+  absolute position/range facts, simultaneous selected and highlighted cues,
+  and an ordinal/label-only selected-outside-window summary;
+  `render_picker_fallback` renders the complete numbered list and semantic input
+  prompt. Both keep opaque identities internal and preserve equivalent
+  sanitized plain and fixed-ANSI meaning.
+- **Direct internal dependencies:** `interactive_terminal._model`.
+- **State, resources, and side effects:** Pure projections only. Dynamic text
+  is sanitized before wrapping or fixed styling; the module writes and flushes
+  no stream, emits no OSC, query, background, dim, blink, or cursor sequence,
+  and owns no environment, terminal, runtime, provider, filesystem, or storage
+  state.
+- **Primary verification/documentation:**
+  `tests/test_interactive_terminal_completion.py`,
+  `tests/test_interactive_terminal_foundation.py`,
+  `tests/test_interactive_terminal_composer.py`,
+  `tests/test_interactive_terminal_picker.py`,
+  `tests/test_interactive_terminal_views.py`,
+  `docs/design/interactive-cli-design-system.md`, and
+  `docs/operations/terminal-safety.md`; focused rich/plain/narrow/wide coverage
+  belongs to the interactive terminal test suites.
+
+### `story_writing_agents.interactive_terminal._driver`
+
+- **Source:** `src/story_writing_agents/interactive_terminal/_driver.py`
+- **Responsibility:** Own stream-backed terminal interaction.
+- **Supported surface:** Package-internal `RawTerminalDriver` and
+  `detect_terminal_capabilities`. The driver accepts pure line, main-input, and
+  history-append collaborators at construction and explicit suggestion or
+  completion/palette collaborators per live read. `read_main_line` preserves
+  the history-aware compatibility route; package-internal supported
+  `read_main_command_line` performs selectable history-aware main editing,
+  `read_live_line` remains the history-free contextual compatibility route,
+  `read_input_line` accepts an injected trusted semantic renderer for
+  history-free composition and confirmation, and `read_line` preserves ordinary
+  fallback. Supported package-internal `read_prompt` accepts an injected
+  trusted semantic renderer and pure transition for one cancellable, history-
+  free settings line; exact Escape cancels in raw or line-fallback mode, and
+  interrupt and EOF remain distinct outcomes. Supported package-internal
+  `read_picker` accepts pure call-local
+  transitions, viewport projection, and live/fallback renderers for a dedicated
+  generic single-select lifecycle that does not reuse editable-line state. The
+  driver provides one-write output, redraws on the full immutable main-command
+  or picker control state, and normalizes established editing and picker keys.
+- **Direct internal dependencies:** `interactive_terminal._model`.
+- **State, resources, and side effects:** Sole owner of borrowed input/output
+  streams, independent capability checks, detected width, normalized physical
+  keys, raw POSIX attributes, functional cursor controls, live redraw writes,
+  flushes, and exact restoration. It retains exactly one bounded process-local
+  main-input history store per driver instance; each main read resets only its
+  call-local navigation state, and a successful fallback commit or restored
+  live commit is appended once. The same read loop owns call-local one-byte
+  incremental decoding and the fixed 50-millisecond Escape readiness lookahead,
+  so available ordinary bytes are reprocessed without a second reader or sleep
+  loop. Completion, prompt-control, and palette collaborators are call-local and
+  retain no prompt mode. Composition, confirmation, and ordinary reads
+  never navigate or mutate that store. Cancellable prompt and picker input
+  likewise never consult or mutate history or completion state; their live
+  paths reuse the sole driver's decoding, raw-mode, cursor, write, flush, and
+  restoration lifecycle. Picker input observes width again for each redraw,
+  and its safe line fallback renders the complete numbered choices. Semantic
+  input resolves capability and
+  width once per read, uses the plain projection for fallback and cursor
+  measurement, and emits the trusted styled projection only on its live path.
+  Construction performs no stream access or terminal mutation, and history is
+  never persisted. Missing, uncertain, non-TTY,
+  non-POSIX, or `TERM=dumb` capability safely uses ordinary line input, while
+  `NO_COLOR` affects decorative SGR only.
+- **Primary verification/documentation:**
+  `tests/test_interactive_line_editor.py`,
+  `tests/test_interactive_terminal_completion.py`,
+  `tests/test_interactive_terminal_foundation.py`,
+  `tests/test_interactive_terminal_composer.py`,
+  `tests/test_interactive_terminal_history.py`,
+  `tests/test_interactive_terminal_picker.py`,
+  `tests/test_interactive_pty.py`,
+  `docs/design/interactive-cli-design-system.md`, and
+  `docs/operations/terminal-safety.md`.
+
+### `story_writing_agents.interactive_terminal._core`
+
+- **Source:** `src/story_writing_agents/interactive_terminal/_core.py`
+- **Responsibility:** Coordinate public interactive-terminal operations.
+- **Supported surface:** Defines every supported terminal enum, frozen/slotted
+  action and error value, immutable error registry, and `InteractiveTerminal`
+  re-exported by the package facade. Constructor and public method signatures,
+  validation, typed input outcomes, established plain record contents/order,
+  error redaction/caps, composition behavior, callback granularity, and fixed
+  callback-width semantics remain compatible. Its package-internal stream
+  factory coordinates the driver, controls, command metadata, and current
+  capability profile. Lobby, attached-session, and conversation-scope
+  orientation plus specialized run, agent, typed-error, help, agent-roster,
+  conversation-list, search-hit, and transcript-event writers construct
+  semantic components; `InteractiveSemanticOutput` binds the same private
+  component writer so controller-owned components share the identical
+  render-and-one-write path. Composition opening, rejection, send, and discard
+  events plus invalid-confirmation hints use the semantic component path; the
+  generic status writer has no remaining internal composer call site. The core
+  constructs ordered structured composition and confirmation input views and
+  maps their pure control outcomes without changing public result contracts.
+  Its package-internal command-completion adapter translates canonical command
+  contexts into terminal completion models, and its unlisted facade adapter
+  supplies the pure selectable control projection plus existing semantic
+  palette renderer to the driver.
+  The internal contextual factory preserves explicit ordinary/main/composition
+  callback routing through deterministic plain semantic adapters, while the
+  real stream factory binds the selectable main-command route, both preview
+  providers, semantic composition and confirmation input, plus the pure
+  main-input transitions to one driver. Resource-free `InteractivePickerInput`
+  validates and initializes one generic picker, then delegates only its
+  immutable control state; callback construction binds deterministic plain
+  complete-list picker input, and stream construction binds the same adapter to
+  the sole driver's dedicated picker lifecycle with pure control and rendering
+  collaborators. Resource-free `InteractivePromptInput` constructs one existing
+  `InputPromptView` and returns typed commit, nested-cancel, interrupt, or EOF;
+  callback and stream construction bind it to plain or driver-owned input
+  without adding a component kind or raw resource owner.
+- **Direct internal dependencies:** `agents`, `interactive_commands`,
+  `interactive_terminal._controls`, `interactive_terminal._driver`,
+  `interactive_terminal._model`, and `interactive_terminal._render`.
+- **State, resources, and side effects:** Callback-constructed instances retain
+  borrowed synchronous read/write callbacks, deterministic plain capabilities,
+  and an explicit width but inspect no stream and acquire no resource.
+  Stream-factory instances delegate all raw terminal state, width detection,
+  keys, writes, flushes, restoration, readiness, incremental decoding, and the
+  bounded process-local main-input history store to one driver. Main completion,
+  palette, and composition providers plus semantic
+  input renderers are selected per call and never retained by that driver;
+  composition, confirmation, cancellable prompt, and picker input are history-
+  free, while subject input remains ordinary. Callback-constructed terminals
+  and the core itself own no history.
+  The semantic adapter retains only the
+  terminal's bound component capability and acquires no stream or raw resource.
+  There is no runtime, filesystem, persistence, subprocess, network, or
+  import-time operational I/O.
+- **Primary verification/documentation:** `tests/test_interactive_terminal.py`,
+  `tests/test_interactive_line_editor.py`, `tests/test_public_api_and_cli.py`,
+  `tests/test_interactive_terminal_completion.py`,
+  `tests/test_interactive_terminal_foundation.py`,
+  `tests/test_interactive_terminal_composer.py`,
+  `tests/test_interactive_terminal_picker.py`,
+  `tests/test_interactive_terminal_views.py`, `tests/test_interactive_pty.py`,
+  `docs/design/overview.md`,
+  `docs/reference/interactive-terminal.md`,
+  `docs/design/interactive-cli-design-system.md`, and
+  `docs/operations/terminal-safety.md`.
 
 ### `story_writing_agents.models`
 
@@ -817,7 +1170,12 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **State, resources, and side effects:** Retains an injected or default
   `ConversationEventStore` collaborator and owns the in-memory binding cache,
   in-flight bind tasks, binding lock, and per-session/conversation advisory-turn
-  locks. For an included consensus request it captures one canonical immutable
+  locks. A backend-bound runtime retains that backend's immutable persisted
+  configuration snapshot for its lifetime, shares it with prompt assembly, and
+  uses its round limit; session runtime overrides and explicit call overrides
+  remain live and higher precedence. Backend-free construction retains the
+  established on-demand configuration path. For an included consensus request
+  it captures one canonical immutable
   context window before reservation, reuses that exact snapshot for every agent
   phase, and delegates create-only sidecar persistence to `Workspace`; fresh
   mode persists identity with no snapshot and an absent request remains
@@ -862,13 +1220,17 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:** `src/story_writing_agents/prompts.py`
 - **Responsibility:** Assemble content-addressed agent definitions and
   prompt-free per-turn requests.
-- **Supported surface:** Internal `PromptAssembler`.
+- **Supported surface:** Internal `PromptAssembler`, whose optional keyword-only
+  `configuration_snapshot` accepts one immutable persisted snapshot without
+  changing the default on-demand construction path.
 - **Direct internal dependencies:** `agents`, `config`, `conversations`,
   `models`, and `workspace`.
-- **State, resources, and side effects:** Reads configuration, verified prompt
-  references, and owner-isolated agent history; forwards an optional canonical
-  conversation-context object unchanged into each built `AgentRequest` and
-  performs no writes.
+- **State, resources, and side effects:** Reads verified prompt references and
+  owner-isolated agent history. With no injected snapshot it resolves persisted
+  configuration on demand; with a snapshot it reuses those persisted values but
+  still loads session runtime overrides for every definition. It forwards an
+  optional canonical conversation-context object unchanged into each built
+  `AgentRequest` and performs no writes.
 - **Primary verification/documentation:** `tests/test_prompts.py`,
   `tests/test_codex_backend.py`, `docs/reference/agent-contracts.md`, and
   `docs/design/prompts-and-provider.md`.
@@ -969,9 +1331,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   colliding files, and return `None` when absent for legacy debates. A
   guarded process-wide weak lock registry serializes operations per
   workspace/session/conversation. The fixed initialized topology includes
-  `agent_states/orchestrator_state/conversation_defaults`; `cli_context` owns
-  the schema stored there. The backend-owned story-session process-access
-  claim remains the cross-process same-session write guard.
+  `agent_states/orchestrator_state/conversation_defaults`; new workspaces also
+  receive the canonical five-key system-default document with null Codex model
+  and reasoning values, while existing system-default bytes are never migrated
+  or rewritten by initialization. `cli_context` owns the schema stored in the
+  conversation-default directory. The backend-owned story-session
+  process-access claim remains the cross-process same-session write guard.
   Catalog and absent-transcript reads do not create storage. Transcript access
   validates catalog identity, and appends atomically replace the complete file.
   `FilesystemConversationEventStore.read_context` retains its event lock across
@@ -990,26 +1355,75 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 ## Consistency Notes
 
+- `Workspace` initializes the canonical five-key system-default document but
+  never rewrites an existing one. `ConfigManager` owns full schema validation
+  and the shared Codex model/reasoning validators plus immutable complete
+  system-and-agent snapshots. Each `AgentBackend` validates and snapshots those
+  workspace-wide values once at construction, applies a
+  non-null explicit model over the persisted model, and alone projects the
+  resolved optional values into invocation-scoped Codex arguments. No model or
+  reasoning value enters agent configuration, bindings, fingerprints, thread
+  keys, lifecycle artifacts, request payloads, or active-backend refresh. A
+  backend-bound `StoryRuntime` and its `PromptAssembler` reuse that same
+  construction-time snapshot for provider routes, language, persona, and round
+  defaults while session and explicit overrides remain live; settings saves
+  affect only a later normal lifecycle.
+- `interactive_settings` alone owns one call-local exact-byte configuration
+  baseline, immutable pending candidate, safe persona catalog, complete
+  candidate validation, exact stale-state detection, deterministic system-then-
+  agent writes, and continued reverse-order exact-text rollback. The controller
+  owns focus and semantic interaction only and reaches this unit directly; the
+  settings unit has no controller, terminal, backend, runtime, or parser edge.
 - `interactive_commands` owns canonical command and agent-route metadata, parse
-  rules, and typed parsed actions. `interactive_line_editor` projects the
-  main-eligible canonical tokens and declared aliases directly from `COMMANDS`,
-  while its separate pure composition provider owns only the fixed ordered
-  `/send` and `/cancel` preview metadata. One shared editor selects those
-  providers call-locally, owns POSIX editing and transient sanitized suggestion
-  redraw, and reaches the existing public terminal sanitizer without creating a
-  registry or parser edge. `interactive_terminal` consumes public `COMMANDS`
-  and `AGENT_ROUTES` metadata plus canonical display names to own safe prompt,
-  confirmation, help, roster, status, error, call-local composition, subject
-  input, conversation scope, catalog-row, search-hit, and transcript-event
-  presentation. Its explicit ordinary, main, and composition reader routing
-  delegates editor resources without prompt inspection or changed typed
-  outcomes. Issue #21 adds two immutable retrieval error entries without
-  changing message kinds, rendering, or dependencies. The controller still
-  receives only completed terminal outcomes and alone passes exact lines to the
-  parser.
+  rules, typed parsed actions, and the pure cursor-aware completion grammar and
+  replacement spans derived from that same metadata. `interactive_line_editor`
+  preserves its legacy main suggestion projection while delegating actual main
+  reads to the shared selectable terminal route; `_controls` owns the fixed
+  ordered `/send`, `/cancel` composition projection. The facade delegates all
+  raw terminal behavior to the unified terminal driver and creates no registry
+  or parser edge. The
+  `interactive_terminal` package keeps its established public facade while
+  `_core` consumes public `COMMANDS` and `AGENT_ROUTES` metadata plus canonical
+  display names to coordinate safe presentation and explicit ordinary, main,
+  composition, and confirmation reader routing. `_model`, `_controls`, and
+  `_render` remain pure; `_driver` alone owns raw streams, capabilities,
+  functional cursor
+  controls, width, key decoding, writes, flushes, restoration, and one bounded
+  process-local main-input history store, fixed 50-millisecond Escape readiness
+  lookahead, and call-local incremental decoder. It receives completion,
+  palette, preview, and trusted semantic input collaborators only per read,
+  resets navigation for each main read, and keeps composition and confirmation
+  reads history-free. Cancellable settings prompt input is also history- and
+  completion-free: `_controls` owns its pure Escape outcome, `_core` binds the
+  resource-free facade adapter, and the sole driver owns its raw/fallback input
+  and restoration. It also owns the dedicated picker lifecycle, observes
+  picker width on each redraw, and keeps picker input separate from editable
+  line, history, and completion state. `_controls` supplies immutable history,
+  selectable palette, composer, confirmation, and generic picker transitions:
+  open-palette Up and Down
+  move the clamped highlight, while closed-palette Up and Down remain history
+  keys; picker Up and Down skip disabled choices and clamp within their own
+  at-most-seven-row viewport. Opaque choice identities remain internal
+  correlation keys and are never rendered. Composition preview remains
+  nonselectable. The real CLI constructs one
+  stream-backed terminal rather than injecting a second editor. The terminal
+  facade also
+  exposes an unlisted typed semantic-output adapter and closed component
+  bindings, including `ListView`, for package consumers without expanding
+  `__all__`; controller code imports only that facade, never a terminal leaf.
+  Counted session, conversation, search, transcript, and history output uses
+  one positioned one-record list and one component write for each established
+  row callback, preserving partial-output and cancellation boundaries.
+  Composer lifecycle records and invalid-confirmation hints now use one semantic
+  component write each, with zero internal composer calls to the generic status
+  writer; the controller owns none. The controller still receives only
+  completed terminal outcomes, alone passes exact lines to the parser once, and
+  neither it nor parser or storage code owns or persists command history.
 - `interactive_controller` is the stable one-class import boundary and owns no
   shell state or resource. Its `_core` owns interactive shell action mapping,
   current in-memory attachment, current-focus conversation and sticky-target state,
+  the resource-free facade-only settings picker/prompt interaction and its
+  call-local pending candidate,
   process-local per-session latest accepted STARTED debate IDs, transition and
   compensation ordering, retained runtime and memory-service wiring, one
   private lifecycle `asyncio.Runner`, controller-local interruption/progress
@@ -1031,9 +1445,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   operation join, while every uncertain state fails closed.
   The `_session_policy`, `_conversation_policy`, and `_runtime_policy` leaves
   interpret immutable collaborator facts and safe failure categories without
-  retaining state, performing I/O, mutating progress collections, importing
-  `_core`, or depending on one another; `_core` alone renders and commits their
-  canonical results to controller-owned process state.
+  retaining state, performing I/O, formatting presentation text, mutating
+  progress collections, importing `_core`, or depending on one another.
+  `_runtime_policy` returns typed debate and context inspection facts;
+  `_core` alone constructs their semantic presentation and focused-history
+  context accounting and commits canonical results to controller-owned process
+  state, while the terminal remains the rendering and emission owner.
   Provider-free `/search` and `/transcript` inspection crosses only public
   `ConversationMemoryService.search` and
   `ConversationMemoryService.read_transcript` boundaries. Provider-free

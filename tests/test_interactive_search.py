@@ -16,6 +16,15 @@ from story_writing_agents.cli_context import (
     load_cli_context,
     save_default_session,
 )
+from story_writing_agents.conversation_search import (
+    ConversationCitation,
+    ConversationSearchHit,
+    ConversationSearchMatchKind,
+    ConversationSearchQuery,
+    ConversationSearchResult,
+)
+from story_writing_agents.conversations import ConversationEventKind
+from story_writing_agents.interactive_commands import parse_interactive_line
 from story_writing_agents.interactive_controller import InteractiveController
 from story_writing_agents.interactive_controller import _core as controller_core_module
 from story_writing_agents.interactive_terminal import (
@@ -23,6 +32,8 @@ from story_writing_agents.interactive_terminal import (
     InteractiveErrorCode,
     InteractiveTerminal,
 )
+from story_writing_agents import interactive_terminal as terminal_module
+from story_writing_agents.interactive_terminal._render import render_plain
 from story_writing_agents.workspace import (
     FilesystemConversationCatalog,
     FilesystemConversationEventStore,
@@ -73,7 +84,20 @@ def _error_record(code: InteractiveErrorCode) -> str:
     """Return the exact default record for one typed interactive error."""
 
     spec = INTERACTIVE_ERROR_SPECS[code]
-    return f"[error {code.value}] {spec.summary}\n[hint] {spec.hint}\n"
+    component = terminal_module.Panel(
+        "Interactive error",
+        (
+            terminal_module.Notice(
+                spec.summary,
+                label=f"error {code.value}",
+                role=terminal_module.SemanticRole.ERROR,
+                state=terminal_module.ViewState.ERROR,
+            ),
+            terminal_module.Notice(spec.hint, label="hint"),
+        ),
+        state=terminal_module.ViewState.ERROR,
+    )
+    return f"{render_plain(component, width=240).text}\n"
 
 
 def _persistent_file_snapshot(root: Path) -> dict[str, tuple[bytes, int]]:
@@ -232,15 +256,23 @@ class InteractiveSearchFilesystemTests(unittest.TestCase):
 
         rendered = "".join(callbacks.records)
         exact_row = (
-            f"[search {exact.conversation_id[:12]}] Status: active | "
-            "Match: exact_subject | Subject: Council Vessel | Citation: "
-            f"conversation {exact.conversation_id[:12]}\n"
+            "Search results (1/2) [completed]\n"
+            f"  [search {exact.conversation_id[:12]}] [completed]\n"
+            "    Status: active\n"
+            "    Match: exact_subject\n"
+            "    Subject: Council Vessel\n"
+            f"    Citation: conversation {exact.conversation_id[:12]}\n"
+            "    Snippet: council vessel\n"
         )
         transcript_row = (
-            f"[search {transcript.conversation_id[:12]}] Status: active | "
-            "Match: transcript | Subject: Harbor timing | Citation: "
-            f"conversation {transcript.conversation_id[:12]}, turn "
-            "turn_search, sequence 1, kind user_message\n"
+            "Search results (2/2) [completed]\n"
+            f"  [search {transcript.conversation_id[:12]}] [completed]\n"
+            "    Status: active\n"
+            "    Match: transcript\n"
+            "    Subject: Harbor timing\n"
+            f"    Citation: conversation {transcript.conversation_id[:12]}, "
+            "turn turn_search, sequence 1, kind user_message\n"
+            "    Snippet: the council vessel enters at dusk.\n"
         )
         self.assertIn(exact_row, rendered)
         self.assertIn(transcript_row, rendered)
@@ -258,6 +290,69 @@ class InteractiveSearchFilesystemTests(unittest.TestCase):
         self.assertIn("[result] Transcript page returned 0 events.\n", rendered)
         self.assertIn(_error_record(InteractiveErrorCode.TRANSCRIPT_INVALID), rendered)
         self.assertNotIn("[error conversation_required]", rendered)
+
+    def test_search_rejects_tampered_partial_event_citation_before_output(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        catalog = FilesystemConversationCatalog(workspace)
+        with mock.patch.object(
+            workspace_module,
+            "uuid4",
+            return_value=UUID(hex=_A[2:]),
+        ):
+            metadata = catalog.create(_SESSION, "Council Vessel")
+        query = ConversationSearchQuery("council")
+        citation = ConversationCitation(
+            _SESSION,
+            metadata.conversation_id,
+            "turn_1",
+            1,
+            ConversationEventKind.USER_MESSAGE,
+        )
+        hit = ConversationSearchHit(
+            citation,
+            metadata.subject,
+            metadata.subject_revision,
+            metadata.status,
+            metadata.updated_at,
+            ConversationSearchMatchKind.TRANSCRIPT,
+            "council vessel",
+        )
+        result = ConversationSearchResult(
+            query,
+            "council",
+            (hit,),
+            1,
+            1,
+            1,
+            False,
+            False,
+        )
+        self.assertIs(type(result), ConversationSearchResult)
+        self.assertIs(type(result.hits[0]), ConversationSearchHit)
+        self.assertIs(type(result.hits[0].citation), ConversationCitation)
+        object.__setattr__(citation, "sequence", None)
+
+        controller, _backend, callbacks = self.make_controller(
+            workspace,
+            catalog,
+        )
+        memory = mock.Mock()
+        memory.search.return_value = result
+        controller._attached_session_id = _SESSION
+        controller._conversation_memory_service = memory
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "^citation turn ID, sequence, and kind must be present together$",
+        ):
+            controller._search_attached_conversations(
+                parse_interactive_line("/search council"),
+            )
+
+        memory.search.assert_called_once_with(query)
+        self.assertEqual(callbacks.records, [])
 
     def test_resolution_is_case_sensitive_and_includes_archived_collisions(
         self,
@@ -377,15 +472,27 @@ class InteractiveSearchFilesystemTests(unittest.TestCase):
         rendered = "".join(callbacks.records)
         handle = metadata.conversation_id[:12]
         self.assertIn(
-            f"[transcript {handle}] Sequence: 3 | Turn: turn_2 | "
-            "Kind: user_message | Sender: user | Recipient: plot_architect\n"
-            "[content]  \\x09\n",
+            "Transcript (1/2) [completed]\n"
+            f"  [transcript {handle}] [completed]\n"
+            "    Sequence: 3\n"
+            "    Turn: turn_2\n"
+            "    Kind: user_message\n"
+            "    Sender: user\n"
+            "    Recipient: plot_architect\n"
+            "    Content:\n"
+            "     \\x09\n",
             rendered,
         )
         self.assertIn(
-            f"[transcript {handle}] Sequence: 4 | Turn: turn_2 | "
-            "Kind: agent_reply | Sender: plot_architect | Recipient: user\n"
-            "[content] new reply\n",
+            "Transcript (2/2) [completed]\n"
+            f"  [transcript {handle}] [completed]\n"
+            "    Sequence: 4\n"
+            "    Turn: turn_2\n"
+            "    Kind: agent_reply\n"
+            "    Sender: plot_architect\n"
+            "    Recipient: user\n"
+            "    Content:\n"
+            "    new reply\n",
             rendered,
         )
         self.assertEqual(

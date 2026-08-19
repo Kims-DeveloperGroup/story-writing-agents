@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import ast
+import inspect
 import os
+import pickle
 import random
 import socket
 import subprocess
@@ -30,6 +32,8 @@ from story_writing_agents import interactive_commands as commands_module
 from story_writing_agents.interactive_commands import (
     AGENT_ROUTES,
     AgentRouteSpec,
+    CommandCompletionContext,
+    project_command_completion,
 )
 
 
@@ -77,6 +81,7 @@ COMMAND_NAMES = {
     "language": "/language",
     "persona": "/persona",
     "reset": "/reset",
+    "settings": "/settings",
     "run": "/run",
     "draft-file": "/draft-file",
     "session": "/session",
@@ -135,6 +140,7 @@ ACTION_RULES = {
     ActionKind.INSPECT: ({"argument"}, set()),
     ActionKind.HISTORY: ({"count"}, set()),
     ActionKind.STATUS: (set(), set()),
+    ActionKind.SETTINGS: (set(), set()),
     ActionKind.SET_LANGUAGE: ({"argument"}, {"argument"}),
     ActionKind.SET_PERSONA: (
         {"agent_id", "argument"},
@@ -245,6 +251,7 @@ class ActionContractTests(unittest.TestCase):
             "INSPECT": "inspect",
             "HISTORY": "history",
             "STATUS": "status",
+            "SETTINGS": "settings",
             "SET_LANGUAGE": "set_language",
             "SET_PERSONA": "set_persona",
             "RESET": "reset",
@@ -421,7 +428,7 @@ class ActionContractTests(unittest.TestCase):
 
 
 class CommandRegistryTests(unittest.TestCase):
-    def test_registry_is_the_exact_ordered_twenty_row_contract(self) -> None:
+    def test_registry_is_the_exact_ordered_twenty_one_row_contract(self) -> None:
         expected = (
             CommandSpec("Conversation", "/compose", (), False, False, "/compose"),
             CommandSpec("Conversation", "/send", (), False, False, "/send"),
@@ -460,6 +467,14 @@ class CommandRegistryTests(unittest.TestCase):
                 "/persona plot meticulous",
             ),
             CommandSpec("Agents", "/reset", (), False, False, "/reset"),
+            CommandSpec(
+                "Agents",
+                "/settings",
+                (),
+                False,
+                True,
+                "/settings",
+            ),
             CommandSpec(
                 "Consensus",
                 "/run [PROMPT] | /run --fresh PROMPT",
@@ -565,12 +580,18 @@ class CommandRegistryTests(unittest.TestCase):
                 for name, spec in zip(canonical, COMMANDS)
                 if spec.may_write_artifacts
             },
-            {"/run", "/draft-file"},
+            {"/settings", "/run", "/draft-file"},
         )
+        settings = next(
+            spec for spec in COMMANDS if spec.syntax == "/settings"
+        )
+        self.assertFalse(settings.may_call_provider)
+        self.assertTrue(settings.may_write_artifacts)
         self.assertTrue(
             all(
                 not spec.may_write_artifacts or spec.may_call_provider
                 for spec in COMMANDS
+                if spec is not settings
             )
         )
         self.assertNotIn("message", canonical)
@@ -653,6 +674,7 @@ class SuccessfulParsingTests(unittest.TestCase):
             ),
             ("/history 20", InteractiveAction(ActionKind.HISTORY, count=20)),
             ("/status", InteractiveAction(ActionKind.STATUS)),
+            ("/settings", InteractiveAction(ActionKind.SETTINGS)),
             (
                 "/language ko-KR",
                 InteractiveAction(ActionKind.SET_LANGUAGE, argument="ko-KR"),
@@ -1097,6 +1119,7 @@ class InvalidInputTests(ParserAssertions, unittest.TestCase):
             "/cancel",
             "/status",
             "/reset",
+            "/settings",
             "/session list",
             "/session pause",
             "/quit",
@@ -1491,6 +1514,241 @@ class ParserBoundaryTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertEqual(completed.stdout, "ok\n")
             self.assertEqual(list(root.iterdir()), [])
+
+
+class CommandCompletionProjectionTests(unittest.TestCase):
+    """Lock the provider-free fixed command grammar at exact cursor spans."""
+
+    ROOT = (
+        "/say",
+        "/to",
+        "/agent",
+        "/agents",
+        "/language",
+        "/persona",
+        "/reset",
+        "/settings",
+        "/run",
+        "/draft-file",
+        "/session",
+        "/conversation",
+        "/search",
+        "/transcript",
+        "/inspect",
+        "/history",
+        "/status",
+        "/help",
+        "/?",
+        "/quit",
+        "/exit",
+    )
+    HELP = ("/compose", "/send", "/cancel", *ROOT)
+    AGENTS = (
+        "lead",
+        "orchestrator",
+        "lead_orchestrator",
+        "plot",
+        "plot_architect",
+        "character",
+        "character_custodian",
+        "execution",
+        "prose",
+        "execution_specialist",
+    )
+
+    def test_context_model_is_exact_frozen_slotted_picklable_and_internal(self) -> None:
+        self.assertEqual(
+            tuple(inspect.signature(CommandCompletionContext).parameters),
+            ("position", "replacement_start", "replacement_end", "replacements"),
+        )
+        value = CommandCompletionContext("root.command", 0, 1, self.ROOT)
+        self.assertFalse(hasattr(value, "__dict__"))
+        self.assertEqual(pickle.loads(pickle.dumps(value)), value)
+        with self.assertRaises(FrozenInstanceError):
+            value.position = "changed"  # type: ignore[misc]
+        self.assertNotIn("CommandCompletionContext", commands_module.__all__)
+        self.assertNotIn("project_command_completion", commands_module.__all__)
+        self.assertNotIn("CommandCompletionContext", story_writing_agents.__all__)
+        self.assertFalse(hasattr(story_writing_agents, "CommandCompletionContext"))
+
+    def test_exact_ordered_fixed_grammar_positions(self) -> None:
+        cases = (
+            ("/", 1, "root.command", 0, 1, self.ROOT),
+            (
+                "/session ",
+                9,
+                "session.subcommand",
+                9,
+                9,
+                ("list", "create", "open", "pause"),
+            ),
+            (
+                "/conversation ",
+                14,
+                "conversation.subcommand",
+                14,
+                14,
+                ("new", "list", "use", "subject", "archive"),
+            ),
+            ("/to ", 4, "target.agent", 4, 4, self.AGENTS),
+            ("/agent ", 7, "target.agent", 7, 7, self.AGENTS),
+            ("/persona ", 9, "persona.agent", 9, 9, self.AGENTS),
+            ("/run ", 5, "run.flag", 5, 5, ("--fresh",)),
+            ("/conversation list ", 19, "conversation.list.flag", 19, 19, ("--all",)),
+            ("/help ", 6, "help.command", 6, 6, self.HELP),
+            ("/? ", 3, "help.command", 3, 3, self.HELP),
+            ("/inspect ", 9, "inspect.argument", 9, 9, ("last",)),
+            ("/transcript c ", 14, "transcript.after_id.flag", 14, 14, ("--from",)),
+            (
+                "/transcript c 24 ",
+                17,
+                "transcript.after_count.flag",
+                17,
+                17,
+                ("--from",),
+            ),
+        )
+        for buffer, cursor, position, start, end, replacements in cases:
+            with self.subTest(buffer=buffer):
+                self.assertEqual(
+                    project_command_completion(buffer, cursor),
+                    CommandCompletionContext(position, start, end, replacements),
+                )
+
+    def test_complete_token_spans_include_suffix_at_and_after_delimiters(self) -> None:
+        cases = (
+            ("/session list", 9, "session.subcommand", 9, 13),
+            ("/help run", 6, "help.command", 6, 9),
+            ("/run --fresh", 5, "run.flag", 5, 12),
+            ("/session create tail", 11, "session.subcommand", 9, 15),
+            ("/session\tlist", 9, "session.subcommand", 9, 13),
+        )
+        for buffer, cursor, position, start, end in cases:
+            with self.subTest(buffer=buffer, cursor=cursor):
+                projected = project_command_completion(buffer, cursor)
+                self.assertIsNotNone(projected)
+                assert projected is not None
+                self.assertEqual(
+                    (
+                        projected.position,
+                        projected.replacement_start,
+                        projected.replacement_end,
+                    ),
+                    (position, start, end),
+                )
+
+        fixed_cases = (
+            ("/run --fresh", (5, 8, 12), "run.flag", 5, 12, ("--fresh",)),
+            (
+                "/conversation list --all",
+                (19, 22, 24),
+                "conversation.list.flag",
+                19,
+                24,
+                ("--all",),
+            ),
+            (
+                "/transcript c --from",
+                (14, 17, 20),
+                "transcript.after_id.flag",
+                14,
+                20,
+                ("--from",),
+            ),
+            (
+                "/transcript c 24 --from",
+                (17, 20, 23),
+                "transcript.after_count.flag",
+                17,
+                23,
+                ("--from",),
+            ),
+            ("/inspect la", (9, 10, 11), "inspect.argument", 9, 11, ("last",)),
+            ("/inspect last", (9, 11, 13), "inspect.argument", 9, 13, ("last",)),
+        )
+        for buffer, cursors, position, start, end, replacements in fixed_cases:
+            for cursor in cursors:
+                with self.subTest(buffer=buffer, cursor=cursor):
+                    self.assertEqual(
+                        project_command_completion(buffer, cursor),
+                        CommandCompletionContext(
+                            position,
+                            start,
+                            end,
+                            replacements,
+                        ),
+                    )
+
+    def test_dynamic_and_invalid_grammar_positions_have_no_projection(self) -> None:
+        cases = (
+            ("", 0), ("ordinary", 3), (" /", 2), ("/say ", 5),
+            ("/to plot ", 9), ("/persona plot ", 14),
+            ("/conversation use ", 18), ("/transcript --from ", 19),
+            ("/transcript c nope ", 19), ("/transcript c 0 ", 16),
+            ("/session list ", 14), ("/HELP ", 6),
+        )
+        for buffer, cursor in cases:
+            with self.subTest(buffer=buffer, cursor=cursor):
+                self.assertIsNone(project_command_completion(buffer, cursor))
+
+        free_cases = (
+            ("/run prompt", (5, 8, 11)),
+            ("/conversation list query", (19, 21, 24)),
+            ("/transcript c 24", (14, 15, 16)),
+            ("/inspect debate", (9, 12, 15)),
+        )
+        for buffer, cursors in free_cases:
+            for cursor in cursors:
+                with self.subTest(buffer=buffer, cursor=cursor):
+                    self.assertIsNone(
+                        project_command_completion(buffer, cursor)
+                    )
+
+    def test_partial_tokens_preserve_full_order_for_control_side_filtering(
+        self,
+    ) -> None:
+        for buffer, cursor, position, replacements in (
+            ("/s", 2, "root.command", self.ROOT),
+            (
+                "/session cr",
+                11,
+                "session.subcommand",
+                ("list", "create", "open", "pause"),
+            ),
+            ("/to pl", 6, "target.agent", self.AGENTS),
+            ("/help ru", 8, "help.command", self.HELP),
+            ("/inspect la", 11, "inspect.argument", ("last",)),
+            ("/run --f", 8, "run.flag", ("--fresh",)),
+        ):
+            with self.subTest(buffer=buffer):
+                projected = project_command_completion(buffer, cursor)
+                self.assertIsNotNone(projected)
+                assert projected is not None
+                self.assertEqual(projected.position, position)
+                self.assertEqual(projected.replacements, replacements)
+
+    def test_inputs_and_context_relations_are_validated_exactly(self) -> None:
+        invalid_contexts = (
+            ((1, 0, 0, ("x",)), TypeError),
+            (("", 0, 0, ("x",)), ValueError),
+            (("p", True, 0, ("x",)), TypeError),
+            (("p", -1, 0, ("x",)), ValueError),
+            (("p", 2, 1, ("x",)), ValueError),
+            (("p", 0, 0, ["x"]), TypeError),
+            (("p", 0, 0, ("",)), ValueError),
+            (("p", 0, 0, ("x", "x")), ValueError),
+        )
+        for arguments, error_type in invalid_contexts:
+            with self.subTest(arguments=arguments):
+                with self.assertRaises(error_type):
+                    CommandCompletionContext(*arguments)  # type: ignore[arg-type]
+        for buffer, cursor, error_type in (
+            (object(), 0, TypeError), ("/", True, TypeError),
+            ("/", -1, ValueError), ("/", 2, ValueError),
+        ):
+            with self.subTest(buffer=buffer, cursor=cursor):
+                with self.assertRaises(error_type):
+                    project_command_completion(buffer, cursor)  # type: ignore[arg-type]
 
 
 if __name__ == "__main__":

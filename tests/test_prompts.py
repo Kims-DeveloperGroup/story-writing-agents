@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import tempfile
 import unittest
 from dataclasses import fields
@@ -23,6 +24,7 @@ from story_writing_agents import (
     StoryRuntime,
 )
 from story_writing_agents.errors import WorkspaceFormatError
+from story_writing_agents.config import ConfigManager
 from story_writing_agents.prompts import PromptAssembler
 
 from tests.helpers import ScriptedBackend, initialized_workspace
@@ -90,6 +92,84 @@ class PromptAssemblerTests(unittest.TestCase):
         self.assertTrue(request.task.startswith("Audit the candidate."))
         self.assertIn("Do not reveal", request.task)
         self.assertIsNone(request.conversation_context)
+
+    def test_explicit_configuration_snapshot_is_fixed_and_overrides_stay_live(
+        self,
+    ) -> None:
+        self.assertEqual(
+            tuple(inspect.signature(PromptAssembler).parameters),
+            ("workspace", "backend_overrides", "configuration_snapshot"),
+        )
+        snapshot = ConfigManager(self.workspace).load_configuration_snapshot()
+        assembler = PromptAssembler(
+            self.workspace,
+            configuration_snapshot=snapshot,
+        )
+        before = assembler.build_definition(
+            session_id="snapshot_session",
+            agent_id=PLOT_ARCHITECT,
+        )
+        self.assertEqual(
+            (before.backend, before.language, before.persona_file.path.name),
+            ("codex", "EN", "prompt_persona.md"),
+        )
+
+        replacement = "replacement_persona"
+        self.workspace.write_text(
+            "config/persona_templates/alternative_templates/"
+            f"{replacement}.md",
+            "replacement",
+        )
+        configs = self.workspace.read_json("config/agent_configs.json")
+        configs[PLOT_ARCHITECT].update(
+            {"backend": "gemini", "language": "FR", "persona": replacement}
+        )
+        self.workspace.write_json("config/agent_configs.json", configs)
+
+        after = assembler.build_definition(
+            session_id="snapshot_session",
+            agent_id=PLOT_ARCHITECT,
+        )
+        self.assertEqual(after, before)
+
+        self.workspace.save_session_overrides(
+            "override_session",
+            {
+                "language": "ES",
+                "persona": replacement,
+                "agents": {},
+            },
+        )
+        overridden = assembler.build_definition(
+            session_id="override_session",
+            agent_id=PLOT_ARCHITECT,
+        )
+        self.assertEqual(
+            (
+                overridden.backend,
+                overridden.language,
+                overridden.persona_file.path.name,
+            ),
+            ("codex", "ES", "replacement_persona.md"),
+        )
+
+        next_lifecycle = PromptAssembler(self.workspace).build_definition(
+            session_id="snapshot_session",
+            agent_id=PLOT_ARCHITECT,
+        )
+        self.assertEqual(
+            (
+                next_lifecycle.backend,
+                next_lifecycle.language,
+                next_lifecycle.persona_file.path.name,
+            ),
+            ("gemini", "FR", "replacement_persona.md"),
+        )
+        with self.assertRaisesRegex(TypeError, "ConfigurationSnapshot"):
+            PromptAssembler(  # type: ignore[arg-type]
+                self.workspace,
+                configuration_snapshot=object(),
+            )
 
     def test_agent_request_optional_context_is_last_and_forwarded_canonically(
         self,
@@ -439,6 +519,48 @@ class RuntimeBindingTests(unittest.IsolatedAsyncioTestCase):
                 definition.agent_id == request.agent_id
                 for definition, request in backend.bound_invocations
             )
+        )
+
+    async def test_codex_defaults_do_not_change_definition_or_binding_identity(
+        self,
+    ) -> None:
+        backend = ScriptedBackend(
+            lambda request: AgentReply.approval(request.revision_id)
+        )
+        runtime = StoryRuntime(self.workspace, backend)
+        first_request = self._audit_request(runtime)
+        before = runtime.prompts.build_definition(
+            session_id=first_request.session_id,
+            agent_id=PLOT_ARCHITECT,
+        )
+
+        await runtime._invoke(first_request)
+        defaults = self.workspace.read_json("config/system_defaults.json")
+        defaults["codex_model"] = "identity-neutral-model"
+        defaults["codex_reasoning_effort"] = "xhigh"
+        self.workspace.write_json("config/system_defaults.json", defaults)
+
+        after = runtime.prompts.build_definition(
+            session_id=first_request.session_id,
+            agent_id=PLOT_ARCHITECT,
+        )
+        self.assertEqual(after, before)
+        self.assertEqual(after.fingerprint, before.fingerprint)
+        self.assertEqual(after.file_references(), before.file_references())
+        await runtime._invoke(first_request)
+        await runtime._invoke(
+            self._audit_request(
+                runtime,
+                session_id="binding_session_two",
+                debate_id="binding_debate_two",
+            )
+        )
+
+        self.assertEqual(backend.definitions, [before])
+        self.assertEqual(len(backend.bound_invocations), 3)
+        self.assertEqual(
+            [request.session_id for _, request in backend.bound_invocations],
+            ["binding_session", "binding_session", "binding_session_two"],
         )
 
     async def test_identical_binding_is_single_flight_and_waiter_cancellation_safe(

@@ -10,9 +10,66 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import KW_ONLY, dataclass
 from enum import StrEnum
 from types import MappingProxyType
+from typing import TextIO
 
-from .agents import AGENT_SPECS
-from .interactive_commands import AGENT_ROUTES, COMMANDS, CommandSpec
+from ..agents import AGENT_SPECS
+from ..interactive_commands import (
+    AGENT_ROUTES,
+    COMMANDS,
+    CommandSpec,
+    project_command_completion,
+)
+from ._controls import (
+    append_main_input_history,
+    initialize_picker,
+    project_picker_viewport,
+    project_composition_suggestions,
+    project_main_suggestion_palette,
+    project_slash_suggestions,
+    transition_composer_line,
+    transition_confirmation_answer,
+    transition_main_input,
+    transition_main_command_input,
+    transition_picker,
+    transition_picker_fallback,
+    transition_line_input,
+    transition_prompt_input,
+)
+from ._driver import RawTerminalDriver
+from ._model import (
+    CapabilityProfile,
+    Choice,
+    CommandCompletionCandidate,
+    CommandCompletionProjection,
+    ComposerState,
+    Component,
+    ControlOutcome,
+    ControlOutcomeKind,
+    Field,
+    InputPromptView,
+    ListView,
+    MainInputControlState,
+    MainInputHistoryState,
+    Message,
+    Notice,
+    Panel,
+    Picker,
+    PickerControlState,
+    Prompt,
+    Record,
+    Section,
+    SemanticRole,
+    SlashCommandSuggestion,
+    TerminalCapabilities,
+    ViewState,
+    sanitize_terminal_text,
+)
+from ._render import (
+    render_component,
+    render_input_prompt,
+    render_picker_fallback,
+    render_picker_viewport,
+)
 
 
 class AttachmentKind(StrEnum):
@@ -374,32 +431,19 @@ _TRUNCATION_SUFFIX = " ...[truncated]"
 _SUMMARY_LIMIT = 512
 _HINT_LIMIT = 256
 _REDACTION = "<redacted>"
-
-
-def sanitize_terminal_text(text: str) -> str:
-    """Return display text whose control code points cannot affect a terminal."""
-
-    if not isinstance(text, str):
-        raise TypeError("terminal text must be a string")
-    rendered: list[str] = []
-    for character in text:
-        if character == "\n":
-            rendered.append(character)
-            continue
-        category = unicodedata.category(character)
-        if category in {"Cc", "Cf", "Cs"} or character in {"\u2028", "\u2029"}:
-            rendered.append(_visible_escape(character))
-        else:
-            rendered.append(character)
-    return "".join(rendered)
+_MAIN_PROMPT_EXCLUSIONS = frozenset({"/compose", "/send", "/cancel"})
 
 
 class InteractiveTerminal:
     """Render plain terminal records and collect one input operation at a time."""
 
     __slots__ = (
+        "_capability_provider",
         "_composition_read_line",
+        "_confirmation_read_line",
         "_main_read_line",
+        "_picker_read",
+        "_prompt_read",
         "_read_line",
         "_width",
         "_write_text",
@@ -416,9 +460,10 @@ class InteractiveTerminal:
         """Bind borrowed synchronous I/O callbacks and a fixed wrap width.
 
         The established ``read_line`` callback remains responsible for subject,
-        confirmation, and composition input. An optional keyword-only
-        ``main_read_line`` handles only completed main-prompt lines and defaults
-        to ``read_line``. Construction performs no I/O or resource acquisition.
+        confirmation, and public-constructor composition input. An optional
+        keyword-only ``main_read_line`` handles only completed main-prompt lines
+        and defaults to ``read_line``. Construction performs no I/O or resource
+        acquisition.
         """
 
         if not callable(read_line):
@@ -435,9 +480,13 @@ class InteractiveTerminal:
         self._main_read_line = (
             read_line if main_read_line is None else main_read_line
         )
-        self._composition_read_line = read_line
+        self._composition_read_line = _plain_input_reader(read_line, width)
+        self._confirmation_read_line = _plain_input_reader(read_line, width)
+        self._picker_read = _plain_picker_reader(read_line, write_text, width)
+        self._prompt_read = _plain_prompt_reader(read_line, width)
         self._write_text = write_text
         self._width = width
+        self._capability_provider = lambda: _plain_capabilities(width)
 
     def read_main(
         self,
@@ -494,28 +543,40 @@ class InteractiveTerminal:
         prompt_message = _inline_text(_required_text("message", message))
         if type(default) is not bool:
             raise TypeError("default must be a bool")
-        suffix = "[Y/n] " if default else "[y/N] "
-        prompt = f"{prompt_message} {suffix}"
+        invalid = False
         while True:
             try:
-                answer = _validated_input_line(self._read_line(prompt))
+                answer = _validated_input_line(
+                    self._confirmation_read_line(
+                        _confirmation_input_view(
+                            prompt_message,
+                            default=default,
+                            invalid=invalid,
+                        )
+                    )
+                )
             except KeyboardInterrupt:
                 return ConfirmationResult.INTERRUPT
             except EOFError:
                 return ConfirmationResult.EOF
 
-            normalized = answer.strip().casefold()
-            if not normalized:
-                return (
-                    ConfirmationResult.YES
-                    if default
-                    else ConfirmationResult.NO
+            outcome = transition_confirmation_answer(answer, default=default)
+            if outcome.kind is ControlOutcomeKind.COMMIT:
+                assert outcome.text is not None
+                return ConfirmationResult(outcome.text)
+            if outcome.kind is not ControlOutcomeKind.REJECTED:
+                raise RuntimeError(
+                    "confirmation transition returned an unsupported outcome"
                 )
-            if normalized in {"y", "yes"}:
-                return ConfirmationResult.YES
-            if normalized in {"n", "no"}:
-                return ConfirmationResult.NO
-            self._write_block("[hint] Enter y, yes, n, or no.")
+            self._write_component(
+                Notice(
+                    "Enter y, yes, n, or no.",
+                    label="hint",
+                    role=SemanticRole.ERROR,
+                    state=ViewState.ERROR,
+                )
+            )
+            invalid = True
 
     def compose(
         self,
@@ -535,81 +596,96 @@ class InteractiveTerminal:
             introduction = (
                 "Consensus run. Use /send to submit or /cancel to discard."
             )
-        self.write_status(TerminalMessageKind.COMPOSE, introduction)
+        self._write_component(
+            Notice(
+                introduction,
+                label="compose",
+                role=SemanticRole.INFO,
+                state=ViewState.OPEN,
+            )
+        )
 
-        lines: list[str] = []
+        state = ComposerState()
         while True:
-            prompt = _compose_prompt(mode, alias, len(lines) + 1)
             try:
                 line = _validated_input_line(
-                    self._composition_read_line(prompt)
+                    self._composition_read_line(
+                        _composer_input_view(mode, alias, state)
+                    )
                 )
             except KeyboardInterrupt:
                 return self._record_discarded_composition(
                     TerminalActionKind.INTERRUPT,
-                    lines,
+                    state,
                 )
             except EOFError:
                 return self._record_discarded_composition(
                     TerminalActionKind.EOF,
-                    lines,
+                    state,
                 )
 
-            if line == "/send":
-                content = "\n".join(lines)
-                if not content or content.isspace():
-                    self.write_status(
-                        TerminalMessageKind.COMPOSE,
+            state, outcome = transition_composer_line(state, line)
+            if outcome is None:
+                continue
+            if outcome.kind is ControlOutcomeKind.REJECTED:
+                self._write_component(
+                    Notice(
                         "Nothing to send.",
+                        label="compose",
+                        role=SemanticRole.ERROR,
+                        state=ViewState.ERROR,
                     )
-                    continue
+                )
+                continue
+            if outcome.kind is ControlOutcomeKind.COMMIT:
+                assert outcome.text == state.content
                 action = TerminalAction(
                     TerminalActionKind.SEND,
-                    text=content,
-                    line_count=len(lines),
-                    character_count=len(content),
+                    text=state.content,
+                    line_count=state.line_count,
+                    character_count=state.character_count,
                 )
                 target = alias if alias is not None else "consensus"
-                self.write_status(
-                    TerminalMessageKind.COMPOSE,
-                    (
+                self._write_component(
+                    Notice(
                         f"Sending {action.line_count} "
                         f"{_plural(action.line_count, 'line')}, "
                         f"{action.character_count} "
                         f"{_plural(action.character_count, 'character')} "
-                        f"to {target}."
-                    ),
+                        f"to {target}.",
+                        label="compose",
+                        role=SemanticRole.SUCCESS,
+                        state=ViewState.COMPLETED,
+                    )
                 )
                 return action
-
-            if line == "/cancel":
+            if outcome.kind is ControlOutcomeKind.CANCEL:
                 return self._record_discarded_composition(
                     TerminalActionKind.CANCEL,
-                    lines,
+                    state,
                 )
-            if line == "/say /send":
-                line = "/send"
-            elif line == "/say /cancel":
-                line = "/cancel"
-            lines.append(line)
+            raise RuntimeError("composer transition returned an unsupported outcome")
 
     def write_lobby_orientation(self, workspace: str) -> None:
         """Render the stable startup orientation for an unattached lobby."""
 
         workspace_text = _inline_text(_required_text("workspace", workspace))
-        self._write_block(
-            "\n".join(
+        self._write_component(
+            Panel(
+                "Story chat",
                 (
-                    "Story chat",
-                    f"Workspace: {workspace_text}",
-                    "Session: lobby",
-                    (
-                        "Provider calls are unavailable in the lobby. Use "
-                        "/session create NAME, /session open [NAME], or "
-                        "/session list."
+                    Field("Workspace", workspace_text),
+                    Field("Session", "lobby"),
+                    Notice(
+                        (
+                            "Provider calls are unavailable in the lobby. Use "
+                            "/session create NAME, /session open [NAME], or "
+                            "/session list."
+                        ),
+                        role=SemanticRole.WARNING,
                     ),
-                    "Type /help for commands; /quit exits.",
-                )
+                    Notice("Type /help for commands; /quit exits."),
+                ),
             )
         )
 
@@ -640,29 +716,35 @@ class InteractiveTerminal:
         if history_count is not None and history_count < 0:
             raise ValueError("history_count must not be negative")
 
-        lines = [
-            "Story chat",
-            f"Workspace: {workspace_text}",
-            f"Session: {safe_session} ({attachment.value})",
-            f"Target: {_AGENT_DISPLAY_NAMES[agent_id]}",
+        items: list[Field | Notice] = [
+            Field("Workspace", workspace_text),
+            Field("Session", f"{safe_session} ({attachment.value})"),
+            Field("Target", _AGENT_DISPLAY_NAMES[agent_id]),
         ]
         if history_count is not None:
-            lines.extend(
+            items.extend(
                 (
-                    (
-                        f"History: {history_count} visible room "
-                        f"{_plural(history_count, 'event')}"
+                    Field(
+                        "History",
+                        (
+                            f"{history_count} visible room "
+                            f"{_plural(history_count, 'event')}"
+                        ),
                     ),
-                    (
-                        "Room messages are saved locally and shared with "
-                        "addressed agents."
+                    Notice(
+                        (
+                            "Room messages are saved locally and shared with "
+                            "addressed agents."
+                        )
                     ),
                 )
             )
-        lines.append(
-            "Type /help for commands; /quit releases access without pausing."
+        items.append(
+            Notice(
+                "Type /help for commands; /quit releases access without pausing."
+            )
         )
-        self._write_block("\n".join(lines))
+        self._write_component(Panel("Story chat", tuple(items)))
 
     def write_conversation_scope(
         self,
@@ -683,9 +765,10 @@ class InteractiveTerminal:
         safe_session = _safe_identifier("session_id", session_id)
         agent_alias = _agent_alias(agent_id)
         if conversation_handle is None and conversation_subject is None:
-            scope = (
-                f"Session: {safe_session} | Conversation: none | "
-                f"Agent: {agent_alias}"
+            fields = (
+                Field("Session", safe_session),
+                Field("Conversation", "none"),
+                Field("Agent", agent_alias),
             )
         elif conversation_handle is None or conversation_subject is None:
             raise ValueError(
@@ -699,13 +782,13 @@ class InteractiveTerminal:
             safe_subject = _inline_text(
                 _required_text("conversation_subject", conversation_subject)
             )
-            scope = (
-                f"Session: {safe_session} | Conversation: {safe_handle} | "
-                f"Subject: {safe_subject} | Agent: {agent_alias}"
+            fields = (
+                Field("Session", safe_session),
+                Field("Conversation", safe_handle),
+                Field("Subject", safe_subject),
+                Field("Agent", agent_alias),
             )
-        self._write_block(
-            "\n".join(_wrap_prefixed("[context] ", scope, self._width))
-        )
+        self._write_component(Panel("Conversation scope", fields))
 
     def write_conversation_list_entry(
         self,
@@ -737,12 +820,20 @@ class InteractiveTerminal:
             raise ValueError("an archived conversation cannot be focused")
         status = "archived" if archived else "active"
         focus = "focused" if focused else "not focused"
-        entry = (
-            f"{safe_handle} | {status} | {focus} | Subject: {safe_subject}"
-        )
-        self._write_block(
-            "\n".join(
-                _wrap_prefixed("[conversation] ", entry, self._width)
+        self._write_component(
+            Record(
+                f"conversation {safe_handle}",
+                fields=(
+                    Field("Status", status),
+                    Field("Focus", focus),
+                    Field("Subject", safe_subject),
+                ),
+                role=(
+                    SemanticRole.MUTED
+                    if archived
+                    else SemanticRole.DEFAULT
+                ),
+                state=ViewState.COMPLETED,
             )
         )
 
@@ -790,7 +881,7 @@ class InteractiveTerminal:
             citation_kind,
         )
         if all(value is None for value in citation_values):
-            citation = f"Citation: conversation {safe_handle}"
+            citation = f"conversation {safe_handle}"
         elif any(value is None for value in citation_values):
             raise ValueError(
                 "citation turn ID, sequence, and kind must be present together"
@@ -808,24 +899,29 @@ class InteractiveTerminal:
                 _strict_required_text("citation_kind", citation_kind)
             )
             citation = (
-                f"Citation: conversation {safe_handle}, turn {safe_turn_id}, "
+                f"conversation {safe_handle}, turn {safe_turn_id}, "
                 f"sequence {safe_sequence}, kind {safe_citation_kind}"
             )
 
         status = "archived" if archived else "active"
-        header = (
-            f"Status: {status} | Match: {safe_match_kind} | "
-            f"Subject: {safe_subject} | {citation}"
+        self._write_component(
+            Record(
+                f"search {safe_handle}",
+                fields=(
+                    Field("Status", status),
+                    Field("Match", safe_match_kind),
+                    Field("Subject", safe_subject),
+                    Field("Citation", citation),
+                    Field("Snippet", safe_snippet),
+                ),
+                role=(
+                    SemanticRole.MUTED
+                    if archived
+                    else SemanticRole.DEFAULT
+                ),
+                state=ViewState.COMPLETED,
+            )
         )
-        lines = _wrap_prefixed(
-            f"[search {safe_handle}] ",
-            header,
-            self._width,
-        )
-        lines.extend(
-            _wrap_prefixed("[snippet] ", safe_snippet, self._width)
-        )
-        self._write_block("\n".join(lines))
 
     def write_conversation_transcript_event(
         self,
@@ -859,24 +955,21 @@ class InteractiveTerminal:
         safe_content = sanitize_terminal_text(
             _strict_nonempty_terminal_content(content)
         )
-        header = (
-            f"Sequence: {safe_sequence} | Turn: {safe_turn_id} | "
-            f"Kind: {safe_kind} | Sender: {safe_sender} | "
-            f"Recipient: {safe_recipient}"
-        )
-        lines = _wrap_prefixed(
-            f"[transcript {safe_handle}] ",
-            header,
-            self._width,
-        )
-        lines.extend(
-            _wrap_preserved_content_lines(
-                "[content] ",
-                safe_content,
-                self._width,
+        self._write_component(
+            Record(
+                f"transcript {safe_handle}",
+                fields=(
+                    Field("Sequence", str(safe_sequence)),
+                    Field("Turn", safe_turn_id),
+                    Field("Kind", safe_kind),
+                    Field("Sender", safe_sender),
+                    Field("Recipient", safe_recipient),
+                    Field("Content", ""),
+                ),
+                content=safe_content,
+                state=ViewState.COMPLETED,
             )
         )
-        self._write_block("\n".join(lines))
 
     def write_agent_roster(self) -> None:
         """Render every advisory route in registry order without mutation.
@@ -887,18 +980,28 @@ class InteractiveTerminal:
         resource and therefore owns no cleanup.
         """
 
-        lines: list[str] = []
-        for route in AGENT_ROUTES:
-            display_name = AGENT_SPECS[route.agent_id].display_name
-            description = (
-                f"{display_name} | ID: {route.agent_id} | "
-                f"Aliases: {', '.join(route.aliases)} | "
-                f"Advisory domain: {route.advisory_domain}"
+        records = tuple(
+            Record(
+                "agent",
+                title=AGENT_SPECS[route.agent_id].display_name,
+                fields=(
+                    Field("ID", route.agent_id),
+                    Field("Aliases", ", ".join(route.aliases)),
+                    Field("Advisory domain", route.advisory_domain),
+                ),
+                role=SemanticRole.AGENT,
+                state=ViewState.COMPLETED,
             )
-            lines.extend(
-                _wrap_prefixed("[agent] ", description, self._width)
+            for route in AGENT_ROUTES
+        )
+        self._write_component(
+            ListView(
+                "Agents",
+                records,
+                total_count=len(records),
+                state=ViewState.COMPLETED,
             )
-        self._write_block("\n".join(lines))
+        )
 
     def write_status(self, kind: TerminalMessageKind, text: str) -> None:
         """Write one trusted status prefix followed by safe display text."""
@@ -911,23 +1014,94 @@ class InteractiveTerminal:
         """Write one trusted consensus-run record."""
 
         safe_id = _safe_identifier("debate_id", debate_id)
-        self._write_block(f"[run {safe_id}] {_required_text('text', text)}")
+        self._write_component(
+            Record(
+                f"run {safe_id}",
+                content=_required_text("text", text),
+            )
+        )
 
     def write_agent(self, agent_id: str, text: str) -> None:
         """Write one validated agent response without parsing its content."""
 
         alias = _agent_alias(agent_id)
-        self._write_block(f"{alias}> {_required_text('text', text)}")
+        self._write_component(
+            Message(
+                alias,
+                _required_text("text", text),
+                role=SemanticRole.AGENT,
+                state=ViewState.COMPLETED,
+            )
+        )
 
     def write_help(self, command: str | None = None) -> None:
         """Render full or contextual help from the parser-owned registry."""
 
         if command is None:
-            lines = self._full_help_lines(COMMANDS)
+            sections: tuple[Section, ...] = ()
+            for group in dict.fromkeys(spec.group for spec in COMMANDS):
+                records = tuple(
+                    Record(
+                        "command",
+                        title=spec.syntax,
+                        fields=(
+                            Field("Aliases", _aliases_text(spec)),
+                            Field("Calls provider", _yes_no(spec.may_call_provider)),
+                            Field(
+                                "May write artifacts",
+                                _yes_no(spec.may_write_artifacts),
+                            ),
+                        ),
+                        role=SemanticRole.COMMAND,
+                        state=ViewState.COMPLETED,
+                    )
+                    for spec in COMMANDS
+                    if spec.group == group
+                )
+                sections += (
+                    Section(
+                        group,
+                        (
+                            ListView(
+                                "Commands",
+                                records,
+                                total_count=len(records),
+                                state=ViewState.COMPLETED,
+                            ),
+                        ),
+                        state=ViewState.COMPLETED,
+                    ),
+                )
+            component = Panel(
+                "Help",
+                sections,
+                state=ViewState.COMPLETED,
+            )
         else:
             spec = _find_command(command, COMMANDS)
-            lines = self._context_help_lines(spec)
-        self._write_block("\n".join(lines))
+            component = Panel(
+                "Help",
+                (
+                    Record(
+                        "command",
+                        fields=(
+                            Field("Group", spec.group),
+                            Field("Syntax", spec.syntax),
+                            Field("Aliases", _aliases_text(spec)),
+                            Field("Calls provider", _yes_no(spec.may_call_provider)),
+                            Field(
+                                "May write artifacts",
+                                _yes_no(spec.may_write_artifacts),
+                            ),
+                            Field("Example", spec.example),
+                        ),
+                        role=SemanticRole.COMMAND,
+                        state=ViewState.COMPLETED,
+                    ),
+                ),
+                state=ViewState.COMPLETED,
+            )
+        self._write_component(component)
 
     def write_error(
         self,
@@ -953,34 +1127,43 @@ class InteractiveTerminal:
             variants,
             _HINT_LIMIT,
         )
-        lines = _wrap_prefixed(
-            f"[error {error.code.value}] ",
-            summary,
-            self._width,
+        self._write_component(
+            Panel(
+                "Interactive error",
+                (
+                    Notice(
+                        summary,
+                        label=f"error {error.code.value}",
+                        role=SemanticRole.ERROR,
+                        state=ViewState.ERROR,
+                    ),
+                    Notice(hint, label="hint"),
+                ),
+                state=ViewState.ERROR,
+            )
         )
-        lines.extend(_wrap_prefixed("[hint] ", hint, self._width))
-        self._write_block("\n".join(lines))
 
     def _record_discarded_composition(
         self,
         kind: TerminalActionKind,
-        lines: list[str],
+        state: ComposerState,
     ) -> TerminalAction:
         """Report a discarded compose buffer and return its count-only action."""
 
-        content = "\n".join(lines)
         action = TerminalAction(
             kind,
-            line_count=len(lines),
-            character_count=len(content),
+            line_count=state.line_count,
+            character_count=state.character_count,
         )
-        self.write_status(
-            TerminalMessageKind.COMPOSE,
-            (
+        self._write_component(
+            Notice(
                 f"Discarded {action.line_count} "
                 f"{_plural(action.line_count, 'line')}. "
-                "No message was saved or sent."
-            ),
+                "No message was saved or sent.",
+                label="compose",
+                role=SemanticRole.WARNING,
+                state=ViewState.CANCELLED,
+            )
         )
         return action
 
@@ -1041,6 +1224,98 @@ class InteractiveTerminal:
 
         self._write_text(f"{sanitize_terminal_text(text)}\n")
 
+    def _write_component(self, component: Component) -> None:
+        """Render and write one semantic component through the bound callback."""
+
+        frame = render_component(component, self._capability_provider())
+        self._write_text(f"{frame.text}\n")
+
+
+class InteractiveSemanticOutput:
+    """Retain only one terminal's package-internal semantic write capability."""
+
+    __slots__ = ("_write",)
+
+    def __init__(self, terminal: InteractiveTerminal) -> None:
+        """Bind semantic output without inspecting capabilities or streams."""
+
+        if not isinstance(terminal, InteractiveTerminal):
+            raise TypeError("terminal must be an InteractiveTerminal")
+        self._write: Callable[[Component], None] = terminal._write_component
+
+    def write_component(self, component: Component) -> None:
+        """Delegate one closed semantic component to exactly one terminal write."""
+
+        self._write(component)
+
+
+class InteractivePickerInput:
+    """Retain only one terminal's package-internal picker input capability."""
+
+    __slots__ = ("_read",)
+
+    def __init__(self, terminal: InteractiveTerminal) -> None:
+        """Bind picker input without inspecting capabilities or acquiring I/O."""
+
+        if not isinstance(terminal, InteractiveTerminal):
+            raise TypeError("terminal must be an InteractiveTerminal")
+        self._read: Callable[[PickerControlState], ControlOutcome] = (
+            terminal._picker_read
+        )
+
+    def read_picker(
+        self,
+        prompt: Prompt,
+        choices: tuple[Choice, ...],
+        *,
+        highlighted_id: str | None = None,
+        selected_id: str | None = None,
+        notice: Notice | None = None,
+        state: ViewState = ViewState.OPEN,
+    ) -> ControlOutcome:
+        """Read one semantic single-select value without invoking a consumer."""
+
+        picker = Picker(
+            prompt,
+            choices,
+            highlighted_id=highlighted_id,
+            selected_id=selected_id,
+            notice=notice,
+            state=state,
+        )
+        outcome = self._read(initialize_picker(picker))
+        if type(outcome) is not ControlOutcome:
+            raise TypeError("picker reader must return a ControlOutcome")
+        return outcome
+
+
+class InteractivePromptInput:
+    """Retain only one terminal's package-internal cancellable line input."""
+
+    __slots__ = ("_read",)
+
+    def __init__(self, terminal: InteractiveTerminal) -> None:
+        """Bind prompt input without inspecting capabilities or acquiring I/O."""
+
+        if not isinstance(terminal, InteractiveTerminal):
+            raise TypeError("terminal must be an InteractiveTerminal")
+        self._read: Callable[[InputPromptView], ControlOutcome] = (
+            terminal._prompt_read
+        )
+
+    def read_prompt(
+        self,
+        prompt: Prompt,
+        *,
+        context: tuple[Panel | Section | Field | Notice, ...] = (),
+    ) -> ControlOutcome:
+        """Read one exact line with a distinct nested-cancel outcome."""
+
+        outcome = self._read(InputPromptView(context, prompt))
+        if type(outcome) is not ControlOutcome:
+            raise TypeError("prompt reader must return a ControlOutcome")
+        return outcome
+
 
 def build_contextual_terminal(
     read_line: Callable[[str], str],
@@ -1065,19 +1340,222 @@ def build_contextual_terminal(
         width=width,
         main_read_line=main_read_line,
     )
-    terminal._composition_read_line = composition_read_line
+    terminal._composition_read_line = _plain_input_reader(
+        composition_read_line,
+        width,
+    )
     return terminal
 
 
-def _visible_escape(character: str) -> str:
-    """Format one unsafe code point as a lowercase visible ASCII escape."""
+def _plain_capabilities(width: int) -> TerminalCapabilities:
+    """Return the deterministic resource-free callback rendering profile."""
 
-    value = ord(character)
-    if value <= 0xFF:
-        return f"\\x{value:02x}"
-    if value <= 0xFFFF:
-        return f"\\u{value:04x}"
-    return f"\\U{value:08x}"
+    return TerminalCapabilities(
+        CapabilityProfile.LINE,
+        width,
+        input_tty=False,
+        output_tty=False,
+        raw_mode=False,
+        cursor_controls=False,
+        decorative_sgr=False,
+    )
+
+
+def _plain_input_reader(
+    read_line: Callable[[str], str],
+    width: int,
+) -> Callable[[InputPromptView], str]:
+    """Adapt one borrowed string reader to deterministic semantic input."""
+
+    if not callable(read_line):
+        raise TypeError("read_line must be callable")
+    capabilities = _plain_capabilities(width)
+
+    def read_input(view: InputPromptView) -> str:
+        frame = render_input_prompt(view, capabilities)
+        return read_line(frame.plain_text)
+
+    return read_input
+
+
+def _plain_prompt_reader(
+    read_line: Callable[[str], str],
+    width: int,
+) -> Callable[[InputPromptView], ControlOutcome]:
+    """Adapt one borrowed line callback to cancellable semantic input."""
+
+    if not callable(read_line):
+        raise TypeError("read_line must be callable")
+    capabilities = _plain_capabilities(width)
+
+    def read_prompt(view: InputPromptView) -> ControlOutcome:
+        frame = render_input_prompt(view, capabilities)
+        try:
+            line = _validated_input_line(read_line(frame.plain_text))
+        except KeyboardInterrupt:
+            return ControlOutcome(ControlOutcomeKind.INTERRUPT)
+        except EOFError:
+            return ControlOutcome(ControlOutcomeKind.EOF)
+        if line == "\x1b":
+            return ControlOutcome(ControlOutcomeKind.CANCEL)
+        return ControlOutcome(ControlOutcomeKind.COMMIT, text=line)
+
+    return read_prompt
+
+
+def _plain_picker_reader(
+    read_line: Callable[[str], str],
+    write_text: Callable[[str], None],
+    width: int,
+) -> Callable[[PickerControlState], ControlOutcome]:
+    """Adapt borrowed callbacks to deterministic complete-list picker input."""
+
+    if not callable(read_line):
+        raise TypeError("read_line must be callable")
+    if not callable(write_text):
+        raise TypeError("write_text must be callable")
+    capabilities = _plain_capabilities(width)
+
+    def read_picker(initial_state: PickerControlState) -> ControlOutcome:
+        if type(initial_state) is not PickerControlState:
+            raise TypeError("state must be a PickerControlState")
+        picker_state = initial_state
+        while True:
+            frame = render_picker_fallback(picker_state, capabilities)
+            try:
+                answer = _validated_input_line(read_line(frame.plain_text))
+            except KeyboardInterrupt:
+                return ControlOutcome(ControlOutcomeKind.INTERRUPT)
+            except EOFError:
+                return ControlOutcome(ControlOutcomeKind.EOF)
+            picker_state, outcome = transition_picker_fallback(
+                picker_state,
+                answer,
+            )
+            if outcome.kind is ControlOutcomeKind.REJECTED:
+                continue
+            if outcome.kind in {
+                ControlOutcomeKind.COMMIT,
+                ControlOutcomeKind.CANCEL,
+            }:
+                final_frame = render_picker_fallback(
+                    picker_state,
+                    capabilities,
+                )
+                write_text(f"{final_frame.text}\n")
+            return outcome
+
+    return read_picker
+
+
+def _empty_slash_suggestions(
+    buffer: str,
+) -> tuple[SlashCommandSuggestion, ...]:
+    """Return the fixed empty preview set for confirmation input."""
+
+    if type(buffer) is not str:
+        raise TypeError("buffer must be a string")
+    return ()
+
+
+def _main_slash_suggestions(
+    buffer: str,
+) -> tuple[SlashCommandSuggestion, ...]:
+    """Project the current canonical command registry for the live driver."""
+
+    command_tokens = tuple(
+        (spec.syntax.split(maxsplit=1)[0], spec.aliases) for spec in COMMANDS
+    )
+    return project_slash_suggestions(
+        buffer,
+        command_tokens,
+        exclusions=_MAIN_PROMPT_EXCLUSIONS,
+    )
+
+
+def _main_command_completion(
+    buffer: str,
+    cursor: int,
+) -> CommandCompletionProjection | None:
+    """Adapt command-owned grammar context to terminal completion values."""
+
+    context = project_command_completion(buffer, cursor)
+    if context is None:
+        return None
+    return CommandCompletionProjection(
+        context.position,
+        context.replacement_start,
+        context.replacement_end,
+        tuple(
+            CommandCompletionCandidate(context.position, replacement)
+            for replacement in context.replacements
+        ),
+    )
+
+
+def read_main_command_line(
+    driver: RawTerminalDriver,
+    prompt: str,
+) -> str:
+    """Read one canonical selectable main command through the sole driver."""
+
+    if not isinstance(driver, RawTerminalDriver):
+        raise TypeError("driver must be a RawTerminalDriver")
+    return driver.read_main_command_line(
+        prompt,
+        _main_command_completion,
+        project_main_suggestion_palette,
+        render_component,
+    )
+
+
+def build_stream_terminal(
+    fallback_read_line: Callable[[str], str],
+    input_stream: TextIO,
+    output_stream: TextIO,
+) -> InteractiveTerminal:
+    """Build the real CLI terminal around one stream-owning raw driver."""
+
+    driver = RawTerminalDriver(
+        fallback_read_line,
+        input_stream,
+        output_stream,
+        transition_line_input,
+        transition_main_command_input,
+        append_main_input_history,
+    )
+    capabilities = driver.capabilities()
+    terminal = InteractiveTerminal(
+        driver.read_line,
+        driver.write_text,
+        width=max(20, capabilities.width),
+        main_read_line=lambda prompt: read_main_command_line(driver, prompt),
+    )
+    terminal._composition_read_line = lambda view: driver.read_input_line(
+        view,
+        render_input_prompt,
+        project_composition_suggestions,
+    )
+    terminal._confirmation_read_line = lambda view: driver.read_input_line(
+        view,
+        render_input_prompt,
+        _empty_slash_suggestions,
+    )
+    terminal._picker_read = lambda state: driver.read_picker(
+        state,
+        transition_picker,
+        transition_picker_fallback,
+        project_picker_viewport,
+        render_picker_viewport,
+        render_picker_fallback,
+    )
+    terminal._prompt_read = lambda view: driver.read_prompt(
+        view,
+        render_input_prompt,
+        transition_prompt_input,
+    )
+    terminal._capability_provider = driver.capabilities
+    return terminal
 
 
 def _safe_identifier(name: str, value: object) -> str:
@@ -1198,6 +1676,58 @@ def _compose_prompt(mode: ComposeMode, alias: str | None, line_number: int) -> s
         assert alias is not None
         return f"compose[chat:{alias}:{line_number}]> "
     return f"compose[run:{line_number}]> "
+
+
+def _composer_input_view(
+    mode: ComposeMode,
+    alias: str | None,
+    state: ComposerState,
+) -> InputPromptView:
+    """Project exact composer facts before one focused numbered prompt."""
+
+    items: list[Field | Notice] = [Field("Mode", mode.value)]
+    if alias is not None:
+        items.append(Field("Target", alias))
+    items.extend(
+        (
+            Field("Next line", str(state.line_count + 1)),
+            Field("Lines", str(state.line_count)),
+            Field("Characters", str(state.character_count)),
+            Notice("Use /send to submit or /cancel to discard."),
+        )
+    )
+    identity = _compose_prompt(mode, alias, state.line_count + 1).removesuffix(" ")
+    return InputPromptView(tuple(items), Prompt(identity))
+
+
+def _confirmation_input_view(
+    message: str,
+    *,
+    default: bool,
+    invalid: bool,
+) -> InputPromptView:
+    """Project question, choices, default, invalid state, and focused answer."""
+
+    if type(default) is not bool:
+        raise TypeError("default must be a bool")
+    if type(invalid) is not bool:
+        raise TypeError("invalid must be a bool")
+    choice_role = SemanticRole.ERROR if invalid else SemanticRole.DEFAULT
+    choice_state = ViewState.ERROR if invalid else ViewState.IDLE
+    suffix = "[Y/n]" if default else "[y/N]"
+    return InputPromptView(
+        (
+            Field("Question", message),
+            Field(
+                "Choices",
+                "y/yes or n/no",
+                role=choice_role,
+                state=choice_state,
+            ),
+            Field("Default", "yes" if default else "no"),
+        ),
+        Prompt(f"confirm {suffix}>"),
+    )
 
 
 def _plural(count: int, singular: str) -> str:
@@ -1380,4 +1910,7 @@ __all__ = [
     "InteractiveError",
     "sanitize_terminal_text",
     "InteractiveTerminal",
+    "build_contextual_terminal",
+    "build_stream_terminal",
+    "project_composition_suggestions",
 ]

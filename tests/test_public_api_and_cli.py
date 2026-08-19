@@ -56,6 +56,8 @@ from story_writing_agents.interactive_terminal import (
     InteractiveErrorCode,
     InteractiveTerminal,
 )
+from story_writing_agents import interactive_terminal as terminal_module
+from story_writing_agents.interactive_terminal._render import render_plain
 from story_writing_agents.workspace import DEFAULT_AGENT_PROMPTS
 
 from tests.helpers import initialized_workspace
@@ -82,13 +84,23 @@ class TtyStringIO(io.StringIO):
 
 
 def expected_interactive_error(code: InteractiveErrorCode) -> str:
-    """Return the exact canonical two-line startup error record."""
+    """Return the exact callback-profile semantic startup error record."""
 
     spec = INTERACTIVE_ERROR_SPECS[code]
-    return (
-        f"[error {code.value}] {spec.summary}\n"
-        f"[hint] {spec.hint}\n"
+    component = terminal_module.Panel(
+        "Interactive error",
+        (
+            terminal_module.Notice(
+                spec.summary,
+                label=f"error {code.value}",
+                role=terminal_module.SemanticRole.ERROR,
+                state=terminal_module.ViewState.ERROR,
+            ),
+            terminal_module.Notice(spec.hint, label="hint"),
+        ),
+        state=terminal_module.ViewState.ERROR,
     )
+    return f"{render_plain(component, width=80).text}\n"
 
 
 class PackagingTests(unittest.TestCase):
@@ -205,6 +217,44 @@ class PublicApiTests(unittest.TestCase):
                 self.assertTrue(
                     issubclass(getattr(story_writing_agents, name), base_error)
                 )
+
+    def test_agent_backend_signature_and_configuration_exports_are_unchanged(
+        self,
+    ) -> None:
+        signature = inspect.signature(story_writing_agents.AgentBackend)
+        self.assertEqual(
+            tuple(signature.parameters),
+            (
+                "workspace",
+                "executable",
+                "model",
+                "timeout_seconds",
+                "backend_overrides",
+            ),
+        )
+        self.assertIs(
+            signature.parameters["workspace"].kind,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        )
+        for name in (
+            "executable",
+            "model",
+            "timeout_seconds",
+            "backend_overrides",
+        ):
+            with self.subTest(parameter=name):
+                self.assertIs(
+                    signature.parameters[name].kind,
+                    inspect.Parameter.KEYWORD_ONLY,
+                )
+        self.assertEqual(signature.parameters["executable"].default, "codex")
+        self.assertIsNone(signature.parameters["model"].default)
+        self.assertEqual(signature.parameters["timeout_seconds"].default, 300)
+        self.assertIsNone(signature.parameters["backend_overrides"].default)
+        for internal in ("ConfigManager", "SystemDefaults"):
+            with self.subTest(internal=internal):
+                self.assertNotIn(internal, story_writing_agents.__all__)
+                self.assertFalse(hasattr(story_writing_agents, internal))
 
     def test_debate_context_and_progress_public_models_are_exact(self) -> None:
         required = {
@@ -849,6 +899,20 @@ class CliTests(unittest.TestCase):
             },
         )
 
+        for arguments in (
+            ["chat", "--codex-reasoning-effort", "high"],
+            ["run", "--draft", "draft", "--codex-reasoning-effort", "high"],
+        ):
+            stderr = io.StringIO()
+            with (
+                self.subTest(arguments=arguments),
+                contextlib.redirect_stderr(stderr),
+                self.assertRaises(SystemExit) as raised,
+            ):
+                parser.parse_args(arguments)
+            self.assertEqual(raised.exception.code, 2)
+            self.assertIn("unrecognized arguments", stderr.getvalue())
+
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr):
             with self.assertRaises(SystemExit) as raised:
@@ -878,6 +942,10 @@ class CliTests(unittest.TestCase):
                 )
                 self.assertEqual(completed.returncode, 0, completed.stderr)
                 self.assertIn("usage:", completed.stdout)
+                self.assertNotIn(
+                    "--codex-reasoning-effort",
+                    completed.stdout,
+                )
 
     def test_non_tty_guard_precedes_input_options_workspace_and_backend(self) -> None:
         cases = (
@@ -923,15 +991,7 @@ class CliTests(unittest.TestCase):
                     mock.patch.object(cli_module, "AgentBackend") as backend,
                     mock.patch.object(
                         cli_module,
-                        "InteractiveMainLineEditor",
-                    ) as line_editor,
-                    mock.patch.object(
-                        cli_module,
-                        "bind_suggestion_reader",
-                    ) as bind_reader,
-                    mock.patch.object(
-                        cli_module,
-                        "build_contextual_terminal",
+                        "build_stream_terminal",
                     ) as terminal_factory,
                     mock.patch.object(
                         cli_module,
@@ -950,8 +1010,6 @@ class CliTests(unittest.TestCase):
                 resolve_workspace.assert_not_called()
                 load_context.assert_not_called()
                 backend.assert_not_called()
-                line_editor.assert_not_called()
-                bind_reader.assert_not_called()
                 terminal_factory.assert_not_called()
                 controller.assert_not_called()
 
@@ -1033,9 +1091,12 @@ class CliTests(unittest.TestCase):
                 backend_value = mock.Mock()
                 controller_value = mock.Mock()
                 controller_value.run_session_lobby.return_value = 7
-                main_line_editor = mock.Mock()
-                main_line_editor.read_line.return_value = "/status"
-                composition_read_line = mock.Mock(return_value="/cancel")
+                main_reader = mock.Mock(return_value="/status")
+                terminal_value = InteractiveTerminal(
+                    lambda prompt: "unused",
+                    lambda text: None,
+                    main_read_line=main_reader,
+                )
                 with (
                     mock.patch.object(sys, "stdin", stdin),
                     mock.patch.object(sys, "stdout", stdout),
@@ -1057,18 +1118,8 @@ class CliTests(unittest.TestCase):
                     ) as backend_factory,
                     mock.patch.object(
                         cli_module,
-                        "InteractiveMainLineEditor",
-                        return_value=main_line_editor,
-                    ) as line_editor_factory,
-                    mock.patch.object(
-                        cli_module,
-                        "bind_suggestion_reader",
-                        return_value=composition_read_line,
-                    ) as bind_reader,
-                    mock.patch.object(
-                        cli_module,
-                        "build_contextual_terminal",
-                        wraps=cli_module.build_contextual_terminal,
+                        "build_stream_terminal",
+                        return_value=terminal_value,
                     ) as terminal_factory,
                     mock.patch.object(
                         cli_module,
@@ -1091,17 +1142,7 @@ class CliTests(unittest.TestCase):
                     timeout_seconds=timeout,
                     backend_overrides=overrides,
                 )
-                line_editor_factory.assert_called_once_with(input, stdin, stdout)
-                bind_reader.assert_called_once_with(
-                    main_line_editor,
-                    cli_module.composition_slash_command_suggestions,
-                )
-                terminal_factory.assert_called_once_with(
-                    input,
-                    stdout.write,
-                    main_read_line=main_line_editor.read_line,
-                    composition_read_line=composition_read_line,
-                )
+                terminal_factory.assert_called_once_with(input, stdin, stdout)
                 controller_args = controller_factory.call_args.args
                 self.assertEqual(
                     controller_args[:3],
@@ -1111,7 +1152,7 @@ class CliTests(unittest.TestCase):
                 self.assertIsInstance(terminal, InteractiveTerminal)
                 action = terminal.read_main()
                 self.assertEqual((action.kind.value, action.text), ("line", "/status"))
-                main_line_editor.read_line.assert_called_once_with(
+                main_reader.assert_called_once_with(
                     "story[lobby]> "
                 )
                 self.assertEqual(stdin.readline_calls, 0)
@@ -1267,65 +1308,38 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(stdout.getvalue(), "")
                 self.assertNotIn("context-secret", stderr.getvalue())
 
-        for failed_factory in (
-            "InteractiveMainLineEditor",
-            "bind_suggestion_reader",
-            "build_contextual_terminal",
+        stdin = TtyStringIO(is_terminal=True)
+        stdout = TtyStringIO(is_terminal=True)
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(sys, "stdin", stdin),
+            mock.patch.object(sys, "stdout", stdout),
+            mock.patch.object(sys, "stderr", stderr),
+            mock.patch.object(
+                cli_module,
+                "resolve_workspace",
+                return_value=workspace,
+            ),
+            mock.patch.object(
+                cli_module,
+                "load_cli_context",
+                return_value=CliContext(),
+            ),
+            mock.patch.object(
+                cli_module,
+                "build_stream_terminal",
+                side_effect=RuntimeError("terminal-constructor-secret"),
+            ),
+            mock.patch.object(cli_module, "AgentBackend") as backend,
         ):
-            with self.subTest(phase="terminal", failed_factory=failed_factory):
-                stdin = TtyStringIO(is_terminal=True)
-                stdout = TtyStringIO(is_terminal=True)
-                stderr = io.StringIO()
-                editor = mock.Mock()
-                factories = {
-                    "InteractiveMainLineEditor": mock.Mock(return_value=editor),
-                    "bind_suggestion_reader": mock.Mock(return_value=mock.Mock()),
-                    "build_contextual_terminal": mock.Mock(return_value=mock.Mock()),
-                }
-                factories[failed_factory].side_effect = RuntimeError(
-                    f"{failed_factory}-secret"
-                )
-                with (
-                    mock.patch.object(sys, "stdin", stdin),
-                    mock.patch.object(sys, "stdout", stdout),
-                    mock.patch.object(sys, "stderr", stderr),
-                    mock.patch.object(
-                        cli_module,
-                        "resolve_workspace",
-                        return_value=workspace,
-                    ),
-                    mock.patch.object(
-                        cli_module,
-                        "load_cli_context",
-                        return_value=CliContext(),
-                    ),
-                    mock.patch.object(
-                        cli_module,
-                        "InteractiveMainLineEditor",
-                        factories["InteractiveMainLineEditor"],
-                    ),
-                    mock.patch.object(
-                        cli_module,
-                        "bind_suggestion_reader",
-                        factories["bind_suggestion_reader"],
-                    ),
-                    mock.patch.object(
-                        cli_module,
-                        "build_contextual_terminal",
-                        factories["build_contextual_terminal"],
-                    ),
-                    mock.patch.object(cli_module, "AgentBackend") as backend,
-                ):
-                    self.assertEqual(main(["chat"]), 2)
-                self.assertEqual(
-                    stderr.getvalue(),
-                    expected_interactive_error(
-                        InteractiveErrorCode.INTERNAL_ERROR
-                    ),
-                )
-                self.assertEqual(stdout.getvalue(), "")
-                self.assertNotIn(f"{failed_factory}-secret", stderr.getvalue())
-                backend.assert_not_called()
+            self.assertEqual(main(["chat"]), 2)
+        self.assertEqual(
+            stderr.getvalue(),
+            expected_interactive_error(InteractiveErrorCode.INTERNAL_ERROR),
+        )
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertNotIn("terminal-constructor-secret", stderr.getvalue())
+        backend.assert_not_called()
 
         backend_cases = (
             (ConfigurationError, InteractiveErrorCode.CONFIGURATION_INVALID),

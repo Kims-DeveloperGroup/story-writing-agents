@@ -27,6 +27,8 @@ from story_writing_agents.interactive_line_editor import (
     composition_slash_command_suggestions,
     slash_command_suggestions,
 )
+from story_writing_agents.interactive_terminal import _driver as driver_module
+from story_writing_agents.interactive_terminal._model import MainInputHistoryState
 
 
 EXPECTED_SUGGESTIONS = (
@@ -37,6 +39,7 @@ EXPECTED_SUGGESTIONS = (
     "/language",
     "/persona",
     "/reset",
+    "/settings",
     "/run",
     "/draft-file",
     "/session",
@@ -208,6 +211,15 @@ def capable_terminal(
             "get_terminal_size",
             return_value=os.terminal_size((width, 24)),
         ),
+        mock.patch.object(
+            driver_module._select,
+            "select",
+            side_effect=lambda readable, writable, exceptional, _timeout: (
+                readable,
+                writable,
+                exceptional,
+            ),
+        ),
     ):
         yield
 
@@ -347,6 +359,7 @@ class SuggestionContractTests(unittest.TestCase):
             "/agent": ("/agent", "/agents"),
             "/agents": ("/agents",),
             "/he": ("/help",),
+            "/set": ("/settings",),
             "/?": ("/?",),
             "/exit": ("/exit",),
             "": (),
@@ -447,12 +460,20 @@ class SuggestionContractTests(unittest.TestCase):
         editor, input_stream, output, fallback = make_editor("")
         first_provider = mock.Mock(return_value=())
         second_provider = mock.Mock(return_value=())
-        with mock.patch.object(
-            InteractiveMainLineEditor,
-            "_read_line",
-            autospec=True,
-            side_effect=lambda _self, prompt, _provider: prompt,
-        ) as internal_read:
+        with (
+            mock.patch.object(
+                InteractiveMainLineEditor,
+                "_read_line",
+                autospec=True,
+                side_effect=lambda _self, prompt, _provider: prompt,
+            ) as internal_read,
+            mock.patch.object(
+                editor_module,
+                "read_main_command_line",
+                autospec=True,
+                side_effect=lambda _driver, prompt: prompt,
+            ) as main_read,
+        ):
             first_reader = bind_suggestion_reader(editor, first_provider)
             second_reader = bind_suggestion_reader(editor, second_provider)
             self.assertEqual(first_reader("compose[first]> "), "compose[first]> ")
@@ -463,13 +484,16 @@ class SuggestionContractTests(unittest.TestCase):
             internal_read.call_args_list,
             [
                 mock.call(editor, "compose[first]> ", first_provider),
-                mock.call(editor, "story[lobby]> ", slash_command_suggestions),
                 mock.call(editor, "compose[second]> ", second_provider),
             ],
         )
+        main_read.assert_called_once_with(
+            editor._driver,
+            "story[lobby]> ",
+        )
         self.assertEqual(
             InteractiveMainLineEditor.__slots__,
-            ("_fallback_read_line", "_input_stream", "_output_stream"),
+            ("_driver",),
         )
         self.assertEqual(input_stream.read_calls, 0)
         self.assertEqual(output.records, [])
@@ -481,6 +505,73 @@ class SuggestionContractTests(unittest.TestCase):
 
 
 class LiveEditingTests(unittest.TestCase):
+    def test_main_history_navigates_edits_and_normalizes_reserved_keys(self) -> None:
+        characters = "".join(
+            (
+                "first\n",
+                "second\n",
+                "draft-tail",
+                "\x1b[D" * 4,
+                "\x1b[A",
+                "\x1b[B",
+                "X\n",
+                "saved",
+                "\x1bOA",
+                "\x1bOB",
+                "!\n",
+                "ab\t\x1b[Z\x1bx\n",
+                "/\x1b[A\n",
+            )
+        )
+        editor, _input, output, fallback = make_editor(characters)
+        with capable_terminal(FakeTermios(), width=40):
+            self.assertEqual(editor.read_line("main[1]> "), "first")
+            self.assertEqual(editor.read_line("main[2]> "), "second")
+            self.assertEqual(editor.read_line("main[3]> "), "draft-Xtail")
+            self.assertEqual(editor.read_line("main[4]> "), "saved!")
+            self.assertEqual(editor.read_line("main[5]> "), "abx")
+            self.assertEqual(editor.read_line("main[6]> "), "/")
+
+        self.assertEqual(
+            editor._driver._history_state,
+            MainInputHistoryState(
+                ("first", "second", "draft-Xtail", "saved!", "abx", "/")
+            ),
+        )
+        self.assertTrue(any("Suggestions [open]" in record for record in output.records))
+        fallback.assert_not_called()
+
+    def test_composition_history_isolated_and_stores_are_per_editor(self) -> None:
+        editor, _input, _output, fallback = make_editor(
+            "alpha\n\x1b[Acontext\n\x1b[A\n"
+        )
+        other, _other_input, _other_output, other_fallback = make_editor(
+            "\x1b[A\n"
+        )
+        with capable_terminal(FakeTermios()):
+            self.assertEqual(editor.read_line("main[1]> "), "alpha")
+            self.assertEqual(
+                bind_suggestion_reader(
+                    editor,
+                    composition_slash_command_suggestions,
+                )("compose> "),
+                "context",
+            )
+            self.assertEqual(editor.read_line("main[2]> "), "alpha")
+            self.assertEqual(other.read_line("other> "), "")
+
+        self.assertEqual(
+            editor._driver._history_state,
+            MainInputHistoryState(("alpha", "alpha")),
+        )
+        self.assertEqual(other._driver._history_state, MainInputHistoryState())
+        self.assertIsNot(
+            editor._driver._history_state,
+            other._driver._history_state,
+        )
+        fallback.assert_not_called()
+        other_fallback.assert_not_called()
+
     def test_insert_cursor_delete_and_unknown_sequences_return_exact_text(self) -> None:
         characters = "".join(
             (
@@ -612,6 +703,7 @@ class LiveEditingTests(unittest.TestCase):
         editor, _input, output, _fallback = make_editor("/\n")
         with (
             mock.patch.object(editor_module, "COMMANDS", registry),
+            mock.patch.object(commands_module, "COMMANDS", registry),
             capable_terminal(FakeTermios(), width=40),
         ):
             self.assertEqual(editor.read_line("p> "), "/")
@@ -638,6 +730,12 @@ class LiveEditingTests(unittest.TestCase):
                         with self.assertRaises(error_type):
                             editor.read_line("p> ")
                 fallback.assert_not_called()
+                expected_history = (
+                    MainInputHistoryState(("text",))
+                    if characters == "text\x04"
+                    else MainInputHistoryState()
+                )
+                self.assertEqual(editor._driver._history_state, expected_history)
                 self.assertEqual(
                     tuple(call[1] for call in termios_double.set_calls),
                     (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
@@ -820,7 +918,9 @@ class CapabilityAndFailureTests(unittest.TestCase):
         self.assertEqual(output.records, [])
         self.assertEqual(termios_double.set_calls, [])
 
-    def test_unsupported_platform_and_size_failures_fallback_without_ansi(self) -> None:
+    def test_unsupported_platform_falls_back_and_size_failure_uses_default(
+        self,
+    ) -> None:
         unsupported_platforms = ((None, "posix"), (FakeTermios(), "nt"))
         for unsupported_termios, platform_name in unsupported_platforms:
             with self.subTest(
@@ -838,7 +938,7 @@ class CapabilityAndFailureTests(unittest.TestCase):
                 self.assertEqual(input_stream.read_calls, 0)
                 self.assertEqual(output.records, [])
 
-        editor, input_stream, output, fallback = make_editor("unused")
+        editor, input_stream, output, fallback = make_editor("\n")
         with (
             mock.patch.object(editor_module, "_termios", FakeTermios()),
             mock.patch.object(editor_module.os, "name", "posix"),
@@ -849,10 +949,10 @@ class CapabilityAndFailureTests(unittest.TestCase):
                 side_effect=OSError("size unavailable"),
             ),
         ):
-            self.assertEqual(editor.read_line("p> "), "fallback")
-        fallback.assert_called_once_with("p> ")
-        self.assertEqual(input_stream.read_calls, 0)
-        self.assertEqual(output.records, [])
+            self.assertEqual(editor.read_line("p> "), "")
+        fallback.assert_not_called()
+        self.assertEqual(input_stream.read_calls, 1)
+        self.assertTrue(output.records)
 
     def test_recoverable_activation_failure_restores_then_uses_fallback(self) -> None:
         editor, input_stream, output, fallback = make_editor("unused")
@@ -865,6 +965,10 @@ class CapabilityAndFailureTests(unittest.TestCase):
         fallback.assert_called_once_with("p> ")
         self.assertEqual(input_stream.read_calls, 0)
         self.assertEqual(output.records, [])
+        self.assertEqual(
+            editor._driver._history_state,
+            MainInputHistoryState(("fallback",)),
+        )
         self.assertEqual(
             tuple(call[1] for call in termios_double.set_calls),
             (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
@@ -894,6 +998,10 @@ class CapabilityAndFailureTests(unittest.TestCase):
                         editor.read_line("p> ")
                 fallback.assert_not_called()
                 self.assertEqual(
+                    editor._driver._history_state,
+                    MainInputHistoryState(),
+                )
+                self.assertEqual(
                     tuple(call[1] for call in termios_double.set_calls),
                     (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
                 )
@@ -917,6 +1025,10 @@ class CapabilityAndFailureTests(unittest.TestCase):
                 else:
                     self.assertFalse(hasattr(caught.exception, "__notes__"))
                 fallback.assert_not_called()
+                self.assertEqual(
+                    editor._driver._history_state,
+                    MainInputHistoryState(),
+                )
 
         editor, _input, _output, fallback = make_editor("unused")
         termios_double = FakeTermios()
@@ -932,6 +1044,110 @@ class CapabilityAndFailureTests(unittest.TestCase):
         self.assertIs(caught.exception.__cause__, restoration_failure)
         self.assertEqual(len(caught.exception.__notes__), 1)
         fallback.assert_not_called()
+        self.assertEqual(
+            editor._driver._history_state,
+            MainInputHistoryState(),
+        )
+
+    def test_main_history_appends_after_restoration_and_not_after_final_write_failure(
+        self,
+    ) -> None:
+        editor, _input, _output, fallback = make_editor("visible\n")
+        termios_double = FakeTermios()
+        observed_during_restoration: list[MainInputHistoryState] = []
+        real_set = termios_double.tcsetattr
+
+        def observe_set(
+            descriptor: int,
+            when: int,
+            attributes: list[object],
+        ) -> None:
+            if when == FakeTermios.TCSADRAIN:
+                observed_during_restoration.append(editor._driver._history_state)
+            real_set(descriptor, when, attributes)
+
+        termios_double.tcsetattr = observe_set  # type: ignore[method-assign]
+        with capable_terminal(termios_double):
+            self.assertEqual(editor.read_line("p> "), "visible")
+        self.assertEqual(observed_during_restoration, [MainInputHistoryState()])
+        self.assertEqual(
+            editor._driver._history_state,
+            MainInputHistoryState(("visible",)),
+        )
+        fallback.assert_not_called()
+
+        output = RecordingOutput()
+        calls = 0
+
+        def fail_final_write(text: str) -> int:
+            nonlocal calls
+            calls += 1
+            output.records.append(text)
+            if calls == 2:
+                raise OSError("final redraw failed")
+            return len(text)
+
+        output.write = fail_final_write  # type: ignore[method-assign]
+        failed, _input, _unused, failed_fallback = make_editor(
+            "candidate\n",
+            output=output,
+        )
+        with capable_terminal(FakeTermios()):
+            with self.assertRaisesRegex(OSError, "^final redraw failed$"):
+                failed.read_line("p> ")
+        self.assertEqual(failed._driver._history_state, MainInputHistoryState())
+        failed_fallback.assert_not_called()
+
+        flushing = RecordingOutput()
+        flushing.flush_failure = OSError("flush failed")
+        failed, _input, _unused, failed_fallback = make_editor(
+            "candidate\n",
+            output=flushing,
+        )
+        with capable_terminal(FakeTermios()):
+            with self.assertRaisesRegex(OSError, "^flush failed$"):
+                failed.read_line("p> ")
+        self.assertEqual(failed._driver._history_state, MainInputHistoryState())
+        failed_fallback.assert_not_called()
+
+    def test_fallback_hostile_string_returns_original_then_recalls_base_text(
+        self,
+    ) -> None:
+        class HostileString(str):
+            def __str__(self) -> str:
+                raise AssertionError("overridden __str__ must not run")
+
+            def __contains__(self, value: object) -> bool:
+                raise AssertionError("overridden __contains__ must not run")
+
+        value = HostileString("  /unknown 🌊  ")
+        input_stream = ScriptedInput(*"\x1b[A\n", is_terminal=False)
+        output = RecordingOutput()
+        fallback = mock.Mock(return_value=value)
+        editor = InteractiveMainLineEditor(
+            fallback,
+            input_stream,  # type: ignore[arg-type]
+            output,  # type: ignore[arg-type]
+        )
+        termios_double = FakeTermios()
+        with capable_terminal(termios_double):
+            returned = editor.read_line("fallback> ")
+        self.assertIs(returned, value)
+        self.assertEqual(
+            editor._driver._history_state,
+            MainInputHistoryState(("  /unknown 🌊  ",)),
+        )
+
+        input_stream.is_terminal = True
+        with capable_terminal(termios_double):
+            recalled = editor.read_line("live> ")
+        self.assertIs(type(recalled), str)
+        self.assertEqual(recalled, "  /unknown 🌊  ")
+        self.assertEqual(
+            editor._driver._history_state,
+            MainInputHistoryState(("  /unknown 🌊  ", "  /unknown 🌊  ")),
+        )
+        fallback.assert_called_once_with("fallback> ")
 
     def test_non_exception_activation_failure_restores_and_propagates(self) -> None:
         editor, input_stream, output, fallback = make_editor("unused")
@@ -945,6 +1161,7 @@ class CapabilityAndFailureTests(unittest.TestCase):
         fallback.assert_not_called()
         self.assertEqual(input_stream.read_calls, 0)
         self.assertEqual(output.records, [])
+        self.assertEqual(editor._driver._history_state, MainInputHistoryState())
         self.assertEqual(
             tuple(call[1] for call in termios_double.set_calls),
             (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),

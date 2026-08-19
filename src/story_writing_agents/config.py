@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Mapping
 
 from .agents import AGENT_SPECS, ROSTER
@@ -12,6 +14,13 @@ from .workspace import Workspace
 
 
 _LANGUAGE = re.compile(r"[A-Za-z][A-Za-z0-9-]{0,15}")
+_CODEX_REASONING_EFFORTS: tuple[str, ...] = (
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+)
 KNOWN_AGENT_BACKENDS: tuple[str, ...] = ("codex", "gemini")
 
 
@@ -20,6 +29,8 @@ class SystemDefaults:
     language: str
     persona: str
     max_debate_rounds: int
+    codex_model: str | None = None
+    codex_reasoning_effort: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +46,37 @@ class ResolvedAgentConfig:
     backend: str
     language: str
     persona: str
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigurationSnapshot:
+    """Retain one immutable, roster-complete persisted configuration pair."""
+
+    system_defaults: SystemDefaults
+    agent_configs: Mapping[str, AgentConfig]
+
+    def __post_init__(self) -> None:
+        if type(self.system_defaults) is not SystemDefaults:
+            raise TypeError("system_defaults must be a SystemDefaults")
+        if not isinstance(self.agent_configs, Mapping):
+            raise TypeError("agent_configs must be a mapping")
+        if set(self.agent_configs) != set(ROSTER):
+            raise ValueError("agent_configs must contain the complete roster")
+        if any(
+            type(self.agent_configs[agent_id]) is not AgentConfig
+            for agent_id in ROSTER
+        ):
+            raise TypeError("agent_configs values must be AgentConfig values")
+        object.__setattr__(
+            self,
+            "agent_configs",
+            MappingProxyType(
+                {
+                    agent_id: self.agent_configs[agent_id]
+                    for agent_id in ROSTER
+                }
+            ),
+        )
 
 
 class ConfigManager:
@@ -62,12 +104,54 @@ class ConfigManager:
             raise ConfigurationError(f"backend must be one of: {expected}")
         return value
 
+    @staticmethod
+    def validate_codex_model(value: Any) -> str | None:
+        if value is None:
+            return None
+        if (
+            not isinstance(value, str)
+            or not value
+            or value.startswith("-")
+            or any(
+                unicodedata.category(character) in {"Cc", "Cf", "Cs"}
+                for character in value
+            )
+        ):
+            raise ConfigurationError(
+                "codex_model must be safe non-empty text or null"
+            )
+        return value
+
+    @staticmethod
+    def validate_codex_reasoning_effort(value: Any) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str) or value not in _CODEX_REASONING_EFFORTS:
+            expected = ", ".join(_CODEX_REASONING_EFFORTS)
+            raise ConfigurationError(
+                "codex_reasoning_effort must be null or one of: "
+                f"{expected}"
+            )
+        return value
+
     def load_system_defaults(self) -> SystemDefaults:
-        value = self.workspace.read_json("config/system_defaults.json")
+        return self._validate_system_defaults(
+            self.workspace.read_json("config/system_defaults.json")
+        )
+
+    def _validate_system_defaults(self, value: Any) -> SystemDefaults:
+        """Validate one complete system-default document without I/O."""
+
         if not isinstance(value, dict):
             raise ConfigurationError("system_defaults.json must contain an object")
         unknown = set(value).difference(
-            {"language", "persona", "max_debate_rounds"}
+            {
+                "language",
+                "persona",
+                "max_debate_rounds",
+                "codex_model",
+                "codex_reasoning_effort",
+            }
         )
         if unknown:
             raise ConfigurationError(
@@ -78,14 +162,31 @@ class ConfigManager:
         rounds = value.get("max_debate_rounds", 1)
         if isinstance(rounds, bool) or not isinstance(rounds, int) or rounds < 0:
             raise ConfigurationError("max_debate_rounds must be a non-negative integer")
+        codex_model = self.validate_codex_model(value.get("codex_model"))
+        codex_reasoning_effort = self.validate_codex_reasoning_effort(
+            value.get("codex_reasoning_effort")
+        )
         return SystemDefaults(
             language=language,
             persona=persona,
             max_debate_rounds=rounds,
+            codex_model=codex_model,
+            codex_reasoning_effort=codex_reasoning_effort,
         )
 
     def load_agent_configs(self) -> dict[str, AgentConfig]:
-        value = self.workspace.read_json("config/agent_configs.json")
+        return dict(
+            self._validate_agent_configs(
+                self.workspace.read_json("config/agent_configs.json")
+            )
+        )
+
+    def _validate_agent_configs(
+        self,
+        value: Any,
+    ) -> Mapping[str, AgentConfig]:
+        """Validate one roster-complete agent document without I/O."""
+
         if not isinstance(value, dict):
             raise ConfigurationError("agent_configs.json must contain an object")
         unknown = set(value).difference(ROSTER)
@@ -121,7 +222,27 @@ class ConfigManager:
                 language=language,
                 persona=persona,
             )
-        return configs
+        return MappingProxyType(configs)
+
+    def validate_configuration(
+        self,
+        system_value: Any,
+        agent_value: Any,
+    ) -> ConfigurationSnapshot:
+        """Validate both complete persisted documents before publication."""
+
+        return ConfigurationSnapshot(
+            self._validate_system_defaults(system_value),
+            self._validate_agent_configs(agent_value),
+        )
+
+    def load_configuration_snapshot(self) -> ConfigurationSnapshot:
+        """Read and validate one immutable persisted configuration pair."""
+
+        return self.validate_configuration(
+            self.workspace.read_json("config/system_defaults.json"),
+            self.workspace.read_json("config/agent_configs.json"),
+        )
 
     def validate_runtime_overrides(
         self, value: Mapping[str, Any] | Any
@@ -181,10 +302,28 @@ class ConfigManager:
         runtime_overrides: Mapping[str, Any] | None = None,
         backend_overrides: Mapping[str, str] | None = None,
     ) -> ResolvedAgentConfig:
+        return self.resolve_from_snapshot(
+            self.load_configuration_snapshot(),
+            agent_id,
+            runtime_overrides,
+            backend_overrides,
+        )
+
+    def resolve_from_snapshot(
+        self,
+        snapshot: ConfigurationSnapshot,
+        agent_id: str,
+        runtime_overrides: Mapping[str, Any] | None = None,
+        backend_overrides: Mapping[str, str] | None = None,
+    ) -> ResolvedAgentConfig:
+        """Resolve live overrides over one immutable persisted snapshot."""
+
+        if type(snapshot) is not ConfigurationSnapshot:
+            raise TypeError("snapshot must be a ConfigurationSnapshot")
         if agent_id not in AGENT_SPECS:
             raise ConfigurationError(f"unknown agent: {agent_id}")
-        defaults = self.load_system_defaults()
-        agent = self.load_agent_configs()[agent_id]
+        defaults = snapshot.system_defaults
+        agent = snapshot.agent_configs[agent_id]
         runtime = self.validate_runtime_overrides(runtime_overrides or {})
         runtime_agent = runtime["agents"].get(agent_id, {})
         backend_override = (backend_overrides or {}).get(agent_id)

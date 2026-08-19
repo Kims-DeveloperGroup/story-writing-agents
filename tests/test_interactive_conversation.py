@@ -70,6 +70,8 @@ from story_writing_agents.interactive_terminal import (
     InteractiveErrorCode,
     InteractiveTerminal,
 )
+from story_writing_agents import interactive_terminal as terminal_module
+from story_writing_agents.interactive_terminal._render import render_plain
 from story_writing_agents.models import (
     AgentDefinition,
     ConversationReply,
@@ -224,11 +226,23 @@ class RecordingConversationBound:
 
 
 def _error_record(code: InteractiveErrorCode) -> str:
+    """Return one exact semantic error callback at this suite's width."""
+
     spec = INTERACTIVE_ERROR_SPECS[code]
-    return (
-        f"[error {code.value}] {spec.summary}\n"
-        f"[hint] {spec.hint}\n"
+    component = terminal_module.Panel(
+        "Interactive error",
+        (
+            terminal_module.Notice(
+                spec.summary,
+                label=f"error {code.value}",
+                role=terminal_module.SemanticRole.ERROR,
+                state=terminal_module.ViewState.ERROR,
+            ),
+            terminal_module.Notice(spec.hint, label="hint"),
+        ),
+        state=terminal_module.ViewState.ERROR,
     )
+    return f"{render_plain(component, width=240).text}\n"
 
 
 def _empty_context() -> ConversationContextWindow:
@@ -546,6 +560,19 @@ class RuntimeWiringAndGateTests(InteractiveConversationTestCase):
         bind.assert_not_called()
         rendered = "".join(callbacks.records)
         self.assertEqual(rendered.count("[agent] "), 4)
+        roster_records = [
+            record for record in callbacks.records if record.startswith("Agents (4)")
+        ]
+        self.assertEqual(len(roster_records), 1)
+        roster = roster_records[0]
+        ordered_ids = (
+            "lead_orchestrator",
+            "plot_architect",
+            "character_custodian",
+            "execution_specialist",
+        )
+        positions = [roster.index(f"ID: {agent_id}") for agent_id in ordered_ids]
+        self.assertEqual(positions, sorted(positions))
         self.assertEqual(rendered.count("[error session_not_attached]"), 4)
         self.assertNotIn("[error conversation_required]", rendered)
 
@@ -693,7 +720,7 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
             "in this shared room; it does not make the turn private.\n",
             rendered,
         )
-        self.assertIn("lead> lead reply\\x1b\n", rendered)
+        self.assertIn("lead [completed]> lead reply\\x1b\n", rendered)
         self.assertNotIn("lead reply\x1b", rendered)
         main_prompts = [
             prompt for prompt in callbacks.prompts if prompt.startswith("story[")
@@ -756,17 +783,22 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
         rendered = "".join(callbacks.records)
         routing_index = rendered.index("[routing] ")
         waiting_index = rendered.index("[waiting] ")
-        truncation_index = rendered.index("[context] Context truncated:")
-        reply_index = rendered.index("lead> first line")
+        truncation_index = rendered.index("[context] [completed] [warning]")
+        reply_index = rendered.index("lead [completed]> first line")
         self.assertLess(routing_index, waiting_index)
         self.assertLess(waiting_index, truncation_index)
         self.assertLess(truncation_index, reply_index)
         self.assertIn(
-            "[context] Context truncated: 4 events retained across 2 turns; "
+            "[context] [completed] [warning]\n"
+            "  Context truncated: 4 events retained across 2 turns; "
             "3 earlier turns omitted.\n",
             rendered,
         )
-        self.assertIn("lead> first line\nsecond\\x1bline\n", rendered)
+        self.assertIn(
+            "lead [completed]> first line\n"
+            "                  second\\x1bline\n",
+            rendered,
+        )
         self.assertNotIn("\x1b", rendered)
 
     def test_retrieval_progress_sources_and_selected_scope_render_exactly(self) -> None:
@@ -874,17 +906,23 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
         rendered = "".join(callbacks.records)
         expected_records = (
             "[context] Retrieval search action 1 started.\n",
-            "[context] Retrieval search action 1 completed: 2 hits; "
+            "[context] [completed]\n"
+            "  Retrieval search action 1 completed: 2 hits; "
             "321 observation bytes; truncated: yes.\n",
             "[context] Retrieval read action 2 started.\n",
-            "[context] Retrieval read action 2 completed: 2 turns; 4 events; "
+            "[context] [completed]\n"
+            "  Retrieval read action 2 completed: 2 turns; 4 events; "
             "654 observation bytes; truncated: no.\n",
-            "lead> cited answer\n",
-            "[context] Source 1: Subject: Conversation source | "
-            "Conversation: source_conversation\n",
-            "[context] Source 2: Subject: Event source | "
-            "Conversation: source_conversation | Turn: source_turn | "
-            "Sequence: 7 | Kind: agent_reply\n",
+            "lead [completed]> cited answer\n",
+            "[context] Source 1 [completed]\n"
+            "  Subject: Conversation source\n"
+            "  Conversation: source_conversation\n",
+            "[context] Source 2 [completed]\n"
+            "  Subject: Event source\n"
+            "  Conversation: source_conversation\n"
+            "  Turn: source_turn\n"
+            "  Sequence: 7\n"
+            "  Kind: agent_reply\n",
         )
         for record in expected_records:
             self.assertIn(record, rendered)
@@ -1139,7 +1177,7 @@ class FailureAndResultTests(InteractiveConversationTestCase):
                 rendered = "".join(callbacks.records)
                 self.assertIn(_error_record(expected_code), rendered)
                 self.assertNotIn("secret", rendered)
-                self.assertIn("lead> recovered reply\n", rendered)
+                self.assertIn("lead [completed]> recovered reply\n", rendered)
                 self.assertEqual(len(runtime.calls), 2)
                 if isinstance(failure, BackendProtocolError) and type(
                     failure
@@ -1231,7 +1269,7 @@ class FailureAndResultTests(InteractiveConversationTestCase):
                     _error_record(InteractiveErrorCode.INTERNAL_ERROR),
                     rendered,
                 )
-                self.assertNotIn("lead> foreign", rendered)
+                self.assertNotIn("lead [completed]> foreign", rendered)
                 self.assertEqual(len(runtime.calls), 1)
                 lease = workspace.path(
                     "agent_states/orchestrator_state/provider_sessions/"
@@ -1417,7 +1455,10 @@ class RealRetainedRuntimeTests(InteractiveConversationTestCase):
             first.conversation_id,
         )
         rendered = "".join(callbacks.records)
-        self.assertIn(f"execution> reply:{EXECUTION_SPECIALIST}:/run literal", rendered)
+        self.assertIn(
+            f"execution [completed]> reply:{EXECUTION_SPECIALIST}:/run literal",
+            rendered,
+        )
         self.assertNotIn("[run ", rendered)
 
     def test_real_runtime_persists_sanitized_failure_then_recovers(self) -> None:
@@ -1498,7 +1539,7 @@ class RealRetainedRuntimeTests(InteractiveConversationTestCase):
             rendered,
         )
         self.assertNotIn("provider diagnostic", rendered)
-        self.assertIn("lead> recovered\n", rendered)
+        self.assertIn("lead [completed]> recovered\n", rendered)
         self.assertEqual(len({id(loop) for loop in loops}), 1)
         self.assertTrue(all(loop.is_closed() for loop in loops))
         self.assertTrue(all(task is not None and task.done() for task in tasks))
