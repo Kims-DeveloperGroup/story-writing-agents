@@ -1147,13 +1147,17 @@ print("RESULT=" + outcome.kind.value)
                     after=language_mark,
                 )
                 self.assertIn(expected_language, language_result)
-                process.wait_for_text(
+                returned_settings = process.wait_for_text(
                     "Choose a setting to edit, save, or cancel.",
                     after=language_mark,
                 )
+                self.assertEqual(
+                    returned_settings.count("Settings [focused] [open]"),
+                    1,
+                )
                 returned_mark = process.output_mark()
                 process.send_text(("\x1b[B" * 4) + "\n")
-                process.send_line("yes")
+                process.send_text("\n")
                 saved = process.wait_for_text(
                     "[saved] Settings saved.",
                     after=returned_mark,
@@ -1264,7 +1268,7 @@ print("RESULT=" + outcome.kind.value)
         process.send_line("/cancel")
         process.wait_for_text("6. [available] Cancel", after=model_mark)
         process.send_line("5")
-        process.send_line("yes")
+        process.send_line("1")
         process.wait_for_text("Settings saved", after=mark)
         process.wait_for_text("story[lobby]> ", after=mark)
         process.send_line("/quit")

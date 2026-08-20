@@ -287,13 +287,14 @@ main-history store. Callback and ordinary-line fallback cannot erase committed
 rows, so the line remains visible and no cleanup is claimed; history is
 unchanged in every profile.
 
-Save and Cancel each use a transient yes/no confirmation prompt. Its context
-contains only fields whose Current and Pending values differ, and both displayed
-values carry the `(Changed)` cue; an empty diff shows `No pending settings
-changes.`. `yes`/`y` commits the requested action, while `no`/`n`, blank, or
-nested Escape returns to the settings picker. Invalid input retries with a
-trusted notice. Top-level Escape, Ctrl-C, and EOF cancel without writing and do
-not imply a snapshot was rendered.
+Save and Cancel each show a transient selectable confirmation with highlighted
+`YES` and `NO` choices. Its preceding context contains only fields whose
+Current and Pending values differ, and both displayed values carry the
+`(Changed)` cue; an unchanged state shows only `No pending settings changes.`
+without empty Current or Pending sections. Selecting `YES` commits the
+requested action, while `NO` or nested Escape returns to the settings picker.
+Top-level Escape, Ctrl-C, and EOF cancel without writing and do not imply a
+snapshot was rendered.
 
 ## Current semantic plain shapes
 
@@ -538,9 +539,10 @@ returning the typed outcome, so no duplicate final frame is emitted. Callback
 and line-fallback readers cannot erase prior output; transient picker fallback
 therefore omits its synthetic final frame rather than duplicating it. Nested
 settings Escape returns to the parent silently. Save and Cancel confirmations
-show the changed-only Current/Pending context; top-level cancellation does not
-claim a snapshot that was not rendered. Non-settings calls retain the default
-final-frame behavior.
+show a selectable YES/NO control with the changed-only Current/Pending context;
+unchanged context contains only the no-changes notice. Top-level cancellation
+does not claim a snapshot that was not rendered. Non-settings calls retain the
+default final-frame behavior.
 
 For the default lifecycle, live and fallback readers emit exactly one final
 semantic `completed` or `cancelled` frame after commit or cancel. Interrupt,
