@@ -774,7 +774,7 @@ class RawTerminalDriver:
                 self._write_live_text("\n")
                 display_state.rendered_cursor_row = 0
             else:
-                self._clear_live_display(display_state, line_break=True)
+                self._clear_live_display(display_state, line_break=False)
         except BaseException as failure:
             active_failure = failure
             try:
@@ -998,7 +998,7 @@ class RawTerminalDriver:
                 palette_renderer,
             )
             if transient:
-                self._clear_live_display(display_state, line_break=True)
+                self._clear_live_display(display_state, line_break=False)
             else:
                 committed_rows = self._finish_live_display(
                     prompt,

@@ -2382,20 +2382,46 @@ class ControllerSettingsTests(ControllerTestCase):
             for index in changed_indices
         )
 
-        return terminal_module.Panel(
-            "Settings",
-            (
+        if changed_indices:
+            items = (
                 terminal_module.Section("Current", current_fields),
                 terminal_module.Section("Pending", pending_fields),
                 terminal_module.Notice(
-                    "No pending settings changes."
-                    if not changed_indices
-                    else "Changed values apply only to the next shell after Save.",
-                    label="no changes" if not changed_indices else "activation",
+                    "Changed values apply only to the next shell after Save.",
+                    label="activation",
                     role=terminal_module.SemanticRole.MUTED,
                 ),
-            ),
+            )
+        else:
+            items = (
+                terminal_module.Notice(
+                    "No pending settings changes.",
+                    label="no changes",
+                    role=terminal_module.SemanticRole.MUTED,
+                ),
+            )
+        return terminal_module.Panel(
+            "Settings",
+            items,
             state=terminal_module.ViewState.OPEN,
+        )
+
+    def test_settings_panel_omits_empty_diff_sections(self) -> None:
+        workspace = self.make_workspace()
+        state = settings_module.load_settings_state(workspace)
+        self.assertEqual(
+            InteractiveController._settings_panel(state),
+            terminal_module.Panel(
+                "Settings",
+                (
+                    terminal_module.Notice(
+                        "No pending settings changes.",
+                        label="no changes",
+                        role=terminal_module.SemanticRole.MUTED,
+                    ),
+                ),
+                state=terminal_module.ViewState.OPEN,
+            ),
         )
 
     def test_settings_open_is_exact_six_item_provider_free_snapshot(self) -> None:
@@ -2405,7 +2431,7 @@ class ControllerSettingsTests(ControllerTestCase):
             workspace,
             "/settings",
             "6",
-            "yes",
+            "1",
             "/quit",
             terminal_width=120,
         )
@@ -2456,7 +2482,7 @@ class ControllerSettingsTests(ControllerTestCase):
             "3",
             "0",
             "5",
-            "yes",
+            "1",
             "/quit",
             terminal_width=120,
         )
@@ -2482,7 +2508,7 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertTrue(
             all(call.kwargs.get("transient") is True for call in picker.call_args_list)
         )
-        self.assertEqual(len(prompt.call_args_list), 2)
+        self.assertEqual(len(prompt.call_args_list), 1)
         self.assertTrue(
             all(call.kwargs.get("transient") is True for call in prompt.call_args_list)
         )
@@ -2508,7 +2534,7 @@ class ControllerSettingsTests(ControllerTestCase):
         ordinary_picker.assert_not_called()
         ordinary_prompt.assert_not_called()
 
-    def test_settings_confirmation_panel_is_changed_only_and_invalid_retries(
+    def test_settings_confirmation_panel_is_changed_only_and_selectable(
         self,
     ) -> None:
         workspace = self.make_workspace()
@@ -2521,58 +2547,39 @@ class ControllerSettingsTests(ControllerTestCase):
             "1",
             "2",
             "5",
-            "maybe",
-            "yes",
+            "1",
             "/quit",
             terminal_width=48,
         )
-        original_prompt = terminal_module.InteractivePromptInput.read_prompt
+        original_picker = terminal_module.InteractivePickerInput.read_picker
         with mock.patch.object(
-            terminal_module.InteractivePromptInput,
-            "read_prompt",
+            terminal_module.InteractivePickerInput,
+            "read_picker",
             autospec=True,
-            side_effect=original_prompt,
-        ) as prompt:
+            side_effect=original_picker,
+        ) as picker:
             self.assertEqual(controller.run_session_lobby(), 0)
 
-        self.assertEqual(len(prompt.call_args_list), 2)
-        first_context = prompt.call_args_list[0].kwargs["context"]
-        second_context = prompt.call_args_list[1].kwargs["context"]
-        self.assertEqual(first_context, (expected,))
-        retry_notice = terminal_module.Notice(
-            "Enter yes, no, or blank to return.",
-            label="hint",
-            role=terminal_module.SemanticRole.ERROR,
-            state=terminal_module.ViewState.ERROR,
+        self.assertGreaterEqual(len(picker.call_args_list), 3)
+        picker_call = picker.call_args_list[-1]
+        self.assertEqual(
+            picker_call.args[2],
+            (terminal_module.Choice("yes", "YES"), terminal_module.Choice("no", "NO")),
         )
-        expected_retry = terminal_module.Panel(
-            expected.title,
-            expected.items + (retry_notice,),
-            state=expected.state,
+        self.assertEqual(picker_call.kwargs["highlighted_id"], "yes")
+        self.assertTrue(picker_call.kwargs["transient"])
+        confirmation_prompt = next(
+            prompt for prompt in callbacks.prompts if "Save settings?" in prompt
         )
-        self.assertEqual(second_context, (expected_retry,))
-        self.assertIn("Language", callbacks.prompts[1])
-        self.assertTrue(any("(Changed)" in prompt for prompt in callbacks.prompts))
-        confirmation_prompts = [
-            value
-            for value in callbacks.prompts
-            if value.endswith("Save settings? > ")
-        ]
-        self.assertEqual(len(confirmation_prompts), 2)
-        rendered_context = render_plain(expected, width=48).text
-        rendered_retry = render_plain(expected_retry, width=48).text
-        self.assertTrue(
-            confirmation_prompts[0].startswith(f"{rendered_context}\n")
-        )
-        self.assertTrue(
-            confirmation_prompts[1].startswith(f"{rendered_retry}\n")
-        )
-        self.assertTrue(
-            all(
-                f"{'-' * 48}\nEnter yes to save, or no/blank to return."
-                in value
-                for value in confirmation_prompts
-            )
+        self.assertIn("YES", confirmation_prompt)
+        expected_record = f"{render_plain(expected, width=48).text}\n"
+        self.assertEqual(
+            [
+                record
+                for record in callbacks.records
+                if record.startswith("--- Settings [open]")
+            ],
+            [expected_record],
         )
         self.assertIn(
             "[saved] Settings saved.",
@@ -2587,9 +2594,12 @@ class ControllerSettingsTests(ControllerTestCase):
         self,
     ) -> None:
         cases = (
-            ("save-no-then-cancel-yes", ("/settings", "5", "no", "6", "yes", "/quit")),
-            ("save-escape-then-cancel-yes", ("/settings", "5", "\x1b", "6", "yes", "/quit")),
-            ("cancel-no-then-cancel-yes", ("/settings", "6", "no", "6", "yes", "/quit")),
+            ("save-no-then-cancel-yes", ("/settings", "5", "2", "6", "1", "/quit")),
+            (
+                "save-fallback-cancel-then-cancel-yes",
+                ("/settings", "5", "/cancel", "6", "1", "/quit"),
+            ),
+            ("cancel-no-then-cancel-yes", ("/settings", "6", "2", "6", "1", "/quit")),
             ("save-interrupt", ("/settings", "5", KeyboardInterrupt(), "/quit")),
             ("save-eof", ("/settings", "5", EOFError(), "/quit")),
         )
@@ -2611,12 +2621,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     ),
                     1,
                 )
-                self.assertTrue(
-                    any(
-                        "Save settings?" in prompt or "Cancel settings?" in prompt
-                        for prompt in callbacks.prompts
-                    )
-                )
+                self.assertTrue(any("YES" in prompt and "NO" in prompt for prompt in callbacks.prompts))
 
     def test_settings_edit_save_isolated_candidate_and_literal_cancel_text(self) -> None:
         workspace = self.make_workspace()
@@ -2645,7 +2650,7 @@ class ControllerSettingsTests(ControllerTestCase):
             "3",
             "6",
             "5",
-            "yes",
+            "1",
             "/quit",
             terminal_width=160,
         )
@@ -2716,7 +2721,7 @@ class ControllerSettingsTests(ControllerTestCase):
 
     def test_nested_escape_returns_but_interrupt_and_eof_cancel_all(self) -> None:
         scenarios = (
-            (("/settings", "4", "2", "2", "\x1b", "6", "yes", "/quit"),),
+            (("/settings", "4", "2", "2", "\x1b", "6", "1", "/quit"),),
             (("/settings", KeyboardInterrupt(), "/quit"),),
             (("/settings", EOFError(), "/quit"),),
         )
@@ -2765,9 +2770,9 @@ class ControllerSettingsTests(ControllerTestCase):
                     workspace,
                     "/settings",
                     "5",
-                    "yes",
+                    "1",
                     "6",
-                    "yes",
+                    "1",
                     "/quit",
                     terminal_width=160,
                 )

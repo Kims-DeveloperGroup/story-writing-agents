@@ -25,9 +25,10 @@
 > capable advisory turns; advisory turns no longer emit `[routing]` or
 > `[waiting]` notices. The
 > #115 settings lifecycle keeps capable committed `/settings` input cleanup
-> display-only, adds transient Save/Cancel confirmations, and shows only
-> changed Current/Pending fields with explicit cues. #123 frames every semantic
-> `Panel` with responsive ASCII top-title and bottom splitters. The
+> display-only, adds transient selectable YES/NO confirmations, and shows
+> changed Current/Pending fields with explicit cues or a no-changes notice.
+> #123 frames every semantic `Panel` with responsive ASCII top-title and bottom
+> splitters. The
 > [interactive terminal reference](../reference/interactive-terminal.md) and
 > [terminal safety rules](../operations/terminal-safety.md) describe current
 > observable behavior.
@@ -60,7 +61,7 @@ describe current production behavior.
 | #105 agent reply presentation | Implemented: direct, retrieval, transcript, and focused-history agent replies use a presentation-only strict JSON object/array projection with exact unchanged fallback cases and two-space Unicode-preserving output; stored/provider content remains unchanged, and the `AGENT` role uses bold terminal-default foreground styling without background detection. |
 | #106 transient settings UI | Implemented: settings-only picker and prompt reads clear capable transient rows, suppress duplicate fallback finals, keep nested Escape silent, and preserve default non-settings lifecycles. #115 owns the later confirmation-context diff and committed-line cleanup. |
 | #111 advisory progress indicator | Implemented: one advisory and consensus waiting four-glyph rolling indicator runs only on capable raw streams, including `NO_COLOR`; callback, non-TTY, `TERM=dumb`, and uncertain-capability paths remain silent, and no general animation or `[routing]`/`[waiting]` record is introduced. |
-| #115 settings lifecycle | Implemented: capable committed `/settings` input is cleared from the live display without deleting its history entry; Save and Cancel use transient yes/no confirmations; confirmation context shows only changed Current/Pending fields with `(Changed)` cues; fallback paths preserve visible committed input and report no cleanup they cannot perform. |
+| #115 settings lifecycle | Implemented: capable committed `/settings` input is cleared from the live display without deleting its history entry; Save and Cancel use transient selectable YES/NO confirmations; confirmation context shows only changed Current/Pending fields with `(Changed)` cues or only a no-changes notice; fallback paths preserve visible committed input and report no cleanup they cannot perform. |
 | #119 debate visibility | Implemented: consensus progress now includes per-phase handoff/action records and a dedicated semantic `Panel` titled `Agent saying` showing newly emitted messages from the relevant agents. |
 | #123 Panel splitters | Implemented: every semantic `Panel` renders a responsive ASCII top splitter carrying its title and state plus a bottom splitter, without side borders or changes to interaction/runtime behavior. |
 
@@ -479,10 +480,11 @@ The presentation uses one `Panel` with `Section`, `Field`, and `Notice` values,
 plus one focused `Picker` or `Prompt`. It is not a new component or a
 general-purpose form abstraction. One section shows validated current values;
 another shows independent pending values. Controls render without the snapshot
-panel. Save and Cancel open transient yes/no confirmations whose context shows
-only changed fields in both Current and Pending, with each displayed value
-marked `(Changed)`; when nothing differs, both sections are empty and a `No
-pending settings changes.` notice is shown. The controller keeps snapshots
+panel. Save and Cancel open transient selectable confirmations with highlighted
+YES and NO choices; their context shows only changed fields in both Current and
+Pending, with each displayed value marked `(Changed)`. When nothing differs,
+only a `No pending settings changes.` notice is shown, without empty sections.
+The controller keeps snapshots
 call-local and does not emit the diff while opening, navigating, or editing;
 top-level cancellation does not claim a panel that was not rendered.
 Nested Escape returns silently to its parent without a snapshot or cancellation
@@ -533,12 +535,11 @@ one control is focused:
   updates only the pending value and returns focus;
   invalid Enter leaves the prompt focused with a trusted validation notice.
   Escape restores its prior pending value.
-- Enter on Save opens a transient `Save settings?` confirmation with the
-  changed-only Current/Pending context. `yes`/`y` proceeds to validate both
-  complete pending snapshots and re-read both persisted documents and the
-  persona catalog before any write. `no`/`n`, blank, or nested Escape returns
-  to the top-level picker; invalid text retains the prompt with a trusted
-  validation notice. Any exact-byte or catalog change from the validated
+- Enter on Save opens a transient `Save settings?` picker with highlighted YES
+  and NO choices plus the changed-only Current/Pending context. YES proceeds
+  to validate both complete pending snapshots and re-read both persisted
+  documents and the persona catalog before any write. NO or nested Escape
+  returns to the top-level picker. Any exact-byte or catalog change from the validated
   opening baseline fails closed with no write. A valid, unchanged baseline
   crosses the sole mutation boundary: each changed file is replaced atomically
   in system-then-agent order, and any write failure triggers best-effort
@@ -548,9 +549,14 @@ one control is focused:
   retains the pending values for retry or cancellation. This is a guarded
   two-file update, not a global transaction or a power-loss-safe transaction
   across both files.
-- Enter on Cancel opens a transient `Cancel settings?` confirmation with the
-  same changed-only context. `yes`/`y` returns `cancelled` without writing;
-  `no`/`n`, blank, or nested Escape returns to the top-level picker. Top-level
+- Enter on Cancel opens a transient `Cancel settings?` picker with highlighted
+  YES and NO choices plus the same separately rendered changed-only or
+  no-changes context `Panel`. Capable raw input initially highlights YES; Enter
+  commits the highlighted choice, while Escape returns to the top-level picker.
+  Line fallback accepts blank to commit the highlighted choice (initially YES),
+  decimal ordinal `1` for YES or `2` for NO, and `/cancel` to return; free-form
+  `yes`/`y` and `no`/`n` are rejected. Committed YES returns `cancelled`
+  without writing; committed NO returns to the top-level picker. Top-level
   Escape, Ctrl-C, or EOF cancels without writing. Opening, navigating,
   highlighting, editing, validation preview, nested cancellation, and
   rerendering likewise have no filesystem, runtime, provider, storage, or
