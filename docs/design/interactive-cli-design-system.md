@@ -28,7 +28,9 @@
 > display-only, adds transient selectable YES/NO confirmations, and shows
 > changed Current/Pending fields with explicit cues or a no-changes notice.
 > #123 frames every semantic `Panel` with responsive ASCII top-title and bottom
-> splitters. The
+> splitters. #126 makes Enter apply a highlighted main-command suggestion
+> before submission and aligns Enter and Tab completion spacing. #127 adds
+> leading routed-agent suggestions to that capable main-prompt palette. The
 > [interactive terminal reference](../reference/interactive-terminal.md) and
 > [terminal safety rules](../operations/terminal-safety.md) describe current
 > observable behavior.
@@ -41,8 +43,8 @@ semantic model.
 
 The words **must**, **must not**, and **may** below constrain the delivery
 issues. Requirements beyond the implemented #82, #83, #84, #85, #86, #79,
-#87, #94, #93, #105, #106, #111, #115, #119, #123, and #73 slices do not
-describe current production behavior.
+#87, #94, #93, #105, #106, #111, #115, #119, #123, #126, #127, and #73 slices
+do not describe current production behavior.
 
 ## Delivery status
 
@@ -64,6 +66,8 @@ describe current production behavior.
 | #115 settings lifecycle | Implemented: capable committed `/settings` input is cleared from the live display without deleting its history entry; Save and Cancel use transient selectable YES/NO confirmations; confirmation context shows only changed Current/Pending fields with `(Changed)` cues or only a no-changes notice; fallback paths preserve visible committed input and report no cleanup they cannot perform. |
 | #119 debate visibility | Implemented: consensus progress now includes per-phase handoff/action records and a dedicated semantic `Panel` titled `Agent saying` showing newly emitted messages from the relevant agents. |
 | #123 Panel splitters | Implemented: every semantic `Panel` renders a responsive ASCII top splitter carrying its title and state plus a bottom splitter, without side borders or changes to interaction/runtime behavior. |
+| #126 Enter completion and spacing | Implemented: at capable main prompts, Enter applies a highlighted suggestion without submitting and dismisses the palette so a second Enter submits; Enter and Tab add one ASCII trailing space only when the replaced token ends at the buffer end. |
+| #127 leading routed-agent suggestions | Implemented: the capable main prompt projects `@lead`, `@plot`, `@character`, and `@execution` for a cursor-active first leading token, using canonical preferred route aliases and the existing completion controls. |
 
 ## Goals and limits
 
@@ -163,6 +167,10 @@ the established insertion, deletion, cursor, Enter, Ctrl-C, and EOF behavior.
 stream-backed driver. #86 adds pure composer-line and confirmation-answer
 transitions plus a history-free semantic input route. #79 composes canonical
 grammar projection with the main transition and semantic palette projection.
+#126 makes highlighted Enter use that completion projection before submission
+and gives Enter and Tab one shared end-of-buffer spacing rule.
+#127 extends the same pure projection and palette route to the first leading
+routed-message token without changing parsing or non-main input.
 #87 adds a separate generic picker state, transition, bounded viewport, and
 dedicated history-free driver route; it does not reuse editable-line or main
 completion state. #93 consumes that route for `/settings` and adds one
@@ -222,8 +230,8 @@ through package-internal seams.
 
 | Focused control | Navigation and editing | Commit | Cancel or terminal event |
 | --- | --- | --- | --- |
-| Main one-line input | Text, Backspace/Delete, Left/Right, and Home/End edit. Up/Down navigate history only while no palette is open. Slash-prefixed input may open a palette; Tab applies its highlighted completion. | Enter, or configured VEOF with a nonempty buffer, submits the exact visible buffer to the existing parser once. | Ctrl-C, configured VEOF on an empty buffer, and physical EOF retain their established typed outcomes; no text is parsed. |
-| `SuggestionPalette` anchored to main input | Opening highlights the first eligible candidate without editing. Up/Down moves the highlight among eligible candidates without replacement; Tab applies the highlighted candidate to the applicable span. Shift-Tab has no palette action. | Enter submits the current visible buffer, never an unapplied highlighted candidate. | Escape closes the palette and restores the prefix captured before the first completion replacement. |
+| Main one-line input | Text, Backspace/Delete, Left/Right, and Home/End edit. Up/Down navigate history only while no palette is open. Slash-prefixed input or a leading routed-message token may open a palette; Tab applies its highlighted completion. | Enter submits the exact visible buffer once when no highlighted suggestion is open. Configured VEOF with a nonempty buffer submits the exact visible buffer unconditionally. | Ctrl-C, configured VEOF on an empty buffer, and physical EOF retain their established typed outcomes; no text is parsed. |
+| `SuggestionPalette` anchored to main input | Opening highlights the first eligible candidate without editing. Up/Down moves the highlight among eligible candidates without replacement; Tab applies the highlighted candidate to the applicable span. Shift-Tab has no palette action. | Enter with a highlight applies completion without submitting, closes and latches the palette dismissed, and leaves a later Enter to submit. | Escape closes the palette and restores the pre-Tab buffer and cursor snapshot when one exists. |
 | `Picker` | Up/Down changes highlight among enabled items. Highlight never selects or commits. | Enter selects and commits the highlighted enabled item. | Escape cancels. Ctrl-C and EOF leave without commit and retain the invoking API's typed semantics. |
 | Settings `Prompt` | Text and ordinary line-edit keys edit one history-free value. Completion keys have no effect. | Enter commits the exact buffer for field validation. | Escape returns to the parent without changing the pending value; Ctrl-C and EOF cancel the whole settings workflow. |
 | Line-oriented composer | Each ordinary line appends exact content. Up/Down, Tab, Shift-Tab, and Escape are no-ops; no full-screen editing or command-history traversal is introduced. | `/send` commits the exact LF-joined content when nonblank. | `/cancel`, Ctrl-C, and EOF preserve established discard outcomes and counts. |
@@ -324,47 +332,71 @@ the same content.
 
 ### Main-command palette and fixed choices
 
-> **Implemented by #79:** capable main reads provide deterministic selectable
-> root, subcommand, and finite fixed-option completion without changing parser,
-> runtime, history, fallback, or public API contracts.
+> **Implemented by #79 and #127:** capable main reads provide deterministic
+> selectable root, subcommand, finite fixed-option, and leading routed-agent
+> completion without changing parser, runtime, history, fallback, or public API
+> contracts.
 
 A leading slash automatically opens `SuggestionPalette` at a recognized
 grammar position. Root candidates are the 21 main-available command tokens in
 registry order. Help offers those 21 plus `/compose`, `/send`, and `/cancel`;
-agent-valued positions expose the four preferred prompt aliases—`lead`, `plot`,
-`character`, and `execution`—in route order. The parser continues to accept all
-ten declared route aliases. Other implemented finite positions expose their
-static subcommands or options. Runtime values such as session, conversation,
-debate, query, prompt, subject, and file-path text are never candidates.
-Fixed-only positions retain an open empty palette when a prefix has no match;
-mixed fixed/free positions close the palette for a free-value slot.
+agent-valued slash positions expose the four preferred prompt aliases `lead`,
+`plot`, `character`, and `execution` in route order. Other implemented finite
+positions expose their static subcommands or options. Runtime values such as
+session, conversation, debate, query, prompt, subject, and file-path text are
+never candidates. Fixed-only positions retain an open empty palette when a
+prefix has no match; mixed fixed/free positions close the palette for a
+free-value slot.
+
+A first token beginning with `@` projects the full candidates `@lead`, `@plot`,
+`@character`, and `@execution`. Their order and preferred values derive from
+each `AGENT_ROUTES` entry's `prompt_alias`; all other existing route aliases
+remain valid parser input but are not suggested. Matching is exact and
+case-sensitive. Projection is available only while that first leading token is
+cursor-active. A non-leading `@`, the routed-message body, and `@` text in slash
+message input project no routed-agent palette.
 
 Candidate and active-token matching are exact and case-sensitive. ASCII space
 and tab alone delimit the cursor-aware replacement span. Completion replaces
 the full active token, including its suffix when the cursor is in the middle,
-and inserts no whitespace. Help accepts a bare active token for slash-prefixed
-replacement, so `/help ru` may complete to `/help /run`. Filtering, opening,
-empty results, highlight, replacement, and dismissal are deterministic pure
-transitions.
+then adds exactly one ASCII trailing space only when that token ends at the
+buffer end. An existing space/tab delimiter and all text after the token remain
+exact. Help accepts a bare active token for slash-prefixed replacement, so
+`/help ru` may complete to `/help /run`. Filtering, opening, empty results,
+highlight, replacement, and dismissal are deterministic pure transitions.
 
 Opening the palette highlights the first eligible candidate deterministically
 without changing the editable buffer. While the palette is open, Up and Down
 move the highlight among eligible candidates and clamp at the first and last
 candidate; they do not replace text or traverse history. Tab applies the
-highlighted candidate by replacing the applicable buffer span. Shift-Tab does
-not navigate or apply the palette. Applying a highlighted candidate is
-completion only, not parser or runtime commit. Tab is a no-op for an empty
-palette, a palette without a highlight, or an already exact replacement. The
-first changing Tab retains the full pre-completion buffer and cursor snapshot;
-edits within the same grammar position keep that snapshot, while a grammar
-position change resets it. Escape restores the retained snapshot when one
-exists, closes the palette, and latches that exact line state so it stays
-dismissed until an edit or history change. Without a snapshot it leaves the
-current buffer unchanged. Enter always commits the visible buffer through the
-existing parser once and never implicitly applies an unapplied highlighted
-candidate. When the palette is closed, Up/Down resume older/newer history
+highlighted candidate by replacing the applicable buffer span and applying the
+shared spacing rule. Shift-Tab does not navigate or apply the palette. Tab is
+completion only, not parser or runtime commit, and is a no-op for an empty
+palette, a palette without a highlight, or when replacement and spacing leave
+the line unchanged. The first changing Tab retains the full pre-completion
+buffer and cursor snapshot; edits within the same grammar position keep that
+snapshot, while a grammar position change resets it. Escape restores the
+retained snapshot when one exists, closes the palette, and latches that exact
+line state so it stays dismissed until an edit or history change. Without a
+snapshot it leaves the current buffer unchanged.
+
+Enter with a highlighted candidate applies the same replacement and spacing as
+Tab without parser or runtime commit, closes the palette, and latches the
+completed line dismissed. The next Enter therefore submits that exact visible
+buffer. When no highlighted candidate is open, Enter submits the exact visible
+buffer through the existing parser once. Configured VEOF with a nonempty buffer
+submits that exact visible buffer unconditionally, including while a candidate
+is highlighted. When the palette is closed, Up/Down resume older/newer history
 traversal. Recalled text remains editable and may reopen a palette based on its
-current buffer.
+current buffer. Ordinary-line fallback and all other prompt contexts retain
+their established behavior.
+
+The routed-agent palette uses these same completion controls and spacing rules.
+Enter or Tab completes a highlight; Enter completion does not submit, so the
+user enters the routed-message body and then presses Enter to submit. A route
+without a nonblank message remains a parser error. Ordinary-line fallback,
+settings, composition, confirmation, subjects, and other non-main prompts
+receive no routed-agent palette.
 
 Fixed command arguments are palette candidates only when the existing grammar
 exposes a finite canonical set. They do not add parser rules, authorization,
