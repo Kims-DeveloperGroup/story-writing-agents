@@ -2087,6 +2087,78 @@ print(
             )
         self.assertFalse(self.provider_log.exists())
 
+    def test_session_open_picker_selects_persisted_session_and_restores_terminal(
+        self,
+    ) -> None:
+        """Move from the highlighted attachment to another persisted session."""
+
+        self._seed_default_session()
+        backend = AgentBackend(
+            self.workspace,
+            executable=str(self.fake_executable),
+        )
+        try:
+            backend.create_session_with_access("beta")
+        finally:
+            backend.close()
+        for session_id, updated_at in (
+            ("alpha", "2099-01-01T00:00:00+00:00"),
+            ("beta", "2099-01-02T00:00:00+00:00"),
+        ):
+            manifest = self.workspace.read_json(
+                f"{_SESSION_DIRECTORY}/{session_id}.json"
+            )
+            manifest["updated_at"] = updated_at
+            self.workspace.write_json(
+                f"{_SESSION_DIRECTORY}/{session_id}.json",
+                manifest,
+            )
+
+        process = self._spawn_cli(
+            (),
+            environment_overrides={"TERM": "xterm-256color"},
+        )
+        process.wait_for_text("story[alpha:lead]> ")
+        mark = process.output_mark()
+        process.send_line("/session open")
+        process.send_text("\n")
+        opened = process.wait_for_text(
+            "Open story session [focused] [open] >",
+            after=mark,
+        )
+        self.assertLess(
+            opened.index("[available] beta"),
+            opened.index("[highlighted] alpha"),
+        )
+        self.assertIn("[highlighted] alpha", opened)
+        self.assertIn("Durable: ready; access: held_here", opened)
+
+        process.send_text("\x1b[A\n")
+        process.wait_for_text("Session: beta (opened)", after=mark)
+        process.wait_for_text("story[beta:lead]> ", after=mark)
+        process.send_line("/quit")
+        process.send_text("\n")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+
+        self.assertEqual(load_cli_context(self.workspace).default_session_id, "beta")
+        for session_id in ("alpha", "beta"):
+            self.assertEqual(
+                self.workspace.read_json(
+                    f"{_SESSION_DIRECTORY}/{session_id}.json"
+                )["durable_state"],
+                "ready",
+            )
+            self.assertFalse(
+                self.workspace.path(
+                    f"{_SESSION_DIRECTORY}/{session_id}.access.json"
+                ).exists()
+            )
+        self.assertFalse(self.provider_log.exists())
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
     def test_history_search_transcript_and_cited_retrieval_stay_scoped(
         self,
     ) -> None:
