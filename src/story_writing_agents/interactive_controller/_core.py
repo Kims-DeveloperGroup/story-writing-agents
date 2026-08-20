@@ -814,19 +814,86 @@ class InteractiveController:
     def _open_default_or_named_session(
         self,
         requested_session: str | None,
-    ) -> None:
-        """Open an explicit or default session without creating missing state."""
+    ) -> bool:
+        """Open an explicit session or select one persisted session to open.
 
-        session_id = (
-            requested_session
-            if requested_session is not None
-            else self._context.default_session_id
-        )
-        if session_id is None:
-            self._terminal.write_error(
-                InteractiveError(InteractiveErrorCode.SESSION_NOT_FOUND)
+        Explicit identity preserves the established direct transition. An
+        omitted identity reads the canonical lifecycle order into the generic
+        picker; cancellation is mutation-free and EOF requests normal lobby
+        cleanup. The committed identity is not trusted as lifecycle state and
+        is freshly validated by ``_open_known_session``.
+        """
+
+        if requested_session is not None:
+            if requested_session == self._attached_session_id:
+                self._write_notice(
+                    f"Already attached to {requested_session}.",
+                    label="session",
+                    role=SemanticRole.SUCCESS,
+                    state=ViewState.COMPLETED,
+                )
+                return False
+            self._open_known_session(requested_session)
+            return False
+
+        try:
+            states = self._validated_story_session_lifecycles()
+        except Exception as exc:
+            self._present_session_failure(
+                exc,
+                self._context.default_session_id,
             )
-            return
+            return False
+        if not states:
+            self._write_notice(
+                "No story sessions found.",
+                label="session",
+                role=SemanticRole.MUTED,
+                state=ViewState.EMPTY,
+            )
+            return False
+
+        session_ids = tuple(state.session_id for state in states)
+        highlighted_id = self._attached_session_id
+        if highlighted_id not in session_ids:
+            highlighted_id = self._context.default_session_id
+        if highlighted_id not in session_ids:
+            highlighted_id = None
+        outcome = self._picker_input.read_picker(
+            Prompt(
+                "Open story session",
+                instruction="Choose a persisted session to open.",
+            ),
+            tuple(
+                Choice(
+                    state.session_id,
+                    state.session_id,
+                    description=(
+                        f"Durable: {state.durable_state.value}; "
+                        f"access: {state.access_state.value}"
+                    ),
+                )
+                for state in states
+            ),
+            highlighted_id=highlighted_id,
+        )
+        if outcome.kind is ControlOutcomeKind.EOF:
+            return True
+        if outcome.kind in {
+            ControlOutcomeKind.CANCEL,
+            ControlOutcomeKind.INTERRUPT,
+        }:
+            self._write_session_open_cancelled_status()
+            return False
+        if (
+            outcome.kind is not ControlOutcomeKind.COMMIT
+            or outcome.text is None
+            or outcome.text not in session_ids
+        ):
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            )
+        session_id = outcome.text
         if session_id == self._attached_session_id:
             self._write_notice(
                 f"Already attached to {session_id}.",
@@ -834,8 +901,9 @@ class InteractiveController:
                 role=SemanticRole.SUCCESS,
                 state=ViewState.COMPLETED,
             )
-            return
+            return False
         self._open_known_session(session_id)
+        return False
 
     def _open_known_session(self, session_id: str) -> None:
         """Run validate, pre-read, acquire/reopen, and correlated post-read."""
@@ -1194,8 +1262,7 @@ class InteractiveController:
             self._create_and_attach_destination(action.argument)
             return False
         if action.kind is ActionKind.SESSION_OPEN:
-            self._open_default_or_named_session(action.argument)
-            return False
+            return self._open_default_or_named_session(action.argument)
         if action.kind is ActionKind.SESSION_PAUSE:
             return self._pause_attached_session()
         if action.kind is ActionKind.QUIT:
@@ -1272,9 +1339,7 @@ class InteractiveController:
                 )
                 return False
             if action.kind is ActionKind.CONVERSATION_USE:
-                assert action.argument is not None
-                self._focus_subject_conversation(action.argument)
-                return False
+                return self._focus_subject_conversation(action.argument)
             if action.kind is ActionKind.CONVERSATION_SUBJECT:
                 assert action.argument is not None
                 self._rename_focused_conversation(action.argument)
@@ -3870,17 +3935,98 @@ class InteractiveController:
                 total_count=total_count,
             )
 
-    def _focus_subject_conversation(self, reference: str) -> None:
-        """Resolve, save, and focus one active conversation without rerouting.
+    def _focus_subject_conversation(self, reference: str | None) -> bool:
+        """Select or resolve, save, and focus one active conversation.
 
-        Exact IDs win over case-sensitive prefixes of at least twelve
-        characters. Resolution includes archived records, which receive a
-        typed rejection. Default persistence completes before in-memory focus
-        and presentation change.
+        An omitted reference presents active rows in catalog order. Picker
+        cancellation is mutation-free and EOF requests normal controller
+        cleanup. The committed full identity then follows the same fresh
+        resolution used by explicit exact IDs and accepted unique prefixes.
+        Resolution includes archived records, which receive a typed rejection.
+        Default persistence completes before in-memory focus and presentation
+        change, and agent routing remains untouched.
         """
 
         session_id = self._attached_session_id
         assert session_id is not None
+        if reference is None:
+            try:
+                entries = self._catalog_entries(session_id)
+                active_entries = tuple(
+                    entry
+                    for entry in entries
+                    if entry.status is ConversationStatus.ACTIVE
+                )
+            except Exception as exc:
+                self._present_conversation_failure(exc)
+                return False
+            if not active_entries:
+                self._write_notice(
+                    "No active conversations found.",
+                    label="conversation",
+                    role=SemanticRole.MUTED,
+                    state=ViewState.EMPTY,
+                )
+                return False
+
+            active_ids = tuple(
+                entry.conversation_id for entry in active_entries
+            )
+            highlighted_id = (
+                None
+                if self._focused_conversation is None
+                else self._focused_conversation.conversation_id
+            )
+            if highlighted_id not in active_ids:
+                try:
+                    highlighted_id = load_default_conversation(
+                        self._workspace,
+                        session_id,
+                    )
+                except Exception as exc:
+                    self._present_conversation_failure(exc)
+                    return False
+            if highlighted_id not in active_ids:
+                highlighted_id = None
+
+            outcome = self._picker_input.read_picker(
+                Prompt(
+                    "Use conversation",
+                    instruction="Choose an active conversation to focus.",
+                ),
+                tuple(
+                    Choice(
+                        entry.conversation_id,
+                        entry.subject,
+                        description=(
+                            "Handle: "
+                            f"{visible_conversation_handle(entry, entries)}"
+                        ),
+                    )
+                    for entry in active_entries
+                ),
+                highlighted_id=highlighted_id,
+            )
+            if outcome.kind is ControlOutcomeKind.EOF:
+                return True
+            if outcome.kind in {
+                ControlOutcomeKind.CANCEL,
+                ControlOutcomeKind.INTERRUPT,
+            }:
+                self._write_conversation_cancelled_status(
+                    "Conversation focus cancelled."
+                )
+                return False
+            if (
+                outcome.kind is not ControlOutcomeKind.COMMIT
+                or outcome.text is None
+                or outcome.text not in active_ids
+            ):
+                raise _ControllerAbort(
+                    InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+                )
+            reference = outcome.text
+
         try:
             focused, entries = self._resolve_conversation_reference(
                 session_id,
@@ -3888,12 +4034,12 @@ class InteractiveController:
             )
         except Exception as exc:
             self._present_conversation_failure(exc)
-            return
+            return False
         if focused.status is ConversationStatus.ARCHIVED:
             self._terminal.write_error(
                 InteractiveError(InteractiveErrorCode.CONVERSATION_ARCHIVED)
             )
-            return
+            return False
         try:
             save_default_conversation(
                 self._workspace,
@@ -3905,7 +4051,7 @@ class InteractiveController:
             self._terminal.write_error(
                 classify_conversation_failure(exc)
             )
-            return
+            return False
 
         self._focused_conversation = focused
         self._write_notice(
@@ -3918,6 +4064,7 @@ class InteractiveController:
             role=SemanticRole.SUCCESS,
             state=ViewState.COMPLETED,
         )
+        return False
 
     def _rename_focused_conversation(self, subject: str) -> None:
         """Atomically rename the focused active conversation, then update memory.
@@ -4412,21 +4559,28 @@ class InteractiveController:
             state=ViewState.CANCELLED,
         )
 
+    def _validated_story_session_lifecycles(
+        self,
+    ) -> tuple[SessionLifecycleState, ...]:
+        """Return the backend's ordered persisted lifecycles after validation."""
+
+        states = self._backend.list_session_lifecycles()
+        if type(states) is not tuple:
+            raise BackendProtocolError(
+                "backend returned an invalid lifecycle collection"
+            )
+        return tuple(
+            require_lifecycle_state(state, state.session_id)
+            if type(state) is SessionLifecycleState
+            else require_lifecycle_state(state, "invalid")
+            for state in states
+        )
+
     def _list_story_sessions(self) -> None:
         """Render canonical read-only lifecycle rows in backend order."""
 
         try:
-            states = self._backend.list_session_lifecycles()
-            if type(states) is not tuple:
-                raise BackendProtocolError(
-                    "backend returned an invalid lifecycle collection"
-                )
-            validated = tuple(
-                require_lifecycle_state(state, state.session_id)
-                if type(state) is SessionLifecycleState
-                else require_lifecycle_state(state, "invalid")
-                for state in states
-            )
+            validated = self._validated_story_session_lifecycles()
         except Exception as exc:
             self._present_session_failure(exc, self._context.default_session_id)
             return

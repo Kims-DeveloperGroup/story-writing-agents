@@ -308,7 +308,7 @@ _ACTION_FIELD_RULES: dict[
     ),
     ActionKind.CONVERSATION_USE: (
         frozenset({"argument"}),
-        frozenset({"argument"}),
+        _NO_FIELDS,
     ),
     ActionKind.CONVERSATION_SUBJECT: (
         frozenset({"argument"}),
@@ -438,7 +438,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
     CommandSpec(
         "Conversations",
         (
-            "/conversation new [SUBJECT] | list [--all] [QUERY] | use ID | "
+            "/conversation new [SUBJECT] | list [--all] [QUERY] | use [ID] | "
             "subject SUBJECT | archive [ID]"
         ),
         (),
@@ -1027,8 +1027,10 @@ def _parse_conversation(tail: str | None) -> InteractiveAction:
 
     if subcommand == "use":
         tokens = _tokens(subcommand_tail)
-        if len(tokens) != 1:
-            return _parse_error("/conversation use requires exactly one ID")
+        if len(tokens) > 1:
+            return _parse_error("/conversation use accepts at most one ID")
+        if not tokens:
+            return InteractiveAction(ActionKind.CONVERSATION_USE)
         conversation_id = tokens[0]
         if not _is_valid_token(conversation_id):
             return _parse_error(

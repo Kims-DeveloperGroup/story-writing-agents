@@ -2249,7 +2249,8 @@ class ControllerCommandTests(ControllerTestCase):
         )
         self.assertEqual(controller.run_session_lobby(), 0)
         rendered = "".join(callbacks.records)
-        self.assertIn(_error_record(InteractiveErrorCode.SESSION_NOT_FOUND), rendered)
+        self.assertIn("[session] No story sessions found.\n", rendered)
+        self.assertNotIn("Open story session", "".join(callbacks.prompts))
         self.assertIn("Session: action_session (created)\n", rendered)
         self.assertEqual(
             load_cli_context(workspace).default_session_id,
@@ -2268,6 +2269,7 @@ class ControllerCommandTests(ControllerTestCase):
         controller, _backend, callbacks = self.make_controller(
             workspace,
             "/session open",
+            "",
             "/quit",
             backend=backend,
         )
@@ -2300,6 +2302,235 @@ class ControllerCommandTests(ControllerTestCase):
         self.assertEqual(rendered.count("Session: source (opened)\n"), 1)
         self.assertIn("[session] Already attached to source.\n", rendered)
 
+    def test_omitted_open_picker_preserves_order_rows_and_default_highlight(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        for session_id, durable_state in (
+            ("alpha", SessionDurableState.READY),
+            ("beta", SessionDurableState.PAUSED),
+        ):
+            self.seed_session(
+                workspace,
+                session_id,
+                durable_state=durable_state,
+            )
+        save_default_session(workspace, "beta")
+        backend = self.make_backend(workspace)
+        lifecycles = (
+            _lifecycle("alpha"),
+            _lifecycle("beta", durable_state=SessionDurableState.PAUSED),
+        )
+        controller, _backend, callbacks = self.make_controller(
+            workspace,
+            "n",
+            "/session open",
+            "",
+            "/quit",
+            backend=backend,
+            terminal_width=120,
+        )
+        original_picker = terminal_module.InteractivePickerInput.read_picker
+
+        with (
+            mock.patch.object(
+                backend,
+                "list_session_lifecycles",
+                return_value=lifecycles,
+            ) as list_lifecycles,
+            mock.patch.object(
+                terminal_module.InteractivePickerInput,
+                "read_picker",
+                autospec=True,
+                side_effect=original_picker,
+            ) as picker,
+        ):
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        list_lifecycles.assert_called_once_with()
+        picker.assert_called_once()
+        picker_call = picker.call_args
+        self.assertEqual(
+            picker_call.args[1],
+            terminal_module.Prompt(
+                "Open story session",
+                instruction="Choose a persisted session to open.",
+            ),
+        )
+        self.assertEqual(
+            picker_call.args[2],
+            (
+                terminal_module.Choice(
+                    "alpha",
+                    "alpha",
+                    description="Durable: ready; access: claimable",
+                ),
+                terminal_module.Choice(
+                    "beta",
+                    "beta",
+                    description="Durable: paused; access: claimable",
+                ),
+            ),
+        )
+        self.assertEqual(picker_call.kwargs["highlighted_id"], "beta")
+        picker_prompt = next(
+            prompt for prompt in callbacks.prompts if "Open story session" in prompt
+        )
+        self.assertLess(picker_prompt.index("alpha"), picker_prompt.index("beta"))
+        self.assertIn("1. [available] alpha", picker_prompt)
+        self.assertIn("Durable: ready; access: claimable", picker_prompt)
+        self.assertIn("2. [highlighted] beta", picker_prompt)
+        self.assertIn("Durable: paused; access: claimable", picker_prompt)
+        self.assertEqual(
+            workspace.read_json(_manifest_relative("beta"))["durable_state"],
+            "ready",
+        )
+        self.assertIn("Session: beta (reopened)\n", "".join(callbacks.records))
+
+    def test_omitted_open_prefers_current_highlight_over_saved_default(self) -> None:
+        workspace = self.make_workspace()
+        for session_id in ("current", "saved"):
+            self.seed_session(
+                workspace,
+                session_id,
+                durable_state=SessionDurableState.READY,
+            )
+        save_default_session(workspace, "current")
+        before = _tree_snapshot(workspace.root)
+        backend = self.make_backend(workspace)
+        controller: InteractiveController
+
+        def open_with_distinct_saved_default(_prompt: str) -> str:
+            controller._context = CliContext(default_session_id="saved")
+            return "/session open"
+
+        controller, _backend, callbacks = self.make_controller(
+            workspace,
+            open_with_distinct_saved_default,
+            "/cancel",
+            "/quit",
+            backend=backend,
+        )
+        original_picker = terminal_module.InteractivePickerInput.read_picker
+        with mock.patch.object(
+            terminal_module.InteractivePickerInput,
+            "read_picker",
+            autospec=True,
+            side_effect=original_picker,
+        ) as picker:
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        picker.assert_called_once()
+        self.assertEqual(picker.call_args.kwargs["highlighted_id"], "current")
+        self.assertEqual(_tree_snapshot(workspace.root), before)
+        self.assertIn(
+            "[cancelled] Session open cancelled.\n",
+            "".join(callbacks.records),
+        )
+
+    def test_omitted_open_fallback_ordinal_selects_ready_session(self) -> None:
+        workspace = self.make_workspace()
+        for session_id in ("alpha", "beta"):
+            self.seed_session(
+                workspace,
+                session_id,
+                durable_state=SessionDurableState.READY,
+            )
+        backend = self.make_backend(workspace)
+        controller, _backend, callbacks = self.make_controller(
+            workspace,
+            "/session open",
+            "2",
+            "/quit",
+            backend=backend,
+        )
+        with mock.patch.object(
+            backend,
+            "list_session_lifecycles",
+            return_value=(_lifecycle("alpha"), _lifecycle("beta")),
+        ):
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        self.assertEqual(load_cli_context(workspace).default_session_id, "beta")
+        self.assertIn("Session: beta (opened)\n", "".join(callbacks.records))
+        self.assertFalse(workspace.path(_access_relative("beta")).exists())
+
+    def test_omitted_open_cancel_interrupt_and_eof_are_nonmutating(self) -> None:
+        cases = (
+            ("cancel", "/cancel", False),
+            ("interrupt", KeyboardInterrupt(), False),
+            ("eof", EOFError(), True),
+        )
+        for label, picker_input, exits_from_picker in cases:
+            with self.subTest(case=label):
+                workspace = self.make_workspace()
+                self.seed_session(
+                    workspace,
+                    "source",
+                    durable_state=SessionDurableState.READY,
+                )
+                save_default_session(workspace, "source")
+                before = _tree_snapshot(workspace.root)
+                reads = (
+                    ("/session open", picker_input)
+                    if exits_from_picker
+                    else ("/session open", picker_input, "/quit")
+                )
+                controller, backend, callbacks = self.make_controller(
+                    workspace,
+                    *reads,
+                )
+
+                self.assertEqual(controller.run_session_lobby(), 0)
+
+                self.assertEqual(_tree_snapshot(workspace.root), before)
+                self.assertTrue(backend._closed)
+                self.assertFalse(
+                    workspace.path(_access_relative("source")).exists()
+                )
+                rendered = "".join(callbacks.records)
+                if exits_from_picker:
+                    self.assertNotIn("Session open cancelled.", rendered)
+                    self.assertEqual(
+                        callbacks.prompts[-1].splitlines()[-1],
+                        "Open story session > ",
+                    )
+                else:
+                    self.assertIn(
+                        "[cancelled] Session open cancelled.\n",
+                        rendered,
+                    )
+
+    def test_omitted_open_stale_selection_uses_existing_missing_error_path(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        before = _tree_snapshot(workspace.root)
+        backend = self.make_backend(workspace)
+        controller, _backend, callbacks = self.make_controller(
+            workspace,
+            "/session open",
+            "",
+            "/quit",
+            backend=backend,
+            terminal_width=200,
+        )
+        with mock.patch.object(
+            backend,
+            "list_session_lifecycles",
+            return_value=(_lifecycle("stale"),),
+        ):
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        self.assertEqual(_tree_snapshot(workspace.root), before)
+        rendered = "".join(callbacks.records)
+        self.assertIn(
+            _error_record(InteractiveErrorCode.SESSION_NOT_FOUND, width=200),
+            rendered,
+        )
+        self.assertIn("Session: lobby\n", rendered)
+        self.assertFalse(workspace.path(_CONTEXT_PATH).exists())
+
     def test_declined_default_session_can_be_opened_by_omitted_command(self) -> None:
         workspace = self.make_workspace()
         self.seed_session(workspace, "saved", durable_state=SessionDurableState.PAUSED)
@@ -2308,6 +2539,7 @@ class ControllerCommandTests(ControllerTestCase):
             workspace,
             "n",
             "/session open",
+            "",
             "/quit",
         )
         self.assertEqual(controller.run_session_lobby(), 0)
@@ -4404,6 +4636,338 @@ class ControllerConversationCommandTests(ControllerTestCase):
             _UNIQUE_C,
         )
 
+    def test_omitted_use_picker_preserves_active_order_handles_and_current_highlight(
+        self,
+    ) -> None:
+        entries = (
+            _conversation_metadata(_COLLIDING_A, "Shared subject"),
+            _conversation_metadata(
+                _COLLIDING_B,
+                "Archived subject",
+                status=ConversationStatus.ARCHIVED,
+            ),
+            _conversation_metadata(_UNIQUE_C, "Shared subject"),
+        )
+        workspace: Workspace
+
+        def change_saved_default(_prompt: str) -> str:
+            save_default_conversation(workspace, "session", _UNIQUE_C)
+            return "/conversation use"
+
+        workspace, _backend, _catalog, controller, callbacks = (
+            self.prepared_controller(
+                change_saved_default,
+                "2",
+                "/quit",
+                entries=entries,
+                selected_id=_COLLIDING_A,
+            )
+        )
+        original_picker = terminal_module.InteractivePickerInput.read_picker
+        with mock.patch.object(
+            terminal_module.InteractivePickerInput,
+            "read_picker",
+            autospec=True,
+            side_effect=original_picker,
+        ) as picker:
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        picker.assert_called_once()
+        picker_call = picker.call_args
+        self.assertEqual(
+            picker_call.args[1],
+            terminal_module.Prompt(
+                "Use conversation",
+                instruction="Choose an active conversation to focus.",
+            ),
+        )
+        self.assertEqual(
+            picker_call.args[2],
+            (
+                terminal_module.Choice(
+                    _COLLIDING_A,
+                    "Shared subject",
+                    description=f"Handle: {_COLLIDING_A}",
+                ),
+                terminal_module.Choice(
+                    _UNIQUE_C,
+                    "Shared subject",
+                    description=f"Handle: {_UNIQUE_C[:12]}",
+                ),
+            ),
+        )
+        self.assertEqual(
+            picker_call.kwargs["highlighted_id"],
+            _COLLIDING_A,
+        )
+        picker_prompt = next(
+            prompt for prompt in callbacks.prompts if "Use conversation" in prompt
+        )
+        self.assertLess(
+            picker_prompt.index(f"Handle: {_COLLIDING_A}"),
+            picker_prompt.index(f"Handle: {_UNIQUE_C[:12]}"),
+        )
+        self.assertIn("1. [highlighted] Shared subject", picker_prompt)
+        self.assertIn("2. [available] Shared subject", picker_prompt)
+        self.assertNotIn("Archived subject", picker_prompt)
+        self.assertEqual(
+            load_default_conversation(workspace, "session"),
+            _UNIQUE_C,
+        )
+        self.assertIn(
+            "Current focus: c_fedcba9876 | Subject: Shared subject",
+            "".join(callbacks.records),
+        )
+
+    def test_omitted_use_blank_commits_saved_default_when_focus_is_absent(
+        self,
+    ) -> None:
+        prior = _conversation_metadata(_COLLIDING_A, "Prior")
+        saved = _conversation_metadata(_UNIQUE_C, "Saved")
+        controller: InteractiveController
+
+        def clear_current_focus(_prompt: str) -> str:
+            controller._focused_conversation = None
+            return "/conversation use"
+
+        workspace, _backend, _catalog, controller, callbacks = (
+            self.prepared_controller(
+                clear_current_focus,
+                "",
+                "/quit",
+                entries=(prior, saved),
+                selected_id=saved.conversation_id,
+            )
+        )
+        original_picker = terminal_module.InteractivePickerInput.read_picker
+        with mock.patch.object(
+            terminal_module.InteractivePickerInput,
+            "read_picker",
+            autospec=True,
+            side_effect=original_picker,
+        ) as picker:
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        picker.assert_called_once()
+        self.assertEqual(
+            picker.call_args.kwargs["highlighted_id"],
+            saved.conversation_id,
+        )
+        self.assertEqual(
+            load_default_conversation(workspace, "session"),
+            saved.conversation_id,
+        )
+        self.assertIn(
+            "Current focus: c_fedcba9876 | Subject: Saved",
+            "".join(callbacks.records),
+        )
+
+    def test_omitted_use_cancel_interrupt_and_eof_are_nonmutating(self) -> None:
+        cases = (
+            ("cancel", "/cancel", False),
+            ("interrupt", KeyboardInterrupt(), False),
+            ("eof", EOFError(), True),
+        )
+        for label, picker_input, exits_from_picker in cases:
+            with self.subTest(case=label):
+                selected = _conversation_metadata(_COLLIDING_A, "Selected")
+                other = _conversation_metadata(_UNIQUE_C, "Other")
+                reads = (
+                    ("/conversation use", picker_input)
+                    if exits_from_picker
+                    else ("/conversation use", picker_input, "/quit")
+                )
+                workspace, backend, catalog, controller, callbacks = (
+                    self.prepared_controller(
+                        *reads,
+                        entries=(selected, other),
+                        selected_id=selected.conversation_id,
+                    )
+                )
+                before = _tree_snapshot(workspace.root)
+                with mock.patch.object(
+                    backend,
+                    "release_session_access",
+                    wraps=backend.release_session_access,
+                ) as detach:
+                    self.assertEqual(controller.run_session_lobby(), 0)
+
+                detach.assert_called_once_with("session")
+                self.assertEqual(_tree_snapshot(workspace.root), before)
+                self.assertEqual(
+                    load_default_conversation(workspace, "session"),
+                    selected.conversation_id,
+                )
+                self.assertFalse(
+                    any(
+                        event.startswith(("create:", "rename:", "archive:"))
+                        for event in catalog.events
+                    )
+                )
+                rendered = "".join(callbacks.records)
+                if exits_from_picker:
+                    self.assertNotIn("Conversation focus cancelled.", rendered)
+                    self.assertEqual(
+                        callbacks.prompts[-1].splitlines()[-1],
+                        "Use conversation > ",
+                    )
+                else:
+                    self.assertIn(
+                        "[cancelled] Conversation focus cancelled.",
+                        rendered,
+                    )
+
+    def test_omitted_use_empty_active_catalog_does_not_open_picker(self) -> None:
+        archived = _conversation_metadata(
+            _COLLIDING_B,
+            "Archived",
+            status=ConversationStatus.ARCHIVED,
+        )
+        workspace, _backend, _catalog, controller, callbacks = (
+            self.prepared_controller(
+                "/conversation use",
+                "/quit",
+                entries=(archived,),
+            )
+        )
+        before = _tree_snapshot(workspace.root)
+        with mock.patch.object(
+            terminal_module.InteractivePickerInput,
+            "read_picker",
+        ) as picker:
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        picker.assert_not_called()
+        self.assertEqual(_tree_snapshot(workspace.root), before)
+        self.assertIn(
+            "[conversation] No active conversations found.",
+            "".join(callbacks.records),
+        )
+        self.assertEqual(
+            [prompt for prompt in callbacks.prompts if prompt.startswith("story[")],
+            ["story[session:lead]> ", "story[session:lead]> "],
+        )
+
+    def test_omitted_use_freshly_resolves_picker_commit_before_selection(
+        self,
+    ) -> None:
+        cases = (
+            ("missing", InteractiveErrorCode.CONVERSATION_NOT_FOUND),
+            ("archived", InteractiveErrorCode.CONVERSATION_ARCHIVED),
+            ("refreshed", None),
+        )
+        for change, expected_error in cases:
+            with self.subTest(change=change):
+                prior = _conversation_metadata(_COLLIDING_A, "Prior")
+                target = _conversation_metadata(_UNIQUE_C, "Snapshot subject")
+                workspace, _backend, catalog, controller, callbacks = (
+                    self.prepared_controller(
+                        "/conversation use",
+                        "/quit",
+                        entries=(prior, target),
+                        selected_id=prior.conversation_id,
+                    )
+                )
+                selection_path = workspace.path(_default_relative("session"))
+                selection_before = (
+                    selection_path.read_bytes(),
+                    selection_path.stat().st_mtime_ns,
+                )
+
+                def mutate_after_snapshot(
+                    _picker_input: object,
+                    _prompt: object,
+                    _choices: object,
+                    **_kwargs: object,
+                ) -> terminal_module.ControlOutcome:
+                    if change == "missing":
+                        catalog.entries.pop()
+                    elif change == "archived":
+                        catalog.entries[-1] = replace(
+                            catalog.entries[-1],
+                            status=ConversationStatus.ARCHIVED,
+                        )
+                    else:
+                        catalog.entries[-1] = replace(
+                            catalog.entries[-1],
+                            subject="Fresh subject",
+                        )
+                    return terminal_module.ControlOutcome(
+                        terminal_module.ControlOutcomeKind.COMMIT,
+                        text=target.conversation_id,
+                    )
+
+                with mock.patch.object(
+                    terminal_module.InteractivePickerInput,
+                    "read_picker",
+                    autospec=True,
+                    side_effect=mutate_after_snapshot,
+                ):
+                    self.assertEqual(controller.run_session_lobby(), 0)
+
+                rendered = "".join(callbacks.records)
+                if expected_error is None:
+                    self.assertEqual(
+                        load_default_conversation(workspace, "session"),
+                        target.conversation_id,
+                    )
+                    self.assertIn("Subject: Fresh subject", rendered)
+                    self.assertNotIn(
+                        "Current focus: c_fedcba9876 | Subject: Snapshot subject",
+                        rendered,
+                    )
+                else:
+                    self.assertEqual(
+                        (
+                            selection_path.read_bytes(),
+                            selection_path.stat().st_mtime_ns,
+                        ),
+                        selection_before,
+                    )
+                    self.assertIn(
+                        _error_record(expected_error, width=200),
+                        rendered,
+                    )
+                    self.assertGreaterEqual(rendered.count("Subject: Prior"), 2)
+
+    def test_omitted_use_selection_write_failure_preserves_prior_choice(
+        self,
+    ) -> None:
+        prior = _conversation_metadata(_COLLIDING_A, "Prior")
+        target = _conversation_metadata(_UNIQUE_C, "Target")
+        workspace, _backend, _catalog, controller, callbacks = (
+            self.prepared_controller(
+                "/conversation use",
+                "2",
+                "/quit",
+                entries=(prior, target),
+                selected_id=prior.conversation_id,
+            )
+        )
+        selection_path = workspace.path(_default_relative("session"))
+        selection_before = (
+            selection_path.read_bytes(),
+            selection_path.stat().st_mtime_ns,
+        )
+        with mock.patch.object(
+            controller_core_module,
+            "save_default_conversation",
+            side_effect=OSError("selection-secret"),
+        ):
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        self.assertEqual(
+            (selection_path.read_bytes(), selection_path.stat().st_mtime_ns),
+            selection_before,
+        )
+        rendered = "".join(callbacks.records)
+        self.assertIn(
+            _error_record(InteractiveErrorCode.WORKSPACE_INVALID, width=200),
+            rendered,
+        )
+        self.assertGreaterEqual(rendered.count("Subject: Prior"), 2)
+        self.assertNotIn("selection-secret", rendered)
+
     def test_use_selection_write_failure_preserves_prior_effective_choice(
         self,
     ) -> None:
@@ -5105,6 +5669,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
                 "/session pause",
                 "yes",
                 "/session open",
+                "",
                 "/quit",
                 entries=(selected,),
                 selected_id=selected.conversation_id,

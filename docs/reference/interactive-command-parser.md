@@ -57,7 +57,7 @@ only the four preferred prompt aliases—`lead`, `plot`, `character`, and
 | Agents | `/to NAME`; `/agents`; `/language LANG`; `/persona AGENT NAME`; `/reset`; `/settings` |
 | Consensus | `/run [PROMPT] \| /run --fresh PROMPT`; `/draft-file PATH` |
 | Sessions | `/session list \| create NAME \| open [NAME] \| pause` |
-| Conversations | `/conversation new [SUBJECT] \| list [--all] [QUERY] \| use ID \| subject SUBJECT \| archive [ID]` |
+| Conversations | `/conversation new [SUBJECT] \| list [--all] [QUERY] \| use [ID] \| subject SUBJECT \| archive [ID]` |
 | Inspection | `/search QUERY`; `/transcript ID [COUNT] [--from SEQUENCE]`; `/inspect [DEBATE\|last]`; `/history [COUNT]`; `/status`; `/help [COMMAND]` |
 | Exit | `/quit` |
 
@@ -149,8 +149,11 @@ concerns.
 ## Other grammar and failures
 
 Conversation `new` and `subject` preserve their remainder. `list [--all]
-[QUERY]`, `use ID`, and `archive [ID]` follow the
-[catalog contract](conversation-catalog.md).
+[QUERY]`, `use [ID]`, and `archive [ID]` follow the
+[catalog contract](conversation-catalog.md). Omitted `use` returns a
+`conversation_use` action without an argument, and the controller opens the
+active-conversation picker. A supplied control-free `ID` remains direct; the
+controller resolves an exact full ID or accepted case-sensitive unique prefix.
 
 `/to` and `/agent` return `set_target`; `@ALIAS TEXT` returns
 `routed_message`; `/say TEXT` returns `message`. The parser does not enforce

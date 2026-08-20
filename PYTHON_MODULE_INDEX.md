@@ -504,8 +504,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   by the additive `SETTINGS` action and the same help/completion grammar.
   Story-session parsing recognizes exactly
   `/session create NAME`, `/session open [NAME]`, `/session pause`, and
-  `/session list`, with no old lifecycle verbs or aliases. The package facade
-  does not re-export the route metadata.
+  `/session list`, with no old lifecycle verbs or aliases. Conversation
+  selection recognizes exactly `/conversation use [ID]`: omission produces a
+  `CONVERSATION_USE` action without an argument for controller-owned picker
+  selection, while an included identity remains the action argument. The
+  package facade does not re-export the route metadata.
 - **Direct internal dependencies:** `agents`.
 - **State, resources, and side effects:** Immutable command and agent-route
   metadata only. Completion projection is pure and call-local; the module owns
@@ -515,7 +518,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Primary verification/documentation:** `tests/test_interactive_commands.py`,
   `tests/test_interactive_terminal_completion.py`,
   `tests/test_public_api_and_cli.py`, and
-  `docs/reference/interactive-command-parser.md`.
+  `docs/reference/interactive-command-parser.md`, `docs/reference/cli.md`, and
+  `docs/guides/story-sessions.md`.
 
 ### `story_writing_agents.interactive_controller`
 
@@ -578,9 +582,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   wrap exactly the runtime awaitables instead of emitting persistent routing
   and waiting notices; the controller owns no indicator glyph, cursor control,
   or animation task. It also retains the facade's resource-free committed-main
-  cleanup, picker, and cancellable-prompt adapters for the call-local settings
-  flow. Only a parsed `/settings` action consumes the correlated cleanup before
-  dispatch; the controller owns no cursor sequence or terminal geometry.
+  cleanup, generic picker, and cancellable-prompt adapters. Omitted
+  `/session open` and `/conversation use` consume the picker for
+  controller-owned selection, while settings consumes picker and prompt
+  adapters for its call-local edit flow. Only a parsed `/settings` action
+  consumes the correlated cleanup before dispatch; the controller owns no
+  cursor sequence or terminal geometry.
   Retrieval results and persisted `agent_reply`
   history/transcript rows use the facade's pure `format_agent_reply_content`
   projection and agent semantic role without changing the stored event or
@@ -695,9 +702,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   transcript-read integration, and `tests/test_interactive_pty.py` for primary
   process-level POSIX PTY lifecycle verification;
   `docs/design/session-lifecycle.md`,
-  `docs/reference/cli.md`, `docs/reference/interactive-terminal.md`, and
+  `docs/guides/story-sessions.md`, `docs/reference/cli.md`,
+  `docs/reference/interactive-terminal.md`, and
   `docs/reference/conversation-retrieval.md` verify the current collaborator,
-  lifecycle, and retrieval-presentation contracts.
+  lifecycle, selection, and retrieval-presentation contracts.
 
 ### `story_writing_agents.interactive_controller._session_policy`
 
@@ -1550,8 +1558,10 @@ every intermediate arrow. The current runtime graph is acyclic.
 - `interactive_controller` is the stable one-class import boundary and owns no
   shell state or resource. Its `_core` owns interactive shell action mapping,
   current in-memory attachment, current-focus conversation and sticky-target state,
-  the resource-free facade-only settings cleanup/picker/prompt interaction and
-  its call-local pending candidate and confirmation diff,
+  resource-free facade-only generic picker interaction for settings, omitted
+  `/session open`, and omitted `/conversation use`; settings-only committed-main
+  cleanup and cancellable-prompt interaction; and the settings flow's call-local
+  pending candidate and confirmation diff,
   process-local per-session latest accepted STARTED debate IDs, transition and
   compensation ordering, retained runtime and memory-service wiring, one
   private lifecycle `asyncio.Runner`, controller-local interruption/progress
