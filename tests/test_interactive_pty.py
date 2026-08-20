@@ -2644,6 +2644,7 @@ asyncio.run(main())
         mark = process.output_mark()
         process.send_line("/run cancel consensus")
         process.wait_for_text("Started prompt consensus.", after=mark)
+        process.wait_for_text("◐", after=mark)
 
         def is_blocked_consensus_draft(record: dict[str, Any]) -> bool:
             """Identify the blocked execution draft for the cancellation run."""

@@ -448,6 +448,7 @@ class InteractiveTerminal:
         "_picker_read",
         "_prompt_read",
         "_advisory_progress",
+        "_debate_progress",
         "_read_line",
         "_width",
         "_write_text",
@@ -490,6 +491,7 @@ class InteractiveTerminal:
         self._picker_read = _plain_picker_reader(read_line, write_text, width)
         self._prompt_read = _plain_prompt_reader(read_line, width)
         self._advisory_progress = _plain_advisory_progress
+        self._debate_progress = _plain_debate_progress
         self._write_text = write_text
         self._width = width
         self._capability_provider = lambda: _plain_capabilities(width)
@@ -1379,6 +1381,26 @@ class InteractiveAdvisoryProgress:
         return await self._run(operation)
 
 
+class InteractiveDebateProgress:
+    """Retain one terminal's package-internal consensus progress session."""
+
+    __slots__ = ("_run",)
+
+    def __init__(self, terminal: InteractiveTerminal) -> None:
+        """Bind consensus progress lifecycle without inspecting streams."""
+
+        if not isinstance(terminal, InteractiveTerminal):
+            raise TypeError("terminal must be an InteractiveTerminal")
+        self._run: Callable[[Awaitable[object]], Awaitable[object]] = (
+            terminal._debate_progress
+        )
+
+    async def run(self, operation: Awaitable[object]) -> object:
+        """Join one consensus operation with the terminal-owned indicator."""
+
+        return await self._run(operation)
+
+
 def build_contextual_terminal(
     read_line: Callable[[str], str],
     write_text: Callable[[str], None],
@@ -1473,6 +1495,12 @@ def _plain_prompt_reader(
 
 async def _plain_advisory_progress(operation: Awaitable[object]) -> object:
     """Keep callback and non-TTY advisory execution visually silent."""
+
+    return await operation
+
+
+async def _plain_debate_progress(operation: Awaitable[object]) -> object:
+    """Keep callback and non-TTY consensus execution visually silent."""
 
     return await operation
 
@@ -1654,7 +1682,14 @@ def build_stream_terminal(
             render_advisory_progress_frame,
         )
 
+    async def run_debate_progress(operation):
+        return await driver.run_advisory_progress(
+            operation,
+            render_advisory_progress_frame,
+        )
+
     terminal._advisory_progress = run_advisory_progress
+    terminal._debate_progress = run_debate_progress
     terminal._capability_provider = driver.capabilities
     return terminal
 
