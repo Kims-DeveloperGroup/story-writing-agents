@@ -252,6 +252,16 @@ def transition_main_command_input(
             overlay_open=False,
         )
         return MainCommandControlState(main_input, dismissal_latch=restored), None
+    if (
+        event.kind is KeyKind.ENTER
+        and state.palette is not None
+        and state.palette.highlighted is not None
+    ):
+        return _apply_main_command_completion(
+            state,
+            completion_provider,
+            dismiss_palette=True,
+        ), None
     if event.kind is KeyKind.TAB:
         return _apply_main_command_completion(
             state,
@@ -769,8 +779,10 @@ def _apply_main_command_completion(
     completion_provider: Callable[
         [str, int], CommandCompletionProjection | None
     ],
+    *,
+    dismiss_palette: bool = False,
 ) -> MainCommandControlState:
-    """Apply the current highlight and retain the cycle's first undo point."""
+    """Apply the current highlight, optionally dismissing the completed palette."""
 
     palette = state.palette
     if palette is None or palette.highlighted is None:
@@ -778,27 +790,31 @@ def _apply_main_command_completion(
     line = state.main_input.line_state
     projection = palette.projection
     replacement = palette.highlighted.replacement
-    if (
-        line.buffer[projection.start : projection.end] == replacement
-        and line.cursor == projection.end
-    ):
-        return state
-
+    trailing_space = " " if projection.end == len(line.buffer) else ""
     replaced = LineInputState(
         "".join(
             (
                 line.buffer[: projection.start],
                 replacement,
+                trailing_space,
                 line.buffer[projection.end :],
             )
         ),
-        projection.start + len(replacement),
+        projection.start + len(replacement) + len(trailing_space),
     )
+    if replaced == line and not dismiss_palette:
+        return state
+
     closed_main = _main_input_with_line(
         state.main_input,
         replaced,
         overlay_open=False,
     )
+    if dismiss_palette:
+        return MainCommandControlState(
+            closed_main,
+            dismissal_latch=replaced,
+        )
     snapshot = line if palette.snapshot is None else palette.snapshot
     return _project_main_command_state(
         closed_main,
