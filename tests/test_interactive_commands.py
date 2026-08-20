@@ -1101,6 +1101,7 @@ class InvalidInputTests(ParserAssertions, unittest.TestCase):
             "/say\t\t",
             "@plot",
             "@plot   ",
+            "@plot\t\t",
             "/draft-file",
             "/draft-file\t\t",
             "/run --fresh",
@@ -1551,6 +1552,12 @@ class CommandCompletionProjectionTests(unittest.TestCase):
         "character",
         "execution",
     )
+    MENTIONS = (
+        "@lead",
+        "@plot",
+        "@character",
+        "@execution",
+    )
 
     def test_context_model_is_exact_frozen_slotted_picklable_and_internal(self) -> None:
         self.assertEqual(
@@ -1570,6 +1577,7 @@ class CommandCompletionProjectionTests(unittest.TestCase):
     def test_exact_ordered_fixed_grammar_positions(self) -> None:
         cases = (
             ("/", 1, "root.command", 0, 1, self.ROOT),
+            ("@", 1, "routed.agent", 0, 1, self.MENTIONS),
             (
                 "/session ",
                 9,
@@ -1614,6 +1622,8 @@ class CommandCompletionProjectionTests(unittest.TestCase):
     def test_complete_token_spans_include_suffix_at_and_after_delimiters(self) -> None:
         cases = (
             ("/session list", 9, "session.subcommand", 9, 13),
+            ("@plot message", 3, "routed.agent", 0, 5),
+            ("@plot\tmessage", 5, "routed.agent", 0, 5),
             ("/help run", 6, "help.command", 6, 9),
             ("/to plot_architect", 6, "target.agent", 4, 18),
             ("/persona character_custodian", 12, "persona.agent", 9, 28),
@@ -1636,6 +1646,14 @@ class CommandCompletionProjectionTests(unittest.TestCase):
                 )
 
         fixed_cases = (
+            (
+                "@plot message",
+                (1, 3, 5),
+                "routed.agent",
+                0,
+                5,
+                self.MENTIONS,
+            ),
             ("/run --fresh", (5, 8, 12), "run.flag", 5, 12, ("--fresh",)),
             (
                 "/conversation list --all",
@@ -1680,6 +1698,9 @@ class CommandCompletionProjectionTests(unittest.TestCase):
     def test_dynamic_and_invalid_grammar_positions_have_no_projection(self) -> None:
         cases = (
             ("", 0), ("ordinary", 3), (" /", 2), ("/say ", 5),
+            ("@plot ", 6), ("@plot message", 6),
+            ("@plot message", 13), ("message @pl", 11),
+            ("@plot @pl", 9), ("/say @pl", 8),
             ("/to plot ", 9), ("/persona plot ", 14),
             ("/conversation use ", 18), ("/transcript --from ", 19),
             ("/transcript c nope ", 19), ("/transcript c 0 ", 16),
@@ -1707,6 +1728,7 @@ class CommandCompletionProjectionTests(unittest.TestCase):
     ) -> None:
         for buffer, cursor, position, replacements in (
             ("/s", 2, "root.command", self.ROOT),
+            ("@pl", 3, "routed.agent", self.MENTIONS),
             (
                 "/session cr",
                 11,

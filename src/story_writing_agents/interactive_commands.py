@@ -550,7 +550,7 @@ def project_command_completion(
     buffer: str,
     cursor: int,
 ) -> CommandCompletionContext | None:
-    """Project the fixed command grammar active at one exact cursor boundary.
+    """Project fixed command or leading-route grammar at one cursor boundary.
 
     The result contains grammar-owned ordered literals and the complete active
     token span. It performs no parsing, fuzzy matching, catalog lookup, I/O, or
@@ -564,10 +564,20 @@ def project_command_completion(
         raise TypeError("cursor must be an integer")
     if cursor < 0 or cursor > len(buffer):
         raise ValueError("cursor must identify a buffer boundary")
-    if not buffer.startswith("/"):
+    if not buffer.startswith(("/", "@")):
         return None
 
     start, end = _completion_token_span(buffer, cursor)
+    if buffer.startswith("@"):
+        if start != 0:
+            return None
+        return _completion_context(
+            "routed.agent",
+            start,
+            end,
+            tuple(f"@{alias}" for alias in _agent_completion_replacements()),
+        )
+
     active_token = buffer[start:end]
     preceding = _completion_preceding_tokens(buffer, start)
 
