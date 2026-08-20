@@ -132,10 +132,17 @@ system defaults. Settings pickers and prompts use a transient lifecycle:
 capable streams clear their transient rows before returning, while fallback
 readers omit duplicate synthetic final picker frames. Nested Escape returns to
 the parent silently without a Current/Pending snapshot or cancellation record.
-The controller emits one complete Current/Pending snapshot immediately before
-each Save attempt or whole-flow cancellation. Top-level Escape, Cancel, Ctrl-C,
-or EOF cancels the whole workflow without writing. `/cancel` is literal model
-text in the free-text prompt.
+Save and Cancel each open a transient yes/no confirmation with a changed-only
+Current/Pending context: only differing fields appear in both sections, each
+with a `(Changed)` cue, while no differences show `No pending settings changes.`
+`yes`/`y` commits the requested action; `no`/`n`, blank, or nested Escape
+returns to the settings picker, and invalid confirmation input retries. Top-
+level Escape, Ctrl-C, or EOF cancels the whole workflow without writing;
+on a capable raw terminal, entering `/settings` clears only its correlated
+committed display rows and never deletes the history entry. Callback and
+ordinary-line fallback paths leave committed input visible rather than claiming
+cursor cleanup, with history unchanged. `/cancel` is literal model text in the
+free-text prompt.
 
 Save validates the complete pending pair, then rejects any exact-byte change to
 either configuration document or any persona-catalog change since opening.

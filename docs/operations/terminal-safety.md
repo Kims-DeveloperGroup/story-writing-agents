@@ -255,6 +255,13 @@ restoration; restoration uncertainty is fatal `internal_error`. See the exact
 [composition](../reference/interactive-terminal.md#composition-live-suggestions)
 tokens.
 
+When that committed live action is `/settings`, the controller then consumes
+the correlated display token once and clears only the committed rows before
+opening settings. This never deletes or rewrites the already appended main
+history entry. Callback and ordinary-line fallback cannot erase prior rows, so
+the committed line remains visible and the fallback makes no false cleanup
+claim; history behavior is unchanged.
+
 Main palette projection, filtering, highlight, replacement, snapshot restore,
 and dismissal call no parser, story provider, runtime, filesystem, persistence,
 subprocess, storage, or network. They change only call-local editor/terminal
@@ -279,10 +286,13 @@ input is added to main history or command completion. Settings alone opts into
 transient picker/prompt reads: capable streams clear the transient rows before
 returning, callback and line fallback cannot erase and therefore omit duplicate
 synthetic picker final frames, and nested Escape returns silently without a
-snapshot or cancellation record. The controller emits one complete
-Current/Pending snapshot immediately before each Save attempt or whole-flow
-cancellation. The default non-settings picker/prompt lifecycle remains
-unchanged.
+snapshot or cancellation record. Save and Cancel each open a transient yes/no
+confirmation. Its context shows only changed Current/Pending fields, marks
+each displayed value `(Changed)`, and shows `No pending settings changes.` when
+there is no diff. `yes`/`y` commits the requested action; `no`/`n`, blank, or
+nested Escape returns to the settings picker; invalid input retries with a
+trusted notice. Top-level cancellation does not claim a snapshot that was not
+rendered. The default non-settings picker/prompt lifecycle remains unchanged.
 
 Capable main reads render the existing semantic `SuggestionPalette` in plain or
 fixed ANSI at the active width. `NO_COLOR` removes only decoration. Opening
