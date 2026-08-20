@@ -278,8 +278,8 @@ read uses the trusted fixed-theme projection and keeps its renderer, buffer,
 cursor, and preview state call-local. Confirmation supplies no suggestions.
 
 `/settings` uses the same renderer and sole driver for one top-level or nested
-picker at a time and for history-free text/numeric prompts with the current
-settings panel as context. Picker Escape returns from a nested editor or
+picker at a time and for context-free history-free text/numeric prompts. Picker
+Escape returns from a nested editor or
 cancels at top level according to controller-owned focus. Prompt Escape returns
 from the nested editor; Ctrl-C and EOF cancel the whole workflow. No settings
 input is added to main history or command completion. Settings alone opts into

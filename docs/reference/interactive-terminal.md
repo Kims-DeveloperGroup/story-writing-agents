@@ -259,12 +259,12 @@ bounded viewport at the current observed width; plain callback, non-TTY,
 complete numbered list through the ordinary line callback. Opaque choice
 identities are control state and are never rendered.
 
-Settings free-text and numeric values use a separate semantic `Prompt` with the
-current Settings panel as context. That route is history- and
-completion-free. Enter commits the exact line, Escape cancels only the nested
-editor, and Ctrl-C or EOF cancels the whole settings workflow. In fallback an
-exact ESC line cancels, while `/cancel` remains literal input. The same sole
-driver owns raw input, redraw, cleanup, and restoration.
+Settings free-text and numeric values use a separate context-free semantic
+`Prompt`. That route is history- and completion-free. Enter commits the exact
+line, Escape cancels only the nested editor, and Ctrl-C or EOF cancels the whole
+settings workflow. In fallback an exact ESC line cancels, while `/cancel`
+remains literal input. The same sole driver owns raw input, redraw, cleanup,
+and restoration.
 
 When a capable raw main read commits `/settings`, the controller consumes one
 correlated committed-display token and clears only those live rows before
