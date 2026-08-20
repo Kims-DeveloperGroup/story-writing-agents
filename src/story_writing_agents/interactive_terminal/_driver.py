@@ -66,6 +66,13 @@ class _LiveEditorState:
 
 
 @dataclass(frozen=True, slots=True)
+class _CommittedMainDisplay:
+    """Correlate one live main submission with its committed screen rows."""
+
+    row_count: int
+
+
+@dataclass(frozen=True, slots=True)
 class _TerminalConfiguration:
     """Capture one validated POSIX terminal mode and its exact restoration."""
 
@@ -146,6 +153,7 @@ class RawTerminalDriver:
         "_history_state",
         "_input_stream",
         "_line_transition",
+        "_main_commit_display",
         "_main_transition",
         "_os_provider",
         "_output_stream",
@@ -191,6 +199,7 @@ class RawTerminalDriver:
         self._input_stream = input_stream
         self._output_stream = output_stream
         self._line_transition = line_transition
+        self._main_commit_display: _CommittedMainDisplay | None = None
         self._main_transition = main_transition
         self._history_append = history_append
         self._history_state = MainInputHistoryState()
@@ -545,11 +554,13 @@ class RawTerminalDriver:
                 _empty_command_completion,
             )
 
+        self._main_commit_display = None
         line = self._read_control_line(
             prompt,
             suggestion_provider,
             MainCommandControlState(),
             transition,
+            track_main_commit=True,
         )
         self._append_completed_main_history(line)
         return line
@@ -575,6 +586,7 @@ class RawTerminalDriver:
 
         capabilities = self.capabilities()
         if not capabilities.raw_mode:
+            self._main_commit_display = None
             line = self._fallback_read_line(prompt)
             self._append_completed_main_history(line)
             return line
@@ -594,6 +606,7 @@ class RawTerminalDriver:
                 completion_provider,
             )
 
+        self._main_commit_display = None
         line = self._read_control_line(
             prompt,
             _empty_suggestion_preview,
@@ -603,9 +616,29 @@ class RawTerminalDriver:
             live_capabilities=capabilities,
             palette_projector=palette_projector,
             palette_renderer=palette_renderer,
+            track_main_commit=True,
         )
         self._append_completed_main_history(line)
         return line
+
+    def clear_main_commit_display(self) -> None:
+        """Clear one correlated live main submission, at most once."""
+
+        committed = self._main_commit_display
+        self._main_commit_display = None
+        if committed is None:
+            return
+        self._write_live_text(
+            "".join(
+                (
+                    _CARRIAGE_RETURN,
+                    _CURSOR_UP * committed.row_count,
+                    _CARRIAGE_RETURN,
+                    _CLEAR_TO_END,
+                    "\n",
+                )
+            )
+        )
 
     def read_picker(
         self,
@@ -827,6 +860,7 @@ class RawTerminalDriver:
         palette_projector: _PaletteProjector | None = None,
         palette_renderer: _PaletteRenderer | None = None,
         transient: bool = False,
+        track_main_commit: bool = False,
     ) -> str:
         """Read one exact buffer through one pure logical-state transition.
 
@@ -851,6 +885,8 @@ class RawTerminalDriver:
             raise TypeError("transition must be callable")
         if type(transient) is not bool:
             raise TypeError("transient must be a bool")
+        if type(track_main_commit) is not bool:
+            raise TypeError("track_main_commit must be a bool")
         if (
             rendered_input is not None
             and type(rendered_input) is not RenderedInputFrame
@@ -914,6 +950,7 @@ class RawTerminalDriver:
         display_state = _LiveEditorState()
         line: str | None = None
         line_state: LineInputState | None = None
+        committed_rows: int | None = None
         active_failure: BaseException | None = None
         try:
             line, line_state = self._read_live_buffer(
@@ -931,7 +968,7 @@ class RawTerminalDriver:
             if transient:
                 self._clear_live_display(display_state, line_break=True)
             else:
-                self._finish_live_display(
+                committed_rows = self._finish_live_display(
                     prompt,
                     configuration.width,
                     display_state,
@@ -952,6 +989,8 @@ class RawTerminalDriver:
             raise active_failure
         assert line is not None
         assert line_state is not None
+        if track_main_commit and committed_rows is not None:
+            self._main_commit_display = _CommittedMainDisplay(committed_rows)
         return line
 
     def _read_live_buffer(
@@ -1335,7 +1374,7 @@ class RawTerminalDriver:
         display_state: _LiveEditorState,
         line_state: LineInputState,
         rendered_input: RenderedInputFrame | None,
-    ) -> None:
+    ) -> int:
         """Remove suggestions and leave the submitted prompt line visible.
 
         The exact buffer is not changed; only its sanitized width-wrapped view
@@ -1366,6 +1405,7 @@ class RawTerminalDriver:
         )
         self._write_live_text(payload)
         display_state.rendered_cursor_row = 0
+        return len(input_lines)
 
     def _clear_live_display(
         self,
