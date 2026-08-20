@@ -815,6 +815,68 @@ class RenderingFoundationTests(unittest.TestCase):
         for line in strip_decorative_sgr(ansi.text).splitlines():
             self.assertLessEqual(physical_width(line), 20)
 
+    def test_panels_have_bounded_ascii_splitters_across_profiles_and_consumers(
+        self,
+    ) -> None:
+        cases = (
+            ("Story chat", ViewState.IDLE, ("--- Story chat -----",)),
+            ("Help", ViewState.COMPLETED, ("--- Help [completed]",)),
+            (
+                "Interactive error",
+                ViewState.ERROR,
+                ("--- Interactive erro", "    r [error] ------"),
+            ),
+            (
+                "Agent saying",
+                ViewState.COMPLETED,
+                ("--- Agent saying", "    [completed] ----"),
+            ),
+            ("Settings", ViewState.OPEN, ("--- Settings [open]",)),
+            (
+                "Result",
+                ViewState.COMPLETED,
+                ("--- Result", "    [completed] ----"),
+            ),
+        )
+        for title, state, expected_heading in cases:
+            with self.subTest(title=title, state=state):
+                panel = Panel(title, (), state=state)
+                line = render_component(
+                    panel,
+                    capability(CapabilityProfile.LINE, width=20),
+                )
+                plain = render_component(
+                    panel,
+                    capability(CapabilityProfile.PLAIN, width=20),
+                )
+                ansi = render_component(
+                    panel,
+                    capability(CapabilityProfile.ANSI, width=20),
+                )
+                expected = "\n".join((*expected_heading, "-" * 20))
+                self.assertEqual(line.text, expected)
+                self.assertEqual(plain.text, expected)
+                self.assertEqual(strip_decorative_sgr(ansi.text), expected)
+                self.assertEqual(line.line_count, len(expected_heading) + 1)
+                collapsed_heading = "\n".join(expected_heading).removeprefix(
+                    "--- "
+                ).replace("\n    ", "")
+                self.assertEqual(collapsed_heading.count(title), 1)
+                if state is not ViewState.IDLE:
+                    self.assertEqual(expected.count(f"[{state.value}]"), 1)
+                self.assertTrue(
+                    all(
+                        line.isascii() and physical_width(line) <= 20
+                        for line in expected.splitlines()
+                    )
+                )
+
+        first = render_plain(Panel("First", ()), width=20).text
+        second = render_plain(Panel("Second", ()), width=20).text
+        self.assertEqual(first.splitlines()[-1], "-" * 20)
+        self.assertEqual(second.splitlines()[0], "--- Second ---------")
+        self.assertIn(f"{'-' * 20}\n--- Second", f"{first}\n{second}")
+
     def test_settings_changed_only_panel_matches_plain_ansi_and_narrow_widths(
         self,
     ) -> None:
@@ -1094,6 +1156,22 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
         self.assertEqual(len(prompts), 4)
         self.assertTrue(all("Settings [open]" in value for value in prompts))
         self.assertTrue(all("Codex model" in value for value in prompts))
+        rendered_context = render_plain(context[0], width=40).text
+        self.assertTrue(
+            all(value.startswith(f"{rendered_context}\n") for value in prompts)
+        )
+        self.assertTrue(
+            all(
+                f"{'-' * 40}\nEnter exact text." in value
+                for value in prompts
+            )
+        )
+        self.assertTrue(
+            all(
+                value.endswith("Codex model [settings] > ")
+                for value in prompts
+            )
+        )
         self.assertNotIn("\x1b[", "".join(prompts))
 
         fallback = mock.Mock(side_effect=["\x1b", "/cancel"])

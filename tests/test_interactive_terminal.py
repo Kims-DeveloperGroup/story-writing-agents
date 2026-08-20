@@ -321,13 +321,14 @@ def expected_session_orientation(
 ) -> str:
     event_word = "event" if history_count == 1 else "events"
     return (
-        "Story chat\n"
+        f"--- Story chat {'-' * 65}\n"
         "  Workspace: /stories/example\n"
         f"  Session: SESSION ({attachment.value})\n"
         f"  Target: {display_name}\n"
         f"  History: {history_count} visible room {event_word}\n"
         "  [info] Room messages are saved locally and shared with addressed agents.\n"
         "  [info] Type /help for commands; /quit releases access without pausing.\n"
+        f"{'-' * 80}\n"
     )
 
 
@@ -1242,13 +1243,14 @@ class PromptAndRenderingTests(unittest.TestCase):
         self.assertEqual(
             callbacks.records,
             [
-                "Story chat\n"
+                f"--- Story chat {'-' * 65}\n"
                 "  Workspace: /stories/example\n"
                 "  Session: lobby\n"
                 "  [warning] Provider calls are unavailable in the lobby. Use "
                 "/session create NAM\n"
                 "            E, /session open [NAME], or /session list.\n"
                 "  [info] Type /help for commands; /quit exits.\n"
+                f"{'-' * 80}\n"
             ],
         )
 
@@ -1312,11 +1314,12 @@ class PromptAndRenderingTests(unittest.TestCase):
         self.assertEqual(
             callbacks.records,
             [
-                "Story chat\n"
+                f"--- Story chat {'-' * 65}\n"
                 "  Workspace: /stories/example\n"
                 "  Session: SESSION (created)\n"
                 "  Target: Lead Orchestrator\n"
                 "  [info] Type /help for commands; /quit releases access without pausing.\n"
+                f"{'-' * 80}\n"
             ],
         )
         self.assertNotIn("History:", callbacks.records[0])
@@ -1350,15 +1353,17 @@ class PromptAndRenderingTests(unittest.TestCase):
         self.assertEqual(
             callbacks.records,
             [
-                "Conversation scope\n"
+                f"--- Conversation scope {'-' * 177}\n"
                 "  Session: SESSION\n"
                 "  Conversation: c_0123456789\n"
                 "  Subject: Opening scene\n"
-                "  Agent: plot\n",
-                "Conversation scope\n"
+                "  Agent: plot\n"
+                f"{'-' * 200}\n",
+                f"--- Conversation scope {'-' * 177}\n"
                 "  Session: SESSION\n"
                 "  Conversation: none\n"
-                "  Agent: lead\n",
+                "  Agent: lead\n"
+                f"{'-' * 200}\n",
             ],
         )
 
@@ -1372,7 +1377,7 @@ class PromptAndRenderingTests(unittest.TestCase):
         rendered = callbacks.records[0]
         self.assertIn("Subject:", rendered)
         self.assertIn("Unsafe\\x0asubject\\x1b", rendered)
-        self.assertTrue(rendered.startswith("Conversation scope\n"))
+        self.assertTrue(rendered.startswith("--- Conversation scope"))
         self.assertTrue(rendered.endswith("\n"))
         rendered.encode("utf-8", errors="strict")
 
@@ -2109,7 +2114,7 @@ class HelpAndErrorTests(unittest.TestCase):
         self.assertEqual(
             callbacks.records,
             [
-                "Help [completed]\n"
+                f"--- Help [completed] {'-' * 59}\n"
                 "  [command] [completed]\n"
                 "    Group: Agents\n"
                 "    Syntax: /to NAME\n"
@@ -2117,6 +2122,7 @@ class HelpAndErrorTests(unittest.TestCase):
                 "    Calls provider: no\n"
                 "    May write artifacts: no\n"
                 "    Example: /to plot\n"
+                f"{'-' * 80}\n"
             ],
         )
 
@@ -2131,7 +2137,7 @@ class HelpAndErrorTests(unittest.TestCase):
         self.assertEqual(
             callbacks.records,
             [
-                "Help [completed]\n"
+                f"--- Help [completed] {'-' * 11}\n"
                 " [command] [completed]\n"
                 "  Group:\n"
                 "   Consensus\n"
@@ -2146,6 +2152,7 @@ class HelpAndErrorTests(unittest.TestCase):
                 "   yes\n"
                 "  Example:\n"
                 "   /run Outline chapter one\n"
+                f"{'-' * 32}\n"
             ],
         )
         for line in callbacks.records[0].splitlines():
@@ -2191,10 +2198,11 @@ class HelpAndErrorTests(unittest.TestCase):
         self.assertEqual(
             callbacks.records,
             [
-                "Interactive error [error]\n"
+                f"--- Interactive error [error] {'-' * 970}\n"
                 "  [error internal_error] raw=<redacted> escaped=<redacted> "
                 "long=<redacted> short=<redacted>\n"
                 "  [hint] escaped-control=<redacted>\n"
+                f"{'-' * 1000}\n"
             ],
         )
 
@@ -2235,8 +2243,14 @@ class HelpAndErrorTests(unittest.TestCase):
                 hint="h" * 300,
             )
         )
-        title_line, summary_line, hint_line = callbacks.records[0].splitlines()
-        self.assertEqual(title_line, "Interactive error [error]")
+        title_line, summary_line, hint_line, bottom_line = (
+            callbacks.records[0].splitlines()
+        )
+        self.assertEqual(
+            title_line,
+            f"--- Interactive error [error] {'-' * 970}",
+        )
+        self.assertEqual(bottom_line, "-" * 1000)
         summary = summary_line.removeprefix("  [error internal_error] ")
         hint = hint_line.removeprefix("  [hint] ")
         self.assertEqual(len(summary), 512)
@@ -2255,7 +2269,7 @@ class HelpAndErrorTests(unittest.TestCase):
         self.assertEqual(
             callbacks.records,
             [
-                "Interactive error [error]\n"
+                "--- Interactive error [error]\n"
                 " [error internal_error] one two \n"
                 "                        three fo\n"
                 "                        ur five \n"
@@ -2263,6 +2277,7 @@ class HelpAndErrorTests(unittest.TestCase):
                 "                        n\n"
                 " [hint] alpha beta gamma delta e\n"
                 "        psilon\n"
+                f"{'-' * 32}\n"
             ],
         )
 

@@ -179,7 +179,8 @@ and performs no stream observation or resource acquisition.
 - retrieval progress and cited-source records; and
 - consensus progress, inspection, cancellation, and terminal summaries.
 - Consensus progress now includes phase handoff/action metadata and a dedicated
-  `Agent saying` panel when new agent messages are available for a phase.
+  semantic `Panel` titled `Agent saying` when new agent messages are available
+  for a phase.
 
 #84 uses the same foundation for:
 
@@ -297,7 +298,25 @@ not imply a snapshot was rendered.
 
 ## Current semantic plain shapes
 
-Orientation uses titled `Story chat` or `Conversation scope` panels with
+Every semantic `Panel` uses an ASCII title-bearing top splitter and a bottom
+splitter, with no side borders:
+
+```text
+--- Panel title [completed] ------------
+  PANEL CONTENT
+----------------------------------------
+```
+
+The top run fills the remaining usable width when at least four cells remain.
+At narrower widths, title and state text wrap with continuation indentation and
+the trailing top run may be omitted; the bottom splitter and content remain.
+The frame is part of the Panel's existing single render and callback write, so
+callback cardinality and committed scrollback behavior are unchanged.
+Standalone `Prompt`, `Section`, `ListView`, `Record`, `SuggestionPalette`, and
+`Picker` components retain their unframed shapes. Nested components appear
+inside a Panel's splitters without receiving their own frame.
+
+Orientation uses titled `Story chat` or `Conversation scope` `Panel` values with
 indented `Workspace`, `Session`, `Target`, optional `History`, `Conversation`,
 `Subject`, and `Agent` fields in the established order. Status and inspection
 use records headed by stable bracketed identities such as `[session]`,
@@ -337,13 +356,14 @@ uses `[run DEBATE_ID] [completed] [success]`, interrupted inspection uses
 inspection uses `[loading] [info]`, and a missing debate uses `[empty]`. These
 markers are present in plain and `NO_COLOR` output; color is redundant.
 
-Full help is one completed `Help` panel. It retains registry group order; each
-completed group section contains one completed `Commands` list whose records
-retain syntax, aliases, provider-call, and artifact-write facts. Context help is
-one completed `Help` panel containing one command record in `Group`, `Syntax`,
-`Aliases`, `Calls provider`, `May write artifacts`, `Example` order. Agent
-roster is one completed `Agents` list in canonical route order; each record
-retains display name, `ID`, `Aliases`, and `Advisory domain`.
+Full help is one completed `Panel` titled `Help`. It retains registry group
+order; each completed group section contains one completed `Commands` list
+whose records retain syntax, aliases, provider-call, and artifact-write facts.
+Context help is one completed `Panel` titled `Help` containing one command
+record in `Group`, `Syntax`, `Aliases`, `Calls provider`,
+`May write artifacts`, `Example` order. Agent roster is one completed `Agents`
+list in canonical route order; each record retains display name, `ID`,
+`Aliases`, and `Advisory domain`.
 
 Session, conversation, search, transcript, and focused-history rows use this
 positioned form, with one row per callback:
@@ -454,10 +474,10 @@ routed through the unified stream terminal's explicit composition route show
 
 Matching is an exact, case-sensitive prefix of the whole current buffer. `/`
 shows both entries, `/s` narrows to `/send`, and `/c` narrows to `/cancel`.
-Whitespace, an empty buffer, or any nonmatching text clears the panel. `/say`
-is not suggested; `/say /send` and `/say /cancel` keep their established
-literal-escape meaning and show no panel because the buffers contain
-whitespace.
+Whitespace, an empty buffer, or any nonmatching text clears the suggestion
+preview. `/say` is not suggested; `/say /send` and `/say /cancel` keep their
+established literal-escape meaning and show no preview because the buffers
+contain whitespace.
 
 This is preview only: it does not complete, replace, select, parse, or dispatch
 the buffer and does not call a story provider, runtime, filesystem, or storage.
@@ -465,7 +485,7 @@ Enter submits the unchanged buffer to the existing composition rules. The
 installed shell enters RUN composition through bare `/run`; CHAT composition
 remains a module-supported terminal operation. At the editor boundary,
 unsupported, `TERM=dumb`, non-TTY, and non-POSIX reads use ordinary line input
-with the structured plain semantic prompt once and without a suggestion panel;
+with the structured plain semantic prompt once and without a suggestion preview;
 the installed CLI's earlier dual-TTY guard still applies.
 
 Composition remains line-oriented and history-free. Up/Down, Tab, Shift-Tab,
@@ -606,12 +626,13 @@ result, hint, or context record. Attached state remains unchanged.
 
 The controller classifies 36 codes; the terminal accepts no exceptions.
 `write_error()` redacts secrets, caps summary/hint at 512/256 characters, and
-writes one semantic panel and one callback record:
+writes one semantic `Panel` and one callback record:
 
 ```text
-Interactive error [error]
+--- Interactive error [error] ---
   [error CODE] SUMMARY
   [hint] HINT
+---------------------------------
 ```
 
 It preserves the trusted code, summary, hint, order, limits, redaction, and

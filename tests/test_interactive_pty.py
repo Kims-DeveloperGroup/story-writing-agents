@@ -1053,15 +1053,16 @@ print("RESULT=" + outcome.kind.value)
             decorative_color=True,
         )
         ansi.wait_for_text("story[lobby]> ")
-        self.assertIn(b"\x1b[1mStory chat\x1b[0m", ansi.raw_bytes)
+        self.assertIn(b"\x1b[1m--- Story chat ", ansi.raw_bytes)
         self.assertIn(b"\x1b[33m  [warning]", ansi.raw_bytes)
+        self.assertIn(b"\x1b[1m--------------------------------", ansi.raw_bytes)
         self.assertIn(b"\x1b[0m", ansi.raw_bytes)
         mark = ansi.output_mark()
         ansi.send_line("/help /run")
         ansi.wait_for_text("Help [completed]", after=mark)
         ansi.wait_for_text("story[lobby]> ", after=mark)
         dense_ansi = bytes(ansi.raw_bytes[mark:])
-        self.assertIn(b"\x1b[1mHelp [completed]\x1b[0m", dense_ansi)
+        self.assertIn(b"\x1b[1m--- Help [completed] ", dense_ansi)
         self.assertIn(b"\x1b[35m  [command] [completed]", dense_ansi)
         ansi.send_line("/quit")
         self.assertEqual(ansi.wait_for_exit(), 0, ansi.normalized_text)
@@ -1075,8 +1076,8 @@ print("RESULT=" + outcome.kind.value)
             environment_overrides={"TERM": "xterm-256color"},
         )
         no_color.wait_for_text("story[lobby]> ")
-        self.assertIn("Story chat\n", no_color.normalized_text)
-        self.assertNotIn(b"\x1b[1mStory chat", no_color.raw_bytes)
+        self.assertIn("--- Story chat ", no_color.normalized_text)
+        self.assertNotIn(b"\x1b[1m--- Story chat", no_color.raw_bytes)
         self.assertNotIn(b"\x1b[33m  [warning]", no_color.raw_bytes)
         mark = no_color.output_mark()
         no_color.send_line("/agents")
@@ -1289,7 +1290,7 @@ print("RESULT=" + outcome.kind.value)
 
         process = self._spawn_cli(())
         process.wait_for_text("story[lobby]> ")
-        self.assertIn("Story chat\n", process.normalized_text)
+        self.assertIn("--- Story chat ", process.normalized_text)
         self.assertIn(
             f"Workspace:{self.workspace.root}",
             "".join(process.normalized_text.split()),
@@ -2260,7 +2261,10 @@ print(
         process.wait_for_text("compose[run:5]> ", after=mark)
         process.send_line("/send")
         process.wait_for_text("core updates:", after=mark)
-        successful_output = process.wait_for_text("Conversation scope", after=mark)
+        successful_output = process.wait_for_text(
+            "story[alpha:lead]> ",
+            after=mark,
+        )
         collapsed = "".join(successful_output.split())
         self.assertIn(
             "[compose]Sending4lines,33characterstoconsensus.",

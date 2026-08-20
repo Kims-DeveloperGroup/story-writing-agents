@@ -210,6 +210,26 @@ def _error_record(code: InteractiveErrorCode, *, width: int = 80) -> str:
     return f"{render_plain(component, width=width).text}\n"
 
 
+def _conversation_scope_record(
+    session_id: str,
+    conversation_id: str | None,
+    subject: str | None,
+    *,
+    width: int = 200,
+) -> str:
+    """Return one exact framed conversation-scope callback record."""
+
+    fields = [
+        terminal_module.Field("Session", session_id),
+        terminal_module.Field("Conversation", conversation_id or "none"),
+    ]
+    if subject is not None:
+        fields.append(terminal_module.Field("Subject", subject))
+    fields.append(terminal_module.Field("Agent", "lead"))
+    component = terminal_module.Panel("Conversation scope", tuple(fields))
+    return f"{render_plain(component, width=width).text}\n"
+
+
 def _lifecycle(
     session_id: str,
     *,
@@ -1199,6 +1219,12 @@ class ControllerDebateVisibilityTests(ControllerTestCase):
         self.assertIn("Agent error details are unavailable.", rendered)
         self.assertNotIn("private prompt", rendered)
         self.assertNotIn("provider secret details", rendered)
+        agent_records = [
+            record for record in callbacks.records if "Agent saying" in record
+        ]
+        self.assertEqual(len(agent_records), 1)
+        self.assertTrue(agent_records[0].startswith("--- Agent saying [completed]"))
+        self.assertTrue(agent_records[0].endswith(f"{'-' * 80}\n"))
 
         callbacks.records.clear()
         controller._render_debate_agent_sayings(
@@ -1586,7 +1612,7 @@ class ControllerConversationStartupTests(ControllerTestCase):
                 scopes = [
                     record
                     for record in callbacks.records
-                    if record.startswith("Conversation scope\n")
+                    if record.startswith("--- Conversation scope")
                 ]
                 if label == "active":
                     self.assertEqual(len(scopes), 1)
@@ -1602,10 +1628,12 @@ class ControllerConversationStartupTests(ControllerTestCase):
                     self.assertEqual(
                         scopes,
                         [
-                            "Conversation scope\n"
-                            "  Session: session\n"
-                            "  Conversation: none\n"
-                            "  Agent: lead\n"
+                            _conversation_scope_record(
+                                "session",
+                                None,
+                                None,
+                                width=80,
+                            )
                         ],
                     )
                 if persist_file:
@@ -1922,10 +1950,7 @@ class ControllerConversationStartupTests(ControllerTestCase):
         rendered = "".join(callbacks.records)
         self.assertIn("Subject: Source subject", rendered)
         self.assertIn(
-            "Conversation scope\n"
-            "  Session: destination\n"
-            "  Conversation: none\n"
-            "  Agent: lead\n",
+            _conversation_scope_record("destination", None, None),
             rendered,
         )
         self.assertNotIn("[error conversation_archived]", rendered)
@@ -2528,6 +2553,27 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertEqual(second_context, (expected_retry,))
         self.assertIn("Language", callbacks.prompts[1])
         self.assertTrue(any("(Changed)" in prompt for prompt in callbacks.prompts))
+        confirmation_prompts = [
+            value
+            for value in callbacks.prompts
+            if value.endswith("Save settings? > ")
+        ]
+        self.assertEqual(len(confirmation_prompts), 2)
+        rendered_context = render_plain(expected, width=48).text
+        rendered_retry = render_plain(expected_retry, width=48).text
+        self.assertTrue(
+            confirmation_prompts[0].startswith(f"{rendered_context}\n")
+        )
+        self.assertTrue(
+            confirmation_prompts[1].startswith(f"{rendered_retry}\n")
+        )
+        self.assertTrue(
+            all(
+                f"{'-' * 48}\nEnter yes to save, or no/blank to return."
+                in value
+                for value in confirmation_prompts
+            )
+        )
         self.assertIn(
             "[saved] Settings saved.",
             "".join(callbacks.records),
@@ -3100,7 +3146,10 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
             [(entry.conversation_id, 1, 24)],
         )
         rendered = "".join(callbacks.records)
-        self.assertIn(_error_record(InteractiveErrorCode.COMMAND_INVALID), rendered)
+        self.assertIn(
+            _error_record(InteractiveErrorCode.COMMAND_INVALID, width=240),
+            rendered,
+        )
         self.assertIn(
             "[cancelled] Search cancelled; attached state is unchanged.\n",
             rendered,
@@ -3110,7 +3159,10 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
             "unchanged.\n",
             rendered,
         )
-        self.assertIn(_error_record(InteractiveErrorCode.WORKSPACE_INVALID), rendered)
+        self.assertIn(
+            _error_record(InteractiveErrorCode.WORKSPACE_INVALID, width=240),
+            rendered,
+        )
         self.assertEqual(workspace.path(_CONTEXT_PATH).read_bytes(), context_before)
         self.assertFalse(
             workspace.path(_default_relative("session")).exists()
@@ -3889,6 +3941,57 @@ class ControllerConversationCommandTests(ControllerTestCase):
             callbacks,
         )
 
+    def test_status_with_prior_run_emits_one_exact_framed_result_panel(
+        self,
+    ) -> None:
+        workspace, _backend, _catalog, controller, callbacks = (
+            self.prepared_controller(
+                "/conversation new Opening scene",
+                "/status",
+                "/quit",
+            )
+        )
+        controller._last_started_debate_by_session["session"] = "debate_1"
+        components: list[object] = []
+        real_write_component = terminal_module.InteractiveSemanticOutput.write_component
+
+        def capture_component(output, component):
+            components.append(component)
+            return real_write_component(output, component)
+
+        with mock.patch.object(
+            terminal_module.InteractiveSemanticOutput,
+            "write_component",
+            autospec=True,
+            side_effect=capture_component,
+        ):
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        result_panels = [
+            component
+            for component in components
+            if type(component) is terminal_module.Panel
+            and component.title == "Result"
+        ]
+        self.assertEqual(len(result_panels), 1)
+        result = result_panels[0]
+        self.assertIs(result.state, terminal_module.ViewState.COMPLETED)
+        self.assertEqual(
+            tuple(type(item) for item in result.items),
+            (terminal_module.Field, terminal_module.Section),
+        )
+        expected_record = f"{render_plain(result, width=200).text}\n"
+        self.assertEqual(
+            [
+                record
+                for record in callbacks.records
+                if record.startswith("--- Result")
+            ],
+            [expected_record],
+        )
+        self.assertTrue(expected_record.endswith(f"{'-' * 200}\n"))
+        self.assertFalse(workspace.path(_access_relative("session")).exists())
+
     def test_bare_create_prompts_once_and_duplicate_subjects_stay_distinct(
         self,
     ) -> None:
@@ -4385,10 +4488,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
                 rendered = "".join(callbacks.records)
                 self.assertIn(_error_record(expected_code, width=200), rendered)
                 self.assertIn(
-                    "Conversation scope\n"
-                    "  Session: session\n"
-                    "  Conversation: none\n"
-                    "  Agent: lead\n",
+                    _conversation_scope_record("session", None, None),
                     rendered,
                 )
 
@@ -4475,10 +4575,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
         )
         self.assertEqual(restarted.run_session_lobby(), 0)
         self.assertIn(
-            "Conversation scope\n"
-            "  Session: session\n"
-            "  Conversation: none\n"
-            "  Agent: lead\n",
+            _conversation_scope_record("session", None, None),
             restarted_callbacks.records,
         )
         self.assertEqual(
@@ -5236,7 +5333,7 @@ class ControllerSwitchTests(ControllerTestCase):
                     if expected_code == 0
                     else InteractiveErrorCode.WORKSPACE_INVALID
                 )
-                self.assertIn(_error_record(expected_error), rendered)
+                self.assertIn(_error_record(expected_error, width=200), rendered)
                 self.assertNotIn("selection-secret", rendered)
 
     def test_failed_destination_release_is_fatal_and_defers_to_close(self) -> None:

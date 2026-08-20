@@ -552,17 +552,41 @@ def _panel_lines(
     *,
     indent: int,
 ) -> list[tuple[str, SemanticRole]]:
-    lines = [
-        (line, SemanticRole.EMPHASIS)
-        for line in _wrap(
-            f"{panel.title}{_state_suffix(panel.state)}",
-            width,
-            indent=indent,
-        )
-    ]
+    heading_lines = _wrap(
+        panel.title,
+        width,
+        indent=indent,
+        initial_prefix="--- ",
+        continuation_prefix="    ",
+    )
+    state_suffix = _state_suffix(panel.state)
+    if state_suffix:
+        if _cell_width(heading_lines[-1]) + _cell_width(state_suffix) <= width:
+            heading_lines[-1] += state_suffix
+        else:
+            heading_lines.extend(
+                _wrap(
+                    state_suffix[1:],
+                    width,
+                    indent=indent,
+                    initial_prefix="    ",
+                    continuation_prefix="    ",
+                )
+            )
+    remaining = width - _cell_width(heading_lines[-1])
+    if remaining >= 4:
+        heading_lines[-1] += f" {'-' * (remaining - 1)}"
+    lines = [(line, SemanticRole.EMPHASIS) for line in heading_lines]
     child_indent = _child_indent(width, indent)
     for item in panel.items:
         lines.extend(_component_lines(item, width, indent=child_indent))
+    rule_indent = max(0, min(indent, width - 1))
+    lines.append(
+        (
+            f"{' ' * rule_indent}{'-' * (width - rule_indent)}",
+            SemanticRole.EMPHASIS,
+        )
+    )
     return lines
 
 

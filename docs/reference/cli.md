@@ -183,7 +183,7 @@ Session grammar is `/session list | create NAME | open [NAME] | pause`. Explicit
 `story chat SESSION` creates an absent session or opens a persisted one. Bare
 entry opens a ready default and asks before reopening a paused default.
 
-Full help is one grouped semantic panel in command-registry order; contextual
+Full help is one grouped semantic `Panel` in command-registry order; contextual
 help is one command record with its group, syntax, aliases, provider/artifact
 effects, and example. `/agents` is one canonical roster list. Session and
 conversation catalogs, search hits, transcript events, and focused history
@@ -234,8 +234,9 @@ Missing cancellation proof is fatal. Exact terminal records are in the
 [terminal reference](interactive-terminal.md#exact-cancellation-records).
 
 Each composition attempt shows `Mode`, `Next line`, `Lines`, `Characters`,
-guidance, then the focused numbered prompt. The `/send`, `/cancel` panel is a
-preview, not completion or dispatch. `/say` is not suggested; `/say /send` and
+guidance, then the focused numbered prompt. The `/send`, `/cancel`
+`SuggestionPalette` is a preview, not completion or dispatch. `/say` is not
+suggested; `/say /send` and
 `/say /cancel` remain literal escapes. Typing, editing, or clearing the preview
 has no provider, runtime, filesystem, or storage effect. Up/Down, Tab,
 Shift-Tab, and Escape are no-ops in composition and confirmation; those routes
