@@ -494,11 +494,6 @@ class InteractiveTerminal:
         self._width = width
         self._capability_provider = lambda: _plain_capabilities(width)
 
-    def clear_main_commit_display(self) -> None:
-        """Clear the latest live main submission through the bound driver."""
-
-        self._clear_main_commit_display()
-
     def read_main(
         self,
         *,
@@ -1258,6 +1253,24 @@ class InteractiveSemanticOutput:
         """Delegate one closed semantic component to exactly one terminal write."""
 
         self._write(component)
+
+
+class InteractiveMainCommitCleanup:
+    """Retain one package-internal committed-main cleanup capability."""
+
+    __slots__ = ("_clear",)
+
+    def __init__(self, terminal: InteractiveTerminal) -> None:
+        """Bind cleanup without exposing it through the supported facade."""
+
+        if not isinstance(terminal, InteractiveTerminal):
+            raise TypeError("terminal must be an InteractiveTerminal")
+        self._clear: Callable[[], None] = terminal._clear_main_commit_display
+
+    def clear_main_commit_display(self) -> None:
+        """Consume one correlated live committed-main cleanup token."""
+
+        self._clear()
 
 
 class InteractivePickerInput:

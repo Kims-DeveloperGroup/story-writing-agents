@@ -72,6 +72,7 @@ from ..interactive_settings import (
 from ..interactive_terminal import (
     AdvisoryProgressError,
     InteractiveAdvisoryProgress,
+    InteractiveMainCommitCleanup,
     format_agent_reply_content,
     AttachmentKind,
     Choice,
@@ -211,6 +212,7 @@ class InteractiveController:
         "_conversation_memory_service",
         "_context",
         "_last_started_debate_by_session",
+        "_main_commit_cleanup",
         "_picker_input",
         "_prompt_input",
         "_advisory_progress",
@@ -259,6 +261,7 @@ class InteractiveController:
         self._picker_input = InteractivePickerInput(terminal)
         self._prompt_input = InteractivePromptInput(terminal)
         self._advisory_progress = InteractiveAdvisoryProgress(terminal)
+        self._main_commit_cleanup = InteractiveMainCommitCleanup(terminal)
         resolved_catalog = (
             FilesystemConversationCatalog(workspace)
             if conversation_catalog is None
@@ -909,7 +912,7 @@ class InteractiveController:
             original_line = terminal_action.text
             action = parse_interactive_line(original_line)
             if action.kind is ActionKind.SETTINGS:
-                self._terminal.clear_main_commit_display()
+                self._main_commit_cleanup.clear_main_commit_display()
             if self._dispatch_session_lobby_action(action, original_line):
                 return 0
 
@@ -1094,16 +1097,19 @@ class InteractiveController:
                 return
             selected = self._require_settings_commit(outcome)
             top_highlight = selected
-            if selected == "cancel":
-                self._write_settings_cancelled()
-                return
-            if selected == "save":
-                confirmation = self._settings_save_confirmation(state)
-                if confirmation in {"return", "cancel"}:
-                    if confirmation == "cancel":
-                        self._write_settings_cancelled()
-                        return
+            if selected in {"save", "cancel"}:
+                confirmation = self._settings_save_confirmation(
+                    state,
+                    action=selected,
+                )
+                if confirmation == "return":
                     continue
+                if confirmation == "cancel":
+                    self._write_settings_cancelled()
+                    return
+                if selected == "cancel":
+                    self._write_settings_cancelled()
+                    return
                 try:
                     save_settings_state(self._workspace, state)
                 except SettingsError as failure:
@@ -1132,16 +1138,28 @@ class InteractiveController:
                 self._write_settings_cancelled()
                 return
 
-    def _settings_save_confirmation(self, state: SettingsState) -> str:
-        """Confirm one pending Save through a transient yes/no prompt."""
+    def _settings_save_confirmation(
+        self,
+        state: SettingsState,
+        *,
+        action: str,
+    ) -> str:
+        """Confirm one Save or Cancel action through transient yes/no input."""
 
+        if action not in {"save", "cancel"}:
+            raise ValueError("action must be save or cancel")
+        notice: Notice | None = None
         while True:
             outcome = self._prompt_input.read_prompt(
                 Prompt(
-                    "Save settings?",
-                    instruction="Enter yes to save, or no/blank to return.",
+                    "Save settings?" if action == "save" else "Cancel settings?",
+                    instruction=(
+                        "Enter yes to save, or no/blank to return."
+                        if action == "save"
+                        else "Enter yes to cancel, or no/blank to return."
+                    ),
                 ),
-                context=(self._settings_panel(state),),
+                context=(self._settings_panel(state, notice=notice),),
                 transient=True,
             )
             if outcome.kind in {
@@ -1159,8 +1177,13 @@ class InteractiveController:
             if answer in {"", "n", "no"}:
                 return "return"
             if answer in {"y", "yes"}:
-                return "save"
-            self._write_settings_validation("Enter yes, no, or blank to return.")
+                return "save" if action == "save" else "cancel"
+            notice = Notice(
+                "Enter yes, no, or blank to return.",
+                label="hint",
+                role=SemanticRole.ERROR,
+                state=ViewState.ERROR,
+            )
 
     def _edit_settings_value(
         self,
@@ -1484,7 +1507,11 @@ class InteractiveController:
         return self._require_settings_commit(outcome), False
 
     @staticmethod
-    def _settings_panel(state: SettingsState) -> Panel:
+    def _settings_panel(
+        state: SettingsState,
+        *,
+        notice: Notice | None = None,
+    ) -> Panel:
         """Project a stable current/pending settings diff for confirmation."""
 
         current = state.baseline.configuration
@@ -1514,37 +1541,45 @@ class InteractiveController:
 
         current_values = values(current)
         pending_values = values(pending)
-        changed = any(left != right for left, right in zip(current_values, pending_values))
 
+        changed_indices = tuple(
+            index
+            for index, (_current, pending_value) in enumerate(pending_values)
+            if pending_value != current_values[index][1]
+        )
         current_fields = tuple(
-            Field(label, value) for label, value in current_values
+            Field(
+                current_values[index][0],
+                f"{current_values[index][1]} (Changed)",
+                role=SemanticRole.WARNING,
+            )
+            for index in changed_indices
         )
         pending_fields = tuple(
             Field(
-                label,
-                f"{value} (Changed)" if value != current_values[index][1] else value,
-                role=(
-                    SemanticRole.WARNING
-                    if value != current_values[index][1]
-                    else SemanticRole.DEFAULT
-                ),
+                pending_values[index][0],
+                f"{pending_values[index][1]} (Changed)",
+                role=SemanticRole.WARNING,
             )
-            for index, (label, value) in enumerate(pending_values)
+            for index in changed_indices
         )
+        panel_items: list[Section | Notice] = [
+            Section("Current", current_fields),
+            Section("Pending", pending_fields),
+            Notice(
+                "No pending settings changes."
+                if not changed_indices
+                else "Changed values apply only to the next shell after Save.",
+                label="no changes" if not changed_indices else "activation",
+                role=SemanticRole.MUTED,
+            ),
+        ]
+        if notice is not None:
+            panel_items.append(notice)
 
         return Panel(
             "Settings",
-            (
-                Section("Current", current_fields),
-                Section("Pending", pending_fields),
-                Notice(
-                    "Pending values match current settings; nothing to save."
-                    if not changed
-                    else "Changed values apply only to the next shell after Save.",
-                    label="no changes" if not changed else "activation",
-                    role=SemanticRole.MUTED,
-                ),
-            ),
+            tuple(panel_items),
             state=ViewState.OPEN,
         )
 
