@@ -405,29 +405,37 @@ no match; mixed fixed/free positions close when the active slot is free text.
 Tokens do not reflect runtime scope gates; `/help` remains authoritative.
 
 The active token is the maximal ASCII-space/tab-delimited span around the
-cursor. Tab replaces that full span with the highlighted candidate and adds no
-whitespace. Help permits a bare prefix to select a slash replacement, for
-example `/help ru` to `/help /run`. Up/Down moves the highlight and clamps at
-the ends without replacing text or traversing history. Filtering keeps the
-highlight when its identity remains eligible; otherwise the first match is
-highlighted. Tab is a no-op for an exact candidate or no highlight, and
-Shift-Tab is always a no-op.
+cursor. With a highlighted suggestion, Tab or Enter replaces that full span
+with the candidate. When the replaced token ends at the buffer end, completion
+adds exactly one ASCII space; otherwise the existing space/tab delimiter and
+suffix remain exact. Help permits a bare prefix to select a slash replacement,
+for example
+`/help ru` to `/help /run`. Up/Down moves the highlight and clamps at the ends
+without replacing text or traversing history. Filtering keeps the highlight
+when its identity remains eligible; otherwise the first match is highlighted.
+Tab is a no-op when there is no highlight or the replacement and spacing would
+leave the line unchanged. Shift-Tab is always a no-op.
 
 The first Tab that changes text retains the complete pre-completion buffer and
 cursor. Edits in the same grammar position keep that snapshot; a position
 change resets it. Escape restores the snapshot when present, otherwise leaves
 the buffer unchanged, then closes the palette and latches that exact line state
 dismissed. An edit or history change clears the latch and permits reopening.
-Closed-palette Up/Down resumes command-history navigation. Enter commits only
-the visible buffer to the established parser once, never an unapplied
-highlight.
+Closed-palette Up/Down resumes command-history navigation. Enter with a
+highlighted suggestion applies the same replacement and spacing as Tab without
+submitting, then closes the palette and latches the completed line dismissed;
+a second Enter submits that exact visible buffer. Enter with no highlighted
+suggestion submits the exact visible buffer to the established parser once.
+Configured VEOF with a nonempty buffer always submits the exact visible buffer,
+even when a suggestion is highlighted.
 
 Plain, fixed-ANSI, `NO_COLOR`, narrow, and empty palette rendering preserve the
 same semantic candidate order and highlight. Ordinary-line fallback receives
-no palette projection and owns none of these keys. Composition uses the
-separate preview-only fixed suggestions below; confirmation has no suggestions,
-and the subject keeps its ordinary line read. Editing, decoding, fallback, and
-restoration details are in
+no palette projection and retains its established behavior. Composition uses
+the separate preview-only fixed suggestions below; confirmation has no
+suggestions, and the subject keeps its ordinary line read. Those other prompt
+contexts are unchanged. Editing, decoding, fallback, and restoration details
+are in
 [Terminal safety](../operations/terminal-safety.md#live-editor-boundary); the
 pure control contract is in the
 [design contract](../design/interactive-cli-design-system.md#main-command-palette-and-fixed-choices).
