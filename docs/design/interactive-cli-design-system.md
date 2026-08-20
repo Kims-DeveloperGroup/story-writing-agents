@@ -22,6 +22,9 @@
 > #111 advisory indicator adds one narrow terminal-owned rolling glyph cycle for
 > capable advisory turns; advisory turns no longer emit `[routing]` or
 > `[waiting]` notices. The
+> #115 settings lifecycle keeps capable committed `/settings` input cleanup
+> display-only, adds transient Save/Cancel confirmations, and shows only
+> changed Current/Pending fields with explicit cues. The
 > [interactive terminal reference](../reference/interactive-terminal.md) and
 > [terminal safety rules](../operations/terminal-safety.md) describe current
 > observable behavior.
@@ -34,7 +37,7 @@ semantic model.
 
 The words **must**, **must not**, and **may** below constrain the delivery
 issues. Requirements beyond the implemented #82, #83, #84, #85, #86, #79,
-#87, #94, #93, #105, #106, and #73 slices do not describe current production
+#87, #94, #93, #105, #106, #111, #115, and #73 slices do not describe current production
 behavior.
 
 ## Delivery status
@@ -52,8 +55,9 @@ behavior.
 | #94 workspace Codex defaults | Implemented: the closed system-default schema accepts optional workspace fallback Codex model and reasoning values, new workspaces initialize both to null, legacy files remain valid and byte-preserved, and each backend validates and snapshots effective invocation values at construction. |
 | #93 settings UI | Implemented: global alias-free `/settings` edits isolated current/pending snapshots of workspace defaults and per-agent provider, model, and reasoning choices through shared picker and prompt controls. Save validates an exact opening baseline and persona catalog, writes only changed configuration documents in deterministic order, and attempts reverse exact-byte rollback after a write failure. The workflow adds no supported public save API. |
 | #105 agent reply presentation | Implemented: direct, retrieval, transcript, and focused-history agent replies use a presentation-only strict JSON object/array projection with exact unchanged fallback cases and two-space Unicode-preserving output; stored/provider content remains unchanged, and the `AGENT` role uses bold terminal-default foreground styling without background detection. |
-| #106 transient settings UI | Implemented: settings-only picker and prompt reads clear capable transient rows, suppress duplicate fallback finals, emit one complete Current/Pending snapshot per Save attempt or whole-flow cancellation, keep nested Escape silent, and preserve default non-settings lifecycles. |
+| #106 transient settings UI | Implemented: settings-only picker and prompt reads clear capable transient rows, suppress duplicate fallback finals, keep nested Escape silent, and preserve default non-settings lifecycles. #115 owns the later confirmation-context diff and committed-line cleanup. |
 | #111 advisory progress indicator | Implemented: one advisory-only four-glyph rolling indicator runs only on capable raw streams, including `NO_COLOR`; callback, non-TTY, `TERM=dumb`, and uncertain-capability paths remain silent, and no general animation or `[routing]`/`[waiting]` record is introduced. |
+| #115 settings lifecycle | Implemented: capable committed `/settings` input is cleared from the live display without deleting its history entry; Save and Cancel use transient yes/no confirmations; confirmation context shows only changed Current/Pending fields with `(Changed)` cues; fallback paths preserve visible committed input and report no cleanup they cannot perform. |
 
 ## Goals and limits
 
@@ -183,6 +187,14 @@ caller. Main input passes the exact committed text to the established
 interactive parser once and only once. Recalled history, completion
 replacement, highlighting, preview, validation display, and rerendering never
 invoke that parser.
+
+On a capable raw terminal, one correlated committed-main display token lets
+the controller clear the committed `/settings` line before the settings view
+opens. This is display cleanup only: it consumes the token at most once and
+never removes or rewrites the already appended main-history entry. Callback and
+ordinary-line fallback have no cursor-erasure capability, so they leave the
+committed line visible and make no cleanup claim; history remains unchanged in
+every profile.
 
 For established output primitives, one semantic `Record`, `Message`, or
 `Notice` produces one callback write including its final newline. A delivery
@@ -458,11 +470,12 @@ The presentation uses one `Panel` with `Section`, `Field`, and `Notice` values,
 plus one focused `Picker` or `Prompt`. It is not a new component or a
 general-purpose form abstraction. One section shows validated current values;
 another shows independent pending values. Controls render without the snapshot
-panel; the full Current/Pending panel appears only immediately before Save
-attempts or whole-flow cancellation. The controller keeps the snapshots
-call-local and does not emit
-the Current/Pending panel while opening, navigating, or editing. It emits one
-complete panel immediately before each Save attempt or whole-flow cancellation.
+panel. Save and Cancel open transient yes/no confirmations whose context shows
+only changed fields in both Current and Pending, with each displayed value
+marked `(Changed)`; when nothing differs, both sections are empty and a `No
+pending settings changes.` notice is shown. The controller keeps snapshots
+call-local and does not emit the diff while opening, navigating, or editing;
+top-level cancellation does not claim a panel that was not rendered.
 Nested Escape returns silently to its parent without a snapshot or cancellation
 record. Settings opts into transient picker and prompt reads: capable streams
 clear transient rows before returning, while fallback readers omit duplicate
@@ -511,23 +524,28 @@ one control is focused:
   updates only the pending value and returns focus;
   invalid Enter leaves the prompt focused with a trusted validation notice.
   Escape restores its prior pending value.
-- Enter on Save emits the one complete Current/Pending panel for that Save
-  attempt, then validates both complete pending snapshots and re-reads both
-  persisted documents and the persona catalog before any write. Any exact-byte
-  or catalog change from the validated opening baseline fails closed with no
-  write. A valid, unchanged baseline crosses the sole mutation boundary: each
-  changed file is replaced atomically in system-then-agent order, and any write
-  failure triggers best-effort reverse-order rollback to the exact original
-  bytes of every attempted target, including the target that reported failure.
-  Success reports `completed`. Validation, conflict, replacement, or rollback
-  failure reports `error` and retains the pending values for retry or
-  cancellation. This is a guarded two-file update, not a global transaction or
-  a power-loss-safe transaction across both files.
-- Enter on Cancel, Escape from the top-level settings picker, Ctrl-C, or EOF
-  returns `cancelled` without writing; the whole-flow cancellation emits its
-  one complete Current/Pending panel. Opening, navigating, highlighting,
-  editing, validation preview, nested cancellation, and rerendering likewise
-  have no filesystem, runtime, provider, storage, or configuration effect.
+- Enter on Save opens a transient `Save settings?` confirmation with the
+  changed-only Current/Pending context. `yes`/`y` proceeds to validate both
+  complete pending snapshots and re-read both persisted documents and the
+  persona catalog before any write. `no`/`n`, blank, or nested Escape returns
+  to the top-level picker; invalid text retains the prompt with a trusted
+  validation notice. Any exact-byte or catalog change from the validated
+  opening baseline fails closed with no write. A valid, unchanged baseline
+  crosses the sole mutation boundary: each changed file is replaced atomically
+  in system-then-agent order, and any write failure triggers best-effort
+  reverse-order rollback to the exact original bytes of every attempted target,
+  including the target that reported failure. Success reports `completed`.
+  Validation, conflict, replacement, or rollback failure reports `error` and
+  retains the pending values for retry or cancellation. This is a guarded
+  two-file update, not a global transaction or a power-loss-safe transaction
+  across both files.
+- Enter on Cancel opens a transient `Cancel settings?` confirmation with the
+  same changed-only context. `yes`/`y` returns `cancelled` without writing;
+  `no`/`n`, blank, or nested Escape returns to the top-level picker. Top-level
+  Escape, Ctrl-C, or EOF cancels without writing. Opening, navigating,
+  highlighting, editing, validation preview, nested cancellation, and
+  rerendering likewise have no filesystem, runtime, provider, storage, or
+  configuration effect.
 
 Saved values apply only to the next backend construction. The active backend
 and runtime retain their complete construction-time persisted configuration
@@ -895,7 +913,7 @@ the graph to 33 units.
 | Retrieval progress and summaries | `Notice`, `Record`, `ListView`, `Field` | Loading, citations/context accounting, result/error/cancelled | #83 (implemented accepted views) |
 | Consensus progress and summaries | `Panel`, `Section`, `Notice`, `Record`, `Field` | Loading, debate identity, result/cancelled/completed/error | #83 (implemented) |
 | Interactive errors and recovery hints | `Notice`, `Field` | Trusted code, redaction, error state, next action, no raw diagnostics | #83 (implemented) |
-| Settings current/pending view | `Panel`, `Section`, `Field`, `Prompt`, `Picker`, `Notice` | Exact top-level order; one complete Current/Pending snapshot per Save attempt or whole-flow cancellation; nested Escape silent; transient cleanup and fallback no-duplicate-final behavior; disabled provider, validation, error, cancelled, and completed meaning; guarded two-file Save boundary | #93 and #106 (implemented) |
+| Settings current/pending view | `Panel`, `Section`, `Field`, `Prompt`, `Picker`, `Notice` | Exact top-level order; changed-only Current/Pending confirmation context with `(Changed)` cues and explicit no-diff notice; nested Escape silent; transient cleanup and fallback honesty; disabled provider, validation, error, cancelled, and completed meaning; guarded two-file Save boundary | #93, #106, and #115 (implemented) |
 
 ### Control groups
 

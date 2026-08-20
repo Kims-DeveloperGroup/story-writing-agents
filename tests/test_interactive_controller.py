@@ -2191,37 +2191,62 @@ class ControllerSettingsTests(ControllerTestCase):
     def expected_panel(state) -> object:
         """Return the exact public semantic tree for one settings snapshot."""
 
-        def configuration_fields(configuration):
+        def configuration_values(configuration):
             defaults = configuration.system_defaults
-            providers = ", ".join(
-                f"{AGENT_SPECS[agent_id].display_name}: "
-                f"{configuration.agent_configs[agent_id].backend or 'codex (default)'}"
-                for agent_id in ROSTER
+            values = [
+                ("Language", defaults.language),
+                ("Persona", defaults.persona),
+                ("Maximum debate rounds", str(defaults.max_debate_rounds)),
+            ]
+            for agent_id in ROSTER:
+                display_name = AGENT_SPECS[agent_id].display_name
+                agent = configuration.agent_configs[agent_id]
+                values.extend(
+                    (
+                        (f"{display_name} Provider", agent.backend or "codex (default)"),
+                        (f"{display_name} Model", agent.codex_model or "inherit"),
+                        (
+                            f"{display_name} Reasoning",
+                            agent.codex_reasoning_effort or "inherit",
+                        ),
+                    )
+                )
+            return tuple(values)
+
+        current_values = configuration_values(state.baseline.configuration)
+        pending_values = configuration_values(state.pending)
+        changed_indices = tuple(
+            index
+            for index, (_label, value) in enumerate(pending_values)
+            if value != current_values[index][1]
+        )
+        current_fields = tuple(
+            terminal_module.Field(
+                current_values[index][0],
+                f"{current_values[index][1]} (Changed)",
+                role=terminal_module.SemanticRole.WARNING,
             )
-            return (
-                terminal_module.Field("Language", defaults.language),
-                terminal_module.Field("Persona", defaults.persona),
-                terminal_module.Field(
-                    "Maximum debate rounds",
-                    str(defaults.max_debate_rounds),
-                ),
-                terminal_module.Field("Providers", providers),
+            for index in changed_indices
+        )
+        pending_fields = tuple(
+            terminal_module.Field(
+                pending_values[index][0],
+                f"{pending_values[index][1]} (Changed)",
+                role=terminal_module.SemanticRole.WARNING,
             )
+            for index in changed_indices
+        )
 
         return terminal_module.Panel(
             "Settings",
             (
-                terminal_module.Section(
-                    "Current",
-                    configuration_fields(state.baseline.configuration),
-                ),
-                terminal_module.Section(
-                    "Pending",
-                    configuration_fields(state.pending),
-                ),
+                terminal_module.Section("Current", current_fields),
+                terminal_module.Section("Pending", pending_fields),
                 terminal_module.Notice(
-                    "Pending changes affect only the next shell after Save.",
-                    label="activation",
+                    "No pending settings changes."
+                    if not changed_indices
+                    else "Changed values apply only to the next shell after Save.",
+                    label="no changes" if not changed_indices else "activation",
                     role=terminal_module.SemanticRole.MUTED,
                 ),
             ),
@@ -2231,29 +2256,15 @@ class ControllerSettingsTests(ControllerTestCase):
     def test_settings_open_is_exact_six_item_provider_free_snapshot(self) -> None:
         workspace = self.make_workspace()
         before = _tree_snapshot(workspace.root)
-        state = settings_module.load_settings_state(workspace)
-        expected_panel = self.expected_panel(state)
         controller, backend, callbacks = self.make_controller(
             workspace,
             "/settings",
             "6",
+            "yes",
             "/quit",
             terminal_width=120,
         )
-        components: list[object] = []
-        real_write = terminal_module.InteractiveSemanticOutput.write_component
-
-        def capture_component(output, component):
-            components.append(component)
-            return real_write(output, component)
-
         with (
-            mock.patch.object(
-                terminal_module.InteractiveSemanticOutput,
-                "write_component",
-                autospec=True,
-                side_effect=capture_component,
-            ),
             mock.patch.object(
                 controller_core_module,
                 "parse_interactive_line",
@@ -2269,11 +2280,6 @@ class ControllerSettingsTests(ControllerTestCase):
         run.assert_not_called()
         connect.assert_not_called()
         self.assertEqual(_tree_snapshot(workspace.root), before)
-        self.assertEqual(
-            [component for component in components if type(component) is terminal_module.Panel],
-            [expected_panel],
-        )
-        self.assertIn(f"{render_plain(expected_panel, width=120).text}\n", callbacks.records)
         self.assertEqual(
             callbacks.prompts[1],
             "Choices (highlighted 1/6) [open]\n"
@@ -2305,6 +2311,7 @@ class ControllerSettingsTests(ControllerTestCase):
             "3",
             "0",
             "5",
+            "yes",
             "/quit",
             terminal_width=120,
         )
@@ -2330,8 +2337,10 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertTrue(
             all(call.kwargs.get("transient") is True for call in picker.call_args_list)
         )
-        self.assertEqual(len(prompt.call_args_list), 1)
-        self.assertIs(prompt.call_args.kwargs.get("transient"), True)
+        self.assertEqual(len(prompt.call_args_list), 2)
+        self.assertTrue(
+            all(call.kwargs.get("transient") is True for call in prompt.call_args_list)
+        )
 
         ordinary_controller, _ordinary_backend, _ordinary_callbacks = (
             self.make_controller(workspace, "/help", "/quit", terminal_width=120)
@@ -2353,6 +2362,95 @@ class ControllerSettingsTests(ControllerTestCase):
             self.assertEqual(ordinary_controller.run_session_lobby(), 0)
         ordinary_picker.assert_not_called()
         ordinary_prompt.assert_not_called()
+
+    def test_settings_confirmation_panel_is_changed_only_and_invalid_retries(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        baseline = settings_module.load_settings_state(workspace)
+        changed = settings_module.update_language(baseline, "EN")
+        expected = self.expected_panel(changed)
+        controller, _backend, callbacks = self.make_controller(
+            workspace,
+            "/settings",
+            "1",
+            "2",
+            "5",
+            "maybe",
+            "yes",
+            "/quit",
+            terminal_width=48,
+        )
+        original_prompt = terminal_module.InteractivePromptInput.read_prompt
+        with mock.patch.object(
+            terminal_module.InteractivePromptInput,
+            "read_prompt",
+            autospec=True,
+            side_effect=original_prompt,
+        ) as prompt:
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        self.assertEqual(len(prompt.call_args_list), 2)
+        first_context = prompt.call_args_list[0].kwargs["context"]
+        second_context = prompt.call_args_list[1].kwargs["context"]
+        self.assertEqual(first_context, (expected,))
+        retry_notice = terminal_module.Notice(
+            "Enter yes, no, or blank to return.",
+            label="hint",
+            role=terminal_module.SemanticRole.ERROR,
+            state=terminal_module.ViewState.ERROR,
+        )
+        expected_retry = terminal_module.Panel(
+            expected.title,
+            expected.items + (retry_notice,),
+            state=expected.state,
+        )
+        self.assertEqual(second_context, (expected_retry,))
+        self.assertIn("Language", callbacks.prompts[1])
+        self.assertTrue(any("(Changed)" in prompt for prompt in callbacks.prompts))
+        self.assertIn(
+            "[saved] Settings saved.",
+            "".join(callbacks.records),
+        )
+        self.assertEqual(
+            settings_module.load_settings_state(workspace).pending.system_defaults.language,
+            "EN",
+        )
+
+    def test_settings_save_and_cancel_confirmation_controls_are_call_local(
+        self,
+    ) -> None:
+        cases = (
+            ("save-no-then-cancel-yes", ("/settings", "5", "no", "6", "yes", "/quit")),
+            ("save-escape-then-cancel-yes", ("/settings", "5", "\x1b", "6", "yes", "/quit")),
+            ("cancel-no-then-cancel-yes", ("/settings", "6", "no", "6", "yes", "/quit")),
+            ("save-interrupt", ("/settings", "5", KeyboardInterrupt(), "/quit")),
+            ("save-eof", ("/settings", "5", EOFError(), "/quit")),
+        )
+        for label, reads in cases:
+            with self.subTest(label=label):
+                workspace = self.make_workspace()
+                before = _tree_snapshot(workspace.root)
+                controller, _backend, callbacks = self.make_controller(
+                    workspace,
+                    *reads,
+                    terminal_width=80,
+                )
+                self.assertEqual(controller.run_session_lobby(), 0)
+                self.assertEqual(_tree_snapshot(workspace.root), before)
+                rendered = "".join(callbacks.records)
+                self.assertEqual(
+                    rendered.count(
+                        "[cancelled] Settings cancelled; no pending changes were saved.\n"
+                    ),
+                    1,
+                )
+                self.assertTrue(
+                    any(
+                        "Save settings?" in prompt or "Cancel settings?" in prompt
+                        for prompt in callbacks.prompts
+                    )
+                )
 
     def test_settings_edit_save_isolated_candidate_and_literal_cancel_text(self) -> None:
         workspace = self.make_workspace()
@@ -2381,6 +2479,7 @@ class ControllerSettingsTests(ControllerTestCase):
             "3",
             "6",
             "5",
+            "yes",
             "/quit",
             terminal_width=160,
         )
@@ -2441,18 +2540,21 @@ class ControllerSettingsTests(ControllerTestCase):
             "(disabled: Provider is not implemented.)",
             rendered,
         )
-        self.assertEqual(rendered.count("Settings [open]\n"), 1)
+        self.assertGreaterEqual(
+            sum("Choose a setting to edit" in prompt for prompt in callbacks.prompts),
+            1,
+        )
         self.assertNotIn("Inherit", rendered)
         self.assertNotIn("Settings cancelled", rendered)
         self.assertEqual(callbacks.reads, [])
 
     def test_nested_escape_returns_but_interrupt_and_eof_cancel_all(self) -> None:
         scenarios = (
-            (("/settings", "4", "2", "2", "\x1b", "6", "/quit"), 1),
-            (("/settings", KeyboardInterrupt(), "/quit"), 1),
-            (("/settings", EOFError(), "/quit"), 1),
+            (("/settings", "4", "2", "2", "\x1b", "6", "yes", "/quit"),),
+            (("/settings", KeyboardInterrupt(), "/quit"),),
+            (("/settings", EOFError(), "/quit"),),
         )
-        for reads, panel_count in scenarios:
+        for (reads,) in scenarios:
             with self.subTest(reads=reads):
                 workspace = self.make_workspace()
                 before = _tree_snapshot(workspace.root)
@@ -2464,7 +2566,9 @@ class ControllerSettingsTests(ControllerTestCase):
                 self.assertEqual(controller.run_session_lobby(), 0)
                 self.assertEqual(_tree_snapshot(workspace.root), before)
                 rendered = "".join(callbacks.records)
-                self.assertEqual(rendered.count("Settings [open]\n"), panel_count)
+                self.assertTrue(
+                    any("Choose a setting to edit" in prompt for prompt in callbacks.prompts)
+                )
                 self.assertEqual(
                     rendered.count(
                         "[cancelled] Settings cancelled; no pending changes were saved.\n"
@@ -2495,7 +2599,9 @@ class ControllerSettingsTests(ControllerTestCase):
                     workspace,
                     "/settings",
                     "5",
+                    "yes",
                     "6",
+                    "yes",
                     "/quit",
                     terminal_width=160,
                 )

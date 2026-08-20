@@ -259,12 +259,27 @@ bounded viewport at the current observed width; plain callback, non-TTY,
 complete numbered list through the ordinary line callback. Opaque choice
 identities are control state and are never rendered.
 
-Settings free-text and numeric values use a separate semantic `Prompt` with the
-current Settings panel as context. That route is history- and
-completion-free. Enter commits the exact line, Escape cancels only the nested
-editor, and Ctrl-C or EOF cancels the whole settings workflow. In fallback an
-exact ESC line cancels, while `/cancel` remains literal input. The same sole
-driver owns raw input, redraw, cleanup, and restoration.
+Settings free-text and numeric values use a separate context-free semantic
+`Prompt`. That route is history- and completion-free. Enter commits the exact
+line, Escape cancels only the nested editor, and Ctrl-C or EOF cancels the whole
+settings workflow. In fallback an exact ESC line cancels, while `/cancel`
+remains literal input. The same sole driver owns raw input, redraw, cleanup,
+and restoration.
+
+When a capable raw main read commits `/settings`, the controller consumes one
+correlated committed-display token and clears only those live rows before
+opening the settings view. The already accepted line remains in the driver's
+main-history store. Callback and ordinary-line fallback cannot erase committed
+rows, so the line remains visible and no cleanup is claimed; history is
+unchanged in every profile.
+
+Save and Cancel each use a transient yes/no confirmation prompt. Its context
+contains only fields whose Current and Pending values differ, and both displayed
+values carry the `(Changed)` cue; an empty diff shows `No pending settings
+changes.`. `yes`/`y` commits the requested action, while `no`/`n`, blank, or
+nested Escape returns to the settings picker. Invalid input retries with a
+trusted notice. Top-level Escape, Ctrl-C, and EOF cancel without writing and do
+not imply a snapshot was rendered.
 
 ## Current semantic plain shapes
 
@@ -508,9 +523,10 @@ pickers and prompts. Capable terminal reads clear the transient rows before
 returning the typed outcome, so no duplicate final frame is emitted. Callback
 and line-fallback readers cannot erase prior output; transient picker fallback
 therefore omits its synthetic final frame rather than duplicating it. Nested
-settings Escape returns to the parent silently, while top-level Save or
-whole-flow cancellation is reported by the controller's single Current/Pending
-snapshot. Non-settings calls retain the default final-frame behavior.
+settings Escape returns to the parent silently. Save and Cancel confirmations
+show the changed-only Current/Pending context; top-level cancellation does not
+claim a snapshot that was not rendered. Non-settings calls retain the default
+final-frame behavior.
 
 For the default lifecycle, live and fallback readers emit exactly one final
 semantic `completed` or `cancelled` frame after commit or cancel. Interrupt,
