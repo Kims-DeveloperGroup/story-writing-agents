@@ -293,18 +293,19 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
     def test_literal_tree_has_exact_plain_and_narrow_rendering(self) -> None:
         self.assertEqual(
             render_plain(_literal_view(), width=80).text,
-            "Status\n"
+            "--- Status ---------------------------------------------------------------------\n"
             "  Workspace: /stories/界\n"
             "  [warning] Unsafe\\x1b[31m text\n"
             "  plot [completed]> Line one\n"
             "                    line two\n"
             "  [debate_1] Consensus [completed] [success]\n"
-            "    Done.",
+            "    Done.\n"
+            "--------------------------------------------------------------------------------",
         )
         narrow = render_plain(_literal_view(), width=32)
         self.assertEqual(
             narrow.text,
-            "Status\n"
+            "--- Status ---------------------\n"
             " Workspace:\n"
             "  /stories/界\n"
             " [warning] Unsafe\\x1b[31m text\n"
@@ -312,10 +313,11 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
             "                   line two\n"
             " [debate_1] Consensus [completed\n"
             " ] [success]\n"
-            "  Done.",
+            "  Done.\n"
+            "--------------------------------",
         )
         self.assertEqual(narrow.width, 32)
-        self.assertEqual(narrow.line_count, 9)
+        self.assertEqual(narrow.line_count, 10)
         self.assertNotIn("\x1b", narrow.text)
 
     def test_literal_tree_has_exact_ansi_and_no_color_plain_equivalence(self) -> None:
@@ -325,13 +327,14 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
         )
         self.assertEqual(
             ansi.text,
-            "\x1b[1mStatus\x1b[0m\n"
+            "\x1b[1m--- Status ---------------------------------------------------------------------\x1b[0m\n"
             "  Workspace: /stories/界\n"
             "\x1b[33m  [warning] Unsafe\\x1b[31m text\x1b[0m\n"
             "\x1b[1m  plot [completed]> Line one\x1b[0m\n"
             "\x1b[1m                    line two\x1b[0m\n"
             "\x1b[32m  [debate_1] Consensus [completed] [success]\x1b[0m\n"
-            "\x1b[32m    Done.\x1b[0m",
+            "\x1b[32m    Done.\x1b[0m\n"
+            "\x1b[1m--------------------------------------------------------------------------------\x1b[0m",
         )
         plain = render_component(
             _literal_view(),

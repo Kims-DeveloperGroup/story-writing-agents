@@ -1669,7 +1669,7 @@ class TerminalAndCleanupFailureTests(InteractiveCancellationTestCase):
                 InterruptingWriteCallbacks(
                     "/quit",
                     output_predicate=lambda text: text.startswith(
-                        "Conversation scope\n"
+                        "--- Conversation scope"
                     ),
                     failure=OSError("broken pipe"),
                 ),
