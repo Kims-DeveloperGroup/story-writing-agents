@@ -78,6 +78,7 @@ from ..interactive_settings import (
 from ..interactive_terminal import (
     AdvisoryProgressError,
     InteractiveAdvisoryProgress,
+    InteractiveDebateProgress,
     InteractiveMainCommitCleanup,
     format_agent_reply_content,
     AttachmentKind,
@@ -222,6 +223,7 @@ class InteractiveController:
         "_picker_input",
         "_prompt_input",
         "_advisory_progress",
+        "_debate_progress",
         "_runner",
         "_runtime",
         "_semantic_output",
@@ -269,6 +271,7 @@ class InteractiveController:
         self._picker_input = InteractivePickerInput(terminal)
         self._prompt_input = InteractivePromptInput(terminal)
         self._advisory_progress = InteractiveAdvisoryProgress(terminal)
+        self._debate_progress = InteractiveDebateProgress(terminal)
         self._main_commit_cleanup = InteractiveMainCommitCleanup(terminal)
         resolved_catalog = (
             FilesystemConversationCatalog(workspace)
@@ -2904,8 +2907,9 @@ class InteractiveController:
                 InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
             )
         operation_coroutine = run_joined_consensus_operation()
+        progress_coroutine = self._debate_progress.run(operation_coroutine)
         try:
-            result = runner.run(operation_coroutine)
+            result = runner.run(progress_coroutine)
         except KeyboardInterrupt:
             if progress_callback_failure is not None:
                 raise _ControllerAbort(
@@ -2943,6 +2947,10 @@ class InteractiveController:
                     progress_callback_failure or exc.__cause__ or exc
                 )
             ) from None
+        except AdvisoryProgressError:
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            ) from None
         except Exception as exc:
             if progress_callback_failure is not None:
                 raise _ControllerAbort(
@@ -2959,6 +2967,7 @@ class InteractiveController:
         finally:
             if not operation_entered:
                 operation_coroutine.close()
+                progress_coroutine.close()
 
         try:
             terminal_event, artifact_event = validate_consensus_result(
