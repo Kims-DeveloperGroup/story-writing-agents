@@ -6,6 +6,7 @@ from ._core import (
     AdvisoryProgressError,
     format_agent_reply_content,
     InteractiveAdvisoryProgress,
+    InteractiveMainCommitCleanup,
     INTERACTIVE_ERROR_SPECS,
     AttachmentKind,
     Choice,

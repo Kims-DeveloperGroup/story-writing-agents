@@ -72,6 +72,7 @@ from ..interactive_settings import (
 from ..interactive_terminal import (
     AdvisoryProgressError,
     InteractiveAdvisoryProgress,
+    InteractiveMainCommitCleanup,
     format_agent_reply_content,
     AttachmentKind,
     Choice,
@@ -211,6 +212,7 @@ class InteractiveController:
         "_conversation_memory_service",
         "_context",
         "_last_started_debate_by_session",
+        "_main_commit_cleanup",
         "_picker_input",
         "_prompt_input",
         "_advisory_progress",
@@ -259,6 +261,7 @@ class InteractiveController:
         self._picker_input = InteractivePickerInput(terminal)
         self._prompt_input = InteractivePromptInput(terminal)
         self._advisory_progress = InteractiveAdvisoryProgress(terminal)
+        self._main_commit_cleanup = InteractiveMainCommitCleanup(terminal)
         resolved_catalog = (
             FilesystemConversationCatalog(workspace)
             if conversation_catalog is None
@@ -908,6 +911,8 @@ class InteractiveController:
             assert terminal_action.text is not None
             original_line = terminal_action.text
             action = parse_interactive_line(original_line)
+            if action.kind is ActionKind.SETTINGS:
+                self._main_commit_cleanup.clear_main_commit_display()
             if self._dispatch_session_lobby_action(action, original_line):
                 return 0
 
@@ -1088,23 +1093,23 @@ class InteractiveController:
                 ControlOutcomeKind.INTERRUPT,
                 ControlOutcomeKind.EOF,
             }:
-                self._semantic_output.write_component(
-                    self._settings_panel(state)
-                )
                 self._write_settings_cancelled()
                 return
             selected = self._require_settings_commit(outcome)
             top_highlight = selected
-            if selected == "cancel":
-                self._semantic_output.write_component(
-                    self._settings_panel(state)
+            if selected in {"save", "cancel"}:
+                confirmation = self._settings_save_confirmation(
+                    state,
+                    action=selected,
                 )
-                self._write_settings_cancelled()
-                return
-            if selected == "save":
-                self._semantic_output.write_component(
-                    self._settings_panel(state)
-                )
+                if confirmation == "return":
+                    continue
+                if confirmation == "cancel":
+                    self._write_settings_cancelled()
+                    return
+                if selected == "cancel":
+                    self._write_settings_cancelled()
+                    return
                 try:
                     save_settings_state(self._workspace, state)
                 except SettingsError as failure:
@@ -1130,11 +1135,55 @@ class InteractiveController:
                 selected,
             )
             if cancelled:
-                self._semantic_output.write_component(
-                    self._settings_panel(state)
-                )
                 self._write_settings_cancelled()
                 return
+
+    def _settings_save_confirmation(
+        self,
+        state: SettingsState,
+        *,
+        action: str,
+    ) -> str:
+        """Confirm one Save or Cancel action through transient yes/no input."""
+
+        if action not in {"save", "cancel"}:
+            raise ValueError("action must be save or cancel")
+        notice: Notice | None = None
+        while True:
+            outcome = self._prompt_input.read_prompt(
+                Prompt(
+                    "Save settings?" if action == "save" else "Cancel settings?",
+                    instruction=(
+                        "Enter yes to save, or no/blank to return."
+                        if action == "save"
+                        else "Enter yes to cancel, or no/blank to return."
+                    ),
+                ),
+                context=(self._settings_panel(state, notice=notice),),
+                transient=True,
+            )
+            if outcome.kind in {
+                ControlOutcomeKind.INTERRUPT,
+                ControlOutcomeKind.EOF,
+            }:
+                return "cancel"
+            if outcome.kind is ControlOutcomeKind.CANCEL:
+                return "return"
+            if outcome.kind is not ControlOutcomeKind.COMMIT or outcome.text is None:
+                raise _ControllerAbort(
+                    InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+                )
+            answer = outcome.text.strip().casefold()
+            if answer in {"", "n", "no"}:
+                return "return"
+            if answer in {"y", "yes"}:
+                return "save" if action == "save" else "cancel"
+            notice = Notice(
+                "Enter yes, no, or blank to return.",
+                label="hint",
+                role=SemanticRole.ERROR,
+                state=ViewState.ERROR,
+            )
 
     def _edit_settings_value(
         self,
@@ -1458,42 +1507,79 @@ class InteractiveController:
         return self._require_settings_commit(outcome), False
 
     @staticmethod
-    def _settings_panel(state: SettingsState) -> Panel:
-        """Project current and pending values without relying on color."""
+    def _settings_panel(
+        state: SettingsState,
+        *,
+        notice: Notice | None = None,
+    ) -> Panel:
+        """Project a stable current/pending settings diff for confirmation."""
 
         current = state.baseline.configuration
         pending = state.pending
 
-        def fields(configuration) -> tuple[Field, ...]:
+        def values(configuration) -> tuple[tuple[str, str], ...]:
             defaults = configuration.system_defaults
-            providers = ", ".join(
-                (
-                    f"{AGENT_SPECS[agent_id].display_name}: "
-                    f"{configuration.agent_configs[agent_id].backend or 'codex (default)'}"
+            rows = [
+                ("Language", defaults.language),
+                ("Persona", defaults.persona),
+                ("Maximum debate rounds", str(defaults.max_debate_rounds)),
+            ]
+            for agent_id in ROSTER:
+                display_name = AGENT_SPECS[agent_id].display_name
+                agent = configuration.agent_configs[agent_id]
+                rows.extend(
+                    (
+                        (f"{display_name} Provider", agent.backend or "codex (default)"),
+                        (f"{display_name} Model", agent.codex_model or "inherit"),
+                        (
+                            f"{display_name} Reasoning",
+                            agent.codex_reasoning_effort or "inherit",
+                        ),
+                    )
                 )
-                for agent_id in ROSTER
+            return tuple(rows)
+
+        current_values = values(current)
+        pending_values = values(pending)
+
+        changed_indices = tuple(
+            index
+            for index, (_current, pending_value) in enumerate(pending_values)
+            if pending_value != current_values[index][1]
+        )
+        current_fields = tuple(
+            Field(
+                current_values[index][0],
+                f"{current_values[index][1]} (Changed)",
+                role=SemanticRole.WARNING,
             )
-            return (
-                Field("Language", defaults.language),
-                Field("Persona", defaults.persona),
-                Field(
-                    "Maximum debate rounds",
-                    str(defaults.max_debate_rounds),
-                ),
-                Field("Providers", providers),
+            for index in changed_indices
+        )
+        pending_fields = tuple(
+            Field(
+                pending_values[index][0],
+                f"{pending_values[index][1]} (Changed)",
+                role=SemanticRole.WARNING,
             )
+            for index in changed_indices
+        )
+        panel_items: list[Section | Notice] = [
+            Section("Current", current_fields),
+            Section("Pending", pending_fields),
+            Notice(
+                "No pending settings changes."
+                if not changed_indices
+                else "Changed values apply only to the next shell after Save.",
+                label="no changes" if not changed_indices else "activation",
+                role=SemanticRole.MUTED,
+            ),
+        ]
+        if notice is not None:
+            panel_items.append(notice)
 
         return Panel(
             "Settings",
-            (
-                Section("Current", fields(current)),
-                Section("Pending", fields(pending)),
-                Notice(
-                    "Pending changes affect only the next shell after Save.",
-                    label="activation",
-                    role=SemanticRole.MUTED,
-                ),
-            ),
+            tuple(panel_items),
             state=ViewState.OPEN,
         )
 

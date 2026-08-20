@@ -443,6 +443,7 @@ class InteractiveTerminal:
         "_capability_provider",
         "_composition_read_line",
         "_confirmation_read_line",
+        "_clear_main_commit_display",
         "_main_read_line",
         "_picker_read",
         "_prompt_read",
@@ -485,6 +486,7 @@ class InteractiveTerminal:
         )
         self._composition_read_line = _plain_input_reader(read_line, width)
         self._confirmation_read_line = _plain_input_reader(read_line, width)
+        self._clear_main_commit_display: Callable[[], None] = lambda: None
         self._picker_read = _plain_picker_reader(read_line, write_text, width)
         self._prompt_read = _plain_prompt_reader(read_line, width)
         self._advisory_progress = _plain_advisory_progress
@@ -1253,6 +1255,24 @@ class InteractiveSemanticOutput:
         self._write(component)
 
 
+class InteractiveMainCommitCleanup:
+    """Retain one package-internal committed-main cleanup capability."""
+
+    __slots__ = ("_clear",)
+
+    def __init__(self, terminal: InteractiveTerminal) -> None:
+        """Bind cleanup without exposing it through the supported facade."""
+
+        if not isinstance(terminal, InteractiveTerminal):
+            raise TypeError("terminal must be an InteractiveTerminal")
+        self._clear: Callable[[], None] = terminal._clear_main_commit_display
+
+    def clear_main_commit_display(self) -> None:
+        """Consume one correlated live committed-main cleanup token."""
+
+        self._clear()
+
+
 class InteractivePickerInput:
     """Retain only one terminal's package-internal picker input capability."""
 
@@ -1601,6 +1621,7 @@ def build_stream_terminal(
         render_input_prompt,
         _empty_slash_suggestions,
     )
+    terminal._clear_main_commit_display = driver.clear_main_commit_display
     def read_picker(state, *, transient=False):
         arguments = (
             state,
