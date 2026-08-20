@@ -592,12 +592,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   roster agent and then its Provider, Model, or Reasoning effort without
   changing the active backend or runtime snapshot. Editors contain no repeated
   Current/Pending context panel. Explicit Save and Cancel actions each use one
-  transient history-free confirmation whose context contains only changed
+  selectable YES/NO confirmation whose preceding context contains only changed
   Current/Pending properties in stable settings and roster order; each changed
   value has an explicit text cue and warning role, and an unchanged candidate
-  has an explicit no-changes notice. Invalid confirmation guidance remains in
-  that transient context. No, blank, or nested Escape returns to the settings
-  menu, while interrupt or EOF preserves whole-flow cancellation.
+  contains only an explicit no-changes notice without empty sections. NO or
+  nested Escape returns to the settings menu, while interrupt or EOF preserves
+  whole-flow cancellation.
 - **Direct internal dependencies:** `agents`, `backend`, `cli_context`,
   `conversation_retrieval`, `conversation_search`, `conversations`, `errors`,
   `interactive_commands`, `interactive_controller._conversation_policy`,

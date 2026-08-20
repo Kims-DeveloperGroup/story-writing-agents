@@ -1387,46 +1387,42 @@ class InteractiveController:
         *,
         action: str,
     ) -> str:
-        """Confirm one Save or Cancel action through transient yes/no input."""
+        """Confirm one Save or Cancel action through a transient YES/NO picker."""
 
         if action not in {"save", "cancel"}:
             raise ValueError("action must be save or cancel")
-        notice: Notice | None = None
-        while True:
-            outcome = self._prompt_input.read_prompt(
-                Prompt(
-                    "Save settings?" if action == "save" else "Cancel settings?",
-                    instruction=(
-                        "Enter yes to save, or no/blank to return."
-                        if action == "save"
-                        else "Enter yes to cancel, or no/blank to return."
-                    ),
+        self._semantic_output.write_component(self._settings_panel(state))
+        outcome = self._picker_input.read_picker(
+            Prompt(
+                "Save settings?" if action == "save" else "Cancel settings?",
+                instruction=(
+                    "Choose YES to save, or NO to return."
+                    if action == "save"
+                    else "Choose YES to cancel, or NO to return."
                 ),
-                context=(self._settings_panel(state, notice=notice),),
-                transient=True,
+            ),
+            (Choice("yes", "YES"), Choice("no", "NO")),
+            highlighted_id="yes",
+            transient=True,
+        )
+        if outcome.kind in {
+            ControlOutcomeKind.INTERRUPT,
+            ControlOutcomeKind.EOF,
+        }:
+            return "cancel"
+        if outcome.kind is ControlOutcomeKind.CANCEL:
+            return "return"
+        if outcome.kind is not ControlOutcomeKind.COMMIT or outcome.text is None:
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
             )
-            if outcome.kind in {
-                ControlOutcomeKind.INTERRUPT,
-                ControlOutcomeKind.EOF,
-            }:
-                return "cancel"
-            if outcome.kind is ControlOutcomeKind.CANCEL:
-                return "return"
-            if outcome.kind is not ControlOutcomeKind.COMMIT or outcome.text is None:
-                raise _ControllerAbort(
-                    InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
-                )
-            answer = outcome.text.strip().casefold()
-            if answer in {"", "n", "no"}:
-                return "return"
-            if answer in {"y", "yes"}:
-                return "save" if action == "save" else "cancel"
-            notice = Notice(
-                "Enter yes, no, or blank to return.",
-                label="hint",
-                role=SemanticRole.ERROR,
-                state=ViewState.ERROR,
-            )
+        if outcome.text == "no":
+            return "return"
+        if outcome.text == "yes":
+            return "save" if action == "save" else "cancel"
+        raise _ControllerAbort(
+            InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+        )
 
     def _edit_settings_value(
         self,
@@ -1806,17 +1802,24 @@ class InteractiveController:
             )
             for index in changed_indices
         )
-        panel_items: list[Section | Notice] = [
-            Section("Current", current_fields),
-            Section("Pending", pending_fields),
-            Notice(
-                "No pending settings changes."
-                if not changed_indices
-                else "Changed values apply only to the next shell after Save.",
-                label="no changes" if not changed_indices else "activation",
-                role=SemanticRole.MUTED,
-            ),
-        ]
+        if changed_indices:
+            panel_items: list[Section | Notice] = [
+                Section("Current", current_fields),
+                Section("Pending", pending_fields),
+                Notice(
+                    "Changed values apply only to the next shell after Save.",
+                    label="activation",
+                    role=SemanticRole.MUTED,
+                ),
+            ]
+        else:
+            panel_items = [
+                Notice(
+                    "No pending settings changes.",
+                    label="no changes",
+                    role=SemanticRole.MUTED,
+                )
+            ]
         if notice is not None:
             panel_items.append(notice)
 

@@ -1147,9 +1147,13 @@ print("RESULT=" + outcome.kind.value)
                     after=language_mark,
                 )
                 self.assertIn(expected_language, language_result)
-                process.wait_for_text(
+                returned_settings = process.wait_for_text(
                     "Choose a setting to edit, save, or cancel.",
                     after=language_mark,
+                )
+                self.assertEqual(
+                    returned_settings.count("Settings [focused] [open]"),
+                    1,
                 )
                 returned_mark = process.output_mark()
                 process.send_text(("\x1b[B" * 4) + "\n")
