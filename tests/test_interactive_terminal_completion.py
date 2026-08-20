@@ -392,6 +392,67 @@ class CompletionControlTests(unittest.TestCase):
             ),
         )
 
+    def test_routed_agent_palette_order_filter_case_and_aliases_are_exact(
+        self,
+    ) -> None:
+        replacements = ("@lead", "@plot", "@character", "@execution")
+        initial = self.type_text("@")
+        assert initial.palette is not None
+        self.assertEqual(
+            tuple(
+                item.replacement for item in initial.palette.projection.candidates
+            ),
+            replacements,
+        )
+        self.assertEqual(
+            initial.palette.highlighted.replacement,  # type: ignore[union-attr]
+            "@lead",
+        )
+        self.assertEqual(
+            project_main_suggestion_palette(initial),
+            SuggestionPalette(
+                "@",
+                tuple(
+                    Choice(f"routed.agent:{replacement}", replacement)
+                    for replacement in replacements
+                ),
+                highlighted_id="routed.agent:@lead",
+                state=ViewState.OPEN,
+            ),
+        )
+
+        partial = self.type_text("@pl")
+        assert partial.palette is not None
+        self.assertEqual(
+            tuple(
+                item.replacement for item in partial.palette.projection.candidates
+            ),
+            ("@plot",),
+        )
+        for buffer in ("@Pl", "@or", "@plot_"):
+            with self.subTest(buffer=buffer):
+                unmatched = self.type_text(buffer)
+                self.assertIsNotNone(unmatched.palette)
+                self.assertEqual(
+                    unmatched.palette.projection.candidates,  # type: ignore[union-attr]
+                    (),
+                )
+                self.assertIsNone(
+                    unmatched.palette.highlighted  # type: ignore[union-attr]
+                )
+
+    def test_routed_agent_completion_is_isolated_to_the_leading_token(
+        self,
+    ) -> None:
+        for buffer in (
+            "message @pl",
+            "@plot message @pl",
+            "/say @pl",
+        ):
+            with self.subTest(buffer=buffer):
+                state = self.type_text(buffer)
+                self.assertIsNone(state.palette)
+
     def test_enter_without_highlight_and_veof_submit_visible_buffer(self) -> None:
         cases = (
             ("ordinary", KeyKind.ENTER),
@@ -439,6 +500,7 @@ class CompletionControlTests(unittest.TestCase):
     def test_enter_and_tab_share_exact_trailing_space_completion(self) -> None:
         cases = (
             ("/s", "/say "),
+            ("@pl", "@plot "),
             ("/status", "/status "),
             ("/session li", "/session list "),
         )
@@ -454,22 +516,36 @@ class CompletionControlTests(unittest.TestCase):
                     )
 
     def test_enter_and_tab_preserve_ascii_delimiter_suffix_and_cursor(self) -> None:
-        for kind in (KeyKind.ENTER, KeyKind.TAB):
-            for delimiter in (" ", "\t"):
-                with self.subTest(kind=kind, delimiter=repr(delimiter)):
-                    initial = self.type_text(f"/s{delimiter}tail")
-                    for _ in range(5):
-                        initial, outcome = self.apply(initial, KeyEvent(KeyKind.LEFT))
-                        self.assertIsNone(outcome)
-                    self.assertEqual(initial.main_input.line_state.cursor, 2)
-                    self.assertIsNotNone(initial.palette)
+        for source, replacement in (("/s", "/say"), ("@pl", "@plot")):
+            for kind in (KeyKind.ENTER, KeyKind.TAB):
+                for delimiter in (" ", "\t"):
+                    with self.subTest(
+                        source=source,
+                        kind=kind,
+                        delimiter=repr(delimiter),
+                    ):
+                        initial = self.type_text(f"{source}{delimiter}tail")
+                        for _ in range(5):
+                            initial, outcome = self.apply(
+                                initial,
+                                KeyEvent(KeyKind.LEFT),
+                            )
+                            self.assertIsNone(outcome)
+                        self.assertEqual(
+                            initial.main_input.line_state.cursor,
+                            len(source),
+                        )
+                        self.assertIsNotNone(initial.palette)
 
-                    completed, outcome = self.apply(initial, KeyEvent(kind))
-                    self.assertIsNone(outcome)
-                    self.assertEqual(
-                        completed.main_input.line_state,
-                        LineInputState(f"/say{delimiter}tail", 4),
-                    )
+                        completed, outcome = self.apply(initial, KeyEvent(kind))
+                        self.assertIsNone(outcome)
+                        self.assertEqual(
+                            completed.main_input.line_state,
+                            LineInputState(
+                                f"{replacement}{delimiter}tail",
+                                len(replacement),
+                            ),
+                        )
 
     def test_tab_snapshot_exact_noop_cycle_and_escape_restore(self) -> None:
         initial = self.type_text("/session li tail")
@@ -799,6 +875,29 @@ class CompletionDriverTests(unittest.TestCase):
         )
         rendered = "".join(output.records)
         self.assertIn("Suggestions [open]", rendered)
+        self.assertNotIn("Suggestions [open]", output.records[-1])
+
+    def test_routed_enter_completion_waits_for_message_and_second_enter(
+        self,
+    ) -> None:
+        driver, input_stream, output, fallback, termios, os_module = make_driver(
+            "@pl\nmessage\n"
+        )
+        self.assertEqual(self.read(driver), "@plot message")
+
+        fallback.assert_not_called()
+        self.assertEqual(input_stream.reads, [])
+        self.assertEqual(
+            driver._history_state,
+            MainInputHistoryState(("@plot message",)),
+        )
+        self.assertEqual(os_module.observed_widths, [8])
+        self.assertEqual(
+            tuple(call[1] for call in termios.set_calls),
+            (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
+        )
+        rendered = "".join(output.records)
+        self.assertIn("[highlighted] @plot", rendered)
         self.assertNotIn("Suggestions [open]", output.records[-1])
 
     def test_completion_provider_is_call_local_across_reads_on_one_driver(self) -> None:

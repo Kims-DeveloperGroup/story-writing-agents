@@ -392,17 +392,33 @@ highlighted. Compact registry order (not output layout):
 /conversation /search /transcript /inspect /history /status /help /? /quit /exit
 ```
 
+A leading routed-message token opens with these full candidates, in route
+order derived from each `AGENT_ROUTES` entry's `prompt_alias`:
+
+```text
+@lead @plot @character @execution
+```
+
 Exact case-sensitive prefixes filter in stable order. Root provides the 21
 tokens above; help provides 24 including `/compose`, `/send`, and `/cancel`;
-agent-valued positions provide the four preferred prompt aliases—`lead`,
-`plot`, `character`, and `execution`—in route order. The parser still accepts
-all ten declared route aliases; completion does not duplicate those aliases.
-Static finite positions also provide session and conversation subcommands,
-`--fresh`, `--all`, `last`, and `--from`. Dynamic session, conversation,
-debate, count, sequence, query, prompt, subject, and path values are not
-synthesized. Fixed-only positions remain open with an explicit empty palette on
-no match; mixed fixed/free positions close when the active slot is free text.
-Tokens do not reflect runtime scope gates; `/help` remains authoritative.
+agent-valued slash positions provide the four preferred prompt aliases `lead`,
+`plot`, `character`, and `execution` in the same route order. The parser still
+accepts all ten declared route aliases for slash and routed-message input;
+completion does not duplicate those aliases. Static finite positions also
+provide session and conversation subcommands, `--fresh`, `--all`, `last`, and
+`--from`. Dynamic session, conversation, debate, count, sequence, query,
+prompt, subject, and path values are not synthesized. Fixed-only positions
+remain open with an explicit empty palette on no match; mixed fixed/free
+positions close when the active slot is free text. Tokens do not reflect
+runtime scope gates; `/help` remains authoritative.
+
+The routed-message palette is cursor-aware and applies only when the first
+token begins at the start of the buffer and is cursor-active. It does not
+project for a non-leading `@`, while the cursor is in the message body, or for
+`@` text inside slash message input. For example, Enter or Tab completes `@pl`
+to `@plot ` under the shared spacing rule. Enter completion does not submit;
+after typing the message body, Enter submits the visible routed message.
+Submitting a route with no nonblank message remains an error.
 
 The active token is the maximal ASCII-space/tab-delimited span around the
 cursor. With a highlighted suggestion, Tab or Enter replaces that full span
@@ -431,11 +447,11 @@ even when a suggestion is highlighted.
 
 Plain, fixed-ANSI, `NO_COLOR`, narrow, and empty palette rendering preserve the
 same semantic candidate order and highlight. Ordinary-line fallback receives
-no palette projection and retains its established behavior. Composition uses
-the separate preview-only fixed suggestions below; confirmation has no
-suggestions, and the subject keeps its ordinary line read. Those other prompt
-contexts are unchanged. Editing, decoding, fallback, and restoration details
-are in
+no palette projection and retains its established behavior. Settings and the
+subject keep their non-main reads, composition uses the separate preview-only
+fixed suggestions below, and confirmation has no suggestions. None of those
+contexts receives the leading `@` palette. Editing, decoding, fallback, and
+restoration details are in
 [Terminal safety](../operations/terminal-safety.md#live-editor-boundary); the
 pure control contract is in the
 [design contract](../design/interactive-cli-design-system.md#main-command-palette-and-fixed-choices).
