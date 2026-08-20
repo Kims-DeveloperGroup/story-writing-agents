@@ -175,6 +175,9 @@ and performs no stream observation or resource acquisition.
   optional capable-only indicator without an advisory waiting record;
 - retrieval progress and cited-source records; and
 - consensus progress, inspection, cancellation, and terminal summaries.
+- Consensus progress now includes phase handoff/action metadata and a dedicated
+  `Agent saying` panel so each debate phase shows explicit participants and
+  their messages.
 
 #84 uses the same foundation for:
 
@@ -193,6 +196,14 @@ structure and applicable `loading`, `empty`, `error`, `cancelled`, and
 `completed` state markers. Capable real-CLI output may add fixed decorative
 ANSI; `NO_COLOR` removes only that decoration. Callback construction renders
 the same structure in plain text at its fixed width.
+
+### Consensus progress records
+
+Consensus-phase rendering now emits per-event metadata as fields (`Event`,
+`Round`, `Revision`, `Handoff`, and `Action`, with optional `Conflicts`) in
+one `Record`, then the phase status record. When phase messages exist, the
+controller also writes one bounded `Panel` titled `Agent saying`, where each
+message includes the sender label and its phase/revision metadata.
 
 ### Advisory progress
 

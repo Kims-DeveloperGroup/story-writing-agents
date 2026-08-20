@@ -15,7 +15,9 @@
 > delivers the generic package-internal picker foundation without installing a
 > shell consumer. #94 adds validated persisted workspace Codex fallback model
 > and reasoning defaults. #93 adds the interactive settings workflow, immutable
-> lifecycle configuration snapshots, and guarded persistence. #105 adds
+> lifecycle configuration snapshots, and guarded persistence. #119 adds
+> phase-level debate visibility in consensus output via handoff/action metadata
+> and boxed agent-saying panels. #105 adds
 > presentation-only strict JSON formatting for agent replies and bold
 > terminal-default agent styling. #106 makes settings picker and prompt editors
 > transient without changing non-settings input behavior. The
@@ -37,7 +39,7 @@ semantic model.
 
 The words **must**, **must not**, and **may** below constrain the delivery
 issues. Requirements beyond the implemented #82, #83, #84, #85, #86, #79,
-#87, #94, #93, #105, #106, #111, #115, and #73 slices do not describe current production
+#87, #94, #93, #105, #106, #111, #115, #119, and #73 slices do not describe current production
 behavior.
 
 ## Delivery status
@@ -58,6 +60,7 @@ behavior.
 | #106 transient settings UI | Implemented: settings-only picker and prompt reads clear capable transient rows, suppress duplicate fallback finals, keep nested Escape silent, and preserve default non-settings lifecycles. #115 owns the later confirmation-context diff and committed-line cleanup. |
 | #111 advisory progress indicator | Implemented: one advisory-only four-glyph rolling indicator runs only on capable raw streams, including `NO_COLOR`; callback, non-TTY, `TERM=dumb`, and uncertain-capability paths remain silent, and no general animation or `[routing]`/`[waiting]` record is introduced. |
 | #115 settings lifecycle | Implemented: capable committed `/settings` input is cleared from the live display without deleting its history entry; Save and Cancel use transient yes/no confirmations; confirmation context shows only changed Current/Pending fields with `(Changed)` cues; fallback paths preserve visible committed input and report no cleanup they cannot perform. |
+| #119 debate visibility | Implemented: consensus progress now includes per-phase handoff/action records and a boxed `Agent saying` panel showing newly emitted messages from the relevant agents. |
 
 ## Goals and limits
 
@@ -911,7 +914,7 @@ the graph to 33 units.
 | Focused history | `ListView`, `Record`, `Field`, `Notice` | Snapshot order, context accounting, empty/cancelled/error | #84 (implemented) |
 | Advisory turns | `Message`, `Notice`, `Field` | Operation result, cancelled/completed/error; optional capable-only indicator; no `[routing]` or `[waiting]` record | #83 and #111 (implemented) |
 | Retrieval progress and summaries | `Notice`, `Record`, `ListView`, `Field` | Loading, citations/context accounting, result/error/cancelled | #83 (implemented accepted views) |
-| Consensus progress and summaries | `Panel`, `Section`, `Notice`, `Record`, `Field` | Loading, debate identity, result/cancelled/completed/error | #83 (implemented) |
+| Consensus progress and summaries | `Panel`, `Section`, `Notice`, `Record`, `Field`, `Message` | Loading, debate identity, handoff/action metadata, boxed agent messages, result/cancelled/completed/error | #83, #119 (implemented) |
 | Interactive errors and recovery hints | `Notice`, `Field` | Trusted code, redaction, error state, next action, no raw diagnostics | #83 (implemented) |
 | Settings current/pending view | `Panel`, `Section`, `Field`, `Prompt`, `Picker`, `Notice` | Exact top-level order; changed-only Current/Pending confirmation context with `(Changed)` cues and explicit no-diff notice; nested Escape silent; transient cleanup and fallback honesty; disabled provider, validation, error, cancelled, and completed meaning; guarded two-file Save boundary | #93, #106, and #115 (implemented) |
 
@@ -968,6 +971,9 @@ handling, safe model and fixed reasoning validation, full-schema-first failure,
 model precedence, backend-lifetime snapshots, exact fresh/resume invocation
 arguments, initialization preservation, and unchanged definition/thread/public
 contracts.
+Issue #119 extends the same output boundary with per-phase handoff/action
+metadata and a dedicated `Agent saying` panel for new agent messages in each
+phase.
 
 | Area | Required evidence |
 | --- | --- |
