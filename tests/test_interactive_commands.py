@@ -154,7 +154,7 @@ ACTION_RULES = {
     ActionKind.CONVERSATION_NEW: ({"argument"}, set()),
     ActionKind.CONVERSATION_LIST: ({"argument"}, set()),
     ActionKind.CONVERSATION_LIST_ALL: ({"argument"}, set()),
-    ActionKind.CONVERSATION_USE: ({"argument"}, {"argument"}),
+    ActionKind.CONVERSATION_USE: ({"argument"}, set()),
     ActionKind.CONVERSATION_SUBJECT: ({"argument"}, {"argument"}),
     ActionKind.CONVERSATION_ARCHIVE: ({"argument"}, set()),
     ActionKind.HELP: ({"argument"}, set()),
@@ -503,7 +503,7 @@ class CommandRegistryTests(unittest.TestCase):
                 "Conversations",
                 (
                     "/conversation new [SUBJECT] | list [--all] [QUERY] | "
-                    "use ID | subject SUBJECT | archive [ID]"
+                    "use [ID] | subject SUBJECT | archive [ID]"
                 ),
                 (),
                 False,
@@ -849,6 +849,10 @@ class SuccessfulParsingTests(unittest.TestCase):
                 InteractiveAction(ActionKind.CONVERSATION_LIST_ALL),
             ),
             (
+                "/conversation use ",
+                InteractiveAction(ActionKind.CONVERSATION_USE),
+            ),
+            (
                 "/conversation archive\t",
                 InteractiveAction(ActionKind.CONVERSATION_ARCHIVE),
             ),
@@ -1037,6 +1041,10 @@ class InvalidInputTests(ParserAssertions, unittest.TestCase):
                 ),
             ),
             (
+                "/conversation use",
+                InteractiveAction(ActionKind.CONVERSATION_USE),
+            ),
+            (
                 "/conversation use ../unsafe",
                 InteractiveAction(
                     ActionKind.CONVERSATION_USE,
@@ -1066,7 +1074,6 @@ class InvalidInputTests(ParserAssertions, unittest.TestCase):
         cases = (
             "/conversation",
             "/conversation unknown",
-            "/conversation use",
             "/conversation use one two",
             "/conversation subject",
             "/conversation subject   ",

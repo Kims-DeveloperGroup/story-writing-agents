@@ -119,8 +119,9 @@ highlight. The first changing Tab
 saves the full buffer/cursor snapshot; edits in the same grammar position keep
 it, and a grammar-position change resets it. Enter submits only the visible
 buffer to the parser once. The generic single-select picker and cancellable
-prompt seams remain package-internal; `/settings` consumes both and omitted
-`/session open` consumes the picker without adding a supported terminal API.
+prompt seams remain package-internal; `/settings` consumes both, while omitted
+`/session open` and `/conversation use` consume the picker without adding a
+supported terminal API.
 
 `/settings` is alias-free, takes no argument, and is available with or without
 an attached session. It edits isolated Current and Pending snapshots for
@@ -196,6 +197,27 @@ picker. Choosing the current attachment reports that it is already attached;
 another committed choice follows the established open/reopen transition.
 Explicit `/session open NAME`, startup default handling, `/session list`, and
 standalone `story session` commands are unchanged.
+
+Conversation selection grammar is exactly `/conversation use [ID]`. With
+`ID`, it directly resolves the established exact full ID or accepted
+case-sensitive unique prefix of at least 12 characters across the complete
+session catalog, then rejects an archived result. With `ID` omitted, the
+picker contains only active conversations in catalog order. Rows use subject
+labels and show a stable handle: the first 12 ID characters when unique across
+the complete catalog, otherwise the full ID.
+Current active focus is highlighted first, then an active saved default, then
+the first row. Capable Up/Down, Enter, Escape, and Ctrl-C behavior and numbered
+fallback blank/ordinal/`/cancel` behavior follow the generic picker contract.
+Cancel and interrupt leave catalog, default, current focus, and agent focus
+unchanged; EOF performs normal shell cleanup without selecting. No active rows
+emits `[conversation] No active conversations found.` without a picker.
+
+The committed full ID is freshly resolved against the complete catalog before
+selection. A now-missing or archived choice is rejected, refreshed metadata is
+used, and the saved default is committed before current focus changes. The
+existing explicit-ID path, `/conversation list` active-only default and
+`--all`, startup restoration, agent routing, noninteractive behavior, schemas,
+and package/public terminal APIs are unchanged.
 
 Full help is one grouped semantic `Panel` in command-registry order; contextual
 help is one command record with its group, syntax, aliases, provider/artifact
