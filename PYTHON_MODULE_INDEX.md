@@ -574,9 +574,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   retain the facade's unlisted `InteractiveAdvisoryProgress` adapter and wrap
   exactly the runtime awaitable instead of emitting persistent routing and
   waiting notices; the controller owns no indicator glyph, cursor control, or
-  animation task. It also retains
-  the facade's resource-free picker and cancellable-prompt adapters for the
-  call-local settings flow. Retrieval results and persisted `agent_reply`
+  animation task. It also retains the facade's resource-free committed-main
+  cleanup, picker, and cancellable-prompt adapters for the call-local settings
+  flow. Only a parsed `/settings` action consumes the correlated cleanup before
+  dispatch; the controller owns no cursor sequence or terminal geometry.
+  Retrieval results and persisted `agent_reply`
   history/transcript rows use the facade's pure `format_agent_reply_content`
   projection and agent semantic role without changing the stored event or
   non-agent content. Ordered session,
@@ -588,10 +590,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   Maximum debate rounds, Providers, Save, and Cancel; Providers selects one
   roster agent and then its Provider, Model, or Reasoning effort without
   changing the active backend or runtime snapshot. Editors contain no repeated
-  Current/Pending context panel. The controller emits that complete semantic
-  snapshot exactly once for each Save attempt or whole-flow cancellation;
-  nested Escape returns to its parent without a snapshot or cancellation
-  record.
+  Current/Pending context panel. Explicit Save and Cancel actions each use one
+  transient history-free confirmation whose context contains only changed
+  Current/Pending properties in stable settings and roster order; each changed
+  value has an explicit text cue and warning role, and an unchanged candidate
+  has an explicit no-changes notice. Invalid confirmation guidance remains in
+  that transient context. No, blank, or nested Escape returns to the settings
+  menu, while interrupt or EOF preserves whole-flow cancellation.
 - **Direct internal dependencies:** `agents`, `backend`, `cli_context`,
   `conversation_retrieval`, `conversation_search`, `conversations`, `errors`,
   `interactive_commands`, `interactive_controller._conversation_policy`,
@@ -625,11 +630,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   unsuccessfully interrupted Runner close retains its private reference.
   `AgentBackend` retains the actual access claim, manifest, subprocess, and
   provider-thread resources. The settings flow retains only one call-local
-  immutable baseline and pending candidate, constructs current/pending semantic
-  views, and delegates exact-byte conflict detection and guarded persistence to
-  `interactive_settings`; cancellation or failed saves do not mutate the active
-  backend or runtime snapshot. Through public collaborators the controller reads
-  and parses terminal input, submits typed presentation facts and invokes
+  immutable baseline and pending candidate, constructs its changed-only
+  confirmation context, and delegates exact-byte conflict detection and guarded
+  persistence to `interactive_settings`; cancellation or failed saves do not
+  mutate the active backend or runtime snapshot. Through public collaborators
+  the controller reads and parses terminal input, submits typed presentation
+  facts and invokes
   terminal-owned semantic writers, sequences session and nested
   conversation transitions, performs
   configuration validation, pre-read, access acquisition, and correlated
@@ -897,6 +903,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   lifecycle used by settings: capable stream construction delegates display
   clearing to the sole driver, while callback construction omits synthetic
   picker final frames it cannot erase. Their default route remains unchanged.
+  Unlisted `InteractiveMainCommitCleanup` binds a resource-free, one-shot
+  committed-main display cleanup capability for controller use. Callback
+  construction binds a no-op, while stream construction delegates correlated
+  row ownership and fixed cursor cleanup to the sole driver; neither the class
+  nor its operation expands the exact public `__all__` or `InteractiveTerminal`
+  method surface.
   Unlisted `InteractiveAdvisoryProgress` and `AdvisoryProgressError` bind one
   advisory-only async progress lifecycle through the same facade: callback and
   incapable terminals await silently, while stream construction injects the
@@ -1073,6 +1085,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   generic single-select lifecycle that does not reuse editable-line state. The
   driver provides one-write output, redraws on the full immutable main-command
   or picker control state, and normalizes established editing and picker keys.
+  Supported package-internal `clear_main_commit_display` consumes at most one
+  live main submission correlated only after restoration and successful history
+  append; it clears the exact committed rows without adding a line break.
   Its optional per-read transient flag clears capable picker and cancellable
   prompt rows on completion or cancellation before returning the typed outcome;
   line fallback cannot erase and instead omits the duplicate picker final
@@ -1089,7 +1104,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   flushes, and exact restoration. It retains exactly one bounded process-local
   main-input history store per driver instance; each main read resets only its
   call-local navigation state, and a successful fallback commit or restored
-  live commit is appended once. The same read loop owns call-local one-byte
+  live commit is appended once. It also retains at most one nonpersistent live
+  main-display cleanup token; fallback reads create none, every intervening
+  input or output invalidates it, and only its explicit one-shot operation emits
+  the fixed functional controls. The same read loop owns call-local one-byte
   incremental decoding and the fixed 50-millisecond Escape readiness lookahead,
   so available ordinary bytes are reprocessed without a second reader or sleep
   loop. Completion, prompt-control, and palette collaborators are call-local and
@@ -1171,6 +1189,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   advisory awaitable wrapper: callback construction remains visually silent,
   and stream construction injects the pure fixed-glyph renderer into the sole
   driver without exposing capabilities or streams.
+  Resource-free `InteractiveMainCommitCleanup` binds only the terminal's private
+  cleanup callback: callback terminals use a no-op and the real stream factory
+  binds the sole driver's correlated one-shot operation. The supported public
+  terminal class and facade exports remain unchanged.
 - **Direct internal dependencies:** `agents`, `interactive_commands`,
   `interactive_terminal._controls`, `interactive_terminal._driver`,
   `interactive_terminal._model`, and `interactive_terminal._render`.
@@ -1179,8 +1201,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   and an explicit width but inspect no stream and acquire no resource.
   Stream-factory instances delegate all raw terminal state, width detection,
   keys, writes, flushes, restoration, readiness, incremental decoding, and the
-  bounded process-local main-input history store plus advisory indicator task
-  and cleanup to one driver. Main completion,
+  bounded process-local main-input history store, optional correlated
+  committed-main cleanup token, plus advisory indicator task and cleanup to one
+  driver. Main completion,
   palette, and composition providers plus semantic
   input renderers are selected per call and never retained by that driver;
   composition, confirmation, cancellable prompt, and picker input are history-
@@ -1481,13 +1504,19 @@ every intermediate arrow. The current runtime graph is acyclic.
   completion-free: `_controls` owns its pure Escape outcome, `_core` binds the
   resource-free facade adapter, and the sole driver owns its raw/fallback input
   and restoration. Settings alone opts into transient picker/prompt reads: the
-  driver clears capable live rows before returning, callback/line fallback
-  omits only duplicate picker final frames, and the controller owns one complete
-  Current/Pending snapshot at each Save attempt or whole-flow cancellation.
-  Nested Escape emits no snapshot, and default non-settings control behavior is
-  unchanged. The driver also owns the dedicated picker lifecycle, observes
-  picker width on each redraw, and keeps picker input separate from editable
-  line, history, and completion state. `_controls` supplies immutable history,
+  driver clears capable live rows before returning and callback/line fallback
+  omits only duplicate picker final frames. Explicit Save and Cancel
+  confirmations alone carry the controller-owned changed-only Current/Pending
+  context, including plain-text changed cues and any invalid-answer hint;
+  ordinary editing and whole-flow cancellation emit no snapshot. Nested Escape
+  returns without committing, and default non-settings control behavior is
+  unchanged. The same driver owns the one-shot committed-main display token:
+  only the facade adapter for a parsed `/settings` action consumes it, every
+  intervening input/output invalidates it, and capable cleanup adds no blank
+  line while fallback cleanup is a no-op. The driver also owns the dedicated
+  picker lifecycle, observes picker width on each redraw, and keeps picker input
+  separate from editable line, history, and completion state. `_controls`
+  supplies immutable history,
   selectable palette, composer, confirmation, and generic picker transitions:
   open-palette Up and Down
   move the clamped highlight, while closed-palette Up and Down remain history
@@ -1516,8 +1545,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 - `interactive_controller` is the stable one-class import boundary and owns no
   shell state or resource. Its `_core` owns interactive shell action mapping,
   current in-memory attachment, current-focus conversation and sticky-target state,
-  the resource-free facade-only settings picker/prompt interaction and its
-  call-local pending candidate,
+  the resource-free facade-only settings cleanup/picker/prompt interaction and
+  its call-local pending candidate and confirmation diff,
   process-local per-session latest accepted STARTED debate IDs, transition and
   compensation ordering, retained runtime and memory-service wiring, one
   private lifecycle `asyncio.Runner`, controller-local interruption/progress
