@@ -571,10 +571,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   search, and transcript records through the terminal facade's unlisted
   `InteractiveSemanticOutput`; it retains that adapter alongside the same
   terminal used for input and terminal-owned semantic writers. Advisory turns
-  retain the facade's unlisted `InteractiveAdvisoryProgress` adapter and wrap
-  exactly the runtime awaitable instead of emitting persistent routing and
-  waiting notices; the controller owns no indicator glyph, cursor control, or
-  animation task. It also retains the facade's resource-free committed-main
+  and consensus waits retain the facade's unlisted
+  `InteractiveAdvisoryProgress` and `InteractiveDebateProgress` adapters and
+  wrap exactly the runtime awaitables instead of emitting persistent routing
+  and waiting notices; the controller owns no indicator glyph, cursor control,
+  or animation task. It also retains the facade's resource-free committed-main
   cleanup, picker, and cancellable-prompt adapters for the call-local settings
   flow. Only a parsed `/settings` action consumes the correlated cleanup before
   dispatch; the controller owns no cursor sequence or terminal geometry.
@@ -909,11 +910,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   row ownership and fixed cursor cleanup to the sole driver; neither the class
   nor its operation expands the exact public `__all__` or `InteractiveTerminal`
   method surface.
-  Unlisted `InteractiveAdvisoryProgress` and `AdvisoryProgressError` bind one
-  advisory-only async progress lifecycle through the same facade: callback and
-  incapable terminals await silently, while stream construction injects the
-  pure fixed-glyph renderer into the sole driver. They do not expand the public
-  `__all__` or expose terminal leaves to the controller.
+  Unlisted `InteractiveAdvisoryProgress`, `InteractiveDebateProgress`, and
+  `AdvisoryProgressError` bind advisory and consensus async progress lifecycles
+  through the same facade: callback and incapable terminals await silently,
+  while stream construction injects the pure fixed-glyph renderer into the sole
+  driver. They do not expand the public `__all__` or expose terminal leaves to
+  the controller.
 - **Direct internal dependencies:** `interactive_terminal._core`.
 - **State, resources, and side effects:** Owns no terminal resource or mutable
   process state. Import deterministically canonicalizes supported public object
@@ -1185,10 +1187,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   validated opt-in transient flag and pass it only to collaborators that support
   that lifecycle; default calls retain the established picker final frame and
   prompt behavior, while transient callback pickers omit the duplicate final
-  frame. Resource-free `InteractiveAdvisoryProgress` binds the terminal's
-  advisory awaitable wrapper: callback construction remains visually silent,
-  and stream construction injects the pure fixed-glyph renderer into the sole
-  driver without exposing capabilities or streams.
+  frame. Resource-free `InteractiveAdvisoryProgress` and
+  `InteractiveDebateProgress` bind the terminal's advisory and consensus
+  awaitable wrappers: callback construction remains visually silent, and stream
+  construction injects the pure fixed-glyph renderer into the sole driver
+  without exposing capabilities or streams.
   Resource-free `InteractiveMainCommitCleanup` binds only the terminal's private
   cleanup callback: callback terminals use a no-op and the real stream factory
   binds the sole driver's correlated one-shot operation. The supported public

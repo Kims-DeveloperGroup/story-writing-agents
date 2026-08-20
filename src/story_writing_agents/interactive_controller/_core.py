@@ -428,8 +428,13 @@ class InteractiveController:
         """Map a progress phase to readable sender/recipient/action."""
 
         phase = event.phase
-        key = self._debate_message_key(event)
         if phase is DebateProgressPhase.STARTED:
+            if event.input_kind is InputKind.DRAFT:
+                return (
+                    ("user",),
+                    tuple(SPECIALIST_IDS),
+                    "Accept supplied draft as revision 0; request specialist audits.",
+                )
             return (
                 ("user",),
                 (EXECUTION_SPECIALIST,),
@@ -437,7 +442,11 @@ class InteractiveController:
             )
         if phase is DebateProgressPhase.DRAFTED:
             return (
-                (EXECUTION_SPECIALIST,),
+                (
+                    ("user",)
+                    if event.input_kind is InputKind.DRAFT
+                    else (EXECUTION_SPECIALIST,)
+                ),
                 tuple(SPECIALIST_IDS),
                 "Draft complete; request specialist audits.",
             )
@@ -460,13 +469,10 @@ class InteractiveController:
                 "No conflicts found; return approvals to orchestrator.",
             )
         if phase is DebateProgressPhase.SYNTHESIZED:
-            targets = self._debate_last_conflict_targets.get(
-                key, tuple(SPECIALIST_IDS)
-            )
             return (
                 (LEAD_ORCHESTRATOR,),
-                targets,
-                "Synthesize revision from proposals and feedback.",
+                tuple(SPECIALIST_IDS),
+                "Synthesize revision from proposals and feedback; re-audit all specialists.",
             )
         if phase is DebateProgressPhase.ARTIFACTS_COMMITTED:
             return (
@@ -542,24 +548,36 @@ class InteractiveController:
                 event.session_id,
                 event.debate_id,
             )
-        except Exception:
+        except (OSError, WorkspaceFormatError, WorkspaceSecurityError):
             self._debate_message_offsets[key] = start
+            self._write_notice(
+                "Agent sayings unavailable; the debate log could not be read.",
+                label="agent-saying",
+                role=SemanticRole.WARNING,
+                state=ViewState.ERROR,
+            )
             return
         if start > len(messages):
             start = 0
-        items = messages[start:]
+        items = tuple(
+            item for item in messages[start:] if item.sender in AGENT_SPECS
+        )
         if not items:
             self._debate_message_offsets[key] = len(messages)
             return
 
-        panel_items: tuple[Message, ...] = ()
+        panel_items: list[Message] = []
         for item in items:
             label = self._agent_display_name(item.sender)
             metadata = f"[{item.kind}] {item.phase} {item.revision} round {item.round}:"
-            panel_items += (
+            panel_items.append(
                 Message(
                     label,
-                    f"{metadata}\n{self._truncate_for_display(item.content)}",
+                    (
+                        f"{metadata}\n{self._truncate_for_display(item.content)}"
+                        if item.kind != "error"
+                        else f"{metadata}\nAgent error details are unavailable."
+                    ),
                     role=(
                         SemanticRole.AGENT
                         if item.sender in AGENT_SPECS
@@ -571,7 +589,7 @@ class InteractiveController:
         self._semantic_output.write_component(
             Panel(
                 "Agent saying",
-                panel_items,
+                tuple(panel_items),
                 state=ViewState.COMPLETED,
             )
         )

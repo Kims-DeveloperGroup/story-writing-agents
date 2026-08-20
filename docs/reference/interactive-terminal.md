@@ -90,7 +90,7 @@ semantic `Picker` remains a `Component`. None of these additions changes public
 
 The facade also binds unlisted `InteractiveAdvisoryProgress` and
 `InteractiveDebateProgress` for advisory and consensus awaitable lifecycles.
-It is package-internal and does not expose the driver, renderer, glyphs,
+They are package-internal and do not expose the driver, renderer, glyphs,
 cursor controls, or a public animation API.
 
 The narrow internal adapters have these signatures:
@@ -179,8 +179,7 @@ and performs no stream observation or resource acquisition.
 - retrieval progress and cited-source records; and
 - consensus progress, inspection, cancellation, and terminal summaries.
 - Consensus progress now includes phase handoff/action metadata and a dedicated
-  `Agent saying` panel so each debate phase shows explicit participants and
-  their messages.
+  `Agent saying` panel when new agent messages are available for a phase.
 
 #84 uses the same foundation for:
 

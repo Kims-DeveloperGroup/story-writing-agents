@@ -18,7 +18,12 @@ from typing import get_type_hints
 from unittest import mock
 
 import story_writing_agents
-from story_writing_agents.agents import AGENT_SPECS, PLOT_ARCHITECT, ROSTER
+from story_writing_agents.agents import (
+    AGENT_SPECS,
+    PLOT_ARCHITECT,
+    ROSTER,
+    SPECIALIST_IDS,
+)
 from story_writing_agents import interactive_controller as controller_package
 from story_writing_agents.backend import AgentBackend
 from story_writing_agents.cli_context import (
@@ -82,6 +87,12 @@ from story_writing_agents.interactive_terminal import (
 )
 from story_writing_agents import interactive_terminal as terminal_module
 from story_writing_agents.interactive_terminal._render import render_plain
+from story_writing_agents.models import (
+    DebateMessage,
+    DebateProgressEvent,
+    DebateProgressPhase,
+    InputKind,
+)
 from story_writing_agents.session_lifecycle import (
     SessionAccessState,
     SessionDurableState,
@@ -1102,6 +1113,115 @@ class ControllerContractTests(ControllerTestCase):
         for module_name in graph:
             visit(module_name)
         self.assertEqual(len(modules), 33)
+
+
+class ControllerDebateVisibilityTests(ControllerTestCase):
+    """Verify debate handoffs and blackboard message presentation."""
+
+    def _event(
+        self,
+        phase: DebateProgressPhase,
+        *,
+        input_kind: InputKind = InputKind.PROMPT,
+        revision_id: str | None = None,
+        round_number: int = 0,
+    ) -> DebateProgressEvent:
+        """Build one valid event for direct visibility projections."""
+
+        return DebateProgressEvent(
+            session_id="session",
+            debate_id="debate",
+            input_kind=input_kind,
+            phase=phase,
+            revision_id=revision_id,
+            round_number=round_number,
+        )
+
+    def test_draft_and_synthesis_handoffs_match_runtime_flow(self) -> None:
+        workspace = self.make_workspace()
+        controller, backend, _callbacks = self.make_controller(workspace)
+
+        draft_start = controller._debate_handoff_for_phase(
+            self._event(DebateProgressPhase.STARTED, input_kind=InputKind.DRAFT)
+        )
+        self.assertEqual(
+            draft_start,
+            (
+                ("user",),
+                tuple(SPECIALIST_IDS),
+                "Accept supplied draft as revision 0; request specialist audits.",
+            ),
+        )
+        synthesized = controller._debate_handoff_for_phase(
+            self._event(
+                DebateProgressPhase.SYNTHESIZED,
+                revision_id="r1",
+                round_number=1,
+            )
+        )
+        self.assertEqual(synthesized[0], ("lead_orchestrator",))
+        self.assertEqual(synthesized[1], tuple(SPECIALIST_IDS))
+        backend.close()
+
+    def test_agent_panel_filters_user_entries_and_redacts_errors(self) -> None:
+        workspace = self.make_workspace()
+        controller, backend, callbacks = self.make_controller(workspace)
+        for message in (
+            DebateMessage(
+                "user", "started", 0, "", "user", "private prompt", _CREATED
+            ),
+            DebateMessage(
+                PLOT_ARCHITECT,
+                "audit_completed",
+                0,
+                "r0",
+                "critique",
+                "visible critique",
+                _CREATED,
+            ),
+            DebateMessage(
+                PLOT_ARCHITECT,
+                "failed",
+                0,
+                "r0",
+                "error",
+                "provider secret details",
+                _CREATED,
+            ),
+        ):
+            workspace.append_debate_message("session", "debate", message)
+
+        controller._render_debate_agent_sayings(
+            self._event(DebateProgressPhase.STARTED)
+        )
+        rendered = "".join(callbacks.records)
+        self.assertIn("visible critique", rendered)
+        self.assertIn("Agent error details are unavailable.", rendered)
+        self.assertNotIn("private prompt", rendered)
+        self.assertNotIn("provider secret details", rendered)
+
+        callbacks.records.clear()
+        controller._render_debate_agent_sayings(
+            self._event(DebateProgressPhase.DRAFTED, revision_id="r0")
+        )
+        self.assertNotIn("Agent saying", "".join(callbacks.records))
+        backend.close()
+
+    def test_malformed_agent_log_emits_safe_warning(self) -> None:
+        workspace = self.make_workspace()
+        controller, backend, callbacks = self.make_controller(workspace)
+        with mock.patch.object(
+            workspace,
+            "read_debate_messages",
+            side_effect=WorkspaceFormatError("raw provider details"),
+        ):
+            controller._render_debate_agent_sayings(
+                self._event(DebateProgressPhase.STARTED)
+            )
+        rendered = "".join(callbacks.records)
+        self.assertIn("Agent sayings unavailable; the debate log could not be read.", rendered)
+        self.assertNotIn("raw provider details", rendered)
+        backend.close()
 
 
 class ControllerStartupTests(ControllerTestCase):
