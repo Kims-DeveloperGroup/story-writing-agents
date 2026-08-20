@@ -32,6 +32,7 @@ from story_writing_agents.interactive_terminal import (
     InteractiveError,
     InteractiveErrorCode,
     InteractiveErrorSpec,
+    InteractiveMainCommitCleanup,
     InteractivePromptInput,
     InteractiveTerminal,
     TerminalAction,
@@ -307,6 +308,12 @@ class PublicCompatibilityFoundationTests(unittest.TestCase):
         self.assertIs(InteractivePromptInput, _core.InteractivePromptInput)
         self.assertNotIn("InteractivePromptInput", terminal_facade.__all__)
         self.assertFalse(hasattr(__import__("story_writing_agents"), "InteractivePromptInput"))
+        self.assertIs(
+            terminal_facade.InteractiveMainCommitCleanup,
+            InteractiveMainCommitCleanup,
+        )
+        self.assertIs(InteractiveMainCommitCleanup, _core.InteractiveMainCommitCleanup)
+        self.assertNotIn("InteractiveMainCommitCleanup", terminal_facade.__all__)
 
     def test_public_signatures_remain_exact(self) -> None:
         positional = inspect.Parameter.POSITIONAL_OR_KEYWORD
@@ -808,6 +815,38 @@ class RenderingFoundationTests(unittest.TestCase):
         for line in strip_decorative_sgr(ansi.text).splitlines():
             self.assertLessEqual(physical_width(line), 20)
 
+    def test_settings_changed_only_panel_matches_plain_ansi_and_narrow_widths(
+        self,
+    ) -> None:
+        panel = Panel(
+            "Settings",
+            (
+                Section(
+                    "Current",
+                    (Field("Language", "KO (Changed)", role=SemanticRole.WARNING),),
+                ),
+                Section(
+                    "Pending",
+                    (Field("Language", "EN (Changed)", role=SemanticRole.WARNING),),
+                ),
+                Notice(
+                    "Changed values apply only to the next shell after Save.",
+                    label="activation",
+                    role=SemanticRole.MUTED,
+                ),
+            ),
+            state=ViewState.OPEN,
+        )
+        plain = render_plain(panel, width=20)
+        ansi = render_component(panel, capability(CapabilityProfile.ANSI, width=20))
+        self.assertEqual(strip_decorative_sgr(ansi.text), plain.text)
+        self.assertIn("Language", plain.text)
+        self.assertIn("KO (Changed)", plain.text)
+        self.assertIn("EN (Changed)", plain.text)
+        self.assertNotIn("Persona", plain.text)
+        for line in plain.text.splitlines():
+            self.assertLessEqual(physical_width(line), 20)
+
     def test_every_state_and_selection_disabled_empty_cue_is_plainly_visible(
         self,
     ) -> None:
@@ -986,6 +1025,31 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
         read_line.assert_not_called()
         with self.assertRaisesRegex(TypeError, "InteractiveTerminal"):
             InteractivePromptInput(object())  # type: ignore[arg-type]
+
+    def test_main_commit_cleanup_is_one_shot_and_fallback_safe(self) -> None:
+        output = io.StringIO()
+        driver = RawTerminalDriver(
+            lambda _prompt: "fallback",
+            object(),  # type: ignore[arg-type]
+            output,
+            transition_line_input,
+            transition_main_input,
+            append_main_input_history,
+        )
+        terminal = InteractiveTerminal(lambda _prompt: "", lambda _text: None)
+        cleanup = InteractiveMainCommitCleanup(terminal)
+        cleanup.clear_main_commit_display()
+
+        driver._main_commit_display = _driver._CommittedMainDisplay(2)
+        driver.clear_main_commit_display()
+        self.assertEqual(output.getvalue(), "\r\x1b[A\x1b[A\r\x1b[J")
+        driver.clear_main_commit_display()
+        self.assertEqual(output.getvalue(), "\r\x1b[A\x1b[A\r\x1b[J")
+
+        driver._main_commit_display = _driver._CommittedMainDisplay(1)
+        self.assertEqual(driver.read_line("story[lobby]> "), "fallback")
+        driver.clear_main_commit_display()
+        self.assertEqual(output.getvalue(), "\r\x1b[A\x1b[A\r\x1b[J")
 
     def test_prompt_adapter_and_driver_fallback_are_typed_literal_and_history_free(
         self,

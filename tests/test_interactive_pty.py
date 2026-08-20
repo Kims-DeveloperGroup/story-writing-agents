@@ -1153,10 +1153,14 @@ print("RESULT=" + outcome.kind.value)
                 )
                 returned_mark = process.output_mark()
                 process.send_text(("\x1b[B" * 4) + "\n")
-                process.wait_for_text(
+                process.send_line("yes")
+                saved = process.wait_for_text(
                     "[saved] Settings saved.",
                     after=returned_mark,
                 )
+                self.assertIn("(Changed)", saved)
+                confirmation = saved.rsplit("Settings [open]", 1)[-1]
+                self.assertNotIn("Persona", confirmation)
                 process.wait_for_text("story[lobby]> ", after=returned_mark)
 
                 history_mark = process.output_mark()
@@ -1260,6 +1264,7 @@ print("RESULT=" + outcome.kind.value)
         process.send_line("/cancel")
         process.wait_for_text("6. [available] Cancel", after=model_mark)
         process.send_line("5")
+        process.send_line("yes")
         process.wait_for_text("Settings saved", after=mark)
         process.wait_for_text("story[lobby]> ", after=mark)
         process.send_line("/quit")
