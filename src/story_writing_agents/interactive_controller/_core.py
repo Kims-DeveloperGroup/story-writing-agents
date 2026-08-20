@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import asyncio
 
-from ..agents import AGENT_SPECS, LEAD_ORCHESTRATOR, ROSTER
+from ..agents import (
+    AGENT_SPECS,
+    EXECUTION_SPECIALIST,
+    LEAD_ORCHESTRATOR,
+    ROSTER,
+    SPECIALIST_IDS,
+)
 from ..backend import AgentBackend
 from ..cli_context import (
     CliContext,
@@ -220,6 +226,8 @@ class InteractiveController:
         "_runtime",
         "_semantic_output",
         "_focused_conversation",
+        "_debate_message_offsets",
+        "_debate_last_conflict_targets",
         "_started",
         "_target_agent_id",
         "_terminal",
@@ -291,6 +299,10 @@ class InteractiveController:
         self._focused_conversation: ConversationMetadata | None = None
         self._target_agent_id = LEAD_ORCHESTRATOR
         self._last_started_debate_by_session: dict[str, str] = {}
+        self._debate_message_offsets: dict[tuple[str, str], int] = {}
+        self._debate_last_conflict_targets: dict[
+            tuple[str, str], tuple[str, ...]
+        ] = {}
         self._runner: asyncio.Runner | None = None
         self._started = False
         self._closed = False
@@ -351,6 +363,216 @@ class InteractiveController:
                 state=state,
             )
         )
+
+    @staticmethod
+    def _debate_progress_style(phase: DebateProgressPhase) -> tuple[SemanticRole, ViewState]:
+        """Return stable role/state decoration for one progress phase."""
+
+        if phase is DebateProgressPhase.CONSENSUS:
+            return SemanticRole.SUCCESS, ViewState.COMPLETED
+        if phase in {
+            DebateProgressPhase.DEADLOCK,
+            DebateProgressPhase.FAILED,
+        }:
+            return SemanticRole.ERROR, ViewState.ERROR
+        if phase is DebateProgressPhase.INTERRUPTED:
+            return SemanticRole.WARNING, ViewState.CANCELLED
+        return SemanticRole.INFO, ViewState.LOADING
+
+    @staticmethod
+    def _agent_display_name(agent_id: str) -> str:
+        """Return one short display label for known and internal IDs."""
+
+        if agent_id in AGENT_SPECS:
+            return AGENT_SPECS[agent_id].display_name
+        if agent_id == "runtime":
+            return "runtime"
+        if agent_id == "user":
+            return "user"
+        if agent_id == "filesystem":
+            return "filesystem"
+        if agent_id == "artifact_store":
+            return "artifact_store"
+        return agent_id.replace("_", " ")
+
+    @staticmethod
+    def _agent_display_chain(agent_ids: tuple[str, ...]) -> str:
+        """Render one compact textual sender/recipient chain."""
+
+        return ", ".join(
+            InteractiveController._agent_display_name(agent_id)
+            for agent_id in agent_ids
+        )
+
+    @staticmethod
+    def _debate_message_key(event: DebateProgressEvent) -> tuple[str, str]:
+        """Return one stable key for debate-local in-memory cursors."""
+
+        return (event.session_id, event.debate_id)
+
+    @staticmethod
+    def _truncate_for_display(text: str, limit: int = 1200) -> str:
+        """Shorten long speech content before printing an event log."""
+
+        if len(text) <= limit:
+            return text
+        return f"{text[: limit - 20]} ... [truncated]"
+
+    def _debate_handoff_for_phase(
+        self,
+        event: DebateProgressEvent,
+    ) -> tuple[tuple[str, ...], tuple[str, ...], str]:
+        """Map a progress phase to readable sender/recipient/action."""
+
+        phase = event.phase
+        key = self._debate_message_key(event)
+        if phase is DebateProgressPhase.STARTED:
+            return (
+                ("user",),
+                (EXECUTION_SPECIALIST,),
+                "Start drafting revision 0 from user input.",
+            )
+        if phase is DebateProgressPhase.DRAFTED:
+            return (
+                (EXECUTION_SPECIALIST,),
+                tuple(SPECIALIST_IDS),
+                "Draft complete; request specialist audits.",
+            )
+        if phase is DebateProgressPhase.AUDIT_STARTED:
+            return (
+                (LEAD_ORCHESTRATOR,),
+                tuple(SPECIALIST_IDS),
+                "Dispatch specialist audit for the current revision.",
+            )
+        if phase is DebateProgressPhase.AUDIT_COMPLETED:
+            if event.conflicting_agents:
+                return (
+                    tuple(event.conflicting_agents),
+                    (LEAD_ORCHESTRATOR,),
+                    "Conflicts found; return critiques to orchestrator.",
+                )
+            return (
+                tuple(SPECIALIST_IDS),
+                (LEAD_ORCHESTRATOR,),
+                "No conflicts found; return approvals to orchestrator.",
+            )
+        if phase is DebateProgressPhase.SYNTHESIZED:
+            targets = self._debate_last_conflict_targets.get(
+                key, tuple(SPECIALIST_IDS)
+            )
+            return (
+                (LEAD_ORCHESTRATOR,),
+                targets,
+                "Synthesize revision from proposals and feedback.",
+            )
+        if phase is DebateProgressPhase.ARTIFACTS_COMMITTED:
+            return (
+                (LEAD_ORCHESTRATOR,),
+                ("filesystem",),
+                "Finalize draft and commit artifact updates.",
+            )
+        if phase is DebateProgressPhase.CONSENSUS:
+            return (
+                (LEAD_ORCHESTRATOR,),
+                ("user",),
+                "Consensus reached; provide final result.",
+            )
+        if phase is DebateProgressPhase.DEADLOCK:
+            return (
+                (LEAD_ORCHESTRATOR,),
+                ("user",),
+                "Deadlock detected; user input is required.",
+            )
+        if phase is DebateProgressPhase.FAILED:
+            return (
+                (LEAD_ORCHESTRATOR,),
+                ("runtime",),
+                "Debate failed and will be closed with an error.",
+            )
+        return (
+            ("runtime",),
+            ("user",),
+            "Persist interrupted state and return for retry.",
+        )
+
+    def _write_debate_progress_context(self, event: DebateProgressEvent) -> None:
+        """Render event-handoff metadata before the phase status row."""
+
+        role, state = self._debate_progress_style(event.phase)
+        from_agents, to_agents, action = self._debate_handoff_for_phase(event)
+        fields = (
+            Field("Event", event.phase.value),
+            Field("Round", str(event.round_number)),
+            Field("Revision", event.revision_id or "n/a"),
+            Field(
+                "Handoff",
+                f"{self._agent_display_chain(from_agents)} -> "
+                f"{self._agent_display_chain(to_agents)}",
+            ),
+            Field("Action", action),
+        )
+        if event.conflicting_agents:
+            fields = (*fields,)
+            fields += (
+                Field(
+                    "Conflicts",
+                    self._agent_display_chain(event.conflicting_agents),
+                ),
+            )
+        self._semantic_output.write_component(
+            Record(
+                "event",
+                title=f"{event.debate_id} phase",
+                fields=fields,
+                role=role,
+                state=state,
+            )
+        )
+
+    def _render_debate_agent_sayings(self, event: DebateProgressEvent) -> None:
+        """Render only the new agent messages since the previous phase."""
+
+        key = self._debate_message_key(event)
+        start = self._debate_message_offsets.get(key, 0)
+        try:
+            messages = self._workspace.read_debate_messages(
+                event.session_id,
+                event.debate_id,
+            )
+        except Exception:
+            self._debate_message_offsets[key] = start
+            return
+        if start > len(messages):
+            start = 0
+        items = messages[start:]
+        if not items:
+            self._debate_message_offsets[key] = len(messages)
+            return
+
+        panel_items: tuple[Message, ...] = ()
+        for item in items:
+            label = self._agent_display_name(item.sender)
+            metadata = f"[{item.kind}] {item.phase} {item.revision} round {item.round}:"
+            panel_items += (
+                Message(
+                    label,
+                    f"{metadata}\n{self._truncate_for_display(item.content)}",
+                    role=(
+                        SemanticRole.AGENT
+                        if item.sender in AGENT_SPECS
+                        else SemanticRole.DEFAULT
+                    ),
+                    state=ViewState.COMPLETED,
+                ),
+            )
+        self._semantic_output.write_component(
+            Panel(
+                "Agent saying",
+                panel_items,
+                state=ViewState.COMPLETED,
+            )
+        )
+        self._debate_message_offsets[key] = len(messages)
 
     @staticmethod
     def _debate_inspection_record(facts: DebateInspectionFacts) -> Record:
@@ -2843,6 +3065,12 @@ class InteractiveController:
             expected_context_mode=expected_context_mode,
             previous=events[-1] if events else None,
         )
+        key = self._debate_message_key(canonical)
+        if canonical.phase is DebateProgressPhase.STARTED:
+            self._debate_message_offsets[key] = 0
+            self._debate_last_conflict_targets[key] = ()
+        elif canonical.phase is DebateProgressPhase.AUDIT_COMPLETED:
+            self._debate_last_conflict_targets[key] = canonical.conflicting_agents
         self._render_debate_progress(canonical)
         events.append(canonical)
         if canonical.phase is DebateProgressPhase.STARTED:
@@ -2855,6 +3083,7 @@ class InteractiveController:
 
         phase = event.phase
         if phase is DebateProgressPhase.STARTED:
+            self._write_debate_progress_context(event)
             self._write_run_record(
                 event.debate_id,
                 content=f"Started {event.input_kind.value} consensus.",
@@ -2876,6 +3105,7 @@ class InteractiveController:
                     label="context",
                     state=ViewState.COMPLETED,
                 )
+            self._render_debate_agent_sayings(event)
             return
         if phase is DebateProgressPhase.DRAFTED:
             text = "Drafted revision r0."
@@ -2936,12 +3166,14 @@ class InteractiveController:
         else:
             role = SemanticRole.INFO
             state = ViewState.LOADING
+        self._write_debate_progress_context(event)
         self._write_run_record(
             event.debate_id,
             content=text,
             role=role,
             state=state,
         )
+        self._render_debate_agent_sayings(event)
 
     def _present_consensus_result(
         self,
