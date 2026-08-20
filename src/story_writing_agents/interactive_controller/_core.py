@@ -1339,9 +1339,7 @@ class InteractiveController:
                 )
                 return False
             if action.kind is ActionKind.CONVERSATION_USE:
-                assert action.argument is not None
-                self._focus_subject_conversation(action.argument)
-                return False
+                return self._focus_subject_conversation(action.argument)
             if action.kind is ActionKind.CONVERSATION_SUBJECT:
                 assert action.argument is not None
                 self._rename_focused_conversation(action.argument)
@@ -3937,17 +3935,98 @@ class InteractiveController:
                 total_count=total_count,
             )
 
-    def _focus_subject_conversation(self, reference: str) -> None:
-        """Resolve, save, and focus one active conversation without rerouting.
+    def _focus_subject_conversation(self, reference: str | None) -> bool:
+        """Select or resolve, save, and focus one active conversation.
 
-        Exact IDs win over case-sensitive prefixes of at least twelve
-        characters. Resolution includes archived records, which receive a
-        typed rejection. Default persistence completes before in-memory focus
-        and presentation change.
+        An omitted reference presents active rows in catalog order. Picker
+        cancellation is mutation-free and EOF requests normal controller
+        cleanup. The committed full identity then follows the same fresh
+        resolution used by explicit exact IDs and accepted unique prefixes.
+        Resolution includes archived records, which receive a typed rejection.
+        Default persistence completes before in-memory focus and presentation
+        change, and agent routing remains untouched.
         """
 
         session_id = self._attached_session_id
         assert session_id is not None
+        if reference is None:
+            try:
+                entries = self._catalog_entries(session_id)
+                active_entries = tuple(
+                    entry
+                    for entry in entries
+                    if entry.status is ConversationStatus.ACTIVE
+                )
+            except Exception as exc:
+                self._present_conversation_failure(exc)
+                return False
+            if not active_entries:
+                self._write_notice(
+                    "No active conversations found.",
+                    label="conversation",
+                    role=SemanticRole.MUTED,
+                    state=ViewState.EMPTY,
+                )
+                return False
+
+            active_ids = tuple(
+                entry.conversation_id for entry in active_entries
+            )
+            highlighted_id = (
+                None
+                if self._focused_conversation is None
+                else self._focused_conversation.conversation_id
+            )
+            if highlighted_id not in active_ids:
+                try:
+                    highlighted_id = load_default_conversation(
+                        self._workspace,
+                        session_id,
+                    )
+                except Exception as exc:
+                    self._present_conversation_failure(exc)
+                    return False
+            if highlighted_id not in active_ids:
+                highlighted_id = None
+
+            outcome = self._picker_input.read_picker(
+                Prompt(
+                    "Use conversation",
+                    instruction="Choose an active conversation to focus.",
+                ),
+                tuple(
+                    Choice(
+                        entry.conversation_id,
+                        entry.subject,
+                        description=(
+                            "Handle: "
+                            f"{visible_conversation_handle(entry, entries)}"
+                        ),
+                    )
+                    for entry in active_entries
+                ),
+                highlighted_id=highlighted_id,
+            )
+            if outcome.kind is ControlOutcomeKind.EOF:
+                return True
+            if outcome.kind in {
+                ControlOutcomeKind.CANCEL,
+                ControlOutcomeKind.INTERRUPT,
+            }:
+                self._write_conversation_cancelled_status(
+                    "Conversation focus cancelled."
+                )
+                return False
+            if (
+                outcome.kind is not ControlOutcomeKind.COMMIT
+                or outcome.text is None
+                or outcome.text not in active_ids
+            ):
+                raise _ControllerAbort(
+                    InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+                )
+            reference = outcome.text
+
         try:
             focused, entries = self._resolve_conversation_reference(
                 session_id,
@@ -3955,12 +4034,12 @@ class InteractiveController:
             )
         except Exception as exc:
             self._present_conversation_failure(exc)
-            return
+            return False
         if focused.status is ConversationStatus.ARCHIVED:
             self._terminal.write_error(
                 InteractiveError(InteractiveErrorCode.CONVERSATION_ARCHIVED)
             )
-            return
+            return False
         try:
             save_default_conversation(
                 self._workspace,
@@ -3972,7 +4051,7 @@ class InteractiveController:
             self._terminal.write_error(
                 classify_conversation_failure(exc)
             )
-            return
+            return False
 
         self._focused_conversation = focused
         self._write_notice(
@@ -3985,6 +4064,7 @@ class InteractiveController:
             role=SemanticRole.SUCCESS,
             state=ViewState.COMPLETED,
         )
+        return False
 
     def _rename_focused_conversation(self, subject: str) -> None:
         """Atomically rename the focused active conversation, then update memory.

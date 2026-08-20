@@ -102,13 +102,39 @@ snapshot, and live session or explicit overrides still take precedence. See
 | --- | --- |
 | `/conversation new [SUBJECT]` | Create an active subject; save it as default and current focus. |
 | `/conversation list [--all] [QUERY]` | List in catalog order; optionally include archives or filter subjects. |
-| `/conversation use ID` | Focus an active exact ID or displayed unique handle; save the default. |
+| `/conversation use [ID]` | Focus an active exact ID or accepted unique prefix, or omit `ID` to choose from active conversations; save the default. |
 | `/conversation subject SUBJECT` | Rename the focused identity. |
 | `/conversation archive [ID]` | Confirm focused archive, or archive another identity directly. |
 
+Omitting `ID` opens the generic picker over active conversations in catalog
+order. Each row uses the subject as its label and shows `Handle: HANDLE`. A
+handle is the stable first 12 characters of the immutable ID when that prefix
+is unique across the complete session catalog; a collision shows the full ID.
+The current focus is highlighted when it is still active; otherwise the active
+saved default is highlighted when present, then the first row. On a capable
+terminal, use Up/Down and Enter. Numbered fallback accepts a blank line for the
+highlighted row, an in-range ASCII decimal ordinal, or exact `/cancel`.
+
+Escape on a capable terminal, exact `/cancel` in fallback, or Ctrl-C cancels
+without changing the catalog, saved default, current focus, or agent focus.
+EOF exits through normal shell cleanup without selecting a conversation. If
+there are no active conversations, the shell prints
+`No active conversations found.` without opening the picker.
+
+A picker commit carries the immutable full ID, then rereads the complete
+catalog before selection. A conversation that disappeared or became archived
+is rejected, and a refreshed subject is used. The saved default is written
+before current focus changes, so a failed write preserves the prior effective
+choice. Explicit `/conversation use ID` remains direct and accepts the same
+exact full ID or accepted case-sensitive unique prefix of at least 12
+characters as before.
+
 Identities cannot change. Responders share the focused transcript. Ordinary
 text uses agent focus; `@plot TEXT` is one-shot, while `/to character` persists.
-Conversation changes preserve agent focus; session transitions reset or clear it.
+Conversation changes preserve agent focus; session transitions reset or clear
+it. `/conversation list` remains active-only unless `--all` is supplied. The
+picker does not change startup default restoration, routing, noninteractive
+commands, storage/provider schemas, or package APIs.
 
 ## Choose the right memory operation
 

@@ -2159,6 +2159,51 @@ print(
             process.original_terminal_attributes,
         )
 
+    def test_conversation_use_picker_selects_active_focus_and_restores_terminal(
+        self,
+    ) -> None:
+        """Select another active conversation through the real picker consumer."""
+
+        self._seed_default_session(subject="First subject")
+        catalog = FilesystemConversationCatalog(self.workspace)
+        target = catalog.create("alpha", "Second subject")
+        process = self._spawn_cli(
+            (),
+            environment_overrides={"TERM": "xterm-256color"},
+        )
+        process.wait_for_text("story[alpha:lead]> ")
+
+        mark = process.output_mark()
+        process.send_line("/conversation use")
+        process.send_text("\n")
+        opened = process.wait_for_text(
+            "Use conversation [focused] [open] >",
+            after=mark,
+        )
+        self.assertLess(
+            opened.index("[highlighted] First subject"),
+            opened.index("[available] Second subject"),
+        )
+        self.assertEqual(opened.count("Handle:"), 2)
+
+        process.send_text("\x1b[B\n")
+        process.wait_for_text("Current focus: ", after=mark)
+        process.wait_for_text("Subject: Second subject", after=mark)
+        process.wait_for_text("story[alpha:lead]> ", after=mark)
+        process.send_line("/quit")
+        process.send_text("\n")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+
+        self.assertEqual(
+            load_default_conversation(self.workspace, "alpha"),
+            target.conversation_id,
+        )
+        self.assertFalse(self.provider_log.exists())
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
     def test_history_search_transcript_and_cited_retrieval_stay_scoped(
         self,
     ) -> None:
