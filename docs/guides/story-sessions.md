@@ -28,9 +28,24 @@ Run `story` from an initialized workspace. Without a default it opens
 | Another session is attached | Create/open acquires the destination before releasing the source. | Destination becomes default/current; agent focus resets to `lead`. |
 | Session is attached | Confirmed `/session pause` pauses and releases it. | Defaults remain; attachment and both focuses clear. |
 
-Omitting `/session open`'s name uses the default but never creates it.
-`story chat NAME` creates an absent name or opens/reopens it. Bare `story` opens
-a ready default and asks before reopening a paused default.
+Omitting the name from `/session open` opens a picker over persisted sessions in
+the same lifecycle order used by the backend. Each row shows the session ID,
+durable state, and process-access state. The current attachment is highlighted
+when present; otherwise the saved default is highlighted when present, then the
+first row. On a capable terminal, use Up/Down and Enter. In line fallback,
+press Enter for the highlighted row or enter its ASCII decimal number.
+
+Escape on a capable terminal, exact `/cancel` in line fallback, or Ctrl-C
+cancels without changing lifecycle state, defaults, or attachment. EOF exits
+the shell through normal cleanup without selecting a session. An empty catalog
+prints `No story sessions found.` without opening a picker. Choosing the current
+attachment only reports that it is already attached; any other selection uses
+the same open/reopen transition as explicit `/session open NAME`. The explicit
+form remains direct and never creates a missing session.
+
+`story chat NAME` creates an absent name or opens/reopens it. Bare `story` still
+opens a ready default and asks before reopening a paused default. The picker
+does not change `/session list` or standalone session-command behavior.
 
 `/quit`, `/exit`, and EOF release access without pausing; ready state and
 defaults remain. Restarting establishes a new attachment and restores an active

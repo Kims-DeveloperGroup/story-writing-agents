@@ -119,8 +119,8 @@ highlight. The first changing Tab
 saves the full buffer/cursor snapshot; edits in the same grammar position keep
 it, and a grammar-position change resets it. Enter submits only the visible
 buffer to the parser once. The generic single-select picker and cancellable
-prompt seams remain package-internal; `/settings` consumes them without adding
-a supported terminal API.
+prompt seams remain package-internal; `/settings` consumes both and omitted
+`/session open` consumes the picker without adding a supported terminal API.
 
 `/settings` is alias-free, takes no argument, and is available with or without
 an attached session. It edits isolated Current and Pending snapshots for
@@ -182,6 +182,20 @@ indicator-only failures use the existing internal-error path after cleanup.
 Session grammar is `/session list | create NAME | open [NAME] | pause`. Explicit
 `story chat SESSION` creates an absent session or opens a persisted one. Bare
 entry opens a ready default and asks before reopening a paused default.
+
+Within the shell, omitted `/session open` displays all persisted sessions in
+backend lifecycle order. Rows show session ID plus durable and process-access
+state. The current attachment is highlighted when it is present in the
+catalog; otherwise the saved default is highlighted when present, then the
+first row. Up/Down and Enter select on a capable terminal. Numbered fallback
+accepts a blank line for the highlight, an in-range ASCII decimal ordinal, or
+exact `/cancel`. Escape on capable streams, exact `/cancel` in fallback, and
+Ctrl-C cancel without mutation; EOF performs normal shell cleanup without
+selecting. An empty catalog emits `[session] No story sessions found.` and no
+picker. Choosing the current attachment reports that it is already attached;
+another committed choice follows the established open/reopen transition.
+Explicit `/session open NAME`, startup default handling, `/session list`, and
+standalone `story session` commands are unchanged.
 
 Full help is one grouped semantic `Panel` in command-registry order; contextual
 help is one command record with its group, syntax, aliases, provider/artifact

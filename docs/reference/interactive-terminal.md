@@ -11,7 +11,8 @@
 > lifecycle records use semantic notices. A generic single-select picker
 > foundation and a cancellable prompt seam are implemented behind unlisted
 > package-internal adapters. `/settings` consumes both without changing the
-> supported public terminal API. Advisory and consensus turns additionally use
+> supported public terminal API; omitted `/session open` consumes only the
+> picker. Advisory and consensus turns additionally use
 > one unlisted terminal-owned rolling indicator on capable raw streams;
 > callback and incapable paths remain silent, and these waits emit no
 > `[routing]` or `[waiting]` record.
@@ -125,7 +126,8 @@ accepted component call performs one render and one callback write, including
 the final LF; failures propagate without a retry. The picker adapter likewise
 binds only the terminal's picker reader without observing capabilities or
 acquiring I/O. The settings controller consumes both input adapters through
-the facade; neither is public API. `transient` is an opt-in settings lifecycle:
+the facade, while omitted `/session open` consumes the picker adapter; neither
+is public API. `transient` is an opt-in settings lifecycle:
 its default `False` preserves the established picker and prompt final-frame
 behavior used by every non-settings caller. `InteractiveAdvisoryProgress` and
 `InteractiveDebateProgress` are also unlisted and bind one call-local async
@@ -240,7 +242,8 @@ four generic-status call sites; the controller also has no generic
 input views and use pure history-free controls as documented below. Selectable
 main-command palettes and finite fixed options are available on capable main
 reads. The generic picker and cancellable-prompt foundations remain available
-only through unlisted internal seams; `/settings` is their installed consumer.
+only through unlisted internal seams. `/settings` consumes both, and omitted
+`/session open` consumes the picker.
 
 ## Prompts and semantic input presentation
 
@@ -536,13 +539,24 @@ None of those terminal results adds a final confirmation notice.
 
 ## Generic internal picker foundation
 
-This foundation is package-internal; `/settings` consumes it through the
-controller and unlisted terminal facade adapter. A caller supplies one semantic
-prompt and immutable choices whose opaque identities are returned on commit but
-never rendered.
+This foundation is package-internal; `/settings` and omitted `/session open`
+consume it through their controllers and the unlisted terminal facade adapter.
+A caller supplies one semantic prompt and immutable choices whose opaque
+identities are returned on commit but never rendered.
+
 Initialization highlights an explicit enabled choice, otherwise an enabled
 selection, otherwise the first enabled choice. Empty and all-disabled choice
 sets remain explicit `empty` and `disabled` states.
+
+Omitted `/session open` supplies one enabled choice per persisted lifecycle in
+backend order. The visible label is the session ID, and its description is
+`Durable: STATE; access: STATE`. The controller explicitly highlights the
+current attachment, then the saved default; generic initialization chooses the
+first row if neither is present. A commit returns the identity; the controller
+reports an unchanged current attachment or freshly validates another choice
+before the established open/reopen transition. Escape or Ctrl-C cancels without
+mutation, while EOF returns to normal shell cleanup. The controller handles an
+empty catalog without opening the picker.
 
 Highlight and selection are independent until commit, so a frame can show one
 selected choice and another highlighted choice. Up/Down moves the highlight
