@@ -46,10 +46,14 @@ Do not replace the guard pathname while a workspace may be used.
 ## Debug-log filesystem safety
 
 The internal debug writer uses `Workspace` containment and no-symlink checks
-for `debug_logs/`, `.runtime.lock`, the active log, and every backup. Existing
-guard, active, and backup paths must be regular files; active and backup files
-must also be no larger than 1 MiB. Unsafe, nonregular, or oversized storage is
-preserved rather than repaired.
+for `debug_logs/`, `.runtime.lock`, the active log, and every backup. Every
+existing guard, active, and backup path must name a regular file with a
+filesystem link count of exactly one (`st_nlink == 1`). The opened guard and
+active file descriptors are also verified against their current pathnames
+before use. Active and backup files must be no larger than 1 MiB. Hard-linked,
+nonregular, oversized, or otherwise unsafe storage is preserved rather than
+repaired, and that diagnostic record is dropped without changing caller
+control flow.
 
 A guarded weak process-wide lock serializes writers for one resolved workspace.
 An independent persistent `.runtime.lock` then provides a POSIX or Windows
@@ -67,8 +71,11 @@ not form a transaction. Lock, validation, append, flush, synchronization,
 rollback, rotation, and cleanup failures are suppressed; a record may be
 dropped, and a failed rotation can leave fewer retained files.
 
-Do not edit or replace `.runtime.lock` or the active/backup files while the
-workspace may be used. Paths and retention are listed in
+Do not edit, replace, or create another hard link to `.runtime.lock` or the
+active/backup files while the workspace may be used. Validation covers the
+state observed when a file is opened or checked for rotation; it cannot make
+concurrent external filesystem changes transactional. Paths and retention are
+listed in
 [Session storage](../reference/configuration/session-storage.md#runtime-debug-log-storage).
 
 ## Conversation transcript safety

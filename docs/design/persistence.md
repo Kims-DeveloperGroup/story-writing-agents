@@ -41,13 +41,15 @@ fixed replacements for unsafe type, module, or function names. It does not
 accept a caller timestamp, message, path, traceback text, or arbitrary detail
 or payload mapping.
 
-`Workspace` owns containment and the `debug_logs/` scaffold. The internal
-writer separately owns this schema, the active file, guard, append, rollback,
-and rotation. It is not exported from the project-root facade, and constructing
-the writer performs no filesystem work. `StoryRuntime` construction only retains
-that I/O-free handle and emits nothing. `AgentBackend` begins emitting only
-after the complete configuration snapshot loads successfully; CLI, controller,
-and smoke emission starts only after workspace resolution or initialization.
+`Workspace` owns containment, no-symlink checks, and the `debug_logs/` scaffold.
+The internal writer separately owns this schema and the lifecycle of its guard
+and log files: lazy creation, single-link regular-file validation, active/backup
+size validation, append, rollback, and rotation. It is not exported from the
+project-root facade, and constructing the writer performs no filesystem work.
+`StoryRuntime` construction only retains that I/O-free handle and emits nothing.
+`AgentBackend` begins emitting only after the complete configuration snapshot
+loads successfully; CLI, controller, and smoke emission starts only after
+workspace resolution or initialization.
 
 The low-level writer drops ordinary `Exception` failures. Each of the five
 consumers adds a private `BaseException` guard around submissions, so a
