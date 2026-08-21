@@ -33,7 +33,6 @@ from story_writing_agents.interactive_terminal import (
     InteractiveErrorCode,
     InteractiveErrorSpec,
     InteractiveMainInput,
-    InteractiveMainCommitCleanup,
     InteractivePromptInput,
     InteractiveTerminal,
     TerminalAction,
@@ -316,12 +315,9 @@ class PublicCompatibilityFoundationTests(unittest.TestCase):
         self.assertIs(InteractiveMainInput, _core.InteractiveMainInput)
         self.assertNotIn("InteractiveMainInput", terminal_facade.__all__)
         self.assertFalse(hasattr(__import__("story_writing_agents"), "InteractiveMainInput"))
-        self.assertIs(
-            terminal_facade.InteractiveMainCommitCleanup,
-            InteractiveMainCommitCleanup,
-        )
-        self.assertIs(InteractiveMainCommitCleanup, _core.InteractiveMainCommitCleanup)
         self.assertNotIn("InteractiveMainCommitCleanup", terminal_facade.__all__)
+        self.assertFalse(hasattr(terminal_facade, "InteractiveMainCommitCleanup"))
+        self.assertFalse(hasattr(_core, "InteractiveMainCommitCleanup"))
 
     def test_public_signatures_remain_exact(self) -> None:
         positional = inspect.Parameter.POSITIONAL_OR_KEYWORD
@@ -1104,7 +1100,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
         with self.assertRaisesRegex(TypeError, "InteractiveTerminal"):
             InteractivePromptInput(object())  # type: ignore[arg-type]
 
-    def test_main_commit_cleanup_is_temporary_resource_free_noop(self) -> None:
+    def test_deleted_main_commit_cleanup_seam_leaves_no_terminal_state(self) -> None:
         output = io.StringIO()
         driver = RawTerminalDriver(
             lambda _prompt: "fallback",
@@ -1114,12 +1110,12 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             transition_main_input,
             append_main_input_history,
         )
-        terminal = InteractiveTerminal(lambda _prompt: "", lambda _text: None)
-        cleanup = InteractiveMainCommitCleanup(terminal)
-        cleanup.clear_main_commit_display()
         self.assertEqual(driver.read_line("story[lobby]> "), "fallback")
-        cleanup.clear_main_commit_display()
         self.assertEqual(output.getvalue(), "")
+        self.assertNotIn(
+            "_clear_main_commit_display",
+            InteractiveTerminal.__slots__,
+        )
         self.assertNotIn("_main_commit_display", RawTerminalDriver.__slots__)
         self.assertFalse(hasattr(driver, "_main_commit_display"))
         self.assertFalse(hasattr(driver, "clear_main_commit_display"))
@@ -1507,7 +1503,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
         driver.read_main_command_line.side_effect = (
             "/status",
             "/help",
-            "/session open alpha",
+            "/session resume alpha",
         )
         driver.read_input_line.side_effect = (
             "composition line",
@@ -1575,8 +1571,8 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
         picker = Picker(
             Prompt("Resume"),
             (
-                Choice("/session open alpha", "Alpha"),
-                Choice("/session open beta", "Beta"),
+                Choice("/session resume alpha", "Alpha"),
+                Choice("/session resume beta", "Beta"),
             ),
         )
         choice_provider = mock.Mock(return_value=picker)
@@ -1584,7 +1580,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             InteractiveMainInput(terminal).read_main(choice_provider),
             TerminalAction(
                 TerminalActionKind.LINE,
-                text="/session open alpha",
+                text="/session resume alpha",
             ),
         )
         terminal.write_status(TerminalMessageKind.RESULT, "ready")
@@ -1615,7 +1611,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             SuggestionPalette(
                 "/",
                 picker.choices,
-                highlighted_id="/session open alpha",
+                highlighted_id="/session resume alpha",
             ),
         )
         choice_provider.assert_called_once_with("/", 1)

@@ -2012,7 +2012,7 @@ print(
         self.assertIn("focused", listed)
 
         mark = process.output_mark()
-        process.send_line(f"/conversation use {first_handle}")
+        process.send_line(f"/conversation resume {first_handle}")
         process.wait_for_text("Current focus: ", after=mark)
         mark = process.output_mark()
         process.send_line("/conversation subject Renamed Subject")
@@ -2133,7 +2133,7 @@ print(
         )
 
         mark = process.output_mark()
-        process.send_line("/session open alpha")
+        process.send_line("/session resume alpha")
         process.wait_for_text("Session: alpha (opened)", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         self.assertFalse(
@@ -2169,10 +2169,10 @@ print(
             )
         self.assertFalse(self.provider_log.exists())
 
-    def test_session_open_picker_selects_persisted_session_and_restores_terminal(
+    def test_live_session_resume_selects_persisted_session_and_restores_terminal(
         self,
     ) -> None:
-        """Move from the highlighted attachment to another persisted session."""
+        """Commit one live resume choice without entering a second picker."""
 
         self._seed_default_session()
         backend = AgentBackend(
@@ -2202,24 +2202,33 @@ print(
         )
         process.wait_for_text("story[alpha:lead]> ")
         mark = process.output_mark()
-        process.send_text("/session open\n\n")
-        process.send_text("\n")
+        process.send_text("/session resume")
         opened = process.wait_for_text(
-            "Open story session [focused] [open] >",
+            "[highlighted] alpha — Durable: ready; access: held_here",
             after=mark,
         )
+        self.assertIn("Suggestions [open]", opened)
         self.assertLess(
-            opened.index("[available] beta"),
+            opened.index("- beta — Durable: ready; access: claimable"),
             opened.index("[highlighted] alpha"),
         )
-        self.assertIn("[highlighted] alpha", opened)
-        self.assertIn("Durable: ready; access: held_here", opened)
+        self.assertNotIn("Resume story session [focused] [open] >", opened)
 
-        process.send_text("\x1b[A\n")
-        process.wait_for_text("Session: beta (opened)", after=mark)
-        process.wait_for_text("story[beta:lead]> ", after=mark)
-        process.send_text("/quit\n\n")
+        navigation_mark = process.output_mark()
+        process.send_text("\x1b[A")
+        process.wait_for_text(
+            "[highlighted] beta — Durable: ready; access: claimable",
+            after=navigation_mark,
+        )
+        commit_mark = process.output_mark()
         process.send_text("\n")
+        resumed = process.wait_for_text("story[beta:lead]> ", after=commit_mark)
+        self.assertTrue(resumed.startswith("\r\r\x1b[J"), resumed)
+        self.assertEqual(resumed.count("Session: beta (opened)"), 1)
+        self.assertEqual(resumed.count("--- Conversation scope "), 1)
+        self.assertNotIn("[session] Already attached to beta.", resumed)
+        self.assertNotIn("Resume story session [focused] [open] >", resumed)
+        process.send_text("/quit\n\n")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
 
         self.assertEqual(load_cli_context(self.workspace).default_session_id, "beta")
@@ -2241,10 +2250,10 @@ print(
             process.original_terminal_attributes,
         )
 
-    def test_conversation_use_picker_selects_active_focus_and_restores_terminal(
+    def test_live_conversation_resume_selects_focus_and_restores_terminal(
         self,
     ) -> None:
-        """Select another active conversation through the real picker consumer."""
+        """Commit one live focus choice without entering a second picker."""
 
         self._seed_default_session(subject="First subject")
         catalog = FilesystemConversationCatalog(self.workspace)
@@ -2256,24 +2265,31 @@ print(
         process.wait_for_text("story[alpha:lead]> ")
 
         mark = process.output_mark()
-        process.send_text("/conversation use\n\n")
-        process.send_text("\n")
+        process.send_text("/conversation resume")
         opened = process.wait_for_text(
-            "Use conversation [focused] [open] >",
+            "[highlighted] First subject",
             after=mark,
         )
+        self.assertIn("Suggestions [open]", opened)
         self.assertLess(
             opened.index("[highlighted] First subject"),
-            opened.index("[available] Second subject"),
+            opened.index("- Second subject"),
         )
         self.assertEqual(opened.count("Handle:"), 2)
+        self.assertNotIn("Resume conversation [focused] [open] >", opened)
 
-        process.send_text("\x1b[B\n")
-        process.wait_for_text("Current focus: ", after=mark)
-        process.wait_for_text("Subject: Second subject", after=mark)
-        process.wait_for_text("story[alpha:lead]> ", after=mark)
-        process.send_text("/quit\n\n")
+        navigation_mark = process.output_mark()
+        process.send_text("\x1b[B")
+        process.wait_for_text("[highlighted] Second subject", after=navigation_mark)
+        commit_mark = process.output_mark()
         process.send_text("\n")
+        resumed = process.wait_for_text("story[alpha:lead]> ", after=commit_mark)
+        self.assertTrue(resumed.startswith("\r\r\x1b[J"), resumed)
+        self.assertEqual(resumed.count("Current focus: "), 1)
+        self.assertEqual(resumed.count("--- Conversation scope "), 1)
+        self.assertIn("Subject: Second subject", resumed)
+        self.assertNotIn("Resume conversation [focused] [open] >", resumed)
+        process.send_text("/quit\n\n")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
 
         self.assertEqual(

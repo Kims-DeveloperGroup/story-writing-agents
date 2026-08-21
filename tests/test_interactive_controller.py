@@ -1341,13 +1341,13 @@ class ControllerStartupTests(ControllerTestCase):
     def test_saved_paused_confirmation_outcomes_are_distinct(self) -> None:
         cases = (
             ("default_yes", "", "ready", False, "Session: saved (reopened)"),
-            ("no", "no", "paused", False, "Session open cancelled."),
+            ("no", "no", "paused", False, "Session resume cancelled."),
             (
                 "interrupt",
                 KeyboardInterrupt(),
                 "paused",
                 False,
-                "Session open cancelled.",
+                "Session resume cancelled.",
             ),
             ("eof", EOFError(), "paused", True, None),
         )
@@ -1366,7 +1366,7 @@ class ControllerStartupTests(ControllerTestCase):
                 self.assertEqual(
                     callbacks.prompts[0],
                     _confirmation_prompt(
-                        "Open default session saved?",
+                        "Resume default session saved?",
                         default=True,
                     ),
                 )
@@ -1758,7 +1758,7 @@ class ControllerConversationStartupTests(ControllerTestCase):
         backend = self.make_backend(workspace)
         controller, _backend, callbacks = self.make_controller(
             workspace,
-            "/session open destination",
+            "/session resume destination",
             "/quit",
             backend=backend,
             conversation_catalog=catalog,
@@ -1870,7 +1870,7 @@ class ControllerConversationStartupTests(ControllerTestCase):
         backend = self.make_backend(workspace)
         controller, _backend, callbacks = self.make_controller(
             workspace,
-            "/session open destination",
+            "/session resume destination",
             "/quit",
             backend=backend,
             conversation_catalog=catalog,
@@ -1931,7 +1931,7 @@ class ControllerConversationStartupTests(ControllerTestCase):
         backend = self.make_backend(workspace)
         controller, _backend, callbacks = self.make_controller(
             workspace,
-            "/session open destination",
+            "/session resume destination",
             "/quit",
             backend=backend,
             conversation_catalog=catalog,
@@ -2012,7 +2012,7 @@ class ControllerCommandTests(ControllerTestCase):
         rendered = "".join(callbacks.records)
         self.assertIn("[cancelled] No action was taken.\n", rendered)
         self.assertIn(
-            "Syntax: /session list | create NAME | open [NAME] | pause",
+            "Syntax: /session list | create NAME | resume [NAME] | pause",
             rendered,
         )
         self.assertIn("[error command_invalid] unknown command: /sesion\n", rendered)
@@ -2101,7 +2101,7 @@ class ControllerCommandTests(ControllerTestCase):
                             terminal_module.Field("Provider readiness", "no"),
                             terminal_module.Field(
                                 "Next action",
-                                "Open the session to make it ready.",
+                                "Resume the session to make it ready.",
                             ),
                         ),
                         state=terminal_module.ViewState.COMPLETED,
@@ -2153,7 +2153,7 @@ class ControllerCommandTests(ControllerTestCase):
             "Process access: claimable",
             "Default session: no",
             "Provider readiness: no",
-            "Next action: Open the session to make it ready.",
+            "Next action: Resume the session to make it ready.",
         ):
             with self.subTest(session="beta", fact=fact):
                 self.assertIn(fact, beta)
@@ -2239,18 +2239,186 @@ class ControllerCommandTests(ControllerTestCase):
             [f"{render_plain(expected, width=200).text}\n"],
         )
 
+    def test_main_session_resume_provider_is_live_canonical_and_immutable(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        for session_id in ("current", "saved"):
+            self.seed_session(
+                workspace,
+                session_id,
+                durable_state=SessionDurableState.READY,
+            )
+        save_default_session(workspace, "current")
+        backend = self.make_backend(workspace)
+        controller, _backend, _callbacks = self.make_controller(
+            workspace,
+            backend=backend,
+        )
+        states = (
+            _lifecycle("saved", durable_state=SessionDurableState.PAUSED),
+            _lifecycle("current"),
+        )
+        captured: dict[str, object] = {}
+
+        def capture_provider(
+            _main_input: object,
+            provider: Callable[[str, int], object],
+            **_kwargs: object,
+        ) -> terminal_module.TerminalAction:
+            controller._context = CliContext(default_session_id="saved")
+            captured["picker"] = provider("/session resume", 15)
+            captured["explicit"] = provider("/session resume saved", 21)
+            captured["midline"] = provider("/session resume", 8)
+            list_lifecycles.return_value = ()
+            captured["empty"] = provider("/session resume", 15)
+            list_lifecycles.side_effect = OSError("snapshot-secret")
+            captured["failure"] = provider("/session resume", 15)
+            return terminal_module.TerminalAction(
+                terminal_module.TerminalActionKind.LINE,
+                text="/quit",
+            )
+
+        with (
+            mock.patch.object(
+                backend,
+                "list_session_lifecycles",
+                return_value=states,
+            ) as list_lifecycles,
+            mock.patch.object(
+                terminal_module.InteractiveMainInput,
+                "read_main",
+                autospec=True,
+                side_effect=capture_provider,
+            ),
+        ):
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        picker = captured["picker"]
+        self.assertEqual(
+            picker,
+            terminal_module.Picker(
+                terminal_module.Prompt(
+                    "Resume story session",
+                    instruction="Choose a persisted session to resume.",
+                ),
+                (
+                    terminal_module.Choice(
+                        "/session resume saved",
+                        "saved",
+                        description="Durable: paused; access: claimable",
+                    ),
+                    terminal_module.Choice(
+                        "/session resume current",
+                        "current",
+                        description="Durable: ready; access: claimable",
+                    ),
+                ),
+                highlighted_id="/session resume current",
+            ),
+        )
+        self.assertIsInstance(picker, terminal_module.Picker)
+        assert isinstance(picker, terminal_module.Picker)
+        self.assertIsInstance(picker.choices, tuple)
+        with self.assertRaises(TypeError):
+            picker.choices[0] = picker.choices[0]  # type: ignore[index]
+        self.assertIsNone(captured["explicit"])
+        self.assertIsNone(captured["midline"])
+        self.assertEqual(
+            captured["empty"],
+            terminal_module.Picker(
+                terminal_module.Prompt(
+                    "Resume story session",
+                    instruction="Choose a persisted session to resume.",
+                ),
+                (),
+            ),
+        )
+        self.assertIsNone(captured["failure"])
+
+    def test_live_session_resume_identity_reaches_parser_and_explicit_handler(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        for session_id in ("source", "destination"):
+            self.seed_session(
+                workspace,
+                session_id,
+                durable_state=SessionDurableState.READY,
+            )
+        save_default_session(workspace, "source")
+        backend = self.make_backend(workspace)
+        controller, _backend, _callbacks = self.make_controller(
+            workspace,
+            backend=backend,
+        )
+        reads = 0
+
+        def commit_live_choice(
+            _main_input: object,
+            provider: Callable[[str, int], object],
+            **_kwargs: object,
+        ) -> terminal_module.TerminalAction:
+            nonlocal reads
+            reads += 1
+            if reads == 1:
+                picker = provider("/session resume", 15)
+                assert isinstance(picker, terminal_module.Picker)
+                return terminal_module.TerminalAction(
+                    terminal_module.TerminalActionKind.LINE,
+                    text=picker.choices[1].identity,
+                )
+            return terminal_module.TerminalAction(
+                terminal_module.TerminalActionKind.LINE,
+                text="/quit",
+            )
+
+        with (
+            mock.patch.object(
+                backend,
+                "list_session_lifecycles",
+                return_value=(
+                    _lifecycle("source"),
+                    _lifecycle("destination"),
+                ),
+            ),
+            mock.patch.object(
+                terminal_module.InteractiveMainInput,
+                "read_main",
+                autospec=True,
+                side_effect=commit_live_choice,
+            ),
+            mock.patch.object(
+                controller_core_module,
+                "parse_interactive_line",
+                wraps=controller_core_module.parse_interactive_line,
+            ) as parse,
+        ):
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        self.assertEqual(
+            parse.call_args_list.count(
+                mock.call("/session resume destination")
+            ),
+            1,
+        )
+        self.assertEqual(
+            load_cli_context(workspace).default_session_id,
+            "destination",
+        )
+
     def test_open_without_name_and_same_session_noop(self) -> None:
         workspace = self.make_workspace()
         controller, _backend, callbacks = self.make_controller(
             workspace,
-            "/session open",
+            "/session resume",
             "/session create action_session",
             "/quit",
         )
         self.assertEqual(controller.run_session_lobby(), 0)
         rendered = "".join(callbacks.records)
         self.assertIn("[session] No story sessions found.\n", rendered)
-        self.assertNotIn("Open story session", "".join(callbacks.prompts))
+        self.assertNotIn("Resume story session", "".join(callbacks.prompts))
         self.assertIn("Session: action_session (created)\n", rendered)
         self.assertEqual(
             load_cli_context(workspace).default_session_id,
@@ -2268,7 +2436,7 @@ class ControllerCommandTests(ControllerTestCase):
         backend = self.make_backend(workspace)
         controller, _backend, callbacks = self.make_controller(
             workspace,
-            "/session open",
+            "/session resume",
             "",
             "/quit",
             backend=backend,
@@ -2324,7 +2492,7 @@ class ControllerCommandTests(ControllerTestCase):
         controller, _backend, callbacks = self.make_controller(
             workspace,
             "n",
-            "/session open",
+            "/session resume",
             "",
             "/quit",
             backend=backend,
@@ -2353,8 +2521,8 @@ class ControllerCommandTests(ControllerTestCase):
         self.assertEqual(
             picker_call.args[1],
             terminal_module.Prompt(
-                "Open story session",
-                instruction="Choose a persisted session to open.",
+                "Resume story session",
+                instruction="Choose a persisted session to resume.",
             ),
         )
         self.assertEqual(
@@ -2374,7 +2542,7 @@ class ControllerCommandTests(ControllerTestCase):
         )
         self.assertEqual(picker_call.kwargs["highlighted_id"], "beta")
         picker_prompt = next(
-            prompt for prompt in callbacks.prompts if "Open story session" in prompt
+            prompt for prompt in callbacks.prompts if "Resume story session" in prompt
         )
         self.assertLess(picker_prompt.index("alpha"), picker_prompt.index("beta"))
         self.assertIn("1. [available] alpha", picker_prompt)
@@ -2402,7 +2570,7 @@ class ControllerCommandTests(ControllerTestCase):
 
         def open_with_distinct_saved_default(_prompt: str) -> str:
             controller._context = CliContext(default_session_id="saved")
-            return "/session open"
+            return "/session resume"
 
         controller, _backend, callbacks = self.make_controller(
             workspace,
@@ -2424,7 +2592,7 @@ class ControllerCommandTests(ControllerTestCase):
         self.assertEqual(picker.call_args.kwargs["highlighted_id"], "current")
         self.assertEqual(_tree_snapshot(workspace.root), before)
         self.assertIn(
-            "[cancelled] Session open cancelled.\n",
+            "[cancelled] Session resume cancelled.\n",
             "".join(callbacks.records),
         )
 
@@ -2439,7 +2607,7 @@ class ControllerCommandTests(ControllerTestCase):
         backend = self.make_backend(workspace)
         controller, _backend, callbacks = self.make_controller(
             workspace,
-            "/session open",
+            "/session resume",
             "2",
             "/quit",
             backend=backend,
@@ -2472,9 +2640,9 @@ class ControllerCommandTests(ControllerTestCase):
                 save_default_session(workspace, "source")
                 before = _tree_snapshot(workspace.root)
                 reads = (
-                    ("/session open", picker_input)
+                    ("/session resume", picker_input)
                     if exits_from_picker
-                    else ("/session open", picker_input, "/quit")
+                    else ("/session resume", picker_input, "/quit")
                 )
                 controller, backend, callbacks = self.make_controller(
                     workspace,
@@ -2490,14 +2658,14 @@ class ControllerCommandTests(ControllerTestCase):
                 )
                 rendered = "".join(callbacks.records)
                 if exits_from_picker:
-                    self.assertNotIn("Session open cancelled.", rendered)
+                    self.assertNotIn("Session resume cancelled.", rendered)
                     self.assertEqual(
                         callbacks.prompts[-1].splitlines()[-1],
-                        "Open story session > ",
+                        "Resume story session > ",
                     )
                 else:
                     self.assertIn(
-                        "[cancelled] Session open cancelled.\n",
+                        "[cancelled] Session resume cancelled.\n",
                         rendered,
                     )
 
@@ -2509,7 +2677,7 @@ class ControllerCommandTests(ControllerTestCase):
         backend = self.make_backend(workspace)
         controller, _backend, callbacks = self.make_controller(
             workspace,
-            "/session open",
+            "/session resume",
             "",
             "/quit",
             backend=backend,
@@ -2538,7 +2706,7 @@ class ControllerCommandTests(ControllerTestCase):
         controller, _backend, callbacks = self.make_controller(
             workspace,
             "n",
-            "/session open",
+            "/session resume",
             "",
             "/quit",
         )
@@ -2548,12 +2716,12 @@ class ControllerCommandTests(ControllerTestCase):
             "ready",
         )
         rendered = "".join(callbacks.records)
-        self.assertIn("[cancelled] Session open cancelled.\n", rendered)
+        self.assertIn("[cancelled] Session resume cancelled.\n", rendered)
         self.assertIn("Session: saved (reopened)\n", rendered)
         self.assertEqual(
             callbacks.prompts.count(
                 _confirmation_prompt(
-                    "Open default session saved?",
+                    "Resume default session saved?",
                     default=True,
                 )
             ),
@@ -3980,7 +4148,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
         memory = ScriptedConversationMemoryService()
         _workspace, _backend, catalog, controller, _callbacks = (
             self.prepared_attached_controller(
-                f"/conversation use {second.conversation_id}",
+                f"/conversation resume {second.conversation_id}",
                 "/conversation subject Revised",
                 "/conversation archive",
                 "yes",
@@ -4019,7 +4187,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                 backend = self.make_backend(workspace)
                 controller, _backend, callbacks = self.make_controller(
                     workspace,
-                    "/session open destination",
+                    "/session resume destination",
                     "/quit",
                     backend=backend,
                     conversation_catalog=MemoryConversationCatalog(),
@@ -4594,6 +4762,165 @@ class ControllerConversationCommandTests(ControllerTestCase):
             [f"{render_plain(expected, width=200).text}\n"],
         )
 
+    def test_main_conversation_resume_provider_is_live_and_freshly_validated(
+        self,
+    ) -> None:
+        prior = _conversation_metadata(_COLLIDING_A, "Shared subject")
+        archived = _conversation_metadata(
+            _COLLIDING_B,
+            "Archived subject",
+            status=ConversationStatus.ARCHIVED,
+        )
+        target = _conversation_metadata(_UNIQUE_C, "Target subject")
+        workspace, _backend, catalog, controller, callbacks = (
+            self.prepared_controller(
+                entries=(prior, archived, target),
+                selected_id=prior.conversation_id,
+            )
+        )
+        reads = 0
+        captured: dict[str, object] = {}
+
+        def commit_live_choice(
+            _main_input: object,
+            provider: Callable[[str, int], object],
+            **_kwargs: object,
+        ) -> terminal_module.TerminalAction:
+            nonlocal reads
+            reads += 1
+            if reads == 1:
+                captured["current"] = provider("/conversation resume", 20)
+                save_default_conversation(
+                    workspace,
+                    "session",
+                    target.conversation_id,
+                )
+                captured["current_precedence"] = provider(
+                    "/conversation resume",
+                    20,
+                )
+                controller._focused_conversation = None
+                captured["default_precedence"] = provider(
+                    "/conversation resume",
+                    20,
+                )
+                captured["explicit"] = provider(
+                    f"/conversation resume {target.conversation_id}",
+                    20 + len(target.conversation_id) + 1,
+                )
+                captured["midline"] = provider("/conversation resume", 8)
+                saved_entries = list(catalog.entries)
+                catalog.entries.clear()
+                captured["empty"] = provider("/conversation resume", 20)
+                catalog.entries[:] = saved_entries
+                with mock.patch.object(
+                    catalog,
+                    "list",
+                    side_effect=OSError("snapshot-secret"),
+                ):
+                    captured["failure"] = provider(
+                        "/conversation resume",
+                        20,
+                    )
+                catalog.entries[-1] = replace(
+                    catalog.entries[-1],
+                    subject="Fresh subject",
+                )
+                picker = captured["default_precedence"]
+                assert isinstance(picker, terminal_module.Picker)
+                return terminal_module.TerminalAction(
+                    terminal_module.TerminalActionKind.LINE,
+                    text=picker.choices[1].identity,
+                )
+            return terminal_module.TerminalAction(
+                terminal_module.TerminalActionKind.LINE,
+                text="/quit",
+            )
+
+        with (
+            mock.patch.object(
+                terminal_module.InteractiveMainInput,
+                "read_main",
+                autospec=True,
+                side_effect=commit_live_choice,
+            ),
+            mock.patch.object(
+                controller_core_module,
+                "parse_interactive_line",
+                wraps=controller_core_module.parse_interactive_line,
+            ) as parse,
+        ):
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        expected_choices = (
+            terminal_module.Choice(
+                f"/conversation resume {prior.conversation_id}",
+                "Shared subject",
+                description=f"Handle: {prior.conversation_id}",
+            ),
+            terminal_module.Choice(
+                f"/conversation resume {target.conversation_id}",
+                "Target subject",
+                description=f"Handle: {target.conversation_id[:12]}",
+            ),
+        )
+        current = captured["current"]
+        self.assertEqual(
+            current,
+            terminal_module.Picker(
+                terminal_module.Prompt(
+                    "Resume conversation",
+                    instruction="Choose an active conversation to resume.",
+                ),
+                expected_choices,
+                highlighted_id=(
+                    f"/conversation resume {prior.conversation_id}"
+                ),
+            ),
+        )
+        self.assertEqual(captured["current_precedence"], current)
+        self.assertEqual(
+            captured["default_precedence"],
+            terminal_module.Picker(
+                terminal_module.Prompt(
+                    "Resume conversation",
+                    instruction="Choose an active conversation to resume.",
+                ),
+                expected_choices,
+                highlighted_id=(
+                    f"/conversation resume {target.conversation_id}"
+                ),
+            ),
+        )
+        self.assertIsNone(captured["explicit"])
+        self.assertIsNone(captured["midline"])
+        self.assertEqual(
+            captured["empty"],
+            terminal_module.Picker(
+                terminal_module.Prompt(
+                    "Resume conversation",
+                    instruction="Choose an active conversation to resume.",
+                ),
+                (),
+            ),
+        )
+        self.assertIsNone(captured["failure"])
+        self.assertEqual(
+            parse.call_args_list.count(
+                mock.call(
+                    f"/conversation resume {target.conversation_id}"
+                )
+            ),
+            1,
+        )
+        self.assertEqual(
+            load_default_conversation(workspace, "session"),
+            target.conversation_id,
+        )
+        rendered = "".join(callbacks.records)
+        self.assertIn("Subject: Fresh subject", rendered)
+        self.assertNotIn("snapshot-secret", rendered)
+
     def test_use_resolves_full_and_unique_prefixes_across_archived_entries(
         self,
     ) -> None:
@@ -4608,12 +4935,12 @@ class ControllerConversationCommandTests(ControllerTestCase):
         )
         workspace, _backend, _catalog, controller, callbacks = (
             self.prepared_controller(
-                f"/conversation use {_UNIQUE_C[:11]}",
-                "/conversation use c_0123456789",
-                "/conversation use c_9999999999",
-                f"/conversation use {_COLLIDING_B}",
-                f"/conversation use {_COLLIDING_A}",
-                f"/conversation use {_UNIQUE_C[:12]}",
+                f"/conversation resume {_UNIQUE_C[:11]}",
+                "/conversation resume c_0123456789",
+                "/conversation resume c_9999999999",
+                f"/conversation resume {_COLLIDING_B}",
+                f"/conversation resume {_COLLIDING_A}",
+                f"/conversation resume {_UNIQUE_C[:12]}",
                 "/quit",
                 entries=entries,
                 selected_id=_UNIQUE_C,
@@ -4652,7 +4979,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
 
         def change_saved_default(_prompt: str) -> str:
             save_default_conversation(workspace, "session", _UNIQUE_C)
-            return "/conversation use"
+            return "/conversation resume"
 
         workspace, _backend, _catalog, controller, callbacks = (
             self.prepared_controller(
@@ -4677,8 +5004,8 @@ class ControllerConversationCommandTests(ControllerTestCase):
         self.assertEqual(
             picker_call.args[1],
             terminal_module.Prompt(
-                "Use conversation",
-                instruction="Choose an active conversation to focus.",
+                "Resume conversation",
+                instruction="Choose an active conversation to resume.",
             ),
         )
         self.assertEqual(
@@ -4701,7 +5028,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
             _COLLIDING_A,
         )
         picker_prompt = next(
-            prompt for prompt in callbacks.prompts if "Use conversation" in prompt
+            prompt for prompt in callbacks.prompts if "Resume conversation" in prompt
         )
         self.assertLess(
             picker_prompt.index(f"Handle: {_COLLIDING_A}"),
@@ -4728,7 +5055,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
 
         def clear_current_focus(_prompt: str) -> str:
             controller._focused_conversation = None
-            return "/conversation use"
+            return "/conversation resume"
 
         workspace, _backend, _catalog, controller, callbacks = (
             self.prepared_controller(
@@ -4773,9 +5100,9 @@ class ControllerConversationCommandTests(ControllerTestCase):
                 selected = _conversation_metadata(_COLLIDING_A, "Selected")
                 other = _conversation_metadata(_UNIQUE_C, "Other")
                 reads = (
-                    ("/conversation use", picker_input)
+                    ("/conversation resume", picker_input)
                     if exits_from_picker
-                    else ("/conversation use", picker_input, "/quit")
+                    else ("/conversation resume", picker_input, "/quit")
                 )
                 workspace, backend, catalog, controller, callbacks = (
                     self.prepared_controller(
@@ -4809,7 +5136,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
                     self.assertNotIn("Conversation focus cancelled.", rendered)
                     self.assertEqual(
                         callbacks.prompts[-1].splitlines()[-1],
-                        "Use conversation > ",
+                        "Resume conversation > ",
                     )
                 else:
                     self.assertIn(
@@ -4825,7 +5152,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
         )
         workspace, _backend, _catalog, controller, callbacks = (
             self.prepared_controller(
-                "/conversation use",
+                "/conversation resume",
                 "/quit",
                 entries=(archived,),
             )
@@ -4862,7 +5189,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
                 target = _conversation_metadata(_UNIQUE_C, "Snapshot subject")
                 workspace, _backend, catalog, controller, callbacks = (
                     self.prepared_controller(
-                        "/conversation use",
+                        "/conversation resume",
                         "/quit",
                         entries=(prior, target),
                         selected_id=prior.conversation_id,
@@ -4937,7 +5264,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
         target = _conversation_metadata(_UNIQUE_C, "Target")
         workspace, _backend, _catalog, controller, callbacks = (
             self.prepared_controller(
-                "/conversation use",
+                "/conversation resume",
                 "2",
                 "/quit",
                 entries=(prior, target),
@@ -4975,7 +5302,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
         target = _conversation_metadata(_UNIQUE_C, "Target")
         workspace, _backend, catalog, controller, callbacks = (
             self.prepared_controller(
-                f"/conversation use {target.conversation_id}",
+                f"/conversation resume {target.conversation_id}",
                 "/quit",
                 entries=(prior, target),
                 selected_id=prior.conversation_id,
@@ -5281,7 +5608,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
             "/conversation new Subject",
             "/conversation list",
             "/conversation list --all",
-            f"/conversation use {_UNIQUE_C}",
+            f"/conversation resume {_UNIQUE_C}",
             "/conversation subject Revised",
             "/conversation archive",
         )
@@ -5357,7 +5684,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
                     "/conversation subject Revised",
                     "/conversation archive",
                     "/conversation list",
-                    f"/conversation use {_UNIQUE_C}",
+                    f"/conversation resume {_UNIQUE_C}",
                     f"/conversation archive {_UNIQUE_C}",
                     "/conversation new Allowed",
                     "/quit",
@@ -5565,7 +5892,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
                     target = _conversation_metadata(_UNIQUE_C, "Target")
                     workspace, backend, catalog, controller, callbacks = (
                         self.prepared_controller(
-                            f"/conversation use {target.conversation_id}",
+                            f"/conversation resume {target.conversation_id}",
                             entries=(prior, target),
                             selected_id=prior.conversation_id,
                         )
@@ -5668,7 +5995,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
             self.prepared_controller(
                 "/session pause",
                 "yes",
-                "/session open",
+                "/session resume",
                 "",
                 "/quit",
                 entries=(selected,),
@@ -5727,7 +6054,7 @@ class ControllerSwitchTests(ControllerTestCase):
         backend = self.make_backend(workspace)
         controller, _backend, callbacks = self.make_controller(
             workspace,
-            "/session open destination",
+            "/session resume destination",
             "/quit",
             backend=backend,
             terminal_width=200,

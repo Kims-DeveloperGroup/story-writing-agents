@@ -108,7 +108,7 @@ ERROR_DEFAULTS = {
     ),
     InteractiveErrorCode.SESSION_EXISTS: (
         "The story session already exists.",
-        "Open it or choose a different session name.",
+        "Resume it or choose a different session name.",
     ),
     InteractiveErrorCode.SESSION_NOT_FOUND: (
         "The story session was not found.",
@@ -116,15 +116,15 @@ ERROR_DEFAULTS = {
     ),
     InteractiveErrorCode.SESSION_NOT_ATTACHED: (
         "No story session is attached to this shell.",
-        "Create or open a session before using this command.",
+        "Create or resume a session before using this command.",
     ),
     InteractiveErrorCode.SESSION_PAUSED: (
         "The story session is paused.",
-        "Open the session to make it ready before provider work.",
+        "Resume the session to make it ready before provider work.",
     ),
     InteractiveErrorCode.SESSION_ACCESS_BLOCKED: (
         "Story-session access is held by another live local process.",
-        "Wait for that process to release access, then open the session.",
+        "Wait for that process to release access, then resume the session.",
     ),
     InteractiveErrorCode.SESSION_OWNERSHIP_UNKNOWN: (
         "Story-session access ownership cannot be verified.",
@@ -1254,7 +1254,7 @@ class PromptAndRenderingTests(unittest.TestCase):
                 "  Session: lobby\n"
                 "  [warning] Provider calls are unavailable in the lobby. Use "
                 "/session create NAM\n"
-                "            E, /session open [NAME], or /session list.\n"
+                "            E, /session resume [NAME], or /session list.\n"
                 "  [info] Type /help for commands; /quit exits.\n"
                 f"{'-' * 80}\n"
             ],

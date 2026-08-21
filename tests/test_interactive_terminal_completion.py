@@ -409,16 +409,16 @@ class CompletionControlTests(unittest.TestCase):
         picker = Picker(
             Prompt("Resume"),
             (
-                Choice("/session open alpha", "Alpha"),
+                Choice("/session resume alpha", "Alpha"),
                 Choice(
-                    "/session open disabled",
+                    "/session resume disabled",
                     "Unavailable",
                     enabled=False,
                     disabled_reason="Busy",
                 ),
-                Choice("/session open beta", "Beta"),
+                Choice("/session resume beta", "Beta"),
             ),
-            highlighted_id="/session open beta",
+            highlighted_id="/session resume beta",
         )
         choice_provider = mock.Mock(
             side_effect=lambda buffer, cursor: project_main_choice_completion(
@@ -441,18 +441,18 @@ class CompletionControlTests(unittest.TestCase):
                 candidate.replacement
                 for candidate in state.palette.projection.candidates  # type: ignore[union-attr]
             ),
-            ("/session open alpha", "/session open beta"),
+            ("/session resume alpha", "/session resume beta"),
         )
         self.assertEqual(
             state.palette.highlighted.replacement,  # type: ignore[union-attr]
-            "/session open beta",
+            "/session resume beta",
         )
         self.assertEqual(
             project_main_choice_palette(state, picker),
             SuggestionPalette(
                 "/",
                 picker.choices,
-                highlighted_id="/session open beta",
+                highlighted_id="/session resume beta",
                 state=ViewState.OPEN,
             ),
         )
@@ -470,7 +470,7 @@ class CompletionControlTests(unittest.TestCase):
         self.assertIsNone(outcome)
         self.assertEqual(
             moved_up.palette.highlighted.replacement,  # type: ignore[union-attr]
-            "/session open alpha",
+            "/session resume alpha",
         )
         moved_down, _ = transition_main_command_input(
             moved_up,
@@ -496,7 +496,7 @@ class CompletionControlTests(unittest.TestCase):
             outcome,
             _model.ControlOutcome(
                 ControlOutcomeKind.COMMIT,
-                text="/session open beta",
+                text="/session resume beta",
             ),
         )
         self.assertEqual(committed.main_input.line_state, LineInputState("/", 1))
@@ -1040,8 +1040,8 @@ class CompletionDriverTests(unittest.TestCase):
         picker = Picker(
             Prompt("Resume"),
             (
-                Choice("/session open alpha", "Alpha"),
-                Choice("/session open beta", "Beta"),
+                Choice("/session resume alpha", "Alpha"),
+                Choice("/session resume beta", "Beta"),
             ),
         )
         provider = mock.Mock(return_value=picker)
@@ -1060,25 +1060,25 @@ class CompletionDriverTests(unittest.TestCase):
                     "main> ",
                     choice_provider=provider,
                 ),
-                "/session open beta",
+                "/session resume beta",
             )
 
         self.assertEqual(
             driver._history_state,
-            MainInputHistoryState(("/session open beta",)),
+            MainInputHistoryState(("/session resume beta",)),
         )
         self.assertEqual(
             events[-3:],
             [
                 ("write", "\r\r\x1b[J"),
                 ("termios", FakeTermios.TCSADRAIN),
-                ("history", "/session open beta"),
+                ("history", "/session resume beta"),
             ],
         )
         rendered = "".join(output.records)
         self.assertIn("[highlighted] Beta", rendered)
         self.assertNotIn("/say", rendered)
-        self.assertNotIn("/session open beta", rendered)
+        self.assertNotIn("/session resume beta", rendered)
         provider.assert_called_once_with("/", 1)
         fallback.assert_not_called()
 
