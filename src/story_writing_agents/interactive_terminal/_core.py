@@ -314,7 +314,7 @@ INTERACTIVE_ERROR_SPECS: Mapping[
         ),
         InteractiveErrorCode.SESSION_EXISTS: InteractiveErrorSpec(
             "The story session already exists.",
-            "Open it or choose a different session name.",
+            "Resume it or choose a different session name.",
         ),
         InteractiveErrorCode.SESSION_NOT_FOUND: InteractiveErrorSpec(
             "The story session was not found.",
@@ -322,15 +322,15 @@ INTERACTIVE_ERROR_SPECS: Mapping[
         ),
         InteractiveErrorCode.SESSION_NOT_ATTACHED: InteractiveErrorSpec(
             "No story session is attached to this shell.",
-            "Create or open a session before using this command.",
+            "Create or resume a session before using this command.",
         ),
         InteractiveErrorCode.SESSION_PAUSED: InteractiveErrorSpec(
             "The story session is paused.",
-            "Open the session to make it ready before provider work.",
+            "Resume the session to make it ready before provider work.",
         ),
         InteractiveErrorCode.SESSION_ACCESS_BLOCKED: InteractiveErrorSpec(
             "Story-session access is held by another live local process.",
-            "Wait for that process to release access, then open the session.",
+            "Wait for that process to release access, then resume the session.",
         ),
         InteractiveErrorCode.SESSION_OWNERSHIP_UNKNOWN: InteractiveErrorSpec(
             "Story-session access ownership cannot be verified.",
@@ -448,7 +448,6 @@ class InteractiveTerminal:
         "_capability_provider",
         "_composition_read_line",
         "_confirmation_read_line",
-        "_clear_main_commit_display",
         "_main_choice_read_line",
         "_main_read_line",
         "_picker_read",
@@ -496,7 +495,6 @@ class InteractiveTerminal:
         )
         self._composition_read_line = _plain_input_reader(read_line, width)
         self._confirmation_read_line = _plain_input_reader(read_line, width)
-        self._clear_main_commit_display: Callable[[], None] = lambda: None
         self._picker_read = _plain_picker_reader(read_line, write_text, width)
         self._prompt_read = _plain_prompt_reader(read_line, width)
         self._advisory_progress = _plain_advisory_progress
@@ -696,7 +694,7 @@ class InteractiveTerminal:
                     Notice(
                         (
                             "Provider calls are unavailable in the lobby. Use "
-                            "/session create NAME, /session open [NAME], or "
+                            "/session create NAME, /session resume [NAME], or "
                             "/session list."
                         ),
                         role=SemanticRole.WARNING,
@@ -1302,24 +1300,6 @@ class InteractiveMainInput:
             TerminalActionKind.LINE,
             text=_validated_input_line(line),
         )
-
-
-class InteractiveMainCommitCleanup:
-    """Preserve the controller import until its main-input migration lands."""
-
-    __slots__ = ("_clear",)
-
-    def __init__(self, terminal: InteractiveTerminal) -> None:
-        """Bind cleanup without exposing it through the supported facade."""
-
-        if not isinstance(terminal, InteractiveTerminal):
-            raise TypeError("terminal must be an InteractiveTerminal")
-        self._clear: Callable[[], None] = terminal._clear_main_commit_display
-
-    def clear_main_commit_display(self) -> None:
-        """Do nothing because capable main reads now clear before returning."""
-
-        self._clear()
 
 
 class InteractivePickerInput:

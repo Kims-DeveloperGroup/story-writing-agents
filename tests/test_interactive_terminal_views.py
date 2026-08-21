@@ -427,7 +427,7 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
                         Field("Session", "lobby"),
                         Notice(
                             "Provider calls are unavailable in the lobby. Use "
-                            "/session create NAME, /session open [NAME], or "
+                            "/session create NAME, /session resume [NAME], or "
                             "/session list.",
                             role=SemanticRole.WARNING,
                         ),

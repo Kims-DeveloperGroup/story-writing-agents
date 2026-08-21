@@ -8,7 +8,6 @@ from ._core import (
     InteractiveAdvisoryProgress,
     InteractiveDebateProgress,
     InteractiveMainInput,
-    InteractiveMainCommitCleanup,
     INTERACTIVE_ERROR_SPECS,
     AttachmentKind,
     Choice,
