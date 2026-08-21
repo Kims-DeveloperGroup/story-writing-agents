@@ -325,6 +325,15 @@ class WorkspaceDebugLog:
             return
         try:
             directory = _prepare_debug_directory(self._workspace)
+            _validate_existing_regular(
+                self._workspace.path(DEBUG_LOG_RELATIVE_PATH)
+            )
+            for index in range(1, DEBUG_LOG_BACKUP_COUNT + 1):
+                _validate_existing_regular(
+                    self._workspace.path(
+                        f"{DEBUG_LOG_RELATIVE_PATH}.{index}"
+                    )
+                )
             guard_path = self._workspace.path(DEBUG_LOG_GUARD_RELATIVE_PATH)
             descriptor = _open_verified_regular_file(guard_path, read_write=True)
             locked = False
