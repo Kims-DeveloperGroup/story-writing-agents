@@ -7,7 +7,6 @@ import tempfile
 import uuid
 from collections import Counter
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from .agents import (
@@ -553,7 +552,7 @@ class _SmokeBoundAgent:
 
 
 def _trace_smoke(
-    debug_log: WorkspaceDebugLog,
+    debug_log: WorkspaceDebugLog | None,
     operation: DebugOperation,
     phase: DebugPhase,
     *,
@@ -563,6 +562,8 @@ def _trace_smoke(
 ) -> None:
     """Record a smoke trace without allowing diagnostics to alter behavior."""
 
+    if debug_log is None:
+        return
     try:
         debug_log.trace(
             component=DebugComponent.SMOKE,
@@ -576,45 +577,57 @@ def _trace_smoke(
         pass
 
 
-def run_smoke(workspace_path: str | Path | None = None) -> tuple[dict[str, Any], int]:
+def _create_smoke_debug_log(workspace: Workspace) -> WorkspaceDebugLog | None:
+    """Create one optional smoke logger without changing smoke behavior."""
+
+    try:
+        return WorkspaceDebugLog(workspace)
+    except BaseException:
+        return None
+
+
+def run_smoke(workspace: Workspace | None = None) -> tuple[dict[str, Any], int]:
     """Run one provider-free smoke and return its report plus exit code.
 
-    An omitted path creates and removes a temporary workspace; an explicit path
-    retains uniquely named diagnostics. Named invariant failures return code one,
-    while workspace, storage, protocol, and setup failures propagate to the CLI.
+    An omitted workspace creates and removes a temporary workspace; a supplied
+    initialized workspace is borrowed and retained. Named invariant failures
+    return code one, while workspace, storage, protocol, and setup failures
+    propagate to the CLI.
     """
 
-    if workspace_path is None:
+    if workspace is None:
         with tempfile.TemporaryDirectory(
             prefix="story-writing-agents-smoke-"
         ) as temporary:
+            temporary_workspace = initialize_workspace(temporary)
             return _run_provider_free_smoke_in_workspace(
-                Path(temporary),
+                temporary_workspace,
                 mode="temporary",
                 retained=False,
             )
+    if not isinstance(workspace, Workspace):
+        raise TypeError("workspace must be a Workspace or None")
     return _run_provider_free_smoke_in_workspace(
-        Path(workspace_path),
+        workspace,
         mode="persistent",
         retained=True,
     )
 
 
 def _run_provider_free_smoke_in_workspace(
-    workspace_path: Path,
+    workspace: Workspace,
     *,
     mode: str,
     retained: bool,
 ) -> tuple[dict[str, Any], int]:
-    """Initialize one workspace, run one event loop, and build a compact report.
+    """Use one initialized workspace to run an event loop and build a report.
 
     The supplied mode metadata is reported unchanged. The workflow mutates only
     normal smoke artifacts, returns code zero or one for named invariants, and
     lets all non-invariant failures propagate.
     """
 
-    workspace = initialize_workspace(workspace_path)
-    debug_log = WorkspaceDebugLog(workspace)
+    debug_log = _create_smoke_debug_log(workspace)
     _trace_smoke(
         debug_log,
         DebugOperation.WORKSPACE_INITIALIZATION,
@@ -700,17 +713,18 @@ def _run_provider_free_smoke_in_workspace(
         )
         completed_checks.append(_CHECK_NAMES[11])
     except _SmokeInvariantError as exc:
-        try:
-            debug_log.error(
-                DebugComponent.SMOKE,
-                DebugOperation.CLI_COMMAND,
-                exc,
-                session_id=session_id,
-                debate_id=debate_id,
-                outcome=DebugOutcome.FAILED,
-            )
-        except BaseException:
-            pass
+        if debug_log is not None:
+            try:
+                debug_log.error(
+                    DebugComponent.SMOKE,
+                    DebugOperation.CLI_COMMAND,
+                    exc,
+                    session_id=session_id,
+                    debate_id=debate_id,
+                    outcome=DebugOutcome.FAILED,
+                )
+            except BaseException:
+                pass
         return (
             _report(
                 workspace=workspace,
@@ -726,32 +740,33 @@ def _run_provider_free_smoke_in_workspace(
             1,
         )
     except BaseException as exc:
-        try:
-            debug_log.error(
-                DebugComponent.SMOKE,
-                DebugOperation.CLI_COMMAND,
-                exc,
-                phase=(
-                    DebugPhase.CANCELLED
-                    if isinstance(
-                        exc,
-                        (asyncio.CancelledError, KeyboardInterrupt, SystemExit),
-                    )
-                    else DebugPhase.FAILED
-                ),
-                session_id=session_id,
-                debate_id=debate_id,
-                outcome=(
-                    DebugOutcome.INTERRUPTED
-                    if isinstance(
-                        exc,
-                        (asyncio.CancelledError, KeyboardInterrupt, SystemExit),
-                    )
-                    else DebugOutcome.FAILED
-                ),
-            )
-        except BaseException:
-            pass
+        if debug_log is not None:
+            try:
+                debug_log.error(
+                    DebugComponent.SMOKE,
+                    DebugOperation.CLI_COMMAND,
+                    exc,
+                    phase=(
+                        DebugPhase.CANCELLED
+                        if isinstance(
+                            exc,
+                            (asyncio.CancelledError, KeyboardInterrupt, SystemExit),
+                        )
+                        else DebugPhase.FAILED
+                    ),
+                    session_id=session_id,
+                    debate_id=debate_id,
+                    outcome=(
+                        DebugOutcome.INTERRUPTED
+                        if isinstance(
+                            exc,
+                            (asyncio.CancelledError, KeyboardInterrupt, SystemExit),
+                        )
+                        else DebugOutcome.FAILED
+                    ),
+                )
+            except BaseException:
+                pass
         raise
 
     _trace_smoke(

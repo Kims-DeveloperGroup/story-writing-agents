@@ -49,7 +49,7 @@ from .session_lifecycle import (
     SessionLifecycleState,
     provider_work_is_ready,
 )
-from .workspace import initialize_workspace
+from .workspace import Workspace, initialize_workspace
 
 
 _WORKSPACE_HELP = (
@@ -377,6 +377,15 @@ def _record_cli_error(
         pass
 
 
+def _create_cli_debug_log(workspace: Workspace) -> WorkspaceDebugLog | None:
+    """Create one optional CLI logger without changing command behavior."""
+
+    try:
+        return WorkspaceDebugLog(workspace)
+    except BaseException:
+        return None
+
+
 def _trace_cli(
     debug_log: WorkspaceDebugLog,
     operation: DebugOperation,
@@ -637,6 +646,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments.command is None or arguments.command == "chat":
         return _run_interactive_cli(arguments)
     debug_log: WorkspaceDebugLog | None = None
+    smoke_debug_log_hint_available = False
     session_id: str | None = None
     try:
         if arguments.command == "init":
@@ -663,10 +673,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         if arguments.command == "smoke":
             from .smoke import run_smoke
 
-            report, exit_code = run_smoke(arguments.workspace)
-            if arguments.workspace is not None:
-                workspace = resolve_workspace(arguments.workspace)
-                debug_log = WorkspaceDebugLog(workspace)
+            if arguments.workspace is None:
+                report, exit_code = run_smoke()
+            else:
+                workspace = initialize_workspace(arguments.workspace)
+                smoke_debug_log_hint_available = True
+                debug_log = _create_cli_debug_log(workspace)
+                report, exit_code = run_smoke(workspace)
             print(
                 json.dumps(
                     report,
@@ -873,17 +886,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 4
     except Exception as exc:
-        if (
-            debug_log is None
-            and arguments.command == "smoke"
-            and arguments.workspace is not None
-        ):
-            try:
-                debug_log = WorkspaceDebugLog(
-                    resolve_workspace(arguments.workspace)
-                )
-            except Exception:
-                debug_log = None
         if debug_log is not None:
             _record_cli_error(
                 debug_log,
@@ -892,7 +894,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 session_id=session_id,
             )
         print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
-        if debug_log is not None:
+        if debug_log is not None or smoke_debug_log_hint_available:
             print(_NONINTERACTIVE_DEBUG_LOG_HINT, file=sys.stderr)
         return 2
 
