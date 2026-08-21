@@ -36,10 +36,23 @@ Initialization creates missing scaffold and normally preserves existing files.
 With `overwrite_prompts=True`, it replaces exactly the four canonical role
 prompts and preserves all other existing content.
 
-The workspace root is resolved once. Public path operations accept only safely
-contained workspace-relative paths with no absolute path, `..`, or symlink
-component. Text is strict UTF-8. JSON readers reject malformed structures where
-the consuming contract performs schema validation.
+Construction resolves the workspace root once and may make a nonmutating
+filesystem identity probe; it retains no open descriptor. An existing canonical
+directory with meaningful positive device and inode values binds immediately. A
+specifically missing root remains pending until `initialize()` creates it and
+makes the one permitted binding attempt. Any other unavailable or nonmeaningful
+identity remains unavailable for that `Workspace` instance rather than silently
+rebinding later.
+
+Package-internal, non-root-exported helpers open and reverify that bound root for
+diagnostic storage. Replacing the root does not make an existing `Workspace`
+follow the replacement for logging; the diagnostic record is dropped without a
+fallback path. These helpers add no public signature, and this identity does not
+make normal Workspace operations transactional. Public path operations retain
+their established contract: they accept only safely contained
+workspace-relative paths with no absolute path, `..`, or symlink component.
+Text is strict UTF-8. JSON readers reject malformed structures where the
+consuming contract performs schema validation.
 
 `write_text` and `write_json` atomically replace one file when overwrite is
 allowed. `write_manuscript` never overwrites. A direct caller of generic write

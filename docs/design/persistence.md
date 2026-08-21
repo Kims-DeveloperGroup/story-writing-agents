@@ -41,25 +41,35 @@ fixed replacements for unsafe type, module, or function names. It does not
 accept a caller timestamp, message, path, traceback text, or arbitrary detail
 or payload mapping.
 
-`Workspace` owns initial containment, no-symlink resolution, and the
-`debug_logs/` scaffold. For each supported storage attempt, the internal writer
-opens and holds the verified canonical debug directory, performs no-follow leaf
-operations relative to that descriptor, and separately owns this schema and the
-lifecycle of its guard and log files: lazy creation, single-link regular-file
-validation, active/backup size validation, append, best-effort exact-inode
-rollback, and rotation. A platform without the required safe
-descriptor-relative primitives drops the record instead of using a weaker
-fallback. The writer is not exported from the project-root facade, and
-constructing it performs no filesystem work.
+`Workspace` owns canonical-root resolution, containment, no-symlink checks, its
+per-instance meaningful root identity, package-internal root open/reverification
+helpers, and the `debug_logs/` scaffold declaration. An existing directory binds
+at construction; a specifically missing root receives one binding attempt after
+initialization creates it; any other unavailable identity never silently
+rebinds on that instance. Those helpers are not project-root exports.
+
+For each supported storage attempt, the internal writer owns the lifetimes of
+the root, debug-directory, guard, and active-log descriptors. It creates or opens
+the debug directory relative to the verified root, performs leaf operations
+relative to the verified child, tracks expected rotation absences/inodes, and
+owns this schema plus lazy leaf creation, single-link regular-file validation,
+active/backup size validation, append, best-effort exact-inode rollback,
+rotation, and cleanup. An unavailable or replaced root, or a platform without
+the required safe descriptor-relative primitives, drops the record instead of
+using a weaker fallback. Constructing the internal writer remains
+filesystem-I/O-free.
 `StoryRuntime` construction only retains that I/O-free handle and emits nothing.
 `AgentBackend` begins emitting only after the complete configuration snapshot
 loads successfully; CLI, controller, and smoke emission starts only after
 workspace resolution or initialization.
 
-The low-level writer drops ordinary `Exception` failures. Each of the five
-consumers adds a private `BaseException` guard around submissions, so a
-diagnostic `KeyboardInterrupt` or `SystemExit` cannot replace established
-results, exceptions, cancellation, persistence, cleanup, output, or exits.
+The low-level writer attempts cleanup for every independently acquired
+descriptor and lock and drops ordinary `Exception` failures. An original body
+`KeyboardInterrupt` or `SystemExit` takes precedence; otherwise the first
+cleanup process-control failure propagates after later cleanup attempts. Each of
+the five consumers adds a private `BaseException` guard around submissions, so
+diagnostic failure or an absent record cannot replace established results,
+exceptions, cancellation, persistence, cleanup, output, or exits.
 Explicit smoke retains best-effort records; implicit smoke removes them with its
 temporary workspace.
 Storage paths and retention are in [Session storage](../reference/configuration/session-storage.md#runtime-debug-log-storage),

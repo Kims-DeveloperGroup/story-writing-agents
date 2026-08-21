@@ -11,7 +11,14 @@ of overwrite; **atomic file**—a replacement observed as old or complete new da
 
 ## Workspace boundary
 
-`Workspace` resolves its root once. Every public path operation rejects:
+`Workspace` resolves its root once and makes a nonmutating identity probe. An
+existing canonical directory with meaningful positive device and inode values
+binds that identity at construction. A specifically missing root remains
+pending until `initialize()` creates it and makes the one permitted binding
+attempt. Any other unavailable or nonmeaningful initial identity remains
+unavailable for that `Workspace` instance rather than silently rebinding later.
+This identity protects internal diagnostic containment; it does not make every
+public workspace operation transactional. Every public path operation rejects:
 
 - absolute paths;
 - any `..` path component;
@@ -45,16 +52,18 @@ Do not replace the guard pathname while a workspace may be used.
 
 ## Debug-log filesystem safety
 
-The internal debug writer begins with `Workspace` containment and no-symlink
-resolution for `debug_logs/`. It then opens that canonical directory without
-following its final name, verifies the opened and named directory identities,
-and holds the directory descriptor for the complete critical section. Every
-leaf stat, open, create, unlink, and rename for `.runtime.lock`, the active log,
-and its backups is relative to that descriptor; leaf stats do not follow
-symlinks. The writer rechecks the canonical directory identity before every
-forward leaf mutation. Directory and final leaf opens request `O_NONBLOCK` where
-the platform defines it, and final leaf opens are verified as regular, singly
-linked files before use.
+The internal debug writer opens the identity-bound workspace root without
+following its final name, verifies that its opened and named identities match
+the identity retained by `Workspace`, and holds that root descriptor. It creates
+a missing `debug_logs/` relative to the root descriptor, rechecks the root, then
+opens the child directory without following its name. It verifies and holds both
+root and child descriptors for the complete critical section. Every leaf stat,
+open, create, unlink, and rename for `.runtime.lock`, the active log, and its
+backups is relative to the child descriptor; leaf stats do not follow symlinks.
+The writer rechecks both canonical identities before every forward leaf
+mutation. Root, child, and final leaf opens request `O_NONBLOCK` where the
+platform defines it, and final leaf opens are verified as regular, singly linked
+files before use.
 
 Before opening or lazily creating `.runtime.lock`, the writer validates the
 active-log name and all five backup candidates through the held directory,
@@ -71,10 +80,11 @@ unsafe storage are preserved rather than repaired, and that diagnostic record
 is dropped without changing caller control flow.
 
 Safe storage requires `O_DIRECTORY`, `O_NOFOLLOW`, descriptor-relative
-open/stat/unlink/rename operations, and no-follow stat support. If the platform
-lacks any required primitive, the writer drops the record without opening a
-diagnostic leaf or changing the caller's result, exception, output, or exit.
-There is no less-contained fallback destination.
+mkdir/open/stat/unlink/rename operations, and no-follow stat support. An
+unavailable root identity, a replaced root, or a platform without any required
+primitive drops the record instead of using a weaker or less-contained fallback
+destination. The diagnostic may therefore be absent, but the caller's result,
+exception, output, and exit remain unchanged.
 
 A guarded weak process-wide lock serializes writers for one resolved workspace.
 After the safe-primitive and directory checks pass, an independent persistent
@@ -85,22 +95,37 @@ intentionally separate from the provider-session access-claim guard: session
 access uncertainty fails closed, while diagnostic contention or failure must
 not affect caller control flow.
 
-Under the guard, rotation happens before an append would exceed 1 MiB. It keeps
-five backups, shifts the newest prior active file to `.1`, and discards only the
-oldest backup when the set is full. Append writes are flushed and synchronized.
-After a partial write or synchronization failure, rollback truncates only when
-the open descriptor still identifies the exact inode captured before append and
-that inode remains regular and singly linked. Otherwise rollback is skipped.
-Rotation and rollback do not form a transaction. Lock, validation, append,
-flush, synchronization, rollback, rotation, and cleanup failures are suppressed;
-a record may be dropped, and a failed rotation can leave fewer retained files.
+Under the guard, rotation happens before an append would exceed 1 MiB. The
+writer snapshots each active/backup name as absent or as its validated
+meaningful inode. Before each unlink or rename, it revalidates the involved
+source and destination names against those expected absences or inodes, then
+updates the expected state after a successful mutation. A mismatch stops later
+forward rotation and drops the record; shifts already completed may remain. It
+keeps five backups, moves the newest prior active file to `.1`, and unlinks only
+the oldest backup when the set is full. Append writes are flushed and
+synchronized. After a partial write or synchronization failure, rollback
+truncates only when the open descriptor still identifies the exact inode
+captured before append and that inode remains regular and singly linked.
+Otherwise rollback is skipped.
 
-Do not rename or replace `debug_logs/`, and do not edit, replace, or create
-another hard link to `.runtime.lock` or the active/backup files while the
-workspace may be used. Holding the directory descriptor prevents a renamed or
-replaced pathname from redirecting leaf operations, but validation still covers
-only the identities observed at each check. It cannot make concurrent external
-filesystem changes transactional. Paths and retention are listed in
+Rotation and rollback do not form a transaction. Ordinary `Exception` failures
+from locking, validation, append, synchronization, rotation, rollback, or
+cleanup drop the record. Cleanup still attempts every independently acquired
+active, guard, child-directory, and root-directory descriptor plus the advisory
+and process locks. An original body `KeyboardInterrupt` or `SystemExit` wins;
+otherwise the first cleanup process-control failure wins after later cleanup
+attempts finish. That low-level failure preserves its identity, while each of
+the five diagnostic consumers catches it privately so application results,
+exceptions, cancellation, output, and exits remain unchanged.
+
+Do not rename or replace the workspace root or `debug_logs/`, and do not edit,
+replace, or create another hard link to `.runtime.lock` or the active/backup
+files while the workspace may be used. Holding the root and child descriptors
+prevents a replacement pathname from redirecting leaf operations. Revalidation
+cannot close the interval after the last check and before the following system
+call, however, so a concurrent external leaf change can still race a mutation.
+These checks do not make filesystem changes transactional. Paths and retention
+are listed in
 [Session storage](../reference/configuration/session-storage.md#runtime-debug-log-storage).
 
 ## Conversation transcript safety

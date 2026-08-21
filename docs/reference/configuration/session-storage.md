@@ -45,19 +45,28 @@ files; prompt overwrite replaces only the four role prompts.
 ## Runtime debug-log storage
 
 New initialization scaffolds `debug_logs/`; an existing initialized workspace
-without that directory remains valid. On a platform with the required safe
-descriptor-relative and no-follow primitives, the diagnostics writer creates
-the directory on its first storage attempt. Without those primitives, it drops
-the record and the directory may remain absent. Importing or constructing the
-internal writer creates nothing. The active `runtime.jsonl` and persistent
-`.runtime.lock` guard remain lazy: the writer creates them only during storage
-attempts, and backups appear only after rotation. A guard or active file does
-not by itself prove that any complete record was appended.
+without that directory remains valid. The diagnostics writer creates the
+directory on a storage attempt only after opening and reverifying a bound
+workspace root and confirming the required safe descriptor-relative and
+no-follow primitives. An existing root binds when `Workspace` is constructed; a
+specifically missing root receives its one binding attempt after initialization
+creates it. Any other unavailable identity, a replaced root, or missing safe
+primitive drops the record, and the directory may remain absent. There is no
+fallback destination. Importing or constructing the internal writer creates
+nothing. The active `runtime.jsonl` and persistent `.runtime.lock` guard remain
+lazy: the writer creates them only during storage attempts, and backups appear
+only after rotation. A guard or active file does not by itself prove that any
+complete record was appended.
 
 Each JSONL file is limited to 1,048,576 bytes. Rotation keeps the active file
 plus five backups, with `.1` newest and `.5` oldest, for at most 6 MiB of JSONL
-data. The guard and `.gitkeep` are outside that data bound. Debug records are
-plaintext; their schema is documented in [Persistence](../../design/persistence.md#workspace-runtime-debug-log),
+data. Before each unlink or rename, the writer requires the involved names to
+remain absent or identify the meaningful inode captured for that rotation, then
+updates its expectation after a successful shift. A mismatch stops later
+rotation, although earlier shifts may remain. Removing `.5` is an ordinary
+filesystem unlink, not secure erasure. The guard and `.gitkeep` are outside the
+data bound. Debug records are plaintext; their schema is documented in
+[Persistence](../../design/persistence.md#workspace-runtime-debug-log),
 their containment and failure behavior in [Filesystem safety](../../operations/filesystem-safety.md#debug-log-filesystem-safety),
 and their content boundary in [Privacy](../../operations/privacy-and-provider.md#workspace-debug-log-privacy).
 
