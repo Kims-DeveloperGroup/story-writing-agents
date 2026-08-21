@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import TracebackType
 
 from ..agents import (
     AGENT_SPECS,
@@ -199,6 +200,29 @@ _CONVERSATION_CATALOG_OPERATIONS = (
     "archive",
     "unarchive",
 )
+
+
+_ExceptionState = tuple[BaseException, TracebackType | None]
+
+
+def _remember_first_process_control(
+    retained: _ExceptionState | None,
+    failure: BaseException,
+) -> _ExceptionState | None:
+    """Retain only the first non-ordinary failure across cleanup stages."""
+
+    if isinstance(failure, Exception) or retained is not None:
+        return retained
+    return failure, failure.__traceback__
+
+
+def _raise_exception_state(state: _ExceptionState) -> None:
+    """Raise one retained exception with its originating traceback chain."""
+
+    failure, traceback = state
+    raise failure.with_traceback(traceback)
+
+
 class _ControllerAbort(Exception):
     """Carry one trusted fatal error to the controller's cleanup boundary."""
 
@@ -776,60 +800,64 @@ class InteractiveController:
 
         exit_code = 2
         cleanup_error_reported = False
+        body_control: _ExceptionState | None = None
         try:
-            self._runner = asyncio.Runner()
-            startup_requested_exit = self._enter_initial_session(
-                requested_session
-            )
-            if startup_requested_exit:
-                exit_code = 0
-            else:
-                if self._attached_session_id is None:
-                    self._write_lobby_orientation()
-                exit_code = self._read_session_lobby_commands()
-        except _ControllerAbort as abort:
-            self._record_debug_error(
-                DebugOperation.INTERACTIVE_LOBBY,
-                abort,
-                session_id=self._attached_session_id,
-            )
-            diagnostic_written = self._write_error_best_effort(abort.error)
-            cleanup_error_reported = (
-                abort.error.code is InteractiveErrorCode.CLEANUP_FAILED
-                and diagnostic_written
-            )
-            exit_code = 2
-        except (
-            asyncio.CancelledError,
-            KeyboardInterrupt,
-            OSError,
-        ) as exc:
-            self._record_debug_error(
-                DebugOperation.INTERACTIVE_LOBBY,
-                exc,
-                session_id=self._attached_session_id,
-                phase=DebugPhase.CANCELLED,
-                outcome=DebugOutcome.INTERRUPTED,
-            )
-            self._write_error_best_effort(
-                InteractiveError(InteractiveErrorCode.OPERATION_INTERRUPTED)
-            )
-            exit_code = 2
-        except Exception as exc:
-            self._record_debug_error(
-                DebugOperation.INTERACTIVE_LOBBY,
-                exc,
-                session_id=self._attached_session_id,
-            )
-            self._write_error_best_effort(
-                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
-            )
-            exit_code = 2
-        finally:
-            exit_code = self._release_attachment_and_close_backend(
-                exit_code,
-                cleanup_error_reported=cleanup_error_reported,
-            )
+            try:
+                self._runner = asyncio.Runner()
+                startup_requested_exit = self._enter_initial_session(
+                    requested_session
+                )
+                if startup_requested_exit:
+                    exit_code = 0
+                else:
+                    if self._attached_session_id is None:
+                        self._write_lobby_orientation()
+                    exit_code = self._read_session_lobby_commands()
+            except _ControllerAbort as abort:
+                self._record_debug_error(
+                    DebugOperation.INTERACTIVE_LOBBY,
+                    abort,
+                    session_id=self._attached_session_id,
+                )
+                diagnostic_written = self._write_error_best_effort(abort.error)
+                cleanup_error_reported = (
+                    abort.error.code is InteractiveErrorCode.CLEANUP_FAILED
+                    and diagnostic_written
+                )
+                exit_code = 2
+            except (
+                asyncio.CancelledError,
+                KeyboardInterrupt,
+                OSError,
+            ) as exc:
+                self._record_debug_error(
+                    DebugOperation.INTERACTIVE_LOBBY,
+                    exc,
+                    session_id=self._attached_session_id,
+                    phase=DebugPhase.CANCELLED,
+                    outcome=DebugOutcome.INTERRUPTED,
+                )
+                self._write_error_best_effort(
+                    InteractiveError(InteractiveErrorCode.OPERATION_INTERRUPTED)
+                )
+                exit_code = 2
+            except Exception as exc:
+                self._record_debug_error(
+                    DebugOperation.INTERACTIVE_LOBBY,
+                    exc,
+                    session_id=self._attached_session_id,
+                )
+                self._write_error_best_effort(
+                    InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+                )
+                exit_code = 2
+        except BaseException as failure:
+            body_control = (failure, failure.__traceback__)
+        exit_code = self._release_attachment_and_close_backend(
+            exit_code,
+            cleanup_error_reported=cleanup_error_reported,
+            body_control=body_control,
+        )
         self._trace_debug(
             DebugOperation.INTERACTIVE_LOBBY,
             DebugPhase.SUCCEEDED if exit_code == 0 else DebugPhase.FAILED,
@@ -5196,19 +5224,22 @@ class InteractiveController:
         exit_code: int,
         *,
         cleanup_error_reported: bool,
+        body_control: _ExceptionState | None = None,
     ) -> int:
         """Close Runner, release access, close backend, and rank failures.
 
         Normal quit/EOF releases access without pausing. Each cleanup stage runs
-        after the preceding stage even when that stage fails. Runner, access,
-        backend, attachment, focus, and memory state are cleared before the
-        method returns; one best-effort cleanup diagnostic accompanies status 2.
-        A ``BaseException`` from any stage propagates only after later stages
-        run. If Runner close is interrupted, its private reference is retained
-        because successful close was not established.
+        after the preceding stage even when that stage fails. Attachment, focus,
+        and memory state are always cleared before the method returns; one
+        best-effort cleanup diagnostic accompanies status 2. An uncaught body
+        process control outranks the first cleanup process control, which
+        propagates only after every later stage runs. The Runner reference is
+        retained only when close is interrupted by process control.
         """
 
         if self._closed:
+            if body_control is not None:
+                _raise_exception_state(body_control)
             return exit_code
         self._trace_debug(
             DebugOperation.CLEANUP,
@@ -5216,92 +5247,105 @@ class InteractiveController:
             session_id=self._attached_session_id,
         )
         cleanup_failed = False
+        cleanup_control: _ExceptionState | None = None
         runner = self._runner
         discard_runner_state_after_cleanup = runner is None
         attached_session = self._attached_session_id
-        try:
-            if runner is not None:
-                try:
-                    runner.close()
-                except Exception as exc:
-                    self._record_debug_error(
-                        DebugOperation.CLEANUP,
-                        exc,
-                        session_id=attached_session,
-                    )
-                    cleanup_failed = True
-                    discard_runner_state_after_cleanup = True
-                except BaseException as exc:
-                    self._record_debug_error(
-                        DebugOperation.CLEANUP,
-                        exc,
-                        session_id=attached_session,
-                        phase=DebugPhase.CANCELLED,
-                        outcome=DebugOutcome.INTERRUPTED,
-                    )
-                    raise
-                else:
-                    discard_runner_state_after_cleanup = True
-        finally:
+        if runner is not None:
             try:
-                if attached_session is not None:
-                    try:
-                        released = self._backend.release_session_access(
-                            attached_session
-                        )
-                        require_released_state(
-                            released,
-                            attached_session,
-                        )
-                    except Exception as exc:
-                        self._record_debug_error(
-                            DebugOperation.CLEANUP,
-                            exc,
-                            session_id=attached_session,
-                        )
-                        cleanup_failed = True
-                    except BaseException as exc:
-                        self._record_debug_error(
-                            DebugOperation.CLEANUP,
-                            exc,
-                            session_id=attached_session,
-                            phase=DebugPhase.CANCELLED,
-                            outcome=DebugOutcome.INTERRUPTED,
-                        )
-                        raise
-            finally:
-                try:
-                    try:
-                        self._backend.close()
-                    except Exception as exc:
-                        self._record_debug_error(
-                            DebugOperation.CLEANUP,
-                            exc,
-                            session_id=attached_session,
-                        )
-                        cleanup_failed = True
-                    except BaseException as exc:
-                        self._record_debug_error(
-                            DebugOperation.CLEANUP,
-                            exc,
-                            session_id=attached_session,
-                            phase=DebugPhase.CANCELLED,
-                            outcome=DebugOutcome.INTERRUPTED,
-                        )
-                        raise
-                finally:
-                    if discard_runner_state_after_cleanup:
-                        self._runner = None
-                    self._attached_session_id = None
-                    self._focused_conversation = None
-                    self._conversation_memory_service = None
-                    self._closed = True
+                runner.close()
+            except Exception as exc:
+                self._record_debug_error(
+                    DebugOperation.CLEANUP,
+                    exc,
+                    session_id=attached_session,
+                )
+                cleanup_failed = True
+                discard_runner_state_after_cleanup = True
+            except BaseException as exc:
+                self._record_debug_error(
+                    DebugOperation.CLEANUP,
+                    exc,
+                    session_id=attached_session,
+                    phase=DebugPhase.CANCELLED,
+                    outcome=DebugOutcome.INTERRUPTED,
+                )
+                cleanup_control = _remember_first_process_control(
+                    cleanup_control,
+                    exc,
+                )
+            else:
+                discard_runner_state_after_cleanup = True
+
+        if attached_session is not None:
+            try:
+                released = self._backend.release_session_access(
+                    attached_session
+                )
+                require_released_state(
+                    released,
+                    attached_session,
+                )
+            except Exception as exc:
+                self._record_debug_error(
+                    DebugOperation.CLEANUP,
+                    exc,
+                    session_id=attached_session,
+                )
+                cleanup_failed = True
+            except BaseException as exc:
+                self._record_debug_error(
+                    DebugOperation.CLEANUP,
+                    exc,
+                    session_id=attached_session,
+                    phase=DebugPhase.CANCELLED,
+                    outcome=DebugOutcome.INTERRUPTED,
+                )
+                cleanup_control = _remember_first_process_control(
+                    cleanup_control,
+                    exc,
+                )
+
+        try:
+            self._backend.close()
+        except Exception as exc:
+            self._record_debug_error(
+                DebugOperation.CLEANUP,
+                exc,
+                session_id=attached_session,
+            )
+            cleanup_failed = True
+        except BaseException as exc:
+            self._record_debug_error(
+                DebugOperation.CLEANUP,
+                exc,
+                session_id=attached_session,
+                phase=DebugPhase.CANCELLED,
+                outcome=DebugOutcome.INTERRUPTED,
+            )
+            cleanup_control = _remember_first_process_control(
+                cleanup_control,
+                exc,
+            )
+
+        if discard_runner_state_after_cleanup:
+            self._runner = None
+        self._attached_session_id = None
+        self._focused_conversation = None
+        self._conversation_memory_service = None
+        self._closed = True
 
         if cleanup_failed and not cleanup_error_reported:
-            self._write_error_best_effort(
-                InteractiveError(InteractiveErrorCode.CLEANUP_FAILED)
-            )
-        if not cleanup_failed:
+            try:
+                self._write_error_best_effort(
+                    InteractiveError(InteractiveErrorCode.CLEANUP_FAILED)
+                )
+            except BaseException as exc:
+                cleanup_control = _remember_first_process_control(
+                    cleanup_control,
+                    exc,
+                )
+        if not cleanup_failed and cleanup_control is None:
             self._trace_debug(
                 DebugOperation.CLEANUP,
                 DebugPhase.SUCCEEDED,
@@ -5315,6 +5359,9 @@ class InteractiveController:
                     session_id=attached_session,
                     outcome=DebugOutcome.CLAIMABLE,
                 )
+        retained_control = body_control or cleanup_control
+        if retained_control is not None:
+            _raise_exception_state(retained_control)
         return 2 if cleanup_failed else exit_code
 
 
