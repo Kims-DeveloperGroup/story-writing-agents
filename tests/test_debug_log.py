@@ -448,6 +448,32 @@ class DebugLogContractTests(unittest.TestCase):
                 failed.assert_called_once()
         self.assertFalse(self.log.path.exists())
 
+    def test_record_does_not_swallow_process_control_exceptions(self) -> None:
+        seams = (
+            ("construction", WorkspaceDebugLog, "_build_record"),
+            ("serialization", debug_module.json, "dumps"),
+            ("append", WorkspaceDebugLog, "_append"),
+        )
+        for exception_type in (KeyboardInterrupt, SystemExit):
+            for label, owner, attribute in seams:
+                with self.subTest(
+                    exception_type=exception_type.__name__,
+                    seam=label,
+                ):
+                    control = exception_type(f"{label} control")
+                    with (
+                        mock.patch.object(
+                            owner,
+                            attribute,
+                            side_effect=control,
+                        ) as failed,
+                        self.assertRaises(exception_type) as raised,
+                    ):
+                        _trace(self.log)
+                    self.assertIs(raised.exception, control)
+                    failed.assert_called_once()
+        self.assertFalse(self.log.path.exists())
+
     def test_clean_import_dependency_boundary_and_facade_isolation(self) -> None:
         source = Path(debug_module.__file__).read_text(encoding="utf-8")
         tree = ast.parse(source)
@@ -566,6 +592,51 @@ class DebugLogStorageTests(unittest.TestCase):
                 before = _rotation_snapshot(workspace)
                 _trace(log)
                 self.assertEqual(_rotation_snapshot(workspace), before)
+
+    def test_rotation_reuses_the_no_follow_active_validation_stat(self) -> None:
+        active = self.workspace.path(DEBUG_LOG_RELATIVE_PATH)
+        first_backup = self.workspace.path(f"{DEBUG_LOG_RELATIVE_PATH}.1")
+        active.write_bytes(b"x")
+        payload = b"{}\n"
+        validated = mock.Mock(
+            st_size=DEBUG_LOG_MAX_BYTES - len(payload) + 1,
+        )
+
+        with (
+            mock.patch.object(
+                debug_module,
+                "_validate_existing_regular",
+                side_effect=(validated, None, None, None, None, None),
+            ) as validate,
+            mock.patch.object(debug_module.os, "replace") as replace,
+            mock.patch.object(
+                debug_module,
+                "_open_verified_regular_file",
+                return_value=41,
+            ),
+            mock.patch.object(
+                debug_module.os,
+                "fstat",
+                return_value=mock.Mock(st_size=0),
+            ),
+            mock.patch.object(
+                debug_module.os,
+                "write",
+                return_value=len(payload),
+            ),
+            mock.patch.object(debug_module.os, "fsync"),
+            mock.patch.object(debug_module.os, "close"),
+            mock.patch.object(debug_module.os, "open", return_value=42),
+        ):
+            debug_module._append_under_guard(
+                self.workspace,
+                self.workspace.path(DEBUG_LOG_DIRECTORY),
+                payload,
+            )
+
+        self.assertEqual(validate.call_count, DEBUG_LOG_BACKUP_COUNT + 1)
+        self.assertEqual(validate.call_args_list[0], mock.call(active))
+        replace.assert_called_once_with(active, first_backup)
 
     def test_symlinked_storage_paths_never_mutate_outside_targets(self) -> None:
         cases = (

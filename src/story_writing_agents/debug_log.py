@@ -129,9 +129,9 @@ _PROCESS_LOCKS: weakref.WeakValueDictionary[str, _WorkspaceProcessLock] = (
 class WorkspaceDebugLog:
     """Best-effort writer for one workspace's safe rotating debug log.
 
-    Construction and import perform no filesystem work. Every record attempt is
-    isolated from caller results and control flow; invalid diagnostic inputs,
-    contention, unsafe paths, and storage failures drop only that record.
+    Construction and import perform no filesystem work. Ordinary failures from
+    invalid diagnostic inputs, contention, unsafe paths, or storage drop only
+    that record; process-control exceptions continue to propagate.
     """
 
     __slots__ = ("_workspace",)
@@ -216,7 +216,7 @@ class WorkspaceDebugLog:
         outcome: DebugOutcome | None,
         exception: BaseException | None,
     ) -> None:
-        """Build and append one exact record while suppressing every failure."""
+        """Build and append one exact record while suppressing ordinary failures."""
 
         try:
             record = self._build_record(
@@ -243,7 +243,7 @@ class WorkspaceDebugLog:
             if len(payload) > DEBUG_LOG_MAX_BYTES:
                 return
             self._append(payload)
-        except BaseException:
+        except Exception:
             return
 
     def _build_record(
@@ -460,11 +460,11 @@ def _append_under_guard(workspace: Workspace, directory: Path, payload: bytes) -
         workspace.path(f"{DEBUG_LOG_RELATIVE_PATH}.{index}")
         for index in range(1, DEBUG_LOG_BACKUP_COUNT + 1)
     )
-    _validate_existing_regular(active)
+    active_stat = _validate_existing_regular(active)
     for backup in backups:
         _validate_existing_regular(backup)
 
-    active_size = active.stat().st_size if active.exists() else 0
+    active_size = active_stat.st_size if active_stat is not None else 0
     if active_size and active_size + len(payload) > DEBUG_LOG_MAX_BYTES:
         oldest = backups[-1]
         if oldest.exists():
@@ -507,17 +507,18 @@ def _append_under_guard(workspace: Workspace, directory: Path, payload: bytes) -
         os.close(directory_descriptor)
 
 
-def _validate_existing_regular(path: Path) -> None:
-    """Reject every existing rotation path that is non-regular or oversized."""
+def _validate_existing_regular(path: Path) -> os.stat_result | None:
+    """Return a safe existing rotation stat or reject an unsafe path."""
 
     try:
         value = os.stat(path, follow_symlinks=False)
     except FileNotFoundError:
-        return
+        return None
     if not stat.S_ISREG(value.st_mode):
         raise OSError("debug log rotation path is not regular")
     if value.st_size > DEBUG_LOG_MAX_BYTES:
         raise OSError("debug log rotation path is oversized")
+    return value
 
 
 def _project_exception(exception: BaseException) -> dict[str, object]:
