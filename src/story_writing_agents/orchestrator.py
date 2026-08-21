@@ -1404,6 +1404,15 @@ class StoryRuntime:
                     outcome=DebugOutcome.INTERRUPTED,
                 )
                 raise
+            except (KeyboardInterrupt, SystemExit) as interruption:
+                self._record_debug_error(
+                    DebugOperation.ADVISORY_TURN,
+                    interruption,
+                    session_id=session,
+                    conversation_id=conversation,
+                    agent_id=agent,
+                )
+                raise
             except Exception as exc:
                 failure = ConversationEventAppend(
                     session_id=session,
@@ -1624,6 +1633,15 @@ class StoryRuntime:
                     agent_id=agent,
                     phase=DebugPhase.CANCELLED,
                     outcome=DebugOutcome.INTERRUPTED,
+                )
+                raise
+            except (KeyboardInterrupt, SystemExit) as interruption:
+                self._record_debug_error(
+                    DebugOperation.RETRIEVAL_TURN,
+                    interruption,
+                    session_id=session,
+                    conversation_id=conversation,
+                    agent_id=agent,
                 )
                 raise
             except Exception as exc:
