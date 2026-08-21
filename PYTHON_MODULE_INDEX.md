@@ -488,14 +488,20 @@ every intermediate arrow. The current runtime graph is acyclic.
   correlation strings. A guarded process-wide weak lock registry serializes
   one resolved workspace in process, and the persistent
   `debug_logs/.runtime.lock` independently provides a bounded 100-millisecond
-  POSIX/Windows cross-process advisory-lock attempt. Under that guard the
-  module validates contained non-symlink regular active/backup paths no larger
-  than 1,048,576 bytes, appends to `debug_logs/runtime.jsonl`, best-effort
-  truncates a partial failed append, rotates before the active file would
-  exceed that bound, and retains `runtime.jsonl.1` through `.5`. Invalid input,
-  contention, unsafe storage, serialization, append, synchronization, flush,
-  fsync, rollback, and rotation failures covered by `Exception` drop only that
-  record and never recurse. Process-control `BaseException` failures
+  POSIX/Windows cross-process advisory-lock attempt. `Workspace` supplies
+  containment and no-symlink resolution plus the `debug_logs` scaffold. Under
+  the diagnostic guard, this module requires both the opened-descriptor and
+  named-path views of the guard and active files, plus every existing
+  active/backup rotation candidate, to be regular files with `st_nlink == 1`;
+  active and backup candidates must also be no larger than 1,048,576 bytes. It
+  appends to `debug_logs/runtime.jsonl`,
+  best-effort truncates a partial failed append, rotates before the active file
+  would exceed that bound, and retains `runtime.jsonl.1` through `.5`. These
+  validations cover only the state observed at open or rotation-check time and
+  do not make concurrent external filesystem changes transactional. Invalid
+  input, contention, unsafe storage, serialization, append, synchronization,
+  flush, fsync, rollback, and rotation failures covered by `Exception` drop
+  only that record and never recurse. Process-control `BaseException` failures
   deliberately propagate from this low-level surface so each consumer can
   apply its boundary-specific fail-safe policy.
 - **Primary verification/documentation:** `tests/test_debug_log.py`,
@@ -1606,10 +1612,12 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 - `Workspace` remains the sole containment and no-symlink authority and only
   declares the `debug_logs` scaffold. `debug_log` owns its safe event schema,
-  weak per-workspace process locks, independent advisory guard, active file,
-  append rollback, and bounded rotation. This independent guard intentionally
-  does not reuse the backend's private access-claim lock: access claims fail
-  closed, while ordinary diagnostic `Exception` failures drop their record.
+  weak per-workspace process locks, independent advisory guard, regular-file
+  and single-link validation for guard/active/backup files, active/backup size
+  validation, append rollback, and bounded rotation. This independent guard
+  intentionally does not reuse the backend's private access-claim lock: access
+  claims fail closed, while ordinary diagnostic `Exception` failures drop their
+  record.
   Process-control `BaseException` failures deliberately leave the low-level
   surface, and `backend`, `cli`, `interactive_controller._core`, `orchestrator`,
   and `smoke` each guard every trace and error call privately so diagnostics
