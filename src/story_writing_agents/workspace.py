@@ -219,8 +219,13 @@ class Workspace:
 
         if not isinstance(overwrite_prompts, bool):
             raise TypeError("overwrite_prompts must be a boolean")
+        pending_root_identity = (
+            self._root_identity is _WORKSPACE_ROOT_IDENTITY_PENDING
+        )
         self.root.mkdir(parents=True, exist_ok=True)
         _bind_pending_workspace_root_identity(self)
+        if pending_root_identity:
+            _require_workspace_root_identity(self)
         for relative in WORKSPACE_DIRECTORIES:
             self._directory(relative).mkdir(parents=True, exist_ok=True)
 

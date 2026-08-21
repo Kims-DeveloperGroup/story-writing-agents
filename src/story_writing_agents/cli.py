@@ -357,7 +357,7 @@ def _write_interactive_cli_error(
 
 
 def _record_cli_error(
-    debug_log: WorkspaceDebugLog,
+    debug_log: WorkspaceDebugLog | None,
     operation: DebugOperation,
     failure: BaseException,
     *,
@@ -365,6 +365,8 @@ def _record_cli_error(
 ) -> None:
     """Record a CLI failure without allowing diagnostics to replace it."""
 
+    if debug_log is None:
+        return
     try:
         debug_log.error(
             DebugComponent.CLI,
@@ -387,7 +389,7 @@ def _create_cli_debug_log(workspace: Workspace) -> WorkspaceDebugLog | None:
 
 
 def _trace_cli(
-    debug_log: WorkspaceDebugLog,
+    debug_log: WorkspaceDebugLog | None,
     operation: DebugOperation,
     phase: DebugPhase,
     *,
@@ -396,6 +398,8 @@ def _trace_cli(
 ) -> None:
     """Record a CLI trace without allowing diagnostics to alter behavior."""
 
+    if debug_log is None:
+        return
     try:
         debug_log.trace(
             component=DebugComponent.CLI,
@@ -409,7 +413,7 @@ def _trace_cli(
 
 
 def _trace_cli_completion(
-    debug_log: WorkspaceDebugLog,
+    debug_log: WorkspaceDebugLog | None,
     *,
     session_id: str | None = None,
     outcome: DebugOutcome = DebugOutcome.COMPLETED,
@@ -542,7 +546,7 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
     except Exception as exc:
         _write_interactive_cli_error(_classify_workspace_entry_failure(exc))
         return 2
-    debug_log = WorkspaceDebugLog(workspace)
+    debug_log = _create_cli_debug_log(workspace)
     _trace_cli(
         debug_log,
         DebugOperation.WORKSPACE_DISCOVERY,
@@ -646,7 +650,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments.command is None or arguments.command == "chat":
         return _run_interactive_cli(arguments)
     debug_log: WorkspaceDebugLog | None = None
-    smoke_debug_log_hint_available = False
+    debug_log_hint_available = False
     session_id: str | None = None
     try:
         if arguments.command == "init":
@@ -654,7 +658,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 arguments.workspace,
                 overwrite_prompts=arguments.overwrite_prompts,
             )
-            debug_log = WorkspaceDebugLog(workspace)
+            debug_log_hint_available = True
+            debug_log = _create_cli_debug_log(workspace)
             _trace_cli(
                 debug_log,
                 DebugOperation.WORKSPACE_INITIALIZATION,
@@ -677,7 +682,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 report, exit_code = run_smoke()
             else:
                 workspace = initialize_workspace(arguments.workspace)
-                smoke_debug_log_hint_available = True
+                debug_log_hint_available = True
                 debug_log = _create_cli_debug_log(workspace)
                 report, exit_code = run_smoke(workspace)
             print(
@@ -706,7 +711,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return exit_code
 
         workspace = resolve_workspace(arguments.workspace)
-        debug_log = WorkspaceDebugLog(workspace)
+        debug_log_hint_available = True
+        debug_log = _create_cli_debug_log(workspace)
         _trace_cli(
             debug_log,
             DebugOperation.WORKSPACE_DISCOVERY,
@@ -894,7 +900,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 session_id=session_id,
             )
         print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
-        if debug_log is not None or smoke_debug_log_hint_available:
+        if debug_log_hint_available:
             print(_NONINTERACTIVE_DEBUG_LOG_HINT, file=sys.stderr)
         return 2
 
