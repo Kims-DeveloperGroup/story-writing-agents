@@ -219,6 +219,8 @@ class _ConversationBoundAgent:
             raise AssertionError("retrieval used the wrong bound agent")
         self.backend.trace.append("converse_with_retrieval")
         self.backend.retrieval_requests.append(request)
+        if self.backend.retrieval_failure is not None:
+            raise self.backend.retrieval_failure
         reply = handler.handle_conversation_retrieval_action(
             ConversationRetrievalAnswerAction(
                 kind=ConversationRetrievalActionKind.ANSWER,
@@ -243,6 +245,7 @@ class _ConversationBackend:
         trace: list[str] | None = None,
         configuration_error: BaseException | None = None,
         bind_error: BaseException | None = None,
+        retrieval_failure: BaseException | None = None,
         bind_hook: Callable[[AgentDefinition], None] | None = None,
         bound_factory: Callable[
             [_ConversationBackend, AgentDefinition], object
@@ -252,6 +255,7 @@ class _ConversationBackend:
         self.trace = trace if trace is not None else []
         self.configuration_error = configuration_error
         self.bind_error = bind_error
+        self.retrieval_failure = retrieval_failure
         self.bind_hook = bind_hook
         self.bound_factory = bound_factory or _ConversationBoundAgent
         self.lifecycle_sessions: list[str] = []
@@ -444,6 +448,8 @@ class _ConversationRuntimeCase(unittest.IsolatedAsyncioTestCase):
         session_id: str,
         conversation_id: str,
         prohibited: tuple[str, ...],
+        terminal_phase: str = "failed",
+        terminal_outcome: str = "failed",
     ) -> None:
         """Require one started record and one content-free terminal error."""
 
@@ -455,7 +461,7 @@ class _ConversationRuntimeCase(unittest.IsolatedAsyncioTestCase):
             ],
             [
                 ("trace", "started", None),
-                ("error", "failed", "failed"),
+                ("error", terminal_phase, terminal_outcome),
             ],
         )
         for record in records:
@@ -1408,6 +1414,204 @@ class ConversationRuntimePreflightTests(_ConversationRuntimeCase):
 
 
 class ConversationRuntimeFailureTests(_ConversationRuntimeCase):
+    async def assert_provider_control_flow_guard(
+        self,
+        operation: str,
+        provider_failure: BaseException,
+        *,
+        diagnostic_failure: BaseException | None = None,
+    ) -> None:
+        """Require one interrupted record and the established crash remainder."""
+
+        marker = f"{operation.upper()}_{type(provider_failure).__name__}"
+        workspace, catalog, memory, conversation_id = self.memory_fixture(
+            subject=f"PRIVATE_{marker}_SUBJECT"
+        )
+        trace: list[str] = []
+        store = _TracingStore(memory, trace=trace)
+        advisory_handler = (
+            (lambda _request, failure=provider_failure: failure)
+            if operation == "advisory"
+            else None
+        )
+        backend = _ConversationBackend(
+            advisory_handler,
+            trace=trace,
+            retrieval_failure=(
+                provider_failure if operation == "retrieval" else None
+            ),
+        )
+        runtime = StoryRuntime(
+            workspace,
+            backend,  # type: ignore[arg-type]
+            conversation_event_store=store,
+        )
+        private_input = f"PRIVATE_{marker}_INPUT"
+        failure_message = str(provider_failure)
+        memory_service = ConversationMemoryService(
+            ConversationSearchScope("session_a"),
+            catalog,
+            memory,
+            search=_UnusedConversationSearch(),  # type: ignore[arg-type]
+        )
+
+        with ExitStack() as stack:
+            debug_error = (
+                stack.enter_context(
+                    mock.patch.object(
+                        WorkspaceDebugLog,
+                        "error",
+                        side_effect=diagnostic_failure,
+                    )
+                )
+                if diagnostic_failure is not None
+                else None
+            )
+            raised = stack.enter_context(
+                self.assertRaises(type(provider_failure))
+            )
+            if operation == "advisory":
+                await runtime.converse(
+                    "session_a",
+                    conversation_id,
+                    PLOT_ARCHITECT,
+                    private_input,
+                )
+            else:
+                await runtime.converse_with_retrieval(
+                    "session_a",
+                    conversation_id,
+                    PLOT_ARCHITECT,
+                    private_input,
+                    memory_service=memory_service,
+                )
+
+        self.assertIs(raised.exception, provider_failure)
+        self.assertIs(type(raised.exception), type(provider_failure))
+        self.assertEqual(str(raised.exception), failure_message)
+        self.assertIsNone(raised.exception.__cause__)
+        self.assertIsNone(raised.exception.__context__)
+        self.assertEqual(
+            trace,
+            [
+                "read_context",
+                "validate_provider_configuration",
+                "get_session_lifecycle",
+                "acquire_session_access",
+                "get_session_lifecycle",
+                "bind",
+                "append:user_message",
+                (
+                    "converse"
+                    if operation == "advisory"
+                    else "converse_with_retrieval"
+                ),
+            ],
+        )
+        self.assertEqual(
+            len(
+                backend.requests
+                if operation == "advisory"
+                else backend.retrieval_requests
+            ),
+            1,
+        )
+        self.assertEqual(
+            len(
+                backend.retrieval_requests
+                if operation == "advisory"
+                else backend.requests
+            ),
+            0,
+        )
+        self.assertEqual(
+            tuple(event.kind for event in store.append_calls),
+            (ConversationEventKind.USER_MESSAGE,),
+        )
+        events = memory.read("session_a", conversation_id)
+        self.assertEqual(
+            tuple(event.kind for event in events),
+            (ConversationEventKind.USER_MESSAGE,),
+        )
+        self.assertEqual(events[0].content, private_input)
+        self.assertNotIn(
+            ConversationEventKind.RUNTIME_ERROR,
+            (event.kind for event in store.append_calls),
+        )
+        prohibited = (
+            f"PRIVATE_{marker}_SUBJECT",
+            private_input,
+            failure_message,
+        )
+        if diagnostic_failure is None:
+            self.assert_failed_operation_records(
+                workspace,
+                operation=f"{operation}_turn",
+                session_id="session_a",
+                conversation_id=conversation_id,
+                prohibited=prohibited,
+                terminal_phase="cancelled",
+                terminal_outcome="interrupted",
+            )
+        else:
+            assert debug_error is not None
+            debug_error.assert_called_once()
+            self.assertIs(debug_error.call_args.args[2], provider_failure)
+            raw, records = _runtime_operation_records(
+                workspace,
+                f"{operation}_turn",
+            )
+            self.assertEqual(
+                [(record["level"], record["phase"]) for record in records],
+                [("trace", "started")],
+            )
+            for value in prohibited + (
+                str(diagnostic_failure),
+                str(workspace.root),
+            ):
+                self.assertNotIn(value, raw)
+
+    async def test_provider_base_exceptions_record_interrupted_crash_remainder(
+        self,
+    ) -> None:
+        for operation in ("advisory", "retrieval"):
+            for provider_failure in (
+                KeyboardInterrupt("PRIVATE_PROVIDER_INTERRUPT"),
+                SystemExit("PRIVATE_PROVIDER_EXIT"),
+            ):
+                with self.subTest(
+                    operation=operation,
+                    failure=type(provider_failure).__name__,
+                ):
+                    await self.assert_provider_control_flow_guard(
+                        operation,
+                        provider_failure,
+                    )
+
+    async def test_provider_base_exceptions_survive_diagnostic_sink_failure(
+        self,
+    ) -> None:
+        for operation in ("advisory", "retrieval"):
+            for provider_failure, diagnostic_failure in (
+                (
+                    KeyboardInterrupt("PRIVATE_PROVIDER_INTERRUPT"),
+                    SystemExit("PRIVATE_DIAGNOSTIC_EXIT"),
+                ),
+                (
+                    SystemExit("PRIVATE_PROVIDER_EXIT"),
+                    KeyboardInterrupt("PRIVATE_DIAGNOSTIC_INTERRUPT"),
+                ),
+            ):
+                with self.subTest(
+                    operation=operation,
+                    failure=type(provider_failure).__name__,
+                ):
+                    await self.assert_provider_control_flow_guard(
+                        operation,
+                        provider_failure,
+                        diagnostic_failure=diagnostic_failure,
+                    )
+
     async def assert_append_guard(
         self,
         operation: str,
@@ -2222,43 +2426,6 @@ class ConversationRuntimeCancellationTests(_ConversationRuntimeCase):
                     ),
                     (ConversationEventKind.USER_MESSAGE,),
                 )
-
-    async def test_base_exceptions_leave_crash_remainder(self) -> None:
-        for provider_failure in (
-            KeyboardInterrupt("provider interrupted"),
-            SystemExit("provider exited"),
-        ):
-            workspace, _, memory, conversation_id = self.memory_fixture()
-            store = _TracingStore(memory)
-            backend = _ConversationBackend(
-                lambda request, failure=provider_failure: failure
-            )
-            runtime = StoryRuntime(
-                workspace,
-                backend,  # type: ignore[arg-type]
-                conversation_event_store=store,
-            )
-            with self.subTest(failure=type(provider_failure).__name__):
-                with self.assertRaises(type(provider_failure)) as raised:
-                    await runtime.converse(
-                        "session_a",
-                        conversation_id,
-                        PLOT_ARCHITECT,
-                        "crash remainder",
-                    )
-                self.assertIs(raised.exception, provider_failure)
-                self.assertEqual(
-                    tuple(event.kind for event in store.append_calls),
-                    (ConversationEventKind.USER_MESSAGE,),
-                )
-                self.assertEqual(
-                    tuple(
-                        event.kind
-                        for event in memory.read("session_a", conversation_id)
-                    ),
-                    (ConversationEventKind.USER_MESSAGE,),
-                )
-
 
 class ConversationRuntimeArtifactTests(_ConversationRuntimeCase):
     async def test_success_and_failure_only_change_addressed_transcript(self) -> None:
