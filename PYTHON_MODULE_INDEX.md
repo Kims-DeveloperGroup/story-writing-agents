@@ -489,12 +489,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   one resolved workspace in process, and the persistent
   `debug_logs/.runtime.lock` independently provides a bounded 100-millisecond
   POSIX/Windows cross-process advisory-lock attempt. `Workspace` supplies
-  containment and no-symlink resolution plus the `debug_logs` scaffold. Under
-  the diagnostic guard, this module requires both the opened-descriptor and
-  named-path views of the guard and active files, plus every existing
-  active/backup rotation candidate, to be regular files with `st_nlink == 1`;
-  active and backup candidates must also be no larger than 1,048,576 bytes. It
-  appends to `debug_logs/runtime.jsonl`,
+  containment and no-symlink resolution plus the `debug_logs` scaffold. Before
+  opening or lazily creating the persistent guard, this module validates any
+  existing active file and each existing file among the five backup candidates
+  as regular, with `st_nlink == 1`, and no larger than 1,048,576 bytes. It
+  verifies that the opened and named guard views are the same regular,
+  singly-linked file before attempting the advisory lock and again after
+  acquisition. Under that guard, it revalidates the active and every existing
+  backup candidate for races, then verifies that the opened and named active
+  views are the same regular, singly-linked file before append. It appends to
+  `debug_logs/runtime.jsonl`,
   best-effort truncates a partial failed append, rotates before the active file
   would exceed that bound, and retains `runtime.jsonl.1` through `.5`. These
   validations cover only the state observed at open or rotation-check time and
