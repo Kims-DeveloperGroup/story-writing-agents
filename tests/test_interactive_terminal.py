@@ -821,7 +821,7 @@ class PromptAndRenderingTests(unittest.TestCase):
                 main_read_line=object(),  # type: ignore[arg-type]
             )
 
-    def test_transient_adapter_and_driver_seams_preserve_default_routing(self) -> None:
+    def test_semantic_adapters_always_request_transient_driver_lifecycle(self) -> None:
         picker_signature = inspect.signature(RawTerminalDriver.read_picker)
         prompt_signature = inspect.signature(RawTerminalDriver.read_prompt)
         for signature in (picker_signature, prompt_signature):
@@ -864,8 +864,14 @@ class PromptAndRenderingTests(unittest.TestCase):
             "line",
         )
         self.assertEqual(prompt.read_prompt(Prompt("Prompt")).text, "line")
-        self.assertEqual(picker_calls, [{"transient": True}, {}])
-        self.assertEqual(prompt_calls, [{"transient": True}, {}])
+        self.assertEqual(
+            picker_calls,
+            [{"transient": True}, {"transient": True}],
+        )
+        self.assertEqual(
+            prompt_calls,
+            [{"transient": True}, {"transient": True}],
+        )
 
     def test_main_prompts_are_exact_and_return_unparsed_lines(self) -> None:
         self.assertEqual(
