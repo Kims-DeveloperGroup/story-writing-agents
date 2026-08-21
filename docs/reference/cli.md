@@ -206,8 +206,9 @@ indicator-only failures use the existing internal-error path after cleanup.
 
 `/help [COMMAND]` (`/?`), `/status`, `/settings`, and `/session list` are global.
 Session grammar is `/session list | create NAME | resume [NAME] | pause`. Explicit
-`story chat SESSION` creates an absent session or opens a persisted one. Bare
-entry resumes a ready default and asks before reopening a paused default.
+`story chat SESSION` creates an absent session or resumes a persisted session.
+Bare entry resumes a ready default and asks for confirmation before resuming a
+paused default.
 
 On a capable main prompt, exact omitted `/session resume` displays all persisted
 sessions before submission, ordered by newest durable update then ID. Rows show

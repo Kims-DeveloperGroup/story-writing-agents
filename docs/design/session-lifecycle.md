@@ -107,9 +107,10 @@ default. Lifecycle commands have no `--session`.
 
 ## Shell transitions and compensation
 
-Bare `story` resumes a ready default and asks before reopening paused state.
-`story chat SESSION` creates or opens; `/session resume` never creates. Switching
-validates configuration and lifecycle, acquires or durably reopens the
+Bare `story` resumes a ready default and asks for confirmation before resuming a
+paused default. `story chat SESSION` creates an absent session or resumes a
+persisted session; `/session resume` never creates. Switching validates
+configuration and lifecycle, acquires or durably reopens the
 destination, performs correlated post-validation, loads destination focus,
 persists the destination default, releases the source, then commits in-memory
 attachment/focus and resets agent focus to `lead`.

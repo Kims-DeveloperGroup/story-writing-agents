@@ -80,7 +80,8 @@ returns to the lobby. Quit and main/composer EOF release access without pausing.
 
 Cleanup attempts Runner close → access release → backend close, clears process
 scope, and reports at most one `cleanup_failed`. Later startup resumes a ready
-default or asks to reopen paused; only an active default can become focus.
+default or asks for confirmation before resuming a paused default; only an
+active default can become focus.
 
 ## Current limits
 
