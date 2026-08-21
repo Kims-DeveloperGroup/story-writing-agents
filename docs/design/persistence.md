@@ -43,8 +43,18 @@ or payload mapping.
 
 `Workspace` owns containment and the `debug_logs/` scaffold. The internal
 writer separately owns this schema, the active file, guard, append, rollback,
-and rotation. It is not exported from the project-root facade, and current CLI,
-controller, backend, runtime, and smoke call sites do not emit these records.
+and rotation. It is not exported from the project-root facade, and constructing
+the writer performs no filesystem work. `StoryRuntime` construction only retains
+that I/O-free handle and emits nothing. `AgentBackend` begins emitting only
+after the complete configuration snapshot loads successfully; CLI, controller,
+and smoke emission starts only after workspace resolution or initialization.
+
+The low-level writer drops ordinary `Exception` failures. Each of the five
+consumers adds a private `BaseException` guard around submissions, so a
+diagnostic `KeyboardInterrupt` or `SystemExit` cannot replace established
+results, exceptions, cancellation, persistence, cleanup, output, or exits.
+Explicit smoke retains best-effort records; implicit smoke removes them with its
+temporary workspace.
 Storage paths and retention are in [Session storage](../reference/configuration/session-storage.md#runtime-debug-log-storage),
 failure guarantees in [Filesystem safety](../operations/filesystem-safety.md#debug-log-filesystem-safety),
 and excluded content in [Privacy](../operations/privacy-and-provider.md#workspace-debug-log-privacy).
@@ -111,8 +121,9 @@ Creation occurs after debate reservation and before initiation or provider
 work. The file is strict UTF-8 JSON, identity-bound to its path, rejects
 missing, extra, or duplicate keys, and is never overwritten. A collision raises
 `DebateExistsError`. `Workspace.inspect_debate_context()` and the matching
-runtime methods are read-only; existing debate/session inspection, logs, result
-JSON, and `DebateResult` remain unchanged.
+runtime methods are read-only for debate/session state; runtime wrappers may
+append a bounded operational debug record. Existing inspection JSON, debate
+logs, result JSON, and `DebateResult` remain unchanged.
 
 ## Durability boundaries
 

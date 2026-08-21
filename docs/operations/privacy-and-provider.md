@@ -31,14 +31,18 @@ action, but never owner hostname, PID, or claim token. `/inspect` whitelists
 lifecycle/artifact/context identity/mode/counts, never raw messages, candidates,
 errors/actions, context content, or provider fields.
 
-Help/status/history/inspection are provider-free and read-only. Directives are
-provider-free but atomically update validated overrides. Other scope, thread,
-catalog, transcript, debate, artifact, and core state is preserved.
+Help/status/history/inspection are provider-free and read-only with respect to
+story and session domain state. Workspace-aware CLI/controller activity and
+`StoryRuntime` or `AgentBackend` inspection/lifecycle reads may still append
+bounded operational debug records. Directives are provider-free but atomically
+update validated overrides. Other scope, thread, catalog, transcript, debate,
+artifact, and core state is preserved.
 
 Provider-free is not exposure-free: subjects, snippets, metadata, errors, and
 content reach callbacks/scrollback. Lobby/session orientation intentionally
-prints the normalized workspace root; unexpected diagnostic paths do not.
-Terminal escaping is not redaction. See
+prints the normalized workspace root. Post-workspace error hints expose only the
+fixed relative path `debug_logs/runtime.jsonl`, not a dynamically discovered or
+absolute diagnostic path. Terminal escaping is not redaction. See
 [Conversation search](../reference/conversation-search.md) and
 [Terminal safety](terminal-safety.md).
 
@@ -81,12 +85,29 @@ and discard nonzero provider stderr without decoding it, so that stream is not
 available to this log.
 
 These files are separate from conversation transcript `runtime_error` events
-and their 4,096-character known-value sanitizer. Current CLI, controller,
-backend, runtime, and smoke call sites do not invoke the internal writer, so
-the installed shell does not yet promise a populated log or display its path.
-See [Persistence](../design/persistence.md#workspace-runtime-debug-log) for the
-schema and [Filesystem safety](filesystem-safety.md#debug-log-filesystem-safety)
-for fail-open storage behavior.
+and their 4,096-character known-value sanitizer. `StoryRuntime` construction
+retains an I/O-free handle but emits and creates nothing. `AgentBackend` starts
+only after the complete configuration snapshot loads successfully; invalid
+executable and snapshot-load failures precede emission. CLI, controller, and
+smoke emission begins only after workspace resolution or initialization.
+
+The low-level writer suppresses ordinary `Exception` failures. CLI, backend,
+runtime, controller, and smoke each add a private guard that catches diagnostic
+`BaseException`, so even a sink `KeyboardInterrupt` or `SystemExit` cannot
+replace the application's result, exception, cancellation, cleanup, output, or
+exit status. Explicit smoke retains best-effort records; implicit smoke removes
+its temporary workspace and log. A hint therefore does not guarantee that a
+record exists.
+
+Interactive errors after workspace resolution add exactly
+`[debug log] If available, workspace-relative: debug_logs/runtime.jsonl`.
+A caught noninteractive exception adds the fixed path as a second stderr line
+only after a workspace-bound logger is available. Returned domain outcomes,
+argparse, and pre-workspace errors add no debug-log path. See
+[Persistence](../design/persistence.md#workspace-runtime-debug-log) for the
+schema, [CLI](../reference/cli.md#runtime-debug-logs) for exact output, and
+[Filesystem safety](filesystem-safety.md#debug-log-filesystem-safety) for
+fail-open storage behavior.
 
 <a id="runtime-error-diagnostics"></a>
 

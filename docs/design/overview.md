@@ -29,7 +29,18 @@ claims, prompt staging, routes, processes, and threads;
 The internal `debug_log` module borrows that containment boundary and owns its
 own safe event schema, per-workspace process serialization, independent
 cross-process guard, append rollback, and bounded rotation. It has no
-project-root export, and current application call sites do not invoke it.
+project-root export. Constructing its workspace-bound handle performs no I/O;
+`StoryRuntime` construction emits nothing, `AgentBackend` starts only after its
+complete configuration snapshot loads, and CLI, controller, and smoke emission
+starts only after workspace resolution or initialization succeeds.
+
+The low-level writer suppresses ordinary `Exception` failures. The five
+consumers—CLI, backend, runtime, controller, and smoke—submit only fixed facts
+through private guards that also catch diagnostic `BaseException`. Thus
+`debug_log` alone owns schema, files, locks, append rollback, and rotation, while
+a diagnostic `KeyboardInterrupt` or `SystemExit` cannot replace application
+results, exceptions, cancellation, cleanup, output, or exit behavior. Implicit
+smoke removes its records with the temporary workspace.
 
 ## Fixed collaboration model
 

@@ -94,6 +94,10 @@ def _error_record(code: InteractiveErrorCode) -> str:
                 state=terminal_module.ViewState.ERROR,
             ),
             terminal_module.Notice(spec.hint, label="hint"),
+            terminal_module.Notice(
+                "If available, workspace-relative: debug_logs/runtime.jsonl",
+                label="debug log",
+            ),
         ),
         state=terminal_module.ViewState.ERROR,
     )
@@ -101,7 +105,7 @@ def _error_record(code: InteractiveErrorCode) -> str:
 
 
 def _persistent_file_snapshot(root: Path) -> dict[str, tuple[bytes, int]]:
-    """Capture durable file bytes and mtimes without transient access claims."""
+    """Capture domain file state without leases or diagnostic artifacts."""
 
     return {
         path.relative_to(root).as_posix(): (
@@ -109,7 +113,9 @@ def _persistent_file_snapshot(root: Path) -> dict[str, tuple[bytes, int]]:
             path.stat().st_mtime_ns,
         )
         for path in sorted(root.rglob("*"))
-        if path.is_file() and not path.name.endswith(".access.json")
+        if path.is_file()
+        and not path.name.endswith(".access.json")
+        and "debug_logs" not in path.relative_to(root).parts
     }
 
 

@@ -64,6 +64,13 @@ from .conversations import (
     validate_conversation_context_window,
 )
 from .directives import apply_directive as persist_directive
+from .debug_log import (
+    DebugComponent,
+    DebugOperation,
+    DebugOutcome,
+    DebugPhase,
+    WorkspaceDebugLog,
+)
 from .errors import (
     BackendProtocolError,
     ConfigurationError,
@@ -1048,6 +1055,7 @@ class StoryRuntime:
         self.workspace = (
             workspace if isinstance(workspace, Workspace) else Workspace(workspace)
         )
+        self._debug_log = WorkspaceDebugLog(self.workspace)
         self.backend = backend
         self.conversation_event_store = (
             conversation_event_store
@@ -1079,12 +1087,93 @@ class StoryRuntime:
         self._binding_lock = asyncio.Lock()
         self._conversation_locks: dict[tuple[str, str], asyncio.Lock] = {}
 
+    def _trace_debug(
+        self,
+        operation: DebugOperation,
+        phase: DebugPhase,
+        *,
+        session_id: str | None = None,
+        conversation_id: str | None = None,
+        debate_id: str | None = None,
+        agent_id: str | None = None,
+        outcome: DebugOutcome | None = None,
+    ) -> None:
+        """Record a trace without allowing diagnostics to alter behavior."""
+
+        try:
+            self._debug_log.trace(
+                component=DebugComponent.RUNTIME,
+                operation=operation,
+                phase=phase,
+                session_id=session_id,
+                conversation_id=conversation_id,
+                debate_id=debate_id,
+                agent_id=agent_id,
+                outcome=outcome,
+            )
+        except BaseException:
+            pass
+
+    def _record_debug_error(
+        self,
+        operation: DebugOperation,
+        failure: BaseException,
+        *,
+        session_id: str | None = None,
+        conversation_id: str | None = None,
+        debate_id: str | None = None,
+        agent_id: str | None = None,
+        phase: DebugPhase = DebugPhase.FAILED,
+        outcome: DebugOutcome = DebugOutcome.FAILED,
+    ) -> None:
+        """Record a runtime failure without allowing diagnostics to replace it."""
+
+        if (
+            phase is DebugPhase.FAILED
+            and outcome is DebugOutcome.FAILED
+            and isinstance(
+                failure,
+                (asyncio.CancelledError, KeyboardInterrupt, SystemExit),
+            )
+        ):
+            phase = DebugPhase.CANCELLED
+            outcome = DebugOutcome.INTERRUPTED
+        try:
+            self._debug_log.error(
+                DebugComponent.RUNTIME,
+                operation,
+                failure,
+                phase=phase,
+                session_id=session_id,
+                conversation_id=conversation_id,
+                debate_id=debate_id,
+                agent_id=agent_id,
+                outcome=outcome,
+            )
+        except BaseException:
+            pass
+
     def session(self, session_id: str) -> RuntimeSession:
         self.workspace.validate_identifier(session_id)
         return RuntimeSession(self, session_id)
 
     def apply_directive(self, session_id: str, text: str) -> dict[str, object]:
-        return persist_directive(self.workspace, session_id, text)
+        try:
+            result = persist_directive(self.workspace, session_id, text)
+        except Exception as exc:
+            self._record_debug_error(
+                DebugOperation.DIRECTIVE,
+                exc,
+                session_id=session_id,
+            )
+            raise
+        self._trace_debug(
+            DebugOperation.DIRECTIVE,
+            DebugPhase.SUCCEEDED,
+            session_id=session_id,
+            outcome=DebugOutcome.COMPLETED,
+        )
+        return result
 
     def set_runtime_overrides(
         self,
@@ -1093,17 +1182,63 @@ class StoryRuntime:
     ) -> dict[str, Any]:
         """Replace one session's overrides only after complete validation."""
 
-        validated = self.config.validate_runtime_overrides(overrides)
-        self.workspace.save_session_overrides(session_id, validated)
+        try:
+            validated = self.config.validate_runtime_overrides(overrides)
+            self.workspace.save_session_overrides(session_id, validated)
+        except Exception as exc:
+            self._record_debug_error(
+                DebugOperation.CONFIGURATION,
+                exc,
+                session_id=session_id,
+            )
+            raise
+        self._trace_debug(
+            DebugOperation.CONFIGURATION,
+            DebugPhase.SUCCEEDED,
+            session_id=session_id,
+            outcome=DebugOutcome.COMPLETED,
+        )
         return validated
 
     def inspect_session(self, session_id: str) -> dict[str, Any]:
-        return self.workspace.inspect_session(session_id)
+        try:
+            result = self.workspace.inspect_session(session_id)
+        except Exception as exc:
+            self._record_debug_error(
+                DebugOperation.INSPECTION,
+                exc,
+                session_id=session_id,
+            )
+            raise
+        self._trace_debug(
+            DebugOperation.INSPECTION,
+            DebugPhase.OBSERVED,
+            session_id=session_id,
+            outcome=DebugOutcome.COMPLETED,
+        )
+        return result
 
     def inspect_debate(
         self, session_id: str, debate_id: str
     ) -> dict[str, Any]:
-        return self.workspace.inspect_debate(session_id, debate_id)
+        try:
+            result = self.workspace.inspect_debate(session_id, debate_id)
+        except Exception as exc:
+            self._record_debug_error(
+                DebugOperation.INSPECTION,
+                exc,
+                session_id=session_id,
+                debate_id=debate_id,
+            )
+            raise
+        self._trace_debug(
+            DebugOperation.INSPECTION,
+            DebugPhase.OBSERVED,
+            session_id=session_id,
+            debate_id=debate_id,
+            outcome=DebugOutcome.COMPLETED,
+        )
+        return result
 
     def inspect_debate_context(
         self,
@@ -1112,7 +1247,24 @@ class StoryRuntime:
     ) -> dict[str, Any] | None:
         """Return a strict context sidecar or ``None`` without mutating state."""
 
-        return self.workspace.inspect_debate_context(session_id, debate_id)
+        try:
+            result = self.workspace.inspect_debate_context(session_id, debate_id)
+        except Exception as exc:
+            self._record_debug_error(
+                DebugOperation.INSPECTION,
+                exc,
+                session_id=session_id,
+                debate_id=debate_id,
+            )
+            raise
+        self._trace_debug(
+            DebugOperation.INSPECTION,
+            DebugPhase.OBSERVED,
+            session_id=session_id,
+            debate_id=debate_id,
+            outcome=DebugOutcome.COMPLETED,
+        )
+        return result
 
     async def converse(
         self,
@@ -1189,7 +1341,24 @@ class StoryRuntime:
                 kind=ConversationEventKind.USER_MESSAGE,
                 content=content,
             )
-            self._append_conversation_event(append, user_event)
+            self._trace_debug(
+                DebugOperation.ADVISORY_TURN,
+                DebugPhase.STARTED,
+                session_id=session,
+                conversation_id=conversation,
+                agent_id=agent,
+            )
+            try:
+                self._append_conversation_event(append, user_event)
+            except BaseException as exc:
+                self._record_debug_error(
+                    DebugOperation.ADVISORY_TURN,
+                    exc,
+                    session_id=session,
+                    conversation_id=conversation,
+                    agent_id=agent,
+                )
+                raise
 
             try:
                 raw_reply = await bound_converse(request)
@@ -1211,7 +1380,7 @@ class StoryRuntime:
                     content=reply.content,
                     context=request.context,
                 )
-            except asyncio.CancelledError:
+            except asyncio.CancelledError as cancellation_error:
                 cancellation = ConversationEventAppend(
                     session_id=session,
                     conversation_id=conversation,
@@ -1225,6 +1394,15 @@ class StoryRuntime:
                     self._append_conversation_event(append, cancellation)
                 except BaseException:
                     pass
+                self._record_debug_error(
+                    DebugOperation.ADVISORY_TURN,
+                    cancellation_error,
+                    session_id=session,
+                    conversation_id=conversation,
+                    agent_id=agent,
+                    phase=DebugPhase.CANCELLED,
+                    outcome=DebugOutcome.INTERRUPTED,
+                )
                 raise
             except Exception as exc:
                 failure = ConversationEventAppend(
@@ -1239,10 +1417,42 @@ class StoryRuntime:
                 try:
                     self._append_conversation_event(append, failure)
                 except Exception as persistence_exc:
+                    self._record_debug_error(
+                        DebugOperation.ADVISORY_TURN,
+                        persistence_exc,
+                        session_id=session,
+                        conversation_id=conversation,
+                        agent_id=agent,
+                    )
                     raise persistence_exc from exc
+                self._record_debug_error(
+                    DebugOperation.ADVISORY_TURN,
+                    exc,
+                    session_id=session,
+                    conversation_id=conversation,
+                    agent_id=agent,
+                )
                 raise
 
-            self._append_conversation_event(append, reply_event)
+            try:
+                self._append_conversation_event(append, reply_event)
+            except BaseException as exc:
+                self._record_debug_error(
+                    DebugOperation.ADVISORY_TURN,
+                    exc,
+                    session_id=session,
+                    conversation_id=conversation,
+                    agent_id=agent,
+                )
+                raise
+            self._trace_debug(
+                DebugOperation.ADVISORY_TURN,
+                DebugPhase.SUCCEEDED,
+                session_id=session,
+                conversation_id=conversation,
+                agent_id=agent,
+                outcome=DebugOutcome.COMPLETED,
+            )
             return result
 
     async def converse_with_retrieval(
@@ -1352,7 +1562,24 @@ class StoryRuntime:
                 kind=ConversationEventKind.USER_MESSAGE,
                 content=content,
             )
-            self._append_conversation_event(append, user_event)
+            self._trace_debug(
+                DebugOperation.RETRIEVAL_TURN,
+                DebugPhase.STARTED,
+                session_id=session,
+                conversation_id=conversation,
+                agent_id=agent,
+            )
+            try:
+                self._append_conversation_event(append, user_event)
+            except BaseException as exc:
+                self._record_debug_error(
+                    DebugOperation.RETRIEVAL_TURN,
+                    exc,
+                    session_id=session,
+                    conversation_id=conversation,
+                    agent_id=agent,
+                )
+                raise
 
             try:
                 raw_reply = await bound_converse(request, handler)
@@ -1375,7 +1602,7 @@ class StoryRuntime:
                     context=request.context,
                     sources=reply.sources,
                 )
-            except asyncio.CancelledError:
+            except asyncio.CancelledError as cancellation_error:
                 cancellation = ConversationEventAppend(
                     session_id=session,
                     conversation_id=conversation,
@@ -1389,6 +1616,15 @@ class StoryRuntime:
                     self._append_conversation_event(append, cancellation)
                 except BaseException:
                     pass
+                self._record_debug_error(
+                    DebugOperation.RETRIEVAL_TURN,
+                    cancellation_error,
+                    session_id=session,
+                    conversation_id=conversation,
+                    agent_id=agent,
+                    phase=DebugPhase.CANCELLED,
+                    outcome=DebugOutcome.INTERRUPTED,
+                )
                 raise
             except Exception as exc:
                 failure = ConversationEventAppend(
@@ -1407,10 +1643,42 @@ class StoryRuntime:
                 try:
                     self._append_conversation_event(append, failure)
                 except Exception as persistence_exc:
+                    self._record_debug_error(
+                        DebugOperation.RETRIEVAL_TURN,
+                        persistence_exc,
+                        session_id=session,
+                        conversation_id=conversation,
+                        agent_id=agent,
+                    )
                     raise persistence_exc from exc
+                self._record_debug_error(
+                    DebugOperation.RETRIEVAL_TURN,
+                    exc,
+                    session_id=session,
+                    conversation_id=conversation,
+                    agent_id=agent,
+                )
                 raise
 
-            self._append_conversation_event(append, reply_event)
+            try:
+                self._append_conversation_event(append, reply_event)
+            except BaseException as exc:
+                self._record_debug_error(
+                    DebugOperation.RETRIEVAL_TURN,
+                    exc,
+                    session_id=session,
+                    conversation_id=conversation,
+                    agent_id=agent,
+                )
+                raise
+            self._trace_debug(
+                DebugOperation.RETRIEVAL_TURN,
+                DebugPhase.SUCCEEDED,
+                session_id=session,
+                conversation_id=conversation,
+                agent_id=agent,
+                outcome=DebugOutcome.COMPLETED,
+            )
             return result
 
     async def run_prompt(
@@ -1526,9 +1794,24 @@ class StoryRuntime:
             conversation_context
         )
         progress = _ProgressEmitter(self._validate_progress_sink(progress_sink))
+        self._trace_debug(
+            DebugOperation.CONSENSUS_RUN,
+            DebugPhase.STARTED,
+            session_id=session,
+            debate_id=debate,
+        )
 
         target_name = manuscript_name or f"{session}_{debate}.md"
-        self._acquire_ready_session_access(session)
+        try:
+            self._acquire_ready_session_access(session)
+        except BaseException as exc:
+            self._record_debug_error(
+                DebugOperation.CONSENSUS_RUN,
+                exc,
+                session_id=session,
+                debate_id=debate,
+            )
+            raise
 
         context_snapshot: ConversationContextWindow | None = None
         if (
@@ -1536,34 +1819,52 @@ class StoryRuntime:
             and context_request.mode is DebateContextMode.INCLUDED
         ):
             try:
-                read_context = self._conversation_store_method("read_context")
                 try:
-                    captured = read_context(
-                        session,
-                        context_request.conversation_id,
-                    )
-                except WorkspaceFormatError as exc:
+                    read_context = self._conversation_store_method("read_context")
+                    try:
+                        captured = read_context(
+                            session,
+                            context_request.conversation_id,
+                        )
+                    except WorkspaceFormatError as exc:
+                        raise ValueError(
+                            "conversation context capture is invalid"
+                        ) from exc
+                    self._reject_async_result(captured, operation="read_context")
+                except BackendProtocolError as exc:
                     raise ValueError(
-                        "conversation context capture is invalid"
+                        "conversation context capture must be synchronous"
                     ) from exc
-                self._reject_async_result(captured, operation="read_context")
-            except BackendProtocolError as exc:
-                raise ValueError(
-                    "conversation context capture must be synchronous"
-                ) from exc
-            context_snapshot = validate_conversation_context_window(
-                captured,
-                session_id=session,
-                conversation_id=context_request.conversation_id,
-            )
+                context_snapshot = validate_conversation_context_window(
+                    captured,
+                    session_id=session,
+                    conversation_id=context_request.conversation_id,
+                )
+            except BaseException as exc:
+                self._record_debug_error(
+                    DebugOperation.CONSENSUS_RUN,
+                    exc,
+                    session_id=session,
+                    debate_id=debate,
+                )
+                raise
 
         reservation_token = uuid.uuid4().hex
-        self.workspace.reserve_debate(
-            session,
-            debate,
-            input_kind=input_kind.value,
-            owner_token=reservation_token,
-        )
+        try:
+            self.workspace.reserve_debate(
+                session,
+                debate,
+                input_kind=input_kind.value,
+                owner_token=reservation_token,
+            )
+        except BaseException as exc:
+            self._record_debug_error(
+                DebugOperation.CONSENSUS_RUN,
+                exc,
+                session_id=session,
+                debate_id=debate,
+            )
+            raise
         if context_request is not None:
             try:
                 self.workspace.save_debate_context(
@@ -1587,6 +1888,12 @@ class StoryRuntime:
                     )
                 except Exception:
                     pass
+                self._record_debug_error(
+                    DebugOperation.CONSENSUS_RUN,
+                    exc,
+                    session_id=session,
+                    debate_id=debate,
+                )
                 raise
         execution = asyncio.create_task(
             self._run_reserved(
@@ -1640,9 +1947,25 @@ class StoryRuntime:
                         )
                     )
                 except ProgressObserverError as observer_error:
+                    self._record_debug_error(
+                        DebugOperation.CONSENSUS_RUN,
+                        cancellation,
+                        session_id=session,
+                        debate_id=debate,
+                        phase=DebugPhase.CANCELLED,
+                        outcome=DebugOutcome.INTERRUPTED,
+                    )
                     raise cancellation from observer_error
+            self._record_debug_error(
+                DebugOperation.CONSENSUS_RUN,
+                cancellation,
+                session_id=session,
+                debate_id=debate,
+                phase=DebugPhase.CANCELLED,
+                outcome=DebugOutcome.INTERRUPTED,
+            )
             raise
-        except ProgressObserverError:
+        except ProgressObserverError as exc:
             if not progress.terminal_durable:
                 try:
                     self.workspace.transition_debate(
@@ -1657,6 +1980,13 @@ class StoryRuntime:
                     )
                 except Exception:
                     pass
+            self._record_debug_error(
+                DebugOperation.CONSENSUS_RUN,
+                exc,
+                session_id=session,
+                debate_id=debate,
+                outcome=DebugOutcome.INTERRUPTED,
+            )
             raise
         except Exception as exc:
             try:
@@ -1672,6 +2002,12 @@ class StoryRuntime:
                 )
             except Exception:
                 pass
+            self._record_debug_error(
+                DebugOperation.CONSENSUS_RUN,
+                exc,
+                session_id=session,
+                debate_id=debate,
+            )
             raise
 
     async def _run_reserved(
@@ -3358,6 +3694,22 @@ class StoryRuntime:
                     failure_kind=failure_kind,
                 )
             )
+        outcome = {
+            DebateStatus.CONSENSUS: DebugOutcome.CONSENSUS,
+            DebateStatus.DEADLOCK: DebugOutcome.DEADLOCK,
+            DebateStatus.FAILED: DebugOutcome.FAILED,
+        }[status]
+        self._trace_debug(
+            DebugOperation.CONSENSUS_RUN,
+            (
+                DebugPhase.SUCCEEDED
+                if status in {DebateStatus.CONSENSUS, DebateStatus.DEADLOCK}
+                else DebugPhase.FAILED
+            ),
+            session_id=session,
+            debate_id=debate,
+            outcome=outcome,
+        )
         return result
 
     @staticmethod

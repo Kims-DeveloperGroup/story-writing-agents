@@ -43,6 +43,10 @@ from story_writing_agents.conversation_retrieval import (
     ConversationRetrievalReply,
     ConversationRetrievalSearchObservation,
 )
+from story_writing_agents.debug_log import (
+    DEBUG_LOG_RELATIVE_PATH,
+    WorkspaceDebugLog,
+)
 
 from tests.helpers import ScriptedBackend, all_manuscripts
 
@@ -267,6 +271,8 @@ class SmokeTemporaryTests(unittest.TestCase):
         self.assertEqual(report["workspace"]["mode"], "temporary")
         self.assertIs(report["workspace"]["retained"], False)
         self.assertFalse(Path(report["workspace"]["path"]).exists())
+        self.assertNotIn("debug_logs/runtime.jsonl", stdout)
+        self.assertNotIn("debug_logs/runtime.jsonl", stderr)
 
 
 class SmokePersistentTests(unittest.TestCase):
@@ -320,6 +326,111 @@ class SmokePersistentTests(unittest.TestCase):
             workspace.root,
         )
         self.assertTrue(workspace.root.exists())
+
+        debug_path = workspace.path(DEBUG_LOG_RELATIVE_PATH)
+        raw_debug_log = debug_path.read_text(encoding="utf-8")
+        debug_records = [
+            json.loads(line) for line in raw_debug_log.splitlines()
+        ]
+        smoke_records = [
+            record
+            for record in debug_records
+            if record["component"] == "smoke"
+        ]
+        self.assertEqual(
+            {
+                key: value
+                for key, value in smoke_records[0].items()
+                if key != "timestamp"
+            },
+            {
+                "schema_version": 1,
+                "level": "trace",
+                "component": "smoke",
+                "operation": "workspace_initialization",
+                "phase": "succeeded",
+                "outcome": "ready",
+            },
+        )
+        smoke_completion = next(
+            record
+            for record in reversed(smoke_records)
+            if record["operation"] == "cli_command"
+            and record["phase"] == "succeeded"
+        )
+        self.assertEqual(smoke_completion["session_id"], report["session_id"])
+        self.assertEqual(smoke_completion["debate_id"], report["debate_id"])
+        self.assertEqual(smoke_completion["outcome"], "completed")
+        allowed_record_keys = {
+            "schema_version",
+            "timestamp",
+            "level",
+            "component",
+            "operation",
+            "phase",
+            "session_id",
+            "conversation_id",
+            "debate_id",
+            "agent_id",
+            "outcome",
+            "exception",
+        }
+        for record in debug_records:
+            self.assertLessEqual(set(record), allowed_record_keys)
+        runtime_rows = [
+            (
+                record["operation"],
+                record["phase"],
+                record.get("outcome"),
+            )
+            for record in debug_records
+            if record["component"] == "runtime"
+        ]
+        self.assertTrue(
+            {
+                ("directive", "succeeded", "completed"),
+                ("advisory_turn", "started", None),
+                ("advisory_turn", "succeeded", "completed"),
+                ("retrieval_turn", "started", None),
+                ("retrieval_turn", "succeeded", "completed"),
+                ("consensus_run", "started", None),
+                ("consensus_run", "succeeded", "consensus"),
+                ("inspection", "observed", "completed"),
+            }.issubset(set(runtime_rows))
+        )
+        for record in debug_records:
+            if record["component"] != "runtime":
+                continue
+            self.assertEqual(record.get("session_id"), report["session_id"])
+            if record["operation"] == "consensus_run":
+                self.assertEqual(record.get("debate_id"), report["debate_id"])
+            if record["operation"] in {"advisory_turn", "retrieval_turn"}:
+                self.assertIsInstance(record.get("conversation_id"), str)
+                self.assertIn(record.get("agent_id"), ROSTER)
+        self.assertIn(
+            ("cli_command", "succeeded", "completed"),
+            {
+                (
+                    record["operation"],
+                    record["phase"],
+                    record.get("outcome"),
+                )
+                for record in debug_records
+                if record["component"] == "cli"
+            },
+        )
+        for prohibited in (
+            smoke_module._SOURCE_SUBJECT,
+            smoke_module._RETRIEVAL_SUBJECT,
+            smoke_module._LEAD_QUESTION,
+            smoke_module._RETRIEVAL_QUESTION,
+            smoke_module._REVISION_ONE,
+            str(workspace.root),
+            "owner_hostname",
+            "owner_pid",
+            "access_claim_token",
+        ):
+            self.assertNotIn(prohibited, raw_debug_log)
 
         reconstructed_workspace = Workspace(workspace.root)
         catalog = FilesystemConversationCatalog(reconstructed_workspace)
@@ -539,6 +650,98 @@ class SmokePersistentTests(unittest.TestCase):
             },
             {"unrelated_session.json"},
         )
+
+    def test_diagnostic_storage_failure_does_not_change_smoke_result(self) -> None:
+        """Keep the provider-free result and exit code when every append drops."""
+
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        workspace = initialize_workspace(Path(temporary.name) / "workspace")
+        with mock.patch.object(
+            smoke_module.WorkspaceDebugLog,
+            "_append",
+            side_effect=OSError("diagnostic storage unavailable"),
+        ) as append:
+            exit_code, stdout, stderr = invoke_cli(
+                ["smoke", "--workspace", str(workspace.root)]
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr, "")
+        report = json.loads(stdout)
+        self.assertEqual(report["status"], "passed")
+        self.assertEqual(report["checks"], EXPECTED_CHECKS)
+        self.assertTrue(append.called)
+        self.assertFalse(workspace.path(DEBUG_LOG_RELATIVE_PATH).exists())
+        inspected = StoryRuntime(workspace).inspect_debate(
+            report["session_id"],
+            report["debate_id"],
+        )
+        self.assertEqual(inspected["status"], "consensus")
+
+    def test_trace_failures_preserve_explicit_and_implicit_smoke_results(
+        self,
+    ) -> None:
+        """Keep the complete provider-free workflow independent of trace sinks."""
+
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        workspace = initialize_workspace(Path(temporary.name) / "workspace")
+        with mock.patch.object(
+            WorkspaceDebugLog,
+            "trace",
+            side_effect=SystemExit("diagnostic trace failure"),
+        ) as explicit_trace:
+            exit_code, stdout, stderr = invoke_cli(
+                ["smoke", "--workspace", str(workspace.root)]
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr, "")
+        explicit_report = json.loads(stdout)
+        self.assertEqual(explicit_report["status"], "passed")
+        self.assertEqual(explicit_report["checks"], EXPECTED_CHECKS)
+        self.assertGreater(explicit_trace.call_count, 0)
+        self.assertFalse(workspace.path(DEBUG_LOG_RELATIVE_PATH).exists())
+        self.assertEqual(
+            StoryRuntime(workspace).inspect_debate(
+                explicit_report["session_id"],
+                explicit_report["debate_id"],
+            )["status"],
+            "consensus",
+        )
+
+        implicit_roots: list[Path] = []
+        real_initialize = smoke_module.initialize_workspace
+
+        def record_implicit_workspace(path: Path) -> Workspace:
+            initialized = real_initialize(path)
+            implicit_roots.append(initialized.root)
+            return initialized
+
+        with (
+            mock.patch.object(
+                smoke_module,
+                "initialize_workspace",
+                side_effect=record_implicit_workspace,
+            ),
+            mock.patch.object(
+                WorkspaceDebugLog,
+                "trace",
+                side_effect=KeyboardInterrupt("diagnostic trace failure"),
+            ) as implicit_trace,
+        ):
+            exit_code, stdout, stderr = invoke_cli(["smoke"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr, "")
+        implicit_report = json.loads(stdout)
+        self.assertEqual(implicit_report["status"], "passed")
+        self.assertEqual(implicit_report["checks"], EXPECTED_CHECKS)
+        self.assertGreater(implicit_trace.call_count, 0)
+        self.assertEqual(len(implicit_roots), 1)
+        self.assertFalse(implicit_roots[0].exists())
+        self.assertNotIn("debug_logs/runtime.jsonl", stdout)
 
     def test_two_persistent_runs_create_unique_session_debate_and_outputs(
         self,
@@ -903,6 +1106,69 @@ class SmokeFailureTests(unittest.TestCase):
         self.assertTrue(stderr.startswith("WorkspaceFormatError: "))
         self.assertIn("config/system_defaults.json", stderr)
         self.assertTrue(stderr.endswith("\n"))
+
+    def test_explicit_and_implicit_propagated_failures_keep_boundary_contracts(
+        self,
+    ) -> None:
+        """Expose a fixed hint only when smoke has retained a usable workspace."""
+
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        workspace = initialize_workspace(Path(temporary.name) / "workspace")
+        explicit_failure = RuntimeError("PRIVATE_EXPLICIT_SMOKE_FAILURE")
+        with mock.patch.object(
+            smoke_module,
+            "_verify_workspace_initialized",
+            side_effect=explicit_failure,
+        ):
+            exit_code, stdout, stderr = invoke_cli(
+                ["smoke", "--workspace", str(workspace.root)]
+            )
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(stdout, "")
+        self.assertEqual(
+            stderr,
+            "RuntimeError: PRIVATE_EXPLICIT_SMOKE_FAILURE\n"
+            "Debug log (if available, workspace-relative): "
+            "debug_logs/runtime.jsonl\n",
+        )
+        raw_debug_log = workspace.path(DEBUG_LOG_RELATIVE_PATH).read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("PRIVATE_EXPLICIT_SMOKE_FAILURE", raw_debug_log)
+
+        implicit_roots: list[Path] = []
+        real_initialize = smoke_module.initialize_workspace
+
+        def record_implicit_workspace(path: Path) -> Workspace:
+            initialized = real_initialize(path)
+            implicit_roots.append(initialized.root)
+            return initialized
+
+        with (
+            mock.patch.object(
+                smoke_module,
+                "initialize_workspace",
+                side_effect=record_implicit_workspace,
+            ),
+            mock.patch.object(
+                smoke_module,
+                "_verify_workspace_initialized",
+                side_effect=RuntimeError("PRIVATE_IMPLICIT_SMOKE_FAILURE"),
+            ),
+        ):
+            exit_code, stdout, stderr = invoke_cli(["smoke"])
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(stdout, "")
+        self.assertEqual(
+            stderr,
+            "RuntimeError: PRIVATE_IMPLICIT_SMOKE_FAILURE\n",
+        )
+        self.assertNotIn("debug_logs/runtime.jsonl", stderr)
+        self.assertEqual(len(implicit_roots), 1)
+        self.assertFalse(implicit_roots[0].exists())
 
     def test_invariant_failure_is_compact_failed_json_with_code_one(self) -> None:
         """Preserve the post-debate invariant report and code-one contract."""

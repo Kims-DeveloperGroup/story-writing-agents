@@ -81,6 +81,28 @@ hit's handle with `/transcript ID`; it can also read archives.
 Code `1` includes `failed_check`; repeat with `story smoke --workspace
 ./smoke-debug` to retain artifacts. Code `2` uses the normal error channel.
 
+## Use the bounded runtime debug log
+
+After workspace resolution, interactive errors show
+`[debug log] If available, workspace-relative: debug_logs/runtime.jsonl`.
+A caught noninteractive exception adds
+`Debug log (if available, workspace-relative): debug_logs/runtime.jsonl` as its
+second stderr line only after a workspace-bound logger is available. Smoke
+invariant exit `1` and run deadlock/failed-result exits `3`/`4` retain their
+JSON output without a hint. Resolve the fixed path beneath the workspace root;
+the CLI never prints an absolute diagnostic path.
+
+The file may be absent even when a hint appears because logging is fail-open.
+Do not treat it as retry, telemetry, or proof that an operation completed. It
+contains bounded safe operational facts and exception type/frame structure,
+not story prose, arbitrary payloads, exception messages, or provider stderr.
+Read-only story/session operations can append diagnostics. Users cannot choose
+another diagnostic destination or recover discarded provider stderr from this
+feature. See
+[privacy](../operations/privacy-and-provider.md#workspace-debug-log-privacy),
+[retention](../reference/configuration/session-storage.md#runtime-debug-log-storage),
+and [filesystem safety](../operations/filesystem-safety.md#debug-log-filesystem-safety).
+
 ## Provider configuration or session contention
 
 Confirm Codex login or `CODEX_API_KEY`, ready session, model, and timeout.

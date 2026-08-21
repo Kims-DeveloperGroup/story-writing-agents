@@ -63,7 +63,8 @@ One `asyncio.Runner` serves provider work. SIGINT recovery requires
 
 Consensus Ctrl-C after entry also requires durable `INTERRUPTED`; retry uses a
 new debate ID. Missing proof abandons attachment bookkeeping and exits `2`.
-Cancelled local reads keep completed rows without a second read/write.
+Cancelled local reads keep completed rows without a second domain read/write;
+their command/cancellation boundary may append bounded diagnostics.
 
 ## POSIX PTY boundary
 

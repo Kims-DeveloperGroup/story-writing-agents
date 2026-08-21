@@ -44,6 +44,7 @@ from story_writing_agents import (
 )
 from story_writing_agents.cli import build_parser, main
 from story_writing_agents.cli_context import CliContext
+from story_writing_agents.debug_log import WorkspaceDebugLog
 from story_writing_agents.errors import (
     BackendProtocolError,
     ConfigurationError,
@@ -83,21 +84,33 @@ class TtyStringIO(io.StringIO):
         return super().readline(*args, **kwargs)
 
 
-def expected_interactive_error(code: InteractiveErrorCode) -> str:
+def expected_interactive_error(
+    code: InteractiveErrorCode,
+    *,
+    debug_log_available: bool = False,
+) -> str:
     """Return the exact callback-profile semantic startup error record."""
 
     spec = INTERACTIVE_ERROR_SPECS[code]
+    notices = [
+        terminal_module.Notice(
+            spec.summary,
+            label=f"error {code.value}",
+            role=terminal_module.SemanticRole.ERROR,
+            state=terminal_module.ViewState.ERROR,
+        ),
+        terminal_module.Notice(spec.hint, label="hint"),
+    ]
+    if debug_log_available:
+        notices.append(
+            terminal_module.Notice(
+                "If available, workspace-relative: debug_logs/runtime.jsonl",
+                label="debug log",
+            )
+        )
     component = terminal_module.Panel(
         "Interactive error",
-        (
-            terminal_module.Notice(
-                spec.summary,
-                label=f"error {code.value}",
-                role=terminal_module.SemanticRole.ERROR,
-                state=terminal_module.ViewState.ERROR,
-            ),
-            terminal_module.Notice(spec.hint, label="hint"),
-        ),
+        tuple(notices),
         state=terminal_module.ViewState.ERROR,
     )
     return f"{render_plain(component, width=80).text}\n"
@@ -255,6 +268,28 @@ class PublicApiTests(unittest.TestCase):
             with self.subTest(internal=internal):
                 self.assertNotIn(internal, story_writing_agents.__all__)
                 self.assertFalse(hasattr(story_writing_agents, internal))
+
+    def test_uninitialized_direct_constructors_preserve_results_and_artifacts(
+        self,
+    ) -> None:
+        """Keep diagnostics lazy before a direct API has a usable workspace."""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary) / "uninitialized"
+            runtime = StoryRuntime(target)
+            self.assertIsInstance(runtime, StoryRuntime)
+            self.assertEqual(runtime.workspace.root, target.resolve())
+            self.assertFalse(target.exists())
+
+            with self.assertRaises(WorkspaceFormatError) as caught:
+                story_writing_agents.AgentBackend(target)
+
+            self.assertEqual(
+                str(caught.exception),
+                "cannot read file: config/system_defaults.json",
+            )
+            self.assertIsInstance(caught.exception.__cause__, FileNotFoundError)
+            self.assertFalse(target.exists())
 
     def test_debate_context_and_progress_public_models_are_exact(self) -> None:
         required = {
@@ -1013,6 +1048,69 @@ class CliTests(unittest.TestCase):
                 terminal_factory.assert_not_called()
                 controller.assert_not_called()
 
+    def test_noninteractive_pre_workspace_failures_are_exact_and_log_free(
+        self,
+    ) -> None:
+        """Keep discovery, initialization, and argparse failures pre-log."""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary) / "missing"
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                exit_code = main(
+                    [
+                        "inspect",
+                        "--workspace",
+                        str(target),
+                        "--session",
+                        "pre_workspace",
+                    ]
+                )
+            resolved = target.resolve()
+            self.assertEqual(exit_code, 2)
+            self.assertEqual(
+                stderr.getvalue(),
+                "ConfigurationError: workspace is not initialized: "
+                f"{resolved}; run 'story init {resolved}'\n",
+            )
+            self.assertNotIn("debug_logs/runtime.jsonl", stderr.getvalue())
+            self.assertFalse(target.exists())
+
+            stderr = io.StringIO()
+            failure = WorkspaceFormatError("initialization failed")
+            with (
+                mock.patch.object(
+                    cli_module,
+                    "initialize_workspace",
+                    side_effect=failure,
+                ) as initialize,
+                contextlib.redirect_stderr(stderr),
+            ):
+                self.assertEqual(main(["init", str(target)]), 2)
+            self.assertEqual(stderr.getvalue(), "WorkspaceFormatError: initialization failed\n")
+            self.assertNotIn("debug_logs/runtime.jsonl", stderr.getvalue())
+            initialize.assert_called_once_with(
+                str(target),
+                overwrite_prompts=False,
+            )
+            self.assertFalse(target.exists())
+
+            stderr = io.StringIO()
+            with (
+                contextlib.redirect_stderr(stderr),
+                self.assertRaises(SystemExit) as raised,
+            ):
+                main(["inspect", "--unknown-option"])
+            self.assertEqual(raised.exception.code, 2)
+            self.assertTrue(
+                stderr.getvalue().endswith(
+                    "story-writing-agents: error: unrecognized arguments: "
+                    "--unknown-option\n"
+                )
+            )
+            self.assertNotIn("debug_logs/runtime.jsonl", stderr.getvalue())
+            self.assertFalse(target.exists())
+
     def test_module_non_tty_entry_is_exact_and_does_not_touch_cwd(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
         environment = os.environ.copy()
@@ -1214,7 +1312,10 @@ class CliTests(unittest.TestCase):
         self.assertEqual(exit_code, 2)
         self.assertEqual(
             stderr,
-            expected_interactive_error(InteractiveErrorCode.INTERNAL_ERROR),
+            expected_interactive_error(
+                InteractiveErrorCode.INTERNAL_ERROR,
+                debug_log_available=True,
+            ),
         )
         self.assertNotIn("constructor-secret", stderr)
         unstarted_backend.close.assert_called_once_with()
@@ -1231,7 +1332,10 @@ class CliTests(unittest.TestCase):
         self.assertEqual(exit_code, 2)
         self.assertEqual(
             stderr,
-            expected_interactive_error(InteractiveErrorCode.INTERNAL_ERROR),
+            expected_interactive_error(
+                InteractiveErrorCode.INTERNAL_ERROR,
+                debug_log_available=True,
+            ),
         )
         self.assertNotIn("controller-secret", stderr)
         transferred_backend.close.assert_not_called()
@@ -1270,7 +1374,10 @@ class CliTests(unittest.TestCase):
                     ),
                 ):
                     self.assertEqual(main(["chat"]), 2)
-                self.assertEqual(stderr.getvalue(), expected_interactive_error(code))
+                self.assertEqual(
+                    stderr.getvalue(),
+                    expected_interactive_error(code),
+                )
                 self.assertEqual(stdout.getvalue(), "")
                 self.assertNotIn("workspace-secret", stderr.getvalue())
 
@@ -1304,7 +1411,10 @@ class CliTests(unittest.TestCase):
                     ),
                 ):
                     self.assertEqual(main(["chat"]), 2)
-                self.assertEqual(stderr.getvalue(), expected_interactive_error(code))
+                self.assertEqual(
+                    stderr.getvalue(),
+                    expected_interactive_error(code, debug_log_available=True),
+                )
                 self.assertEqual(stdout.getvalue(), "")
                 self.assertNotIn("context-secret", stderr.getvalue())
 
@@ -1335,7 +1445,10 @@ class CliTests(unittest.TestCase):
             self.assertEqual(main(["chat"]), 2)
         self.assertEqual(
             stderr.getvalue(),
-            expected_interactive_error(InteractiveErrorCode.INTERNAL_ERROR),
+            expected_interactive_error(
+                InteractiveErrorCode.INTERNAL_ERROR,
+                debug_log_available=True,
+            ),
         )
         self.assertEqual(stdout.getvalue(), "")
         self.assertNotIn("terminal-constructor-secret", stderr.getvalue())
@@ -1373,7 +1486,10 @@ class CliTests(unittest.TestCase):
                     ),
                 ):
                     self.assertEqual(main(["chat"]), 2)
-                self.assertEqual(stderr.getvalue(), expected_interactive_error(code))
+                self.assertEqual(
+                    stderr.getvalue(),
+                    expected_interactive_error(code, debug_log_available=True),
+                )
                 self.assertEqual(stdout.getvalue(), "")
                 self.assertNotIn("backend-secret", stderr.getvalue())
 
@@ -1423,6 +1539,142 @@ class CliTests(unittest.TestCase):
             with self.subTest(callable=name):
                 value = getattr(cli_module, name)
                 self.assertTrue(inspect.getdoc(value))
+
+    def test_diagnostic_failure_preserves_noninteractive_exit_and_output(
+        self,
+    ) -> None:
+        workspace = initialized_workspace(self)
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(
+                cli_module.WorkspaceDebugLog,
+                "error",
+                side_effect=SystemExit("diagnostic failure"),
+            ) as debug_error,
+            contextlib.redirect_stderr(stderr),
+        ):
+            exit_code = main(
+                [
+                    "directive",
+                    "--workspace",
+                    str(workspace.root),
+                    "--session",
+                    "cli_session",
+                    "not a directive",
+                ]
+            )
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(
+            stderr.getvalue(),
+            "DirectiveError: message is not an exact standalone directive\n"
+            "Debug log (if available, workspace-relative): "
+            "debug_logs/runtime.jsonl\n",
+        )
+        self.assertTrue(debug_error.called)
+
+    def test_trace_failure_preserves_noninteractive_success_output_and_exit(
+        self,
+    ) -> None:
+        """Keep a valid read-only command independent of its trace sink."""
+
+        workspace = initialized_workspace(self)
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(
+                WorkspaceDebugLog,
+                "trace",
+                side_effect=SystemExit("diagnostic trace failure"),
+            ) as trace,
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            exit_code = main(
+                [
+                    "inspect",
+                    "--workspace",
+                    str(workspace.root),
+                    "--session",
+                    "trace_success",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr.getvalue(), "")
+        self.assertEqual(
+            json.loads(stdout.getvalue()),
+            {
+                "debates": [],
+                "overrides": {"agents": {}, "language": None},
+                "session_id": "trace_success",
+            },
+        )
+        self.assertGreater(trace.call_count, 0)
+
+    def test_noninteractive_success_records_fixed_cli_and_runtime_operations(
+        self,
+    ) -> None:
+        """Persist the exact post-workspace CLI and inspection correlation flow."""
+
+        workspace = initialized_workspace(self)
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            exit_code = main(
+                [
+                    "inspect",
+                    "--workspace",
+                    str(workspace.root),
+                    "--session",
+                    "record_success",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr.getvalue(), "")
+        self.assertEqual(json.loads(stdout.getvalue())["session_id"], "record_success")
+        records = [
+            json.loads(line)
+            for line in workspace.path(
+                "debug_logs/runtime.jsonl"
+            ).read_text(encoding="utf-8").splitlines()
+        ]
+        projected = [
+            (
+                record["component"],
+                record["operation"],
+                record["phase"],
+                record.get("outcome"),
+                record.get("session_id"),
+            )
+            for record in records
+        ]
+        self.assertEqual(
+            projected,
+            [
+                ("cli", "workspace_discovery", "succeeded", "ready", None),
+                ("cli", "cli_command", "started", None, None),
+                ("cli", "cli_context", "succeeded", "completed", None),
+                (
+                    "runtime",
+                    "inspection",
+                    "observed",
+                    "completed",
+                    "record_success",
+                ),
+                (
+                    "cli",
+                    "cli_command",
+                    "succeeded",
+                    "completed",
+                    "record_success",
+                ),
+            ],
+        )
 
     def test_init_inspect_and_expected_error_exit_codes(self) -> None:
         temporary = tempfile.TemporaryDirectory()
@@ -1492,7 +1744,48 @@ class CliTests(unittest.TestCase):
                 ]
             )
         self.assertEqual(exit_code, 2)
-        self.assertIn("DirectiveError", stderr.getvalue())
+        self.assertEqual(
+            stderr.getvalue(),
+            "DirectiveError: message is not an exact standalone directive\n"
+            "Debug log (if available, workspace-relative): "
+            "debug_logs/runtime.jsonl\n",
+        )
+        debug_log = workspace.path("debug_logs/runtime.jsonl")
+        raw_debug_log = debug_log.read_text(encoding="utf-8")
+        records = [json.loads(line) for line in raw_debug_log.splitlines()]
+        cli_failure = next(
+            record
+            for record in reversed(records)
+            if record["component"] == "cli"
+            and record["operation"] == "cli_command"
+            and record["level"] == "error"
+        )
+        self.assertEqual(
+            {
+                key: value
+                for key, value in cli_failure.items()
+                if key not in {"timestamp", "exception"}
+            },
+            {
+                "schema_version": 1,
+                "level": "error",
+                "component": "cli",
+                "operation": "cli_command",
+                "phase": "failed",
+                "session_id": "cli_session",
+                "outcome": "failed",
+            },
+        )
+        self.assertEqual(
+            set(cli_failure["exception"]),
+            {"type", "frames", "frames_truncated"},
+        )
+        for prohibited in (
+            "embedded [SYS: LANG=EN]",
+            "message is not an exact standalone directive",
+            str(workspace.root),
+        ):
+            self.assertNotIn(prohibited, raw_debug_log)
 
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr):
@@ -1511,6 +1804,16 @@ class CliTests(unittest.TestCase):
             )
         self.assertEqual(exit_code, 2)
         self.assertIn("ConfigurationError", stderr.getvalue())
+        self.assertTrue(
+            stderr.getvalue().endswith(
+                "Debug log (if available, workspace-relative): "
+                "debug_logs/runtime.jsonl\n"
+            )
+        )
+        self.assertNotIn(
+            "unsafe backend spec",
+            debug_log.read_text(encoding="utf-8"),
+        )
 
 
 if __name__ == "__main__":

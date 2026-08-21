@@ -55,7 +55,7 @@ _TIMESTAMP = "2026-08-16T00:00:00+00:00"
 
 
 def _durable_file_snapshot(workspace: Workspace) -> dict[str, tuple[bytes, int]]:
-    """Capture persistent bytes and mtimes while excluding transient leases."""
+    """Capture domain state while excluding leases and diagnostic artifacts."""
 
     return {
         path.relative_to(workspace.root).as_posix(): (
@@ -63,7 +63,9 @@ def _durable_file_snapshot(workspace: Workspace) -> dict[str, tuple[bytes, int]]
             path.stat().st_mtime_ns,
         )
         for path in sorted(workspace.root.rglob("*"))
-        if path.is_file() and not path.name.endswith(".access.json")
+        if path.is_file()
+        and not path.name.endswith(".access.json")
+        and "debug_logs" not in path.relative_to(workspace.root).parts
     }
 
 
