@@ -1540,6 +1540,247 @@ class CliTests(unittest.TestCase):
                 value = getattr(cli_module, name)
                 self.assertTrue(inspect.getdoc(value))
 
+    def test_interactive_logger_acquisition_controls_are_optional(self) -> None:
+        """Continue TTY setup and retain post-workspace hints without a logger."""
+
+        for control_type in (KeyboardInterrupt, SystemExit):
+            with self.subTest(control=control_type.__name__, outcome="success"):
+                workspace = initialized_workspace(self)
+                stdin = TtyStringIO(is_terminal=True)
+                stdout = TtyStringIO(is_terminal=True)
+                stderr = io.StringIO()
+                backend = mock.Mock()
+                controller = mock.Mock()
+                controller.run_session_lobby.return_value = 0
+                terminal = mock.Mock()
+                with (
+                    mock.patch.object(sys, "stdin", stdin),
+                    mock.patch.object(sys, "stdout", stdout),
+                    mock.patch.object(sys, "stderr", stderr),
+                    mock.patch.object(
+                        cli_module,
+                        "resolve_workspace",
+                        return_value=workspace,
+                    ),
+                    mock.patch.object(
+                        cli_module,
+                        "WorkspaceDebugLog",
+                        side_effect=control_type("logger acquisition"),
+                    ) as logger,
+                    mock.patch.object(
+                        cli_module,
+                        "load_cli_context",
+                        return_value=CliContext(),
+                    ) as load_context,
+                    mock.patch.object(
+                        cli_module,
+                        "build_stream_terminal",
+                        return_value=terminal,
+                    ) as build_terminal,
+                    mock.patch.object(
+                        cli_module,
+                        "AgentBackend",
+                        return_value=backend,
+                    ) as backend_factory,
+                    mock.patch.object(
+                        cli_module,
+                        "InteractiveController",
+                        return_value=controller,
+                    ) as controller_factory,
+                ):
+                    exit_code = main(["chat"])
+
+                self.assertEqual(exit_code, 0)
+                self.assertEqual(stdout.getvalue(), "")
+                self.assertEqual(stderr.getvalue(), "")
+                logger.assert_called_once_with(workspace)
+                load_context.assert_called_once_with(workspace)
+                build_terminal.assert_called_once_with(input, stdin, stdout)
+                backend_factory.assert_called_once()
+                controller_factory.assert_called_once()
+                controller.run_session_lobby.assert_called_once_with(
+                    requested_session=None
+                )
+                backend.close.assert_not_called()
+
+            with self.subTest(control=control_type.__name__, outcome="failure"):
+                workspace = initialized_workspace(self)
+                stdin = TtyStringIO(is_terminal=True)
+                stdout = TtyStringIO(is_terminal=True)
+                stderr = io.StringIO()
+                failure = ConfigurationError("PRIVATE_POST_WORKSPACE_FAILURE")
+                with (
+                    mock.patch.object(sys, "stdin", stdin),
+                    mock.patch.object(sys, "stdout", stdout),
+                    mock.patch.object(sys, "stderr", stderr),
+                    mock.patch.object(
+                        cli_module,
+                        "resolve_workspace",
+                        return_value=workspace,
+                    ),
+                    mock.patch.object(
+                        cli_module,
+                        "WorkspaceDebugLog",
+                        side_effect=control_type("logger acquisition"),
+                    ) as logger,
+                    mock.patch.object(
+                        cli_module,
+                        "load_cli_context",
+                        side_effect=failure,
+                    ) as load_context,
+                    mock.patch.object(cli_module, "AgentBackend") as backend,
+                ):
+                    exit_code = main(["chat"])
+
+                self.assertEqual(exit_code, 2)
+                self.assertEqual(stdout.getvalue(), "")
+                self.assertEqual(
+                    stderr.getvalue(),
+                    expected_interactive_error(
+                        InteractiveErrorCode.CONFIGURATION_INVALID,
+                        debug_log_available=True,
+                    ),
+                )
+                self.assertNotIn(str(failure), stderr.getvalue())
+                logger.assert_called_once_with(workspace)
+                load_context.assert_called_once_with(workspace)
+                backend.assert_not_called()
+
+    def test_init_logger_acquisition_controls_preserve_exact_success(self) -> None:
+        """Keep initialized state and output when its optional logger is absent."""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            for control_type in (KeyboardInterrupt, SystemExit):
+                with self.subTest(control=control_type.__name__):
+                    root = Path(temporary) / control_type.__name__
+                    stdout = io.StringIO()
+                    stderr = io.StringIO()
+                    with (
+                        mock.patch.object(
+                            cli_module,
+                            "WorkspaceDebugLog",
+                            side_effect=control_type("logger acquisition"),
+                        ) as logger,
+                        contextlib.redirect_stdout(stdout),
+                        contextlib.redirect_stderr(stderr),
+                    ):
+                        exit_code = main(["init", str(root)])
+
+                    self.assertEqual(exit_code, 0)
+                    self.assertEqual(stderr.getvalue(), "")
+                    self.assertEqual(
+                        stdout.getvalue(),
+                        json.dumps({"workspace": str(root.resolve())}, indent=2)
+                        + "\n",
+                    )
+                    logger.assert_called_once()
+                    logged_workspace = logger.call_args.args[0]
+                    self.assertIs(type(logged_workspace), Workspace)
+                    self.assertEqual(logged_workspace.root, root.resolve())
+                    self.assertTrue(
+                        root.joinpath("config/system_defaults.json").is_file()
+                    )
+
+    def test_ordinary_logger_acquisition_controls_preserve_output_and_hint(
+        self,
+    ) -> None:
+        """Keep ordinary success and fixed later-failure output without a logger."""
+
+        for control_type in (KeyboardInterrupt, SystemExit):
+            with self.subTest(control=control_type.__name__, outcome="success"):
+                workspace = initialized_workspace(self)
+                stdout = io.StringIO()
+                stderr = io.StringIO()
+                expected = {
+                    "debates": [],
+                    "overrides": {"agents": {}, "language": None},
+                    "session_id": "logger_optional",
+                }
+                with (
+                    mock.patch.object(
+                        cli_module,
+                        "resolve_workspace",
+                        return_value=workspace,
+                    ),
+                    mock.patch.object(
+                        cli_module,
+                        "WorkspaceDebugLog",
+                        side_effect=control_type("logger acquisition"),
+                    ) as logger,
+                    contextlib.redirect_stdout(stdout),
+                    contextlib.redirect_stderr(stderr),
+                ):
+                    exit_code = main(
+                        [
+                            "inspect",
+                            "--workspace",
+                            str(workspace.root),
+                            "--session",
+                            "logger_optional",
+                        ]
+                    )
+
+                self.assertEqual(exit_code, 0)
+                self.assertEqual(stderr.getvalue(), "")
+                self.assertEqual(
+                    stdout.getvalue(),
+                    json.dumps(
+                        expected,
+                        ensure_ascii=False,
+                        indent=2,
+                        sort_keys=True,
+                    )
+                    + "\n",
+                )
+                logger.assert_called_once_with(workspace)
+
+            with self.subTest(control=control_type.__name__, outcome="failure"):
+                workspace = initialized_workspace(self)
+                stdout = io.StringIO()
+                stderr = io.StringIO()
+                failure = ConfigurationError("PRIVATE_POST_WORKSPACE_FAILURE")
+                with (
+                    mock.patch.object(
+                        cli_module,
+                        "resolve_workspace",
+                        return_value=workspace,
+                    ),
+                    mock.patch.object(
+                        cli_module,
+                        "WorkspaceDebugLog",
+                        side_effect=control_type("logger acquisition"),
+                    ) as logger,
+                    mock.patch.object(
+                        cli_module,
+                        "load_cli_context",
+                        side_effect=failure,
+                    ) as load_context,
+                    mock.patch.object(cli_module, "StoryRuntime") as runtime,
+                    contextlib.redirect_stdout(stdout),
+                    contextlib.redirect_stderr(stderr),
+                ):
+                    exit_code = main(
+                        [
+                            "inspect",
+                            "--workspace",
+                            str(workspace.root),
+                            "--session",
+                            "logger_optional",
+                        ]
+                    )
+
+                self.assertEqual(exit_code, 2)
+                self.assertEqual(stdout.getvalue(), "")
+                self.assertEqual(
+                    stderr.getvalue(),
+                    "ConfigurationError: PRIVATE_POST_WORKSPACE_FAILURE\n"
+                    "Debug log (if available, workspace-relative): "
+                    "debug_logs/runtime.jsonl\n",
+                )
+                logger.assert_called_once_with(workspace)
+                load_context.assert_called_once_with(workspace)
+                runtime.assert_not_called()
+
     def test_diagnostic_failure_preserves_noninteractive_exit_and_output(
         self,
     ) -> None:

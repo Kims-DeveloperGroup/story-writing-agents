@@ -63,6 +63,17 @@ from tests.helpers import initialized_workspace
 _CONTEXT_TIMESTAMP = "2026-08-15T01:02:03+00:00"
 
 
+def snapshot_directory_namespace(directory: Path) -> dict[str, bytes | None]:
+    """Return every descendant name and file byte sequence below a directory."""
+
+    return {
+        path.relative_to(directory).as_posix(): (
+            None if path.is_dir() else path.read_bytes()
+        )
+        for path in sorted(directory.rglob("*"))
+    }
+
+
 def debate_context_window(
     *,
     session_id: str = "session_a",
@@ -340,6 +351,85 @@ class WorkspaceTests(unittest.TestCase):
                 workspace_module.open_workspace_root_directory(workspace)
             self.assertEqual(tuple(root.iterdir()), ())
             self.assertTrue((parked / "core_documents").is_dir())
+
+    def test_missing_root_symlink_race_aborts_before_external_scaffold(self) -> None:
+        """Reject a late root alias without changing any external target entry."""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            root = parent / "workspace"
+            external = parent / "external"
+            external.mkdir()
+            (external / "sentinel.bin").write_bytes(b"external sentinel\x00")
+            nested = external / "existing"
+            nested.mkdir()
+            (nested / "preserved.txt").write_bytes(b"preserved bytes\n")
+            workspace = Workspace(root)
+            before = snapshot_directory_namespace(external)
+            try:
+                root.symlink_to(external, target_is_directory=True)
+            except NotImplementedError as exc:
+                self.skipTest(f"directory symlink creation is unsupported: {exc}")
+            except OSError as exc:
+                unsupported = {
+                    errno.EACCES,
+                    errno.EPERM,
+                    errno.ENOSYS,
+                    getattr(errno, "ENOTSUP", errno.EINVAL),
+                    getattr(errno, "EOPNOTSUPP", errno.EINVAL),
+                }
+                if exc.errno in unsupported:
+                    self.skipTest(
+                        f"directory symlink creation is unsupported: {exc}"
+                    )
+                raise
+            link_target = os.readlink(root)
+
+            with self.assertRaises(OSError):
+                workspace.initialize()
+
+            self.assertTrue(root.is_symlink())
+            self.assertEqual(os.readlink(root), link_target)
+            self.assertEqual(snapshot_directory_namespace(external), before)
+
+    def test_missing_root_nonmeaningful_bind_aborts_before_scaffold(self) -> None:
+        """Require a meaningful pending identity before creating child entries."""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "workspace"
+            workspace = Workspace(root)
+            canonical_root = workspace.root
+            real_stat = os.stat
+            zero_identity = mock.Mock(
+                st_mode=stat.S_IFDIR | 0o700,
+                st_dev=0,
+                st_ino=0,
+            )
+
+            def zero_root_identity(
+                path: object,
+                *args: object,
+                **kwargs: object,
+            ):
+                if (
+                    Path(path) == canonical_root
+                    and kwargs.get("follow_symlinks") is False
+                ):
+                    return zero_identity
+                return real_stat(path, *args, **kwargs)
+
+            with (
+                mock.patch.object(
+                    workspace_module.os,
+                    "stat",
+                    side_effect=zero_root_identity,
+                ),
+                self.assertRaises(OSError),
+            ):
+                workspace.initialize()
+
+            self.assertTrue(canonical_root.is_dir())
+            self.assertEqual(tuple(canonical_root.iterdir()), ())
 
     def test_unavailable_non_directory_and_zero_root_identity_fail_closed(
         self,

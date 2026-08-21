@@ -50,8 +50,15 @@ from story_writing_agents import (
     Workspace,
     WorkspaceFormatError,
 )
+from story_writing_agents import orchestrator as orchestrator_module
 from story_writing_agents.agents import CORE_DOCUMENTS
-from story_writing_agents.debug_log import WorkspaceDebugLog
+from story_writing_agents.debug_log import (
+    DebugComponent,
+    DebugOperation,
+    DebugOutcome,
+    DebugPhase,
+    WorkspaceDebugLog,
+)
 
 from tests.conversation_event_store_contract import (
     InMemoryConversationEventStore,
@@ -141,6 +148,17 @@ def _tree_snapshot(root: Path) -> dict[str, bytes | None]:
         for path in sorted(root.rglob("*"))
         if "debug_logs" not in path.relative_to(root).parts
     }
+
+
+def _traceback_contains(traceback: object, expected: object) -> bool:
+    """Return whether one traceback chain retains an exact injected node."""
+
+    current = traceback
+    while current is not None:
+        if current is expected:
+            return True
+        current = current.tb_next  # type: ignore[union-attr]
+    return False
 
 
 def _changed_paths(
@@ -1411,6 +1429,208 @@ class ConversationRuntimePreflightTests(_ConversationRuntimeCase):
                     tuple(event.kind for event in store.append_calls),
                     (ConversationEventKind.USER_MESSAGE,),
                 )
+
+
+class RuntimeSynchronousDiagnosticTests(unittest.TestCase):
+    def test_process_controls_preserve_sync_operation_and_diagnostic_contracts(
+        self,
+    ) -> None:
+        """Record interrupted sync calls without replacing their exact controls."""
+
+        operations = (
+            ("apply_directive", DebugOperation.DIRECTIVE),
+            ("set_runtime_overrides", DebugOperation.CONFIGURATION),
+            ("inspect_session", DebugOperation.INSPECTION),
+            ("inspect_debate", DebugOperation.INSPECTION),
+            ("inspect_debate_context", DebugOperation.INSPECTION),
+        )
+        controls = (
+            (KeyboardInterrupt, SystemExit),
+            (SystemExit, KeyboardInterrupt),
+        )
+        for operation_name, debug_operation in operations:
+            for control_type, sink_control_type in controls:
+                with self.subTest(
+                    operation=operation_name,
+                    control=control_type.__name__,
+                ):
+                    self._assert_sync_process_control(
+                        operation_name,
+                        debug_operation,
+                        control_type,
+                        sink_control_type,
+                    )
+
+    def _assert_sync_process_control(
+        self,
+        operation_name: str,
+        debug_operation: DebugOperation,
+        control_type: type[BaseException],
+        sink_control_type: type[BaseException],
+    ) -> None:
+        """Exercise one synchronous boundary and its opposite-control sink."""
+
+        workspace = initialized_workspace(self)
+        runtime = StoryRuntime(workspace)
+        before = _tree_snapshot(workspace.root)
+        control = control_type(f"PRIVATE_{operation_name.upper()}_CONTROL")
+        sink_control = sink_control_type(
+            f"PRIVATE_{operation_name.upper()}_SINK_CONTROL"
+        )
+        originating_tracebacks: list[object] = []
+        originating_causes: list[BaseException | None] = []
+        originating_contexts: list[BaseException | None] = []
+
+        def interrupt_underlying(*_args: object, **_kwargs: object) -> None:
+            try:
+                raise control
+            except BaseException as raised:
+                originating_tracebacks.append(raised.__traceback__)
+                originating_causes.append(raised.__cause__)
+                originating_contexts.append(raised.__context__)
+                raise
+
+        debate_id: str | None = None
+        if operation_name == "apply_directive":
+            underlying_patch = mock.patch.object(
+                orchestrator_module,
+                "persist_directive",
+                side_effect=interrupt_underlying,
+            )
+            invoke = lambda: runtime.apply_directive(
+                "session_a",
+                "[SYS: LANG=EN]",
+            )
+            expected_underlying_args = (
+                workspace,
+                "session_a",
+                "[SYS: LANG=EN]",
+            )
+        elif operation_name == "set_runtime_overrides":
+            underlying_patch = mock.patch.object(
+                runtime.workspace,
+                "save_session_overrides",
+                side_effect=interrupt_underlying,
+            )
+            invoke = lambda: runtime.set_runtime_overrides(
+                "session_a",
+                {"language": "EN"},
+            )
+            expected_underlying_args = (
+                "session_a",
+                {"language": "EN", "persona": None, "agents": {}},
+            )
+        elif operation_name == "inspect_session":
+            underlying_patch = mock.patch.object(
+                runtime.workspace,
+                "inspect_session",
+                side_effect=interrupt_underlying,
+            )
+            invoke = lambda: runtime.inspect_session("session_a")
+            expected_underlying_args = ("session_a",)
+        elif operation_name == "inspect_debate":
+            debate_id = "debate_a"
+            underlying_patch = mock.patch.object(
+                runtime.workspace,
+                "inspect_debate",
+                side_effect=interrupt_underlying,
+            )
+            invoke = lambda: runtime.inspect_debate("session_a", "debate_a")
+            expected_underlying_args = ("session_a", "debate_a")
+        else:
+            debate_id = "debate_a"
+            underlying_patch = mock.patch.object(
+                runtime.workspace,
+                "inspect_debate_context",
+                side_effect=interrupt_underlying,
+            )
+            invoke = lambda: runtime.inspect_debate_context(
+                "session_a",
+                "debate_a",
+            )
+            expected_underlying_args = ("session_a", "debate_a")
+
+        real_debug_error = runtime._debug_log.error
+
+        def record_then_interrupt_sink(
+            *args: object,
+            **kwargs: object,
+        ) -> None:
+            real_debug_error(*args, **kwargs)  # type: ignore[arg-type]
+            raise sink_control
+
+        caught: BaseException | None = None
+        with (
+            underlying_patch as underlying,
+            mock.patch.object(
+                WorkspaceDebugLog,
+                "error",
+                side_effect=record_then_interrupt_sink,
+            ) as debug_error,
+        ):
+            try:
+                invoke()
+            except BaseException as raised:
+                caught = raised
+
+        self.assertIs(caught, control)
+        self.assertEqual(len(originating_tracebacks), 1)
+        self.assertTrue(
+            _traceback_contains(caught.__traceback__, originating_tracebacks[0])
+        )
+        self.assertIs(caught.__cause__, originating_causes[0])
+        self.assertIs(caught.__context__, originating_contexts[0])
+        underlying.assert_called_once_with(*expected_underlying_args)
+        debug_error.assert_called_once()
+        self.assertEqual(
+            debug_error.call_args.args,
+            (DebugComponent.RUNTIME, debug_operation, control),
+        )
+        self.assertEqual(
+            debug_error.call_args.kwargs,
+            {
+                "phase": DebugPhase.CANCELLED,
+                "session_id": "session_a",
+                "conversation_id": None,
+                "debate_id": debate_id,
+                "agent_id": None,
+                "outcome": DebugOutcome.INTERRUPTED,
+            },
+        )
+        self.assertEqual(_tree_snapshot(workspace.root), before)
+
+        raw, records = _runtime_operation_records(
+            workspace,
+            debug_operation.value,
+        )
+        self.assertEqual(len(records), 1)
+        record = records[0]
+        self.assertEqual(
+            (
+                record["level"],
+                record["component"],
+                record["operation"],
+                record["phase"],
+                record["outcome"],
+                record["session_id"],
+                record.get("debate_id"),
+            ),
+            (
+                "error",
+                "runtime",
+                debug_operation.value,
+                "cancelled",
+                "interrupted",
+                "session_a",
+                debate_id,
+            ),
+        )
+        for prohibited in (
+            str(control),
+            str(sink_control),
+            str(workspace.root),
+        ):
+            self.assertNotIn(prohibited, raw)
 
 
 class ConversationRuntimeFailureTests(_ConversationRuntimeCase):
