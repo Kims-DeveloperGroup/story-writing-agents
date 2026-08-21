@@ -10,6 +10,7 @@ import pickle
 import stat
 import tempfile
 import unittest
+from collections.abc import Callable
 from dataclasses import FrozenInstanceError, fields
 from pathlib import Path
 from types import MappingProxyType
@@ -170,6 +171,28 @@ class AgentRosterTests(unittest.TestCase):
 
 
 class WorkspaceTests(unittest.TestCase):
+    def assert_identity_unavailable(
+        self,
+        action: Callable[[], object],
+    ) -> OSError:
+        """Require the exact public error for an unbound workspace root."""
+
+        expected_errno = getattr(errno, "ENOTSUP", errno.ENOSYS)
+        with self.assertRaises(OSError) as raised:
+            action()
+        error = raised.exception
+        self.assertIs(type(error), OSError)
+        self.assertEqual(
+            error.args,
+            (expected_errno, "workspace root identity is unavailable"),
+        )
+        self.assertEqual(error.errno, expected_errno)
+        self.assertEqual(
+            error.strerror,
+            "workspace root identity is unavailable",
+        )
+        return error
+
     def test_root_identity_seams_preserve_public_surface_and_verify_existing_root(
         self,
     ) -> None:
@@ -385,12 +408,69 @@ class WorkspaceTests(unittest.TestCase):
                 raise
             link_target = os.readlink(root)
 
-            with self.assertRaises(OSError):
-                workspace.initialize()
+            with mock.patch.object(
+                workspace,
+                "_directory",
+                wraps=workspace._directory,
+            ) as child_directory:
+                first_error = self.assert_identity_unavailable(
+                    workspace.initialize
+                )
+                self.assertEqual(snapshot_directory_namespace(external), before)
+                second_error = self.assert_identity_unavailable(
+                    workspace.initialize
+                )
+            child_directory.assert_not_called()
 
             self.assertTrue(root.is_symlink())
             self.assertEqual(os.readlink(root), link_target)
             self.assertEqual(snapshot_directory_namespace(external), before)
+            self.assertEqual(second_error.args, first_error.args)
+
+    def test_missing_root_stat_failure_is_terminal_across_initialize_calls(
+        self,
+    ) -> None:
+        """Do not retry a pending bind whose one root stat attempt failed."""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Workspace(Path(temporary) / "workspace")
+            canonical_root = workspace.root
+            real_stat = os.stat
+
+            def fail_root_identity(
+                path: object,
+                *args: object,
+                **kwargs: object,
+            ):
+                if (
+                    Path(path) == canonical_root
+                    and kwargs.get("follow_symlinks") is False
+                ):
+                    raise OSError("PRIVATE_PENDING_BIND_STAT_FAILURE")
+                return real_stat(path, *args, **kwargs)
+
+            with mock.patch.object(
+                workspace,
+                "_directory",
+                wraps=workspace._directory,
+            ) as child_directory:
+                with mock.patch.object(
+                    workspace_module.os,
+                    "stat",
+                    side_effect=fail_root_identity,
+                ):
+                    first_error = self.assert_identity_unavailable(
+                        workspace.initialize
+                    )
+                self.assertEqual(tuple(canonical_root.iterdir()), ())
+                second_error = self.assert_identity_unavailable(
+                    workspace.initialize
+                )
+            child_directory.assert_not_called()
+
+            self.assertTrue(canonical_root.is_dir())
+            self.assertEqual(tuple(canonical_root.iterdir()), ())
+            self.assertEqual(second_error.args, first_error.args)
 
     def test_missing_root_nonmeaningful_bind_aborts_before_scaffold(self) -> None:
         """Require a meaningful pending identity before creating child entries."""
@@ -418,18 +498,28 @@ class WorkspaceTests(unittest.TestCase):
                     return zero_identity
                 return real_stat(path, *args, **kwargs)
 
-            with (
-                mock.patch.object(
+            with mock.patch.object(
+                workspace,
+                "_directory",
+                wraps=workspace._directory,
+            ) as child_directory:
+                with mock.patch.object(
                     workspace_module.os,
                     "stat",
                     side_effect=zero_root_identity,
-                ),
-                self.assertRaises(OSError),
-            ):
-                workspace.initialize()
+                ):
+                    first_error = self.assert_identity_unavailable(
+                        workspace.initialize
+                    )
+                self.assertEqual(tuple(canonical_root.iterdir()), ())
+                second_error = self.assert_identity_unavailable(
+                    workspace.initialize
+                )
+            child_directory.assert_not_called()
 
             self.assertTrue(canonical_root.is_dir())
             self.assertEqual(tuple(canonical_root.iterdir()), ())
+            self.assertEqual(second_error.args, first_error.args)
 
     def test_unavailable_non_directory_and_zero_root_identity_fail_closed(
         self,
@@ -499,6 +589,30 @@ class WorkspaceTests(unittest.TestCase):
                 ):
                     workspace_module.open_workspace_root_directory(workspace)
                 opened.assert_not_called()
+
+            for label, workspace in (
+                ("unavailable", unavailable),
+                ("zero", zero),
+            ):
+                with (
+                    self.subTest(label=label, operation="initialize"),
+                    mock.patch.object(
+                        workspace,
+                        "_directory",
+                        wraps=workspace._directory,
+                    ) as child_directory,
+                ):
+                    workspace.initialize()
+                self.assertEqual(
+                    child_directory.call_count,
+                    len(WORKSPACE_DIRECTORIES),
+                )
+                self.assertTrue(
+                    all(
+                        workspace.path(relative).is_dir()
+                        for relative in WORKSPACE_DIRECTORIES
+                    )
+                )
 
     def test_initial_system_defaults_are_exact_and_legacy_bytes_are_preserved(
         self,
