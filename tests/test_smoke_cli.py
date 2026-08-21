@@ -361,6 +361,28 @@ class SmokePersistentTests(unittest.TestCase):
         self.assertEqual(smoke_completion["session_id"], report["session_id"])
         self.assertEqual(smoke_completion["debate_id"], report["debate_id"])
         self.assertEqual(smoke_completion["outcome"], "completed")
+        cli_completion = [
+            record
+            for record in debug_records
+            if record["component"] == "cli"
+            and record["operation"] == "cli_command"
+        ]
+        self.assertEqual(len(cli_completion), 1)
+        self.assertEqual(
+            {
+                key: value
+                for key, value in cli_completion[0].items()
+                if key != "timestamp"
+            },
+            {
+                "schema_version": 1,
+                "level": "trace",
+                "component": "cli",
+                "operation": "cli_command",
+                "phase": "succeeded",
+                "outcome": "completed",
+            },
+        )
         allowed_record_keys = {
             "schema_version",
             "timestamp",
@@ -1208,6 +1230,145 @@ class SmokeFailureTests(unittest.TestCase):
         self.assertEqual(report["checks"], EXPECTED_CHECKS[:8])
         self.assertIs(report["provider_tested"], False)
         self.assertEqual(report["debate_status"], "consensus")
+        workspace = Workspace(workspace_path)
+        raw_debug_log = workspace.path(DEBUG_LOG_RELATIVE_PATH).read_text(
+            encoding="utf-8"
+        )
+        records = [
+            json.loads(line) for line in raw_debug_log.splitlines()
+        ]
+        cli_records = [
+            record
+            for record in records
+            if record["component"] == "cli"
+            and record["operation"] == "cli_command"
+        ]
+        self.assertEqual(len(cli_records), 1)
+        self.assertEqual(
+            {
+                key: value
+                for key, value in cli_records[0].items()
+                if key != "timestamp"
+            },
+            {
+                "schema_version": 1,
+                "level": "trace",
+                "component": "cli",
+                "operation": "cli_command",
+                "phase": "failed",
+                "outcome": "failed",
+            },
+        )
+        self.assertFalse(
+            any(
+                record["phase"] == "succeeded"
+                and record.get("outcome") == "failed"
+                for record in cli_records
+            )
+        )
+        smoke_records = [
+            record
+            for record in records
+            if record["component"] == "smoke"
+            and record["operation"] == "cli_command"
+        ]
+        self.assertEqual(len(smoke_records), 2)
+        self.assertEqual(
+            {
+                key: value
+                for key, value in smoke_records[0].items()
+                if key != "timestamp"
+            },
+            {
+                "schema_version": 1,
+                "level": "trace",
+                "component": "smoke",
+                "operation": "cli_command",
+                "phase": "started",
+                "session_id": report["session_id"],
+                "debate_id": report["debate_id"],
+            },
+        )
+        smoke_exception = smoke_records[1]["exception"]
+        self.assertIs(type(smoke_exception), dict)
+        self.assertEqual(
+            {
+                key: value
+                for key, value in smoke_records[1].items()
+                if key not in {"timestamp", "exception"}
+            },
+            {
+                "schema_version": 1,
+                "level": "error",
+                "component": "smoke",
+                "operation": "cli_command",
+                "phase": "failed",
+                "session_id": report["session_id"],
+                "debate_id": report["debate_id"],
+                "outcome": "failed",
+            },
+        )
+        self.assertEqual(
+            set(smoke_exception),  # type: ignore[arg-type]
+            {"type", "frames", "frames_truncated"},
+        )
+        self.assertTrue(
+            str(smoke_exception["type"]).endswith(  # type: ignore[index]
+                "._SmokeInvariantError"
+            )
+        )
+
+    def test_trace_failure_preserves_invariant_report_and_code_one(self) -> None:
+        """Keep a named smoke failure independent of every trace sink."""
+
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        workspace_path = Path(temporary.name) / "workspace"
+        trace_marker = "PRIVATE_SMOKE_TRACE_SINK"
+
+        with (
+            mock.patch.object(
+                smoke_module,
+                "_verify_revision_workflow",
+                side_effect=smoke_module._SmokeInvariantError(
+                    "revision_workflow"
+                ),
+            ),
+            mock.patch.object(
+                WorkspaceDebugLog,
+                "trace",
+                side_effect=SystemExit(trace_marker),
+            ) as trace,
+        ):
+            exit_code, stdout, stderr = invoke_cli(
+                ["smoke", "--workspace", str(workspace_path)]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(stderr, "")
+        self.assertEqual(len(stdout.splitlines()), 1)
+        report = json.loads(stdout)
+        self.assertEqual(
+            stdout,
+            json.dumps(
+                report,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+            + "\n",
+        )
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(report["failed_check"], "revision_workflow")
+        self.assertEqual(report["checks"], EXPECTED_CHECKS[:8])
+        self.assertIs(report["provider_tested"], False)
+        self.assertEqual(report["debate_status"], "consensus")
+        self.assertGreater(trace.call_count, 0)
+        raw_debug_log = Workspace(workspace_path).path(
+            DEBUG_LOG_RELATIVE_PATH
+        ).read_text(encoding="utf-8")
+        self.assertNotIn(trace_marker, raw_debug_log)
+        self.assertNotIn(str(workspace_path), raw_debug_log)
 
     def test_predebate_invariant_failure_removes_temporary_workspace(self) -> None:
         """Report a named pre-debate failure and remove all temporary artifacts."""
