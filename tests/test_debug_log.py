@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import errno
 import inspect
 import json
 import os
@@ -97,6 +98,68 @@ def _rotation_snapshot(workspace: Workspace) -> dict[str, bytes]:
         for path in sorted(directory.iterdir())
         if path.name.startswith("runtime.jsonl") and path.is_file()
     }
+
+
+def _file_link_snapshot(path: Path) -> tuple[bytes, int, int, int]:
+    """Capture exact bytes and filesystem identity for one regular file."""
+
+    value = os.stat(path, follow_symlinks=False)
+    return path.read_bytes(), value.st_dev, value.st_ino, value.st_nlink
+
+
+def _debug_namespace_snapshot(
+    workspace: Workspace,
+) -> dict[str, tuple[int, int, int, int, bytes]]:
+    """Capture every debug-directory name, identity, link count, and bytes."""
+
+    directory = workspace.path(DEBUG_LOG_DIRECTORY)
+    snapshot: dict[str, tuple[int, int, int, int, bytes]] = {}
+    for path in sorted(directory.iterdir()):
+        value = os.stat(path, follow_symlinks=False)
+        snapshot[path.name] = (
+            value.st_mode,
+            value.st_dev,
+            value.st_ino,
+            value.st_nlink,
+            path.read_bytes(),
+        )
+    return snapshot
+
+
+def _hard_link_or_skip(
+    test_case: unittest.TestCase,
+    source: Path,
+    destination: Path,
+) -> None:
+    """Create one real hard link or skip only unsupported environments."""
+
+    before = os.stat(source, follow_symlinks=False)
+    unsupported = {
+        errno.EACCES,
+        errno.EPERM,
+        errno.EXDEV,
+        errno.EINVAL,
+        errno.ENOSYS,
+        getattr(errno, "ENOTSUP", errno.EINVAL),
+        getattr(errno, "EOPNOTSUPP", errno.EINVAL),
+    }
+    try:
+        os.link(source, destination)
+    except (AttributeError, NotImplementedError) as exc:
+        test_case.skipTest(f"hard-link creation is unsupported: {exc}")
+    except OSError as exc:
+        if exc.errno in unsupported or getattr(exc, "winerror", None) == 1314:
+            test_case.skipTest(f"hard-link creation is unsupported: {exc}")
+        raise
+
+    source_after = os.stat(source, follow_symlinks=False)
+    linked = os.stat(destination, follow_symlinks=False)
+    test_case.assertEqual(
+        (linked.st_dev, linked.st_ino),
+        (source_after.st_dev, source_after.st_ino),
+    )
+    test_case.assertEqual(source_after.st_nlink, before.st_nlink + 1)
+    test_case.assertEqual(linked.st_nlink, source_after.st_nlink)
 
 
 class DebugLogContractTests(unittest.TestCase):
@@ -670,6 +733,173 @@ class DebugLogStorageTests(unittest.TestCase):
                     DebugPhase.OBSERVED,
                 )
                 self.assertEqual(sentinel.read_bytes(), b"outside")
+
+    def test_open_verification_rejects_each_unsafe_link_count(self) -> None:
+        candidate = self.workspace.path(DEBUG_LOG_RELATIVE_PATH)
+        candidate.write_bytes(b"candidate")
+        ordinary = os.stat(candidate, follow_symlinks=False)
+
+        def file_stat(link_count: int) -> mock.Mock:
+            return mock.Mock(
+                st_mode=ordinary.st_mode,
+                st_dev=ordinary.st_dev,
+                st_ino=ordinary.st_ino,
+                st_nlink=link_count,
+            )
+
+        for opened_links, named_links in (
+            (0, 1),
+            (2, 1),
+            (1, 0),
+            (1, 2),
+        ):
+            with (
+                self.subTest(
+                    opened_links=opened_links,
+                    named_links=named_links,
+                ),
+                mock.patch.object(
+                    debug_module.os,
+                    "fstat",
+                    return_value=file_stat(opened_links),
+                ),
+                mock.patch.object(
+                    debug_module.os,
+                    "stat",
+                    return_value=file_stat(named_links),
+                ),
+                self.assertRaises(OSError),
+            ):
+                debug_module._verify_open_file(17, candidate)
+
+        with (
+            mock.patch.object(
+                debug_module.os,
+                "fstat",
+                return_value=file_stat(1),
+            ),
+            mock.patch.object(
+                debug_module.os,
+                "stat",
+                return_value=file_stat(1),
+            ),
+        ):
+            debug_module._verify_open_file(17, candidate)
+
+    def test_hard_linked_guard_drops_without_outside_or_namespace_mutation(
+        self,
+    ) -> None:
+        guard = self.workspace.path(DEBUG_LOG_GUARD_RELATIVE_PATH)
+        with tempfile.TemporaryDirectory(
+            dir=self.workspace.root.parent
+        ) as temporary:
+            outside = Path(temporary) / "outside-guard"
+            outside.write_bytes(b"outside guard bytes")
+            _hard_link_or_skip(self, outside, guard)
+            outside_before = _file_link_snapshot(outside)
+            namespace_before = _debug_namespace_snapshot(self.workspace)
+
+            _trace(self.log)
+
+            self.assertEqual(_file_link_snapshot(outside), outside_before)
+            self.assertEqual(
+                _debug_namespace_snapshot(self.workspace),
+                namespace_before,
+            )
+            self.assertFalse(self.log.path.exists())
+
+    def test_hard_linked_active_drops_append_and_rotation_without_mutation(
+        self,
+    ) -> None:
+        for rotates in (False, True):
+            with self.subTest(rotates=rotates):
+                workspace = initialized_workspace(self)
+                log = WorkspaceDebugLog(workspace)
+                payload = _trace_payload(log)
+                workspace.path(DEBUG_LOG_GUARD_RELATIVE_PATH).write_bytes(
+                    b"safe guard"
+                )
+                if rotates:
+                    outside_bytes = b"a" * (
+                        DEBUG_LOG_MAX_BYTES - len(payload) + 1
+                    )
+                    for index in range(1, DEBUG_LOG_BACKUP_COUNT + 1):
+                        workspace.path(
+                            f"{DEBUG_LOG_RELATIVE_PATH}.{index}"
+                        ).write_bytes(f"backup-{index}".encode("ascii"))
+                else:
+                    outside_bytes = b"outside active bytes"
+                with tempfile.TemporaryDirectory(
+                    dir=workspace.root.parent
+                ) as temporary:
+                    outside = Path(temporary) / "outside-active"
+                    outside.write_bytes(outside_bytes)
+                    _hard_link_or_skip(
+                        self,
+                        outside,
+                        workspace.path(DEBUG_LOG_RELATIVE_PATH),
+                    )
+                    self.assertEqual(
+                        len(outside_bytes) + len(payload) > DEBUG_LOG_MAX_BYTES,
+                        rotates,
+                    )
+                    outside_before = _file_link_snapshot(outside)
+                    namespace_before = _debug_namespace_snapshot(workspace)
+
+                    _trace(log)
+
+                    self.assertEqual(
+                        _file_link_snapshot(outside),
+                        outside_before,
+                    )
+                    self.assertEqual(
+                        _debug_namespace_snapshot(workspace),
+                        namespace_before,
+                    )
+
+    def test_hard_linked_backups_drop_rotation_without_mutation(self) -> None:
+        for linked_index in range(1, DEBUG_LOG_BACKUP_COUNT + 1):
+            with self.subTest(linked_index=linked_index):
+                workspace = initialized_workspace(self)
+                log = WorkspaceDebugLog(workspace)
+                payload = _trace_payload(log)
+                workspace.path(DEBUG_LOG_GUARD_RELATIVE_PATH).write_bytes(
+                    b"safe guard"
+                )
+                active = workspace.path(DEBUG_LOG_RELATIVE_PATH)
+                active.write_bytes(
+                    b"a" * (DEBUG_LOG_MAX_BYTES - len(payload) + 1)
+                )
+                with tempfile.TemporaryDirectory(
+                    dir=workspace.root.parent
+                ) as temporary:
+                    outside = Path(temporary) / f"outside-backup-{linked_index}"
+                    outside.write_bytes(
+                        f"outside backup {linked_index}".encode("ascii")
+                    )
+                    for index in range(1, DEBUG_LOG_BACKUP_COUNT + 1):
+                        backup = workspace.path(
+                            f"{DEBUG_LOG_RELATIVE_PATH}.{index}"
+                        )
+                        if index == linked_index:
+                            _hard_link_or_skip(self, outside, backup)
+                        else:
+                            backup.write_bytes(
+                                f"backup-{index}".encode("ascii")
+                            )
+                    outside_before = _file_link_snapshot(outside)
+                    namespace_before = _debug_namespace_snapshot(workspace)
+
+                    _trace(log)
+
+                    self.assertEqual(
+                        _file_link_snapshot(outside),
+                        outside_before,
+                    )
+                    self.assertEqual(
+                        _debug_namespace_snapshot(workspace),
+                        namespace_before,
+                    )
 
     def test_nonregular_storage_paths_drop_without_raising(self) -> None:
         for relative in (
