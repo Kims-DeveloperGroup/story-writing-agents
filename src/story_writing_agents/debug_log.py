@@ -408,6 +408,8 @@ def _verify_open_file(descriptor: int, path: Path) -> None:
     named = os.stat(path, follow_symlinks=False)
     if not stat.S_ISREG(opened.st_mode) or not stat.S_ISREG(named.st_mode):
         raise OSError("debug log file is not regular")
+    if opened.st_nlink != 1 or named.st_nlink != 1:
+        raise OSError("debug log file link count is unsafe")
     opened_identity = (opened.st_dev, opened.st_ino)
     named_identity = (named.st_dev, named.st_ino)
     if any((*opened_identity, *named_identity)) and opened_identity != named_identity:
@@ -516,6 +518,8 @@ def _validate_existing_regular(path: Path) -> os.stat_result | None:
         return None
     if not stat.S_ISREG(value.st_mode):
         raise OSError("debug log rotation path is not regular")
+    if value.st_nlink != 1:
+        raise OSError("debug log rotation path link count is unsafe")
     if value.st_size > DEBUG_LOG_MAX_BYTES:
         raise OSError("debug log rotation path is oversized")
     return value
