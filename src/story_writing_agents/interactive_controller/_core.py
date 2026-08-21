@@ -756,7 +756,7 @@ class InteractiveController:
             if decision is ConfirmationResult.EOF:
                 return True
             if decision is not ConfirmationResult.YES:
-                self._write_session_open_cancelled_status()
+                self._write_session_resume_cancelled_status()
                 return False
         self._open_known_session(default_session)
         return False
@@ -886,7 +886,7 @@ class InteractiveController:
             ControlOutcomeKind.CANCEL,
             ControlOutcomeKind.INTERRUPT,
         }:
-            self._write_session_open_cancelled_status()
+            self._write_session_resume_cancelled_status()
             return False
         if (
             outcome.kind is not ControlOutcomeKind.COMMIT
@@ -4903,7 +4903,7 @@ class InteractiveController:
             state=ViewState.CANCELLED,
         )
 
-    def _write_session_open_cancelled_status(self) -> None:
+    def _write_session_resume_cancelled_status(self) -> None:
         """Acknowledge declined default-session resume without mutation."""
 
         self._write_notice(
