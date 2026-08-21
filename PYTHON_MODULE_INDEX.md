@@ -306,15 +306,20 @@ every intermediate arrow. The current runtime graph is acyclic.
   construction fails before that ownership transfer. Only after workspace
   initialization or discovery succeeds, the CLI creates a workspace-bound
   debug-log handle and best-effort records fixed command, context,
-  configuration, and workspace lifecycle facts or safe failures. Module-private
-  trace and error helpers catch diagnostic `BaseException` failures. Discovery
-  and initialization failures remain unlogged and retain their established
-  output; later caught noninteractive exceptions append one fixed
-  workspace-relative debug-log hint to stderr when that handle is available,
-  while returned domain outcomes remain JSON-only. Interactive startup failures
-  add the corresponding fixed terminal notice. Existing sanitized error text
-  and exit behavior are otherwise unchanged, and `debug_log` retains storage
-  ownership.
+  configuration, and workspace lifecycle facts or safe failures. For explicit
+  smoke, it initializes and retains one identity-bearing `Workspace`, marks the
+  fixed-hint boundary only after that initialization succeeds, independently
+  guards optional logger construction, and passes the exact workspace instance
+  to `smoke.run_smoke` without resolving the path again. Module-private trace
+  and error helpers, plus explicit-smoke handle acquisition, catch diagnostic
+  `BaseException` failures. Discovery and initialization failures remain
+  unlogged and retain their established output. A later caught explicit-smoke
+  `Exception` appends the fixed workspace-relative hint even when no logger or
+  record is available; other caught noninteractive exceptions append it when
+  their handle is available, while returned domain outcomes remain JSON-only.
+  Interactive startup failures add the corresponding fixed terminal notice.
+  Existing sanitized error text and exit behavior are otherwise unchanged, and
+  `debug_log` retains storage ownership.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
   `tests/test_cli_context.py`, `tests/test_smoke_cli.py`, and
   `tests/test_interactive_pty.py` for primary process-level POSIX PTY
@@ -759,12 +764,19 @@ every intermediate arrow. The current runtime graph is acyclic.
   that Runner; controller-local entry/cancellation/join evidence and public
   Runner task inspection distinguish a quiescent pre-entry interruption, a
   completed entered cancellation, and an unjoined or otherwise uncertain
-  operation. Final cleanup closes the Runner and its residual asynchronous
-  work, releases any still-known process access, and then closes the backend.
-  Later cleanup stages remain attempted after an earlier failure; ordinary
-  cleanup failures force status 2 and one best-effort `cleanup_failed` diagnostic,
-  while a cleanup `BaseException` propagates after later stages run and an
-  unsuccessfully interrupted Runner close retains its private reference.
+  operation. Final cleanup attempts each applicable stage once in order:
+  Runner close and its residual asynchronous work, known process-access
+  release, backend close, then controller-state clearing. An uncaught body
+  process-control failure wins; otherwise the first cleanup process-control
+  failure wins, with every later stage still attempted before the exact object
+  and its originating traceback chain propagate. The Runner reference is
+  retained only when Runner close itself is interrupted by process control;
+  ordinary Runner-close failure clears it, while attachment, focus, and memory
+  always clear and the controller closes. With no retained process control,
+  ordinary cleanup failures force status 2 and one best-effort nonduplicated
+  `cleanup_failed` diagnostic. A diagnostic process control participates only
+  when no earlier winner exists and cannot replace a retained body or cleanup
+  control.
   `AgentBackend` retains the actual access claim, manifest, subprocess, and
   provider-thread resources. The settings flow retains only one call-local
   immutable baseline and pending candidate, constructs its changed-only
@@ -1573,24 +1585,31 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Responsibility:** Run the provider-free deterministic CLI diagnostic across
   subject catalog, transcript, search, retrieval, persisted conversation
   continuity, and included-context consensus behavior.
-- **Supported surface:** Internal `run_smoke`; no package-supported API.
+- **Supported surface:** Internal
+  `run_smoke(workspace: Workspace | None = None)`; no package-supported API.
+  `None` selects the implicit temporary lifecycle, while a supplied value must
+  be an initialized `Workspace`. There is no string-or-path compatibility form.
 - **Direct internal dependencies:** `agents`, `conversation_retrieval`,
   `conversation_search`, `conversations`, `debug_log`, `models`,
   `orchestrator`, `session_lifecycle`, and `workspace`.
-- **State, resources, and side effects:** Creates a unique temporary or
-  explicitly retained workspace diagnostic with a session directive, two
+- **State, resources, and side effects:** Runs a unique temporary or explicitly
+  retained workspace diagnostic with a session directive, two
   conversation metadata and transcript sets, bounded search, transcript-read,
   and retrieval activity, trusted in-memory nonpersistent retrieval progress,
   an immutable included-context sidecar, debate and agent state, a result, and
   a manuscript; verifies core-document bytes. Its provider-free backend
   implements the exact lifecycle hooks and returns correlated ready/access
-  facts so runtime preparation exercises the canonical contract. Temporary
-  mode's enclosing lifecycle removes the workspace and its bounded debug log
-  after return or propagation, while explicit mode retains the workspace and
-  best-effort fixed smoke lifecycle, completion, failure, or cancellation
-  records. A module-private trace helper and local error guards catch diagnostic
-  `BaseException` failures. `debug_log` retains ownership of the diagnostic
-  schema and storage.
+  facts so runtime preparation exercises the canonical contract. Implicit mode
+  owns, initializes, and removes one temporary `Workspace` and its bounded debug
+  log after return or propagation. Explicit mode borrows the caller's exact
+  initialized identity-bearing `Workspace`, never reconstructs it from a path,
+  and leaves it retained. Logger-handle acquisition is optional and guarded
+  independently from the module-private trace and error submissions; diagnostic
+  `BaseException` failures cannot replace a smoke report or propagated
+  application failure. Explicit mode can therefore retain best-effort fixed
+  smoke lifecycle, completion, failure, or cancellation records without
+  redirecting a later attempt into a replacement root. `debug_log` retains
+  ownership of the diagnostic schema and storage.
 - **Primary verification/documentation:** `tests/test_smoke_cli.py`,
   `docs/guides/smoke-test.md`, and `docs/reference/cli.md`.
 
@@ -1676,12 +1695,17 @@ every intermediate arrow. The current runtime graph is acyclic.
   Process-control `BaseException` failures deliberately leave the low-level
   surface, and `backend`, `cli`, `interactive_controller._core`, `orchestrator`,
   and `smoke` each guard every trace and error call privately so diagnostics
-  never affect caller control flow. The diagnostics module is not re-exported
-  by the project facade, and its import and handle construction perform no
-  filesystem operation. Backend emission begins only after its existing
-  configuration snapshot validates, while runtime handle construction emits no
-  record. All five consumers use only the internal append surface; none assumes
-  ownership of diagnostic files, locks, schema, or rotation.
+  never affect caller control flow. Explicit CLI smoke initializes and retains
+  one identity-bearing `Workspace`, passes that same instance to smoke, and
+  never resolves the path again for handoff or post-run diagnostics; implicit
+  smoke instead owns its temporary workspace lifecycle. CLI and smoke also
+  guard their independent diagnostic-handle acquisition. The diagnostics
+  module is not re-exported by the project facade, and its import and handle
+  construction perform no filesystem operation. Backend emission begins only
+  after its existing configuration snapshot validates, while runtime handle
+  construction emits no record. All five consumers use only the internal append
+  surface; none assumes ownership of diagnostic files, locks, schema, or
+  rotation.
 - `Workspace` initializes the canonical five-key system-default document but
   never rewrites an existing one. `ConfigManager` owns full system and per-agent
   schema validation and the shared Codex model/reasoning validators plus
@@ -1800,8 +1824,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   process-local per-session latest accepted STARTED debate IDs, transition and
   compensation ordering, retained runtime and memory-service wiring, one
   private lifecycle `asyncio.Runner`, controller-local interruption/progress
-  proof, and ordered Runner-close, known-access-release, and backend-close
-  coordination after its one run starts.
+  proof, and outer cleanup arbitration after its one run starts. That boundary
+  attempts Runner close, known-access release, backend close, and state clearing
+  in order; an uncaught body process control outranks the first cleanup process
+  control, later stages still run, and the retained exact object and originating
+  traceback propagate only afterward. It alone owns Runner-retention and final
+  controller-state clearing decisions.
   `AgentBackend` retains actual session access claims, manifests, subprocesses,
   and provider-thread ownership; `ConversationCatalog` retains conversation
   metadata ownership; `cli_context` owns both session and per-session
