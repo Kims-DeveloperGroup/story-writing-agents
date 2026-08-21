@@ -832,11 +832,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   terminal mutation. That driver owns one bounded process-local main-input
   history store for the editor lifetime; public `read_line` records successful
   exact nonblank commits, while the internal binding supplies a provider to a
-  history-free contextual read without retaining it. The unified driver
-  preserves exact fallback, selectable-palette, editing, interrupt, EOF,
-  output-failure, and restoration behavior. The history is not persisted, and
-  the facade performs no provider, filesystem, persistence, subprocess,
-  network, or import-time operational side effect.
+  history-free contextual read without retaining it. On a capable stream, the
+  public main-line route clears its complete live frame before `read_line`
+  returns; ordinary-line fallback retains its printed prompt and input. The
+  unified driver preserves exact fallback, selectable-palette, editing,
+  interrupt, EOF, output-failure, and restoration behavior. The history is not
+  persisted, and the facade performs no provider, filesystem, persistence,
+  subprocess, network, or import-time operational side effect.
 - **Primary verification/documentation:** `tests/test_interactive_line_editor.py`,
   `tests/test_interactive_terminal.py`,
   `tests/test_interactive_terminal_completion.py`,
@@ -1027,11 +1029,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   correlated completion projection into the existing semantic palette;
   `project_main_choice_completion` and `project_main_choice_palette` adapt
   controller-owned semantic choices into that same immutable state while
-  keeping committed identities opaque. `transition_main_command_input` owns
-  mutually exclusive completion and choice cycles, palette
-  open/filter/highlight/clamp, static Tab/Enter completion and snapshot,
-  dynamic Up/Down highlight and direct Enter commit, Escape restoration and
-  latch, and the exact open-palette versus closed-history arrow routing.
+  keeping committed identities opaque, while `main_command_uses_choices`
+  reports whether the correlated state owns that dynamic choice cycle.
+  `transition_main_command_input` owns mutually exclusive completion and choice
+  cycles, palette open/filter/highlight/clamp, static Tab/Enter completion and
+  snapshot, dynamic Up/Down highlight and direct Enter commit, Escape
+  restoration and latch, and the exact open-palette versus closed-history arrow
+  routing.
   `transition_composer_line`
   applies exact `/send`, `/cancel`, `/say /send`, and `/say /cancel` semantics
   to immutable composer state, while `transition_confirmation_answer`
