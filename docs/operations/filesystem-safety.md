@@ -86,6 +86,14 @@ primitive drops the record instead of using a weaker or less-contained fallback
 destination. The diagnostic may therefore be absent, but the caller's result,
 exception, output, and exit remain unchanged.
 
+Explicit CLI smoke initializes one identity-bearing `Workspace` and passes that
+same object as the smoke run's retained workspace and uses it for CLI diagnostic
+attempts. The CLI never resolves the pathname again for handoff or post-run
+diagnostics. Replacing or making the bound root unavailable can therefore drop
+later records, but cannot redirect them into the replacement or change the
+compact report, established stderr lines, propagated process control, or exit
+status. Implicit smoke instead owns and removes its temporary workspace.
+
 A guarded weak process-wide lock serializes writers for one resolved workspace.
 After the safe-primitive and directory checks pass, an independent persistent
 `.runtime.lock` attempts the available POSIX or Windows cross-process advisory

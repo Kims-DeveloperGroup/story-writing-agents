@@ -63,6 +63,16 @@ filesystem-I/O-free.
 loads successfully; CLI, controller, and smoke emission starts only after
 workspace resolution or initialization.
 
+Explicit CLI smoke initializes and retains one identity-bearing `Workspace`,
+then passes that exact instance to `run_smoke`, which borrows it. Implicit smoke
+creates, initializes, and removes its own temporary `Workspace`. The smoke
+contract accepts a `Workspace` or `None`, so the CLI does not reconstruct the
+explicit workspace from a path for handoff or post-run diagnostics. CLI and
+smoke diagnostic-handle acquisition and every submission have separate
+`BaseException` guards. A replaced or unavailable bound root can therefore
+omit a record, but cannot redirect diagnostics or change the smoke report,
+stderr, exception, or exit.
+
 The low-level writer attempts cleanup for every independently acquired
 descriptor and lock and drops ordinary `Exception` failures. An original body
 `KeyboardInterrupt` or `SystemExit` takes precedence; otherwise the first

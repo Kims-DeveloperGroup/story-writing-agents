@@ -155,6 +155,18 @@ stable semantic identity when that identity still exists.
 operation results. Color, symbols, or emphasis may reinforce them but their
 text and structure must remain sufficient in plain output.
 
+The controller's outer cleanup boundary is separate from these handled command
+states. It attempts Runner close, known-access release, backend close, and state
+clearing in order even after a stage fails. An uncaught body process control
+wins; otherwise the first cleanup process control propagates, unchanged with its
+traceback, after later stages finish. Runner state remains only when its close
+was interrupted by process control; attachment, focus, and memory always clear.
+With no retained process control, ordinary cleanup failure returns `2` and
+attempts one nonduplicated `cleanup_failed`. A diagnostic process control cannot
+replace an already retained body or cleanup winner. A Ctrl-C or cancellation
+already handled by a command remains a normal `cancelled` or recovery result
+rather than entering this arbitration.
+
 ## Input ownership and transition boundary
 
 Exactly one terminal driver owns raw streams, capability and width detection,
@@ -825,13 +837,16 @@ effect.
 
 The noninteractive `init`, `smoke`, `session`, `directive`, `inspect`, and `run`
 commands remain unstyled. Their success stdout, JSON schemas, key and record
-ordering, and exit behavior remain unchanged. After a workspace-bound logger is
-available, a caught noninteractive exception preserves its established first
-stderr line and adds exactly
+ordering, and exit behavior remain unchanged. Outside explicit smoke, after a
+workspace-bound logger is available, a caught noninteractive exception
+preserves its established first stderr line and adds exactly
 `Debug log (if available, workspace-relative): debug_logs/runtime.jsonl` as the
-second. Returned domain outcomes do not add that hint: smoke invariant exit `1`
-and run deadlock/failed-result exits `3`/`4` retain their established JSON.
-Argparse and pre-workspace failures add no debug-log hint. Interactive capability,
+second. Explicit smoke uses successful workspace initialization as that
+boundary: a later ordinary failure adds the line even if logger acquisition or
+submission fails. Its initialization failure remains hint-free. Returned domain
+outcomes do not add the hint: smoke invariant exit `1` and run
+deadlock/failed-result exits `3`/`4` retain their established JSON. Argparse and
+other pre-workspace failures add no debug-log hint. Interactive capability,
 width, color, or `NO_COLOR` settings must not affect these contracts.
 
 ### `interactive_terminal` public Python surface
@@ -1165,7 +1180,7 @@ public/internal action identities.
 | Composer/confirmation | Ordered semantic input facts and focused prompt; equivalent width-aware plain/ANSI rendering; fallback-once and trusted-live routing; exact `/send`, `/cancel`, `/say`, yes/no/default, invalid retry, Ctrl-C, and EOF results; semantic composer events and hint cardinality; history isolation; reserved-key no-ops; no full-screen or persistent state. |
 | Restoration | Complete-frame cleanup for every capable main/composition/confirmation/picker/prompt submit, commit, cancellation, Escape return, EOF, Ctrl-C, setup failure, read/write/flush failure, and render error; raw attributes restored whenever acquired; completion-only Enter remains inside the live read; restoration uncertainty is fatal. |
 | Public compatibility | Exact exports and order, enum values, dataclass fields/defaults/options, established-call-compatible signatures including exact validation/default behavior for the additive `write_error()` keyword, exceptions, object/class identity, canonical modules, facade imports, callback construction, and no constructor resource acquisition. |
-| Noninteractive regression | Golden byte/schema/order/exit checks for `init`, `smoke`, `session`, `directive`, `inspect`, and `run`, including the exact caught-exception hint after logger availability, no hint for argparse, pre-workspace failures, smoke invariant exit `1`, or run domain exits `3`/`4`, unchanged success output, and no SGR under any environment. |
+| Noninteractive regression | Golden byte/schema/order/exit checks for `init`, `smoke`, `session`, `directive`, `inspect`, and `run`, including the exact caught-exception hint after logger availability or successful explicit-smoke initialization, no hint for argparse, other pre-workspace failures, smoke invariant exit `1`, or run domain exits `3`/`4`, unchanged success output, and no SGR under any environment. |
 
 Process-level POSIX PTY coverage remains required for the real raw-mode and
 restoration boundary. Unit tests with deterministic fake drivers cover pure

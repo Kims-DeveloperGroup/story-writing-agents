@@ -40,7 +40,12 @@ through private guards that also catch diagnostic `BaseException`. Thus
 `debug_log` alone owns schema, files, locks, append rollback, and rotation, while
 a diagnostic `KeyboardInterrupt` or `SystemExit` cannot replace application
 results, exceptions, cancellation, cleanup, output, or exit behavior. Implicit
-smoke removes its records with the temporary workspace.
+smoke owns and removes its temporary `Workspace`. Explicit CLI smoke initializes
+and retains one identity-bearing `Workspace`, passes that same instance to the
+smoke workflow, and does not resolve the path again for handoff or post-run
+diagnostics. CLI and smoke logger-handle acquisition and submissions are
+independently guarded, so root replacement can omit a record but cannot redirect
+it or change the report, stderr, exception, or exit.
 
 ## Fixed collaboration model
 
@@ -70,6 +75,18 @@ The supported import remains `from story_writing_agents.interactive_controller i
 The facade re-exports the core's same class;
 shell behavior and project-root exports are unchanged. Only the core retains
 collaborators and mutable process state.
+
+On session-lobby exit, the core attempts each applicable stage once in this
+order: Runner close, known-access release, backend close, then in-memory state
+clearing. An uncaught body `KeyboardInterrupt` or `SystemExit` wins; otherwise
+the first cleanup process control wins after every later stage runs. The same
+exception object and traceback propagate. The Runner reference remains only
+when its close was interrupted by process control; attachment, focus, and memory
+always clear and the controller closes. With no retained process control,
+ordinary cleanup failure returns `2` and attempts one nonduplicated
+`cleanup_failed` display. A diagnostic process control cannot replace an already
+retained body or cleanup winner. This outer-boundary arbitration does not
+reclassify a Ctrl-C or cancellation already handled by a command.
 
 The supported terminal import remains
 `from story_writing_agents.interactive_terminal import InteractiveTerminal`.

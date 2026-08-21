@@ -16,11 +16,12 @@ Use smoke immediately after installation:
 story smoke
 ```
 
-Temporary mode creates a uniquely named workspace, runs the check, prints one
-line of compact JSON, and removes the directory after normal success or a named
-invariant failure. It attempts bounded operational debug records inside that
-workspace while running, removes any successfully written records with the
-workspace, and prints no debug-log path or hint. A passing report contains
+Temporary mode owns and initializes one uniquely named `Workspace`, runs the
+check, prints one line of compact JSON, and removes the directory on every
+normal return or propagated failure. It attempts bounded operational debug
+records inside that workspace while running, removes any successfully written
+records with the workspace, and prints no debug-log path or hint. A passing
+report contains
 `"status":"passed"`,
 `"provider_tested":false`, unique session and debate IDs, consensus on revision
 `r1`, one completed replacement round, and a disclaimer.
@@ -60,8 +61,10 @@ The exact ordered `checks` array is part of the
 story smoke --workspace ./smoke-workspace
 ```
 
-Persistent mode initializes missing scaffold or reuses the directory. Every run
-uses unique session, conversation, debate, manuscript, and per-agent state
+Persistent CLI mode initializes one identity-bearing `Workspace` and passes
+that exact instance to the smoke workflow, which borrows and retains it. The CLI
+does not resolve the path again for handoff or post-failure diagnostics. Every
+run uses unique session, conversation, debate, manuscript, and per-agent state
 identifiers, so story artifacts from repeated runs do not collide. Debug records
 append to the shared bounded runtime log when storage succeeds and may rotate
 under its retention limit. The report identifies the retained workspace,
@@ -89,12 +92,16 @@ Exit code `0` means every invariant passed. Code `1` means a named invariant
 failed; compact JSON includes the completed check prefix and `failed_check`,
 with no stderr hint. Code `2` covers argparse usage or a setup, configuration,
 or unexpected exception; non-usage exceptions print `ExceptionType: message`
-to standard error. For an explicit workspace, the next line is exactly
-`Debug log (if available, workspace-relative): debug_logs/runtime.jsonl` only
-when the CLI can successfully resolve that workspace after the exception.
-Argparse and failures that leave no resolvable workspace remain hint-free.
-Implicit temporary mode removes its workspace on normal return or exception
-propagation and never exposes a debug-log path.
+to standard error. After an explicit workspace initializes successfully, a
+later ordinary failure always adds exactly
+`Debug log (if available, workspace-relative): debug_logs/runtime.jsonl`, even
+when logging failed or the bound root was replaced and no record is available.
+Initialization and argparse failures remain hint-free. Implicit temporary mode
+removes its workspace on normal return or exception propagation and never
+exposes a debug-log path. Diagnostic-handle acquisition and record submission
+are guarded independently; neither can change the report, stderr, or exit. A
+genuine smoke `KeyboardInterrupt` or `SystemExit` propagates as the same
+exception with its traceback intact.
 
 A pass does **not** validate Codex installation, credentials, provider or model
 behavior, connectivity, terminal behavior, subprocess/app/web integration, or

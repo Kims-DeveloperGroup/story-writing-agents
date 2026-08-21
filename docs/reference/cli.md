@@ -53,8 +53,12 @@ On a pass, `provider_tested:false`; checks, in order, are
 `consensus_context`, `revision_workflow`, `consensus_persisted`,
 `manuscript_committed`, and `core_documents_unchanged`.
 
-Implicit workspaces are removed; explicit ones retain any plaintext diagnostics
-that were successfully written.
+Implicit smoke owns, initializes, and removes its temporary `Workspace`.
+Explicit CLI smoke initializes one `Workspace`, retains it, and passes that
+exact instance to the smoke workflow; the CLI does not resolve the path again
+for handoff or post-run diagnostics.
+Explicit workspaces retain any plaintext diagnostics that were successfully
+written.
 Exit `0` passes, `1` names a failed invariant, and `2` covers usage/setup or an
 unexpected failure. See the [smoke guide](../guides/smoke-test.md).
 
@@ -71,12 +75,12 @@ effect; those operations retain their domain-state contract.
 
 | Boundary or result | Internal behavior | What the user sees |
 | --- | --- | --- |
-| Before a usable workspace | No workspace-bound logger is available, so this invocation submits no record. | Argparse, TTY, interactive-option, initialization, and discovery errors retain their established output and show no debug-log hint. |
+| Before a usable workspace | No workspace-bound diagnostic handle is acquired, so this invocation submits no record. | Argparse, TTY, interactive-option, initialization, and discovery errors retain their established output and show no debug-log hint. |
 | Resolved or initialized workspace; normal activity | The owning CLI, controller, backend, or runtime attempts fixed trace records. | Normal success and domain-result output is unchanged. When created, the active log may be inspected at the fixed relative path. |
 | Handled post-workspace application error | The responsible boundary may attempt a content-safe error record; presentation does not depend on that record succeeding. | Interactive rendering adds the exact third notice below. A caught noninteractive exception preserves its first stderr line and adds the exact second line below. |
 | Diagnostic submission fails | Consumer-private guards catch even a diagnostic `BaseException`; the record may be absent. | The operation's result, exception, cancellation, cleanup, output, and exit status remain authoritative. A displayed hint is only an availability notice. |
 | Implicit smoke | Fixed records are attempted only inside the temporary workspace; normal return or exception propagation removes that workspace and any records successfully written. | A returned compact report has no debug path or hint; a propagated exception also exposes none, and no workspace remains to inspect. |
-| Explicit smoke | Fixed smoke, CLI, and runtime records are attempted; any successfully written records remain in the supplied workspace. | Reports retain their established output. A propagated `Exception` caught by the CLI gets the second stderr line only if the CLI can successfully resolve the workspace afterward. |
+| Explicit smoke | The CLI initializes and retains one identity-bearing `Workspace`; smoke borrows that exact instance. CLI and smoke diagnostic-handle acquisition and each submission are guarded separately, and the CLI does not re-resolve the path for handoff or post-run diagnostics. | Reports retain their established compact output. After initialization succeeds, a propagated ordinary `Exception` caught by the CLI keeps its first stderr line and always gets the fixed second line, even when the record is absent. Root replacement can omit records but cannot redirect them or change output or exit status. Initialization failure is hint-free; a genuine process-control exception propagates unchanged. |
 
 Each submitted interactive command is classified independently when its final
 trace can be written. A normally returned command that successfully rendered a
@@ -93,8 +97,9 @@ this exact third notice to its existing error panel:
 [debug log] If available, workspace-relative: debug_logs/runtime.jsonl
 ```
 
-A caught noninteractive exception after the workspace-bound logger is available
-retains its established first stderr line and adds this exact second line:
+Outside explicit smoke, a caught noninteractive exception after a
+workspace-bound logger is available retains its established first stderr line
+and adds this exact second line:
 
 ```text
 Debug log (if available, workspace-relative): debug_logs/runtime.jsonl
@@ -105,6 +110,9 @@ exit `1` remains compact JSON, and run deadlock/failed-result exits `3`/`4`
 retain their established JSON. Success output also has no hint. “If available”
 is literal: contention, unsafe storage, unavailable safe descriptor-relative
 filesystem primitives, or another logging failure can drop a record.
+For explicit smoke, successful initialization—not logger acquisition—is the
+hint boundary; later ordinary failure still prints the line even if diagnostics
+are unavailable.
 
 Users can inspect the fixed path beneath the workspace root, but cannot
 configure another destination or recover provider stderr through this feature.
@@ -248,7 +256,8 @@ semantic notices; no internal generic composer-status site remains. These
 presentation changes do not alter command grammar, established callback/read
 order, or noninteractive success stdout, JSON, ordering, or exit contracts. The
 documented availability line is the sole additive noninteractive stderr
-contract for a caught exception after a workspace-bound logger is available.
+contract for a caught exception after a workspace-bound logger is available,
+or after an explicit smoke workspace initializes successfully.
 
 During one advisory turn, a capable raw stream may show the terminal-owned
 four-glyph rolling indicator `◐`, `◓`, `◑`, `◒`. The driver clears the active

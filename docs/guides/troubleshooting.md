@@ -87,10 +87,13 @@ After workspace resolution, interactive errors show
 `[debug log] If available, workspace-relative: debug_logs/runtime.jsonl`.
 A caught noninteractive exception adds
 `Debug log (if available, workspace-relative): debug_logs/runtime.jsonl` as its
-second stderr line only after a workspace-bound logger is available. Smoke
-invariant exit `1` and run deadlock/failed-result exits `3`/`4` retain their
-JSON output without a hint. Resolve the fixed path beneath the workspace root;
-the CLI never prints an absolute diagnostic path.
+second stderr line only after a workspace-bound logger is available. Explicit
+smoke uses successful workspace initialization as the boundary, so a later
+ordinary failure still prints the hint when logger acquisition, submission, or
+root revalidation fails; initialization failure is hint-free. Smoke invariant
+exit `1` and run deadlock/failed-result exits `3`/`4` retain their JSON output
+without a hint. Resolve the fixed path beneath the workspace root; the CLI never
+prints an absolute diagnostic path.
 
 The file may be absent even when a hint appears because logging is fail-open.
 Do not treat it as retry, telemetry, or proof that an operation completed. It
@@ -145,9 +148,13 @@ documents if needed, and start a new debate. `active` proves only reservation;
 A recoverable advisory Ctrl-C reports `[cancelled]` and keeps attachment; an
 entered turn must cancel and join, and its provider thread may restart. Fatal
 `operation_interrupted` means proof or terminal I/O failed and exits `2` through
-cleanup. `cleanup_failed` forces exit `2` and means Runner close, access release,
-or backend close may be incomplete. Before retrying, inspect retained temporary
-or claim state, stop a known owner normally, and preserve uncertain ownership.
+cleanup. Cleanup still attempts Runner close, known-access release, backend
+close, and state clearing in order. An uncaught body process control wins;
+otherwise the first cleanup process control propagates after the later stages.
+`cleanup_failed` forces exit `2` and means an ordinary Runner close, access
+release, or backend close may be incomplete. Before retrying, inspect retained
+temporary or claim state, stop a known owner normally, and preserve uncertain
+ownership.
 
 Malformed JSON/JSONL raises; preserve it before intervention. See
 [Inspection and recovery](inspection-and-recovery.md) and the
