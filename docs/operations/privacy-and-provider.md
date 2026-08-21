@@ -93,8 +93,8 @@ smoke emission begins only after workspace resolution or initialization.
 
 The low-level writer suppresses ordinary `Exception` failures. CLI, backend,
 runtime, controller, and smoke each add a private submission guard that catches
-diagnostic `BaseException`; CLI and smoke diagnostic-handle acquisition is
-guarded separately. Even a sink `KeyboardInterrupt` or `SystemExit` therefore
+diagnostic `BaseException`; diagnostic-handle acquisition by CLI and smoke paths
+is guarded separately. Even a sink `KeyboardInterrupt` or `SystemExit` therefore
 cannot replace the application's result, exception, cancellation, cleanup,
 output, or exit status. Explicit smoke retains any best-effort records
 successfully written; implicit smoke removes its temporary workspace and any log
