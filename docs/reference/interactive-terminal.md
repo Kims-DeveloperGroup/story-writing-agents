@@ -661,10 +661,10 @@ session ID, and its description is
 current attachment, then the saved default; generic initialization chooses the
 first row if neither is present. A commit returns the identity; the controller
 reports an unchanged current attachment or freshly validates another choice
-before the established open/reopen transition. Escape or Ctrl-C produces the
-persistent `Session resume cancelled.` record without mutation, while EOF
-returns to normal shell cleanup. The controller handles an empty catalog without
-opening the picker.
+before the established session resume transition. Escape or Ctrl-C produces
+the persistent `[cancelled] Session resume cancelled.` record without mutation,
+while EOF returns to normal shell cleanup. The controller handles an empty
+catalog without opening the picker.
 
 When the submitted omitted `/conversation resume` picker opens, it supplies one
 enabled choice per active conversation in catalog order. The visible label is
@@ -680,9 +680,10 @@ changing current focus. A missing or newly archived choice is rejected,
 refreshed metadata is used, and a reported save failure does not change
 in-memory focus but may follow replacement of the persisted default. Inspect
 the persisted selection after such an error. Escape,
-fallback `/cancel`, or Ctrl-C writes `Conversation focus cancelled.` and leaves
-catalog, default, current focus, and agent focus unchanged; EOF returns to
-normal shell cleanup without a selection. An
+fallback `/cancel`, or Ctrl-C writes
+`[cancelled] Conversation focus cancelled.` and leaves catalog, default,
+current focus, and agent focus unchanged; EOF returns to normal shell cleanup
+without a selection. An
 empty active set emits `[conversation] No active conversations found.` without
 opening the picker.
 

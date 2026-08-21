@@ -60,9 +60,10 @@ interrupting that submitted picker writes
 `[cancelled] No action was taken.` Picker EOF exits through normal cleanup
 without selecting a destination.
 
-An empty lifecycle list prints `No story sessions found.` without opening the
-picker; a lifecycle-read failure reports the applicable error without opening
-it. Choosing the current attachment only reports that it is already attached.
+An empty lifecycle list prints `[session] No story sessions found.` without
+opening the picker; a lifecycle-read failure reports the applicable error
+without opening it. Choosing the current attachment only reports that it is
+already attached.
 Snapshot display,
 highlight movement, Escape dismissal, picker cancel, and rejection before
 destination acquisition are mutation-free. A submitted different choice is
@@ -81,9 +82,10 @@ replacement; inspect `/status` and persisted defaults rather than assuming the
 old default. If source release fails after destination-default persistence, the
 shell exits through `cleanup_failed` and the new default remains.
 
-`story chat NAME` creates an absent name or opens/reopens it. Bare `story` still
-resumes a ready default and asks before reopening a paused default. Resume choices
-do not change `/session list` or standalone session-command behavior.
+`story chat NAME` creates an absent session or resumes a persisted session. Bare
+`story` resumes a ready default and asks for confirmation before resuming a
+paused default. Resume choices do not change `/session list` or standalone
+session-command behavior.
 
 `/quit`, `/exit`, and EOF release access without pausing; ready state and
 defaults remain. Restarting establishes a new attachment and restores an active
@@ -168,9 +170,10 @@ picker answer is history-free. A submitted picker cancel or interrupt writes
 `[cancelled] Conversation focus cancelled.` and changes no catalog, default, or
 focus. EOF
 exits through normal cleanup without selecting a conversation. If there are no
-active conversations, the shell prints `No active conversations found.`
-without opening the picker. A catalog or saved-default read failure reports the
-applicable error without opening it.
+active conversations, the shell prints
+`[conversation] No active conversations found.` without opening the picker. A
+catalog or saved-default read failure reports the applicable error without
+opening it.
 
 A picker commit carries the immutable full ID, then rereads the complete
 catalog before selection. A conversation that disappeared or became archived
