@@ -70,6 +70,7 @@ _CONVERSATION_METADATA_FIELDS = frozenset({
 })
 _CONVERSATION_ID_ALLOCATION_ATTEMPTS = 16
 _WORKSPACE_ROOT_IDENTITY_PENDING = object()
+_WORKSPACE_ROOT_IDENTITY_BIND_FAILED = object()
 _WORKSPACE_ROOT_IDENTITY_UNAVAILABLE = object()
 _CONVERSATION_EVENT_FIELDS = frozenset({
     "schema_version",
@@ -219,8 +220,14 @@ class Workspace:
 
         if not isinstance(overwrite_prompts, bool):
             raise TypeError("overwrite_prompts must be a boolean")
+        requires_bound_root_identity = (
+            self._root_identity is _WORKSPACE_ROOT_IDENTITY_PENDING
+            or self._root_identity is _WORKSPACE_ROOT_IDENTITY_BIND_FAILED
+        )
         self.root.mkdir(parents=True, exist_ok=True)
         _bind_pending_workspace_root_identity(self)
+        if requires_bound_root_identity:
+            _require_workspace_root_identity(self)
         for relative in WORKSPACE_DIRECTORIES:
             self._directory(relative).mkdir(parents=True, exist_ok=True)
 
@@ -2193,7 +2200,7 @@ def _bind_pending_workspace_root_identity(workspace: Workspace) -> None:
 
     if workspace._root_identity is not _WORKSPACE_ROOT_IDENTITY_PENDING:
         return
-    workspace._root_identity = _WORKSPACE_ROOT_IDENTITY_UNAVAILABLE
+    workspace._root_identity = _WORKSPACE_ROOT_IDENTITY_BIND_FAILED
     try:
         value = os.stat(workspace.root, follow_symlinks=False)
     except Exception:

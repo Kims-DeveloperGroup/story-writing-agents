@@ -1160,6 +1160,13 @@ class StoryRuntime:
     def apply_directive(self, session_id: str, text: str) -> dict[str, object]:
         try:
             result = persist_directive(self.workspace, session_id, text)
+        except (KeyboardInterrupt, SystemExit) as exc:
+            self._record_debug_error(
+                DebugOperation.DIRECTIVE,
+                exc,
+                session_id=session_id,
+            )
+            raise
         except Exception as exc:
             self._record_debug_error(
                 DebugOperation.DIRECTIVE,
@@ -1185,6 +1192,13 @@ class StoryRuntime:
         try:
             validated = self.config.validate_runtime_overrides(overrides)
             self.workspace.save_session_overrides(session_id, validated)
+        except (KeyboardInterrupt, SystemExit) as exc:
+            self._record_debug_error(
+                DebugOperation.CONFIGURATION,
+                exc,
+                session_id=session_id,
+            )
+            raise
         except Exception as exc:
             self._record_debug_error(
                 DebugOperation.CONFIGURATION,
@@ -1203,6 +1217,13 @@ class StoryRuntime:
     def inspect_session(self, session_id: str) -> dict[str, Any]:
         try:
             result = self.workspace.inspect_session(session_id)
+        except (KeyboardInterrupt, SystemExit) as exc:
+            self._record_debug_error(
+                DebugOperation.INSPECTION,
+                exc,
+                session_id=session_id,
+            )
+            raise
         except Exception as exc:
             self._record_debug_error(
                 DebugOperation.INSPECTION,
@@ -1223,6 +1244,14 @@ class StoryRuntime:
     ) -> dict[str, Any]:
         try:
             result = self.workspace.inspect_debate(session_id, debate_id)
+        except (KeyboardInterrupt, SystemExit) as exc:
+            self._record_debug_error(
+                DebugOperation.INSPECTION,
+                exc,
+                session_id=session_id,
+                debate_id=debate_id,
+            )
+            raise
         except Exception as exc:
             self._record_debug_error(
                 DebugOperation.INSPECTION,
@@ -1249,6 +1278,14 @@ class StoryRuntime:
 
         try:
             result = self.workspace.inspect_debate_context(session_id, debate_id)
+        except (KeyboardInterrupt, SystemExit) as exc:
+            self._record_debug_error(
+                DebugOperation.INSPECTION,
+                exc,
+                session_id=session_id,
+                debate_id=debate_id,
+            )
+            raise
         except Exception as exc:
             self._record_debug_error(
                 DebugOperation.INSPECTION,

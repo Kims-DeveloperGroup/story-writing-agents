@@ -87,13 +87,13 @@ After workspace resolution, interactive errors show
 `[debug log] If available, workspace-relative: debug_logs/runtime.jsonl`.
 A caught noninteractive exception adds
 `Debug log (if available, workspace-relative): debug_logs/runtime.jsonl` as its
-second stderr line only after a workspace-bound logger is available. Explicit
-smoke uses successful workspace initialization as the boundary, so a later
-ordinary failure still prints the hint when logger acquisition, submission, or
-root revalidation fails; initialization failure is hint-free. Smoke invariant
-exit `1` and run deadlock/failed-result exits `3`/`4` retain their JSON output
-without a hint. Resolve the fixed path beneath the workspace root; the CLI never
-prints an absolute diagnostic path.
+second stderr line after CLI workspace initialization or discovery succeeds.
+Handle acquisition, record submission, or root revalidation may still fail, so
+the hint can appear when the file does not exist. Initialization and discovery
+failures and implicit smoke remain hint-free. Smoke invariant exit `1` and run
+deadlock/failed-result exits `3`/`4` retain their JSON output without a hint.
+Resolve the fixed path beneath the workspace root; the CLI never prints an
+absolute diagnostic path.
 
 The file may be absent even when a hint appears because logging is fail-open.
 Do not treat it as retry, telemetry, or proof that an operation completed. It

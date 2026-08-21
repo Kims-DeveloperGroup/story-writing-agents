@@ -6,6 +6,7 @@ import contextlib
 import io
 import json
 import os
+import shutil
 import socket
 import subprocess
 import tempfile
@@ -135,6 +136,17 @@ def traceback_contains(
             return True
         current = current.tb_next  # type: ignore[union-attr]
     return False
+
+
+def snapshot_directory_namespace(directory: Path) -> dict[str, bytes | None]:
+    """Return every descendant name and file byte sequence below a directory."""
+
+    return {
+        path.relative_to(directory).as_posix(): (
+            None if path.is_dir() else path.read_bytes()
+        )
+        for path in sorted(directory.rglob("*"))
+    }
 
 
 def snapshot_retained_smoke_artifacts(
@@ -929,6 +941,163 @@ class SmokePersistentTests(unittest.TestCase):
             {path.name for path in all_manuscripts(workspace)},
             {Path(first_manuscript).name, Path(second_manuscript).name},
         )
+
+    def test_explicit_smoke_fresh_consumers_borrow_supplied_workspace(
+        self,
+    ) -> None:
+        """Keep fresh service instances without reconstructing their workspace."""
+
+        workspace = initialize_workspace(
+            Path(self.enterContext(tempfile.TemporaryDirectory())) / "workspace"
+        )
+        runtime_instances: list[StoryRuntime] = []
+        catalog_instances: list[FilesystemConversationCatalog] = []
+        store_instances: list[FilesystemConversationEventStore] = []
+        memory_instances: list[ConversationMemoryService] = []
+        runtime_type = smoke_module.StoryRuntime
+        catalog_type = smoke_module.FilesystemConversationCatalog
+        store_type = smoke_module.FilesystemConversationEventStore
+        memory_type = smoke_module.ConversationMemoryService
+
+        def construct_runtime(*args: object, **kwargs: object) -> StoryRuntime:
+            instance = runtime_type(*args, **kwargs)  # type: ignore[arg-type]
+            runtime_instances.append(instance)
+            return instance
+
+        def construct_catalog(
+            *args: object,
+            **kwargs: object,
+        ) -> FilesystemConversationCatalog:
+            instance = catalog_type(*args, **kwargs)  # type: ignore[arg-type]
+            catalog_instances.append(instance)
+            return instance
+
+        def construct_store(
+            *args: object,
+            **kwargs: object,
+        ) -> FilesystemConversationEventStore:
+            instance = store_type(*args, **kwargs)  # type: ignore[arg-type]
+            store_instances.append(instance)
+            return instance
+
+        def construct_memory(
+            *args: object,
+            **kwargs: object,
+        ) -> ConversationMemoryService:
+            instance = memory_type(*args, **kwargs)  # type: ignore[arg-type]
+            memory_instances.append(instance)
+            return instance
+
+        with (
+            mock.patch.object(
+                Workspace,
+                "__init__",
+                side_effect=AssertionError("smoke reconstructed Workspace"),
+            ) as workspace_constructor,
+            mock.patch.object(
+                smoke_module,
+                "StoryRuntime",
+                side_effect=construct_runtime,
+            ),
+            mock.patch.object(
+                smoke_module,
+                "FilesystemConversationCatalog",
+                side_effect=construct_catalog,
+            ),
+            mock.patch.object(
+                smoke_module,
+                "FilesystemConversationEventStore",
+                side_effect=construct_store,
+            ),
+            mock.patch.object(
+                smoke_module,
+                "ConversationMemoryService",
+                side_effect=construct_memory,
+            ),
+        ):
+            report, exit_code = smoke_module.run_smoke(workspace)
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(report["checks"], EXPECTED_CHECKS)
+        workspace_constructor.assert_not_called()
+        for instances in (
+            runtime_instances,
+            catalog_instances,
+            store_instances,
+            memory_instances,
+        ):
+            self.assertGreaterEqual(len(instances), 2)
+            self.assertEqual(
+                len({id(instance) for instance in instances}),
+                len(instances),
+            )
+        self.assertTrue(
+            all(instance.workspace is workspace for instance in runtime_instances)
+        )
+        self.assertTrue(
+            all(instance.workspace is workspace for instance in catalog_instances)
+        )
+        self.assertTrue(
+            all(instance.workspace is workspace for instance in store_instances)
+        )
+        self.assertTrue(
+            all(
+                instance._catalog.workspace is workspace
+                and instance._event_store.workspace is workspace
+                for instance in memory_instances
+            )
+        )
+
+    def test_mid_workflow_replacement_receives_no_redirected_diagnostics(
+        self,
+    ) -> None:
+        """Keep diagnostics bound while pathname-based domain work continues."""
+
+        temporary = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        root = temporary / "workspace"
+        parked = temporary / "workspace-parked"
+        workspace = initialize_workspace(root)
+        search_source = smoke_module._search_source_conversation
+        replaced = False
+        replacement_debug_before: dict[str, bytes | None] = {}
+
+        def replace_after_initial_search(
+            memory: ConversationMemoryService,
+            source: ConversationMetadata,
+            *,
+            failed_check: str,
+        ) -> smoke_module._SmokeSearchEvidence:
+            nonlocal replaced, replacement_debug_before
+            evidence = search_source(
+                memory,
+                source,
+                failed_check=failed_check,
+            )
+            if not replaced:
+                root.rename(parked)
+                shutil.copytree(parked, root)
+                replacement_debug_before = snapshot_directory_namespace(
+                    root / "debug_logs"
+                )
+                replaced = True
+            return evidence
+
+        with mock.patch.object(
+            smoke_module,
+            "_search_source_conversation",
+            side_effect=replace_after_initial_search,
+        ):
+            report, exit_code = smoke_module.run_smoke(workspace)
+
+        self.assertTrue(replaced)
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(report["checks"], EXPECTED_CHECKS)
+        self.assertEqual(
+            snapshot_directory_namespace(root / "debug_logs"),
+            replacement_debug_before,
+        )
+        # Other workspace namespaces remain pathname-based and are deliberately
+        # outside this diagnostic-containment assertion.
 
     def test_internal_trace_covers_routing_retrieval_context_and_revision(
         self,

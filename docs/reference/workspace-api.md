@@ -42,15 +42,31 @@ directory with meaningful positive device and inode values binds immediately. A
 specifically missing root remains pending until `initialize()` creates it and
 makes the one permitted binding attempt. Any other unavailable or nonmeaningful
 identity remains unavailable for that `Workspace` instance rather than silently
-rebinding later.
+rebinding later. If the pending bind remains unavailable, `initialize()` raises
+`OSError` with `workspace root identity is unavailable` before writing canonical
+child directories or defaults. That failure is terminal for the instance:
+later `initialize()` calls raise the same identity-unavailable `OSError` before
+child/default writes and never retry or rebind. Any parent or root directory
+created before the failed bind is not removed. Constructing a new `Workspace`
+performs a new identity probe; callers should inspect and repair the root path
+first.
+
+An existing directory whose construction-time probe is unavailable or
+nonmeaningful is the established exception to the initialization requirement:
+normal pathname-based initialization may still create its scaffold, while
+diagnostic storage remains unavailable for that instance. It also never
+silently rebinds.
 
 Package-internal, non-root-exported helpers open and reverify that bound root for
 diagnostic storage. Replacing the root does not make an existing `Workspace`
 follow the replacement for logging; the diagnostic record is dropped without a
 fallback path. These helpers add no public signature, and this identity does not
-make normal Workspace operations transactional. Public path operations retain
-their established contract: they accept only safely contained
-workspace-relative paths with no absolute path, `..`, or symlink component.
+apply to normal `Workspace` methods. Those methods remain pathname-based and may
+read or write a real directory installed later at the same root path; callers
+cannot use one instance as an identity-pinned filesystem snapshot or a
+transaction across operations. Public path operations retain their established
+contract: they accept only safely contained workspace-relative paths with no
+absolute path, `..`, or symlink component.
 Text is strict UTF-8. JSON readers reject malformed structures where the
 consuming contract performs schema validation.
 

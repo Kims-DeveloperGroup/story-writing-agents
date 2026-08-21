@@ -93,7 +93,7 @@ smoke emission begins only after workspace resolution or initialization.
 
 The low-level writer suppresses ordinary `Exception` failures. CLI, backend,
 runtime, controller, and smoke each add a private submission guard that catches
-diagnostic `BaseException`; explicit CLI and smoke diagnostic-handle acquisition
+diagnostic `BaseException`; diagnostic-handle acquisition by CLI and smoke paths
 is guarded separately. Even a sink `KeyboardInterrupt` or `SystemExit` therefore
 cannot replace the application's result, exception, cancellation, cleanup,
 output, or exit status. Explicit smoke retains any best-effort records
@@ -104,11 +104,10 @@ does not guarantee that a record exists.
 Interactive errors after workspace resolution add exactly
 `[debug log] If available, workspace-relative: debug_logs/runtime.jsonl`.
 A caught noninteractive exception adds the fixed path as a second stderr line
-only after a workspace-bound logger is available. Explicit smoke instead uses
-successful workspace initialization as that boundary: a later ordinary failure
-adds the line even if no logger or record is available, while initialization
-failure is hint-free. Returned domain outcomes, argparse, and other pre-workspace
-errors add no debug-log path. See
+after CLI workspace initialization or discovery succeeds, even if optional
+handle acquisition failed and no record or file is available. Initialization
+and discovery failures, implicit smoke, returned domain outcomes, argparse, and
+other pre-workspace errors add no debug-log path. See
 [Persistence](../design/persistence.md#workspace-runtime-debug-log) for the
 schema, [CLI](../reference/cli.md#runtime-debug-logs) for exact output, and
 [Filesystem safety](filesystem-safety.md#debug-log-filesystem-safety) for

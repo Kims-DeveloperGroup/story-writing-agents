@@ -17,8 +17,22 @@ binds that identity at construction. A specifically missing root remains
 pending until `initialize()` creates it and makes the one permitted binding
 attempt. Any other unavailable or nonmeaningful initial identity remains
 unavailable for that `Workspace` instance rather than silently rebinding later.
-This identity protects internal diagnostic containment; it does not make every
-public workspace operation transactional. Every public path operation rejects:
+If the post-creation bind remains unavailable, `initialize()` raises `OSError`
+with `workspace root identity is unavailable` before creating workspace child
+directories or default files. The failure is terminal for that instance: every
+later `initialize()` call raises before child/default writes and never retries
+or rebinds. A parent or root directory just created by `mkdir` may remain; a new
+`Workspace` performs its own construction-time probe, so inspect and repair the
+root path before constructing one. An existing directory whose initial probe is
+unavailable or nonmeaningful retains the established limitation: normal
+pathname-based initialization may create its scaffold, but diagnostic storage
+remains unavailable for that instance.
+
+This identity protects internal diagnostic containment only. Public and domain
+operations retain pathname and no-symlink checks but do not compare the retained
+root identity, so they may observe a real directory installed later at the same
+root path. A `Workspace` is not an identity-pinned filesystem snapshot or a
+transaction across operations. Every public path operation rejects:
 
 - absolute paths;
 - any `..` path component;
@@ -88,11 +102,14 @@ exception, output, and exit remain unchanged.
 
 Explicit CLI smoke initializes one identity-bearing `Workspace` and passes that
 same object as the smoke run's retained workspace and uses it for CLI diagnostic
-attempts. The CLI never resolves the pathname again for handoff or post-run
+attempts. Every fresh workspace-bound service inside smoke also borrows that
+object. The CLI never resolves the pathname again for handoff or post-run
 diagnostics. Replacing or making the bound root unavailable can therefore drop
 later records, but cannot redirect them into the replacement or change the
 compact report, established stderr lines, propagated process control, or exit
-status. Implicit smoke instead owns and removes its temporary workspace.
+status. This does not identity-pin ordinary smoke artifacts; their ordinary
+`Workspace` I/O is pathname-based and may observe the replacement. Implicit
+smoke instead owns and removes its temporary workspace.
 
 A guarded weak process-wide lock serializes writers for one resolved workspace.
 After the safe-primitive and directory checks pass, an independent persistent

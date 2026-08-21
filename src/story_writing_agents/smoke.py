@@ -656,7 +656,7 @@ def _run_provider_free_smoke_in_workspace(
             session_id,
             "[SYS: LANG=EN]",
         )
-        fresh_runtime = StoryRuntime(Workspace(workspace.root))
+        fresh_runtime = StoryRuntime(workspace)
         _verify_directive(fresh_runtime, session_id)
         completed_checks.append(_CHECK_NAMES[1])
 
@@ -870,16 +870,15 @@ async def _exercise_provider_free_conversation_and_consensus(
     )
     completed_checks.append(_CHECK_NAMES[4])
 
-    fresh_workspace = Workspace(workspace.root)
-    fresh_catalog = FilesystemConversationCatalog(fresh_workspace)
+    fresh_catalog = FilesystemConversationCatalog(workspace)
     fresh_store = FilesystemConversationEventStore(
-        fresh_workspace,
+        workspace,
         catalog=fresh_catalog,
     )
     fresh_backend = _SmokeBackend(session_id, debate_id)
     fresh_backend._binding_failed_check = _CHECK_NAMES[6]
     fresh_runtime = StoryRuntime(
-        fresh_workspace,
+        workspace,
         fresh_backend,
         conversation_event_store=fresh_store,
     )
@@ -922,7 +921,7 @@ async def _exercise_provider_free_conversation_and_consensus(
         source_events=source_events,
     )
     _verify_preconsensus_artifact_isolation(
-        fresh_workspace,
+        workspace,
         session_id=session_id,
         debate_id=debate_id,
         core_before=core_before,
@@ -1141,7 +1140,7 @@ def _verify_preconsensus_artifact_isolation(
     check name while workspace and filesystem failures propagate.
     """
 
-    runtime = StoryRuntime(Workspace(workspace.root))
+    runtime = StoryRuntime(workspace)
     _require(
         runtime.inspect_session(session_id)["debates"] == []
         and runtime.inspect_debate_context(session_id, debate_id) is None
@@ -1379,7 +1378,7 @@ def _verify_consensus_context(
 
     _require(bool(context.events), _CHECK_NAMES[7])
     conversation_id = context.events[0].conversation_id
-    sidecar = StoryRuntime(Workspace(workspace.root)).inspect_debate_context(
+    sidecar = StoryRuntime(workspace).inspect_debate_context(
         result.session_id,
         result.debate_id,
     )
@@ -1391,9 +1390,10 @@ def _verify_consensus_context(
         "retained_utf8_bytes": context.retained_utf8_bytes,
         "truncated": context.truncated,
     }
-    persisted_events = FilesystemConversationEventStore(
-        Workspace(workspace.root)
-    ).read(result.session_id, conversation_id)
+    persisted_events = FilesystemConversationEventStore(workspace).read(
+        result.session_id,
+        conversation_id,
+    )
     _require(
         len(backend.requests) == 10
         and all(
@@ -1509,7 +1509,7 @@ def _verify_consensus(workspace: Workspace, result: DebateResult) -> None:
     invariant and workspace failures propagate.
     """
 
-    inspected = StoryRuntime(Workspace(workspace.root)).inspect_debate(
+    inspected = StoryRuntime(workspace).inspect_debate(
         result.session_id,
         result.debate_id,
     )

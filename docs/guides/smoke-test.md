@@ -40,9 +40,10 @@ One run uses a single event loop and the ordinary runtime paths to:
    not created debate, manuscript, agent-state, or core-document changes;
 5. find the source once by exact subject and once by literal visible content,
    preserving match kinds and citations;
-6. reconstruct fresh workspace, catalog, event-store, runtime, backend, and
-   memory-service objects and observe the same directive, IDs, order,
-   transcripts, searches, and citations;
+6. construct fresh catalog, event-store, runtime, backend, and memory-service
+   objects, with every workspace-bound object borrowing the original
+   `Workspace`, then observe the same directive, IDs, order, transcripts,
+   searches, and citations;
 7. run a typed, bounded `search(1) -> read(2) -> answer(3)` retrieval turn in
    the second conversation, with trusted progress and answer sources equal to
    the authorized complete-pair citations;
@@ -61,11 +62,14 @@ The exact ordered `checks` array is part of the
 story smoke --workspace ./smoke-workspace
 ```
 
-Persistent CLI mode initializes one identity-bearing `Workspace` and passes
-that exact instance to the smoke workflow, which borrows and retains it. The CLI
-does not resolve the path again for handoff or post-failure diagnostics. Every
-run uses unique session, conversation, debate, manuscript, and per-agent state
-identifiers, so story artifacts from repeated runs do not collide. Debug records
+Persistent CLI mode initializes and retains one identity-bearing `Workspace`.
+The CLI owns its lifetime and passes that exact instance to the smoke workflow;
+the workflow and every newly constructed workspace-bound service borrow it.
+Here, “fresh” means a new service object, not a reopened workspace or rebound
+root identity. The CLI does not resolve the path again for handoff or
+post-failure diagnostics. Every run uses unique session, conversation, debate,
+manuscript, and per-agent state identifiers, so story artifacts from repeated
+runs do not collide. Debug records
 append to the shared bounded runtime log when storage succeeds and may rotate
 under its retention limit. The report identifies the retained workspace,
 session, and debate; inspect them with:
@@ -85,6 +89,12 @@ unavailable. Successfully written records contain no synthetic story content or
 provider stderr. The run preserves pre-existing core-document bytes and CLI
 default files, but the supplied workspace is not read-only. See
 [debug-log privacy](../operations/privacy-and-provider.md#workspace-debug-log-privacy).
+
+This identity continuity applies only to diagnostic storage: later records use
+the originally bound root or are dropped, never redirected to a replacement.
+Ordinary smoke artifact reads and writes retain the normal pathname-based
+`Workspace` behavior and may observe a real directory installed at the same
+root path. Do not rename or replace the workspace root during a run.
 
 ## Interpret failures
 

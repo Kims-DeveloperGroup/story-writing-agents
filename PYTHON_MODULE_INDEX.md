@@ -303,23 +303,23 @@ every intermediate arrow. The current runtime graph is acyclic.
   subject input remains an ordinary read, while composition and confirmation
   use history-free semantic input. The controller owns interactive backend
   cleanup after its session-lobby run begins, while the CLI closes a backend if
-  construction fails before that ownership transfer. Only after workspace
-  initialization or discovery succeeds, the CLI creates a workspace-bound
-  debug-log handle and best-effort records fixed command, context,
-  configuration, and workspace lifecycle facts or safe failures. For explicit
-  smoke, it initializes and retains one identity-bearing `Workspace`, marks the
-  fixed-hint boundary only after that initialization succeeds, independently
-  guards optional logger construction, and passes the exact workspace instance
-  to `smoke.run_smoke` without resolving the path again. Module-private trace
-  and error helpers, plus explicit-smoke handle acquisition, catch diagnostic
-  `BaseException` failures. Discovery and initialization failures remain
-  unlogged and retain their established output. A later caught explicit-smoke
-  `Exception` appends the fixed workspace-relative hint even when no logger or
-  record is available; other caught noninteractive exceptions append it when
-  their handle is available, while returned domain outcomes remain JSON-only.
-  Interactive startup failures add the corresponding fixed terminal notice.
-  Existing sanitized error text and exit behavior are otherwise unchanged, and
-  `debug_log` retains storage ownership.
+  construction fails before that ownership transfer. After workspace
+  initialization or discovery succeeds, the CLI independently marks later
+  failure-hint eligibility and attempts optional workspace-bound debug-log
+  handle construction through one `BaseException`-guarded helper. Interactive,
+  `init`, explicit-smoke, and ordinary resolved-workspace entry all use that
+  helper; module-private trace and error helpers accept an absent handle and
+  guard every submission. For explicit smoke, the CLI initializes and retains
+  one identity-bearing `Workspace` and passes that exact instance to
+  `smoke.run_smoke` without resolving the path again. Initialization,
+  discovery, argparse, and other pre-workspace failures, plus implicit smoke,
+  remain hint-free. A later caught eligible noninteractive `Exception` appends
+  the fixed workspace-relative hint even when no handle, record, or file is
+  available, while returned domain outcomes remain JSON-only. Interactive
+  startup failures after workspace discovery add the corresponding fixed
+  terminal notice independently of handle availability. Existing sanitized
+  error text and exit behavior are otherwise unchanged, and `debug_log`
+  retains storage ownership.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
   `tests/test_cli_context.py`, `tests/test_smoke_cli.py`, and
   `tests/test_interactive_pty.py` for primary process-level POSIX PTY
@@ -1443,12 +1443,14 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:** `src/story_writing_agents/orchestrator.py`
 - **Responsibility:** Coordinate provider-neutral runtime workflows across
   debates and advisory conversation turns.
-- **Supported surface:** Package-supported `StoryRuntime` and `RuntimeSession`,
-  including unchanged one-step `converse()`, additive bounded
-  `converse_with_retrieval()` with required scoped memory service and optional
-  synchronous progress sink, context-aware `run_prompt()` and `run_draft()`,
-  and the separate strict `inspect_debate_context()` accessor on both forms,
-  plus compatibility aliases `Runtime` and `Session`.
+- **Supported surface:** Package-supported `StoryRuntime` and `RuntimeSession`.
+  `StoryRuntime` exposes provider-free directive application, runtime-override
+  saving, and session/debate/context inspection; `RuntimeSession` supplies their
+  bound-session equivalents. Both forms retain unchanged one-step `converse()`,
+  additive bounded `converse_with_retrieval()` with required scoped memory
+  service and optional synchronous progress sink, context-aware `run_prompt()`
+  and `run_draft()`, and strict `inspect_debate_context()`, plus compatibility
+  aliases `Runtime` and `Session`.
 - **Direct internal dependencies:** `agents`, `backend`, `config`,
   `conversation_retrieval`, `conversation_search`, `debug_log`, `directives`,
   `conversations`, `errors`, `models`, `prompts`, `session_lifecycle`, and
@@ -1471,7 +1473,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   retrieval, consensus, and safe failure facts through runtime-private trace
   and error guards that catch diagnostic `BaseException` failures. Diagnostic
   calls preserve the established result, exception, cancellation, and
-  persistence behavior, while `debug_log` retains storage ownership.
+  persistence behavior, while `debug_log` retains storage ownership. For
+  synchronous `apply_directive`, `set_runtime_overrides`, `inspect_session`,
+  `inspect_debate`, and `inspect_debate_context`, an underlying
+  `KeyboardInterrupt` or `SystemExit` attempts exactly one
+  `cancelled`/`interrupted` record through that safe guard before a bare
+  re-raise preserves the identical object and originating traceback. Ordinary
+  failures retain `failed`/`failed`; successful directive/configuration calls
+  retain `succeeded`/`completed`, and successful inspections retain
+  `observed`/`completed`.
   It synchronously emits typed provider-neutral debate progress in lifecycle
   order, makes result and terminal state durable before terminal debate
   progress, preserves typed observer failures, and retains external
@@ -1602,14 +1612,19 @@ every intermediate arrow. The current runtime graph is acyclic.
   facts so runtime preparation exercises the canonical contract. Implicit mode
   owns, initializes, and removes one temporary `Workspace` and its bounded debug
   log after return or propagation. Explicit mode borrows the caller's exact
-  initialized identity-bearing `Workspace`, never reconstructs it from a path,
-  and leaves it retained. Logger-handle acquisition is optional and guarded
-  independently from the module-private trace and error submissions; diagnostic
-  `BaseException` failures cannot replace a smoke report or propagated
-  application failure. Explicit mode can therefore retain best-effort fixed
-  smoke lifecycle, completion, failure, or cancellation records without
-  redirecting a later attempt into a replacement root. `debug_log` retains
-  ownership of the diagnostic schema and storage.
+  initialized identity-bearing `Workspace` and leaves it retained. Every fresh
+  workspace-bound runtime, catalog, event store, memory service, and inspection
+  consumer borrows that exact instance rather than reconstructing or rebinding
+  one from its path; the provider-free backend remains a separate fresh service
+  without workspace ownership. Logger-handle acquisition is optional and
+  guarded independently from the module-private trace and error submissions;
+  diagnostic `BaseException` failures cannot replace a smoke report or
+  propagated application failure. Every diagnostic handle therefore retains
+  the original Workspace identity and either appends there or fails closed
+  instead of redirecting into a replacement root. Ordinary smoke artifact I/O
+  deliberately retains the established pathname-based, nontransactional
+  `Workspace` behavior and may observe a real-directory replacement. `debug_log`
+  retains ownership of the diagnostic schema and storage.
 - **Primary verification/documentation:** `tests/test_smoke_cli.py`,
   `docs/guides/smoke-test.md`, and `docs/reference/cli.md`.
 
@@ -1629,17 +1644,27 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Direct internal dependencies:** `agents`, `conversations`, `errors`, and
   `models`.
 - **State, resources, and side effects:** Owns topology, path and symlink
-  security, and each instance's immutable meaningful canonical-root identity.
-  Construction makes one nonmutating no-follow identity probe and retains no
-  descriptor: an existing directory binds immediately, a specifically missing
-  root remains pending for one binding attempt after `initialize()` creates it,
-  and an initially unsafe, non-directory, nonmeaningful, or otherwise unavailable
-  root fails closed without later rebinding, so helper access raises an ordinary
-  `OSError`. The package-internal helpers open and reverify the bound named root
-  and descriptor; once a meaningful identity is bound, a later named or opened
-  symlink, non-directory, or identity replacement raises
+  security, and each instance's canonical-root identity lifecycle. Construction
+  makes one nonmutating no-follow identity probe and retains no descriptor: an
+  existing directory binds immediately, while a specifically missing root
+  remains pending for the one permitted bind after `initialize()` creates the
+  root. If that post-creation bind cannot establish a meaningful directory
+  identity, the instance enters a private terminal failed-bind state and the
+  first and every later `initialize()` call raises the established
+  identity-unavailable `OSError` before child scaffold or default writes,
+  without retry or rebind; parent/root creation is not rolled back, and a new
+  `Workspace` performs its own construction probe. An existing root whose
+  initial probe is unavailable or nonmeaningful remains in the distinct
+  unavailable state: diagnostic helper access fails closed without rebinding,
+  while established pathname-based initialization may still scaffold it. The
+  package-internal helpers open and reverify the bound named root and descriptor;
+  once a meaningful identity is bound, a later named or opened symlink,
+  non-directory, or identity replacement raises
   `WorkspaceSecurityError`, while an unsupported safe primitive raises an
-  ordinary `OSError`. The module also owns strict UTF-8 and
+  ordinary `OSError`. Retained identity protects internal diagnostic storage,
+  not ordinary domain operations: public path I/O remains pathname-based and
+  nontransactional and may observe a real directory installed later at the same
+  root path. The module also owns strict UTF-8 and
   JSON I/O, overrides, agent and debate state, logs, results, per-conversation
   metadata under
   `discussion_logs/<session_id>/interactive/conversations/<conversation_id>/metadata.json`,
@@ -1695,13 +1720,22 @@ every intermediate arrow. The current runtime graph is acyclic.
   Process-control `BaseException` failures deliberately leave the low-level
   surface, and `backend`, `cli`, `interactive_controller._core`, `orchestrator`,
   and `smoke` each guard every trace and error call privately so diagnostics
-  never affect caller control flow. Explicit CLI smoke initializes and retains
-  one identity-bearing `Workspace`, passes that same instance to smoke, and
-  never resolves the path again for handoff or post-run diagnostics; implicit
-  smoke instead owns its temporary workspace lifecycle. CLI and smoke also
-  guard their independent diagnostic-handle acquisition. The diagnostics
+  never affect caller control flow. The five synchronous provider-free runtime
+  operations also attempt `cancelled`/`interrupted` records for application
+  `KeyboardInterrupt` or `SystemExit` before bare-reraising the identical
+  control. Explicit CLI smoke initializes and retains one identity-bearing
+  `Workspace`; smoke and every fresh workspace-bound service borrow that same
+  instance, so none can reacquire a replacement identity. Implicit smoke instead
+  owns its temporary workspace lifecycle. This diagnostic identity continuity
+  does not change ordinary pathname-based, nontransactional Workspace domain
+  I/O. CLI and smoke guard diagnostic-handle acquisition; CLI separately marks
+  hint eligibility after successful initialization or discovery, so an eligible
+  hint does not imply that a handle, record, or file exists. The diagnostics
   module is not re-exported by the project facade, and its import and handle
-  construction perform no filesystem operation. Backend emission begins only
+  construction perform no filesystem operation. A missing-root Workspace whose
+  one post-creation identity bind fails never retries and never writes child
+  scaffold/defaults on that instance, while an initially unavailable existing
+  root retains its distinct established behavior. Backend emission begins only
   after its existing configuration snapshot validates, while runtime handle
   construction emits no record. All five consumers use only the internal append
   surface; none assumes ownership of diagnostic files, locks, schema, or
