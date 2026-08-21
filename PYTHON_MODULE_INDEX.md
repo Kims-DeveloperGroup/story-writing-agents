@@ -1614,11 +1614,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   Construction makes one nonmutating no-follow identity probe and retains no
   descriptor: an existing directory binds immediately, a specifically missing
   root remains pending for one binding attempt after `initialize()` creates it,
-  and any other unavailable state fails closed without later rebinding. The
-  package-internal helpers open and reverify the bound named root and descriptor;
-  a replacement, symlink, non-directory, or identity mismatch raises
-  `WorkspaceSecurityError`, while an unavailable identity or unsupported safe
-  primitive raises an ordinary `OSError`. The module also owns strict UTF-8 and
+  and an initially unsafe, non-directory, nonmeaningful, or otherwise unavailable
+  root fails closed without later rebinding, so helper access raises an ordinary
+  `OSError`. The package-internal helpers open and reverify the bound named root
+  and descriptor; once a meaningful identity is bound, a later named or opened
+  symlink, non-directory, or identity replacement raises
+  `WorkspaceSecurityError`, while an unsupported safe primitive raises an
+  ordinary `OSError`. The module also owns strict UTF-8 and
   JSON I/O, overrides, agent and debate state, logs, results, per-conversation
   metadata under
   `discussion_logs/<session_id>/interactive/conversations/<conversation_id>/metadata.json`,
