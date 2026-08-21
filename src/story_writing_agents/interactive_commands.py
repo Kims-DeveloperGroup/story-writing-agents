@@ -308,7 +308,7 @@ _ACTION_FIELD_RULES: dict[
     ),
     ActionKind.CONVERSATION_USE: (
         frozenset({"argument"}),
-        frozenset({"argument"}),
+        _NO_FIELDS,
     ),
     ActionKind.CONVERSATION_SUBJECT: (
         frozenset({"argument"}),
@@ -429,7 +429,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
     ),
     CommandSpec(
         "Sessions",
-        "/session list | create NAME | open [NAME] | pause",
+        "/session list | create NAME | resume [NAME] | pause",
         (),
         False,
         False,
@@ -438,7 +438,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
     CommandSpec(
         "Conversations",
         (
-            "/conversation new [SUBJECT] | list [--all] [QUERY] | use ID | "
+            "/conversation new [SUBJECT] | list [--all] [QUERY] | resume [ID] | "
             "subject SUBJECT | archive [ID]"
         ),
         (),
@@ -527,14 +527,14 @@ _COMMAND_ALIASES: dict[str, str] = {
 _SESSION_COMMANDS: dict[str, str] = {
     "list": "/session list",
     "create": "/session create",
-    "open": "/session open",
+    "resume": "/session resume",
     "pause": "/session pause",
 }
 
 _CONVERSATION_COMMANDS: dict[str, str] = {
     "new": "/conversation new",
     "list": "/conversation list",
-    "use": "/conversation use",
+    "resume": "/conversation resume",
     "subject": "/conversation subject",
     "archive": "/conversation archive",
 }
@@ -550,7 +550,7 @@ def project_command_completion(
     buffer: str,
     cursor: int,
 ) -> CommandCompletionContext | None:
-    """Project the fixed command grammar active at one exact cursor boundary.
+    """Project fixed command or leading-route grammar at one cursor boundary.
 
     The result contains grammar-owned ordered literals and the complete active
     token span. It performs no parsing, fuzzy matching, catalog lookup, I/O, or
@@ -564,10 +564,20 @@ def project_command_completion(
         raise TypeError("cursor must be an integer")
     if cursor < 0 or cursor > len(buffer):
         raise ValueError("cursor must identify a buffer boundary")
-    if not buffer.startswith("/"):
+    if not buffer.startswith(("/", "@")):
         return None
 
     start, end = _completion_token_span(buffer, cursor)
+    if buffer.startswith("@"):
+        if start != 0:
+            return None
+        return _completion_context(
+            "routed.agent",
+            start,
+            end,
+            tuple(f"@{alias}" for alias in _agent_completion_replacements()),
+        )
+
     active_token = buffer[start:end]
     preceding = _completion_preceding_tokens(buffer, start)
 
@@ -925,8 +935,9 @@ def _parse_run(tail: str | None) -> InteractiveAction:
 def _parse_session(tail: str | None) -> InteractiveAction:
     """Parse exact session subcommands and token counts without I/O.
 
-    Valid list/create/open/pause forms return typed actions; unknown, unsafe, or
-    mis-sized forms return parse-error actions with suggestions when available.
+    Valid list/create/resume/pause forms return typed actions; unknown, unsafe,
+    or mis-sized forms return parse-error actions with suggestions when
+    available.
     """
 
     tokens = _tokens(tail)
@@ -952,15 +963,15 @@ def _parse_session(tail: str | None) -> InteractiveAction:
                 "/session create name must be a control-free token"
             )
         return InteractiveAction(ActionKind.SESSION_CREATE, argument=name)
-    if subcommand == "open":
+    if subcommand == "resume":
         if len(tokens) > 2:
-            return _parse_error("/session open accepts at most one name")
+            return _parse_error("/session resume accepts at most one name")
         if len(tokens) == 1:
             return InteractiveAction(ActionKind.SESSION_OPEN)
         name = tokens[1]
         if not _is_valid_token(name):
             return _parse_error(
-                "/session open name must be a control-free token"
+                "/session resume name must be a control-free token"
             )
         return InteractiveAction(ActionKind.SESSION_OPEN, argument=name)
 
@@ -1015,14 +1026,16 @@ def _parse_conversation(tail: str | None) -> InteractiveAction:
             )
         return InteractiveAction(ActionKind.CONVERSATION_LIST, argument=query)
 
-    if subcommand == "use":
+    if subcommand == "resume":
         tokens = _tokens(subcommand_tail)
-        if len(tokens) != 1:
-            return _parse_error("/conversation use requires exactly one ID")
+        if len(tokens) > 1:
+            return _parse_error("/conversation resume accepts at most one ID")
+        if not tokens:
+            return InteractiveAction(ActionKind.CONVERSATION_USE)
         conversation_id = tokens[0]
         if not _is_valid_token(conversation_id):
             return _parse_error(
-                "/conversation use ID must be a control-free token"
+                "/conversation resume ID must be a control-free token"
             )
         return InteractiveAction(
             ActionKind.CONVERSATION_USE,

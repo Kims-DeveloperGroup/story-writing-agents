@@ -5,8 +5,8 @@
 | Durable ↓ / process access → | `claimable` | `held_here` | `blocked_by_live_local_owner` | `ownership_unknown` |
 | --- | --- | --- | --- | --- |
 | `absent` | Create it. | Invalid | Invalid | Invalid |
-| `ready` | Open it. | Work when configured. | Close the local owner. | Verify; preserve claim. |
-| `paused` | Open to ready. | Valid, but work is paused. | Close the local owner. | Verify; preserve claim. |
+| `ready` | Resume it. | Work when configured. | Close the local owner. | Verify; preserve claim. |
+| `paused` | Resume to ready. | Valid, but work is paused. | Close the local owner. | Verify; preserve claim. |
 
 **Durable state** says missing, ready, or paused. **Process access** says
 claimable, held here, blocked locally, or unknown. The axes are independent;
@@ -16,6 +16,27 @@ claimable, held here, blocked locally, or unknown. The axes are independent;
 `session_id`, `durable_state`, `access_state`, `owner_hostname`, `owner_pid`,
 `created_at`, `updated_at`. Owner fields pair; persisted timestamps are ordered
 and offset-aware. A dead-local claim can be claimable while retaining owner facts.
+
+## What the shell state means to a user
+
+`/status` presents a snapshot, not one combined lifecycle label. Durable state
+answers whether provider work is intentionally available; process access
+answers whether this process may use it. A ready but claimable session therefore
+still cannot run provider work until this shell resumes and holds it. A paused
+session must become ready as part of resume. Blocked or unknown ownership cannot
+be bypassed from the shell.
+
+Defaults and current scope are also separate. A saved default only tells a
+later command or process which session or conversation to try. Current
+attachment is the session held now; current focus is the active conversation
+used now; agent focus chooses the ordinary advisory responder. Provider
+readiness is derived from validated configuration plus `ready` and `held_here`.
+It never acquires access or changes another field.
+
+Successful create/resume writes orientation with an `AttachmentKind` result:
+`created`, `opened` for an already-ready session, or `reopened` for a paused
+session made ready. Those result labels describe what happened; `opened` and
+`reopened` are not interactive command words.
 
 ## Defaults, process scope, and readiness
 
@@ -27,7 +48,7 @@ current scope.
 `provider_work_is_ready()` is pure: exact `True` configuration + `ready` +
 `held_here`. Ready plus claimable reports readiness `no`.
 
-## Transition mechanism
+## Internal transition mechanism
 
 ```mermaid
 sequenceDiagram
@@ -64,8 +85,8 @@ end `ready` + `held_here`. Failure compensates only newly acquired access.
 | Facts or need | Command / stable failure | Exact next action |
 | --- | --- | --- |
 | Missing | `/session create NAME`; `story session create SESSION` | `Create a session.` |
-| Ready + claimable | `/session open [NAME]`; `story session reopen [SESSION]` | `Open the session.` |
-| Paused + claimable/held here | `SessionPausedError` / `session_paused` | `Open the session to make it ready.` |
+| Ready + claimable | `/session resume [NAME]`; `story session reopen [SESSION]` | `Resume the session.` |
+| Paused + claimable/held here | `SessionPausedError` / `session_paused` | `Resume the session to make it ready.` |
 | Live local owner | `SessionAccessBlockedError` / `session_access_blocked` | `Close the owning local process normally, then retry.` |
 | Unknown owner | `SessionOwnershipUnknownError` / `session_ownership_unknown` | `Verify ownership; do not remove the access claim.` |
 | Invalid provider setup | `ConfigurationError` or `BackendProtocolError` / `provider_preflight_failed` | `Repair provider configuration, then retry.` |
@@ -88,14 +109,31 @@ default. Lifecycle commands have no `--session`.
 
 ## Shell transitions and compensation
 
-Bare `story` opens a ready default and asks before reopening paused state.
-`story chat SESSION` creates or opens; `/session open` never creates. Switching
-acquires the destination, loads/saves defaults, releases the source, then commits
+Bare `story` resumes a ready default and asks for confirmation before resuming a
+paused default. `story chat SESSION` creates an absent session or resumes a
+persisted session; `/session resume` never creates. Switching validates
+configuration and lifecycle, acquires or durably reopens the
+destination, performs correlated post-validation, loads destination focus,
+persists the destination default, releases the source, then commits in-memory
 attachment/focus and resets agent focus to `lead`.
+
+Snapshot/highlight work, cancel, and rejection before acquisition are
+mutation-free. The later sequence is not transactional: a successful
+paused-to-ready reopen is not rolled back if focus loading, default persistence,
+source release, or another later step fails. Later failure releases newly
+acquired destination access where possible and does not advance in-memory
+attachment/focus, but durable lifecycle/default rollback is not promised. A
+reported default-write failure may follow `os.replace`; inspect persisted state
+instead of assuming the old value. Source-release failure after default
+persistence is fatal `cleanup_failed`, and the new default remains. The
+standalone automation command remains `story session reopen`; it is distinct
+from interactive grammar.
 
 <a id="conversation-lifecycle-and-compensation"></a>
 
-Conversation create/use saves its default before changing current focus.
+Conversation creation or resume saves its default before changing current
+focus. A reported save failure leaves in-memory focus unchanged but may occur
+after replacement of the persisted default, which must then be inspected.
 Archiving focused content saves another active default or `null`; save failure
 restores archive state only while ready access remains proved.
 

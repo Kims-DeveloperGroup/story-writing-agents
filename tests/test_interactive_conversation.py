@@ -1071,10 +1071,10 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
             "/to character",
             "/conversation new Created",
             "/conversation subject Renamed",
-            f"/conversation use {source_a.conversation_id}",
+            f"/conversation resume {source_a.conversation_id}",
             "/conversation archive",
             "yes",
-            "/session open destination",
+            "/session resume destination",
             "/quit",
             catalog=catalog,
             runtime=runtime,
@@ -1169,7 +1169,7 @@ class FailureAndResultTests(InteractiveConversationTestCase):
                 reads: list[object] = ["first"]
                 if isinstance(failure, ConversationNotFoundError):
                     reads.append(
-                        f"/conversation use {selected.conversation_id}"
+                        f"/conversation resume {selected.conversation_id}"
                     )
                 reads.extend(("second", "/quit"))
                 controller, _backend, callbacks, _store, _factory = (
@@ -1329,9 +1329,10 @@ class RealRetainedRuntimeTests(InteractiveConversationTestCase):
             workspace,
             "first",
             "@plot second",
-            f"/conversation use {second.conversation_id}",
+            "/conversation resume",
+            "2",
             "@character third",
-            f"/conversation use {first.conversation_id}",
+            f"/conversation resume {first.conversation_id}",
             "/to execution",
             "/say /run literal",
             "/quit",

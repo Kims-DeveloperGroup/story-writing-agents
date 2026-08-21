@@ -1198,7 +1198,7 @@ class PickerDriverTests(unittest.TestCase):
                     self.assertNotIn("[cancelled]", rendered)
                     self.assertEqual(
                         output.records[-1],
-                        "\r\x1b[A\x1b[A\r\x1b[J\n",
+                        "\r\x1b[A\x1b[A\r\x1b[J",
                     )
                 else:
                     self.assertIn(final_marker, rendered)
@@ -1556,7 +1556,7 @@ class PickerDriverTests(unittest.TestCase):
 class PickerAdapterCompatibilityTests(unittest.TestCase):
     """Lock callback/stream binding and unchanged public/module boundaries."""
 
-    def test_callback_adapter_is_resource_free_retries_and_writes_one_final_frame(self) -> None:
+    def test_callback_adapter_is_resource_free_retries_without_synthetic_output(self) -> None:
         prompts: list[str] = []
         answers = iter(("2", ""))
         writes: list[str] = []
@@ -1587,11 +1587,7 @@ class PickerAdapterCompatibilityTests(unittest.TestCase):
             self.assertIn("2. [disabled] Beta", prompt)
             self.assertIn("3. [highlighted] Gamma", prompt)
             self.assertNotIn("secret-", prompt)
-        self.assertEqual(len(writes), 1)
-        self.assertIn("[completed]", writes[0])
-        self.assertIn("3. [selected] [highlighted] Gamma", writes[0])
-        self.assertNotIn("[validation]", writes[0])
-        self.assertNotIn("secret-", writes[0])
+        self.assertEqual(writes, [])
 
     def test_callback_terminal_events_failures_and_validation_do_not_synthesize_output(self) -> None:
         choices = (Choice("one", "One"),)
@@ -1612,11 +1608,14 @@ class PickerAdapterCompatibilityTests(unittest.TestCase):
                 self.assertEqual(writes, [])
 
         writer = mock.Mock(side_effect=RuntimeError("writer failed"))
-        with self.assertRaisesRegex(RuntimeError, "writer failed"):
-            InteractivePickerInput(
-                InteractiveTerminal(lambda _prompt: "1", writer)
-            ).read_picker(Prompt("Choose"), choices)
-        writer.assert_called_once()
+        outcome = InteractivePickerInput(
+            InteractiveTerminal(lambda _prompt: "1", writer)
+        ).read_picker(Prompt("Choose"), choices)
+        self.assertEqual(
+            outcome,
+            ControlOutcome(ControlOutcomeKind.COMMIT, text="one"),
+        )
+        writer.assert_not_called()
 
         read_line = mock.Mock(side_effect=AssertionError("must not read"))
         write_text = mock.Mock(side_effect=AssertionError("must not write"))
@@ -1667,6 +1666,7 @@ class PickerAdapterCompatibilityTests(unittest.TestCase):
             project_picker_viewport,
             render_picker_viewport,
             render_picker_fallback,
+            transient=True,
         )
         self.assertEqual(factory.call_count, 1)
 

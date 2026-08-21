@@ -221,18 +221,16 @@ dual-TTY guard still exits before editor construction. Recoverable activation
 failure restores first, then falls back.
 
 One unified driver instance is the sole owner of raw terminal resources. The
-terminal supplies the canonical completion provider and semantic palette
-renderer to the supported main read, or the composition/empty-confirmation
-suggestion provider and semantic input renderer to a history-free read. Its
-package-internal picker adapter supplies picker transitions, viewport
-projection, and live/fallback renderers to the driver's dedicated picker read;
-its cancellable-prompt adapter supplies the settings free-text/numeric route.
-Every collaborator is call-local; the driver retains no provider, renderer, or
-operation mode. The terminal routes completed main, composition,
-confirmation, picker, and settings prompt reads explicitly, without inspecting
-prompt text, while subject input remains on the ordinary reader. The standalone
-line-editor compatibility facade delegates to this same main reader and driver
-implementation.
+terminal supplies canonical static completion, a call-local controller choice
+provider, and the semantic palette renderer to the supported main read. The
+composition/empty-confirmation routes supply their own semantic input renderer
+to history-free reads. Package-internal picker and cancellable-prompt adapters
+supply pure transitions and live/fallback renderers to the same driver. Every
+collaborator is call-local; the driver retains no provider, renderer, catalog,
+or operation mode. Main, composition, confirmation, picker, and prompt reads are
+routed explicitly without inspecting prompt text. Conversation-subject input
+always remains on the ordinary reader. The standalone line-editor compatibility
+facade delegates to this same main reader and driver implementation.
 
 An active read disables canonical input and echo, keeps a Unicode code-point
 buffer, and supports insertion, Left/Right, Home/End, Backspace/Delete, Enter,
@@ -245,37 +243,45 @@ It creates no second reader, thread, or sleep loop.
 
 On main input, closed-palette Up/Down navigates the driver's history. An open
 palette instead owns Up/Down highlight movement, Tab completion, and Escape
-dismissal/restoration; Shift-Tab has no action. Composition and confirmation
-remain history-free, and Up/Down, Tab, Shift-Tab, and Escape are no-ops there.
+dismissal/restoration; Shift-Tab has no action. A controller-owned resume-choice
+palette makes Tab a no-op and Enter commit the highlighted complete explicit
+command immediately. Static highlighted Enter only completes, dismisses the
+palette, and leaves the read active for a later submit. Composition and
+confirmation remain history-free, and Up/Down, Tab, Shift-Tab, and Escape are
+no-ops there.
 The separate internal picker uses Up/Down for disabled-skipping clamped
 highlight movement, Enter to commit, and Escape to cancel; edit and completion
 keys are no-ops. The settings prompt uses ordinary line editing, but Escape has
 a distinct nested-cancel outcome. Neither route consults history or completion
 state.
-Enter submits; VEOF submits nonempty text or returns EOF when empty; VINTR
-returns interrupt.
-Submission clears the panel; failure attempts it; both restore captured
-attributes. A successful live main commit is appended only after display
-cleanup and terminal restoration complete. Active failures propagate after
-restoration; restoration uncertainty is fatal `internal_error`. See the exact
+Enter submits when no highlighted static completion is open; VEOF submits
+nonempty text or returns EOF when empty; VINTR returns interrupt.
+
+A complete live frame comprises every row and terminal cell drawn for one
+capable input read: semantic context and prompt, editable buffer, suggestions or
+choices, validation, and redraws. Before any capable main, composition,
+confirmation, picker, or prompt read returns on submit/commit, cancel,
+interrupt, or EOF—or propagates a read, render, write, flush, or decode
+failure—the driver attempts to clear that entire frame and restore all captured
+attributes. A successful live main commit is appended only after cleanup and
+restoration complete. Active failures propagate after restoration; restoration
+uncertainty is fatal `internal_error`. Completion-only Enter has not returned,
+so its frame remains active and no history entry exists yet. See the exact
 [main](../reference/interactive-terminal.md#main-prompt-live-suggestions) and
 [composition](../reference/interactive-terminal.md#composition-live-suggestions)
 tokens.
-
-When that committed live action is `/settings`, the controller then consumes
-the correlated display token once and clears only the committed rows before
-opening settings. This never deletes or rewrites the already appended main
-history entry. Callback and ordinary-line fallback cannot erase prior rows, so
-the committed line remains visible and the fallback makes no false cleanup
-claim; history behavior is unchanged.
 
 Main palette projection, filtering, highlight, replacement, snapshot restore,
 and dismissal call no parser, story provider, runtime, filesystem, persistence,
 subprocess, storage, or network. They change only call-local editor/terminal
 state; the exact visible buffer is passed once to the terminal/controller
 boundary. Canonical command grammar supplies only static root, subcommand, and
-finite fixed-option candidates. Composition remains a preview-only fixed
-ordered `/send`, `/cancel` set, and whitespace or a nonmatch clears it.
+finite fixed-option candidates. For exact omitted resume commands, the
+controller alone reads catalogs and supplies disposable ordered rows; the
+terminal neither authorizes nor mutates them. The controller freshly validates
+a committed choice before lifecycle/default/focus/routing changes. Composition
+remains a preview-only fixed ordered `/send`, `/cancel` set, and whitespace or a
+nonmatch clears it.
 
 Before input, composition and confirmation each build one ordered semantic view
 whose final control is focused. The renderer is pure and produces equivalent
@@ -288,26 +294,29 @@ cursor, and preview state call-local. Confirmation supplies no suggestions.
 picker at a time and for context-free history-free text/numeric prompts. Picker
 Escape returns from a nested editor or
 cancels at top level according to controller-owned focus. Prompt Escape returns
-from the nested editor; Ctrl-C and EOF cancel the whole workflow. No settings
-input is added to main history or command completion. Settings alone opts into
-transient picker/prompt reads: capable streams clear the transient rows before
-returning, callback and line fallback cannot erase and therefore omit duplicate
-synthetic picker final frames, and nested Escape returns silently without a
-snapshot or cancellation record. Save and Cancel each open a transient yes/no
-confirmation. Its context shows only changed Current/Pending fields, marks
+from the nested editor; Ctrl-C and EOF cancel the whole workflow. Nested
+settings input does not navigate or mutate main history and receives no command
+completion. These reads follow the same universal capable cleanup and
+honest fallback visibility as every other input route; nested Escape returns
+silently without a snapshot or cancellation record. Save and Cancel each open a
+transient yes/no confirmation. Its context shows only changed Current/Pending
+fields and marks
 each displayed value `(Changed)`, and shows `No pending settings changes.` when
 there is no diff. `yes`/`y` commits the requested action; `no`/`n`, blank, or
 nested Escape returns to the settings picker; invalid input retries with a
 trusted notice. Top-level cancellation does not claim a snapshot that was not
-rendered. The default non-settings picker/prompt lifecycle remains unchanged.
+rendered.
 
 Capable main reads render the existing semantic `SuggestionPalette` in plain or
 fixed ANSI at the active width. `NO_COLOR` removes only decoration. Opening
 sets the first highlight; open-palette Up/Down clamps highlight without
-history movement, Tab replaces the full cursor-active token without whitespace,
-and Escape restores the first pre-completion snapshot and dismisses that exact
-line state. Plain fallback bypasses the completion provider, palette projector,
-and renderer completely; it receives the prompt once and returns one line.
+history movement. For static suggestions, Tab replaces the full cursor-active
+token and adds one ASCII space only when that token ended at the buffer end;
+Escape restores the first pre-completion snapshot and dismisses that exact line
+state. Dynamic resume choices make Tab a no-op and Escape leave the omitted
+buffer unchanged. Plain fallback bypasses the completion/choice providers,
+palette projector, and renderer completely; it receives the prompt once and
+returns one line.
 
 The internal picker has its own safe fallback grammar: exact `/cancel`, blank
 for the current enabled highlight, or an in-range enabled ASCII decimal ordinal
@@ -316,21 +325,33 @@ exact validation notice. Callback, non-TTY, `TERM=dumb`, non-POSIX, uncertain
 capability, and recovered activation paths use this full numbered fallback; it
 does not acquire raw input or expose choice identities. See the exact
 [picker contract](../reference/interactive-terminal.md#generic-internal-picker-foundation).
+For every submitted omitted resume, the main reader records the omitted command
+whether its fresh choice read opens a picker, reports empty, or reports an
+error. When eligible rows open a picker, its answer is history-free; the picker
+is live and transient on capable streams and numbered in line fallback. Picker
+cancellation and rejection before acquisition or default persistence are
+mutation-free, but a later
+session-transition failure does not promise durable lifecycle/default rollback.
+See the [session transition contract](../design/session-lifecycle.md#shell-transitions-and-compensation).
+Persistent cancellation/error records are controller output.
 
 The cancellable settings prompt uses ordinary one-line fallback: an exact ESC
 line cancels that nested editor, while `/cancel` is literal data. Enter commits
 the exact line, KeyboardInterrupt is interrupt, and EOF remains distinct.
 
-A default picker commit or cancel clears/redraws and writes exactly one final
-semantic `completed` or `cancelled` frame. Configured VINTR/Ctrl-C and
-VEOF/physical EOF return typed internal outcomes after clearing the transient
-display, without a final picker frame. Settings opts into the transient
-lifecycle: capable reads clear before returning, and fallback readers omit the
-synthetic final picker frame they cannot erase. Read, render, write, flush, or
-decoding failures likewise attempt display cleanup and restore captured
-attributes before propagating; restoration uncertainty remains fatal. No second
-reader, thread, sleep loop, history store, or completion store is introduced,
-and non-settings calls retain the default behavior.
+Pure picker controls retain internal `completed` or `cancelled` outcome states,
+but supported terminal adapters never render a final control frame. Capable
+reads clear before every return; fallback readers keep printed prompt/input and
+add no synthetic frame. Read, render, write, flush, or decoding failures likewise
+attempt complete-frame cleanup and restore captured attributes before
+propagating; restoration uncertainty remains fatal. Persistent controller
+validation, cancellation, discard, error, orientation, and result records are
+separate semantic output and are not erased. No second reader, thread, sleep
+loop, history store, or completion store is introduced.
+
+If the output channel itself fails, the driver can only attempt the erase; it
+does not claim terminal bytes it could not write. Attribute restoration is
+still attempted, and uncertainty about restoration remains fatal.
 
 ## Other input and process-local state
 

@@ -154,7 +154,7 @@ ACTION_RULES = {
     ActionKind.CONVERSATION_NEW: ({"argument"}, set()),
     ActionKind.CONVERSATION_LIST: ({"argument"}, set()),
     ActionKind.CONVERSATION_LIST_ALL: ({"argument"}, set()),
-    ActionKind.CONVERSATION_USE: ({"argument"}, {"argument"}),
+    ActionKind.CONVERSATION_USE: ({"argument"}, set()),
     ActionKind.CONVERSATION_SUBJECT: ({"argument"}, {"argument"}),
     ActionKind.CONVERSATION_ARCHIVE: ({"argument"}, set()),
     ActionKind.HELP: ({"argument"}, set()),
@@ -493,7 +493,7 @@ class CommandRegistryTests(unittest.TestCase):
             ),
             CommandSpec(
                 "Sessions",
-                "/session list | create NAME | open [NAME] | pause",
+                "/session list | create NAME | resume [NAME] | pause",
                 (),
                 False,
                 False,
@@ -503,7 +503,7 @@ class CommandRegistryTests(unittest.TestCase):
                 "Conversations",
                 (
                     "/conversation new [SUBJECT] | list [--all] [QUERY] | "
-                    "use ID | subject SUBJECT | archive [ID]"
+                    "resume [ID] | subject SUBJECT | archive [ID]"
                 ),
                 (),
                 False,
@@ -555,6 +555,9 @@ class CommandRegistryTests(unittest.TestCase):
         )
         self.assertIsInstance(COMMANDS, tuple)
         self.assertEqual(COMMANDS, expected)
+        advertised = "\n".join(spec.syntax for spec in COMMANDS)
+        self.assertNotIn("/session open", advertised)
+        self.assertNotIn("/conversation use", advertised)
 
     def test_registry_names_aliases_and_capability_flags_are_consistent(
         self,
@@ -694,7 +697,7 @@ class SuccessfulParsingTests(unittest.TestCase):
                 InteractiveAction(ActionKind.SESSION_CREATE, argument="chapter-01"),
             ),
             (
-                "/session open chapter-01",
+                "/session resume chapter-01",
                 InteractiveAction(
                     ActionKind.SESSION_OPEN,
                     argument="chapter-01",
@@ -723,7 +726,7 @@ class SuccessfulParsingTests(unittest.TestCase):
                 ),
             ),
             (
-                "/conversation use c_0123456789abcdef",
+                "/conversation resume c_0123456789abcdef",
                 InteractiveAction(
                     ActionKind.CONVERSATION_USE,
                     argument="c_0123456789abcdef",
@@ -833,7 +836,7 @@ class SuccessfulParsingTests(unittest.TestCase):
             ("/inspect ", InteractiveAction(ActionKind.INSPECT)),
             ("/history\t\t", InteractiveAction(ActionKind.HISTORY)),
             (
-                "/session open ",
+                "/session resume ",
                 InteractiveAction(ActionKind.SESSION_OPEN),
             ),
             (
@@ -847,6 +850,10 @@ class SuccessfulParsingTests(unittest.TestCase):
             (
                 "/conversation list --all ",
                 InteractiveAction(ActionKind.CONVERSATION_LIST_ALL),
+            ),
+            (
+                "/conversation resume ",
+                InteractiveAction(ActionKind.CONVERSATION_USE),
             ),
             (
                 "/conversation archive\t",
@@ -1037,7 +1044,11 @@ class InvalidInputTests(ParserAssertions, unittest.TestCase):
                 ),
             ),
             (
-                "/conversation use ../unsafe",
+                "/conversation resume",
+                InteractiveAction(ActionKind.CONVERSATION_USE),
+            ),
+            (
+                "/conversation resume ../unsafe",
                 InteractiveAction(
                     ActionKind.CONVERSATION_USE,
                     argument="../unsafe",
@@ -1067,7 +1078,8 @@ class InvalidInputTests(ParserAssertions, unittest.TestCase):
             "/conversation",
             "/conversation unknown",
             "/conversation use",
-            "/conversation use one two",
+            "/conversation use c_0123456789abcdef",
+            "/conversation resume one two",
             "/conversation subject",
             "/conversation subject   ",
             "/conversation archive one two",
@@ -1101,6 +1113,7 @@ class InvalidInputTests(ParserAssertions, unittest.TestCase):
             "/say\t\t",
             "@plot",
             "@plot   ",
+            "@plot\t\t",
             "/draft-file",
             "/draft-file\t\t",
             "/run --fresh",
@@ -1140,11 +1153,13 @@ class InvalidInputTests(ParserAssertions, unittest.TestCase):
             "/persona plot",
             "/persona plot name extra",
             "/session unknown",
+            "/session open",
+            "/session open chapter-01",
             "/session list extra",
             "/session create",
             "/session create   ",
             "/session create name extra",
-            "/session open name extra",
+            "/session resume name extra",
             "/session pause extra",
             "/help run extra",
             "/? run extra",
@@ -1184,7 +1199,7 @@ class InvalidInputTests(ParserAssertions, unittest.TestCase):
             "/language ko\x00KR",
             "/persona plot meticulous\x7f",
             "/session create chapter\vone",
-            "/session open chapter\u2003one",
+            "/session resume chapter\u2003one",
             "/inspect debate\x00one",
             "/to pl\x00ot",
         )
@@ -1551,6 +1566,12 @@ class CommandCompletionProjectionTests(unittest.TestCase):
         "character",
         "execution",
     )
+    MENTIONS = (
+        "@lead",
+        "@plot",
+        "@character",
+        "@execution",
+    )
 
     def test_context_model_is_exact_frozen_slotted_picklable_and_internal(self) -> None:
         self.assertEqual(
@@ -1570,13 +1591,14 @@ class CommandCompletionProjectionTests(unittest.TestCase):
     def test_exact_ordered_fixed_grammar_positions(self) -> None:
         cases = (
             ("/", 1, "root.command", 0, 1, self.ROOT),
+            ("@", 1, "routed.agent", 0, 1, self.MENTIONS),
             (
                 "/session ",
                 9,
                 "session.subcommand",
                 9,
                 9,
-                ("list", "create", "open", "pause"),
+                ("list", "create", "resume", "pause"),
             ),
             (
                 "/conversation ",
@@ -1584,7 +1606,7 @@ class CommandCompletionProjectionTests(unittest.TestCase):
                 "conversation.subcommand",
                 14,
                 14,
-                ("new", "list", "use", "subject", "archive"),
+                ("new", "list", "resume", "subject", "archive"),
             ),
             ("/to ", 4, "target.agent", 4, 4, self.AGENTS),
             ("/agent ", 7, "target.agent", 7, 7, self.AGENTS),
@@ -1614,6 +1636,8 @@ class CommandCompletionProjectionTests(unittest.TestCase):
     def test_complete_token_spans_include_suffix_at_and_after_delimiters(self) -> None:
         cases = (
             ("/session list", 9, "session.subcommand", 9, 13),
+            ("@plot message", 3, "routed.agent", 0, 5),
+            ("@plot\tmessage", 5, "routed.agent", 0, 5),
             ("/help run", 6, "help.command", 6, 9),
             ("/to plot_architect", 6, "target.agent", 4, 18),
             ("/persona character_custodian", 12, "persona.agent", 9, 28),
@@ -1636,6 +1660,14 @@ class CommandCompletionProjectionTests(unittest.TestCase):
                 )
 
         fixed_cases = (
+            (
+                "@plot message",
+                (1, 3, 5),
+                "routed.agent",
+                0,
+                5,
+                self.MENTIONS,
+            ),
             ("/run --fresh", (5, 8, 12), "run.flag", 5, 12, ("--fresh",)),
             (
                 "/conversation list --all",
@@ -1680,8 +1712,11 @@ class CommandCompletionProjectionTests(unittest.TestCase):
     def test_dynamic_and_invalid_grammar_positions_have_no_projection(self) -> None:
         cases = (
             ("", 0), ("ordinary", 3), (" /", 2), ("/say ", 5),
+            ("@plot ", 6), ("@plot message", 6),
+            ("@plot message", 13), ("message @pl", 11),
+            ("@plot @pl", 9), ("/say @pl", 8),
             ("/to plot ", 9), ("/persona plot ", 14),
-            ("/conversation use ", 18), ("/transcript --from ", 19),
+            ("/conversation resume ", 21), ("/transcript --from ", 19),
             ("/transcript c nope ", 19), ("/transcript c 0 ", 16),
             ("/session list ", 14), ("/HELP ", 6),
         )
@@ -1707,11 +1742,12 @@ class CommandCompletionProjectionTests(unittest.TestCase):
     ) -> None:
         for buffer, cursor, position, replacements in (
             ("/s", 2, "root.command", self.ROOT),
+            ("@pl", 3, "routed.agent", self.MENTIONS),
             (
                 "/session cr",
                 11,
                 "session.subcommand",
-                ("list", "create", "open", "pause"),
+                ("list", "create", "resume", "pause"),
             ),
             ("/to pl", 6, "target.agent", self.AGENTS),
             ("/help ru", 8, "help.command", self.HELP),
