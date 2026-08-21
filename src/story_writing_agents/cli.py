@@ -676,8 +676,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             )
             if debug_log is not None:
-                _trace_cli_completion(
+                _trace_cli(
                     debug_log,
+                    DebugOperation.CLI_COMMAND,
+                    (
+                        DebugPhase.SUCCEEDED
+                        if exit_code == 0
+                        else DebugPhase.FAILED
+                    ),
                     outcome=(
                         DebugOutcome.COMPLETED
                         if exit_code == 0
