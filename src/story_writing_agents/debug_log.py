@@ -480,8 +480,9 @@ def _append_under_guard(workspace: Workspace, directory: Path, payload: bytes) -
         os.replace(active, backups[0])
 
     descriptor = _open_verified_regular_file(active, read_write=False)
-    prior_size = os.fstat(descriptor).st_size
+    prior_size: int | None = None
     try:
+        prior_size = os.fstat(descriptor).st_size
         remaining = memoryview(payload)
         while remaining:
             written = os.write(descriptor, remaining)
@@ -490,11 +491,12 @@ def _append_under_guard(workspace: Workspace, directory: Path, payload: bytes) -
             remaining = remaining[written:]
         os.fsync(descriptor)
     except BaseException:
-        try:
-            os.ftruncate(descriptor, prior_size)
-            os.fsync(descriptor)
-        except BaseException:
-            pass
+        if prior_size is not None:
+            try:
+                os.ftruncate(descriptor, prior_size)
+                os.fsync(descriptor)
+            except BaseException:
+                pass
         raise
     finally:
         os.close(descriptor)
