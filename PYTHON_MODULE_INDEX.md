@@ -309,10 +309,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   configuration, and workspace lifecycle facts or safe failures. Module-private
   trace and error helpers catch diagnostic `BaseException` failures. Discovery
   and initialization failures remain unlogged and retain their established
-  output; later noninteractive failures append one fixed workspace-relative
-  debug-log hint to stderr, and interactive startup failures add the
-  corresponding fixed terminal notice. Existing sanitized error text and exit
-  behavior are otherwise unchanged, and `debug_log` retains storage ownership.
+  output; later caught noninteractive exceptions append one fixed
+  workspace-relative debug-log hint to stderr when that handle is available,
+  while returned domain outcomes remain JSON-only. Interactive startup failures
+  add the corresponding fixed terminal notice. Existing sanitized error text
+  and exit behavior are otherwise unchanged, and `debug_log` retains storage
+  ownership.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
   `tests/test_cli_context.py`, `tests/test_smoke_cli.py`, and
   `tests/test_interactive_pty.py` for primary process-level POSIX PTY
