@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import contextlib
 import errno
 import inspect
 import json
@@ -160,6 +161,31 @@ def _hard_link_or_skip(
     )
     test_case.assertEqual(source_after.st_nlink, before.st_nlink + 1)
     test_case.assertEqual(linked.st_nlink, source_after.st_nlink)
+
+
+def _fifo_or_skip(test_case: unittest.TestCase, path: Path) -> None:
+    """Create one real FIFO or skip only unsupported environments."""
+
+    mkfifo = getattr(os, "mkfifo", None)
+    if mkfifo is None:
+        test_case.skipTest("FIFO creation is unsupported")
+    unsupported = {
+        errno.EACCES,
+        errno.EPERM,
+        errno.EINVAL,
+        errno.ENOSYS,
+        getattr(errno, "ENOTSUP", errno.EINVAL),
+        getattr(errno, "EOPNOTSUPP", errno.EINVAL),
+    }
+    try:
+        mkfifo(path, 0o600)
+    except (AttributeError, NotImplementedError) as exc:
+        test_case.skipTest(f"FIFO creation is unsupported: {exc}")
+    except OSError as exc:
+        if exc.errno in unsupported:
+            test_case.skipTest(f"FIFO creation is unsupported: {exc}")
+        raise
+    test_case.assertTrue(path.is_fifo())
 
 
 class DebugLogContractTests(unittest.TestCase):
@@ -894,14 +920,150 @@ class DebugLogStorageTests(unittest.TestCase):
             outside_before = _file_link_snapshot(outside)
             namespace_before = _debug_namespace_snapshot(self.workspace)
 
-            _trace(self.log)
+            with mock.patch.object(
+                debug_module,
+                "_open_verified_regular_file",
+                side_effect=AssertionError("unsafe guard reached open"),
+            ) as opened:
+                _trace(self.log)
 
+            opened.assert_not_called()
             self.assertEqual(_file_link_snapshot(outside), outside_before)
             self.assertEqual(
                 _debug_namespace_snapshot(self.workspace),
                 namespace_before,
             )
             self.assertFalse(self.log.path.exists())
+
+    def test_fifo_guard_is_rejected_before_open_without_blocking(self) -> None:
+        guard = self.workspace.path(DEBUG_LOG_GUARD_RELATIVE_PATH)
+        _fifo_or_skip(self, guard)
+        namespace_before = _debug_namespace_snapshot(self.workspace)
+
+        with mock.patch.object(
+            debug_module,
+            "_open_verified_regular_file",
+            side_effect=AssertionError("FIFO guard reached open"),
+        ) as opened:
+            _trace(self.log)
+
+        opened.assert_not_called()
+        self.assertEqual(
+            _debug_namespace_snapshot(self.workspace),
+            namespace_before,
+        )
+        self.assertTrue(guard.is_fifo())
+        self.assertFalse(self.log.path.exists())
+
+    def test_oversized_single_link_guard_remains_usable_and_unmodified(
+        self,
+    ) -> None:
+        guard = self.workspace.path(DEBUG_LOG_GUARD_RELATIVE_PATH)
+        guard.write_bytes(b"g" * (DEBUG_LOG_MAX_BYTES + 1))
+        guard_before = _file_link_snapshot(guard)
+        self.assertEqual(guard_before[3], 1)
+
+        _trace(self.log, session_id="oversized_guard")
+
+        self.assertEqual(_file_link_snapshot(guard), guard_before)
+        self.assertEqual(
+            [record["session_id"] for record in _records(self.workspace)],
+            ["oversized_guard"],
+        )
+
+    @unittest.skipUnless(
+        os.name == "posix",
+        "requires replacing an open guard pathname",
+    )
+    def test_guard_mutations_after_precheck_are_rejected_by_later_identity_checks(
+        self,
+    ) -> None:
+        for stage in ("post_open", "post_lock"):
+            with self.subTest(stage=stage):
+                workspace = initialized_workspace(self)
+                log = WorkspaceDebugLog(workspace)
+                guard = workspace.path(DEBUG_LOG_GUARD_RELATIVE_PATH)
+                active = workspace.path(DEBUG_LOG_RELATIVE_PATH)
+                replacement = workspace.path(
+                    f"{DEBUG_LOG_DIRECTORY}/replacement-{stage}"
+                )
+                guard.write_bytes(b"original guard")
+                replacement.write_bytes(f"replacement {stage}".encode("ascii"))
+                namespace_after_mutation: dict[
+                    str,
+                    tuple[int, int, int, int, bytes | None],
+                ] = {}
+
+                def replace_guard() -> None:
+                    os.replace(replacement, guard)
+                    namespace_after_mutation.update(
+                        _debug_namespace_snapshot(workspace)
+                    )
+
+                append_patch = mock.patch.object(
+                    debug_module,
+                    "_append_under_guard",
+                    side_effect=AssertionError("mutated guard reached append"),
+                )
+                if stage == "post_open":
+                    real_open = os.open
+
+                    def open_then_replace(
+                        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+                        flags: int,
+                        mode: int = 0o777,
+                    ) -> int:
+                        descriptor = real_open(path, flags, mode)
+                        if Path(path) == guard:
+                            replace_guard()
+                        return descriptor
+
+                    mutation_patch = mock.patch.object(
+                        debug_module.os,
+                        "open",
+                        side_effect=open_then_replace,
+                    )
+                    acquire_patch = mock.patch.object(
+                        debug_module,
+                        "_acquire_advisory_lock",
+                        side_effect=AssertionError(
+                            "post-open mutation reached locking"
+                        ),
+                    )
+                else:
+
+                    def lock_then_replace(
+                        _descriptor: int,
+                        *,
+                        timeout_seconds: float,
+                    ) -> bool:
+                        self.assertGreaterEqual(timeout_seconds, 0.0)
+                        replace_guard()
+                        return True
+
+                    mutation_patch = mock.patch.object(
+                        debug_module,
+                        "_acquire_advisory_lock",
+                        side_effect=lock_then_replace,
+                    )
+                    acquire_patch = contextlib.nullcontext()
+
+                with (
+                    mutation_patch,
+                    acquire_patch as acquire,
+                    append_patch as append,
+                ):
+                    _trace(log)
+
+                if stage == "post_open":
+                    acquire.assert_not_called()
+                append.assert_not_called()
+                self.assertTrue(namespace_after_mutation)
+                self.assertEqual(
+                    _debug_namespace_snapshot(workspace),
+                    namespace_after_mutation,
+                )
+                self.assertFalse(active.exists())
 
     def test_hard_linked_active_drops_append_and_rotation_without_mutation(
         self,
@@ -1007,7 +1169,15 @@ class DebugLogStorageTests(unittest.TestCase):
                 workspace.path(relative).mkdir()
                 guard = workspace.path(DEBUG_LOG_GUARD_RELATIVE_PATH)
                 before = _debug_namespace_snapshot(workspace)
-                _trace(WorkspaceDebugLog(workspace))
+                with mock.patch.object(
+                    debug_module,
+                    "_open_verified_regular_file",
+                    side_effect=AssertionError(
+                        "nonregular path reached open"
+                    ),
+                ) as opened:
+                    _trace(WorkspaceDebugLog(workspace))
+                opened.assert_not_called()
                 self.assertEqual(_debug_namespace_snapshot(workspace), before)
                 self.assertTrue(workspace.path(relative).is_dir())
                 if relative != DEBUG_LOG_GUARD_RELATIVE_PATH:
