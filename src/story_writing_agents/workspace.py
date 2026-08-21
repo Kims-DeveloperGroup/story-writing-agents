@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
+import stat
 import tempfile
 import threading
 import weakref
 from datetime import UTC, datetime
 from pathlib import Path
+from types import TracebackType
 from typing import Any, Callable, Mapping
 from uuid import uuid4
 
@@ -66,6 +69,8 @@ _CONVERSATION_METADATA_FIELDS = frozenset({
     "updated_at",
 })
 _CONVERSATION_ID_ALLOCATION_ATTEMPTS = 16
+_WORKSPACE_ROOT_IDENTITY_PENDING = object()
+_WORKSPACE_ROOT_IDENTITY_UNAVAILABLE = object()
 _CONVERSATION_EVENT_FIELDS = frozenset({
     "schema_version",
     "session_id",
@@ -191,6 +196,7 @@ class Workspace:
 
     def __init__(self, root: str | os.PathLike[str]) -> None:
         self.root = Path(root).expanduser().resolve()
+        self._root_identity = _probe_workspace_root_identity(self.root)
 
     @staticmethod
     def validate_identifier(value: str, *, label: str = "session ID") -> str:
@@ -214,6 +220,7 @@ class Workspace:
         if not isinstance(overwrite_prompts, bool):
             raise TypeError("overwrite_prompts must be a boolean")
         self.root.mkdir(parents=True, exist_ok=True)
+        _bind_pending_workspace_root_identity(self)
         for relative in WORKSPACE_DIRECTORIES:
             self._directory(relative).mkdir(parents=True, exist_ok=True)
 
@@ -2099,3 +2106,159 @@ def initialize_workspace(
     """Public idempotent initializer."""
 
     return Workspace(root).initialize(overwrite_prompts=overwrite_prompts)
+
+
+def open_workspace_root_directory(workspace: Workspace) -> int:
+    """Open and verify the canonical identity-bound workspace root."""
+
+    _require_workspace_root_identity(workspace)
+    _require_workspace_root_directory_operations()
+    flags = os.O_RDONLY
+    for name in (
+        "O_CLOEXEC",
+        "O_NOINHERIT",
+        "O_BINARY",
+        "O_DIRECTORY",
+        "O_NOFOLLOW",
+        "O_NONBLOCK",
+    ):
+        flags |= getattr(os, name, 0)
+    descriptor = os.open(workspace.root, flags)
+    try:
+        try:
+            os.set_inheritable(descriptor, False)
+        except (AttributeError, OSError):
+            pass
+        verify_workspace_root_directory(workspace, descriptor)
+        return descriptor
+    except BaseException as failure:
+        failure_is_control = not isinstance(failure, Exception)
+        cleanup_control: tuple[BaseException, TracebackType | None] | None = None
+        try:
+            os.close(descriptor)
+        except Exception:
+            pass
+        except BaseException as cleanup_failure:
+            cleanup_control = (
+                cleanup_failure,
+                cleanup_failure.__traceback__,
+            )
+        if not failure_is_control and cleanup_control is not None:
+            cleanup_failure, cleanup_traceback = cleanup_control
+            raise cleanup_failure.with_traceback(cleanup_traceback)
+        raise
+
+
+def verify_workspace_root_directory(
+    workspace: Workspace,
+    descriptor: int,
+) -> None:
+    """Require a descriptor and canonical name to retain the bound root."""
+
+    expected = _require_workspace_root_identity(workspace)
+    _require_workspace_root_directory_operations()
+    opened = os.fstat(descriptor)
+    named = os.stat(workspace.root, follow_symlinks=False)
+    opened_identity = _meaningful_directory_identity(opened)
+    named_identity = _meaningful_directory_identity(named)
+    if opened_identity != expected or named_identity != expected:
+        raise OSError("workspace root directory identity changed")
+
+
+def _probe_workspace_root_identity(root: Path) -> object:
+    """Return a bound, pending, or unavailable canonical root identity."""
+
+    try:
+        value = os.stat(root, follow_symlinks=False)
+    except FileNotFoundError:
+        return _WORKSPACE_ROOT_IDENTITY_PENDING
+    except Exception:
+        return _WORKSPACE_ROOT_IDENTITY_UNAVAILABLE
+    try:
+        identity = _meaningful_directory_identity(value)
+    except Exception:
+        return _WORKSPACE_ROOT_IDENTITY_UNAVAILABLE
+    if identity is None:
+        return _WORKSPACE_ROOT_IDENTITY_UNAVAILABLE
+    return identity
+
+
+def _bind_pending_workspace_root_identity(workspace: Workspace) -> None:
+    """Attempt the one permitted identity bind after root initialization."""
+
+    if workspace._root_identity is not _WORKSPACE_ROOT_IDENTITY_PENDING:
+        return
+    workspace._root_identity = _WORKSPACE_ROOT_IDENTITY_UNAVAILABLE
+    try:
+        value = os.stat(workspace.root, follow_symlinks=False)
+    except Exception:
+        return
+    try:
+        identity = _meaningful_directory_identity(value)
+    except Exception:
+        return
+    if identity is not None:
+        workspace._root_identity = identity
+
+
+def _require_workspace_root_identity(workspace: Workspace) -> tuple[int, int]:
+    """Return one meaningful bound identity or fail closed."""
+
+    if not isinstance(workspace, Workspace):
+        raise TypeError("workspace must be a Workspace")
+    identity = workspace._root_identity
+    if not isinstance(identity, tuple) or len(identity) != 2:
+        raise OSError(
+            getattr(errno, "ENOTSUP", errno.ENOSYS),
+            "workspace root identity is unavailable",
+        )
+    device, inode = identity
+    if (
+        isinstance(device, bool)
+        or not isinstance(device, int)
+        or device <= 0
+        or isinstance(inode, bool)
+        or not isinstance(inode, int)
+        or inode <= 0
+    ):
+        raise OSError(
+            getattr(errno, "ENOTSUP", errno.ENOSYS),
+            "workspace root identity is unavailable",
+        )
+    return device, inode
+
+
+def _require_workspace_root_directory_operations() -> None:
+    """Fail closed without no-follow root-directory primitives."""
+
+    supports_follow_symlinks = getattr(os, "supports_follow_symlinks", ())
+    if (
+        not getattr(os, "O_DIRECTORY", 0)
+        or not getattr(os, "O_NOFOLLOW", 0)
+        or os.stat not in supports_follow_symlinks
+    ):
+        raise OSError(
+            getattr(errno, "ENOTSUP", errno.ENOSYS),
+            "safe workspace root directory access is unsupported",
+        )
+
+
+def _meaningful_directory_identity(
+    value: os.stat_result,
+) -> tuple[int, int] | None:
+    """Return a nonzero directory identity or ``None`` when unavailable."""
+
+    if not stat.S_ISDIR(value.st_mode):
+        return None
+    device = value.st_dev
+    inode = value.st_ino
+    if (
+        isinstance(device, bool)
+        or not isinstance(device, int)
+        or device <= 0
+        or isinstance(inode, bool)
+        or not isinstance(inode, int)
+        or inode <= 0
+    ):
+        return None
+    return device, inode

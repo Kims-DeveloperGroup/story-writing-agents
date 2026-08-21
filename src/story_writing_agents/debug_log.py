@@ -17,7 +17,11 @@ from pathlib import Path
 from types import TracebackType
 
 from .agents import ROSTER
-from .workspace import Workspace
+from .workspace import (
+    Workspace,
+    open_workspace_root_directory,
+    verify_workspace_root_directory,
+)
 
 try:  # pragma: no cover - availability is platform-specific.
     import fcntl as _fcntl
@@ -125,10 +129,16 @@ class _WorkspaceProcessLock:
 class _DebugDirectory:
     """One verified named debug directory held open for a write attempt."""
 
-    __slots__ = ("descriptor", "path")
+    __slots__ = ("descriptor", "root_descriptor", "workspace")
 
-    def __init__(self, path: Path, descriptor: int) -> None:
-        self.path = path
+    def __init__(
+        self,
+        workspace: Workspace,
+        root_descriptor: int,
+        descriptor: int,
+    ) -> None:
+        self.workspace = workspace
+        self.root_descriptor = root_descriptor
         self.descriptor = descriptor
 
 
@@ -335,53 +345,64 @@ class WorkspaceDebugLog:
         deadline = time.monotonic() + DEBUG_LOG_LOCK_TIMEOUT_SECONDS
         if not process_lock.lock.acquire(timeout=DEBUG_LOG_LOCK_TIMEOUT_SECONDS):
             return
+        directory: _DebugDirectory | None = None
+        descriptor: int | None = None
+        locked = False
+        body_failure: _ExceptionState | None = None
         try:
             directory = _prepare_debug_directory(self._workspace)
-            try:
-                _validate_existing_regular(directory, _DEBUG_LOG_FILENAME)
-                for index in range(1, DEBUG_LOG_BACKUP_COUNT + 1):
-                    _validate_existing_regular(
-                        directory,
-                        f"{_DEBUG_LOG_FILENAME}.{index}",
-                    )
-                _validate_existing_guard(directory, _DEBUG_LOG_GUARD_FILENAME)
-                _verify_debug_directory(directory)
-                descriptor = _open_verified_regular_file(
+            _validate_existing_regular(directory, _DEBUG_LOG_FILENAME)
+            for index in range(1, DEBUG_LOG_BACKUP_COUNT + 1):
+                _validate_existing_regular(
+                    directory,
+                    f"{_DEBUG_LOG_FILENAME}.{index}",
+                )
+            _validate_existing_guard(directory, _DEBUG_LOG_GUARD_FILENAME)
+            _verify_debug_directory(directory)
+            descriptor = _open_verified_regular_file(
+                directory,
+                _DEBUG_LOG_GUARD_FILENAME,
+                read_write=True,
+            )
+            locked = _acquire_advisory_lock(
+                descriptor,
+                timeout_seconds=max(0.0, deadline - time.monotonic()),
+            )
+            if locked:
+                _verify_open_file(
+                    descriptor,
                     directory,
                     _DEBUG_LOG_GUARD_FILENAME,
-                    read_write=True,
                 )
-                locked = False
-                try:
-                    locked = _acquire_advisory_lock(
-                        descriptor,
-                        timeout_seconds=max(0.0, deadline - time.monotonic()),
-                    )
-                    if not locked:
-                        return
-                    _verify_open_file(
-                        descriptor,
-                        directory,
-                        _DEBUG_LOG_GUARD_FILENAME,
-                    )
-                    _append_under_guard(directory, payload)
-                finally:
-                    if locked:
-                        try:
-                            _release_advisory_lock(descriptor)
-                        except BaseException:
-                            pass
-                    try:
-                        os.close(descriptor)
-                    except BaseException:
-                        pass
-            finally:
-                try:
-                    os.close(directory.descriptor)
-                except BaseException:
-                    pass
-        finally:
-            process_lock.lock.release()
+                _append_under_guard(directory, payload)
+        except BaseException as failure:
+            body_failure = (failure, failure.__traceback__)
+
+        cleanup_control: _ExceptionState | None = None
+        if locked and descriptor is not None:
+            cleanup_control = _cleanup_advisory_lock(
+                descriptor,
+                cleanup_control,
+            )
+        if descriptor is not None:
+            cleanup_control = _cleanup_descriptor(
+                descriptor,
+                cleanup_control,
+            )
+        if directory is not None:
+            cleanup_control = _cleanup_descriptor(
+                directory.descriptor,
+                cleanup_control,
+            )
+            cleanup_control = _cleanup_descriptor(
+                directory.root_descriptor,
+                cleanup_control,
+            )
+        cleanup_control = _cleanup_process_lock(
+            process_lock,
+            cleanup_control,
+        )
+        _raise_after_cleanup(body_failure, cleanup_control)
 
 
 def _process_lock_for(workspace: Workspace) -> _WorkspaceProcessLock:
@@ -396,39 +417,151 @@ def _process_lock_for(workspace: Workspace) -> _WorkspaceProcessLock:
         return retained
 
 
+_ExceptionState = tuple[BaseException, TracebackType | None]
+
+
+def _remember_cleanup_control(
+    retained: _ExceptionState | None,
+    failure: BaseException,
+) -> _ExceptionState | None:
+    """Retain only the first non-ordinary cleanup failure."""
+
+    if isinstance(failure, Exception) or retained is not None:
+        return retained
+    return failure, failure.__traceback__
+
+
+def _cleanup_descriptor(
+    descriptor: int,
+    retained: _ExceptionState | None,
+) -> _ExceptionState | None:
+    """Close one descriptor once while retaining a process-control failure."""
+
+    try:
+        os.close(descriptor)
+    except Exception:
+        pass
+    except BaseException as failure:
+        retained = _remember_cleanup_control(retained, failure)
+    return retained
+
+
+def _cleanup_advisory_lock(
+    descriptor: int,
+    retained: _ExceptionState | None,
+) -> _ExceptionState | None:
+    """Release one advisory lock while retaining process-control failure."""
+
+    try:
+        _release_advisory_lock(descriptor)
+    except Exception:
+        pass
+    except BaseException as failure:
+        retained = _remember_cleanup_control(retained, failure)
+    return retained
+
+
+def _cleanup_process_lock(
+    process_lock: _WorkspaceProcessLock,
+    retained: _ExceptionState | None,
+) -> _ExceptionState | None:
+    """Release the process lock and make one state-checked recovery attempt."""
+
+    release_failed = False
+    try:
+        process_lock.lock.release()
+    except Exception:
+        release_failed = True
+    except BaseException as failure:
+        release_failed = True
+        retained = _remember_cleanup_control(retained, failure)
+    if not release_failed:
+        return retained
+
+    try:
+        still_locked = process_lock.lock.locked()
+    except Exception:
+        return retained
+    except BaseException as failure:
+        return _remember_cleanup_control(retained, failure)
+    if not still_locked:
+        return retained
+    try:
+        process_lock.lock.release()
+    except Exception:
+        pass
+    except BaseException as failure:
+        retained = _remember_cleanup_control(retained, failure)
+    return retained
+
+
+def _raise_after_cleanup(
+    body_failure: _ExceptionState | None,
+    cleanup_control: _ExceptionState | None,
+) -> None:
+    """Raise the body control, first cleanup control, or ordinary body failure."""
+
+    retained = body_failure
+    if body_failure is None or isinstance(body_failure[0], Exception):
+        retained = cleanup_control or body_failure
+    if retained is not None:
+        failure, traceback = retained
+        raise failure.with_traceback(traceback)
+
+
 def _prepare_debug_directory(workspace: Workspace) -> _DebugDirectory:
-    """Create and hold the fixed directory without following its final name."""
+    """Create and hold the fixed directory beneath a verified workspace root."""
 
     _require_directory_relative_operations()
-
-    directory = workspace.path(DEBUG_LOG_DIRECTORY)
+    root_descriptor = open_workspace_root_directory(workspace)
+    descriptor: int | None = None
     try:
-        directory.mkdir(mode=0o700)
-    except FileExistsError:
-        pass
-    directory = workspace.path(DEBUG_LOG_DIRECTORY)
-    flags = os.O_RDONLY
-    for name in (
-        "O_CLOEXEC",
-        "O_NOINHERIT",
-        "O_BINARY",
-        "O_DIRECTORY",
-        "O_NOFOLLOW",
-        "O_NONBLOCK",
-    ):
-        flags |= getattr(os, name, 0)
-    descriptor = os.open(directory, flags)
-    try:
+        verify_workspace_root_directory(workspace, root_descriptor)
+        try:
+            os.mkdir(
+                DEBUG_LOG_DIRECTORY,
+                mode=0o700,
+                dir_fd=root_descriptor,
+            )
+        except FileExistsError:
+            pass
+        verify_workspace_root_directory(workspace, root_descriptor)
+        flags = os.O_RDONLY
+        for name in (
+            "O_CLOEXEC",
+            "O_NOINHERIT",
+            "O_BINARY",
+            "O_DIRECTORY",
+            "O_NOFOLLOW",
+            "O_NONBLOCK",
+        ):
+            flags |= getattr(os, name, 0)
+        descriptor = os.open(
+            DEBUG_LOG_DIRECTORY,
+            flags,
+            dir_fd=root_descriptor,
+        )
         try:
             os.set_inheritable(descriptor, False)
         except (AttributeError, OSError):
             pass
-        held = _DebugDirectory(directory, descriptor)
+        held = _DebugDirectory(workspace, root_descriptor, descriptor)
         _verify_debug_directory(held)
         return held
-    except BaseException:
-        os.close(descriptor)
-        raise
+    except BaseException as failure:
+        body_failure: _ExceptionState = (failure, failure.__traceback__)
+        cleanup_control: _ExceptionState | None = None
+        if descriptor is not None:
+            cleanup_control = _cleanup_descriptor(
+                descriptor,
+                cleanup_control,
+            )
+        cleanup_control = _cleanup_descriptor(
+            root_descriptor,
+            cleanup_control,
+        )
+        _raise_after_cleanup(body_failure, cleanup_control)
+        raise AssertionError("unreachable")
 
 
 def _require_directory_relative_operations() -> None:
@@ -436,7 +569,7 @@ def _require_directory_relative_operations() -> None:
 
     supports_dir_fd = getattr(os, "supports_dir_fd", ())
     supports_follow_symlinks = getattr(os, "supports_follow_symlinks", ())
-    required_dir_fd = (os.open, os.stat, os.unlink, os.rename)
+    required_dir_fd = (os.mkdir, os.open, os.stat, os.unlink, os.rename)
     if (
         not getattr(os, "O_DIRECTORY", 0)
         or not getattr(os, "O_NOFOLLOW", 0)
@@ -450,15 +583,23 @@ def _require_directory_relative_operations() -> None:
 
 
 def _verify_debug_directory(directory: _DebugDirectory) -> None:
-    """Require the held directory to retain its canonical workspace name."""
+    """Require the held root and child to retain their canonical identities."""
 
+    verify_workspace_root_directory(
+        directory.workspace,
+        directory.root_descriptor,
+    )
     opened = os.fstat(directory.descriptor)
-    named = os.stat(directory.path, follow_symlinks=False)
+    named = os.stat(
+        DEBUG_LOG_DIRECTORY,
+        dir_fd=directory.root_descriptor,
+        follow_symlinks=False,
+    )
     if not stat.S_ISDIR(opened.st_mode) or not stat.S_ISDIR(named.st_mode):
         raise OSError("debug log path is not a regular directory")
-    opened_identity = (opened.st_dev, opened.st_ino)
-    named_identity = (named.st_dev, named.st_ino)
-    if any((*opened_identity, *named_identity)) and opened_identity != named_identity:
+    opened_identity = _meaningful_identity(opened, label="debug log directory")
+    named_identity = _meaningful_identity(named, label="debug log directory")
+    if opened_identity != named_identity:
         raise OSError("debug log directory identity changed")
 
 
@@ -508,9 +649,11 @@ def _open_verified_regular_file(
                 os.fsync(descriptor)
             os.lseek(descriptor, 0, os.SEEK_SET)
         return descriptor
-    except BaseException:
-        os.close(descriptor)
-        raise
+    except BaseException as failure:
+        body_failure: _ExceptionState = (failure, failure.__traceback__)
+        cleanup_control = _cleanup_descriptor(descriptor, None)
+        _raise_after_cleanup(body_failure, cleanup_control)
+        raise AssertionError("unreachable")
 
 
 def _verify_open_file(
@@ -531,9 +674,9 @@ def _verify_open_file(
         raise OSError("debug log file is not regular")
     if named.st_nlink != 1:
         raise OSError("debug log file link count is unsafe")
-    opened_identity = (opened.st_dev, opened.st_ino)
-    named_identity = (named.st_dev, named.st_ino)
-    if any((*opened_identity, *named_identity)) and opened_identity != named_identity:
+    opened_identity = _meaningful_identity(opened, label="debug log file")
+    named_identity = _meaningful_identity(named, label="debug log file")
+    if opened_identity != named_identity:
         raise OSError("debug log file identity changed")
 
 
@@ -555,12 +698,30 @@ def _verify_rollback_descriptor(
     """Require rollback to target the originally opened safe inode."""
 
     opened = _verify_open_descriptor(descriptor)
-    opened_identity = (opened.st_dev, opened.st_ino)
-    if (
-        any((*opened_identity, *expected_identity))
-        and opened_identity != expected_identity
-    ):
+    opened_identity = _meaningful_identity(opened, label="debug log rollback")
+    if opened_identity != expected_identity:
         raise OSError("debug log rollback identity changed")
+
+
+def _meaningful_identity(
+    value: os.stat_result,
+    *,
+    label: str,
+) -> tuple[int, int]:
+    """Return one nonzero filesystem identity or fail closed."""
+
+    device = value.st_dev
+    inode = value.st_ino
+    if (
+        isinstance(device, bool)
+        or not isinstance(device, int)
+        or device <= 0
+        or isinstance(inode, bool)
+        or not isinstance(inode, int)
+        or inode <= 0
+    ):
+        raise OSError(f"{label} identity is unavailable")
+    return device, inode
 
 
 def _acquire_advisory_lock(descriptor: int, *, timeout_seconds: float) -> bool:
@@ -609,26 +770,43 @@ def _append_under_guard(directory: _DebugDirectory, payload: bytes) -> None:
         f"{_DEBUG_LOG_FILENAME}.{index}"
         for index in range(1, DEBUG_LOG_BACKUP_COUNT + 1)
     )
-    active_stat = _validate_existing_regular(directory, active)
-    backup_stats = tuple(
-        _validate_existing_regular(directory, backup) for backup in backups
+    expected: dict[str, os.stat_result | None] = {
+        active: _validate_existing_regular(directory, active),
+    }
+    expected.update(
+        (backup, _validate_existing_regular(directory, backup))
+        for backup in backups
     )
 
+    active_stat = expected[active]
     active_size = active_stat.st_size if active_stat is not None else 0
     if active_size and active_size + len(payload) > DEBUG_LOG_MAX_BYTES:
         oldest = backups[-1]
-        if backup_stats[-1] is not None:
-            _validate_existing_regular(directory, oldest)
+        _validate_expected_rotation_state(
+            directory,
+            oldest,
+            expected[oldest],
+        )
+        if expected[oldest] is not None:
             _verify_debug_directory(directory)
             os.unlink(oldest, dir_fd=directory.descriptor)
-        for source, destination, source_stat in zip(
+            expected[oldest] = None
+        for source, destination in zip(
             reversed(backups[:-1]),
             reversed(backups[1:]),
-            reversed(backup_stats[:-1]),
         ):
+            source_stat = expected[source]
+            _validate_expected_rotation_state(
+                directory,
+                source,
+                source_stat,
+            )
+            _validate_expected_rotation_state(
+                directory,
+                destination,
+                expected[destination],
+            )
             if source_stat is not None:
-                _validate_existing_regular(directory, source)
-                _validate_existing_regular(directory, destination)
                 _verify_debug_directory(directory)
                 os.rename(
                     source,
@@ -636,8 +814,18 @@ def _append_under_guard(directory: _DebugDirectory, payload: bytes) -> None:
                     src_dir_fd=directory.descriptor,
                     dst_dir_fd=directory.descriptor,
                 )
-        _validate_existing_regular(directory, active)
-        _validate_existing_regular(directory, backups[0])
+                expected[destination] = source_stat
+                expected[source] = None
+        _validate_expected_rotation_state(
+            directory,
+            active,
+            expected[active],
+        )
+        _validate_expected_rotation_state(
+            directory,
+            backups[0],
+            expected[backups[0]],
+        )
         _verify_debug_directory(directory)
         os.rename(
             active,
@@ -645,6 +833,8 @@ def _append_under_guard(directory: _DebugDirectory, payload: bytes) -> None:
             src_dir_fd=directory.descriptor,
             dst_dir_fd=directory.descriptor,
         )
+        expected[backups[0]] = expected[active]
+        expected[active] = None
 
     descriptor = _open_verified_regular_file(
         directory,
@@ -653,10 +843,12 @@ def _append_under_guard(directory: _DebugDirectory, payload: bytes) -> None:
     )
     prior_size: int | None = None
     prior_identity: tuple[int, int] | None = None
+    body_failure: _ExceptionState | None = None
+    cleanup_control: _ExceptionState | None = None
     try:
         opened = _verify_open_descriptor(descriptor)
         prior_size = opened.st_size
-        prior_identity = (opened.st_dev, opened.st_ino)
+        prior_identity = _meaningful_identity(opened, label="debug log append")
         remaining = memoryview(payload)
         while remaining:
             _verify_open_file(descriptor, directory, active)
@@ -666,17 +858,22 @@ def _append_under_guard(directory: _DebugDirectory, payload: bytes) -> None:
             remaining = remaining[written:]
         _verify_open_file(descriptor, directory, active)
         os.fsync(descriptor)
-    except BaseException:
+    except BaseException as failure:
+        body_failure = (failure, failure.__traceback__)
         if prior_size is not None and prior_identity is not None:
             try:
                 _verify_rollback_descriptor(descriptor, prior_identity)
                 os.ftruncate(descriptor, prior_size)
                 os.fsync(descriptor)
-            except BaseException:
+            except Exception:
                 pass
-        raise
-    finally:
-        os.close(descriptor)
+            except BaseException as cleanup_failure:
+                cleanup_control = _remember_cleanup_control(
+                    cleanup_control,
+                    cleanup_failure,
+                )
+    cleanup_control = _cleanup_descriptor(descriptor, cleanup_control)
+    _raise_after_cleanup(body_failure, cleanup_control)
 
     try:
         _verify_debug_directory(directory)
@@ -691,6 +888,7 @@ def _validate_existing_regular(
 ) -> os.stat_result | None:
     """Return a safe existing rotation stat from the held directory."""
 
+    _verify_debug_directory(directory)
     try:
         value = os.stat(
             filename,
@@ -705,7 +903,34 @@ def _validate_existing_regular(
         raise OSError("debug log rotation path link count is unsafe")
     if value.st_size > DEBUG_LOG_MAX_BYTES:
         raise OSError("debug log rotation path is oversized")
+    _meaningful_identity(value, label="debug log rotation path")
     return value
+
+
+def _validate_expected_rotation_state(
+    directory: _DebugDirectory,
+    filename: str,
+    expected: os.stat_result | None,
+) -> None:
+    """Require one rotation name to retain its exact captured state."""
+
+    current = _validate_existing_regular(directory, filename)
+    if expected is None:
+        if current is not None:
+            raise OSError("debug log rotation path unexpectedly appeared")
+        return
+    if current is None:
+        raise OSError("debug log rotation path unexpectedly disappeared")
+    expected_identity = _meaningful_identity(
+        expected,
+        label="debug log rotation snapshot",
+    )
+    current_identity = _meaningful_identity(
+        current,
+        label="debug log rotation path",
+    )
+    if current_identity != expected_identity:
+        raise OSError("debug log rotation path identity changed")
 
 
 def _validate_existing_guard(
@@ -714,6 +939,7 @@ def _validate_existing_guard(
 ) -> None:
     """Reject an unsafe existing guard in the held directory."""
 
+    _verify_debug_directory(directory)
     try:
         value = os.stat(
             filename,
@@ -726,6 +952,7 @@ def _validate_existing_guard(
         raise OSError("debug log guard is not regular")
     if value.st_nlink != 1:
         raise OSError("debug log guard link count is unsafe")
+    _meaningful_identity(value, label="debug log guard")
 
 
 def _project_exception(exception: BaseException) -> dict[str, object]:
