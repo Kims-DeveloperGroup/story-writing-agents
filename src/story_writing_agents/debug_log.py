@@ -335,6 +335,7 @@ class WorkspaceDebugLog:
                     )
                 )
             guard_path = self._workspace.path(DEBUG_LOG_GUARD_RELATIVE_PATH)
+            _validate_existing_guard(guard_path)
             descriptor = _open_verified_regular_file(guard_path, read_write=True)
             locked = False
             try:
@@ -534,6 +535,19 @@ def _validate_existing_regular(path: Path) -> os.stat_result | None:
     if value.st_size > DEBUG_LOG_MAX_BYTES:
         raise OSError("debug log rotation path is oversized")
     return value
+
+
+def _validate_existing_guard(path: Path) -> None:
+    """Reject an unsafe existing guard before opening or creating it."""
+
+    try:
+        value = os.stat(path, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    if not stat.S_ISREG(value.st_mode):
+        raise OSError("debug log guard is not regular")
+    if value.st_nlink != 1:
+        raise OSError("debug log guard link count is unsafe")
 
 
 def _project_exception(exception: BaseException) -> dict[str, object]:
