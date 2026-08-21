@@ -32,8 +32,24 @@ keys. Composition has its separate preview-only `/send`, `/cancel` panel;
 confirmation and subject input have none. At the main prompt, candidates filter
 by exact case-sensitive prefixes: Up/Down moves the highlight, Tab completes
 the active token, and Escape restores/dismisses the current completion cycle.
+Tab or static completion-only Enter adds one trailing ASCII space only at the
+buffer end; completion-only Enter needs another Enter to submit. Exact omitted
+`/session resume` and `/conversation resume` additionally show controller-owned
+choices; their highlighted Enter submits immediately, while Tab does nothing.
+Escape followed by Enter, or nonempty VEOF, submits the omitted command and
+starts a fresh choice read. When that read succeeds with eligible choices, the
+generic picker is live on a capable terminal and numbered in ordinary-line
+fallback. An empty result or read failure reports the applicable result or
+error without opening a picker.
 Completion does not enforce runtime scope; use `/help`. See
 [terminal safety](../operations/terminal-safety.md#live-editor-boundary).
+
+Capable submitted input disappears by design after submit, cancel, interrupt,
+or EOF because the terminal clears the complete live frame before return; a
+failure attempts the same cleanup before propagating. Persistent validation,
+cancellation, discard, error, orientation, and result records remain.
+Ordinary-line fallback cannot clear printed input and
+adds no synthetic final control frame.
 
 ## No workspace, default session, or current focus
 
@@ -41,10 +57,10 @@ Run from an initialized workspace or pass `--workspace PATH`. Use `story session
 create SESSION` to save a default, or pass `--session SESSION` to `run`,
 `directive`, or `inspect`. Successful create/reopen saves it; pause retains it.
 
-For `session_paused`, use `/session open NAME` or `story session reopen NAME`.
-For `session_not_attached`, create/open in the shell. For
+For `session_paused`, use `/session resume NAME` or `story session reopen NAME`.
+For `session_not_attached`, create/resume in the shell. For
 `conversation_required`, create `/conversation new` or focus one with
-`/conversation use`.
+`/conversation resume`.
 
 ## A shell command is unavailable
 
