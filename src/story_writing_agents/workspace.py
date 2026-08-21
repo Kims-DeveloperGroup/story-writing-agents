@@ -2111,7 +2111,7 @@ def initialize_workspace(
 def open_workspace_root_directory(workspace: Workspace) -> int:
     """Open and verify the canonical identity-bound workspace root."""
 
-    _require_workspace_root_identity(workspace)
+    expected = _require_workspace_root_identity(workspace)
     _require_workspace_root_directory_operations()
     flags = os.O_RDONLY
     for name in (
@@ -2123,6 +2123,11 @@ def open_workspace_root_directory(workspace: Workspace) -> int:
         "O_NONBLOCK",
     ):
         flags |= getattr(os, name, 0)
+    named_identity = _meaningful_directory_identity(
+        os.stat(workspace.root, follow_symlinks=False)
+    )
+    if named_identity != expected:
+        raise WorkspaceSecurityError("workspace root directory identity changed")
     descriptor = os.open(workspace.root, flags)
     try:
         try:
@@ -2162,7 +2167,7 @@ def verify_workspace_root_directory(
     opened_identity = _meaningful_directory_identity(opened)
     named_identity = _meaningful_directory_identity(named)
     if opened_identity != expected or named_identity != expected:
-        raise OSError("workspace root directory identity changed")
+        raise WorkspaceSecurityError("workspace root directory identity changed")
 
 
 def _probe_workspace_root_identity(root: Path) -> object:
