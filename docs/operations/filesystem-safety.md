@@ -48,12 +48,16 @@ Do not replace the guard pathname while a workspace may be used.
 The internal debug writer uses `Workspace` containment and no-symlink checks
 for `debug_logs/`, `.runtime.lock`, the active log, and every backup. Every
 existing guard, active, and backup path must name a regular file with a
-filesystem link count of exactly one (`st_nlink == 1`). The opened guard and
-active file descriptors are also verified against their current pathnames
-before use. Active and backup files must be no larger than 1 MiB. Hard-linked,
-nonregular, oversized, or otherwise unsafe storage is preserved rather than
-repaired, and that diagnostic record is dropped without changing caller
-control flow.
+filesystem link count of exactly one (`st_nlink == 1`). Before opening or
+lazily creating `.runtime.lock`, the writer validates the active log and all
+five backup paths; if that validation fails, no guard file is opened or created.
+It verifies the opened guard descriptor against its pathname before attempting
+the advisory lock and again after acquisition. Under that lock it revalidates
+the active and backup paths, then verifies the opened active descriptor against
+its pathname before append. Active and backup files must be no larger than 1 MiB.
+Hard-linked, nonregular, oversized, or otherwise unsafe storage is preserved
+rather than repaired, and that diagnostic record is dropped without changing
+caller control flow.
 
 A guarded weak process-wide lock serializes writers for one resolved workspace.
 An independent persistent `.runtime.lock` then provides a POSIX or Windows
