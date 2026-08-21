@@ -1,7 +1,8 @@
 # Session and workspace storage
 
-> **Availability:** V2 defaults, provider sessions, debates, conversations, and
-> manuscripts persist as strict UTF-8 plaintext workspace files.
+> **Availability:** V2 defaults, provider sessions, debates, conversations,
+> internal bounded runtime debug logs, and manuscripts persist as plaintext
+> workspace files.
 
 Key terms: **default**—a persisted command or conversation fallback;
 **manifest**—durable provider state; **access claim**—temporary process ownership.
@@ -25,6 +26,10 @@ workspace/
 │   │   └── debates/<session_id>/<debate_id>.jsonl              [lazy history]
 │   └── {plot_architect,character_custodian,execution_specialist}_state/
 │       └── debates/<session_id>/<debate_id>.jsonl
+├── debug_logs/
+│   ├── .runtime.lock                                           [lazy guard]
+│   ├── runtime.jsonl                                           [lazy active log]
+│   └── runtime.jsonl.{1..5}                                    [lazy backups]
 ├── discussion_logs/<session_id>/
 │   ├── <debate_id>.{state.json,jsonl,result.json}
 │   ├── <debate_id>.context.json                                [lazy debate context]
@@ -34,6 +39,23 @@ workspace/
 
 Initialization adds `.gitkeep` to empty directories. Normal init preserves
 files; prompt overwrite replaces only the four role prompts.
+
+<a id="runtime-debug-log-storage"></a>
+
+## Runtime debug-log storage
+
+New initialization scaffolds `debug_logs/`; an existing initialized workspace
+without that directory remains valid, and the diagnostics writer creates it on
+its first log attempt. Importing or constructing the internal writer creates
+nothing. The active `runtime.jsonl` and persistent `.runtime.lock` guard are
+lazy, and backups appear only after rotation.
+
+Each JSONL file is limited to 1,048,576 bytes. Rotation keeps the active file
+plus five backups, with `.1` newest and `.5` oldest, for at most 6 MiB of JSONL
+data. The guard and `.gitkeep` are outside that data bound. Debug records are
+plaintext; their schema is documented in [Persistence](../../design/persistence.md#workspace-runtime-debug-log),
+their containment and failure behavior in [Filesystem safety](../../operations/filesystem-safety.md#debug-log-filesystem-safety),
+and their content boundary in [Privacy](../../operations/privacy-and-provider.md#workspace-debug-log-privacy).
 
 ## Default records
 

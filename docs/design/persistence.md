@@ -1,7 +1,8 @@
 # Persistence design
 
 > **Availability:** filesystem persistence covers configuration, sessions,
-> conversations, debates, optional debate-context sidecars, and manuscripts.
+> conversations, debates, optional debate-context sidecars, bounded runtime
+> debug-log infrastructure, and manuscripts.
 
 Key terms: **blackboard**—public debate JSONL; **sidecar**—context stored apart
 from established debate records; **create-only**—never replaces an existing
@@ -17,9 +18,36 @@ The workspace uses separate inspectable files rather than a database:
 | Provider manifest and access claim | `AgentBackend` |
 | Session/conversation defaults | CLI context helpers |
 | Conversation metadata and transcript | Catalog and event-store adapters |
+| Bounded runtime diagnostics | Internal `debug_log` writer |
 | Retrieval actions, observations, progress, sources | Process/terminal only |
 | Current conversation and agent focus | Controller memory only |
 | Approved manuscript | Workspace artifact commit |
+
+<a id="workspace-runtime-debug-log"></a>
+
+## Workspace runtime debug log
+
+The internal diagnostics writer appends compact, ASCII-safe schema-v1 JSONL.
+Every record has `schema_version`, a writer-owned UTC `timestamp`, and fixed
+`level`, `component`, `operation`, and `phase` values. It may add an `outcome`
+from its fixed taxonomy and exact validated `session_id`, `conversation_id`,
+`debate_id`, or canonical `agent_id`; absent optional fields are omitted rather
+than written as `null`.
+
+An error record additionally has an `exception` object with only `type`,
+`frames`, and `frames_truncated`. A frame has only a safe module name, function
+name, and positive line number. The writer keeps the nearest 32 frames and uses
+fixed replacements for unsafe type, module, or function names. It does not
+accept a caller timestamp, message, path, traceback text, or arbitrary detail
+or payload mapping.
+
+`Workspace` owns containment and the `debug_logs/` scaffold. The internal
+writer separately owns this schema, the active file, guard, append, rollback,
+and rotation. It is not exported from the project-root facade, and current CLI,
+controller, backend, runtime, and smoke call sites do not emit these records.
+Storage paths and retention are in [Session storage](../reference/configuration/session-storage.md#runtime-debug-log-storage),
+failure guarantees in [Filesystem safety](../operations/filesystem-safety.md#debug-log-filesystem-safety),
+and excluded content in [Privacy](../operations/privacy-and-provider.md#workspace-debug-log-privacy).
 
 <a id="debate-context-sidecar"></a>
 

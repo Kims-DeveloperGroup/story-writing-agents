@@ -710,8 +710,10 @@ slice lands; #83 and #84 have changed their migrated output groups in that
 permitted way, and #123 adds splitter lines to every semantic `Panel`. Exact
 interactive and callback text therefore changes for those components, while
 component ordering, one-component/one-write callback cardinality, interaction,
-runtime behavior, and public Python contracts remain unchanged. The following
-contracts may not change as a side effect.
+runtime behavior, and established public Python calls remain compatible. The
+only later additive public seam is the optional `write_error()` debug-log path
+described below. The following contracts may not otherwise change as a side
+effect.
 
 ### Machine-facing CLI
 
@@ -774,6 +776,13 @@ remain compatible. In particular, callback construction remains:
 InteractiveTerminal(read_line, write_text, *, width=80, main_read_line=None)
 ```
 
+`write_error()` alone adds the optional keyword-only
+`debug_log_path: str | None = None`. Omission preserves the exact established
+two-notice panel and existing callback behavior. Supplied nonblank, one-line,
+strict-UTF-8 display text adds one sanitized third notice labelled `debug log`;
+the terminal does not resolve or retain it. Current CLI and controller callers
+omit the keyword, so this seam does not yet add an installed-shell path hint.
+
 Construction validates and retains borrowed callbacks but performs no stream
 inspection, output, raw-mode change, capability query, resource acquisition,
 or history persistence. Existing constructor validation remains exact:
@@ -803,15 +812,16 @@ writes exactly one component.
 `RenderedInputFrame` contracts. Those types remain outside the package facade,
 root facade, public `__all__`, and closed `Component` union;
 `ControlOutcomeKind.REJECTED` is likewise internal. The established public
-result types, constructor, and method signatures remain exact.
+result types and constructor remain exact, and existing method calls remain
+compatible.
 
 #79 adds package-private completion candidates/projections and main palette
 state plus the unlisted facade bindings `transition_main_command_input` and
 `read_main_command_line`. The model values are not `Component` members; only
 their projected existing `SuggestionPalette` is rendered. These names remain
 outside public `__all__` and the root facade. The established parser,
-`InteractiveTerminal`, and line-editor public results and signatures remain
-exact.
+`InteractiveTerminal`, and line-editor public results and established calls
+remain compatible.
 
 #87 adds package-private `PickerControlState` and `PickerViewport` contracts
 alongside the existing semantic `Picker`, plus the unlisted facade identities
@@ -860,7 +870,7 @@ boundary. Responsibility and dependency direction are fixed as follows:
 | Unit | Responsibility |
 | --- | --- |
 | `interactive_settings` | Package-internal immutable opening baseline and pending configuration, safe lexical persona catalog, validation, exact stale-state detection, changed-only canonical persistence, and reverse exact-byte rollback. It has no terminal, controller, runtime, backend, or parser dependency and no facade export. |
-| `interactive_terminal.__init__` | Compatibility facade with the exact existing public surface plus package-internal stream construction, semantic output, picker-adapter, and cancellable-prompt seams. It owns no import-time resource or state. |
+| `interactive_terminal.__init__` | Compatibility facade with the exact existing exports, the additive optional `write_error()` debug-log-path keyword, and package-internal stream construction, semantic output, picker-adapter, and cancellable-prompt seams. It owns no import-time resource or state. |
 | `interactive_terminal._model` | Immutable semantic components, bounded main-history/control state, main-command completion/palette state, composer and picker control state, bounded picker viewport, semantic input/render frames, key/focus values, and transition/render results. No I/O. |
 | `interactive_terminal._controls` | Pure established line-input, main-command/history, composer-line, confirmation-answer, cancellable-prompt, and picker transitions; bounded history; completion projection; picker initialization/reconciliation, disabled-skipping live navigation, exact fallback grammar, and viewport selection. |
 | `interactive_terminal._render` | Pure safe responsive output and semantic input renderers for plain and fixed ANSI profiles, including bounded live and complete-list fallback picker projections and the strict JSON agent-reply presentation projection. It sanitizes dynamic content before styling and returns render data without writing. |
@@ -950,7 +960,7 @@ the graph to 33 units.
 | Advisory turns | `Message`, `Notice`, `Field` | Operation result, cancelled/completed/error; optional capable-only indicator during advisory/consensus wait; no `[routing]`/`[waiting]` record | #83 and #111 (implemented) |
 | Retrieval progress and summaries | `Notice`, `Record`, `ListView`, `Field` | Loading, citations/context accounting, result/error/cancelled | #83 (implemented accepted views) |
 | Consensus progress and summaries | `Panel`, `Section`, `Notice`, `Record`, `Field`, `Message` | Loading, debate identity, handoff/action metadata, agent messages, result/cancelled/completed/error | #83, #119 (implemented) |
-| Interactive errors and recovery hints | `Notice`, `Field` | Trusted code, redaction, error state, next action, no raw diagnostics | #83 (implemented) |
+| Interactive errors and recovery hints | `Notice`, `Field` | Trusted code, redaction, error state, next action, no raw diagnostics; optional sanitized debug-log path remains caller-supplied and current application callers omit it | #83 and #131 terminal seam (implemented) |
 | Settings current/pending view | `Panel`, `Section`, `Field`, `Prompt`, `Picker`, `Notice` | Exact top-level order; changed-only Current/Pending confirmation context with `(Changed)` cues and explicit no-diff notice; nested Escape silent; transient cleanup and fallback honesty; disabled provider, validation, error, cancelled, and completed meaning; guarded two-file Save boundary | #93, #106, and #115 (implemented) |
 
 ### Control groups
@@ -1029,7 +1039,7 @@ models, callback boundaries, public APIs, or runtime behavior.
 | Parser and mutation boundary | The exact visible committed main buffer reaches the established parser once; previews, recall, replacement, highlight, rerender, cancel, Ctrl-C, empty VEOF, and physical EOF cause no parser/runtime/storage call. |
 | Composer/confirmation | Ordered semantic input facts and focused prompt; equivalent width-aware plain/ANSI rendering; fallback-once and trusted-live routing; exact `/send`, `/cancel`, `/say`, yes/no/default, invalid retry, Ctrl-C, and EOF results; semantic composer events and hint cardinality; history isolation; reserved-key no-ops; no full-screen or persistent state. |
 | Restoration | Normal submit, commit, cancellation, Escape, EOF, Ctrl-C, setup failure, read/write/flush failure, render error, and restoration uncertainty, with raw attributes restored whenever acquired. |
-| Public compatibility | Exact exports and order, enum values, dataclass fields/defaults/options, signatures, exceptions, object/class identity, canonical modules, facade imports, callback construction, and no constructor resource acquisition. |
+| Public compatibility | Exact exports and order, enum values, dataclass fields/defaults/options, established-call-compatible signatures including exact validation/default behavior for the additive `write_error()` keyword, exceptions, object/class identity, canonical modules, facade imports, callback construction, and no constructor resource acquisition. |
 | Noninteractive regression | Golden byte/schema/order/exit checks for `init`, `smoke`, `session`, `directive`, `inspect`, and `run`, with no SGR under any environment. |
 
 Process-level POSIX PTY coverage remains required for the real raw-mode and

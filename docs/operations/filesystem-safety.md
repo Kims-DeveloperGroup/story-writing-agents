@@ -2,8 +2,8 @@
 
 > **Availability:** containment and no-symlink checks, exclusive manuscript and
 > conversation creation, serialized transcript replacement, atomic per-file
-> default/metadata replacement, guarded interactive settings persistence, and
-> best-effort rollback are implemented.
+> default/metadata replacement, guarded interactive settings persistence,
+> bounded fail-open debug logging, and best-effort rollback are implemented.
 
 Key terms: **containment**—keeping paths beneath the workspace root; **symlink**—
 a filesystem alias the runtime rejects; **exclusive creation**—failure instead
@@ -40,6 +40,36 @@ The provider-session claim guard is opened without following symlinks when the
 platform supports it, verified as the same regular file, and locked with POSIX
 `flock` or Windows one-byte advisory locking. Suspicious state fails closed.
 Do not replace the guard pathname while a workspace may be used.
+
+<a id="debug-log-filesystem-safety"></a>
+
+## Debug-log filesystem safety
+
+The internal debug writer uses `Workspace` containment and no-symlink checks
+for `debug_logs/`, `.runtime.lock`, the active log, and every backup. Existing
+guard, active, and backup paths must be regular files; active and backup files
+must also be no larger than 1 MiB. Unsafe, nonregular, or oversized storage is
+preserved rather than repaired.
+
+A guarded weak process-wide lock serializes writers for one resolved workspace.
+An independent persistent `.runtime.lock` then provides a POSIX or Windows
+cross-process advisory-lock attempt. The process and advisory waits share one
+100-millisecond deadline. This guard is intentionally separate from the
+provider-session access-claim guard: session access uncertainty fails closed,
+while diagnostic contention or failure must not affect caller control flow.
+
+Under the guard, rotation happens before an append would exceed 1 MiB. It keeps
+five backups, shifts the newest prior active file to `.1`, and discards only the
+oldest backup when the set is full. Append writes are flushed and synchronized;
+after a partial write or synchronization failure, the writer makes a best-effort
+attempt to truncate the active file to its prior size. Rotation and rollback do
+not form a transaction. Lock, validation, append, flush, synchronization,
+rollback, rotation, and cleanup failures are suppressed; a record may be
+dropped, and a failed rotation can leave fewer retained files.
+
+Do not edit or replace `.runtime.lock` or the active/backup files while the
+workspace may be used. Paths and retention are listed in
+[Session storage](../reference/configuration/session-storage.md#runtime-debug-log-storage).
 
 ## Conversation transcript safety
 

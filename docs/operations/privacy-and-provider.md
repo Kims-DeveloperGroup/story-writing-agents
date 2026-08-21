@@ -10,9 +10,11 @@ stored or displayed failure text.
 
 ## Plaintext local data
 
-There is no encryption, access control, secure erase, or retention policy.
-Documents, debate/context records, provider metadata, subjects, transcripts,
-scrollback, and manuscripts rely on OS/terminal-service protection.
+There is no encryption, application access control, or secure erase. Documents,
+debate/context records, provider metadata, subjects, transcripts, scrollback,
+and manuscripts have no application-managed retention policy and rely on
+OS/terminal-service protection. The workspace debug log is the one bounded
+retention channel described below; it is still plaintext.
 
 Blackboards can contain input, drafts, reviews, and errors. Provider output is
 not generally scrubbed; archive neither deletes nor conceals conversations;
@@ -60,9 +62,35 @@ and debates. Changed visible context does not erase private history. Switch,
 pause, quit, and close preserve thread references; fresh/omitted context cannot make the
 provider forget.
 
+<a id="workspace-debug-log-privacy"></a>
+
+## Workspace debug-log privacy
+
+The internal debug writer admits only fixed operational categories, its own UTC
+timestamp, an optional fixed outcome, and exact validated session,
+conversation, debate, or canonical agent IDs. Error records add a safe
+qualified exception type and at most the nearest 32 module/function/positive
+line-number frame facts. This makes the format content-safe, not encrypted or
+anonymous; identifiers and operational timing can still be sensitive.
+
+There is no field for story prose, prompts, replies, provider payloads,
+arbitrary details, or caller-supplied messages. Exception projection does not
+read exception text or representation, filenames, source text, locals,
+arguments, notes, causes, or contexts. The concrete backend continues to drain
+and discard nonzero provider stderr without decoding it, so that stream is not
+available to this log.
+
+These files are separate from conversation transcript `runtime_error` events
+and their 4,096-character known-value sanitizer. Current CLI, controller,
+backend, runtime, and smoke call sites do not invoke the internal writer, so
+the installed shell does not yet promise a populated log or display its path.
+See [Persistence](../design/persistence.md#workspace-runtime-debug-log) for the
+schema and [Filesystem safety](filesystem-safety.md#debug-log-filesystem-safety)
+for fail-open storage behavior.
+
 <a id="runtime-error-diagnostics"></a>
 
-## Diagnostic redaction
+## Transcript and backend diagnostic redaction
 
 Concrete `AgentBackend` drains nonzero Codex stderr but never decodes, exposes,
 or persists it. It raises `BackendProtocolError` with exact
