@@ -36,6 +36,12 @@ conversation_new conversation_list conversation_list_all conversation_use
 conversation_subject conversation_archive help quit parse_error
 ```
 
+`session_open`/`ActionKind.SESSION_OPEN` and
+`conversation_use`/`ActionKind.CONVERSATION_USE` are stable machine-facing
+dispatch identities. They are not accepted command words. The parser produces
+them from the canonical human grammar `/session resume [NAME]` and
+`/conversation resume [ID]` respectively.
+
 ## Registry
 
 `AGENT_ROUTES` follows roster order and owns IDs, aliases, and domain copy.
@@ -56,8 +62,8 @@ only the four preferred prompt aliases—`lead`, `plot`, `character`, and
 | Conversation | `/compose`; `/send`; `/cancel`; `/say TEXT` |
 | Agents | `/to NAME`; `/agents`; `/language LANG`; `/persona AGENT NAME`; `/reset`; `/settings` |
 | Consensus | `/run [PROMPT] \| /run --fresh PROMPT`; `/draft-file PATH` |
-| Sessions | `/session list \| create NAME \| open [NAME] \| pause` |
-| Conversations | `/conversation new [SUBJECT] \| list [--all] [QUERY] \| use [ID] \| subject SUBJECT \| archive [ID]` |
+| Sessions | `/session list \| create NAME \| resume [NAME] \| pause` |
+| Conversations | `/conversation new [SUBJECT] \| list [--all] [QUERY] \| resume [ID] \| subject SUBJECT \| archive [ID]` |
 | Inspection | `/search QUERY`; `/transcript ID [COUNT] [--from SEQUENCE]`; `/inspect [DEBATE\|last]`; `/history [COUNT]`; `/status`; `/help [COMMAND]` |
 | Exit | `/quit` |
 
@@ -97,8 +103,8 @@ positions are:
 | Position | Ordered replacements |
 | --- | --- |
 | Root command | The 21 main-available canonical commands and aliases in registry order; standalone `/compose`, `/send`, and `/cancel` are excluded. |
-| `/session` | `list`, `create`, `open`, `pause` |
-| `/conversation` | `new`, `list`, `use`, `subject`, `archive` |
+| `/session` | `list`, `create`, `resume`, `pause` |
+| `/conversation` | `new`, `list`, `resume`, `subject`, `archive` |
 | `/to`, `/agent`, `/persona` agent | The four preferred prompt aliases—`lead`, `plot`, `character`, and `execution`—in route order. Other accepted aliases remain parser-compatible but are not duplicated as completion candidates. |
 | `/run` option | `--fresh` |
 | `/conversation list` option | `--all` |
@@ -110,10 +116,13 @@ Fixed-only positions keep their projection when a typed prefix has no match,
 allowing the terminal to render an explicit empty palette. Mixed fixed/free
 positions project only option-looking or still-matching fixed text; prompt,
 query, subject, path, identity, count, sequence, and other runtime values stay
-free text with no palette. Help additionally accepts a bare active prefix for
-slash-prefixed replacement, so `/help ru` can become `/help /run`. Completion
-replaces input only; Enter still sends the final visible buffer to the parser
-once.
+free text with no static palette. The controller may separately supply
+disposable choices only for an exact omitted `/session resume` or
+`/conversation resume`; catalog reads and choice ordering are not parser or
+completion-projection behavior. Help additionally accepts a bare active prefix
+for slash-prefixed replacement, so `/help ru` can become `/help /run`.
+Completion replaces input only; the terminal alone decides when the final
+visible buffer is submitted to this parser once.
 
 ## Search and transcript grammar
 
@@ -149,11 +158,20 @@ concerns.
 ## Other grammar and failures
 
 Conversation `new` and `subject` preserve their remainder. `list [--all]
-[QUERY]`, `use [ID]`, and `archive [ID]` follow the
-[catalog contract](conversation-catalog.md). Omitted `use` returns a
-`conversation_use` action without an argument, and the controller opens the
-active-conversation picker. A supplied control-free `ID` remains direct; the
-controller resolves an exact full ID or accepted case-sensitive unique prefix.
+[QUERY]`, `resume [ID]`, and `archive [ID]` follow the
+[catalog contract](conversation-catalog.md). Omitted `resume` returns a
+`conversation_use` action without an argument. On a capable main prompt the
+controller may already have turned a highlighted live choice into an explicit
+resume line, which bypasses the picker. A submitted omitted action reaches the
+controller's fresh choice read. When that read succeeds with eligible rows, the
+generic picker is live and transient on a capable stream and numbered in line
+fallback. An empty set or read failure produces the applicable controller
+result or error without opening a picker. A supplied control-free `ID` remains
+direct; the controller resolves an exact full ID or accepted case-sensitive
+unique prefix. Session
+`resume [NAME]` follows the same action-identity distinction: omitted and
+explicit forms both return `session_open`, and a supplied name never creates a
+missing session.
 
 `/to` and `/agent` return `set_target`; `@ALIAS TEXT` returns
 `routed_message`; `/say TEXT` returns `message`. The parser does not enforce

@@ -11,8 +11,15 @@
 > lifecycle records use semantic notices. A generic single-select picker
 > foundation and a cancellable prompt seam are implemented behind unlisted
 > package-internal adapters. `/settings` consumes both without changing the
-> supported public terminal API; omitted `/session open` and `/conversation use`
-> consume only the picker. Advisory and consensus turns additionally use
+> supported public terminal API; exact omitted `/session resume` and
+> `/conversation resume` receive controller-owned main choices on capable
+> streams. Highlighted Enter submits an explicit identity and bypasses the
+> picker. Submitting the omitted command performs a fresh choice read; a
+> successful read with eligible rows invokes a generic picker that is live on
+> capable streams and numbered in fallback, while empty or failed reads report
+> without opening it. Every capable input frame clears before return; fallback
+> input remains visible without a synthetic final control frame. Advisory and
+> consensus turns additionally use
 > one unlisted terminal-owned rolling indicator on capable raw streams;
 > callback and incapable paths remain silent, and these waits emit no
 > `[routing]` or `[waiting]` record.
@@ -82,9 +89,10 @@ compatibility editor; they likewise remain unlisted and unsupported.
 unlisted internal bindings for the shared selectable main route. Its completion
 models remain package-private and outside the closed `Component` union; only
 their projected existing `SuggestionPalette` is rendered.
-The facade also exposes the unlisted `Choice`, `Prompt`, `ControlOutcome`,
-`ControlOutcomeKind`, `InteractivePickerInput`, and `InteractivePromptInput`
-identities for the generic picker and cancellable-line seams.
+The facade also exposes the unlisted `Choice`, `Picker`, `Prompt`, `ControlOutcome`,
+`ControlOutcomeKind`, `InteractiveMainInput`, `InteractivePickerInput`, and
+`InteractivePromptInput` identities for controller-owned main choices, the
+generic picker, and cancellable-line seams.
 `PickerControlState` and `PickerViewport` remain package-private; the existing
 semantic `Picker` remains a `Component`. None of these additions changes public
 `__all__`, root exports, or supported signatures.
@@ -100,18 +108,23 @@ The narrow internal adapters have these signatures:
 InteractiveSemanticOutput(terminal: InteractiveTerminal) -> None
 write_component(component: Component) -> None
 
+InteractiveMainInput(terminal: InteractiveTerminal) -> None
+read_main(choice_provider: Callable[[str, int], Picker | None], *,
+          session_id: str | None = None,
+          agent_id: str | None = None) -> TerminalAction
+
 InteractivePickerInput(terminal: InteractiveTerminal) -> None
 read_picker(prompt: Prompt, choices: tuple[Choice, ...], *,
             highlighted_id: str | None = None,
             selected_id: str | None = None,
             notice: Notice | None = None,
             state: ViewState = ViewState.OPEN,
-            transient: bool = False) -> ControlOutcome
+            transient: bool = True) -> ControlOutcome
 
 InteractivePromptInput(terminal: InteractiveTerminal) -> None
 read_prompt(prompt: Prompt, *,
             context: tuple[Panel | Section | Field | Notice, ...] = (),
-            transient: bool = False) -> ControlOutcome
+            transient: bool = True) -> ControlOutcome
 
 InteractiveAdvisoryProgress(terminal: InteractiveTerminal) -> None
 run(operation: Awaitable[object]) -> object  # async, package-internal
@@ -123,13 +136,17 @@ run(operation: Awaitable[object]) -> object  # async, package-internal
 Construction validates and retains the terminal's bound component writer but
 does not render, read, write, observe a stream, or acquire a resource. Each
 accepted component call performs one render and one callback write, including
-the final LF; failures propagate without a retry. The picker adapter likewise
-binds only the terminal's picker reader without observing capabilities or
-acquiring I/O. The settings controller consumes both input adapters through
-the facade, while omitted `/session open` and `/conversation use` consume the
-picker adapter; neither is public API. `transient` is an opt-in settings lifecycle:
-its default `False` preserves the established picker and prompt final-frame
-behavior used by every non-settings caller. `InteractiveAdvisoryProgress` and
+the final LF; failures propagate without a retry. The main-input adapter binds
+a call-local choice provider; the picker adapter likewise binds only the
+terminal's picker reader without observing capabilities or acquiring I/O. The
+controller supplies disposable session/conversation snapshots to the main
+adapter and uses the picker/prompt adapters for settings and for submitted
+omitted resume commands whose fresh reads return eligible rows; none is public
+API. The input adapters validate the
+`transient`
+argument for their internal signature but normalize supported reads to the
+universal transient lifecycle; callers cannot request a persistent final
+control frame. `InteractiveAdvisoryProgress` and
 `InteractiveDebateProgress` are also unlisted and bind one call-local async
 operation to the terminal's indicator without changing the supported public API.
 
@@ -140,6 +157,11 @@ operation to the terminal's indicator without changing the supported public API.
 | `ConfirmationResult` | `yes`, `no`, `interrupt`, `eof` |
 | `TerminalActionKind` | `line`, `send`, `cancel`, `interrupt`, `eof` |
 | `TerminalMessageKind` | `compose`, `session`, `conversation`, `routing`, `context`, `waiting`, `result`, `cancelled`, `hint` |
+
+`AttachmentKind.OPENED` (`opened`) and `AttachmentKind.REOPENED` (`reopened`)
+are result classifications rendered after a successful session transition.
+They are not interactive command words; the human command is
+`/session resume [NAME]`.
 
 The established `routing` and `waiting` enum values remain compatibility
 identities, but advisory and consensus wait paths do not emit records with
@@ -242,8 +264,10 @@ four generic-status call sites; the controller also has no generic
 input views and use pure history-free controls as documented below. Selectable
 main-command palettes and finite fixed options are available on capable main
 reads. The generic picker and cancellable-prompt foundations remain available
-only through unlisted internal seams. `/settings` consumes both, and omitted
-`/session open` and `/conversation use` consume the picker.
+only through unlisted internal seams. `/settings` consumes both. A submitted
+omitted `/session resume` or `/conversation resume` uses the picker only after
+a successful fresh read returns eligible rows; empty and failed reads
+short-circuit before picker input.
 
 ## Prompts and semantic input presentation
 
@@ -284,12 +308,25 @@ settings workflow. In fallback an exact ESC line cancels, while `/cancel`
 remains literal input. The same sole driver owns raw input, redraw, cleanup,
 and restoration.
 
-When a capable raw main read commits `/settings`, the controller consumes one
-correlated committed-display token and clears only those live rows before
-opening the settings view. The already accepted line remains in the driver's
-main-history store. Callback and ordinary-line fallback cannot erase committed
-rows, so the line remains visible and no cleanup is claimed; history is
-unchanged in every profile.
+Every successful capable input operation clears its complete live frame before returning:
+semantic context and prompt, editable text, suggestions or choices, validation,
+and redraws. This applies to submit, commit, cancel, interrupt, and EOF across
+main, composition, confirmation, picker, and cancellable-prompt reads. An
+exceptional failure attempts the same cleanup before propagating; an output
+failure cannot guarantee erase bytes it could not write, and restoration
+uncertainty remains fatal.
+A static highlighted Enter only completes and leaves the main read active, so
+it does not clear or enter history until later submission. Cleanup is display
+only: an eligible main line is appended to driver-local history after cleanup
+and restoration, and persistent semantic validation, cancellation, discard,
+error, orientation, and result records remain in scrollback.
+
+Callback and ordinary-line fallback cannot erase printed prompt or input text,
+so it stays visible. These paths do not add a synthetic final `completed` or
+`cancelled` control frame. Pure picker state may still use those result values
+internally. Conversation-subject input always uses the ordinary reader, even
+when the terminal could otherwise edit live. The normative lifecycle is in the
+[design contract](../design/interactive-cli-design-system.md#submitted-input-lifecycle).
 
 Save and Cancel each show a transient selectable confirmation with highlighted
 `YES` and `NO` choices. Its preceding context contains only fields whose
@@ -409,11 +446,69 @@ agent-valued slash positions provide the four preferred prompt aliases `lead`,
 accepts all ten declared route aliases for slash and routed-message input;
 completion does not duplicate those aliases. Static finite positions also
 provide session and conversation subcommands, `--fresh`, `--all`, `last`, and
-`--from`. Dynamic session, conversation, debate, count, sequence, query,
-prompt, subject, and path values are not synthesized. Fixed-only positions
+`--from`. Static projection does not synthesize session, conversation, debate,
+count, sequence, query, prompt, subject, or path values. Fixed-only positions
 remain open with an explicit empty palette on no match; mixed fixed/free
 positions close when the active slot is free text. Tokens do not reflect
 runtime scope gates; `/help` remains authoritative.
+
+Two exact omitted commands have a separate controller-owned live choice cycle:
+
+- `/session resume` at the end of the buffer shows all persisted sessions,
+  ordered by newest durable update then ID. Labels are session IDs; descriptions
+  show `Durable: STATE; access: STATE`. Current attachment is highlighted first,
+  then the saved default, then the first row.
+- `/conversation resume` at the end of the buffer, while attached, shows active
+  conversations in catalog order. Labels are subjects; descriptions show
+  `Handle: HANDLE`. Current active focus is highlighted first, then an active
+  saved default, then the first row. The committed identity is the immutable
+  full ID, never the possibly shortened handle.
+
+The controller owns catalog reads, ordering, labels, initial highlight, and all
+authorization. The terminal owns only the call-local buffer, palette, keys,
+rendering, cleanup, restoration, and history. Up/Down moves the live highlight;
+Tab is a no-op. Enter commits the highlighted row as one complete explicit
+canonical command in that same key event, clears/restores the live input, and
+then records that explicit line in main history. This differs from static Enter
+completion, which does not submit. Escape dismisses the rows without changing
+the omitted command buffer or producing a domain cancellation record.
+
+The displayed snapshot is disposable. Dynamic-choice Enter produces an
+explicit command; after parsing, the controller freshly rereads and validates
+that identity. A failed pre-Enter snapshot read only suppresses those rows. If
+the omitted command is then submitted, its independent post-submit read may
+still succeed and open the generic picker rather than repeat the first failure.
+An empty post-submit result emits the documented empty record, and a failed read
+emits the applicable error; neither opens the picker.
+
+A submitted omitted resume command uses that history-free picker when the fresh
+lifecycle/catalog read succeeds with eligible rows. On a capable stream the
+picker is live and transient; ordinary-line fallback shows the numbered form.
+This includes Enter after dismissing the pre-Enter rows with Escape and nonempty
+configured VEOF, which submits the unchanged omitted buffer even while a row is
+highlighted. Main history records the omitted command once whether a picker,
+empty result, or error follows; an opened picker's answer adds no entry.
+Dynamic-choice Enter instead records the full explicit command and bypasses the
+picker. Explicit `/session resume NAME` and `/conversation resume ID` remain
+direct forms.
+
+Picker cancel, interrupt, and a selected identity rejected before session
+acquisition or conversation-default persistence are mutation-free. Picker EOF
+selects no destination and proceeds through normal shell cleanup. A session
+choice that advances runs provider validation,
+lifecycle pre-read, acquire or durable reopen, correlated post-read, destination
+focus load, destination-default persistence, source release when switching,
+and only then in-memory attachment/focus commit. A successful paused-to-ready
+reopen is not rolled back if a later step fails. Later failure releases newly
+acquired access where possible and does not advance in-memory attachment/focus,
+but no durable lifecycle or default rollback is promised. Source-release
+failure after default persistence is fatal `cleanup_failed`, and the new
+default remains. A reported default-write failure can occur after atomic
+replacement but during later durability work; inspect persisted state instead
+of assuming the old default. Conversation resume likewise persists its default
+before changing in-memory focus; on a reported write failure the focus stays
+put, but the persisted default must be inspected. Successful session switch
+resets agent focus to `lead`; conversation focus change preserves it.
 
 The routed-message palette is cursor-aware and applies only when the first
 token begins at the start of the buffer and is cursor-active. It does not
@@ -424,9 +519,9 @@ after typing the message body, Enter submits the visible routed message.
 Submitting a route with no nonblank message remains an error.
 
 The active token is the maximal ASCII-space/tab-delimited span around the
-cursor. With a highlighted suggestion, Tab or Enter replaces that full span
-with the candidate. When the replaced token ends at the buffer end, completion
-adds exactly one ASCII space; otherwise the existing space/tab delimiter and
+cursor. With a highlighted static suggestion, Tab or Enter replaces that full
+span with the candidate. When the replaced token ends at the buffer end,
+completion adds exactly one ASCII space; otherwise the existing space/tab delimiter and
 suffix remain exact. Help permits a bare prefix to select a slash replacement,
 for example
 `/help ru` to `/help /run`. Up/Down moves the highlight and clamps at the ends
@@ -441,16 +536,18 @@ change resets it. Escape restores the snapshot when present, otherwise leaves
 the buffer unchanged, then closes the palette and latches that exact line state
 dismissed. An edit or history change clears the latch and permits reopening.
 Closed-palette Up/Down resumes command-history navigation. Enter with a
-highlighted suggestion applies the same replacement and spacing as Tab without
-submitting, then closes the palette and latches the completed line dismissed;
+highlighted static suggestion applies the same replacement and spacing as Tab
+without submitting, then closes the palette and latches the completed line
+dismissed;
 a second Enter submits that exact visible buffer. Enter with no highlighted
 suggestion submits the exact visible buffer to the established parser once.
 Configured VEOF with a nonempty buffer always submits the exact visible buffer,
 even when a suggestion is highlighted.
 
 Plain, fixed-ANSI, `NO_COLOR`, narrow, and empty palette rendering preserve the
-same semantic candidate order and highlight. Ordinary-line fallback receives
-no palette projection and retains its established behavior. Settings and the
+same semantic candidate order and highlight, including controller-owned resume
+rows. Ordinary-line fallback receives no pre-Enter palette projection and
+retains its established behavior. Settings and the
 subject keep their non-main reads, composition uses the separate preview-only
 fixed suggestions below, and confirmation has no suggestions. None of those
 contexts receives the leading `@` palette. Editing, decoding, fallback, and
@@ -468,12 +565,15 @@ cursor, and Down past the newest entry restores both. Recalled text is an
 editable copy with the cursor at its end. Further navigation can replace that
 edited copy without changing the stored entry.
 
-The driver records each successfully completed exact nonblank main buffer once,
+The driver records each successfully completed exact nonblank main submission once,
 before the existing parser runs. Leading and trailing whitespace are preserved;
 invalid command text, duplicates, `/quit`, ordinary-line fallback results, and
 a nonempty configured VEOF commit are therefore eligible. The 101st entry
 evicts only the oldest. The exact visible submitted buffer still reaches the
-parser once.
+parser once. A capable dynamic resume choice records its complete explicit
+command. Any submitted omitted resume buffer records that omitted command even
+when its fresh read reports empty or fails. If a picker opens, its history-free
+answer is never a following entry.
 
 Empty or whitespace-only input, Ctrl-C, empty configured VEOF, physical stream
 EOF, incomplete input, invalid fallback framing, and operations that fail
@@ -539,28 +639,37 @@ None of those terminal results adds a final confirmation notice.
 
 ## Generic internal picker foundation
 
-This foundation is package-internal; `/settings`, omitted `/session open`, and
-omitted `/conversation use` consume it through their controllers and the
-unlisted terminal facade adapter. A caller supplies one semantic prompt and
-immutable choices whose opaque identities are returned on commit but never
-rendered as picker identities.
+This foundation is package-internal. `/settings` and the post-submit controller
+path for omitted `/session resume` or `/conversation resume` consume it through
+the unlisted terminal facade adapter. Capable pre-Enter resume choices reuse the
+main palette described above; only their dynamic Enter commit becomes explicit
+and bypasses the picker. Submitting the omitted buffer instead performs a fresh
+read. A successful read with eligible rows opens this picker live on a capable
+stream or numbered in fallback; an empty or failed read does not open it. A
+caller supplies one semantic prompt and immutable choices whose opaque
+identities are returned on commit but never rendered as picker identities.
 
 Initialization highlights an explicit enabled choice, otherwise an enabled
 selection, otherwise the first enabled choice. Empty and all-disabled choice
 sets remain explicit `empty` and `disabled` states.
 
-Omitted `/session open` supplies one enabled choice per persisted lifecycle in
-backend order. The visible label is the session ID, and its description is
+When the submitted omitted `/session resume` picker opens, it supplies one
+enabled choice per persisted lifecycle, ordered by newest durable update then
+ID. The visible label is the
+session ID, and its description is
 `Durable: STATE; access: STATE`. The controller explicitly highlights the
 current attachment, then the saved default; generic initialization chooses the
 first row if neither is present. A commit returns the identity; the controller
 reports an unchanged current attachment or freshly validates another choice
-before the established open/reopen transition. Escape or Ctrl-C cancels without
-mutation, while EOF returns to normal shell cleanup. The controller handles an
-empty catalog without opening the picker.
+before the established open/reopen transition. Escape or Ctrl-C produces the
+persistent `Session resume cancelled.` record without mutation, while EOF
+returns to normal shell cleanup. The controller handles an empty catalog without
+opening the picker.
 
-Omitted `/conversation use` supplies one enabled choice per active conversation
-in catalog order. The visible label is the subject, and its description is
+When the submitted omitted `/conversation resume` picker opens, it supplies one
+enabled choice per active conversation in catalog order. The visible label is
+the subject, and its
+description is
 `Handle: HANDLE`, where `HANDLE` is the stable first 12 ID characters when
 unique across the complete session catalog and the immutable full ID on a
 collision. The controller explicitly highlights current active focus, then an
@@ -568,9 +677,12 @@ active saved default; generic initialization chooses the first row if neither
 is present. A commit returns the opaque immutable full ID, which the controller
 freshly resolves against the complete catalog before saving the default and
 changing current focus. A missing or newly archived choice is rejected,
-refreshed metadata is used, and save failure preserves prior focus. Escape,
-fallback `/cancel`, or Ctrl-C leaves catalog, default, current focus, and agent
-focus unchanged; EOF returns to normal shell cleanup without a selection. An
+refreshed metadata is used, and a reported save failure does not change
+in-memory focus but may follow replacement of the persisted default. Inspect
+the persisted selection after such an error. Escape,
+fallback `/cancel`, or Ctrl-C writes `Conversation focus cancelled.` and leaves
+catalog, default, current focus, and agent focus unchanged; EOF returns to
+normal shell cleanup without a selection. An
 empty active set emits `[conversation] No active conversations found.` without
 opening the picker.
 
@@ -606,26 +718,23 @@ selection or highlight. The retry adds exactly:
 Enter an enabled choice number, press Enter for the highlighted choice, or enter /cancel.
 ```
 
-The default picker lifecycle renders one final `completed` or `cancelled` frame
-after commit or cancel. Settings opts into a transient lifecycle for its
-pickers and prompts. Capable terminal reads clear the transient rows before
-returning the typed outcome, so no duplicate final frame is emitted. Callback
-and line-fallback readers cannot erase prior output; transient picker fallback
-therefore omits its synthetic final frame rather than duplicating it. Nested
-settings Escape returns to the parent silently. Save and Cancel confirmations
-show a selectable YES/NO control with the changed-only Current/Pending context;
-unchanged context contains only the no-changes notice. Top-level cancellation
-does not claim a snapshot that was not rendered. Non-settings calls retain the
-default final-frame behavior.
+Pure transitions represent commit or cancel with internal `completed` or
+`cancelled` state, but supported adapters never emit a final control frame.
+Capable reads clear the complete live picker before returning commit, cancel,
+interrupt, or EOF and attempt the same cleanup on failure; restoration failure
+remains fatal. Callback and
+line fallback cannot erase the already printed numbered prompt or input, so
+they retain it and add no synthetic terminal-state frame. Nested settings Escape
+returns to the parent silently. Save and Cancel confirmations show a selectable
+YES/NO control with changed-only Current/Pending context; unchanged context
+contains only the no-changes notice. Top-level cancellation does not claim a
+snapshot that was not rendered.
 
-For the default lifecycle, live and fallback readers emit exactly one final
-semantic `completed` or `cancelled` frame after commit or cancel. Interrupt,
-EOF, and failures clear any transient live display and emit no final picker
-state; restoration failure remains fatal. Callback, non-TTY, `TERM=dumb`,
-non-POSIX, uncertain-capability, and safely recovered activation paths use the
-numbered fallback without acquiring raw input. The unified driver remains the
-only raw resource owner and picker reads do not inspect or mutate main history,
-completion, parser, provider, runtime, filesystem, storage, or network state.
+Callback, non-TTY, `TERM=dumb`, non-POSIX, uncertain-capability, and safely
+recovered activation paths use the numbered fallback without acquiring raw
+input. The unified driver remains the only raw resource owner and picker reads
+do not inspect or mutate main history, completion, parser, provider, runtime,
+filesystem, storage, or network state.
 
 <a id="exact-search-and-transcript-records"></a>
 
@@ -672,7 +781,7 @@ result, hint, or context record. Attached state remains unchanged.
 
 | Boundary | Exact records in order |
 | --- | --- |
-| Main prompt / open or pause confirmation | `[cancelled] No action was taken.` / `[cancelled] Session open cancelled.` / `[cancelled] Session pause cancelled.` |
+| Main prompt / session resume or pause / conversation focus | `[cancelled] No action was taken.` / `[cancelled] Session resume cancelled.` / `[cancelled] Session pause cancelled.` / `[cancelled] Conversation focus cancelled.` |
 | Recoverable advisory | `[cancelled] {DISPLAY_NAME} turn was interrupted.`<br>`[hint] The story session remains attached; the affected provider thread may restart on the next message.` |
 | Consensus before entry | `[cancelled] Consensus run was cancelled before start.` |
 | Consensus with trusted durable proof | `[run {DEBATE_ID}] [cancelled] [warning]` then an indented `Run interrupted after durable state transition.` in that same callback record;<br>`[cancelled] Debate {DEBATE_ID} was marked interrupted.`<br>`[hint] It cannot resume. Use /run to create a new debate.`<br>`[session] "{SESSION_ID}" remains ready and attached.` |

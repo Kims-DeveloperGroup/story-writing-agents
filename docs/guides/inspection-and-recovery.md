@@ -28,7 +28,7 @@ ID was reserved; it does not prove the creating process is alive.
 
 ## Inspect safely in the interactive shell
 
-After opening a session, no conversation focus is required:
+With a session attached, no conversation focus is required:
 
 | Command | Result |
 | --- | --- |

@@ -11,8 +11,8 @@ continuing incomplete provider history; **external backup** is outside the works
 
 | Process-access result | Meaning | Safe response |
 | --- | --- | --- |
-| `claimable` | No claim, or a local POSIX PID is proved missing. | Open normally; guarded acquisition replaces an unchanged dead-local claim. |
-| `held_here` | This backend holds the exact token. | Continue, pause, switch, quit, or close normally. |
+| `claimable` | No blocking claim: no claim exists, or an unchanged local POSIX claim is proved dead. Guarded acquisition may be attempted. | Inspect durable state: create when absent; resume when ready or paused. Acquisition rechecks the claim under the guard. |
+| `held_here` | This backend owns the exact claim token. It does not by itself prove provider work is allowed. | Provider work also needs durable `ready`, valid configuration, and any required conversation focus. Otherwise resume paused state, repair scope/configuration, or close normally. |
 | `blocked_by_live_local_owner` | Another process on this host is alive. | Close that process normally, then retry. |
 | `ownership_unknown` | Host is remote, platform/probe is unsupported, permission is denied, or state changed. | Preserve the claim; verify ownership outside the runtime. |
 
@@ -68,7 +68,8 @@ Cancelled local reads keep completed rows without a second read/write.
 ## POSIX PTY boundary
 
 POSIX tests use a controlling PTY and VINTR/VEOF. They prove line fallback,
-suggestion editing, clearing, and restoration. Windows consoles remain unverified.
+static and live-resume suggestion editing, complete capable-frame clearing, and
+restoration across terminal outcomes. Windows consoles remain unverified.
 
 ## Pause, quit, and cleanup
 
@@ -78,7 +79,7 @@ retains defaults, clears current attachment/current focus/agent focus, and
 returns to the lobby. Quit and main/composer EOF release access without pausing.
 
 Cleanup attempts Runner close → access release → backend close, clears process
-scope, and reports at most one `cleanup_failed`. Later startup opens a ready
+scope, and reports at most one `cleanup_failed`. Later startup resumes a ready
 default or asks to reopen paused; only an active default can become focus.
 
 ## Current limits

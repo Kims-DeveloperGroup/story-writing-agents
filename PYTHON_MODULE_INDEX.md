@@ -588,10 +588,17 @@ every intermediate arrow. The current runtime graph is acyclic.
   controller-built immutable `Picker` choices and opaque canonical command
   identities through `InteractiveMainInput`; capable input obtains a fresh
   backend lifecycle or active-catalog snapshot for each exact completion
-  state, while fallback input bypasses the provider and preserves post-submit
-  validation. Settings continues to consume picker and prompt adapters for its
-  call-local edit flow. The controller owns no cursor sequence or terminal
-  geometry.
+  state, while fallback input bypasses the provider. Dynamic-choice Enter
+  submits an explicit identity and bypasses the generic picker. An omitted
+  resume buffer that is itself submitted instead starts a fresh lifecycle or
+  catalog read. When that read succeeds and yields eligible rows, the controller
+  opens the generic picker: it is live and transient on a capable stream and
+  numbered in line fallback, and its selected identity is freshly validated.
+  An empty result or read failure emits its applicable result or error without
+  opening the picker. The submitted omitted main line's history eligibility is
+  independent of that post-submit outcome. Settings continues to consume picker
+  and prompt adapters for its call-local edit flow. The controller owns no
+  cursor sequence or terminal geometry.
   Retrieval results and persisted `agent_reply`
   history/transcript rows use the facade's pure `format_agent_reply_content`
   projection and agent semantic role without changing the stored event or
@@ -649,16 +656,20 @@ every intermediate arrow. The current runtime graph is acyclic.
   persistence to `interactive_settings`; cancellation or failed saves do not
   mutate the active backend or runtime snapshot. Through public collaborators
   the controller reads and parses terminal input, submits typed presentation
-  facts and invokes
-  terminal-owned semantic writers, sequences session and nested
-  conversation transitions, performs
-  configuration validation, pre-read, access acquisition, and correlated
-  post-read in that exact order, and compensates only access newly acquired by
-  a failed transition. Create/resume update the persisted session default only
-  after success; pause retains defaults, changes durable state, releases
-  access, and returns to the lobby. Quit, EOF, and final cleanup release access
-  without pausing. Persisted conversation defaults remain distinct from the
-  in-memory current focus.
+  facts, invokes terminal-owned semantic writers, and sequences nested
+  conversation transitions. A session destination proceeds through
+  configuration validation, lifecycle pre-read, create/acquire or durable
+  reopen, correlated post-read, destination focus load, destination-default
+  persistence, source release when switching, and only then in-memory
+  attachment/focus commit. Later failure releases newly
+  acquired destination access where possible but does not roll back a
+  successful paused-to-ready reopen. A reported default-save failure can follow
+  `os.replace`, so the persisted default is not guaranteed to retain its old
+  value; source-release failure after destination-default persistence leaves
+  the new default and aborts through `cleanup_failed`. Pause retains defaults,
+  changes durable state, releases access, and returns to the lobby. Quit, EOF,
+  and final cleanup release access without pausing. Persisted conversation
+  defaults remain distinct from the in-memory current focus.
   The controller also performs
   catalog create/list/get/rename/archive and compensating unarchive calls,
   persists session and conversation defaults through `cli_context`, applies
@@ -919,11 +930,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   resource-free semantic cancellable-line capability for nested settings input;
   callback and stream factories respectively provide deterministic plain and
   sole-driver-backed implementations without changing the exact public
-  `__all__`. Both unlisted input adapters retain a validated transient argument
-  while enforcing the submitted-input lifecycle: capable stream construction
-  clears before return, and callback or fallback construction emits no
-  synthetic final picker frame it cannot erase. These adapters do not expand
-  the exact public `__all__` or `InteractiveTerminal` method surface.
+  `__all__`. The installed main, composition, confirmation, picker, and
+  cancellable-prompt routes enforce one submitted-input lifecycle: each
+  complete capable live frame clears before return and cleanup is attempted on
+  failure, while callback and line fallback retain printed prompts and input
+  and emit no synthetic `completed` or `cancelled` control frame. The picker
+  and prompt adapters validate their retained `transient` arguments but cannot
+  opt out of that lifecycle. These adapters do not expand the exact public
+  `__all__` or `InteractiveTerminal` method surface.
   Unlisted `InteractiveAdvisoryProgress`, `InteractiveDebateProgress`, and
   `AdvisoryProgressError` bind advisory and consensus async progress lifecycles
   through the same facade: callback and incapable terminals await silently,
@@ -1106,13 +1120,18 @@ every intermediate arrow. The current runtime graph is acyclic.
   generic single-select lifecycle that does not reuse editable-line state. The
   driver provides one-write output, redraws on the full immutable main-command
   or picker control state, and normalizes established editing and picker keys.
-  Capable main reads clear the complete submitted input and overlay before
-  restoration and return, then append one successful exact nonblank committed
-  line to history; completion-only Enter does not submit and appends nothing.
-  `read_input_line` plus picker and cancellable-prompt reads accept a per-read
-  transient flag that clears capable rows on commit, cancel, interrupt, EOF,
-  or failure. Line fallback cannot erase prior text, and transient picker
-  fallback omits the synthetic final frame. Supported
+  Installed stream-terminal main, composition, confirmation, picker, and
+  cancellable-prompt reads clear the complete capable live frame before
+  returning from submit, commit, cancel, interrupt, or EOF and attempt the same
+  cleanup on failure before restoration. An eligible capable main submission
+  enters history only after that cleanup and restoration; an eligible fallback
+  submission enters history after the ordinary reader returns. Static
+  completion-only Enter keeps the live read open, performs no submitted-frame
+  cleanup, and appends nothing.
+  The lower-level semantic-input, picker, and prompt methods validate their
+  per-read transient flags, while the installed facade adapters always request
+  this lifecycle. Line fallback cannot erase printed prompts or input and emits
+  no synthetic `completed` or `cancelled` control frame. Supported
   package-internal `run_advisory_progress` accepts one awaitable and injected
   fixed-glyph renderer, awaits silently without raw cursor capability, and on a
   capable stream joins the operation with one indicator task. Internal
@@ -1124,9 +1143,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   keys, raw POSIX attributes, functional cursor controls, live redraw writes,
   flushes, and exact restoration. It retains exactly one bounded process-local
   main-input history store per driver instance; each main read resets only its
-  call-local navigation state, and a successful fallback commit or restored
-  live commit is appended once after capable display clearing and restoration.
-  It retains no committed-main display token. The same read loop owns
+  call-local navigation state. An eligible fallback commit is appended once
+  after the ordinary reader returns, while an eligible live commit is appended
+  once only after complete-frame clearing and exact restoration. Static
+  completion-only Enter and outcomes without an accepted line append nothing.
+  The same read loop owns
   call-local one-byte
   incremental decoding and the fixed 50-millisecond Escape readiness lookahead,
   so available ordinary bytes are reprocessed without a second reader or sleep
@@ -1208,12 +1229,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   collaborators. Resource-free `InteractivePromptInput` constructs one existing
   `InputPromptView` and returns typed commit, nested-cancel, interrupt, or EOF;
   callback and stream construction bind it to plain or driver-owned input
-  without adding a component kind or raw resource owner. Both adapters retain a
-  validated transient flag but always use the submitted-input lifecycle:
-  capable frames clear before return and callback/fallback picker input omits a
-  synthetic final frame. Stream-backed composition and confirmation lines use
-  that same capable pre-return clearing without changing persistent semantic
-  records. Resource-free `InteractiveAdvisoryProgress` and
+  without adding a component kind or raw resource owner. The picker and prompt
+  adapters validate a retained transient flag but always select the universal
+  submitted-input lifecycle. The real stream factory binds main, composition,
+  confirmation, picker, and cancellable-prompt reads to that lifecycle: the
+  driver clears the complete capable live frame before return and attempts the
+  same cleanup on failure, while callback and line fallback retain printed
+  prompts and input and emit no synthetic `completed` or `cancelled` control
+  frame. Conversation-subject input remains ordinary. Persistent semantic
+  records are unchanged. Resource-free `InteractiveAdvisoryProgress` and
   `InteractiveDebateProgress` bind the terminal's advisory and consensus
   awaitable wrappers: callback construction remains visually silent, and stream
   construction injects the pure fixed-glyph renderer into the sole driver
@@ -1530,20 +1554,23 @@ every intermediate arrow. The current runtime graph is acyclic.
   reads history-free. Cancellable settings prompt input is also history- and
   completion-free: `_controls` owns its pure Escape outcome, `_core` binds the
   resource-free facade adapter, and the sole driver owns its raw/fallback input
-  and restoration. Settings alone opts into transient dedicated picker/prompt
-  reads: the
-  driver clears capable live rows before returning and callback/line fallback
-  omits only duplicate picker final frames. Explicit Save and Cancel
-  confirmations alone carry the controller-owned changed-only Current/Pending
-  context, including plain-text changed cues and any invalid-answer hint;
-  ordinary editing and whole-flow cancellation emit no snapshot. Nested Escape
-  returns without committing, and default non-settings control behavior is
-  unchanged. Capable main reads clear the submitted input and its static or
-  dynamically projected palette before returning; the driver retains no
-  committed-main display token, and callback/fallback main input performs no
-  synthetic cleanup. The driver also owns the dedicated picker lifecycle,
-  observes picker width on each redraw, and keeps picker input separate from
-  editable line, history, and completion state. `_controls`
+  and restoration. The real stream factory binds main, composition,
+  confirmation, picker, and cancellable-prompt reads to one submitted-input
+  lifecycle: the driver clears each complete capable live frame before submit,
+  commit, cancel, interrupt, or EOF returns and attempts the same cleanup on
+  failure before restoration. Static completion-only Enter keeps the main read
+  open, so it triggers neither frame cleanup nor history append. Eligible main
+  submissions append once after capable cleanup and restoration or after an
+  ordinary fallback reader returns. Callback and line fallback retain printed
+  prompts and input and emit no synthetic `completed` or `cancelled` control
+  frame; conversation-subject input remains ordinary. Persistent semantic
+  output written after the input boundary remains in scrollback. Explicit Save
+  and Cancel confirmations alone carry the controller-owned changed-only
+  Current/Pending context, including plain-text changed cues and any invalid-
+  answer hint; ordinary editing and whole-flow cancellation emit no snapshot.
+  Nested Escape returns without committing. The driver also owns the dedicated
+  picker lifecycle, observes picker width on each redraw, and keeps picker input
+  separate from editable line, history, and completion state. `_controls`
   supplies immutable history,
   selectable palette, composer, confirmation, and generic picker transitions:
   open-palette Up and Down
@@ -1573,11 +1600,20 @@ every intermediate arrow. The current runtime graph is acyclic.
 - `interactive_controller` is the stable one-class import boundary and owns no
   shell state or resource. Its `_core` owns interactive shell action mapping,
   current in-memory attachment, current-focus conversation and sticky-target state,
-  resource-free facade-only generic picker interaction for settings and
-  fallback omitted `/session resume` and `/conversation resume`; call-local
-  lifecycle/catalog choice snapshots supplied through `InteractiveMainInput`
-  for capable omitted resume commands; cancellable-prompt interaction; and the
-  settings flow's call-local pending candidate and confirmation diff,
+  resource-free facade-only generic picker interaction for settings and for a
+  submitted omitted `/session resume` or `/conversation resume` after its fresh
+  lifecycle or catalog read succeeds and yields eligible rows; the opened picker
+  is live and transient on capable streams and numbered in line fallback. Empty
+  results and read failures emit their applicable result or error without
+  opening it. Before submission, exact omitted commands on capable input receive
+  call-local lifecycle/catalog choice snapshots through `InteractiveMainInput`;
+  dynamic-choice Enter submits an explicit identity and bypasses the picker,
+  while Escape followed by Enter or nonempty VEOF submits the unchanged omitted
+  buffer and follows the fresh post-submit read. That submitted main line's
+  history eligibility is independent of whether the read opens a picker or
+  returns an empty result or error. The controller also owns cancellable-prompt
+  interaction and the settings flow's call-local pending candidate and
+  confirmation diff,
   process-local per-session latest accepted STARTED debate IDs, transition and
   compensation ordering, retained runtime and memory-service wiring, one
   private lifecycle `asyncio.Runner`, controller-local interruption/progress

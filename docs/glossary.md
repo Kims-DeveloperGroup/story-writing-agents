@@ -1,6 +1,6 @@
 # Glossary
 
-> **Availability:** after opening a session, the shell manages conversations,
+> **Availability:** with a session attached, the shell manages conversations,
 > advisory turns, search, transcripts, and consensus. See [Story sessions](guides/story-sessions.md).
 
 ## A–W
@@ -26,6 +26,12 @@
 - **Candidate and revision.** The candidate is complete text under review; a
   revision identifies its version, beginning with `r0`. See
   [Consensus workflow](design/consensus-workflow.md).
+
+- **Complete live frame.** All terminal rows and cells drawn for one capable
+  input read, including context, prompt, editable text, suggestions or choices,
+  validation, and redraws. It clears before the read returns; persistent
+  semantic result records are separate. See the
+  [interactive design contract](design/interactive-cli-design-system.md#submitted-input-lifecycle).
 
 - **Consensus and deadlock.** Consensus commits final artifacts after all voters
   approve one revision; deadlock leaves conflicts at the round limit. See
@@ -57,7 +63,7 @@
   turns; agent focus is the ordinary advisory responder. Both are process-local.
 
 - **Default session and default conversation.** Persisted fallbacks used when a
-  command omits a session or when a newly opened session restores conversation
+  command omits a session or when session attachment restores conversation
   scope. A default does not prove attachment, focus, or provider readiness.
 
 - **Core documents.** Editable outlines, character/world facts, and narrative

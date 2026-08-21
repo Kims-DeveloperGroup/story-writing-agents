@@ -97,7 +97,7 @@ idempotent and leaves update time unchanged; a real transition refreshes it.
 ## IDs in the installed lobby
 
 The immutable catalog ID is the durable identity; subject text may change.
-`/conversation use` and explicit archive accept an exact full ID or a
+`/conversation resume` and explicit archive accept an exact full ID or a
 case-sensitive unique prefix. An exact ID wins; a nonexact prefix must be at
 least 12 characters. Resolution includes active and archived records, so an
 archived match is found and then rejected for current focus.
