@@ -493,7 +493,7 @@ class CommandRegistryTests(unittest.TestCase):
             ),
             CommandSpec(
                 "Sessions",
-                "/session list | create NAME | open [NAME] | pause",
+                "/session list | create NAME | resume [NAME] | pause",
                 (),
                 False,
                 False,
@@ -503,7 +503,7 @@ class CommandRegistryTests(unittest.TestCase):
                 "Conversations",
                 (
                     "/conversation new [SUBJECT] | list [--all] [QUERY] | "
-                    "use [ID] | subject SUBJECT | archive [ID]"
+                    "resume [ID] | subject SUBJECT | archive [ID]"
                 ),
                 (),
                 False,
@@ -555,6 +555,9 @@ class CommandRegistryTests(unittest.TestCase):
         )
         self.assertIsInstance(COMMANDS, tuple)
         self.assertEqual(COMMANDS, expected)
+        advertised = "\n".join(spec.syntax for spec in COMMANDS)
+        self.assertNotIn("/session open", advertised)
+        self.assertNotIn("/conversation use", advertised)
 
     def test_registry_names_aliases_and_capability_flags_are_consistent(
         self,
@@ -694,7 +697,7 @@ class SuccessfulParsingTests(unittest.TestCase):
                 InteractiveAction(ActionKind.SESSION_CREATE, argument="chapter-01"),
             ),
             (
-                "/session open chapter-01",
+                "/session resume chapter-01",
                 InteractiveAction(
                     ActionKind.SESSION_OPEN,
                     argument="chapter-01",
@@ -723,7 +726,7 @@ class SuccessfulParsingTests(unittest.TestCase):
                 ),
             ),
             (
-                "/conversation use c_0123456789abcdef",
+                "/conversation resume c_0123456789abcdef",
                 InteractiveAction(
                     ActionKind.CONVERSATION_USE,
                     argument="c_0123456789abcdef",
@@ -833,7 +836,7 @@ class SuccessfulParsingTests(unittest.TestCase):
             ("/inspect ", InteractiveAction(ActionKind.INSPECT)),
             ("/history\t\t", InteractiveAction(ActionKind.HISTORY)),
             (
-                "/session open ",
+                "/session resume ",
                 InteractiveAction(ActionKind.SESSION_OPEN),
             ),
             (
@@ -849,7 +852,7 @@ class SuccessfulParsingTests(unittest.TestCase):
                 InteractiveAction(ActionKind.CONVERSATION_LIST_ALL),
             ),
             (
-                "/conversation use ",
+                "/conversation resume ",
                 InteractiveAction(ActionKind.CONVERSATION_USE),
             ),
             (
@@ -1041,11 +1044,11 @@ class InvalidInputTests(ParserAssertions, unittest.TestCase):
                 ),
             ),
             (
-                "/conversation use",
+                "/conversation resume",
                 InteractiveAction(ActionKind.CONVERSATION_USE),
             ),
             (
-                "/conversation use ../unsafe",
+                "/conversation resume ../unsafe",
                 InteractiveAction(
                     ActionKind.CONVERSATION_USE,
                     argument="../unsafe",
@@ -1074,7 +1077,9 @@ class InvalidInputTests(ParserAssertions, unittest.TestCase):
         cases = (
             "/conversation",
             "/conversation unknown",
-            "/conversation use one two",
+            "/conversation use",
+            "/conversation use c_0123456789abcdef",
+            "/conversation resume one two",
             "/conversation subject",
             "/conversation subject   ",
             "/conversation archive one two",
@@ -1148,11 +1153,13 @@ class InvalidInputTests(ParserAssertions, unittest.TestCase):
             "/persona plot",
             "/persona plot name extra",
             "/session unknown",
+            "/session open",
+            "/session open chapter-01",
             "/session list extra",
             "/session create",
             "/session create   ",
             "/session create name extra",
-            "/session open name extra",
+            "/session resume name extra",
             "/session pause extra",
             "/help run extra",
             "/? run extra",
@@ -1192,7 +1199,7 @@ class InvalidInputTests(ParserAssertions, unittest.TestCase):
             "/language ko\x00KR",
             "/persona plot meticulous\x7f",
             "/session create chapter\vone",
-            "/session open chapter\u2003one",
+            "/session resume chapter\u2003one",
             "/inspect debate\x00one",
             "/to pl\x00ot",
         )
@@ -1591,7 +1598,7 @@ class CommandCompletionProjectionTests(unittest.TestCase):
                 "session.subcommand",
                 9,
                 9,
-                ("list", "create", "open", "pause"),
+                ("list", "create", "resume", "pause"),
             ),
             (
                 "/conversation ",
@@ -1599,7 +1606,7 @@ class CommandCompletionProjectionTests(unittest.TestCase):
                 "conversation.subcommand",
                 14,
                 14,
-                ("new", "list", "use", "subject", "archive"),
+                ("new", "list", "resume", "subject", "archive"),
             ),
             ("/to ", 4, "target.agent", 4, 4, self.AGENTS),
             ("/agent ", 7, "target.agent", 7, 7, self.AGENTS),
@@ -1709,7 +1716,7 @@ class CommandCompletionProjectionTests(unittest.TestCase):
             ("@plot message", 13), ("message @pl", 11),
             ("@plot @pl", 9), ("/say @pl", 8),
             ("/to plot ", 9), ("/persona plot ", 14),
-            ("/conversation use ", 18), ("/transcript --from ", 19),
+            ("/conversation resume ", 21), ("/transcript --from ", 19),
             ("/transcript c nope ", 19), ("/transcript c 0 ", 16),
             ("/session list ", 14), ("/HELP ", 6),
         )
@@ -1740,7 +1747,7 @@ class CommandCompletionProjectionTests(unittest.TestCase):
                 "/session cr",
                 11,
                 "session.subcommand",
-                ("list", "create", "open", "pause"),
+                ("list", "create", "resume", "pause"),
             ),
             ("/to pl", 6, "target.agent", self.AGENTS),
             ("/help ru", 8, "help.command", self.HELP),

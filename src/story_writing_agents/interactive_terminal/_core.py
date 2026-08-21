@@ -22,6 +22,9 @@ from ..interactive_commands import (
 from ._controls import (
     append_main_input_history,
     initialize_picker,
+    main_command_uses_choices,
+    project_main_choice_completion,
+    project_main_choice_palette,
     project_picker_viewport,
     project_composition_suggestions,
     project_main_suggestion_palette,
@@ -48,6 +51,7 @@ from ._model import (
     Field,
     InputPromptView,
     ListView,
+    MainCommandControlState,
     MainInputControlState,
     MainInputHistoryState,
     Message,
@@ -60,6 +64,7 @@ from ._model import (
     Section,
     SemanticRole,
     SlashCommandSuggestion,
+    SuggestionPalette,
     TerminalCapabilities,
     ViewState,
     sanitize_terminal_text,
@@ -309,7 +314,7 @@ INTERACTIVE_ERROR_SPECS: Mapping[
         ),
         InteractiveErrorCode.SESSION_EXISTS: InteractiveErrorSpec(
             "The story session already exists.",
-            "Open it or choose a different session name.",
+            "Resume it or choose a different session name.",
         ),
         InteractiveErrorCode.SESSION_NOT_FOUND: InteractiveErrorSpec(
             "The story session was not found.",
@@ -317,15 +322,15 @@ INTERACTIVE_ERROR_SPECS: Mapping[
         ),
         InteractiveErrorCode.SESSION_NOT_ATTACHED: InteractiveErrorSpec(
             "No story session is attached to this shell.",
-            "Create or open a session before using this command.",
+            "Create or resume a session before using this command.",
         ),
         InteractiveErrorCode.SESSION_PAUSED: InteractiveErrorSpec(
             "The story session is paused.",
-            "Open the session to make it ready before provider work.",
+            "Resume the session to make it ready before provider work.",
         ),
         InteractiveErrorCode.SESSION_ACCESS_BLOCKED: InteractiveErrorSpec(
             "Story-session access is held by another live local process.",
-            "Wait for that process to release access, then open the session.",
+            "Wait for that process to release access, then resume the session.",
         ),
         InteractiveErrorCode.SESSION_OWNERSHIP_UNKNOWN: InteractiveErrorSpec(
             "Story-session access ownership cannot be verified.",
@@ -443,7 +448,7 @@ class InteractiveTerminal:
         "_capability_provider",
         "_composition_read_line",
         "_confirmation_read_line",
-        "_clear_main_commit_display",
+        "_main_choice_read_line",
         "_main_read_line",
         "_picker_read",
         "_prompt_read",
@@ -485,9 +490,11 @@ class InteractiveTerminal:
         self._main_read_line = (
             read_line if main_read_line is None else main_read_line
         )
+        self._main_choice_read_line = (
+            lambda prompt, _choice_provider: self._main_read_line(prompt)
+        )
         self._composition_read_line = _plain_input_reader(read_line, width)
         self._confirmation_read_line = _plain_input_reader(read_line, width)
-        self._clear_main_commit_display: Callable[[], None] = lambda: None
         self._picker_read = _plain_picker_reader(read_line, write_text, width)
         self._prompt_read = _plain_prompt_reader(read_line, width)
         self._advisory_progress = _plain_advisory_progress
@@ -687,7 +694,7 @@ class InteractiveTerminal:
                     Notice(
                         (
                             "Provider calls are unavailable in the lobby. Use "
-                            "/session create NAME, /session open [NAME], or "
+                            "/session create NAME, /session resume [NAME], or "
                             "/session list."
                         ),
                         role=SemanticRole.WARNING,
@@ -1257,22 +1264,42 @@ class InteractiveSemanticOutput:
         self._write(component)
 
 
-class InteractiveMainCommitCleanup:
-    """Retain one package-internal committed-main cleanup capability."""
+class InteractiveMainInput:
+    """Bind call-local main choices without expanding the public terminal."""
 
-    __slots__ = ("_clear",)
+    __slots__ = ("_read",)
 
     def __init__(self, terminal: InteractiveTerminal) -> None:
-        """Bind cleanup without exposing it through the supported facade."""
+        """Retain only one terminal's package-internal main-input capability."""
 
         if not isinstance(terminal, InteractiveTerminal):
             raise TypeError("terminal must be an InteractiveTerminal")
-        self._clear: Callable[[], None] = terminal._clear_main_commit_display
+        self._read: Callable[
+            [str, Callable[[str, int], Picker | None]], str
+        ] = terminal._main_choice_read_line
 
-    def clear_main_commit_display(self) -> None:
-        """Consume one correlated live committed-main cleanup token."""
+    def read_main(
+        self,
+        choice_provider: Callable[[str, int], Picker | None],
+        *,
+        session_id: str | None = None,
+        agent_id: str | None = None,
+    ) -> TerminalAction:
+        """Return one completed main line using call-local semantic choices."""
 
-        self._clear()
+        if not callable(choice_provider):
+            raise TypeError("choice_provider must be callable")
+        prompt = _main_prompt(session_id=session_id, agent_id=agent_id)
+        try:
+            line = self._read(prompt, choice_provider)
+        except KeyboardInterrupt:
+            return TerminalAction(TerminalActionKind.INTERRUPT)
+        except EOFError:
+            return TerminalAction(TerminalActionKind.EOF)
+        return TerminalAction(
+            TerminalActionKind.LINE,
+            text=_validated_input_line(line),
+        )
 
 
 class InteractivePickerInput:
@@ -1298,7 +1325,7 @@ class InteractivePickerInput:
         selected_id: str | None = None,
         notice: Notice | None = None,
         state: ViewState = ViewState.OPEN,
-        transient: bool = False,
+        transient: bool = True,
     ) -> ControlOutcome:
         """Read one semantic single-select value without invoking a consumer."""
 
@@ -1314,11 +1341,7 @@ class InteractivePickerInput:
             state=state,
         )
         initial_state = initialize_picker(picker)
-        outcome = (
-            self._read(initial_state, transient=True)
-            if transient
-            else self._read(initial_state)
-        )
+        outcome = self._read(initial_state, transient=True)
         if type(outcome) is not ControlOutcome:
             raise TypeError("picker reader must return a ControlOutcome")
         return outcome
@@ -1343,7 +1366,7 @@ class InteractivePromptInput:
         prompt: Prompt,
         *,
         context: tuple[Panel | Section | Field | Notice, ...] = (),
-        transient: bool = False,
+        transient: bool = True,
     ) -> ControlOutcome:
         """Read one exact line with a distinct nested-cancel outcome."""
 
@@ -1351,11 +1374,7 @@ class InteractivePromptInput:
             raise TypeError("transient must be a bool")
 
         view = InputPromptView(context, prompt)
-        outcome = (
-            self._read(view, transient=True)
-            if transient
-            else self._read(view)
-        )
+        outcome = self._read(view, transient=True)
         if type(outcome) is not ControlOutcome:
             raise TypeError("prompt reader must return a ControlOutcome")
         return outcome
@@ -1475,7 +1494,7 @@ def _plain_prompt_reader(
     def read_prompt(
         view: InputPromptView,
         *,
-        transient: bool = False,
+        transient: bool = True,
     ) -> ControlOutcome:
         if type(transient) is not bool:
             raise TypeError("transient must be a bool")
@@ -1521,7 +1540,7 @@ def _plain_picker_reader(
     def read_picker(
         initial_state: PickerControlState,
         *,
-        transient: bool = False,
+        transient: bool = True,
     ) -> ControlOutcome:
         if type(initial_state) is not PickerControlState:
             raise TypeError("state must be a PickerControlState")
@@ -1604,15 +1623,52 @@ def _main_command_completion(
 def read_main_command_line(
     driver: RawTerminalDriver,
     prompt: str,
+    *,
+    choice_provider: Callable[
+        [str, int], Picker | None
+    ] | None = None,
 ) -> str:
     """Read one canonical selectable main command through the sole driver."""
 
     if not isinstance(driver, RawTerminalDriver):
         raise TypeError("driver must be a RawTerminalDriver")
+    if choice_provider is not None and not callable(choice_provider):
+        raise TypeError("choice_provider must be callable or None")
+
+    active_pickers: dict[tuple[str, int], Picker] = {}
+
+    def completion_provider(
+        buffer: str,
+        cursor: int,
+    ) -> CommandCompletionProjection | None:
+        picker = (
+            None
+            if choice_provider is None
+            else choice_provider(buffer, cursor)
+        )
+        if picker is None:
+            active_pickers.clear()
+            return _main_command_completion(buffer, cursor)
+        projection = project_main_choice_completion(buffer, cursor, picker)
+        active_pickers.clear()
+        active_pickers[(buffer, cursor)] = picker
+        return projection
+
+    def palette_projector(
+        state: MainCommandControlState,
+    ) -> SuggestionPalette | None:
+        if not main_command_uses_choices(state):
+            return project_main_suggestion_palette(state)
+        line = state.main_input.line_state
+        picker = active_pickers.get((line.buffer, line.cursor))
+        if picker is None:
+            raise RuntimeError("active main choices are not correlated")
+        return project_main_choice_palette(state, picker)
+
     return driver.read_main_command_line(
         prompt,
-        _main_command_completion,
-        project_main_suggestion_palette,
+        completion_provider,
+        palette_projector,
         render_component,
     )
 
@@ -1639,18 +1695,28 @@ def build_stream_terminal(
         width=max(20, capabilities.width),
         main_read_line=lambda prompt: read_main_command_line(driver, prompt),
     )
+    terminal._main_choice_read_line = lambda prompt, provider: (
+        read_main_command_line(
+            driver,
+            prompt,
+            choice_provider=provider,
+        )
+    )
     terminal._composition_read_line = lambda view: driver.read_input_line(
         view,
         render_input_prompt,
         project_composition_suggestions,
+        transient=True,
     )
     terminal._confirmation_read_line = lambda view: driver.read_input_line(
         view,
         render_input_prompt,
         _empty_slash_suggestions,
+        transient=True,
     )
-    terminal._clear_main_commit_display = driver.clear_main_commit_display
-    def read_picker(state, *, transient=False):
+    def read_picker(state, *, transient=True):
+        if type(transient) is not bool:
+            raise TypeError("transient must be a bool")
         arguments = (
             state,
             transition_picker,
@@ -1659,19 +1725,13 @@ def build_stream_terminal(
             render_picker_viewport,
             render_picker_fallback,
         )
-        return (
-            driver.read_picker(*arguments, transient=True)
-            if transient
-            else driver.read_picker(*arguments)
-        )
+        return driver.read_picker(*arguments, transient=True)
 
-    def read_prompt(view, *, transient=False):
+    def read_prompt(view, *, transient=True):
+        if type(transient) is not bool:
+            raise TypeError("transient must be a bool")
         arguments = (view, render_input_prompt, transition_prompt_input)
-        return (
-            driver.read_prompt(*arguments, transient=True)
-            if transient
-            else driver.read_prompt(*arguments)
-        )
+        return driver.read_prompt(*arguments, transient=True)
 
     terminal._picker_read = read_picker
     terminal._prompt_read = read_prompt

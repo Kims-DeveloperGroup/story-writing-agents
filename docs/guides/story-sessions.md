@@ -8,7 +8,17 @@ Key terms: **defaults** are persisted fallbacks; **current attachment** is the
 session held by this shell; **current focus** and **agent focus** select the
 conversation and ordinary advisory responder.
 
-## Create, open, switch, and pause
+The status fields describe separate user-visible facts:
+
+| Fact | What it means for you |
+| --- | --- |
+| Durable `ready` / `paused` | `ready` permits provider work only when the other gates pass; `paused` forbids it. Neither says whether this shell owns access. |
+| Process access | `claimable` means no blocking claim and guarded acquisition may be attempted; pair absent with create and ready/paused with resume. `held_here` means this backend owns the exact claim, not that every command is ready. |
+| Default vs current | Defaults are saved choices for a later command or process. Current attachment and conversation focus are what this process can use now. |
+| Agent focus | The responder for ordinary advisory text. A conversation change preserves it; a session switch resets it to `lead`. |
+| Provider readiness | Derived from valid configuration plus durable `ready` and access `held_here`; it is a read-only answer, not another stored state. Commands still require their documented attachment and conversation focus. |
+
+## Create, resume, switch, and pause
 
 Run `story` from an initialized workspace. Without a default it opens
 `story[lobby]>`. Session commands are:
@@ -16,36 +26,66 @@ Run `story` from an initialized workspace. Without a default it opens
 ```text
 /session list
 /session create draft
-/session open [NAME]
+/session resume [NAME]
 /session pause
 ```
 
 | Starting facts | Command behavior | User-visible result |
 | --- | --- | --- |
 | Name is absent | `/session create NAME` creates ready state and attaches it. | Orientation says `created`; it becomes the default. |
-| Ready and claimable | `/session open NAME` acquires it without durable rewrite. | Orientation says `opened`. |
-| Paused and claimable | `/session open NAME` makes it ready and acquires it. | Orientation says `reopened`. |
-| Another session is attached | Create/open acquires the destination before releasing the source. | Destination becomes default/current; agent focus resets to `lead`. |
+| Ready and claimable | `/session resume NAME` acquires it without durable rewrite. | Orientation result remains `opened`. |
+| Paused and claimable | `/session resume NAME` makes it ready and acquires it. | Orientation result remains `reopened`. |
+| Another session is attached | Create/resume acquires the destination before releasing the source. | Destination becomes default/current; agent focus resets to `lead`. |
 | Session is attached | Confirmed `/session pause` pauses and releases it. | Defaults remain; attachment and both focuses clear. |
 
-Omitting the name from `/session open` opens a picker over persisted sessions in
-the same lifecycle order used by the backend. Each row shows the session ID,
-durable state, and process-access state. The current attachment is highlighted
-when present; otherwise the saved default is highlighted when present, then the
-first row. On a capable terminal, use Up/Down and Enter. In line fallback,
-press Enter for the highlighted row or enter its ASCII decimal number.
+At a capable main prompt, typing the exact omitted `/session resume` shows all
+persisted sessions *before* submission, ordered by newest durable update then
+ID. Each row shows session ID, durable state, and process access. The current
+attachment is highlighted first, otherwise the saved default, otherwise the
+first row. Up/Down moves the highlight, Tab does nothing, and Enter submits the
+highlighted row as one complete explicit command. Escape only dismisses these
+live rows and leaves `/session resume` in the buffer; it is not a domain
+cancellation.
 
-Escape on a capable terminal, exact `/cancel` in line fallback, or Ctrl-C
-cancels without changing lifecycle state, defaults, or attachment. EOF exits
-the shell through normal cleanup without selecting a session. An empty catalog
-prints `No story sessions found.` without opening a picker. Choosing the current
-attachment only reports that it is already attached; any other selection uses
-the same open/reopen transition as explicit `/session open NAME`. The explicit
-form remains direct and never creates a missing session.
+If `/session resume` itself is submitted—after Escape then Enter, through
+nonempty configured VEOF, or without committing a live row—the controller
+freshly reads the persisted lifecycles. A successful nonempty read opens the
+history-free generic picker. It is live and transient on a capable terminal;
+ordinary-line fallback shows the complete numbered form. In fallback, press
+Enter for the highlight, enter an in-range ASCII decimal number, or enter exact
+`/cancel`. Main history contains the submitted omitted command even when no
+picker opens; when one does, its answer is history-free. Cancelling or
+interrupting that submitted picker writes
+`[cancelled] Session resume cancelled.`; Ctrl-C at the main prompt instead writes
+`[cancelled] No action was taken.` Picker EOF exits through normal cleanup
+without selecting a destination.
 
-`story chat NAME` creates an absent name or opens/reopens it. Bare `story` still
-opens a ready default and asks before reopening a paused default. The picker
-does not change `/session list` or standalone session-command behavior.
+An empty lifecycle list prints `[session] No story sessions found.` without
+opening the picker; a lifecycle-read failure reports the applicable error
+without opening it. Choosing the current attachment only reports that it is
+already attached.
+Snapshot display,
+highlight movement, Escape dismissal, picker cancel, and rejection before
+destination acquisition are mutation-free. A submitted different choice is
+freshly validated, then the controller acquires it or durably reopens it,
+post-validates, loads its conversation focus, persists the destination default,
+releases the source when switching, and finally commits in-memory attachment and
+focus. Explicit `/session resume NAME` is direct and never creates a missing
+session.
+
+That sequence is not one transaction. If a paused destination is successfully
+reopened and a later step fails, its durable state remains `ready`. Later
+failure releases newly acquired destination access where possible and does not
+advance in-memory attachment/focus, but durable lifecycle and default rollback
+are not promised. A reported default-write failure can occur after atomic
+replacement; inspect `/status` and persisted defaults rather than assuming the
+old default. If source release fails after destination-default persistence, the
+shell exits through `cleanup_failed` and the new default remains.
+
+`story chat NAME` creates an absent session or resumes a persisted session. Bare
+`story` resumes a ready default and asks for confirmation before resuming a
+paused default. Resume choices do not change `/session list` or standalone
+session-command behavior.
 
 `/quit`, `/exit`, and EOF release access without pausing; ready state and
 defaults remain. Restarting establishes a new attachment and restores an active
@@ -58,8 +98,12 @@ candidates. Agent-target positions show only the four preferred prompt aliases
 remain accepted by the parser. Up/Down moves the highlight, and Tab completes
 the active token. Escape restores the first pre-completion snapshot when present
 and dismisses
-that exact state; the palette does not enforce runtime scope. Plain fallback
-has no palette. See the
+that exact state; the palette does not enforce runtime scope. Static Enter
+completion adds one ASCII trailing space at the end of a token and does not
+submit, so a later Enter is required. Dynamic resume Enter commits immediately.
+Plain fallback has no pre-Enter palette. All capable submitted input clears its
+complete live frame before persistent results are written; fallback prompts and
+echoed input remain visible. See the
 [terminal contract](../reference/interactive-terminal.md#main-prompt-live-suggestions).
 
 ## Edit persistent settings
@@ -102,31 +146,44 @@ snapshot, and live session or explicit overrides still take precedence. See
 | --- | --- |
 | `/conversation new [SUBJECT]` | Create an active subject; save it as default and current focus. |
 | `/conversation list [--all] [QUERY]` | List in catalog order; optionally include archives or filter subjects. |
-| `/conversation use [ID]` | Focus an active exact ID or accepted unique prefix, or omit `ID` to choose from active conversations; save the default. |
+| `/conversation resume [ID]` | Focus an active exact ID or accepted unique prefix, or omit `ID` to choose from active conversations; save the default. |
 | `/conversation subject SUBJECT` | Rename the focused identity. |
 | `/conversation archive [ID]` | Confirm focused archive, or archive another identity directly. |
 
-Omitting `ID` opens the generic picker over active conversations in catalog
-order. Each row uses the subject as its label and shows `Handle: HANDLE`. A
-handle is the stable first 12 characters of the immutable ID when that prefix
-is unique across the complete session catalog; a collision shows the full ID.
-The current focus is highlighted when it is still active; otherwise the active
-saved default is highlighted when present, then the first row. On a capable
-terminal, use Up/Down and Enter. Numbered fallback accepts a blank line for the
-highlighted row, an in-range ASCII decimal ordinal, or exact `/cancel`.
+On a capable main prompt, exact omitted `/conversation resume` shows active
+conversations before submission in catalog creation-time/ID order. Each row
+uses the subject as its label and shows `Handle: HANDLE`. A handle is the stable
+first 12 characters of the immutable ID when that prefix is unique across the
+complete session catalog; a collision shows the full ID. Current active focus
+is highlighted first, then an active saved default, then the first row.
+Up/Down previews, Tab does nothing, Enter commits the full immutable ID through
+one explicit resume command, and Escape only dismisses the live rows.
 
-Escape on a capable terminal, exact `/cancel` in fallback, or Ctrl-C cancels
-without changing the catalog, saved default, current focus, or agent focus.
-EOF exits through normal shell cleanup without selecting a conversation. If
-there are no active conversations, the shell prints
-`No active conversations found.` without opening the picker.
+Submitting the omitted command instead freshly reads the complete catalog and
+eligible active rows. A successful nonempty read opens the generic picker. It
+is live and transient on a capable terminal; ordinary-line fallback uses the
+numbered form and accepts blank for the highlight, an in-range ASCII decimal
+ordinal, or exact `/cancel`. This includes Enter after Escape and nonempty
+configured VEOF. Main history records the omitted submission whether the
+controller opens a picker, reports an empty result, or reports an error; a
+picker answer is history-free. A submitted picker cancel or interrupt writes
+`[cancelled] Conversation focus cancelled.` and changes no catalog, default, or
+focus. EOF
+exits through normal cleanup without selecting a conversation. If there are no
+active conversations, the shell prints
+`[conversation] No active conversations found.` without opening the picker. A
+catalog or saved-default read failure reports the applicable error without
+opening it.
 
 A picker commit carries the immutable full ID, then rereads the complete
 catalog before selection. A conversation that disappeared or became archived
 is rejected, and a refreshed subject is used. The saved default is written
-before current focus changes, so a failed write preserves the prior effective
-choice. Explicit `/conversation use ID` remains direct and accepts the same
-exact full ID or accepted case-sensitive unique prefix of at least 12
+before current focus changes. A reported write failure therefore leaves
+in-memory current focus unchanged, but it may occur after atomic replacement of
+the persisted default; inspect the persisted selection rather than assuming the
+old default. Conversation resume never mutates catalog metadata, and agent focus
+is preserved. Explicit `/conversation resume ID` remains direct and accepts the
+same exact full ID or accepted case-sensitive unique prefix of at least 12
 characters as before.
 
 Identities cannot change. Responders share the focused transcript. Ordinary

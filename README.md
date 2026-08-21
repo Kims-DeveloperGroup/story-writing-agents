@@ -56,7 +56,17 @@ Which core-document constraint should shape the opening?
 
 Advisory input is one line; bare `/run` owns multiline composition. `/quit`
 releases process access without pausing the ready session. The default session
-and default conversation remain saved, so later `story` can open them again.
+and default conversation remain saved, so later `story` can resume the session
+and restore its conversation.
+Inside the shell, `/session resume [NAME]` and
+`/conversation resume [ID]` are the only resume grammar. On a capable terminal,
+typing either omitted form shows choices before Enter; highlighted Enter submits
+an explicit identity and bypasses the picker. If the omitted form itself is
+submitted, the controller reads the choices again. A successful read with at
+least one eligible choice opens a generic picker: live and transient on a
+capable terminal, or numbered in ordinary-line fallback. An empty or failed
+read reports its result or error without opening the picker. See the user-visible
+state and input behavior in [Story sessions](docs/guides/story-sessions.md).
 See the complete [Glasswater journey](docs/guides/glasswater-scenario.md).
 
 For scripts and non-TTY automation, use `story run`; it never uses conversation

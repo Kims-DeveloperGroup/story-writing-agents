@@ -92,9 +92,14 @@ The ordinary question is one advisory line. `/run PROMPT` starts consensus with
 one bounded snapshot of the current focus. `/inspect last` shows safe metadata
 for this process's latest accepted run. `/status` names the durable state,
 process access, defaults, current attachment and focus, provider readiness, and
-next action. `/quit` releases access without pausing. Run `story` again to open
+next action. `/quit` releases access without pausing. Run `story` again to resume
 the ready default and restore its active default conversation. Use confirmed
-`/session pause` when provider work should stop until the session is opened again.
+`/session pause` when provider work should stop until the session is resumed again.
+Resume it in the shell with `/session resume [NAME]`; omit `NAME` to choose from
+the live pre-Enter rows on a capable terminal. Submitting the omitted command
+rereads the available sessions. A successful nonempty read opens a generic
+picker, which is live on a capable terminal and numbered in ordinary-line
+fallback; an empty or failed read reports its result or error without a picker.
 
 ## 5. Automate without a TTY
 

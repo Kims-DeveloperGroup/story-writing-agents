@@ -31,6 +31,7 @@ from ._model import (
 
 _COMPOSITION_SUGGESTION_TOKENS = ("/send", "/cancel")
 _MAIN_INPUT_HISTORY_LIMIT = 100
+_MAIN_CHOICE_POSITION_PREFIX = "main.choice:"
 _PICKER_WINDOW_SIZE = 7
 _PICKER_EMPTY_TEXT = "No choices available."
 _PICKER_VALIDATION_TEXT = (
@@ -257,12 +258,25 @@ def transition_main_command_input(
         and state.palette is not None
         and state.palette.highlighted is not None
     ):
+        if _is_main_choice_palette(state.palette):
+            committed = state.palette.highlighted.replacement
+            closed_main = _main_input_with_line(
+                state.main_input,
+                state.main_input.line_state,
+                overlay_open=False,
+            )
+            return (
+                MainCommandControlState(closed_main),
+                ControlOutcome(ControlOutcomeKind.COMMIT, text=committed),
+            )
         return _apply_main_command_completion(
             state,
             completion_provider,
             dismiss_palette=True,
         ), None
     if event.kind is KeyKind.TAB:
+        if state.palette is not None and _is_main_choice_palette(state.palette):
+            return state, None
         return _apply_main_command_completion(
             state,
             completion_provider,
@@ -339,6 +353,100 @@ def project_main_suggestion_palette(
         choices,
         highlighted_id=highlighted_id,
         state=ViewState.OPEN,
+    )
+
+
+def project_main_choice_completion(
+    buffer: str,
+    cursor: int,
+    picker: Picker,
+) -> CommandCompletionProjection:
+    """Project controller-owned choices into the existing main control state.
+
+    Choice identities are exact committed lines and remain opaque to rendering.
+    Only enabled identities participate in keyboard focus and direct commit.
+    """
+
+    if type(buffer) is not str:
+        raise TypeError("buffer must be a string")
+    if type(cursor) is not int:
+        raise TypeError("cursor must be an integer")
+    if cursor < 0 or cursor > len(buffer):
+        raise ValueError("cursor must identify a buffer boundary")
+    if type(picker) is not Picker:
+        raise TypeError("picker must be a Picker")
+    choices = picker.choices
+    identities = tuple(choice.identity for choice in choices)
+    if len(set(identities)) != len(identities):
+        raise ValueError("choice identities must be unique")
+    if any("\r" in identity or "\n" in identity for identity in identities):
+        raise ValueError("choice identities must be single-line committed values")
+    enabled_identities = tuple(
+        choice.identity for choice in choices if choice.enabled
+    )
+    highlighted_id = picker.highlighted_id
+    if highlighted_id is None and picker.selected_id is not None:
+        highlighted_id = picker.selected_id
+    if highlighted_id is None and enabled_identities:
+        highlighted_id = enabled_identities[0]
+    highlighted_index = (
+        -1
+        if highlighted_id is None
+        else enabled_identities.index(highlighted_id)
+    )
+    position = f"{_MAIN_CHOICE_POSITION_PREFIX}{highlighted_index}"
+    return CommandCompletionProjection(
+        position,
+        cursor,
+        cursor,
+        tuple(
+            CommandCompletionCandidate(position, choice.identity)
+            for choice in choices
+            if choice.enabled
+        ),
+    )
+
+
+def project_main_choice_palette(
+    state: MainCommandControlState,
+    picker: Picker,
+) -> SuggestionPalette | None:
+    """Render one active main-choice cycle with controller-owned row copy."""
+
+    if type(state) is not MainCommandControlState:
+        raise TypeError("state must be a MainCommandControlState")
+    if type(picker) is not Picker:
+        raise TypeError("picker must be a Picker")
+    choices = picker.choices
+    palette = state.palette
+    if palette is None or not _is_main_choice_palette(palette):
+        return None
+    enabled_identities = tuple(
+        choice.identity for choice in choices if choice.enabled
+    )
+    candidate_identities = tuple(
+        candidate.replacement for candidate in palette.projection.candidates
+    )
+    if enabled_identities != candidate_identities:
+        raise ValueError("main choices must match the active choice projection")
+    highlighted_id = (
+        None if palette.highlighted is None else palette.highlighted.replacement
+    )
+    return SuggestionPalette(
+        state.main_input.line_state.buffer,
+        choices,
+        highlighted_id=highlighted_id,
+        state=ViewState.OPEN,
+    )
+
+
+def main_command_uses_choices(state: MainCommandControlState) -> bool:
+    """Return whether one main control currently owns a dynamic choice cycle."""
+
+    if type(state) is not MainCommandControlState:
+        raise TypeError("state must be a MainCommandControlState")
+    return bool(
+        state.palette is not None and _is_main_choice_palette(state.palette)
     )
 
 
@@ -824,6 +932,26 @@ def _apply_main_command_completion(
     )
 
 
+def _is_main_choice_palette(palette: MainCommandPaletteState) -> bool:
+    """Identify only the reserved controller-owned main-choice position."""
+
+    return palette.projection.position.startswith(_MAIN_CHOICE_POSITION_PREFIX)
+
+
+def _main_choice_highlight_index(projection: CommandCompletionProjection) -> int:
+    """Decode the provider-selected initial enabled-choice ordinal."""
+
+    if not projection.position.startswith(_MAIN_CHOICE_POSITION_PREFIX):
+        raise ValueError("projection is not a main-choice projection")
+    value = projection.position.removeprefix(_MAIN_CHOICE_POSITION_PREFIX)
+    if not value.isascii() or not value.lstrip("-").isdecimal():
+        raise ValueError("main-choice projection has an invalid highlight")
+    index = int(value)
+    if index < -1 or index >= len(projection.candidates):
+        raise ValueError("main-choice highlight does not identify a candidate")
+    return index
+
+
 def _project_main_command_state(
     main_input: MainInputControlState,
     completion_provider: Callable[
@@ -872,11 +1000,17 @@ def _project_main_command_state(
         previous_highlight = (
             previous_palette.highlighted if same_cycle else None
         )
-        highlighted = (
-            previous_highlight
-            if previous_highlight in candidates
-            else candidates[0]
-        )
+        if previous_highlight in candidates:
+            highlighted = previous_highlight
+        elif projection.position.startswith(_MAIN_CHOICE_POSITION_PREFIX):
+            highlight_index = _main_choice_highlight_index(projection)
+            highlighted = (
+                candidates[0]
+                if highlight_index == -1
+                else candidates[highlight_index]
+            )
+        else:
+            highlighted = candidates[0]
     palette = MainCommandPaletteState(
         filtered,
         highlighted,

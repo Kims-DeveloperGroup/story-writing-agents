@@ -16,9 +16,16 @@ from story_writing_agents import interactive_terminal as terminal_facade
 from story_writing_agents.interactive_terminal import _controls, _core, _driver, _model
 from story_writing_agents.interactive_terminal._controls import (
     append_main_input_history,
+    initialize_picker,
+    main_command_uses_choices,
+    project_main_choice_completion,
+    project_main_choice_palette,
+    project_picker_viewport,
     project_main_suggestion_palette,
     transition_line_input,
     transition_main_command_input,
+    transition_picker,
+    transition_picker_fallback,
 )
 from story_writing_agents.interactive_terminal._driver import RawTerminalDriver
 from story_writing_agents.interactive_terminal._model import (
@@ -35,6 +42,8 @@ from story_writing_agents.interactive_terminal._model import (
     MainCommandPaletteState,
     MainInputControlState,
     MainInputHistoryState,
+    Picker,
+    Prompt,
     RenderedFrame,
     SuggestionPalette,
     TerminalCapabilities,
@@ -42,6 +51,8 @@ from story_writing_agents.interactive_terminal._model import (
 )
 from story_writing_agents.interactive_terminal._render import (
     render_component,
+    render_picker_fallback,
+    render_picker_viewport,
     strip_decorative_sgr,
 )
 
@@ -391,6 +402,106 @@ class CompletionControlTests(unittest.TestCase):
                 state=ViewState.OPEN,
             ),
         )
+
+    def test_dynamic_choices_replace_static_focus_and_commit_exact_identity(
+        self,
+    ) -> None:
+        picker = Picker(
+            Prompt("Resume"),
+            (
+                Choice("/session resume alpha", "Alpha"),
+                Choice(
+                    "/session resume disabled",
+                    "Unavailable",
+                    enabled=False,
+                    disabled_reason="Busy",
+                ),
+                Choice("/session resume beta", "Beta"),
+            ),
+            highlighted_id="/session resume beta",
+        )
+        choice_provider = mock.Mock(
+            side_effect=lambda buffer, cursor: project_main_choice_completion(
+                buffer,
+                cursor,
+                picker,
+            )
+        )
+        state, outcome = transition_main_command_input(
+            MainCommandControlState(),
+            KeyEvent(KeyKind.TEXT, text="/"),
+            MainInputHistoryState(("/status",)),
+            choice_provider,
+        )
+
+        self.assertIsNone(outcome)
+        self.assertTrue(main_command_uses_choices(state))
+        self.assertEqual(
+            tuple(
+                candidate.replacement
+                for candidate in state.palette.projection.candidates  # type: ignore[union-attr]
+            ),
+            ("/session resume alpha", "/session resume beta"),
+        )
+        self.assertEqual(
+            state.palette.highlighted.replacement,  # type: ignore[union-attr]
+            "/session resume beta",
+        )
+        self.assertEqual(
+            project_main_choice_palette(state, picker),
+            SuggestionPalette(
+                "/",
+                picker.choices,
+                highlighted_id="/session resume beta",
+                state=ViewState.OPEN,
+            ),
+        )
+        self.assertNotEqual(
+            state.palette.projection,  # type: ignore[union-attr]
+            _core._main_command_completion("/", 1),
+        )
+
+        moved_up, outcome = transition_main_command_input(
+            state,
+            KeyEvent(KeyKind.UP),
+            MainInputHistoryState(("/status",)),
+            choice_provider,
+        )
+        self.assertIsNone(outcome)
+        self.assertEqual(
+            moved_up.palette.highlighted.replacement,  # type: ignore[union-attr]
+            "/session resume alpha",
+        )
+        moved_down, _ = transition_main_command_input(
+            moved_up,
+            KeyEvent(KeyKind.DOWN),
+            MainInputHistoryState(("/status",)),
+            choice_provider,
+        )
+        tabbed, outcome = transition_main_command_input(
+            moved_down,
+            KeyEvent(KeyKind.TAB),
+            MainInputHistoryState(("/status",)),
+            choice_provider,
+        )
+        self.assertIs(tabbed, moved_down)
+        self.assertIsNone(outcome)
+        committed, outcome = transition_main_command_input(
+            tabbed,
+            KeyEvent(KeyKind.ENTER),
+            MainInputHistoryState(("/status",)),
+            choice_provider,
+        )
+        self.assertEqual(
+            outcome,
+            _model.ControlOutcome(
+                ControlOutcomeKind.COMMIT,
+                text="/session resume beta",
+            ),
+        )
+        self.assertEqual(committed.main_input.line_state, LineInputState("/", 1))
+        self.assertIsNone(committed.palette)
+        choice_provider.assert_called_once_with("/", 1)
 
     def test_routed_agent_palette_order_filter_case_and_aliases_are_exact(
         self,
@@ -877,6 +988,150 @@ class CompletionDriverTests(unittest.TestCase):
         self.assertIn("Suggestions [open]", rendered)
         self.assertNotIn("Suggestions [open]", output.records[-1])
 
+    def test_completion_only_enter_does_not_append_before_interrupt(self) -> None:
+        driver, _input, output, fallback, termios, _os = make_driver("/s\n\x03")
+        history_append = mock.Mock(wraps=append_main_input_history)
+        driver._history_append = history_append
+
+        with self.assertRaises(KeyboardInterrupt):
+            self.read(driver)
+
+        history_append.assert_not_called()
+        self.assertEqual(driver._history_state, MainInputHistoryState())
+        fallback.assert_not_called()
+        self.assertTrue(output.records[-1].endswith("\x1b[J\n"))
+        self.assertEqual(
+            tuple(call[1] for call in termios.set_calls),
+            (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
+        )
+
+    def test_dynamic_choice_live_commit_clears_restores_then_appends_identity(
+        self,
+    ) -> None:
+        driver, _input, output, fallback, termios, _os = make_driver(
+            "/\x1b[B\n"
+        )
+        events: list[tuple[str, object]] = []
+        original_write = output.write
+        original_set = termios.tcsetattr
+
+        def write(text: str) -> int:
+            events.append(("write", text))
+            return original_write(text)
+
+        def set_attributes(
+            descriptor: int,
+            when: int,
+            attributes: list[object],
+        ) -> None:
+            events.append(("termios", when))
+            original_set(descriptor, when, attributes)
+
+        def append_history(
+            history: MainInputHistoryState,
+            line: str,
+        ) -> MainInputHistoryState:
+            events.append(("history", line))
+            return append_main_input_history(history, line)
+
+        output.write = write  # type: ignore[method-assign]
+        termios.tcsetattr = set_attributes  # type: ignore[method-assign]
+        driver._history_append = append_history
+        picker = Picker(
+            Prompt("Resume"),
+            (
+                Choice("/session resume alpha", "Alpha"),
+                Choice("/session resume beta", "Beta"),
+            ),
+        )
+        provider = mock.Mock(return_value=picker)
+        with mock.patch.object(
+            _driver._select,
+            "select",
+            side_effect=lambda readable, writable, exceptional, _timeout: (
+                readable,
+                writable,
+                exceptional,
+            ),
+        ):
+            self.assertEqual(
+                _core.read_main_command_line(
+                    driver,
+                    "main> ",
+                    choice_provider=provider,
+                ),
+                "/session resume beta",
+            )
+
+        self.assertEqual(
+            driver._history_state,
+            MainInputHistoryState(("/session resume beta",)),
+        )
+        self.assertEqual(
+            events[-3:],
+            [
+                ("write", "\r\r\x1b[J"),
+                ("termios", FakeTermios.TCSADRAIN),
+                ("history", "/session resume beta"),
+            ],
+        )
+        rendered = "".join(output.records)
+        self.assertIn("[highlighted] Beta", rendered)
+        self.assertNotIn("/say", rendered)
+        self.assertNotIn("/session resume beta", rendered)
+        provider.assert_called_once_with("/", 1)
+        fallback.assert_not_called()
+
+    def test_dynamic_provider_failure_clears_restores_without_history(self) -> None:
+        driver, _input, output, fallback, termios, _os = make_driver("/unused")
+        provider = mock.Mock(side_effect=RuntimeError("choice failure"))
+
+        with self.assertRaisesRegex(RuntimeError, "^choice failure$"):
+            _core.read_main_command_line(
+                driver,
+                "main> ",
+                choice_provider=provider,
+            )
+
+        provider.assert_called_once_with("/", 1)
+        fallback.assert_not_called()
+        self.assertEqual(driver._history_state, MainInputHistoryState())
+        self.assertTrue(output.records[-1].endswith("\x1b[J\n"))
+        self.assertEqual(
+            tuple(call[1] for call in termios.set_calls),
+            (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
+        )
+
+    def test_transient_picker_renderer_failure_clears_and_restores(self) -> None:
+        driver, _input, output, fallback, termios, _os = make_driver("unused")
+        state = initialize_picker(
+            Picker(
+                Prompt("Choose"),
+                (Choice("opaque", "Visible"),),
+            )
+        )
+        renderer = mock.Mock(side_effect=RuntimeError("picker render failed"))
+
+        with self.assertRaisesRegex(RuntimeError, "^picker render failed$"):
+            driver.read_picker(
+                state,
+                transition_picker,
+                transition_picker_fallback,
+                project_picker_viewport,
+                renderer,
+                render_picker_fallback,
+                transient=True,
+            )
+
+        renderer.assert_called_once()
+        fallback.assert_not_called()
+        self.assertEqual(driver._history_state, MainInputHistoryState())
+        self.assertEqual(output.records[-1], "\r\r\x1b[J\n")
+        self.assertEqual(
+            tuple(call[1] for call in termios.set_calls),
+            (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
+        )
+
     def test_routed_enter_completion_waits_for_message_and_second_enter(
         self,
     ) -> None:
@@ -1040,6 +1295,27 @@ class CompletionDriverTests(unittest.TestCase):
         self.assertEqual(dumb_termios.set_calls, [])
         self.assertEqual(dumb_os.observed_widths, [8])
 
+        dynamic = mock.Mock(side_effect=AssertionError("choices called"))
+        plain, _input, plain_output, plain_fallback, _termios, _os = make_driver(
+            "unused",
+            terminal=False,
+        )
+        self.assertEqual(
+            _core.read_main_command_line(
+                plain,
+                "main> ",
+                choice_provider=dynamic,
+            ),
+            "fallback",
+        )
+        dynamic.assert_not_called()
+        plain_fallback.assert_called_once_with("main> ")
+        self.assertEqual(plain_output.records, [])
+        self.assertEqual(
+            plain._history_state,
+            MainInputHistoryState(("fallback",)),
+        )
+
     def test_completion_projector_and_renderer_failures_restore_without_history(
         self,
     ) -> None:
@@ -1081,12 +1357,22 @@ class CompletionDriverTests(unittest.TestCase):
         driver = mock.Mock(spec=RawTerminalDriver)
         driver.read_main_command_line.return_value = "/status"
         self.assertEqual(_core.read_main_command_line(driver, "main> "), "/status")
-        driver.read_main_command_line.assert_called_once_with(
-            "main> ",
-            _core._main_command_completion,
-            project_main_suggestion_palette,
-            render_component,
+        driver.read_main_command_line.assert_called_once()
+        prompt, completion, projector, renderer = (
+            driver.read_main_command_line.call_args.args
         )
+        self.assertEqual(prompt, "main> ")
+        self.assertEqual(completion("/s", 2), _core._main_command_completion("/s", 2))
+        state = MainCommandControlState()
+        for character in "/s":
+            state, _ = transition_main_command_input(
+                state,
+                KeyEvent(KeyKind.TEXT, text=character),
+                MainInputHistoryState(),
+                completion,
+            )
+        self.assertEqual(projector(state), project_main_suggestion_palette(state))
+        self.assertIs(renderer, render_component)
         with self.assertRaises(TypeError):
             _core.read_main_command_line(object(), "main> ")  # type: ignore[arg-type]
 

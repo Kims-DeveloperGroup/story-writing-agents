@@ -520,7 +520,7 @@ class LiveEditingTests(unittest.TestCase):
                 "\x1bOB",
                 "!\n",
                 "ab\t\x1b[Z\x1bx\n",
-                "/\x1b[A\n",
+                "/\x1b[A\x04",
             )
         )
         editor, _input, output, fallback = make_editor(characters)
@@ -663,8 +663,6 @@ class LiveEditingTests(unittest.TestCase):
                         "\r",
                         "\x1b[A" * (len(lines) - 1),
                         "\r\x1b[J",
-                        "\n".join(lines),
-                        "\n",
                     )
                 )
                 self.assertEqual(output.records[-1], expected)
@@ -700,7 +698,7 @@ class LiveEditingTests(unittest.TestCase):
                 "/unsafe",
             ),
         )
-        editor, _input, output, _fallback = make_editor("/\n")
+        editor, _input, output, _fallback = make_editor("/\x04")
         with (
             mock.patch.object(editor_module, "COMMANDS", registry),
             mock.patch.object(commands_module, "COMMANDS", registry),
@@ -1335,7 +1333,7 @@ class EditorBoundaryTests(unittest.TestCase):
         environment_before = os.environ.copy()
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            editor, _input, _output, fallback = make_editor("/status\n")
+            editor, _input, _output, fallback = make_editor("/status\x04")
             contextual_editor, _context_input, _context_output, contextual_fallback = (
                 make_editor("/\x7fplain\n")
             )

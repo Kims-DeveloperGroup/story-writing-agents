@@ -751,7 +751,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
     def test_internal_picker_ansi_resizes_navigates_commits_and_restores_repeatedly(
         self,
     ) -> None:
-        """Exercise the unlisted stream adapter, live window, and final commit."""
+        """Exercise the unlisted stream adapter and transient live commit."""
 
         source = r'''
 import sys
@@ -825,7 +825,8 @@ print("RESULT=" + outcome.kind.value)
                     re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", final).split()
                 )
                 self.assertIn("[selected][highlighted]Kappa", collapsed)
-                self.assertIn("[completed]", collapsed)
+                self.assertIn("\x1b[J", final)
+                self.assertNotIn("[completed]", collapsed)
                 self.assertNotIn("secret-", process.normalized_text)
                 self.assertIn(b"\x1b[35m", process.raw_bytes)
                 self.assertNotIn(b"\x1b[?1049", process.raw_bytes)
@@ -885,7 +886,8 @@ print("RESULT=" + outcome.kind.value)
                 visible = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", result)
                 collapsed = "".join(visible.split())
                 self.assertIn("[selected][highlighted]", collapsed)
-                self.assertIn("[cancelled]", collapsed)
+                self.assertIn("\x1b[J", result)
+                self.assertNotIn("[cancelled]", collapsed)
                 self.assertNotIn("opaque-id", process.normalized_text)
                 self.assertNotRegex(
                     process.normalized_text,
@@ -988,11 +990,12 @@ print("RESULT=" + outcome.kind.value)
         process.send_line("2")
         retry = process.wait_for_text("[validation]")
         self.assertEqual(retry.count("[validation]"), 1)
+        final_mark = process.output_mark()
         process.send_line("3")
-        result = process.wait_for_text("RESULT=commit")
+        result = process.wait_for_text("RESULT=commit", after=final_mark)
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
-        self.assertIn("[completed]", result)
-        self.assertIn("3. [selected] [highlighted] Gamma", result)
+        self.assertNotIn("[completed]", result)
+        self.assertNotIn("[selected]", result)
         self.assertNotIn("secret-", process.normalized_text)
         self.assertNotIn("\x1b[J", process.normalized_text)
         self.assertEqual(_durable_tree(self.workspace.root), before)
@@ -1042,6 +1045,82 @@ print("RESULT=" + outcome.kind.value)
                     process.original_terminal_attributes,
                 )
 
+    def test_internal_main_dynamic_choices_focus_commit_clear_and_restore(self) -> None:
+        """Exercise call-local live choices without exposing opaque identities."""
+
+        source = r'''
+import json
+import sys
+
+from story_writing_agents.interactive_terminal import (
+    Choice,
+    InteractiveMainInput,
+    Picker,
+    Prompt,
+    build_stream_terminal,
+)
+
+calls = []
+
+def choices(buffer, cursor):
+    calls.append([buffer, cursor])
+    if buffer != "/":
+        return None
+    return Picker(
+        Prompt("Resume"),
+        (
+            Choice("opaque-alpha", "Alpha"),
+            Choice("opaque-beta", "Beta"),
+        ),
+    )
+
+terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
+action = InteractiveMainInput(terminal).read_main(choices)
+print(
+    "RESULT="
+    + json.dumps(
+        {"kind": action.kind.value, "text": action.text, "calls": calls},
+        separators=(",", ":"),
+    )
+)
+'''
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=40,
+            decorative_color=True,
+        )
+        process.wait_for_text("story[lobby]> ")
+        mark = process.output_mark()
+        process.send_text("/")
+        opened = process.wait_for_text("[highlighted] Alpha", after=mark)
+        self.assertIn("Suggestions [open]", opened)
+        self.assertIn("Beta", opened)
+        self.assertNotIn("/say", opened)
+        self.assertNotIn("opaque-", opened)
+        process.send_text("\x1b[B")
+        process.wait_for_text("[highlighted] Beta", after=mark)
+        commit_mark = process.output_mark()
+        process.send_text("\n")
+        result = process.wait_for_text("RESULT=", after=commit_mark)
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertIn("\x1b[J", result)
+        match = re.search(r"RESULT=(\{[^\n]+\})", result)
+        self.assertIsNotNone(match, result)
+        assert match is not None
+        self.assertEqual(
+            json.loads(match.group(1)),
+            {
+                "kind": "line",
+                "text": "opaque-beta",
+                "calls": [["/", 1]],
+            },
+        )
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
     def test_semantic_views_use_ansi_and_no_color_profiles_on_real_ptys(
         self,
     ) -> None:
@@ -1058,13 +1137,13 @@ print("RESULT=" + outcome.kind.value)
         self.assertIn(b"\x1b[1m--------------------------------", ansi.raw_bytes)
         self.assertIn(b"\x1b[0m", ansi.raw_bytes)
         mark = ansi.output_mark()
-        ansi.send_line("/help /run")
+        ansi.send_text("/help /run\n\n")
         ansi.wait_for_text("Help [completed]", after=mark)
         ansi.wait_for_text("story[lobby]> ", after=mark)
         dense_ansi = bytes(ansi.raw_bytes[mark:])
         self.assertIn(b"\x1b[1m--- Help [completed] ", dense_ansi)
         self.assertIn(b"\x1b[35m  [command] [completed]", dense_ansi)
-        ansi.send_line("/quit")
+        ansi.send_text("/quit\n\n")
         self.assertEqual(ansi.wait_for_exit(), 0, ansi.normalized_text)
         self.assertEqual(
             ansi.final_terminal_attributes,
@@ -1080,13 +1159,13 @@ print("RESULT=" + outcome.kind.value)
         self.assertNotIn(b"\x1b[1m--- Story chat", no_color.raw_bytes)
         self.assertNotIn(b"\x1b[33m  [warning]", no_color.raw_bytes)
         mark = no_color.output_mark()
-        no_color.send_line("/agents")
+        no_color.send_text("/agents\n\n")
         no_color.wait_for_text("Agents (4) [completed]", after=mark)
         no_color.wait_for_text("story[lobby]> ", after=mark)
         dense_plain = bytes(no_color.raw_bytes[mark:])
         self.assertNotIn(b"\x1b[1mAgents", dense_plain)
         self.assertNotIn(b"\x1b[34m  [agent]", dense_plain)
-        no_color.send_line("/quit")
+        no_color.send_text("/quit\n\n")
         self.assertEqual(no_color.wait_for_exit(), 0, no_color.normalized_text)
         self.assertEqual(
             no_color.final_terminal_attributes,
@@ -1096,12 +1175,12 @@ print("RESULT=" + outcome.kind.value)
         line = self._spawn_cli(())
         line.wait_for_text("story[lobby]> ")
         mark = line.output_mark()
-        line.send_line("/session list")
+        line.send_text("/session list\n\n")
         line.wait_for_text("Story sessions (0) [empty]", after=mark)
         line.wait_for_text("[session] No story sessions found.", after=mark)
         line.wait_for_text("story[lobby]> ", after=mark)
         self.assertNotIn(b"\x1b", bytes(line.raw_bytes[mark:]))
-        line.send_line("/quit")
+        line.send_text("/quit\n\n")
         self.assertEqual(line.wait_for_exit(), 0, line.normalized_text)
         self.assertEqual(
             line.final_terminal_attributes,
@@ -1124,7 +1203,7 @@ print("RESULT=" + outcome.kind.value)
                 )
                 process.wait_for_text("story[lobby]> ")
                 mark = process.output_mark()
-                process.send_line("/settings")
+                process.send_text("/settings\n\n")
                 opened = process.wait_for_text(
                     "Choose a setting to edit, save, or cancel.",
                     after=mark,
@@ -1178,7 +1257,7 @@ print("RESULT=" + outcome.kind.value)
                 process.send_interrupt()
                 process.wait_for_text("[cancelled]", after=history_mark)
                 process.wait_for_text("story[lobby]> ", after=history_mark)
-                process.send_line("/quit")
+                process.send_text("/quit\n\n")
                 self.assertEqual(
                     process.wait_for_exit(),
                     0,
@@ -1210,7 +1289,7 @@ print("RESULT=" + outcome.kind.value)
                     )
                     process.wait_for_text("story[lobby]> ")
                     mark = process.output_mark()
-                    process.send_line("/settings")
+                    process.send_text("/settings\n\n")
                     process.wait_for_text(
                         "[highlighted] Language",
                         after=mark,
@@ -1238,7 +1317,7 @@ print("RESULT=" + outcome.kind.value)
                         cancelled,
                         r"\x1b\[(?:0|1|3[1-7])m",
                     )
-                    process.send_line("/quit")
+                    process.send_text("/quit\n\n")
                     self.assertEqual(
                         process.wait_for_exit(),
                         0,
@@ -1304,7 +1383,7 @@ print("RESULT=" + outcome.kind.value)
         process.send_line("/session create alpha")
         process.wait_for_text("story[alpha:lead]> ")
         self.assertIn("Session: alpha (created)\n", process.normalized_text)
-        process.send_line("/quit")
+        process.send_text("/quit\n\n")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
 
         manifest = self.workspace.read_json(f"{_SESSION_DIRECTORY}/alpha.json")
@@ -1391,6 +1470,9 @@ print("RESULT=" + outcome.kind.value)
 
         submit_mark = process.output_mark()
         process.send_text("\n")
+        completed = process.wait_for_text("us ", after=submit_mark)
+        self.assertNotIn("[session]", completed)
+        process.send_text("\n")
         submitted = process.wait_for_text("[session]\n", after=submit_mark)
         process.wait_for_text("story[lobby]> ", after=submit_mark)
         self.assertIn("\x1b[J", submitted)
@@ -1398,7 +1480,7 @@ print("RESULT=" + outcome.kind.value)
         self.assertEqual(_durable_tree(self.workspace.root), before)
         self.assertFalse(self.provider_log.exists())
 
-        process.send_line("/quit")
+        process.send_text("/quit\n\n")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
         self.assertEqual(_durable_tree(self.workspace.root), before)
         self.assertFalse(self.provider_log.exists())
@@ -1421,7 +1503,7 @@ print("RESULT=" + outcome.kind.value)
         process.wait_for_text("story[lobby]> ")
 
         status_mark = process.output_mark()
-        process.send_line("/status")
+        process.send_text("/status\n\n")
         process.wait_for_text("story[lobby]> ", after=status_mark)
 
         draft_mark = process.output_mark()
@@ -1461,11 +1543,19 @@ print("RESULT=" + outcome.kind.value)
         process.wait_for_text("[session]", after=veof_mark)
         process.wait_for_text("story[lobby]> ", after=veof_mark)
         recall_mark = process.output_mark()
-        process.send_text("\x1bOA\n")
+        process.send_text("\x1bOA")
         process.wait_for_text("story[lobby]> /status", after=recall_mark)
-        process.wait_for_text("[session]", after=recall_mark)
+        completion_mark = process.output_mark()
+        process.send_text("\n")
+        process.wait_for_text(
+            "story[lobby]> /status ",
+            after=completion_mark,
+        )
+        submit_mark = process.output_mark()
+        process.send_text("\n")
+        process.wait_for_text("[session]", after=submit_mark)
 
-        process.send_line("/quit")
+        process.send_text("/quit\n\n")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
         self.assertEqual(_durable_tree(self.workspace.root), before)
         self.assertFalse(self.provider_log.exists())
@@ -1485,7 +1575,7 @@ print("RESULT=" + outcome.kind.value)
             process.original_terminal_attributes,
         )
 
-    def test_main_completion_navigates_tabs_restores_snapshot_and_commits(self) -> None:
+    def test_main_completion_navigates_tabs_closes_palette_and_commits(self) -> None:
         """Exercise selectable ANSI completion through the real public CLI."""
 
         before = _durable_tree(self.workspace.root)
@@ -1506,17 +1596,17 @@ print("RESULT=" + outcome.kind.value)
         process.wait_for_text("story[lobby]> /to", after=mark)
         snapshot_mark = process.output_mark()
         process.send_text("\x1b")
-        process.wait_for_text("story[lobby]> /", after=snapshot_mark)
+        process.wait_for_text("story[lobby]> /to ", after=snapshot_mark)
         self.assertNotIn("Suggestions [open]", process.text_after(snapshot_mark))
 
-        process.send_text("stat\t\n")
+        process.send_text("\x7f\x7f\x7fstatus\t\n")
         process.wait_for_text("story[lobby]> /status", after=snapshot_mark)
         process.wait_for_text("[session]", after=snapshot_mark)
         process.wait_for_text("story[lobby]> ", after=snapshot_mark)
         self.assertEqual(_durable_tree(self.workspace.root), before)
         self.assertFalse(self.provider_log.exists())
 
-        process.send_line("/quit")
+        process.send_text("/quit\n\n")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
         self.assertEqual(
             process.final_terminal_attributes,
@@ -1559,7 +1649,7 @@ print("RESULT=" + outcome.kind.value)
         process.wait_for_text("story[lobby]> ", after=mark)
         self.assertEqual(_durable_tree(self.workspace.root), before)
         self.assertFalse(self.provider_log.exists())
-        process.send_line("/quit")
+        process.send_text("/quit\n\n")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
         self.assertEqual(
             process.final_terminal_attributes,
@@ -1927,10 +2017,11 @@ print(
         process.send_line("/conversation list")
         listed = process.wait_for_text("First Subject", after=mark)
         process.wait_for_text("Second Subject", after=mark)
+        process.wait_for_text("story[alpha:lead]> ", after=mark)
         self.assertIn("focused", listed)
 
         mark = process.output_mark()
-        process.send_line(f"/conversation use {first_handle}")
+        process.send_line(f"/conversation resume {first_handle}")
         process.wait_for_text("Current focus: ", after=mark)
         mark = process.output_mark()
         process.send_line("/conversation subject Renamed Subject")
@@ -1943,6 +2034,7 @@ print(
         process.send_line("yes")
         process.wait_for_text("Archived ", after=mark)
         process.wait_for_text("Subject: Second Subject", after=mark)
+        process.wait_for_text("story[alpha:lead]> ", after=mark)
 
         mark = process.output_mark()
         process.send_line("/to plot")
@@ -2051,7 +2143,7 @@ print(
         )
 
         mark = process.output_mark()
-        process.send_line("/session open alpha")
+        process.send_line("/session resume alpha")
         process.wait_for_text("Session: alpha (opened)", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         self.assertFalse(
@@ -2087,10 +2179,10 @@ print(
             )
         self.assertFalse(self.provider_log.exists())
 
-    def test_session_open_picker_selects_persisted_session_and_restores_terminal(
+    def test_live_session_resume_selects_persisted_session_and_restores_terminal(
         self,
     ) -> None:
-        """Move from the highlighted attachment to another persisted session."""
+        """Commit one live resume choice without entering a second picker."""
 
         self._seed_default_session()
         backend = AgentBackend(
@@ -2120,24 +2212,33 @@ print(
         )
         process.wait_for_text("story[alpha:lead]> ")
         mark = process.output_mark()
-        process.send_line("/session open")
-        process.send_text("\n")
+        process.send_text("/session resume")
         opened = process.wait_for_text(
-            "Open story session [focused] [open] >",
+            "[highlighted] alpha — Durable: ready; access: held_here",
             after=mark,
         )
+        self.assertIn("Suggestions [open]", opened)
         self.assertLess(
-            opened.index("[available] beta"),
+            opened.index("- beta — Durable: ready; access: claimable"),
             opened.index("[highlighted] alpha"),
         )
-        self.assertIn("[highlighted] alpha", opened)
-        self.assertIn("Durable: ready; access: held_here", opened)
+        self.assertNotIn("Resume story session [focused] [open] >", opened)
 
-        process.send_text("\x1b[A\n")
-        process.wait_for_text("Session: beta (opened)", after=mark)
-        process.wait_for_text("story[beta:lead]> ", after=mark)
-        process.send_line("/quit")
+        navigation_mark = process.output_mark()
+        process.send_text("\x1b[A")
+        process.wait_for_text(
+            "[highlighted] beta — Durable: ready; access: claimable",
+            after=navigation_mark,
+        )
+        commit_mark = process.output_mark()
         process.send_text("\n")
+        resumed = process.wait_for_text("story[beta:lead]> ", after=commit_mark)
+        self.assertTrue(resumed.startswith("\r\r\x1b[J"), resumed)
+        self.assertEqual(resumed.count("Session: beta (opened)"), 1)
+        self.assertEqual(resumed.count("--- Conversation scope "), 1)
+        self.assertNotIn("[session] Already attached to beta.", resumed)
+        self.assertNotIn("Resume story session [focused] [open] >", resumed)
+        process.send_text("/quit\n\n")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
 
         self.assertEqual(load_cli_context(self.workspace).default_session_id, "beta")
@@ -2159,10 +2260,10 @@ print(
             process.original_terminal_attributes,
         )
 
-    def test_conversation_use_picker_selects_active_focus_and_restores_terminal(
+    def test_live_conversation_resume_selects_focus_and_restores_terminal(
         self,
     ) -> None:
-        """Select another active conversation through the real picker consumer."""
+        """Commit one live focus choice without entering a second picker."""
 
         self._seed_default_session(subject="First subject")
         catalog = FilesystemConversationCatalog(self.workspace)
@@ -2174,24 +2275,31 @@ print(
         process.wait_for_text("story[alpha:lead]> ")
 
         mark = process.output_mark()
-        process.send_line("/conversation use")
-        process.send_text("\n")
+        process.send_text("/conversation resume")
         opened = process.wait_for_text(
-            "Use conversation [focused] [open] >",
+            "[highlighted] First subject",
             after=mark,
         )
+        self.assertIn("Suggestions [open]", opened)
         self.assertLess(
             opened.index("[highlighted] First subject"),
-            opened.index("[available] Second subject"),
+            opened.index("- Second subject"),
         )
         self.assertEqual(opened.count("Handle:"), 2)
+        self.assertNotIn("Resume conversation [focused] [open] >", opened)
 
-        process.send_text("\x1b[B\n")
-        process.wait_for_text("Current focus: ", after=mark)
-        process.wait_for_text("Subject: Second subject", after=mark)
-        process.wait_for_text("story[alpha:lead]> ", after=mark)
-        process.send_line("/quit")
+        navigation_mark = process.output_mark()
+        process.send_text("\x1b[B")
+        process.wait_for_text("[highlighted] Second subject", after=navigation_mark)
+        commit_mark = process.output_mark()
         process.send_text("\n")
+        resumed = process.wait_for_text("story[alpha:lead]> ", after=commit_mark)
+        self.assertTrue(resumed.startswith("\r\r\x1b[J"), resumed)
+        self.assertEqual(resumed.count("Current focus: "), 1)
+        self.assertEqual(resumed.count("--- Conversation scope "), 1)
+        self.assertIn("Subject: Second subject", resumed)
+        self.assertNotIn("Resume conversation [focused] [open] >", resumed)
+        process.send_text("/quit\n\n")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
 
         self.assertEqual(
@@ -2308,7 +2416,7 @@ print(
             [record["payload"]["retrieval"]["action_index"] for record in started[-3:]],
             [1, 2, 3],
         )
-        process.send_line("/quit")
+        process.send_text("/quit\n\n")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
 
         catalog = FilesystemConversationCatalog(self.workspace)
@@ -2348,7 +2456,7 @@ print(
         process.wait_for_text("story[alpha:lead]> ")
 
         mark = process.output_mark()
-        process.send_line("/run")
+        process.send_text("/run\n\n")
         process.wait_for_text("compose[run:1]> ", after=mark)
         preview_bytes = _durable_tree_without_access(self.workspace.root)
         preview_mark = process.output_mark()
@@ -2409,7 +2517,7 @@ print(
         durable_after_success = _durable_tree_without_access(self.workspace.root)
 
         mark = process.output_mark()
-        process.send_line("/run")
+        process.send_text("/run\n\n")
         process.wait_for_text("compose[run:1]> ", after=mark)
         process.send_line("discarded by slash command")
         process.wait_for_text("compose[run:2]> ", after=mark)
@@ -2426,7 +2534,7 @@ print(
         )
 
         mark = process.output_mark()
-        process.send_line("/run")
+        process.send_text("/run\n\n")
         process.wait_for_text("compose[run:1]> ", after=mark)
         process.send_line("discarded by interrupt")
         process.wait_for_text("compose[run:2]> ", after=mark)
@@ -2443,7 +2551,7 @@ print(
         )
 
         mark = process.output_mark()
-        process.send_line("/run")
+        process.send_text("/run\n\n")
         process.wait_for_text("compose[run:1]> ", after=mark)
         process.send_line("discarded by eof")
         process.wait_for_text("compose[run:2]> ", after=mark)
@@ -2608,7 +2716,7 @@ asyncio.run(main())
         )
         process.wait_for_text("story[alpha:lead]> ")
         mark = process.output_mark()
-        process.send_line("/to plot")
+        process.send_text("/to plot\n\n")
         process.wait_for_text("story[alpha:plot]> ", after=mark)
 
         mark = process.output_mark()
@@ -2724,7 +2832,7 @@ asyncio.run(main())
             ["resume" in record["argv"] for record in started],
             [False, True, False],
         )
-        process.send_line("/quit")
+        process.send_text("/quit\n\n")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
         self.assertEqual(
             load_default_conversation(self.workspace, "alpha"),
@@ -2742,7 +2850,8 @@ asyncio.run(main())
 
         selected = self._seed_default_session()
         process = self._spawn_cli(
-            ("chat", "alpha", "--workspace", str(self.workspace.root))
+            ("chat", "alpha", "--workspace", str(self.workspace.root)),
+            environment_overrides={"TERM": "xterm-256color"},
         )
         process.wait_for_text("story[alpha:lead]> ")
 
@@ -2877,7 +2986,7 @@ asyncio.run(main())
             if path.is_file() and path.name != ".gitkeep"
         ]
         self.assertEqual(len(final_manuscripts), 2)
-        process.send_line("/quit")
+        process.send_text("/quit\n\n")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
         self.assertEqual(
             load_default_conversation(self.workspace, "alpha"),
@@ -2941,7 +3050,7 @@ asyncio.run(main())
             before,
         )
         self.assertFalse(self.provider_log.exists())
-        process.send_line("/quit")
+        process.send_text("/quit\n\n")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
         self.assertEqual(
             load_default_conversation(self.workspace, "alpha"),
@@ -2989,7 +3098,7 @@ asyncio.run(main())
         )
         process.wait_for_text("[error provider_preflight_failed]")
         process.wait_for_text("story[lobby]> ")
-        process.send_line("/quit")
+        process.send_text("/quit\n\n")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
         self.assertEqual(_durable_tree(self.workspace.root), before)
         self.assertFalse(self.provider_log.exists())
@@ -3020,7 +3129,7 @@ asyncio.run(main())
         )
         contender.wait_for_text("[error session_access_blocked]")
         contender.wait_for_text("story[lobby]> ")
-        contender.send_line("/quit")
+        contender.send_text("/quit\n\n")
         self.assertEqual(contender.wait_for_exit(), 0, contender.normalized_text)
         self.assertEqual(_durable_tree(self.workspace.root), before_contender)
         self.assertNotIn(claim_token, contender.normalized_text)
@@ -3030,7 +3139,7 @@ asyncio.run(main())
         )
         self.assertFalse(self.provider_log.exists())
 
-        owner.send_line("/quit")
+        owner.send_text("/quit\n\n")
         self.assertEqual(owner.wait_for_exit(), 0, owner.normalized_text)
         self.assertFalse(self.workspace.path(access_path).exists())
         manifest = self.workspace.read_json(f"{_SESSION_DIRECTORY}/alpha.json")
@@ -3192,7 +3301,7 @@ asyncio.run(main())
             encoding="utf-8",
         )
         mark = process.output_mark()
-        process.send_line("/history")
+        process.send_text("/history\n\n")
         process.wait_for_text("[error transcript_invalid]", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         transcript_error = process.text_after(mark)
@@ -3206,7 +3315,7 @@ asyncio.run(main())
         self.assertTrue(error_lines)
         self.assertTrue(all(len(line) <= 80 for line in error_lines))
 
-        process.send_line("/quit")
+        process.send_text("/quit\n\n")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
         self.assertEqual(
             load_default_conversation(self.workspace, "alpha"),
