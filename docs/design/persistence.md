@@ -46,7 +46,20 @@ per-instance meaningful root identity, package-internal root open/reverification
 helpers, and the `debug_logs/` scaffold declaration. An existing directory binds
 at construction; a specifically missing root receives one binding attempt after
 initialization creates it; any other unavailable identity never silently
-rebinds on that instance. Those helpers are not project-root exports.
+rebinds on that instance. If the post-creation bind cannot produce a meaningful
+directory identity—including when a symlink appears at the missing root—
+`initialize()` raises `OSError` before creating workspace child directories or
+default files. That failed bind is terminal for the instance: every later
+`initialize()` call raises the same identity-unavailable `OSError` before child
+or default writes and never retries or rebinds. Parent or root directories
+already created by `mkdir` are not rolled back. A new `Workspace` makes its own
+construction-time identity probe.
+
+An existing directory whose construction-time probe is unavailable or
+nonmeaningful follows the established, separate limitation: normal
+pathname-based initialization may still create its scaffold, but that instance
+never gains a diagnostic root identity and diagnostic storage fails closed.
+Those helpers are not project-root exports.
 
 For each supported storage attempt, the internal writer owns the lifetimes of
 the root, debug-directory, guard, and active-log descriptors. It creates or opens
@@ -63,15 +76,26 @@ filesystem-I/O-free.
 loads successfully; CLI, controller, and smoke emission starts only after
 workspace resolution or initialization.
 
+Only package-internal diagnostic storage consults the retained root identity.
+Ordinary `Workspace` domain I/O remains pathname-based and may observe a real
+directory installed later at the same root path. It is not an identity-pinned
+filesystem snapshot or a transaction across operations.
+
 Explicit CLI smoke initializes and retains one identity-bearing `Workspace`,
-then passes that exact instance to `run_smoke`, which borrows it. Implicit smoke
-creates, initializes, and removes its own temporary `Workspace`. The smoke
-contract accepts a `Workspace` or `None`, so the CLI does not reconstruct the
-explicit workspace from a path for handoff or post-run diagnostics. CLI and
-smoke diagnostic-handle acquisition and every submission have separate
-`BaseException` guards. A replaced or unavailable bound root can therefore
-omit a record, but cannot redirect diagnostics or change the smoke report,
-stderr, exception, or exit.
+then passes that exact instance to `run_smoke`. The workflow treats a supplied
+workspace as caller-owned and borrows it. Every fresh workspace-bound catalog,
+event store, runtime, and memory service inside the workflow also borrows that
+instance; service freshness never rebinds workspace identity.
+Implicit smoke creates, initializes, and removes its own temporary `Workspace`.
+The smoke contract accepts a `Workspace` or `None`, so the CLI does not
+reconstruct the explicit workspace from a path for handoff or post-run
+diagnostics. CLI and smoke diagnostic-handle acquisition and every submission
+have separate `BaseException` guards. After CLI initialization or discovery
+succeeds, hint eligibility is recorded before optional handle acquisition; that
+eligibility, not handle presence or record success, controls a later fixed
+failure hint. A replaced or unavailable bound root can therefore omit a record,
+but cannot redirect diagnostics or change the smoke report, stderr, exception,
+or exit.
 
 The low-level writer attempts cleanup for every independently acquired
 descriptor and lock and drops ordinary `Exception` failures. An original body
@@ -82,6 +106,16 @@ diagnostic failure or an absent record cannot replace established results,
 exceptions, cancellation, persistence, cleanup, output, or exits.
 Explicit smoke retains best-effort records; implicit smoke removes them with its
 temporary workspace.
+
+For the five synchronous provider-free `StoryRuntime` methods—directive
+application, runtime-override saving, and session, debate, or context
+inspection—a successful directive or configuration operation attempts
+`succeeded`/`completed`, while successful inspection attempts
+`observed`/`completed`. An ordinary underlying `Exception` attempts
+`failed`/`failed`. `KeyboardInterrupt` or `SystemExit` instead attempts
+`cancelled`/`interrupted`, then is bare-reraised unchanged; diagnostic failure
+cannot replace that control.
+
 Storage paths and retention are in [Session storage](../reference/configuration/session-storage.md#runtime-debug-log-storage),
 failure guarantees in [Filesystem safety](../operations/filesystem-safety.md#debug-log-filesystem-safety),
 and excluded content in [Privacy](../operations/privacy-and-provider.md#workspace-debug-log-privacy).

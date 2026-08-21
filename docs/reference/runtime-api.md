@@ -54,6 +54,17 @@ return values, raised exceptions, cancellation, transcript ordering,
 persistence, and artifact behavior remain unchanged when diagnostics succeed or
 fail.
 
+For the synchronous provider-free `apply_directive()`,
+`set_runtime_overrides()`, `inspect_session()`, `inspect_debate()`, and
+`inspect_debate_context()` methods, successful directive and configuration
+operations attempt `succeeded`/`completed`; successful inspections attempt
+`observed`/`completed`. An ordinary underlying `Exception` attempts
+`failed`/`failed`. An underlying `KeyboardInterrupt` or `SystemExit` instead
+attempts `cancelled`/`interrupted`, then the method bare-reraises the identical
+control with its traceback. A diagnostic failure is swallowed. These direct
+Python calls do not translate process control into a return value or status,
+retry, append transcript output, or print a CLI hint.
+
 After the advisory or retrieval user event is durable, a provider
 `KeyboardInterrupt` or `SystemExit` makes exactly one runtime-component error
 submission for `advisory_turn` or `retrieval_turn` with phase `cancelled` and

@@ -23,7 +23,10 @@ readiness, with no resource or I/O. `AgentBackend` retains manifests, access
 claims, prompt staging, routes, processes, and threads;
 `BoundAgent` owns one binding. Codex is implemented; Gemini fails preflight.
 
-`Workspace` owns path-safe persistence, inspection, and atomic replacement. See
+`Workspace` owns path-safe persistence, inspection, and atomic replacement. Its
+retained root identity is a narrower internal diagnostic-storage seam; ordinary
+domain I/O remains pathname-based and may observe a real-directory replacement
+at the same root path. See
 [Filesystem safety](../operations/filesystem-safety.md).
 
 The internal `debug_log` module borrows that containment boundary and owns its
@@ -41,11 +44,13 @@ through private guards that also catch diagnostic `BaseException`. Thus
 a diagnostic `KeyboardInterrupt` or `SystemExit` cannot replace application
 results, exceptions, cancellation, cleanup, output, or exit behavior. Implicit
 smoke owns and removes its temporary `Workspace`. Explicit CLI smoke initializes
-and retains one identity-bearing `Workspace`, passes that same instance to the
-smoke workflow, and does not resolve the path again for handoff or post-run
-diagnostics. CLI and smoke logger-handle acquisition and submissions are
-independently guarded, so root replacement can omit a record but cannot redirect
-it or change the report, stderr, exception, or exit.
+and retains one identity-bearing `Workspace`; smoke and all fresh workspace-bound
+services borrow that same instance, and the CLI does not resolve the path again
+for handoff or post-run diagnostics. CLI and smoke logger-handle acquisition and
+submissions are independently guarded, so root replacement can omit a record
+but cannot redirect it or change the report, stderr, exception, or exit. The CLI
+records post-workspace hint eligibility separately from its optional handle, so
+a later eligible hint can appear when no diagnostic file exists.
 
 ## Fixed collaboration model
 
