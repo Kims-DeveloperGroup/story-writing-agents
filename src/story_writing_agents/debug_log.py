@@ -40,6 +40,8 @@ DEBUG_LOG_LOCK_TIMEOUT_SECONDS = 0.1
 
 _SCHEMA_VERSION = 1
 _LOCK_RETRY_SECONDS = 0.01
+_DEBUG_LOG_FILENAME = Path(DEBUG_LOG_RELATIVE_PATH).name
+_DEBUG_LOG_GUARD_FILENAME = Path(DEBUG_LOG_GUARD_RELATIVE_PATH).name
 _SAFE_MODULE = re.compile(r"[A-Za-z_][A-Za-z0-9_.]{0,159}")
 _SAFE_SYMBOL = re.compile(
     r"(?:[A-Za-z_][A-Za-z0-9_.<>]{0,159}|<[A-Za-z_][A-Za-z0-9_]*>)"
@@ -118,6 +120,16 @@ class _WorkspaceProcessLock:
 
     def __init__(self) -> None:
         self.lock = threading.Lock()
+
+
+class _DebugDirectory:
+    """One verified named debug directory held open for a write attempt."""
+
+    __slots__ = ("descriptor", "path")
+
+    def __init__(self, path: Path, descriptor: int) -> None:
+        self.path = path
+        self.descriptor = descriptor
 
 
 _PROCESS_LOCK_REGISTRY_GUARD = threading.Lock()
@@ -325,36 +337,47 @@ class WorkspaceDebugLog:
             return
         try:
             directory = _prepare_debug_directory(self._workspace)
-            _validate_existing_regular(
-                self._workspace.path(DEBUG_LOG_RELATIVE_PATH)
-            )
-            for index in range(1, DEBUG_LOG_BACKUP_COUNT + 1):
-                _validate_existing_regular(
-                    self._workspace.path(
-                        f"{DEBUG_LOG_RELATIVE_PATH}.{index}"
-                    )
-                )
-            guard_path = self._workspace.path(DEBUG_LOG_GUARD_RELATIVE_PATH)
-            _validate_existing_guard(guard_path)
-            descriptor = _open_verified_regular_file(guard_path, read_write=True)
-            locked = False
             try:
-                locked = _acquire_advisory_lock(
-                    descriptor,
-                    timeout_seconds=max(0.0, deadline - time.monotonic()),
+                _validate_existing_regular(directory, _DEBUG_LOG_FILENAME)
+                for index in range(1, DEBUG_LOG_BACKUP_COUNT + 1):
+                    _validate_existing_regular(
+                        directory,
+                        f"{_DEBUG_LOG_FILENAME}.{index}",
+                    )
+                _validate_existing_guard(directory, _DEBUG_LOG_GUARD_FILENAME)
+                _verify_debug_directory(directory)
+                descriptor = _open_verified_regular_file(
+                    directory,
+                    _DEBUG_LOG_GUARD_FILENAME,
+                    read_write=True,
                 )
-                if not locked:
-                    return
-                _verify_open_file(descriptor, guard_path)
-                _append_under_guard(self._workspace, directory, payload)
-            finally:
-                if locked:
+                locked = False
+                try:
+                    locked = _acquire_advisory_lock(
+                        descriptor,
+                        timeout_seconds=max(0.0, deadline - time.monotonic()),
+                    )
+                    if not locked:
+                        return
+                    _verify_open_file(
+                        descriptor,
+                        directory,
+                        _DEBUG_LOG_GUARD_FILENAME,
+                    )
+                    _append_under_guard(directory, payload)
+                finally:
+                    if locked:
+                        try:
+                            _release_advisory_lock(descriptor)
+                        except BaseException:
+                            pass
                     try:
-                        _release_advisory_lock(descriptor)
+                        os.close(descriptor)
                     except BaseException:
                         pass
+            finally:
                 try:
-                    os.close(descriptor)
+                    os.close(directory.descriptor)
                 except BaseException:
                     pass
         finally:
@@ -373,8 +396,10 @@ def _process_lock_for(workspace: Workspace) -> _WorkspaceProcessLock:
         return retained
 
 
-def _prepare_debug_directory(workspace: Workspace) -> Path:
-    """Create the fixed directory lazily and revalidate its safe identity."""
+def _prepare_debug_directory(workspace: Workspace) -> _DebugDirectory:
+    """Create and hold the fixed directory without following its final name."""
+
+    _require_directory_relative_operations()
 
     directory = workspace.path(DEBUG_LOG_DIRECTORY)
     try:
@@ -382,26 +407,103 @@ def _prepare_debug_directory(workspace: Workspace) -> Path:
     except FileExistsError:
         pass
     directory = workspace.path(DEBUG_LOG_DIRECTORY)
-    if not directory.is_dir() or directory.is_symlink():
-        raise OSError("debug log path is not a regular directory")
-    return directory
-
-
-def _open_verified_regular_file(path: Path, *, read_write: bool) -> int:
-    """Open one fixed file without following links and verify its identity."""
-
-    flags = os.O_CREAT | (os.O_RDWR if read_write else os.O_WRONLY | os.O_APPEND)
-    for name in ("O_CLOEXEC", "O_NOINHERIT", "O_BINARY", "O_NOFOLLOW"):
+    flags = os.O_RDONLY
+    for name in (
+        "O_CLOEXEC",
+        "O_NOINHERIT",
+        "O_BINARY",
+        "O_DIRECTORY",
+        "O_NOFOLLOW",
+        "O_NONBLOCK",
+    ):
         flags |= getattr(os, name, 0)
-    descriptor = os.open(path, flags, 0o600)
+    descriptor = os.open(directory, flags)
     try:
         try:
             os.set_inheritable(descriptor, False)
         except (AttributeError, OSError):
             pass
-        _verify_open_file(descriptor, path)
+        held = _DebugDirectory(directory, descriptor)
+        _verify_debug_directory(held)
+        return held
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _require_directory_relative_operations() -> None:
+    """Fail closed unless every required descriptor-relative primitive exists."""
+
+    supports_dir_fd = getattr(os, "supports_dir_fd", ())
+    supports_follow_symlinks = getattr(os, "supports_follow_symlinks", ())
+    required_dir_fd = (os.open, os.stat, os.unlink, os.rename)
+    if (
+        not getattr(os, "O_DIRECTORY", 0)
+        or not getattr(os, "O_NOFOLLOW", 0)
+        or any(function not in supports_dir_fd for function in required_dir_fd)
+        or os.stat not in supports_follow_symlinks
+    ):
+        raise OSError(
+            getattr(errno, "ENOTSUP", errno.ENOSYS),
+            "safe descriptor-relative debug logging is unsupported",
+        )
+
+
+def _verify_debug_directory(directory: _DebugDirectory) -> None:
+    """Require the held directory to retain its canonical workspace name."""
+
+    opened = os.fstat(directory.descriptor)
+    named = os.stat(directory.path, follow_symlinks=False)
+    if not stat.S_ISDIR(opened.st_mode) or not stat.S_ISDIR(named.st_mode):
+        raise OSError("debug log path is not a regular directory")
+    opened_identity = (opened.st_dev, opened.st_ino)
+    named_identity = (named.st_dev, named.st_ino)
+    if any((*opened_identity, *named_identity)) and opened_identity != named_identity:
+        raise OSError("debug log directory identity changed")
+
+
+def _open_verified_regular_file(
+    directory: _DebugDirectory,
+    filename: str,
+    *,
+    read_write: bool,
+) -> int:
+    """Open or exclusively create one verified file relative to the held directory."""
+
+    flags = os.O_RDWR if read_write else os.O_WRONLY | os.O_APPEND
+    for name in (
+        "O_CLOEXEC",
+        "O_NOINHERIT",
+        "O_BINARY",
+        "O_NOFOLLOW",
+        "O_NONBLOCK",
+    ):
+        flags |= getattr(os, name, 0)
+    _verify_debug_directory(directory)
+    try:
+        descriptor = os.open(
+            filename,
+            flags | os.O_CREAT | os.O_EXCL,
+            0o600,
+            dir_fd=directory.descriptor,
+        )
+    except FileExistsError:
+        _verify_debug_directory(directory)
+        descriptor = os.open(
+            filename,
+            flags,
+            0o600,
+            dir_fd=directory.descriptor,
+        )
+    try:
+        try:
+            os.set_inheritable(descriptor, False)
+        except (AttributeError, OSError):
+            pass
+        _verify_open_file(descriptor, directory, filename)
         if read_write and _fcntl is None and _msvcrt is not None:
             if os.fstat(descriptor).st_size == 0:
+                _verify_open_file(descriptor, directory, filename)
                 os.write(descriptor, b"\0")
                 os.fsync(descriptor)
             os.lseek(descriptor, 0, os.SEEK_SET)
@@ -411,19 +513,54 @@ def _open_verified_regular_file(path: Path, *, read_write: bool) -> int:
         raise
 
 
-def _verify_open_file(descriptor: int, path: Path) -> None:
-    """Require descriptor/path regularity and stable filesystem identity."""
+def _verify_open_file(
+    descriptor: int,
+    directory: _DebugDirectory,
+    filename: str,
+) -> None:
+    """Require descriptor/name regularity and stable filesystem identity."""
 
-    opened = os.fstat(descriptor)
-    named = os.stat(path, follow_symlinks=False)
-    if not stat.S_ISREG(opened.st_mode) or not stat.S_ISREG(named.st_mode):
+    _verify_debug_directory(directory)
+    opened = _verify_open_descriptor(descriptor)
+    named = os.stat(
+        filename,
+        dir_fd=directory.descriptor,
+        follow_symlinks=False,
+    )
+    if not stat.S_ISREG(named.st_mode):
         raise OSError("debug log file is not regular")
-    if opened.st_nlink != 1 or named.st_nlink != 1:
+    if named.st_nlink != 1:
         raise OSError("debug log file link count is unsafe")
     opened_identity = (opened.st_dev, opened.st_ino)
     named_identity = (named.st_dev, named.st_ino)
     if any((*opened_identity, *named_identity)) and opened_identity != named_identity:
         raise OSError("debug log file identity changed")
+
+
+def _verify_open_descriptor(descriptor: int) -> os.stat_result:
+    """Require one opened file to remain regular and singly linked."""
+
+    opened = os.fstat(descriptor)
+    if not stat.S_ISREG(opened.st_mode):
+        raise OSError("debug log file is not regular")
+    if opened.st_nlink != 1:
+        raise OSError("debug log file link count is unsafe")
+    return opened
+
+
+def _verify_rollback_descriptor(
+    descriptor: int,
+    expected_identity: tuple[int, int],
+) -> None:
+    """Require rollback to target the originally opened safe inode."""
+
+    opened = _verify_open_descriptor(descriptor)
+    opened_identity = (opened.st_dev, opened.st_ino)
+    if (
+        any((*opened_identity, *expected_identity))
+        and opened_identity != expected_identity
+    ):
+        raise OSError("debug log rollback identity changed")
 
 
 def _acquire_advisory_lock(descriptor: int, *, timeout_seconds: float) -> bool:
@@ -464,45 +601,75 @@ def _release_advisory_lock(descriptor: int) -> None:
         _msvcrt.locking(descriptor, _msvcrt.LK_UNLCK, 1)
 
 
-def _append_under_guard(workspace: Workspace, directory: Path, payload: bytes) -> None:
+def _append_under_guard(directory: _DebugDirectory, payload: bytes) -> None:
     """Rotate when needed, then append with best-effort partial-write rollback."""
 
-    active = workspace.path(DEBUG_LOG_RELATIVE_PATH)
+    active = _DEBUG_LOG_FILENAME
     backups = tuple(
-        workspace.path(f"{DEBUG_LOG_RELATIVE_PATH}.{index}")
+        f"{_DEBUG_LOG_FILENAME}.{index}"
         for index in range(1, DEBUG_LOG_BACKUP_COUNT + 1)
     )
-    active_stat = _validate_existing_regular(active)
-    for backup in backups:
-        _validate_existing_regular(backup)
+    active_stat = _validate_existing_regular(directory, active)
+    backup_stats = tuple(
+        _validate_existing_regular(directory, backup) for backup in backups
+    )
 
     active_size = active_stat.st_size if active_stat is not None else 0
     if active_size and active_size + len(payload) > DEBUG_LOG_MAX_BYTES:
         oldest = backups[-1]
-        if oldest.exists():
-            oldest.unlink()
-        for source, destination in zip(
+        if backup_stats[-1] is not None:
+            _validate_existing_regular(directory, oldest)
+            _verify_debug_directory(directory)
+            os.unlink(oldest, dir_fd=directory.descriptor)
+        for source, destination, source_stat in zip(
             reversed(backups[:-1]),
             reversed(backups[1:]),
+            reversed(backup_stats[:-1]),
         ):
-            if source.exists():
-                os.replace(source, destination)
-        os.replace(active, backups[0])
+            if source_stat is not None:
+                _validate_existing_regular(directory, source)
+                _validate_existing_regular(directory, destination)
+                _verify_debug_directory(directory)
+                os.rename(
+                    source,
+                    destination,
+                    src_dir_fd=directory.descriptor,
+                    dst_dir_fd=directory.descriptor,
+                )
+        _validate_existing_regular(directory, active)
+        _validate_existing_regular(directory, backups[0])
+        _verify_debug_directory(directory)
+        os.rename(
+            active,
+            backups[0],
+            src_dir_fd=directory.descriptor,
+            dst_dir_fd=directory.descriptor,
+        )
 
-    descriptor = _open_verified_regular_file(active, read_write=False)
+    descriptor = _open_verified_regular_file(
+        directory,
+        active,
+        read_write=False,
+    )
     prior_size: int | None = None
+    prior_identity: tuple[int, int] | None = None
     try:
-        prior_size = os.fstat(descriptor).st_size
+        opened = _verify_open_descriptor(descriptor)
+        prior_size = opened.st_size
+        prior_identity = (opened.st_dev, opened.st_ino)
         remaining = memoryview(payload)
         while remaining:
+            _verify_open_file(descriptor, directory, active)
             written = os.write(descriptor, remaining)
             if written <= 0:
                 raise OSError("short debug log append")
             remaining = remaining[written:]
+        _verify_open_file(descriptor, directory, active)
         os.fsync(descriptor)
     except BaseException:
-        if prior_size is not None:
+        if prior_size is not None and prior_identity is not None:
             try:
+                _verify_rollback_descriptor(descriptor, prior_identity)
                 os.ftruncate(descriptor, prior_size)
                 os.fsync(descriptor)
             except BaseException:
@@ -512,20 +679,24 @@ def _append_under_guard(workspace: Workspace, directory: Path, payload: bytes) -
         os.close(descriptor)
 
     try:
-        directory_descriptor = os.open(directory, os.O_RDONLY)
+        _verify_debug_directory(directory)
+        os.fsync(directory.descriptor)
     except OSError:
         return
+
+
+def _validate_existing_regular(
+    directory: _DebugDirectory,
+    filename: str,
+) -> os.stat_result | None:
+    """Return a safe existing rotation stat from the held directory."""
+
     try:
-        os.fsync(directory_descriptor)
-    finally:
-        os.close(directory_descriptor)
-
-
-def _validate_existing_regular(path: Path) -> os.stat_result | None:
-    """Return a safe existing rotation stat or reject an unsafe path."""
-
-    try:
-        value = os.stat(path, follow_symlinks=False)
+        value = os.stat(
+            filename,
+            dir_fd=directory.descriptor,
+            follow_symlinks=False,
+        )
     except FileNotFoundError:
         return None
     if not stat.S_ISREG(value.st_mode):
@@ -537,11 +708,18 @@ def _validate_existing_regular(path: Path) -> os.stat_result | None:
     return value
 
 
-def _validate_existing_guard(path: Path) -> None:
-    """Reject an unsafe existing guard before opening or creating it."""
+def _validate_existing_guard(
+    directory: _DebugDirectory,
+    filename: str,
+) -> None:
+    """Reject an unsafe existing guard in the held directory."""
 
     try:
-        value = os.stat(path, follow_symlinks=False)
+        value = os.stat(
+            filename,
+            dir_fd=directory.descriptor,
+            follow_symlinks=False,
+        )
     except FileNotFoundError:
         return
     if not stat.S_ISREG(value.st_mode):
