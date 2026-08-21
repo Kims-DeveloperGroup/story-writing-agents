@@ -718,9 +718,15 @@ effect.
 ### Machine-facing CLI
 
 The noninteractive `init`, `smoke`, `session`, `directive`, `inspect`, and `run`
-commands remain unstyled. Their stdout/stderr bytes, JSON schemas, key and
-record ordering, and exit behavior must not change. Interactive capability,
-width, color, or `NO_COLOR` settings must not affect them.
+commands remain unstyled. Their success stdout, JSON schemas, key and record
+ordering, and exit behavior remain unchanged. After a workspace-bound logger is
+available, a caught noninteractive exception preserves its established first
+stderr line and adds exactly
+`Debug log (if available, workspace-relative): debug_logs/runtime.jsonl` as the
+second. Returned domain outcomes do not add that hint: smoke invariant exit `1`
+and run deadlock/failed-result exits `3`/`4` retain their established JSON.
+Argparse and pre-workspace failures add no debug-log hint. Interactive capability,
+width, color, or `NO_COLOR` settings must not affect these contracts.
 
 ### `interactive_terminal` public Python surface
 
@@ -780,8 +786,9 @@ InteractiveTerminal(read_line, write_text, *, width=80, main_read_line=None)
 `debug_log_path: str | None = None`. Omission preserves the exact established
 two-notice panel and existing callback behavior. Supplied nonblank, one-line,
 strict-UTF-8 display text adds one sanitized third notice labelled `debug log`;
-the terminal does not resolve or retain it. Current CLI and controller callers
-omit the keyword, so this seam does not yet add an installed-shell path hint.
+the terminal does not resolve or retain it. After workspace resolution, the
+installed CLI and controller supply the fixed workspace-relative availability
+notice. Pre-workspace errors omit the keyword and include no debug-log path.
 
 Construction validates and retains borrowed callbacks but performs no stream
 inspection, output, raw-mode change, capability query, resource acquisition,
@@ -960,7 +967,7 @@ the graph to 33 units.
 | Advisory turns | `Message`, `Notice`, `Field` | Operation result, cancelled/completed/error; optional capable-only indicator during advisory/consensus wait; no `[routing]`/`[waiting]` record | #83 and #111 (implemented) |
 | Retrieval progress and summaries | `Notice`, `Record`, `ListView`, `Field` | Loading, citations/context accounting, result/error/cancelled | #83 (implemented accepted views) |
 | Consensus progress and summaries | `Panel`, `Section`, `Notice`, `Record`, `Field`, `Message` | Loading, debate identity, handoff/action metadata, agent messages, result/cancelled/completed/error | #83, #119 (implemented) |
-| Interactive errors and recovery hints | `Notice`, `Field` | Trusted code, redaction, error state, next action, no raw diagnostics; optional sanitized debug-log path remains caller-supplied and current application callers omit it | #83 and #131 terminal seam (implemented) |
+| Interactive errors and recovery hints | `Notice`, `Field` | Trusted code, redaction, error state, next action, no raw diagnostics; post-workspace application errors supply one fixed sanitized debug-log availability notice, while pre-workspace errors include no debug-log path | #83, #131 terminal seam, and #132 application wiring (implemented) |
 | Settings current/pending view | `Panel`, `Section`, `Field`, `Prompt`, `Picker`, `Notice` | Exact top-level order; changed-only Current/Pending confirmation context with `(Changed)` cues and explicit no-diff notice; nested Escape silent; transient cleanup and fallback honesty; disabled provider, validation, error, cancelled, and completed meaning; guarded two-file Save boundary | #93, #106, and #115 (implemented) |
 
 ### Control groups
@@ -1040,7 +1047,7 @@ models, callback boundaries, public APIs, or runtime behavior.
 | Composer/confirmation | Ordered semantic input facts and focused prompt; equivalent width-aware plain/ANSI rendering; fallback-once and trusted-live routing; exact `/send`, `/cancel`, `/say`, yes/no/default, invalid retry, Ctrl-C, and EOF results; semantic composer events and hint cardinality; history isolation; reserved-key no-ops; no full-screen or persistent state. |
 | Restoration | Normal submit, commit, cancellation, Escape, EOF, Ctrl-C, setup failure, read/write/flush failure, render error, and restoration uncertainty, with raw attributes restored whenever acquired. |
 | Public compatibility | Exact exports and order, enum values, dataclass fields/defaults/options, established-call-compatible signatures including exact validation/default behavior for the additive `write_error()` keyword, exceptions, object/class identity, canonical modules, facade imports, callback construction, and no constructor resource acquisition. |
-| Noninteractive regression | Golden byte/schema/order/exit checks for `init`, `smoke`, `session`, `directive`, `inspect`, and `run`, with no SGR under any environment. |
+| Noninteractive regression | Golden byte/schema/order/exit checks for `init`, `smoke`, `session`, `directive`, `inspect`, and `run`, including the exact caught-exception hint after logger availability, no hint for argparse, pre-workspace failures, smoke invariant exit `1`, or run domain exits `3`/`4`, unchanged success output, and no SGR under any environment. |
 
 Process-level POSIX PTY coverage remains required for the real raw-mode and
 restoration boundary. Unit tests with deterministic fake drivers cover pure

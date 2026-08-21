@@ -58,6 +58,13 @@ from .conversation_retrieval import (
     ConversationRetrievalTranscriptEvent,
     serialize_conversation_retrieval_observation,
 )
+from .debug_log import (
+    DebugComponent,
+    DebugOperation,
+    DebugOutcome,
+    DebugPhase,
+    WorkspaceDebugLog,
+)
 from .errors import (
     BackendProtocolError,
     ConfigurationError,
@@ -148,11 +155,49 @@ class BoundAgent:
             self.definition.agent_id,
         )
         async with lock:
-            if self.vendor == "codex":
-                return await self.backend._invoke_codex(self, request)
-            raise ConfigurationError(
-                f"agent backend is not implemented: {self.vendor}"
+            self.backend._trace_debug(
+                DebugOperation.PROVIDER_INVOCATION,
+                DebugPhase.STARTED,
+                session_id=request.session_id,
+                debate_id=request.debate_id,
+                agent_id=self.definition.agent_id,
             )
+            try:
+                if self.vendor == "codex":
+                    reply = await self.backend._invoke_codex(self, request)
+                else:
+                    raise ConfigurationError(
+                        f"agent backend is not implemented: {self.vendor}"
+                    )
+            except asyncio.CancelledError as exc:
+                self.backend._record_debug_error(
+                    DebugOperation.PROVIDER_INVOCATION,
+                    exc,
+                    session_id=request.session_id,
+                    debate_id=request.debate_id,
+                    agent_id=self.definition.agent_id,
+                    phase=DebugPhase.CANCELLED,
+                    outcome=DebugOutcome.INTERRUPTED,
+                )
+                raise
+            except Exception as exc:
+                self.backend._record_debug_error(
+                    DebugOperation.PROVIDER_INVOCATION,
+                    exc,
+                    session_id=request.session_id,
+                    debate_id=request.debate_id,
+                    agent_id=self.definition.agent_id,
+                )
+                raise
+            self.backend._trace_debug(
+                DebugOperation.PROVIDER_INVOCATION,
+                DebugPhase.SUCCEEDED,
+                session_id=request.session_id,
+                debate_id=request.debate_id,
+                agent_id=self.definition.agent_id,
+                outcome=DebugOutcome.COMPLETED,
+            )
+            return reply
 
     async def converse(self, request: ConversationRequest) -> ConversationReply:
         """Run one validated visible conversation turn on this agent thread."""
@@ -164,11 +209,49 @@ class BoundAgent:
             self.definition.agent_id,
         )
         async with lock:
-            if self.vendor == "codex":
-                return await self.backend._converse_codex(self, validated)
-            raise ConfigurationError(
-                f"agent backend is not implemented: {self.vendor}"
+            self.backend._trace_debug(
+                DebugOperation.PROVIDER_INVOCATION,
+                DebugPhase.STARTED,
+                session_id=validated.session_id,
+                conversation_id=validated.conversation_id,
+                agent_id=self.definition.agent_id,
             )
+            try:
+                if self.vendor == "codex":
+                    reply = await self.backend._converse_codex(self, validated)
+                else:
+                    raise ConfigurationError(
+                        f"agent backend is not implemented: {self.vendor}"
+                    )
+            except asyncio.CancelledError as exc:
+                self.backend._record_debug_error(
+                    DebugOperation.PROVIDER_INVOCATION,
+                    exc,
+                    session_id=validated.session_id,
+                    conversation_id=validated.conversation_id,
+                    agent_id=self.definition.agent_id,
+                    phase=DebugPhase.CANCELLED,
+                    outcome=DebugOutcome.INTERRUPTED,
+                )
+                raise
+            except Exception as exc:
+                self.backend._record_debug_error(
+                    DebugOperation.PROVIDER_INVOCATION,
+                    exc,
+                    session_id=validated.session_id,
+                    conversation_id=validated.conversation_id,
+                    agent_id=self.definition.agent_id,
+                )
+                raise
+            self.backend._trace_debug(
+                DebugOperation.PROVIDER_INVOCATION,
+                DebugPhase.SUCCEEDED,
+                session_id=validated.session_id,
+                conversation_id=validated.conversation_id,
+                agent_id=self.definition.agent_id,
+                outcome=DebugOutcome.COMPLETED,
+            )
+            return reply
 
     async def converse_with_retrieval(
         self,
@@ -208,15 +291,53 @@ class BoundAgent:
             self.definition.agent_id,
         )
         async with lock:
-            if self.vendor == "codex":
-                return await self.backend._converse_with_retrieval_codex(
-                    self,
-                    validated,
-                    handler_method,
-                )
-            raise ConfigurationError(
-                f"agent backend is not implemented: {self.vendor}"
+            self.backend._trace_debug(
+                DebugOperation.PROVIDER_INVOCATION,
+                DebugPhase.STARTED,
+                session_id=validated.session_id,
+                conversation_id=validated.conversation_id,
+                agent_id=self.definition.agent_id,
             )
+            try:
+                if self.vendor == "codex":
+                    reply = await self.backend._converse_with_retrieval_codex(
+                        self,
+                        validated,
+                        handler_method,
+                    )
+                else:
+                    raise ConfigurationError(
+                        f"agent backend is not implemented: {self.vendor}"
+                    )
+            except asyncio.CancelledError as exc:
+                self.backend._record_debug_error(
+                    DebugOperation.PROVIDER_INVOCATION,
+                    exc,
+                    session_id=validated.session_id,
+                    conversation_id=validated.conversation_id,
+                    agent_id=self.definition.agent_id,
+                    phase=DebugPhase.CANCELLED,
+                    outcome=DebugOutcome.INTERRUPTED,
+                )
+                raise
+            except Exception as exc:
+                self.backend._record_debug_error(
+                    DebugOperation.PROVIDER_INVOCATION,
+                    exc,
+                    session_id=validated.session_id,
+                    conversation_id=validated.conversation_id,
+                    agent_id=self.definition.agent_id,
+                )
+                raise
+            self.backend._trace_debug(
+                DebugOperation.PROVIDER_INVOCATION,
+                DebugPhase.SUCCEEDED,
+                session_id=validated.session_id,
+                conversation_id=validated.conversation_id,
+                agent_id=self.definition.agent_id,
+                outcome=DebugOutcome.COMPLETED,
+            )
+            return reply
 
     def _validated_conversation_request(
         self,
@@ -326,36 +447,51 @@ class AgentBackend:
         self.workspace = (
             workspace if isinstance(workspace, Workspace) else Workspace(workspace)
         )
+        self._debug_log = WorkspaceDebugLog(self.workspace)
         if not isinstance(executable, str) or not executable:
             raise ValueError("Codex executable must be non-empty text")
         manager = ConfigManager(self.workspace)
         configuration = manager.load_configuration_snapshot()
+        self._trace_debug(
+            DebugOperation.CONFIGURATION,
+            DebugPhase.STARTED,
+        )
         defaults = configuration.system_defaults
         try:
             explicit_model = manager.validate_codex_model(model)
         except ConfigurationError as exc:
-            raise ValueError(
+            failure = ValueError(
                 "Codex model must be safe non-empty text or None"
-            ) from exc
+            )
+            self._record_debug_error(DebugOperation.CONFIGURATION, failure)
+            raise failure from exc
         if (
             isinstance(timeout_seconds, bool)
             or not isinstance(timeout_seconds, (int, float))
             or timeout_seconds <= 0
         ):
-            raise ValueError("Codex timeout must be a positive number")
+            failure = ValueError("Codex timeout must be a positive number")
+            self._record_debug_error(DebugOperation.CONFIGURATION, failure)
+            raise failure
 
         raw_overrides = dict(backend_overrides or {})
         unknown_agents = set(raw_overrides).difference(ROSTER)
         if unknown_agents:
-            raise ConfigurationError(
+            failure = ConfigurationError(
                 f"unknown backend override agent: {sorted(unknown_agents)[0]}"
             )
-        self.backend_overrides = MappingProxyType(
-            {
-                agent_id: manager.validate_backend(backend)
-                for agent_id, backend in raw_overrides.items()
-            }
-        )
+            self._record_debug_error(DebugOperation.CONFIGURATION, failure)
+            raise failure
+        try:
+            self.backend_overrides = MappingProxyType(
+                {
+                    agent_id: manager.validate_backend(backend)
+                    for agent_id, backend in raw_overrides.items()
+                }
+            )
+        except BaseException as exc:
+            self._record_debug_error(DebugOperation.CONFIGURATION, exc)
+            raise
         self._configuration_snapshot = configuration
         self.executable = executable
         self._explicit_model = explicit_model
@@ -371,21 +507,113 @@ class AgentBackend:
         self._staging_directories: set[Path] = set()
         self._closed = False
         atexit.register(self.close)
+        self._trace_debug(
+            DebugOperation.CONFIGURATION,
+            DebugPhase.SUCCEEDED,
+            outcome=DebugOutcome.READY,
+        )
+
+    def _trace_debug(
+        self,
+        operation: DebugOperation,
+        phase: DebugPhase,
+        *,
+        session_id: str | None = None,
+        debate_id: str | None = None,
+        conversation_id: str | None = None,
+        agent_id: str | None = None,
+        outcome: DebugOutcome | None = None,
+    ) -> None:
+        """Record a trace without allowing diagnostics to alter behavior."""
+
+        try:
+            self._debug_log.trace(
+                component=DebugComponent.BACKEND,
+                operation=operation,
+                phase=phase,
+                session_id=session_id,
+                debate_id=debate_id,
+                conversation_id=conversation_id,
+                agent_id=agent_id,
+                outcome=outcome,
+            )
+        except BaseException:
+            pass
+
+    def _record_debug_error(
+        self,
+        operation: DebugOperation,
+        failure: BaseException,
+        *,
+        session_id: str | None = None,
+        debate_id: str | None = None,
+        conversation_id: str | None = None,
+        agent_id: str | None = None,
+        phase: DebugPhase = DebugPhase.FAILED,
+        outcome: DebugOutcome = DebugOutcome.FAILED,
+    ) -> None:
+        """Record a failure without allowing diagnostics to replace it."""
+
+        if (
+            phase is DebugPhase.FAILED
+            and outcome is DebugOutcome.FAILED
+            and isinstance(
+                failure,
+                (asyncio.CancelledError, KeyboardInterrupt, SystemExit),
+            )
+        ):
+            phase = DebugPhase.CANCELLED
+            outcome = DebugOutcome.INTERRUPTED
+        try:
+            self._debug_log.error(
+                DebugComponent.BACKEND,
+                operation,
+                failure,
+                phase=phase,
+                session_id=session_id,
+                debate_id=debate_id,
+                conversation_id=conversation_id,
+                agent_id=agent_id,
+                outcome=outcome,
+            )
+        except BaseException:
+            pass
 
     async def bind(self, definition: AgentDefinition) -> BoundAgent:
         """Verify and stage a configured vendor binding."""
 
         self._ensure_open()
-        if definition.backend != "codex":
-            raise ConfigurationError(
-                f"agent backend is not implemented: {definition.backend}"
+        agent_id = definition.agent_id
+        self._trace_debug(
+            DebugOperation.BACKEND_LIFECYCLE,
+            DebugPhase.STARTED,
+            agent_id=agent_id,
+        )
+        try:
+            if definition.backend != "codex":
+                raise ConfigurationError(
+                    f"agent backend is not implemented: {definition.backend}"
+                )
+            for reference in definition.file_references():
+                reference.read_text()
+            staging_directory = self._stage_codex_definition(definition)
+            for reference in definition.file_references():
+                reference.read_text()
+            bound = BoundAgent(self, definition, staging_directory)
+        except BaseException as exc:
+            self._record_debug_error(
+                DebugOperation.BACKEND_LIFECYCLE,
+                exc,
+                agent_id=agent_id,
             )
-        for reference in definition.file_references():
-            reference.read_text()
-        staging_directory = self._stage_codex_definition(definition)
-        for reference in definition.file_references():
-            reference.read_text()
-        return BoundAgent(self, definition, staging_directory)
+            raise
+        self._trace_debug(
+            DebugOperation.BACKEND_LIFECYCLE,
+            DebugPhase.SUCCEEDED,
+            agent_id=agent_id,
+            outcome=DebugOutcome.READY,
+        )
+        return bound
 
     def get_session_lifecycle(self, session_id: str) -> SessionLifecycleState:
         """Return validated durable and access facts without mutation.
@@ -397,23 +625,45 @@ class AgentBackend:
 
         self._ensure_open()
         session = self.workspace.validate_identifier(session_id)
-        self._reject_unsupported_access_artifacts(session)
-        manifest = self._read_manifest(session, missing_ok=True)
-        if manifest is None:
-            if self._read_access_claim_if_present(session) is not None:
-                raise WorkspaceFormatError(
-                    f"provider session access claim has no manifest: {session}"
+        try:
+            self._reject_unsupported_access_artifacts(session)
+            manifest = self._read_manifest(session, missing_ok=True)
+            if manifest is None:
+                if self._read_access_claim_if_present(session) is not None:
+                    raise WorkspaceFormatError(
+                        f"provider session access claim has no manifest: {session}"
+                    )
+                state = SessionLifecycleState(
+                    session_id=session,
+                    durable_state=SessionDurableState.ABSENT,
+                    access_state=SessionAccessState.CLAIMABLE,
+                    owner_hostname=None,
+                    owner_pid=None,
+                    created_at=None,
+                    updated_at=None,
                 )
-            return SessionLifecycleState(
+            else:
+                state = self._session_lifecycle(manifest)
+        except BaseException as exc:
+            self._record_debug_error(
+                DebugOperation.SESSION_LIFECYCLE,
+                exc,
                 session_id=session,
-                durable_state=SessionDurableState.ABSENT,
-                access_state=SessionAccessState.CLAIMABLE,
-                owner_hostname=None,
-                owner_pid=None,
-                created_at=None,
-                updated_at=None,
             )
-        return self._session_lifecycle(manifest)
+            raise
+        self._trace_debug(
+            DebugOperation.SESSION_LIFECYCLE,
+            DebugPhase.OBSERVED,
+            session_id=session,
+            outcome=(
+                DebugOutcome.HELD_HERE
+                if state.access_state is SessionAccessState.HELD_HERE
+                else DebugOutcome.CLAIMABLE
+                if state.access_state is SessionAccessState.CLAIMABLE
+                else DebugOutcome.COMPLETED
+            ),
+        )
+        return state
 
     def list_session_lifecycles(self) -> tuple[SessionLifecycleState, ...]:
         """List validated persisted lifecycle facts without mutation.
@@ -423,61 +673,84 @@ class AgentBackend:
         """
 
         self._ensure_open()
-        self._reject_unsupported_access_artifacts(None)
-        directory = self.workspace.path(_SESSION_DIRECTORY)
-        if not directory.exists():
-            return ()
-        if not directory.is_dir():
-            raise WorkspaceFormatError(
-                "provider session manifest path is not a directory"
-            )
         try:
-            entries = sorted(directory.iterdir(), key=lambda entry: entry.name)
-        except OSError as exc:
-            raise WorkspaceFormatError(
-                "cannot enumerate provider session manifests"
-            ) from exc
+            self._reject_unsupported_access_artifacts(None)
+            directory = self.workspace.path(_SESSION_DIRECTORY)
+            if not directory.exists():
+                result: tuple[SessionLifecycleState, ...] = ()
+            else:
+                if not directory.is_dir():
+                    raise WorkspaceFormatError(
+                        "provider session manifest path is not a directory"
+                    )
+                try:
+                    entries = sorted(
+                        directory.iterdir(),
+                        key=lambda entry: entry.name,
+                    )
+                except OSError as exc:
+                    raise WorkspaceFormatError(
+                        "cannot enumerate provider session manifests"
+                    ) from exc
 
-        manifest_sessions: set[str] = set()
-        claim_sessions: set[str] = set()
-        states: list[SessionLifecycleState] = []
-        for entry in entries:
-            name = entry.name
-            if name in {".gitkeep", ".access-claims.lock"}:
-                continue
-            if name == ".lease-claims.lock" or name.endswith(".lease.json"):
-                raise WorkspaceVersionUnsupportedError(
-                    "workspace contains unsupported version-1 session access data"
-                )
-            if name.endswith(".access.json"):
-                session = self.workspace.validate_identifier(
-                    name[: -len(".access.json")]
-                )
-                claim_sessions.add(session)
-                self._read_access_claim(session)
-                continue
-            if not name.endswith(".json"):
-                continue
-            session = self.workspace.validate_identifier(name[:-5])
-            manifest_sessions.add(session)
-            manifest = self._read_manifest(session, missing_ok=False)
-            assert manifest is not None
-            states.append(self._session_lifecycle(manifest))
+                manifest_sessions: set[str] = set()
+                claim_sessions: set[str] = set()
+                states: list[SessionLifecycleState] = []
+                for entry in entries:
+                    name = entry.name
+                    if name in {".gitkeep", ".access-claims.lock"}:
+                        continue
+                    if name == ".lease-claims.lock" or name.endswith(
+                        ".lease.json"
+                    ):
+                        raise WorkspaceVersionUnsupportedError(
+                            "workspace contains unsupported version-1 "
+                            "session access data"
+                        )
+                    if name.endswith(".access.json"):
+                        session = self.workspace.validate_identifier(
+                            name[: -len(".access.json")]
+                        )
+                        claim_sessions.add(session)
+                        self._read_access_claim(session)
+                        continue
+                    if not name.endswith(".json"):
+                        continue
+                    session = self.workspace.validate_identifier(name[:-5])
+                    manifest_sessions.add(session)
+                    manifest = self._read_manifest(session, missing_ok=False)
+                    assert manifest is not None
+                    states.append(self._session_lifecycle(manifest))
 
-        orphaned = sorted(claim_sessions.difference(manifest_sessions))
-        if orphaned:
-            raise WorkspaceFormatError(
-                f"provider session access claim has no manifest: {orphaned[0]}"
+                orphaned = sorted(
+                    claim_sessions.difference(manifest_sessions)
+                )
+                if orphaned:
+                    raise WorkspaceFormatError(
+                        "provider session access claim has no manifest: "
+                        f"{orphaned[0]}"
+                    )
+                states.sort(key=lambda state: state.session_id)
+                states.sort(
+                    key=lambda state: _parse_timestamp(
+                        state.updated_at,
+                        label="provider session updated_at",
+                    ),
+                    reverse=True,
+                )
+                result = tuple(states)
+        except BaseException as exc:
+            self._record_debug_error(
+                DebugOperation.SESSION_LIFECYCLE,
+                exc,
             )
-        states.sort(key=lambda state: state.session_id)
-        states.sort(
-            key=lambda state: _parse_timestamp(
-                state.updated_at,
-                label="provider session updated_at",
-            ),
-            reverse=True,
+            raise
+        self._trace_debug(
+            DebugOperation.SESSION_LIFECYCLE,
+            DebugPhase.OBSERVED,
+            outcome=DebugOutcome.COMPLETED,
         )
-        return tuple(states)
+        return result
 
     def validate_provider_configuration(self, session_id: str) -> bool:
         """Validate every provider route without lifecycle or provider mutation.
@@ -488,7 +761,26 @@ class AgentBackend:
 
         self._ensure_open()
         session = self.workspace.validate_identifier(session_id)
-        self._preflight_session(session)
+        self._trace_debug(
+            DebugOperation.CONFIGURATION,
+            DebugPhase.STARTED,
+            session_id=session,
+        )
+        try:
+            self._preflight_session(session)
+        except BaseException as exc:
+            self._record_debug_error(
+                DebugOperation.CONFIGURATION,
+                exc,
+                session_id=session,
+            )
+            raise
+        self._trace_debug(
+            DebugOperation.CONFIGURATION,
+            DebugPhase.SUCCEEDED,
+            session_id=session,
+            outcome=DebugOutcome.READY,
+        )
         return True
 
     def acquire_session_access(self, session_id: str) -> SessionLifecycleState:
@@ -496,7 +788,26 @@ class AgentBackend:
 
         self._ensure_open()
         session = self.workspace.validate_identifier(session_id)
-        state, _ = self._acquire_access_with_reuse(session)
+        self._trace_debug(
+            DebugOperation.SESSION_LIFECYCLE,
+            DebugPhase.STARTED,
+            session_id=session,
+        )
+        try:
+            state, _ = self._acquire_access_with_reuse(session)
+        except BaseException as exc:
+            self._record_debug_error(
+                DebugOperation.SESSION_LIFECYCLE,
+                exc,
+                session_id=session,
+            )
+            raise
+        self._trace_debug(
+            DebugOperation.SESSION_LIFECYCLE,
+            DebugPhase.SUCCEEDED,
+            session_id=session,
+            outcome=DebugOutcome.HELD_HERE,
+        )
         return state
 
     def release_session_access(self, session_id: str) -> SessionLifecycleState:
@@ -508,10 +819,30 @@ class AgentBackend:
 
         self._ensure_open()
         session = self.workspace.validate_identifier(session_id)
-        token = self._access_claim_tokens.get(session)
-        if token is not None:
-            self._release_access_claim(session, token)
-        return self.get_session_lifecycle(session)
+        self._trace_debug(
+            DebugOperation.SESSION_LIFECYCLE,
+            DebugPhase.STARTED,
+            session_id=session,
+        )
+        try:
+            token = self._access_claim_tokens.get(session)
+            if token is not None:
+                self._release_access_claim(session, token)
+            state = self.get_session_lifecycle(session)
+        except BaseException as exc:
+            self._record_debug_error(
+                DebugOperation.SESSION_LIFECYCLE,
+                exc,
+                session_id=session,
+            )
+            raise
+        self._trace_debug(
+            DebugOperation.SESSION_LIFECYCLE,
+            DebugPhase.SUCCEEDED,
+            session_id=session,
+            outcome=DebugOutcome.CLAIMABLE,
+        )
+        return state
 
     def create_session_with_access(
         self,
@@ -525,46 +856,73 @@ class AgentBackend:
 
         self._ensure_open()
         session = self.workspace.validate_identifier(session_id)
-        current = self.get_session_lifecycle(session)
-        if current.durable_state is not SessionDurableState.ABSENT:
-            raise SessionExistsError(f"provider session already exists: {session}")
-
-        token = uuid.uuid4().hex
-        claim = self._new_access_claim(session, token)
-        now = _now()
-        _parse_timestamp(now, label="provider session timestamp")
-        manifest: dict[str, Any] = {
-            "schema_version": _SESSION_SCHEMA_VERSION,
-            "session_id": session,
-            "durable_state": SessionDurableState.READY.value,
-            "created_at": now,
-            "updated_at": now,
-            "provider_threads": {},
-        }
-        with self._access_claim_guard():
-            self._reject_unsupported_access_artifacts(session)
-            if self._manifest_exists(session):
-                self._read_manifest(session, missing_ok=False)
+        self._trace_debug(
+            DebugOperation.SESSION_LIFECYCLE,
+            DebugPhase.STARTED,
+            session_id=session,
+        )
+        try:
+            current = self.get_session_lifecycle(session)
+            if current.durable_state is not SessionDurableState.ABSENT:
                 raise SessionExistsError(
                     f"provider session already exists: {session}"
                 )
-            if self._read_access_claim_if_present(session) is not None:
-                raise WorkspaceFormatError(
-                    f"provider session access claim has no manifest: {session}"
-                )
-            self.workspace.write_json(
-                self._access_claim_relative(session),
-                claim,
-                overwrite=False,
-            )
-            try:
-                self._write_manifest(session, manifest, overwrite=False)
-            except BaseException as exc:
-                self._discard_access_claim_after_failed_create(session, token, exc)
-                raise
 
-        self._access_claim_tokens[session] = token
-        return self._session_lifecycle(manifest)
+            token = uuid.uuid4().hex
+            claim = self._new_access_claim(session, token)
+            now = _now()
+            _parse_timestamp(now, label="provider session timestamp")
+            manifest: dict[str, Any] = {
+                "schema_version": _SESSION_SCHEMA_VERSION,
+                "session_id": session,
+                "durable_state": SessionDurableState.READY.value,
+                "created_at": now,
+                "updated_at": now,
+                "provider_threads": {},
+            }
+            with self._access_claim_guard():
+                self._reject_unsupported_access_artifacts(session)
+                if self._manifest_exists(session):
+                    self._read_manifest(session, missing_ok=False)
+                    raise SessionExistsError(
+                        f"provider session already exists: {session}"
+                    )
+                if self._read_access_claim_if_present(session) is not None:
+                    raise WorkspaceFormatError(
+                        "provider session access claim has no manifest: "
+                        f"{session}"
+                    )
+                self.workspace.write_json(
+                    self._access_claim_relative(session),
+                    claim,
+                    overwrite=False,
+                )
+                try:
+                    self._write_manifest(session, manifest, overwrite=False)
+                except BaseException as exc:
+                    self._discard_access_claim_after_failed_create(
+                        session,
+                        token,
+                        exc,
+                    )
+                    raise
+
+            self._access_claim_tokens[session] = token
+            state = self._session_lifecycle(manifest)
+        except BaseException as exc:
+            self._record_debug_error(
+                DebugOperation.SESSION_LIFECYCLE,
+                exc,
+                session_id=session,
+            )
+            raise
+        self._trace_debug(
+            DebugOperation.SESSION_LIFECYCLE,
+            DebugPhase.SUCCEEDED,
+            session_id=session,
+            outcome=DebugOutcome.READY,
+        )
+        return state
 
     def reopen_session_with_access(
         self,
@@ -579,23 +937,43 @@ class AgentBackend:
 
         self._ensure_open()
         session = self.workspace.validate_identifier(session_id)
-        _, already_owned = self._acquire_access_with_reuse(session)
+        self._trace_debug(
+            DebugOperation.SESSION_LIFECYCLE,
+            DebugPhase.STARTED,
+            session_id=session,
+        )
         try:
-            manifest = self._read_manifest(session, missing_ok=False)
-            assert manifest is not None
-            if manifest["durable_state"] != SessionDurableState.READY.value:
-                manifest["durable_state"] = SessionDurableState.READY.value
-                manifest["updated_at"] = _advanced_timestamp(
-                    manifest["updated_at"]
-                )
-                self._write_manifest(session, manifest)
-            return self._session_lifecycle(manifest)
-        except BaseException:
-            if not already_owned:
-                token = self._access_claim_tokens.get(session)
-                if token is not None:
-                    self._release_access_claim(session, token)
+            _, already_owned = self._acquire_access_with_reuse(session)
+            try:
+                manifest = self._read_manifest(session, missing_ok=False)
+                assert manifest is not None
+                if manifest["durable_state"] != SessionDurableState.READY.value:
+                    manifest["durable_state"] = SessionDurableState.READY.value
+                    manifest["updated_at"] = _advanced_timestamp(
+                        manifest["updated_at"]
+                    )
+                    self._write_manifest(session, manifest)
+                state = self._session_lifecycle(manifest)
+            except BaseException:
+                if not already_owned:
+                    token = self._access_claim_tokens.get(session)
+                    if token is not None:
+                        self._release_access_claim(session, token)
+                raise
+        except BaseException as exc:
+            self._record_debug_error(
+                DebugOperation.SESSION_LIFECYCLE,
+                exc,
+                session_id=session,
+            )
             raise
+        self._trace_debug(
+            DebugOperation.SESSION_LIFECYCLE,
+            DebugPhase.SUCCEEDED,
+            session_id=session,
+            outcome=DebugOutcome.READY,
+        )
+        return state
 
     def pause_session_and_release_access(
         self,
@@ -610,43 +988,76 @@ class AgentBackend:
 
         self._ensure_open()
         session = self.workspace.validate_identifier(session_id)
-        _, already_owned = self._acquire_access_with_reuse(session)
+        self._trace_debug(
+            DebugOperation.SESSION_LIFECYCLE,
+            DebugPhase.STARTED,
+            session_id=session,
+        )
         try:
-            manifest = self._read_manifest(session, missing_ok=False)
-            assert manifest is not None
-            if manifest["durable_state"] != SessionDurableState.PAUSED.value:
-                manifest["durable_state"] = SessionDurableState.PAUSED.value
-                manifest["updated_at"] = _advanced_timestamp(
-                    manifest["updated_at"]
-                )
-                self._write_manifest(session, manifest)
-        except BaseException:
-            if not already_owned:
-                token = self._access_claim_tokens.get(session)
-                if token is not None:
-                    self._release_access_claim(session, token)
+            _, already_owned = self._acquire_access_with_reuse(session)
+            try:
+                manifest = self._read_manifest(session, missing_ok=False)
+                assert manifest is not None
+                if manifest["durable_state"] != SessionDurableState.PAUSED.value:
+                    manifest["durable_state"] = SessionDurableState.PAUSED.value
+                    manifest["updated_at"] = _advanced_timestamp(
+                        manifest["updated_at"]
+                    )
+                    self._write_manifest(session, manifest)
+            except BaseException:
+                if not already_owned:
+                    token = self._access_claim_tokens.get(session)
+                    if token is not None:
+                        self._release_access_claim(session, token)
+                raise
+            token = self._access_claim_tokens.get(session)
+            if token is not None:
+                self._release_access_claim(session, token)
+            state = self.get_session_lifecycle(session)
+        except BaseException as exc:
+            self._record_debug_error(
+                DebugOperation.SESSION_LIFECYCLE,
+                exc,
+                session_id=session,
+            )
             raise
-        token = self._access_claim_tokens.get(session)
-        if token is not None:
-            self._release_access_claim(session, token)
-        return self.get_session_lifecycle(session)
+        self._trace_debug(
+            DebugOperation.SESSION_LIFECYCLE,
+            DebugPhase.SUCCEEDED,
+            session_id=session,
+            outcome=DebugOutcome.PAUSED,
+        )
+        return state
 
     def close(self) -> None:
         """Release owned access claims and remove ephemeral prompt staging."""
 
         if self._closed:
             return
+        self._trace_debug(
+            DebugOperation.CLEANUP,
+            DebugPhase.STARTED,
+        )
         self._closed = True
         for session, token in tuple(self._access_claim_tokens.items()):
             try:
                 self._release_access_claim(session, token)
-            except Exception:
-                pass
+            except Exception as exc:
+                self._record_debug_error(
+                    DebugOperation.CLEANUP,
+                    exc,
+                    session_id=session,
+                )
         self._access_claim_tokens.clear()
         self._thread_locks.clear()
         for directory in tuple(self._staging_directories):
             shutil.rmtree(directory, ignore_errors=True)
         self._staging_directories.clear()
+        self._trace_debug(
+            DebugOperation.CLEANUP,
+            DebugPhase.SUCCEEDED,
+            outcome=DebugOutcome.COMPLETED,
+        )
 
     async def _invoke_codex(
         self,

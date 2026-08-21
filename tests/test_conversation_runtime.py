@@ -10,6 +10,7 @@ import unicodedata
 import unittest
 import uuid
 from collections.abc import Awaitable, Callable
+from contextlib import ExitStack
 from dataclasses import MISSING, FrozenInstanceError, fields, replace
 from pathlib import Path
 from typing import Any
@@ -26,10 +27,17 @@ from story_writing_agents import (
     ConversationEvent,
     ConversationEventAppend,
     ConversationEventKind,
+    ConversationMemoryService,
     ConversationNotFoundError,
     ConversationReply,
     ConversationRequest,
+    ConversationRetrievalActionHandler,
+    ConversationRetrievalActionKind,
+    ConversationRetrievalAnswerAction,
+    ConversationRetrievalReply,
+    ConversationRetrievalRequest,
     ConversationResult,
+    ConversationSearchScope,
     FilesystemConversationCatalog,
     FilesystemConversationEventStore,
     PLOT_ARCHITECT,
@@ -43,6 +51,7 @@ from story_writing_agents import (
     WorkspaceFormatError,
 )
 from story_writing_agents.agents import CORE_DOCUMENTS
+from story_writing_agents.debug_log import WorkspaceDebugLog
 
 from tests.conversation_event_store_contract import (
     InMemoryConversationEventStore,
@@ -130,6 +139,7 @@ def _tree_snapshot(root: Path) -> dict[str, bytes | None]:
             None if path.is_dir() else path.read_bytes()
         )
         for path in sorted(root.rglob("*"))
+        if "debug_logs" not in path.relative_to(root).parts
     }
 
 
@@ -149,6 +159,22 @@ def _transcript_path(session_id: str, conversation_id: str) -> str:
         f"discussion_logs/{session_id}/interactive/conversations/"
         f"{conversation_id}/transcript.jsonl"
     )
+
+
+def _runtime_operation_records(
+    workspace: Workspace,
+    operation: str,
+) -> tuple[str, list[dict[str, object]]]:
+    """Read one operation's exact runtime records and raw privacy surface."""
+
+    raw = workspace.path("debug_logs/runtime.jsonl").read_text(encoding="utf-8")
+    records = [
+        record
+        for record in (json.loads(line) for line in raw.splitlines())
+        if record["component"] == "runtime"
+        and record["operation"] == operation
+    ]
+    return raw, records
 
 
 ConversationHandler = Callable[
@@ -182,6 +208,32 @@ class _ConversationBoundAgent:
             raise result
         return result
 
+    async def converse_with_retrieval(
+        self,
+        request: ConversationRetrievalRequest,
+        handler: ConversationRetrievalActionHandler,
+    ) -> ConversationRetrievalReply:
+        """Return one handler-authorized direct answer without memory access."""
+
+        if request.agent_id != self.definition.agent_id:
+            raise AssertionError("retrieval used the wrong bound agent")
+        self.backend.trace.append("converse_with_retrieval")
+        self.backend.retrieval_requests.append(request)
+        reply = handler.handle_conversation_retrieval_action(
+            ConversationRetrievalAnswerAction(
+                kind=ConversationRetrievalActionKind.ANSWER,
+                session_id=request.session_id,
+                conversation_id=request.conversation_id,
+                turn_id=request.turn_id,
+                action_index=1,
+                content="retrieval reply",
+                citation_ids=(),
+            )
+        )
+        if type(reply) is not ConversationRetrievalReply:
+            raise AssertionError("direct retrieval answer did not return a reply")
+        return reply
+
 
 class _ConversationBackend:
     def __init__(
@@ -206,6 +258,7 @@ class _ConversationBackend:
         self.access_held: set[str] = set()
         self.definitions: list[AgentDefinition] = []
         self.requests: list[ConversationRequest] = []
+        self.retrieval_requests: list[ConversationRetrievalRequest] = []
 
     @staticmethod
     def _default_handler(request: ConversationRequest) -> ConversationReply:
@@ -316,6 +369,11 @@ class _MissingConverseBound:
         raise AssertionError
 
 
+class _UnusedConversationSearch:
+    def search(self, *_args: object) -> object:
+        raise AssertionError("direct retrieval answer must not search memory")
+
+
 class _SynchronousConverseBound:
     async def invoke(self, request: object) -> object:
         raise AssertionError
@@ -377,6 +435,39 @@ class _ConversationRuntimeCase(unittest.IsolatedAsyncioTestCase):
                 text,  # type: ignore[arg-type]
             )
         return raised.exception
+
+    def assert_failed_operation_records(
+        self,
+        workspace: Workspace,
+        *,
+        operation: str,
+        session_id: str,
+        conversation_id: str,
+        prohibited: tuple[str, ...],
+    ) -> None:
+        """Require one started record and one content-free terminal error."""
+
+        raw, records = _runtime_operation_records(workspace, operation)
+        self.assertEqual(
+            [
+                (record["level"], record["phase"], record.get("outcome"))
+                for record in records
+            ],
+            [
+                ("trace", "started", None),
+                ("error", "failed", "failed"),
+            ],
+        )
+        for record in records:
+            self.assertEqual(record["session_id"], session_id)
+            self.assertEqual(record["conversation_id"], conversation_id)
+            self.assertEqual(record["agent_id"], PLOT_ARCHITECT)
+        self.assertEqual(
+            [record["level"] for record in records if record["phase"] != "started"],
+            ["error"],
+        )
+        for value in prohibited + (str(workspace.root),):
+            self.assertNotIn(value, raw)
 
 
 class ConversationResultContractTests(unittest.TestCase):
@@ -1317,6 +1408,185 @@ class ConversationRuntimePreflightTests(_ConversationRuntimeCase):
 
 
 class ConversationRuntimeFailureTests(_ConversationRuntimeCase):
+    async def assert_append_guard(
+        self,
+        operation: str,
+        failed_kind: ConversationEventKind,
+        *,
+        diagnostic_failure: BaseException | None = None,
+    ) -> None:
+        """Exercise one append guard with exact ordering and transcript state."""
+
+        marker = operation.upper()
+        workspace, catalog, memory, conversation_id = self.memory_fixture(
+            subject=f"PRIVATE_{marker}_SUBJECT"
+        )
+        trace: list[str] = []
+        failure = WorkspaceFormatError(
+            f"PRIVATE_{marker}_{failed_kind.value}_FAILURE"
+        )
+        failure_message = str(failure)
+
+        def fail_selected(event: ConversationEventAppend) -> object:
+            return failure if event.kind is failed_kind else _DELEGATE
+
+        store = _TracingStore(memory, trace=trace, append_hook=fail_selected)
+        backend = _ConversationBackend(trace=trace)
+        runtime = StoryRuntime(
+            workspace,
+            backend,  # type: ignore[arg-type]
+            conversation_event_store=store,
+        )
+        private_input = f"PRIVATE_{marker}_INPUT"
+        memory_service = ConversationMemoryService(
+            ConversationSearchScope("session_a"),
+            catalog,
+            memory,
+            search=_UnusedConversationSearch(),  # type: ignore[arg-type]
+        )
+        with ExitStack() as stack:
+            debug_error = (
+                stack.enter_context(
+                    mock.patch.object(
+                        WorkspaceDebugLog,
+                        "error",
+                        side_effect=diagnostic_failure,
+                    )
+                )
+                if diagnostic_failure is not None
+                else None
+            )
+            raised = stack.enter_context(
+                self.assertRaises(WorkspaceFormatError)
+            )
+            if operation == "advisory":
+                await runtime.converse(
+                    "session_a",
+                    conversation_id,
+                    PLOT_ARCHITECT,
+                    private_input,
+                )
+            else:
+                await runtime.converse_with_retrieval(
+                    "session_a",
+                    conversation_id,
+                    PLOT_ARCHITECT,
+                    private_input,
+                    memory_service=memory_service,
+                )
+
+        self.assertIs(raised.exception, failure)
+        self.assertIs(type(raised.exception), WorkspaceFormatError)
+        self.assertEqual(str(raised.exception), failure_message)
+        self.assertIsNone(raised.exception.__cause__)
+        self.assertIsNone(raised.exception.__context__)
+        expected_trace = [
+            "read_context",
+            "validate_provider_configuration",
+            "get_session_lifecycle",
+            "acquire_session_access",
+            "get_session_lifecycle",
+            "bind",
+            "append:user_message",
+        ]
+        expected_events: tuple[ConversationEventKind, ...] = ()
+        expected_requests = 0
+        if failed_kind is ConversationEventKind.AGENT_REPLY:
+            expected_trace.extend(
+                (
+                    "converse"
+                    if operation == "advisory"
+                    else "converse_with_retrieval",
+                    "append:agent_reply",
+                )
+            )
+            expected_events = (ConversationEventKind.USER_MESSAGE,)
+            expected_requests = 1
+        self.assertEqual(trace, expected_trace)
+        self.assertEqual(
+            len(
+                backend.requests
+                if operation == "advisory"
+                else backend.retrieval_requests
+            ),
+            expected_requests,
+        )
+        self.assertEqual(
+            tuple(
+                event.kind
+                for event in memory.read("session_a", conversation_id)
+            ),
+            expected_events,
+        )
+        self.assertNotIn(
+            ConversationEventKind.RUNTIME_ERROR,
+            (event.kind for event in store.append_calls),
+        )
+        prohibited = (
+            f"PRIVATE_{marker}_SUBJECT",
+            private_input,
+            failure_message,
+        )
+        if diagnostic_failure is None:
+            self.assert_failed_operation_records(
+                workspace,
+                operation=f"{operation}_turn",
+                session_id="session_a",
+                conversation_id=conversation_id,
+                prohibited=prohibited,
+            )
+        else:
+            assert debug_error is not None
+            debug_error.assert_called_once()
+            self.assertIs(debug_error.call_args.args[2], failure)
+            raw, records = _runtime_operation_records(
+                workspace,
+                f"{operation}_turn",
+            )
+            self.assertEqual(
+                [(record["level"], record["phase"]) for record in records],
+                [("trace", "started")],
+            )
+            for value in prohibited + (str(workspace.root),):
+                self.assertNotIn(value, raw)
+
+    async def test_advisory_append_failures_record_one_terminal_error(self) -> None:
+        for failed_kind in (
+            ConversationEventKind.USER_MESSAGE,
+            ConversationEventKind.AGENT_REPLY,
+        ):
+            with self.subTest(failed_kind=failed_kind.value):
+                await self.assert_append_guard("advisory", failed_kind)
+
+    async def test_retrieval_append_failures_record_one_terminal_error(self) -> None:
+        for failed_kind in (
+            ConversationEventKind.USER_MESSAGE,
+            ConversationEventKind.AGENT_REPLY,
+        ):
+            with self.subTest(failed_kind=failed_kind.value):
+                await self.assert_append_guard("retrieval", failed_kind)
+
+    async def test_append_failure_survives_diagnostic_control_flow(self) -> None:
+        cases = (
+            (
+                "advisory",
+                ConversationEventKind.USER_MESSAGE,
+                KeyboardInterrupt("diagnostic interrupt"),
+            ),
+            (
+                "retrieval",
+                ConversationEventKind.AGENT_REPLY,
+                SystemExit("diagnostic exit"),
+            ),
+        )
+        for operation, failed_kind, diagnostic_failure in cases:
+            with self.subTest(operation=operation, failed_kind=failed_kind.value):
+                await self.assert_append_guard(
+                    operation,
+                    failed_kind,
+                    diagnostic_failure=diagnostic_failure,
+                )
+
     async def test_provider_exceptions_record_error_and_reraise_original(self) -> None:
         for provider_error in (
             RuntimeError("provider unavailable"),
@@ -1352,6 +1622,110 @@ class ConversationRuntimeFailureTests(_ConversationRuntimeCase):
                     events[1].content,
                     f"{type(provider_error).__name__}: {provider_error}",
                 )
+                raw_debug_log = workspace.path(
+                    "debug_logs/runtime.jsonl"
+                ).read_text(encoding="utf-8")
+                record = next(
+                    item
+                    for item in reversed(
+                        [
+                            json.loads(line)
+                            for line in raw_debug_log.splitlines()
+                        ]
+                    )
+                    if item["component"] == "runtime"
+                    and item["operation"] == "advisory_turn"
+                    and item["level"] == "error"
+                )
+                self.assertEqual(record["phase"], "failed")
+                self.assertEqual(record["session_id"], "session_a")
+                self.assertEqual(record["conversation_id"], conversation_id)
+                self.assertEqual(record["agent_id"], PLOT_ARCHITECT)
+                self.assertEqual(record["outcome"], "failed")
+                for prohibited in (
+                    "durable question",
+                    "Runtime conversation",
+                    str(provider_error),
+                    str(workspace.root),
+                ):
+                    self.assertNotIn(prohibited, raw_debug_log)
+
+    async def test_diagnostic_failure_preserves_runtime_error_and_transcript(
+        self,
+    ) -> None:
+        workspace, _, memory, conversation_id = self.memory_fixture()
+        provider_error = RuntimeError("PRIVATE_PROVIDER_FAILURE")
+        backend = _ConversationBackend(lambda _request: provider_error)
+        runtime = StoryRuntime(
+            workspace,
+            backend,  # type: ignore[arg-type]
+            conversation_event_store=memory,
+        )
+        with (
+            mock.patch.object(
+                WorkspaceDebugLog,
+                "error",
+                side_effect=KeyboardInterrupt("diagnostic failure"),
+            ) as debug_error,
+            self.assertRaises(RuntimeError) as raised,
+        ):
+            await runtime.converse(
+                "session_a",
+                conversation_id,
+                PLOT_ARCHITECT,
+                "PRIVATE_QUESTION",
+            )
+
+        self.assertIs(raised.exception, provider_error)
+        self.assertTrue(debug_error.called)
+        events = memory.read("session_a", conversation_id)
+        self.assertEqual(
+            tuple(event.kind for event in events),
+            (
+                ConversationEventKind.USER_MESSAGE,
+                ConversationEventKind.RUNTIME_ERROR,
+            ),
+        )
+        self.assertEqual(
+            events[-1].content,
+            "RuntimeError: PRIVATE_PROVIDER_FAILURE",
+        )
+
+    async def test_trace_failure_preserves_advisory_result_and_transcript(
+        self,
+    ) -> None:
+        """Keep a successful direct advisory turn independent of trace output."""
+
+        workspace, _, memory, conversation_id = self.memory_fixture()
+        backend = _ConversationBackend()
+        runtime = StoryRuntime(
+            workspace,
+            backend,  # type: ignore[arg-type]
+            conversation_event_store=memory,
+        )
+        with mock.patch.object(
+            WorkspaceDebugLog,
+            "trace",
+            side_effect=SystemExit("diagnostic trace failure"),
+        ) as trace:
+            result = await runtime.converse(
+                "session_a",
+                conversation_id,
+                PLOT_ARCHITECT,
+                "PRIVATE_ADVISORY_QUESTION",
+            )
+
+        self.assertEqual(result.content, "reply to PRIVATE_ADVISORY_QUESTION")
+        self.assertGreater(trace.call_count, 0)
+        events = memory.read("session_a", conversation_id)
+        self.assertEqual(
+            tuple(event.kind for event in events),
+            (
+                ConversationEventKind.USER_MESSAGE,
+                ConversationEventKind.AGENT_REPLY,
+            ),
+        )
+        self.assertEqual(events[-1].content, result.content)
 
     async def test_reply_type_validation_and_correlation_record_one_error(self) -> None:
         class DerivedReply(ConversationReply):

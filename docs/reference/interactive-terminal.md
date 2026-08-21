@@ -649,8 +649,11 @@ notice:
 ```
 
 This additive keyword does not resolve, open, validate as a filesystem path,
-or retain the value. Current CLI and controller callers omit it, so installed
-shell errors retain the two-notice shape and do not advertise a debug-log path.
+or retain the value. Direct callers may still omit it. After workspace
+resolution, the installed interactive CLI and controller supply the exact text
+`If available, workspace-relative: debug_logs/runtime.jsonl`, producing the
+third `[debug log]` notice. Errors before workspace resolution retain the
+two-notice shape and disclose no debug-log path.
 
 It preserves the trusted code, summary, hint, order, limits, redaction, and
 failure behavior while allowing responsive wrapping and fixed decorative ANSI.

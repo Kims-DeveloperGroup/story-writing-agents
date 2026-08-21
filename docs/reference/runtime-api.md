@@ -39,6 +39,28 @@ options, defaults, and result type; it also exposes
 both conversation methods, `inspect_debate()`, and `inspect_debate_context()`.
 `Runtime` and `Session` are exact aliases.
 
+## Runtime diagnostic side effect
+
+`StoryRuntime` construction retains an I/O-free workspace-bound debug writer
+but emits no record and creates no diagnostic file or guard. Later instrumented
+operations best-effort record fixed configuration, directive, inspection,
+advisory, retrieval, consensus, completion, cancellation, and safe failure
+facts after they reach their emission boundary; rejected calls are not promised
+a record.
+
+Runtime-private submission guards catch diagnostic `BaseException`, including
+`KeyboardInterrupt` and `SystemExit`. Constructor and public method signatures,
+return values, raised exceptions, cancellation, transcript ordering,
+persistence, and artifact behavior remain unchanged when diagnostics succeed or
+fail.
+
+Consequently, `inspect_session()`, `inspect_debate()`, and
+`inspect_debate_context()` remain read-only for session/debate state but may
+append a bounded operational record. There is no public logger parameter,
+configuration switch, telemetry service, or package-root debug-log export. See
+[debug-log privacy](../operations/privacy-and-provider.md#workspace-debug-log-privacy)
+and [storage](configuration/session-storage.md#runtime-debug-log-storage).
+
 ## Debate context
 
 ```python

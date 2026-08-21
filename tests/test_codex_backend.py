@@ -78,6 +78,10 @@ from story_writing_agents.errors import (
     SessionNotFoundError,
     WorkspaceFormatError,
 )
+from story_writing_agents.debug_log import (
+    DEBUG_LOG_RELATIVE_PATH,
+    WorkspaceDebugLog,
+)
 from story_writing_agents.prompts import PromptAssembler
 from story_writing_agents.orchestrator import StoryRuntime
 
@@ -131,6 +135,12 @@ if mode == "sleep":
     time.sleep(30)
 if mode == "delay":
     time.sleep(0.25)
+if mode == "nonzero_invalid_stderr":
+    os.write(
+        sys.stderr.fileno(),
+        b"PRIVATE_INVALID_UTF8_STDERR\\xff\\xfe\\x80\\n",
+    )
+    raise SystemExit(7)
 if mode == "nonzero":
     if "conversation_id" in payload:
         sensitive = [payload["content"]]
@@ -804,6 +814,10 @@ class CodexBackendDefaultsTests(unittest.TestCase):
                     str(caught.exception),
                     "Codex model must be safe non-empty text or None",
                 )
+                self.assertIsInstance(
+                    caught.exception.__cause__,
+                    ConfigurationError,
+                )
 
     def test_full_persisted_schema_precedes_explicit_model_validation(self) -> None:
         expected_effort = (
@@ -1349,6 +1363,11 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured_stderr.getvalue(), "")
         self.assertNotIn(model, str(caught.exception))
         self.assertNotIn(effort, str(caught.exception))
+        raw_debug_log = self.workspace.path(
+            DEBUG_LOG_RELATIVE_PATH
+        ).read_text(encoding="utf-8")
+        self.assertNotIn(model, raw_debug_log)
+        self.assertNotIn(effort, raw_debug_log)
         argv = self.provider_invocations()[0]["argv"]
         start = argv.index("exec")
         self.assertEqual(
@@ -1362,6 +1381,73 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 "--json",
             ),
         )
+
+    async def test_diagnostic_failure_does_not_replace_provider_failure_or_taint(
+        self,
+    ) -> None:
+        """Preserve the provider error and thread safety when logging fails."""
+
+        session_id = "diagnostic_failure"
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        backend.create_session_with_access(session_id)
+        bound = await backend.bind(self.definition())
+        captured_stderr = io.StringIO()
+        with (
+            mock.patch.dict(os.environ, {"STORY_FAKE_CODEX_MODE": "nonzero"}),
+            mock.patch.object(
+                WorkspaceDebugLog,
+                "error",
+                side_effect=SystemExit("diagnostic failure"),
+            ) as debug_error,
+            contextlib.redirect_stderr(captured_stderr),
+            self.assertRaises(BackendProtocolError) as caught,
+        ):
+            await bound.invoke(self.request(session_id=session_id))
+
+        self.assertEqual(str(caught.exception), "Codex CLI exited with status 7")
+        self.assertEqual(captured_stderr.getvalue(), "")
+        self.assertTrue(debug_error.called)
+        manifest = self.workspace.read_json(
+            "agent_states/orchestrator_state/provider_sessions/"
+            f"{session_id}.json"
+        )
+        self.assertEqual(manifest["provider_threads"], {})
+
+    async def test_trace_failure_preserves_provider_result_taint_and_cleanup(
+        self,
+    ) -> None:
+        """Keep successful backend lifecycle and provider behavior trace-independent."""
+
+        session_id = "trace_failure"
+        with mock.patch.object(
+            WorkspaceDebugLog,
+            "trace",
+            side_effect=SystemExit("diagnostic trace failure"),
+        ) as trace:
+            backend = AgentBackend(
+                self.workspace,
+                executable=str(self.executable),
+            )
+            self.addCleanup(backend.close)
+            created = backend.create_session_with_access(session_id)
+            bound = await backend.bind(self.definition())
+            reply = await bound.invoke(self.request(session_id=session_id))
+            backend.close()
+
+        self.assertEqual(created.access_state, SessionAccessState.HELD_HERE)
+        self.assertEqual(reply.content, "generated candidate")
+        self.assertGreater(trace.call_count, 0)
+        thread = self.thread(session_id)
+        self.assertIs(thread["tainted"], False)
+        self.assertFalse(
+            self.workspace.path(
+                "agent_states/orchestrator_state/provider_sessions/"
+                f"{session_id}.access.json"
+            ).exists()
+        )
+        self.assertEqual(backend._access_claim_tokens, {})
+        self.assertEqual(backend._staging_directories, set())
 
     async def test_debate_context_is_the_only_additive_payload_field(self) -> None:
         session_id = "debate_context_session"
@@ -2240,6 +2326,81 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(sensitive, diagnostic)
         for control in ("\x00", "\x1b", "\x7f"):
             self.assertNotIn(control, diagnostic)
+
+        debug_path = self.workspace.path(DEBUG_LOG_RELATIVE_PATH)
+        raw_debug_log = debug_path.read_text(encoding="utf-8")
+        records = [json.loads(line) for line in raw_debug_log.splitlines()]
+        failure = next(
+            record
+            for record in reversed(records)
+            if record["component"] == "backend"
+            and record["operation"] == "provider_invocation"
+            and record["level"] == "error"
+        )
+        self.assertEqual(
+            {
+                key: value
+                for key, value in failure.items()
+                if key not in {"timestamp", "exception"}
+            },
+            {
+                "schema_version": 1,
+                "level": "error",
+                "component": "backend",
+                "operation": "provider_invocation",
+                "phase": "failed",
+                "session_id": session_id,
+                "conversation_id": request.conversation_id,
+                "agent_id": self.definition().agent_id,
+                "outcome": "failed",
+            },
+        )
+        self.assertEqual(
+            set(failure["exception"]),
+            {"type", "frames", "frames_truncated"},
+        )
+        for sensitive in (
+            "CURRENT_SECRET",
+            "CONTEXT_SECRET",
+            "REPLY_SECRET",
+            "simulated provider failure",
+            str(bound.staging_directory),
+            str(self.workspace.root),
+        ):
+            self.assertNotIn(sensitive, raw_debug_log)
+
+    async def test_invalid_utf8_provider_stderr_is_never_decoded_or_persisted(
+        self,
+    ) -> None:
+        """Drain arbitrary stderr bytes without exposing or decoding them."""
+
+        session_id = "invalid_stderr"
+        marker = b"PRIVATE_INVALID_UTF8_STDERR"
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        backend.create_session_with_access(session_id)
+        bound = await backend.bind(self.definition())
+        captured_stderr = io.StringIO()
+
+        with (
+            mock.patch.dict(
+                os.environ,
+                {"STORY_FAKE_CODEX_MODE": "nonzero_invalid_stderr"},
+            ),
+            contextlib.redirect_stderr(captured_stderr),
+            self.assertRaises(BackendProtocolError) as caught,
+        ):
+            await bound.converse(
+                self.conversation_request(session_id=session_id)
+            )
+
+        self.assertEqual(str(caught.exception), "Codex CLI exited with status 7")
+        self.assertEqual(captured_stderr.getvalue(), "")
+        raw_debug_log = self.workspace.path(
+            DEBUG_LOG_RELATIVE_PATH
+        ).read_bytes()
+        self.assertNotIn(marker, raw_debug_log)
+        self.assertNotIn(b"\xff", raw_debug_log)
 
     async def test_debate_nonzero_exit_uses_fixed_stderr_free_error(self) -> None:
         """Exclude debate stderr and request values from fixed errors."""

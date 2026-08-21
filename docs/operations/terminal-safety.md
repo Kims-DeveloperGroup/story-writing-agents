@@ -198,7 +198,10 @@ text and adds one sanitized `[debug log]` notice. `None` preserves the exact
 two-notice panel. The value is call-local presentation input: the terminal does
 not resolve, read, write, or retain a filesystem path. The panel remains one
 callback record. Redaction covers supplied variants, not unknown credentials.
-Current installed CLI and controller callers omit the new keyword.
+After workspace resolution, installed CLI and controller errors supply the
+fixed text `If available, workspace-relative: debug_logs/runtime.jsonl`.
+Pre-workspace errors and direct callers that omit the keyword retain the exact
+two-notice panel.
 
 Conversation failures distinguish invalid, missing, ambiguous, archived, and
 transcript-invalid input from workspace state. The terminal never classifies

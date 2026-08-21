@@ -57,6 +57,53 @@ Implicit workspaces are removed; explicit ones retain plaintext diagnostics.
 Exit `0` passes, `1` names a failed invariant, and `2` covers usage/setup or an
 unexpected failure. See the [smoke guide](../guides/smoke-test.md).
 
+<a id="runtime-debug-logs"></a>
+
+## Runtime debug logs and failure hints
+
+Installed commands best-effort append fixed operational records to
+`debug_logs/runtime.jsonl` only after workspace initialization or discovery
+succeeds. This includes successful commands and operations that are read-only
+with respect to story/session state, such as inspection, status, help, search,
+transcript, history, and lifecycle reads. The bounded log is a separate side
+effect; those operations retain their domain-state contract.
+
+| Boundary or result | Internal behavior | What the user sees |
+| --- | --- | --- |
+| Before a usable workspace | No workspace-bound logger is available, so this invocation submits no record. | Argparse, TTY, interactive-option, initialization, and discovery errors retain their established output and show no debug-log hint. |
+| Resolved or initialized workspace; normal activity | The owning CLI, controller, backend, or runtime attempts fixed trace records. | Normal success and domain-result output is unchanged. The active log may be inspected at the fixed relative path. |
+| Handled post-workspace application error | The responsible boundary may attempt a content-safe error record; presentation does not depend on that record succeeding. | Interactive rendering adds the exact third notice below. A caught noninteractive exception preserves its first stderr line and adds the exact second line below. |
+| Diagnostic submission fails | Consumer-private guards catch even a diagnostic `BaseException`; the record may be absent. | The operation's result, exception, cancellation, cleanup, output, and exit status remain authoritative. A displayed hint is only an availability notice. |
+| Implicit smoke | Fixed records exist only inside the temporary workspace while it runs; normal return or exception propagation removes that workspace. | A returned compact report has no debug path or hint; a propagated exception also exposes none, and no workspace remains to inspect. |
+| Explicit smoke | Fixed smoke, CLI, and runtime records are retained in the supplied workspace. | Reports retain their established output. A propagated `Exception` caught by the CLI gets the second stderr line only if the CLI can successfully resolve the workspace afterward. |
+
+Every rendered interactive application error after workspace resolution adds
+this exact third notice to its existing error panel:
+
+```text
+[debug log] If available, workspace-relative: debug_logs/runtime.jsonl
+```
+
+A caught noninteractive exception after the workspace-bound logger is available
+retains its established first stderr line and adds this exact second line:
+
+```text
+Debug log (if available, workspace-relative): debug_logs/runtime.jsonl
+```
+
+Returned nonexception outcomes do not use the exception hint: a smoke invariant
+exit `1` remains compact JSON, and run deadlock/failed-result exits `3`/`4`
+retain their established JSON. Success output also has no hint. “If available”
+is literal: contention, unsafe storage, or another logging failure can drop a
+record.
+
+Users can inspect the fixed path beneath the workspace root, but cannot
+configure another destination or recover provider stderr through this feature.
+Neither a hint nor a record proves that an operation completed. Content and
+retention limits are in
+[Privacy](../operations/privacy-and-provider.md#workspace-debug-log-privacy)
+and [Session storage](configuration/session-storage.md#runtime-debug-log-storage).
+
 ## Codex defaults and model override
 
 Every installed command that constructs an `AgentBackend` validates and
@@ -164,7 +211,9 @@ wraps labels without dropping facts. Composition and confirmation now use
 ordered semantic input views, and composer entry/error/send/discard records use
 semantic notices; no internal generic composer-status site remains. These
 presentation changes do not alter command grammar, established callback/read
-order, or any noninteractive stdout/stderr, JSON, ordering, or exit contract.
+order, or noninteractive success stdout, JSON, ordering, or exit contracts. The
+documented availability line is the sole additive noninteractive stderr
+contract for a caught exception after a workspace-bound logger is available.
 
 During one advisory turn, a capable raw stream may show the terminal-owned
 four-glyph rolling indicator `◐`, `◓`, `◑`, `◒`. The driver clears the active

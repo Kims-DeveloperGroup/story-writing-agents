@@ -159,7 +159,7 @@ class ScriptedTerminalCallbacks:
 
 
 def _tree_snapshot(root: Path) -> dict[str, tuple[bytes, int, int]]:
-    """Capture file bytes, mode, and timestamp to detect silent rewrites."""
+    """Capture non-diagnostic files to detect silent domain rewrites."""
 
     return {
         str(path.relative_to(root)): (
@@ -169,6 +169,7 @@ def _tree_snapshot(root: Path) -> dict[str, tuple[bytes, int, int]]:
         )
         for path in sorted(root.rglob("*"))
         if path.is_file()
+        and "debug_logs" not in path.relative_to(root).parts
     }
 
 
@@ -204,6 +205,10 @@ def _error_record(code: InteractiveErrorCode, *, width: int = 80) -> str:
                 state=terminal_module.ViewState.ERROR,
             ),
             terminal_module.Notice(spec.hint, label="hint"),
+            terminal_module.Notice(
+                "If available, workspace-relative: debug_logs/runtime.jsonl",
+                label="debug log",
+            ),
         ),
         state=terminal_module.ViewState.ERROR,
     )
@@ -672,6 +677,73 @@ class ControllerContractTests(ControllerTestCase):
                 controller.run_session_lobby()
             close.assert_called_once_with()
 
+    def test_diagnostic_error_failure_preserves_status_output_and_cleanup(
+        self,
+    ) -> None:
+        """Keep the controller contract when its diagnostic sink fails fatally."""
+
+        workspace = self.make_workspace()
+        original_failure = RuntimeError("PRIVATE_TRANSCRIPT_ERROR")
+        controller, backend, callbacks = self.make_controller(
+            workspace,
+            original_failure,
+        )
+        failed_log = mock.Mock()
+        failed_log.error.side_effect = SystemExit("diagnostic sink failed")
+        controller._debug_log = failed_log
+
+        with mock.patch.object(
+            backend,
+            "close",
+            wraps=backend.close,
+        ) as close:
+            self.assertEqual(controller.run_session_lobby(), 2)
+
+        close.assert_called_once_with()
+        failed_log.error.assert_called_once()
+        self.assertIs(failed_log.error.call_args.args[2], original_failure)
+        self.assertEqual(
+            callbacks.records[-1],
+            _error_record(InteractiveErrorCode.INTERNAL_ERROR),
+        )
+        self.assertNotIn(
+            "PRIVATE_TRANSCRIPT_ERROR",
+            "".join(callbacks.records),
+        )
+        self.assertIsNone(controller._runner)
+        self.assertIsNone(controller._attached_session_id)
+        self.assertIsNone(controller._focused_conversation)
+        self.assertIsNone(controller._conversation_memory_service)
+
+    def test_trace_failure_preserves_success_output_and_cleanup(self) -> None:
+        """Keep the normal lobby exit independent of fatal trace callbacks."""
+
+        workspace = self.make_workspace()
+        controller, backend, callbacks = self.make_controller(
+            workspace,
+            "/quit",
+        )
+        failed_log = mock.Mock()
+        failed_log.trace.side_effect = KeyboardInterrupt(
+            "diagnostic trace failure"
+        )
+        controller._debug_log = failed_log
+
+        with mock.patch.object(
+            backend,
+            "close",
+            wraps=backend.close,
+        ) as close:
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        close.assert_called_once_with()
+        self.assertGreater(failed_log.trace.call_count, 0)
+        self.assertNotIn("diagnostic trace failure", "".join(callbacks.records))
+        self.assertIsNone(controller._runner)
+        self.assertIsNone(controller._attached_session_id)
+        self.assertIsNone(controller._focused_conversation)
+        self.assertIsNone(controller._conversation_memory_service)
+
     def test_runtime_inspection_facts_are_exact_frozen_internal_contracts(
         self,
     ) -> None:
@@ -851,6 +923,7 @@ class ControllerContractTests(ControllerTestCase):
                 "conversation_retrieval",
                 "conversation_search",
                 "conversations",
+                "debug_log",
                 "errors",
                 "interactive_commands",
                 "interactive_settings",

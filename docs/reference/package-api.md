@@ -76,6 +76,15 @@ The exact 120-name export inventory is:
 `Runtime` is exactly an alias of `StoryRuntime`; `Session` is exactly an alias
 of `RuntimeSession`. They do not provide different behavior.
 
+The export inventory and public signatures are unchanged by runtime diagnostics.
+Public `AgentBackend` and `StoryRuntime` operations use an internal
+workspace-bound writer and may append bounded operational records, including
+for reads that do not mutate provider-session, conversation, debate, or story
+state. No debug-log class, enum, configuration, or telemetry surface is exported
+from the package root. See [Runtime API](runtime-api.md#runtime-diagnostic-side-effect),
+[Backend and sessions](backend-and-sessions.md#backend-diagnostic-side-effect),
+and [Privacy](../operations/privacy-and-provider.md#workspace-debug-log-privacy).
+
 ## Enum values
 
 | Enum | Exact values |

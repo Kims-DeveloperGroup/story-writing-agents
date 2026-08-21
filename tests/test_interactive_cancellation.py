@@ -80,12 +80,14 @@ _MANIFEST_RELATIVE = f"{_SESSION_DIRECTORY}/session.json"
 
 
 def _file_bytes(workspace: Workspace) -> dict[str, bytes]:
-    """Return durable file bytes while excluding transient lease ownership."""
+    """Return domain bytes while excluding leases and diagnostic artifacts."""
 
     return {
         path.relative_to(workspace.root).as_posix(): path.read_bytes()
         for path in sorted(workspace.root.rglob("*"))
-        if path.is_file() and not path.name.endswith(".access.json")
+        if path.is_file()
+        and not path.name.endswith(".access.json")
+        and "debug_logs" not in path.relative_to(workspace.root).parts
     }
 
 
@@ -1098,6 +1100,43 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
             rendered,
         )
         self.assertIn("plot [completed]> after reply\n", rendered)
+        raw_debug_log = workspace.path(
+            "debug_logs/runtime.jsonl"
+        ).read_text(encoding="utf-8")
+        debug_records = [
+            json.loads(line) for line in raw_debug_log.splitlines()
+        ]
+        interrupted = [
+            record
+            for record in debug_records
+            if record["level"] == "error"
+            and record["phase"] == "cancelled"
+            and record.get("conversation_id") == selected.conversation_id
+        ]
+        self.assertTrue(interrupted)
+        self.assertIn(
+            ("backend", "provider_invocation"),
+            {
+                (record["component"], record["operation"])
+                for record in interrupted
+            },
+        )
+        for record in interrupted:
+            self.assertEqual(record["outcome"], "interrupted")
+            self.assertEqual(record["session_id"], "session")
+            self.assertEqual(record["agent_id"], PLOT_ARCHITECT)
+            self.assertEqual(
+                set(record["exception"]),
+                {"type", "frames", "frames_truncated"},
+            )
+        for prohibited in (
+            "Provider cancellation",
+            "cancel this",
+            "after cancellation",
+            "after reply",
+            str(workspace.root),
+        ):
+            self.assertNotIn(prohibited, raw_debug_log)
 
     def test_advisory_outcome_failure_leaves_unmatched_user_then_recovers(
         self,

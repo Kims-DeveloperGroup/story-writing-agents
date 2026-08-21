@@ -17,7 +17,9 @@ story smoke
 
 Temporary mode creates a uniquely named workspace, runs the check, prints one
 line of compact JSON, and removes the directory after normal success or a named
-invariant failure. A passing report contains `"status":"passed"`,
+invariant failure. It produces bounded operational debug records inside that
+workspace while running, but removes them with the workspace and prints no
+debug-log path or hint. A passing report contains `"status":"passed"`,
 `"provider_tested":false`, unique session and debate IDs, consensus on revision
 `r1`, one completed replacement round, and a disclaimer.
 
@@ -70,15 +72,24 @@ story inspect \
 
 This mode writes ordinary plaintext session data, two conversation records and
 transcripts, owner-isolated agent state, debate lifecycle/log/result/context
-files, and a manuscript. It preserves pre-existing core-document bytes and CLI
-default files, but the supplied workspace is not read-only.
+files, a manuscript, and `debug_logs/runtime.jsonl` with fixed smoke, CLI, and
+runtime operational records. Those records contain no synthetic story content
+or provider stderr. It preserves pre-existing core-document bytes and CLI
+default files, but the supplied workspace is not read-only. See
+[debug-log privacy](../operations/privacy-and-provider.md#workspace-debug-log-privacy).
 
 ## Interpret failures
 
 Exit code `0` means every invariant passed. Code `1` means a named invariant
-failed; compact JSON includes the completed check prefix and `failed_check`.
-Code `2` covers argparse usage or a setup, configuration, or unexpected failure;
-non-usage failures print `ExceptionType: message` to standard error.
+failed; compact JSON includes the completed check prefix and `failed_check`,
+with no stderr hint. Code `2` covers argparse usage or a setup, configuration,
+or unexpected exception; non-usage exceptions print `ExceptionType: message`
+to standard error. For an explicit workspace, the next line is exactly
+`Debug log (if available, workspace-relative): debug_logs/runtime.jsonl` only
+when the CLI can successfully resolve that workspace after the exception.
+Argparse and failures that leave no resolvable workspace remain hint-free.
+Implicit temporary mode removes its workspace on normal return or exception
+propagation and never exposes a debug-log path.
 
 A pass does **not** validate Codex installation, credentials, provider or model
 behavior, connectivity, terminal behavior, subprocess/app/web integration, or

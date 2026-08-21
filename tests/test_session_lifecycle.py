@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import errno
 import inspect
+import json
 import multiprocessing
 import os
 import socket
@@ -37,6 +38,7 @@ from story_writing_agents import backend as backend_module
 from story_writing_agents import errors as errors_module
 from story_writing_agents import models as models_module
 from story_writing_agents import session_lifecycle as lifecycle_module
+from story_writing_agents.debug_log import DEBUG_LOG_RELATIVE_PATH
 
 from tests.helpers import initialized_workspace
 
@@ -138,13 +140,23 @@ def _artifact_snapshot(path: Path) -> tuple[bool, bytes | None, int | None]:
 
 
 def _tree_snapshot(directory: Path) -> dict[str, tuple[bytes, int]]:
-    """Capture every regular file below ``directory`` without mutation."""
+    """Capture every non-diagnostic regular file below ``directory``."""
 
     return {
         str(path.relative_to(directory)): (path.read_bytes(), path.stat().st_mtime_ns)
         for path in sorted(directory.rglob("*"))
         if path.is_file()
+        and "debug_logs" not in path.relative_to(directory).parts
     }
+
+
+def _debug_records(workspace: Any) -> list[dict[str, Any]]:
+    """Return every currently persisted diagnostic record."""
+
+    path = workspace.path(DEBUG_LOG_RELATIVE_PATH)
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
 def _race_for_dead_claim(
@@ -455,6 +467,169 @@ class AgentBackendLifecycleTests(unittest.TestCase):
             ["beta", "zeta", "alpha"],
         )
         self.assertEqual(_tree_snapshot(directory), before)
+
+    def test_lifecycle_operation_records_cover_success_rejection_and_cleanup(
+        self,
+    ) -> None:
+        """Map every public lifecycle path to fixed records and original failures."""
+
+        backend = self.backend()
+
+        def lifecycle_rows_since(mark: int) -> list[tuple[object, ...]]:
+            return [
+                (
+                    record["level"],
+                    record["phase"],
+                    record.get("outcome"),
+                    record.get("session_id"),
+                )
+                for record in _debug_records(self.workspace)[mark:]
+                if record["component"] == "backend"
+                and record["operation"] == "session_lifecycle"
+            ]
+
+        mark = len(_debug_records(self.workspace))
+        self.assertEqual(backend.list_session_lifecycles(), ())
+        self.assertEqual(
+            lifecycle_rows_since(mark),
+            [("trace", "observed", "completed", None)],
+        )
+
+        mark = len(_debug_records(self.workspace))
+        created = backend.create_session_with_access("record_created")
+        self.assertEqual(created.access_state, SessionAccessState.HELD_HERE)
+        self.assertEqual(
+            lifecycle_rows_since(mark),
+            [
+                ("trace", "started", None, "record_created"),
+                ("trace", "observed", "claimable", "record_created"),
+                ("trace", "succeeded", "ready", "record_created"),
+            ],
+        )
+
+        mark = len(_debug_records(self.workspace))
+        released = backend.release_session_access("record_created")
+        self.assertEqual(released.access_state, SessionAccessState.CLAIMABLE)
+        self.assertEqual(
+            lifecycle_rows_since(mark),
+            [
+                ("trace", "started", None, "record_created"),
+                ("trace", "observed", "claimable", "record_created"),
+                ("trace", "succeeded", "claimable", "record_created"),
+            ],
+        )
+
+        self.write_manifest("record_reopen", durable_state="paused")
+        mark = len(_debug_records(self.workspace))
+        reopened = backend.reopen_session_with_access("record_reopen")
+        self.assertEqual(reopened.durable_state, SessionDurableState.READY)
+        self.assertEqual(
+            lifecycle_rows_since(mark),
+            [
+                ("trace", "started", None, "record_reopen"),
+                ("trace", "observed", "claimable", "record_reopen"),
+                ("trace", "succeeded", "ready", "record_reopen"),
+            ],
+        )
+        backend.release_session_access("record_reopen")
+
+        self.write_manifest("record_pause")
+        mark = len(_debug_records(self.workspace))
+        paused = backend.pause_session_and_release_access("record_pause")
+        self.assertEqual(paused.durable_state, SessionDurableState.PAUSED)
+        self.assertEqual(
+            lifecycle_rows_since(mark),
+            [
+                ("trace", "started", None, "record_pause"),
+                ("trace", "observed", "claimable", "record_pause"),
+                ("trace", "observed", "claimable", "record_pause"),
+                ("trace", "succeeded", "paused", "record_pause"),
+            ],
+        )
+
+        self.write_manifest("record_acquire")
+        mark = len(_debug_records(self.workspace))
+        acquired = backend.acquire_session_access("record_acquire")
+        self.assertEqual(acquired.access_state, SessionAccessState.HELD_HERE)
+        self.assertEqual(
+            lifecycle_rows_since(mark),
+            [
+                ("trace", "started", None, "record_acquire"),
+                ("trace", "observed", "claimable", "record_acquire"),
+                ("trace", "succeeded", "held_here", "record_acquire"),
+            ],
+        )
+
+        failures = (
+            (
+                "duplicate_create",
+                lambda: backend.create_session_with_access("record_created"),
+                SessionExistsError,
+                "record_created",
+                True,
+            ),
+            (
+                "missing_acquire",
+                lambda: backend.acquire_session_access("record_missing_acquire"),
+                SessionNotFoundError,
+                "record_missing_acquire",
+                True,
+            ),
+            (
+                "missing_reopen",
+                lambda: backend.reopen_session_with_access("record_missing_reopen"),
+                SessionNotFoundError,
+                "record_missing_reopen",
+                True,
+            ),
+            (
+                "missing_pause",
+                lambda: backend.pause_session_and_release_access("record_missing_pause"),
+                SessionNotFoundError,
+                "record_missing_pause",
+                True,
+            ),
+        )
+        for label, operation, exception_type, session_id, observes in failures:
+            with self.subTest(label=label):
+                mark = len(_debug_records(self.workspace))
+                with self.assertRaises(exception_type):
+                    operation()
+                expected = [("trace", "started", None, session_id)]
+                if observes:
+                    expected.append(("trace", "observed", "claimable", session_id))
+                expected.append(("error", "failed", "failed", session_id))
+                self.assertEqual(lifecycle_rows_since(mark), expected)
+
+        claim_path = self.workspace.path(_access_relative("record_acquire"))
+        claim = self.workspace.read_json(_access_relative("record_acquire"))
+        claim["claim_token"] = "PRIVATE_FOREIGN_CLAIM_TOKEN"
+        self.workspace.write_json(_access_relative("record_acquire"), claim)
+        claim_before = _artifact_snapshot(claim_path)
+        mark = len(_debug_records(self.workspace))
+        with self.assertRaises(BackendProtocolError):
+            backend.release_session_access("record_acquire")
+        self.assertEqual(
+            lifecycle_rows_since(mark),
+            [
+                ("trace", "started", None, "record_acquire"),
+                ("error", "failed", "failed", "record_acquire"),
+            ],
+        )
+        self.assertEqual(_artifact_snapshot(claim_path), claim_before)
+
+        self.write_access("record_orphan")
+        mark = len(_debug_records(self.workspace))
+        with self.assertRaises(WorkspaceFormatError):
+            backend.list_session_lifecycles()
+        self.assertEqual(
+            lifecycle_rows_since(mark),
+            [("error", "failed", "failed", None)],
+        )
+        raw_debug_log = self.workspace.path(DEBUG_LOG_RELATIVE_PATH).read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("PRIVATE_FOREIGN_CLAIM_TOKEN", raw_debug_log)
 
     def test_create_release_and_duplicate_create_use_exact_artifacts(self) -> None:
         backend = self.backend()

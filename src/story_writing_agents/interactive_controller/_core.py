@@ -30,6 +30,13 @@ from ..conversation_retrieval import (
     ConversationRetrievalResult,
     ConversationRetrievalSource,
 )
+from ..debug_log import (
+    DebugComponent,
+    DebugOperation,
+    DebugOutcome,
+    DebugPhase,
+    WorkspaceDebugLog,
+)
 from ..conversations import (
     CONVERSATION_CONTEXT_POLICY,
     ConversationCatalog,
@@ -174,6 +181,7 @@ _LOBBY_COMMAND_HINT = (
     "Use /help, /session list, /session create NAME, /session open [NAME], "
     "/session pause, or /quit."
 )
+_DEBUG_LOG_NOTICE = "If available, workspace-relative: debug_logs/runtime.jsonl"
 _AGENT_ROUTE_ALIASES = frozenset(
     alias for route in AGENT_ROUTES for alias in route.aliases
 )
@@ -218,6 +226,7 @@ class InteractiveController:
         "_conversation_event_store",
         "_conversation_memory_service",
         "_context",
+        "_debug_log",
         "_last_started_debate_by_session",
         "_main_commit_cleanup",
         "_picker_input",
@@ -264,6 +273,7 @@ class InteractiveController:
         if not isinstance(terminal, InteractiveTerminal):
             raise TypeError("terminal must be an InteractiveTerminal")
         self._workspace = workspace
+        self._debug_log = WorkspaceDebugLog(workspace)
         self._context = context
         self._backend = backend
         self._terminal = terminal
@@ -309,6 +319,80 @@ class InteractiveController:
         self._runner: asyncio.Runner | None = None
         self._started = False
         self._closed = False
+
+    def _trace_debug(
+        self,
+        operation: DebugOperation,
+        phase: DebugPhase,
+        *,
+        session_id: str | None = None,
+        conversation_id: str | None = None,
+        debate_id: str | None = None,
+        agent_id: str | None = None,
+        outcome: DebugOutcome | None = None,
+    ) -> None:
+        """Record a trace without allowing diagnostics to alter behavior."""
+
+        try:
+            self._debug_log.trace(
+                component=DebugComponent.INTERACTIVE_CONTROLLER,
+                operation=operation,
+                phase=phase,
+                session_id=session_id,
+                conversation_id=conversation_id,
+                debate_id=debate_id,
+                agent_id=agent_id,
+                outcome=outcome,
+            )
+        except BaseException:
+            pass
+
+    def _write_error(self, error: InteractiveError) -> None:
+        """Render one post-workspace error with the fixed debug-log notice."""
+
+        self._terminal.write_error(
+            error,
+            debug_log_path=_DEBUG_LOG_NOTICE,
+        )
+
+    def _record_debug_error(
+        self,
+        operation: DebugOperation,
+        failure: BaseException,
+        *,
+        session_id: str | None = None,
+        conversation_id: str | None = None,
+        debate_id: str | None = None,
+        agent_id: str | None = None,
+        phase: DebugPhase = DebugPhase.FAILED,
+        outcome: DebugOutcome = DebugOutcome.FAILED,
+    ) -> None:
+        """Record a controller failure without allowing it to be replaced."""
+
+        if (
+            phase is DebugPhase.FAILED
+            and outcome is DebugOutcome.FAILED
+            and isinstance(
+                failure,
+                (asyncio.CancelledError, KeyboardInterrupt, SystemExit),
+            )
+        ):
+            phase = DebugPhase.CANCELLED
+            outcome = DebugOutcome.INTERRUPTED
+        try:
+            self._debug_log.error(
+                DebugComponent.INTERACTIVE_CONTROLLER,
+                operation,
+                failure,
+                phase=phase,
+                session_id=session_id,
+                conversation_id=conversation_id,
+                debate_id=debate_id,
+                agent_id=agent_id,
+                outcome=outcome,
+            )
+        except BaseException:
+            pass
 
     def _write_notice(
         self,
@@ -679,6 +763,10 @@ class InteractiveController:
         if requested_session is not None and not isinstance(requested_session, str):
             raise TypeError("requested_session must be a string or None")
         self._started = True
+        self._trace_debug(
+            DebugOperation.INTERACTIVE_LOBBY,
+            DebugPhase.STARTED,
+        )
 
         exit_code = 2
         cleanup_error_reported = False
@@ -694,18 +782,39 @@ class InteractiveController:
                     self._write_lobby_orientation()
                 exit_code = self._read_session_lobby_commands()
         except _ControllerAbort as abort:
+            self._record_debug_error(
+                DebugOperation.INTERACTIVE_LOBBY,
+                abort,
+                session_id=self._attached_session_id,
+            )
             diagnostic_written = self._write_error_best_effort(abort.error)
             cleanup_error_reported = (
                 abort.error.code is InteractiveErrorCode.CLEANUP_FAILED
                 and diagnostic_written
             )
             exit_code = 2
-        except (asyncio.CancelledError, KeyboardInterrupt, OSError):
+        except (
+            asyncio.CancelledError,
+            KeyboardInterrupt,
+            OSError,
+        ) as exc:
+            self._record_debug_error(
+                DebugOperation.INTERACTIVE_LOBBY,
+                exc,
+                session_id=self._attached_session_id,
+                phase=DebugPhase.CANCELLED,
+                outcome=DebugOutcome.INTERRUPTED,
+            )
             self._write_error_best_effort(
                 InteractiveError(InteractiveErrorCode.OPERATION_INTERRUPTED)
             )
             exit_code = 2
-        except Exception:
+        except Exception as exc:
+            self._record_debug_error(
+                DebugOperation.INTERACTIVE_LOBBY,
+                exc,
+                session_id=self._attached_session_id,
+            )
             self._write_error_best_effort(
                 InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
             )
@@ -715,6 +824,15 @@ class InteractiveController:
                 exit_code,
                 cleanup_error_reported=cleanup_error_reported,
             )
+        self._trace_debug(
+            DebugOperation.INTERACTIVE_LOBBY,
+            DebugPhase.SUCCEEDED if exit_code == 0 else DebugPhase.FAILED,
+            outcome=(
+                DebugOutcome.COMPLETED
+                if exit_code == 0
+                else DebugOutcome.FAILED
+            ),
+        )
         return exit_code
 
     def _enter_initial_session(self, requested_session: str | None) -> bool:
@@ -776,7 +894,7 @@ class InteractiveController:
         """Validate configuration, create with access, and commit attachment."""
 
         if session_id == self._attached_session_id:
-            self._terminal.write_error(
+            self._write_error(
                 InteractiveError(InteractiveErrorCode.SESSION_EXISTS)
             )
             return
@@ -823,7 +941,7 @@ class InteractiveController:
             else self._context.default_session_id
         )
         if session_id is None:
-            self._terminal.write_error(
+            self._write_error(
                 InteractiveError(InteractiveErrorCode.SESSION_NOT_FOUND)
             )
             return
@@ -964,7 +1082,7 @@ class InteractiveController:
             or self._attached_session_id is None
         ):
             raise _ControllerAbort(error)
-        self._terminal.write_error(error)
+        self._write_error(error)
 
     def _attach_destination_session(
         self,
@@ -1095,6 +1213,21 @@ class InteractiveController:
         self._focused_conversation = focused_conversation
         self._conversation_memory_service = memory_service
         self._target_agent_id = LEAD_ORCHESTRATOR
+        self._trace_debug(
+            DebugOperation.ATTACHMENT,
+            DebugPhase.SUCCEEDED,
+            session_id=session_id,
+            outcome=DebugOutcome.HELD_HERE,
+        )
+        if focused_conversation is not None:
+            self._trace_debug(
+                DebugOperation.CONVERSATION_FOCUS,
+                DebugPhase.SUCCEEDED,
+                session_id=session_id,
+                conversation_id=focused_conversation.conversation_id,
+                agent_id=self._target_agent_id,
+                outcome=DebugOutcome.COMPLETED,
+            )
         self._terminal.write_session_orientation(
             str(self._workspace.root),
             session_id,
@@ -1160,6 +1293,75 @@ class InteractiveController:
                 return 0
 
     def _dispatch_session_lobby_action(
+        self,
+        action: InteractiveAction,
+        original_line: str,
+    ) -> bool:
+        """Record and execute one fixed parsed interactive command."""
+
+        session_id = self._attached_session_id
+        conversation_id = (
+            None
+            if self._focused_conversation is None
+            else self._focused_conversation.conversation_id
+        )
+        agent_id = self._target_agent_id if session_id is not None else None
+        self._trace_debug(
+            DebugOperation.INTERACTIVE_COMMAND,
+            DebugPhase.STARTED,
+            session_id=session_id,
+            conversation_id=conversation_id,
+            agent_id=agent_id,
+        )
+        try:
+            should_exit = self._dispatch_session_lobby_action_unlogged(
+                action,
+                original_line,
+            )
+        except (
+            asyncio.CancelledError,
+            KeyboardInterrupt,
+            OSError,
+            SystemExit,
+        ) as exc:
+            self._record_debug_error(
+                DebugOperation.INTERACTIVE_COMMAND,
+                exc,
+                session_id=session_id,
+                conversation_id=conversation_id,
+                agent_id=agent_id,
+                phase=DebugPhase.CANCELLED,
+                outcome=DebugOutcome.INTERRUPTED,
+            )
+            raise
+        except Exception as exc:
+            self._record_debug_error(
+                DebugOperation.INTERACTIVE_COMMAND,
+                exc,
+                session_id=session_id,
+                conversation_id=conversation_id,
+                agent_id=agent_id,
+            )
+            raise
+        self._trace_debug(
+            DebugOperation.INTERACTIVE_COMMAND,
+            DebugPhase.SUCCEEDED,
+            session_id=self._attached_session_id,
+            conversation_id=(
+                None
+                if self._focused_conversation is None
+                else self._focused_conversation.conversation_id
+            ),
+            agent_id=(
+                self._target_agent_id
+                if self._attached_session_id is not None
+                else None
+            ),
+            outcome=DebugOutcome.COMPLETED,
+        )
+        return should_exit
+
+    def _dispatch_session_lobby_action_unlogged(
         self,
         action: InteractiveAction,
         original_line: str,
@@ -1236,7 +1438,7 @@ class InteractiveController:
             return self._run_consensus_action(action)
         if action.kind in {ActionKind.SEARCH, ActionKind.TRANSCRIPT}:
             if self._attached_session_id is None:
-                self._terminal.write_error(
+                self._write_error(
                     InteractiveError(InteractiveErrorCode.SESSION_NOT_ATTACHED)
                 )
                 return False
@@ -1254,7 +1456,7 @@ class InteractiveController:
             ActionKind.CONVERSATION_ARCHIVE,
         }:
             if self._attached_session_id is None:
-                self._terminal.write_error(
+                self._write_error(
                     InteractiveError(InteractiveErrorCode.SESSION_NOT_ATTACHED)
                 )
                 return False
@@ -1284,7 +1486,7 @@ class InteractiveController:
             self._attached_session_id is not None
             and self._focused_conversation is None
         ):
-            self._terminal.write_error(
+            self._write_error(
                 InteractiveError(InteractiveErrorCode.CONVERSATION_REQUIRED)
             )
             return False
@@ -1297,17 +1499,17 @@ class InteractiveController:
         try:
             state = load_settings_state(self._workspace)
         except ConfigurationError:
-            self._terminal.write_error(
+            self._write_error(
                 InteractiveError(InteractiveErrorCode.CONFIGURATION_INVALID)
             )
             return
         except WorkspaceSecurityError:
-            self._terminal.write_error(
+            self._write_error(
                 InteractiveError(InteractiveErrorCode.WORKSPACE_UNSAFE)
             )
             return
         except (WorkspaceFormatError, OSError):
-            self._terminal.write_error(
+            self._write_error(
                 InteractiveError(InteractiveErrorCode.WORKSPACE_INVALID)
             )
             return
@@ -1972,7 +2174,7 @@ class InteractiveController:
                 expected_conversation_id=focus.conversation_id,
             )
             if current.status is ConversationStatus.ARCHIVED:
-                self._terminal.write_error(
+                self._write_error(
                     InteractiveError(InteractiveErrorCode.CONVERSATION_ARCHIVED)
                 )
                 return
@@ -2079,7 +2281,7 @@ class InteractiveController:
         """
 
         if self._attached_session_id is None:
-            self._terminal.write_error(
+            self._write_error(
                 InteractiveError(InteractiveErrorCode.SESSION_NOT_ATTACHED)
             )
             return
@@ -2108,7 +2310,7 @@ class InteractiveController:
                 directive,
             )
         except (DirectiveError, ConfigurationError):
-            self._terminal.write_error(
+            self._write_error(
                 InteractiveError(InteractiveErrorCode.CONFIGURATION_INVALID)
             )
             return
@@ -2227,7 +2429,7 @@ class InteractiveController:
 
         assert action.kind is ActionKind.HISTORY
         if self._attached_session_id is None:
-            self._terminal.write_error(
+            self._write_error(
                 InteractiveError(InteractiveErrorCode.SESSION_NOT_ATTACHED)
             )
             return
@@ -2343,7 +2545,7 @@ class InteractiveController:
         assert action.kind is ActionKind.INSPECT
         session_id = self._attached_session_id
         if session_id is None:
-            self._terminal.write_error(
+            self._write_error(
                 InteractiveError(InteractiveErrorCode.SESSION_NOT_ATTACHED)
             )
             return
@@ -2459,7 +2661,7 @@ class InteractiveController:
         assert action.kind is ActionKind.SET_TARGET
         assert action.agent_id is not None
         if self._attached_session_id is None:
-            self._terminal.write_error(
+            self._write_error(
                 InteractiveError(InteractiveErrorCode.SESSION_NOT_ATTACHED)
             )
             return
@@ -2488,7 +2690,7 @@ class InteractiveController:
         """
 
         if self._attached_session_id is None:
-            self._terminal.write_error(
+            self._write_error(
                 InteractiveError(InteractiveErrorCode.SESSION_NOT_ATTACHED)
             )
             return
@@ -2819,7 +3021,7 @@ class InteractiveController:
         """
 
         if self._attached_session_id is None:
-            self._terminal.write_error(
+            self._write_error(
                 InteractiveError(InteractiveErrorCode.SESSION_NOT_ATTACHED)
             )
             return False
@@ -2858,7 +3060,7 @@ class InteractiveController:
             try:
                 payload = read_draft_file(action.argument)
             except ConfigurationError:
-                self._terminal.write_error(
+                self._write_error(
                     InteractiveError(InteractiveErrorCode.DRAFT_INPUT_INVALID)
                 )
                 return False
@@ -3290,7 +3492,7 @@ class InteractiveController:
             InteractiveErrorCode.WORKSPACE_UNSAFE,
         }:
             self._confirm_attachment_after_command_failure()
-        self._terminal.write_error(InteractiveError(code))
+        self._write_error(InteractiveError(code))
 
     def _present_advisory_turn_failure(self, failure: Exception) -> None:
         """Render one typed turn failure or abort when recovery is uncertain.
@@ -3319,12 +3521,12 @@ class InteractiveController:
             InteractiveErrorCode.WORKSPACE_UNSAFE,
         }:
             self._confirm_attachment_after_command_failure()
-        self._terminal.write_error(error)
+        self._write_error(error)
 
     def _write_unavailable_lobby_command_error(self) -> None:
         """Render the stable later-feature error without mutating controller state."""
 
-        self._terminal.write_error(
+        self._write_error(
             InteractiveError(
                 InteractiveErrorCode.COMMAND_INVALID,
                 summary=_UNAVAILABLE_SUMMARY,
@@ -3352,7 +3554,7 @@ class InteractiveController:
             try:
                 query = ConversationSearchQuery(action.text)
             except (TypeError, ValueError):
-                self._terminal.write_error(
+                self._write_error(
                     InteractiveError(InteractiveErrorCode.COMMAND_INVALID)
                 )
                 return
@@ -3626,7 +3828,7 @@ class InteractiveController:
             InteractiveErrorCode.WORKSPACE_UNSAFE,
         }:
             self._confirm_attachment_after_command_failure()
-        self._terminal.write_error(error)
+        self._write_error(error)
 
     def _write_attached_conversation_scope(self) -> None:
         """Render the effective current focus immediately before main input.
@@ -3665,7 +3867,7 @@ class InteractiveController:
             )
             if current is None:
                 self._focused_conversation = None
-                self._terminal.write_error(
+                self._write_error(
                     InteractiveError(
                         InteractiveErrorCode.CONVERSATION_NOT_FOUND
                     )
@@ -3679,7 +3881,7 @@ class InteractiveController:
                 return
             if current.status is ConversationStatus.ARCHIVED:
                 self._focused_conversation = None
-                self._terminal.write_error(
+                self._write_error(
                     InteractiveError(InteractiveErrorCode.CONVERSATION_ARCHIVED)
                 )
                 self._terminal.write_conversation_scope(
@@ -3751,7 +3953,7 @@ class InteractiveController:
         except Exception as exc:
             self._confirm_attachment_after_command_failure()
             error = classify_conversation_failure(exc)
-            self._terminal.write_error(
+            self._write_error(
                 InteractiveError(
                     error.code,
                     summary=(
@@ -3767,6 +3969,14 @@ class InteractiveController:
             return False
 
         self._focused_conversation = created
+        self._trace_debug(
+            DebugOperation.CONVERSATION_FOCUS,
+            DebugPhase.SUCCEEDED,
+            session_id=session_id,
+            conversation_id=created.conversation_id,
+            agent_id=self._target_agent_id,
+            outcome=DebugOutcome.COMPLETED,
+        )
         handle = self._visible_handle_after_mutation(created)
         self._write_notice(
             f"Created and focused {handle} | Subject: {created.subject}",
@@ -3890,7 +4100,7 @@ class InteractiveController:
             self._present_conversation_failure(exc)
             return
         if focused.status is ConversationStatus.ARCHIVED:
-            self._terminal.write_error(
+            self._write_error(
                 InteractiveError(InteractiveErrorCode.CONVERSATION_ARCHIVED)
             )
             return
@@ -3902,12 +4112,20 @@ class InteractiveController:
             )
         except Exception as exc:
             self._confirm_attachment_after_command_failure()
-            self._terminal.write_error(
+            self._write_error(
                 classify_conversation_failure(exc)
             )
             return
 
         self._focused_conversation = focused
+        self._trace_debug(
+            DebugOperation.CONVERSATION_FOCUS,
+            DebugPhase.SUCCEEDED,
+            session_id=session_id,
+            conversation_id=focused.conversation_id,
+            agent_id=self._target_agent_id,
+            outcome=DebugOutcome.COMPLETED,
+        )
         self._write_notice(
             (
                 "Current focus: "
@@ -3954,7 +4172,7 @@ class InteractiveController:
             return
         if renamed.status is ConversationStatus.ARCHIVED:
             self._focused_conversation = None
-            self._terminal.write_error(
+            self._write_error(
                 InteractiveError(InteractiveErrorCode.CONVERSATION_ARCHIVED)
             )
             return
@@ -4007,7 +4225,7 @@ class InteractiveController:
         if target.status is ConversationStatus.ARCHIVED:
             if is_focused:
                 self._focused_conversation = None
-                self._terminal.write_error(
+                self._write_error(
                     InteractiveError(InteractiveErrorCode.CONVERSATION_ARCHIVED)
                 )
             else:
@@ -4220,7 +4438,7 @@ class InteractiveController:
             self._abandon_known_attachment_for_cleanup_abort()
 
         self._focused_conversation = confirmed
-        self._terminal.write_error(
+        self._write_error(
             classify_conversation_failure(default_failure)
         )
         self._write_notice(
@@ -4242,7 +4460,7 @@ class InteractiveController:
 
         focused = self._focused_conversation
         if focused is None:
-            self._terminal.write_error(
+            self._write_error(
                 InteractiveError(InteractiveErrorCode.CONVERSATION_REQUIRED)
             )
             return None
@@ -4267,7 +4485,7 @@ class InteractiveController:
             return None
         if current.status is ConversationStatus.ARCHIVED:
             self._focused_conversation = None
-            self._terminal.write_error(
+            self._write_error(
                 InteractiveError(InteractiveErrorCode.CONVERSATION_ARCHIVED)
             )
             return None
@@ -4297,12 +4515,12 @@ class InteractiveController:
         )
         if current is None:
             self._focused_conversation = None
-            self._terminal.write_error(
+            self._write_error(
                 InteractiveError(InteractiveErrorCode.CONVERSATION_NOT_FOUND)
             )
         elif current.status is ConversationStatus.ARCHIVED:
             self._focused_conversation = None
-            self._terminal.write_error(
+            self._write_error(
                 InteractiveError(InteractiveErrorCode.CONVERSATION_ARCHIVED)
             )
         else:
@@ -4400,7 +4618,7 @@ class InteractiveController:
             InteractiveErrorCode.WORKSPACE_UNSAFE,
         }:
             self._confirm_attachment_after_command_failure()
-        self._terminal.write_error(error)
+        self._write_error(error)
 
     def _write_conversation_cancelled_status(self, text: str) -> None:
         """Acknowledge one cancelled conversation action without state mutation."""
@@ -4495,7 +4713,7 @@ class InteractiveController:
 
         session_id = self._attached_session_id
         if session_id is None:
-            self._terminal.write_error(
+            self._write_error(
                 InteractiveError(InteractiveErrorCode.SESSION_NOT_ATTACHED)
             )
             return False
@@ -4521,13 +4739,19 @@ class InteractiveController:
         except Exception as exc:
             if not self._attachment_is_safely_retained(session_id):
                 self._abandon_known_attachment_for_cleanup_abort()
-            self._terminal.write_error(classify_session_failure(exc))
+            self._write_error(classify_session_failure(exc))
             return False
 
         self._attached_session_id = None
         self._focused_conversation = None
         self._conversation_memory_service = None
         self._target_agent_id = LEAD_ORCHESTRATOR
+        self._trace_debug(
+            DebugOperation.ATTACHMENT,
+            DebugPhase.SUCCEEDED,
+            session_id=session_id,
+            outcome=DebugOutcome.PAUSED,
+        )
         self._write_notice(
             f"Paused {session_id}; default retained.",
             label="session",
@@ -4575,7 +4799,7 @@ class InteractiveController:
             if action.suggestion is not None
             else None
         )
-        self._terminal.write_error(
+        self._write_error(
             InteractiveError(
                 code,
                 summary=action.error,
@@ -4632,7 +4856,7 @@ class InteractiveController:
         error = classify_session_failure(failure)
         if error.code not in RECOVERABLE_SESSION_ERROR_CODES:
             raise _ControllerAbort(error)
-        self._terminal.write_error(error)
+        self._write_error(error)
 
     def _write_main_input_cancelled_status(self) -> None:
         """Acknowledge main-input Ctrl-C without changing controller state."""
@@ -4694,7 +4918,7 @@ class InteractiveController:
         """
 
         try:
-            self._terminal.write_error(error)
+            self._write_error(error)
         except Exception:
             return False
         return True
@@ -4718,6 +4942,11 @@ class InteractiveController:
 
         if self._closed:
             return exit_code
+        self._trace_debug(
+            DebugOperation.CLEANUP,
+            DebugPhase.STARTED,
+            session_id=self._attached_session_id,
+        )
         cleanup_failed = False
         runner = self._runner
         discard_runner_state_after_cleanup = runner is None
@@ -4726,9 +4955,23 @@ class InteractiveController:
             if runner is not None:
                 try:
                     runner.close()
-                except Exception:
+                except Exception as exc:
+                    self._record_debug_error(
+                        DebugOperation.CLEANUP,
+                        exc,
+                        session_id=attached_session,
+                    )
                     cleanup_failed = True
                     discard_runner_state_after_cleanup = True
+                except BaseException as exc:
+                    self._record_debug_error(
+                        DebugOperation.CLEANUP,
+                        exc,
+                        session_id=attached_session,
+                        phase=DebugPhase.CANCELLED,
+                        outcome=DebugOutcome.INTERRUPTED,
+                    )
+                    raise
                 else:
                     discard_runner_state_after_cleanup = True
         finally:
@@ -4742,14 +4985,42 @@ class InteractiveController:
                             released,
                             attached_session,
                         )
-                    except Exception:
+                    except Exception as exc:
+                        self._record_debug_error(
+                            DebugOperation.CLEANUP,
+                            exc,
+                            session_id=attached_session,
+                        )
                         cleanup_failed = True
+                    except BaseException as exc:
+                        self._record_debug_error(
+                            DebugOperation.CLEANUP,
+                            exc,
+                            session_id=attached_session,
+                            phase=DebugPhase.CANCELLED,
+                            outcome=DebugOutcome.INTERRUPTED,
+                        )
+                        raise
             finally:
                 try:
                     try:
                         self._backend.close()
-                    except Exception:
+                    except Exception as exc:
+                        self._record_debug_error(
+                            DebugOperation.CLEANUP,
+                            exc,
+                            session_id=attached_session,
+                        )
                         cleanup_failed = True
+                    except BaseException as exc:
+                        self._record_debug_error(
+                            DebugOperation.CLEANUP,
+                            exc,
+                            session_id=attached_session,
+                            phase=DebugPhase.CANCELLED,
+                            outcome=DebugOutcome.INTERRUPTED,
+                        )
+                        raise
                 finally:
                     if discard_runner_state_after_cleanup:
                         self._runner = None
@@ -4762,6 +5033,20 @@ class InteractiveController:
             self._write_error_best_effort(
                 InteractiveError(InteractiveErrorCode.CLEANUP_FAILED)
             )
+        if not cleanup_failed:
+            self._trace_debug(
+                DebugOperation.CLEANUP,
+                DebugPhase.SUCCEEDED,
+                session_id=attached_session,
+                outcome=DebugOutcome.COMPLETED,
+            )
+            if attached_session is not None:
+                self._trace_debug(
+                    DebugOperation.ATTACHMENT,
+                    DebugPhase.SUCCEEDED,
+                    session_id=attached_session,
+                    outcome=DebugOutcome.CLAIMABLE,
+                )
         return 2 if cleanup_failed else exit_code
 
 

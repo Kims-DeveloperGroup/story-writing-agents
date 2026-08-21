@@ -43,6 +43,13 @@ from .conversation_search import (
     ConversationSearchQuery,
     ConversationSearchScope,
 )
+from .debug_log import (
+    DebugComponent,
+    DebugOperation,
+    DebugOutcome,
+    DebugPhase,
+    WorkspaceDebugLog,
+)
 from .conversations import (
     ConversationContextWindow,
     ConversationEvent,
@@ -545,6 +552,30 @@ class _SmokeBoundAgent:
         return answer_outcome
 
 
+def _trace_smoke(
+    debug_log: WorkspaceDebugLog,
+    operation: DebugOperation,
+    phase: DebugPhase,
+    *,
+    session_id: str | None = None,
+    debate_id: str | None = None,
+    outcome: DebugOutcome | None = None,
+) -> None:
+    """Record a smoke trace without allowing diagnostics to alter behavior."""
+
+    try:
+        debug_log.trace(
+            component=DebugComponent.SMOKE,
+            operation=operation,
+            phase=phase,
+            session_id=session_id,
+            debate_id=debate_id,
+            outcome=outcome,
+        )
+    except BaseException:
+        pass
+
+
 def run_smoke(workspace_path: str | Path | None = None) -> tuple[dict[str, Any], int]:
     """Run one provider-free smoke and return its report plus exit code.
 
@@ -583,12 +614,26 @@ def _run_provider_free_smoke_in_workspace(
     """
 
     workspace = initialize_workspace(workspace_path)
+    debug_log = WorkspaceDebugLog(workspace)
+    _trace_smoke(
+        debug_log,
+        DebugOperation.WORKSPACE_INITIALIZATION,
+        DebugPhase.SUCCEEDED,
+        outcome=DebugOutcome.READY,
+    )
     token = uuid.uuid4().hex
     session_id = f"smoke_session_{token}"
     debate_id = f"smoke_debate_{token}"
     manuscript_name = f"smoke_{token}.md"
     completed_checks: list[str] = []
     result: DebateResult | None = None
+    _trace_smoke(
+        debug_log,
+        DebugOperation.CLI_COMMAND,
+        DebugPhase.STARTED,
+        session_id=session_id,
+        debate_id=debate_id,
+    )
 
     try:
         _verify_workspace_initialized(workspace)
@@ -655,6 +700,17 @@ def _run_provider_free_smoke_in_workspace(
         )
         completed_checks.append(_CHECK_NAMES[11])
     except _SmokeInvariantError as exc:
+        try:
+            debug_log.error(
+                DebugComponent.SMOKE,
+                DebugOperation.CLI_COMMAND,
+                exc,
+                session_id=session_id,
+                debate_id=debate_id,
+                outcome=DebugOutcome.FAILED,
+            )
+        except BaseException:
+            pass
         return (
             _report(
                 workspace=workspace,
@@ -669,7 +725,43 @@ def _run_provider_free_smoke_in_workspace(
             ),
             1,
         )
+    except BaseException as exc:
+        try:
+            debug_log.error(
+                DebugComponent.SMOKE,
+                DebugOperation.CLI_COMMAND,
+                exc,
+                phase=(
+                    DebugPhase.CANCELLED
+                    if isinstance(
+                        exc,
+                        (asyncio.CancelledError, KeyboardInterrupt, SystemExit),
+                    )
+                    else DebugPhase.FAILED
+                ),
+                session_id=session_id,
+                debate_id=debate_id,
+                outcome=(
+                    DebugOutcome.INTERRUPTED
+                    if isinstance(
+                        exc,
+                        (asyncio.CancelledError, KeyboardInterrupt, SystemExit),
+                    )
+                    else DebugOutcome.FAILED
+                ),
+            )
+        except BaseException:
+            pass
+        raise
 
+    _trace_smoke(
+        debug_log,
+        DebugOperation.CLI_COMMAND,
+        DebugPhase.SUCCEEDED,
+        session_id=session_id,
+        debate_id=debate_id,
+        outcome=DebugOutcome.COMPLETED,
+    )
     return (
         _report(
             workspace=workspace,
