@@ -489,42 +489,48 @@ every intermediate arrow. The current runtime graph is acyclic.
   one resolved workspace in process. After the safe-primitive gate passes, the
   persistent `debug_logs/.runtime.lock` independently makes a bounded
   POSIX/Windows cross-process advisory-lock attempt within the shared
-  100-millisecond deadline. `Workspace` supplies
-  initial containment and no-symlink resolution plus the `debug_logs` scaffold.
-  For each supported storage attempt, this module opens the canonical debug
-  directory without following its final name, verifies its opened and named
-  identities, and holds that descriptor for the complete guard, rotation,
-  append, and rollback critical section. Every leaf stat, open, create, unlink,
-  and rename for the guard, active log, and five backups is relative to the held
-  descriptor; leaf stats do not follow symlinks. The module rechecks the
-  canonical directory identity before each forward leaf mutation, and directory
-  and final-leaf opens request `O_NONBLOCK` where the platform defines it. A
-  platform lacking `O_DIRECTORY`, `O_NOFOLLOW`, descriptor-relative
-  open/stat/unlink/rename, or no-follow stat support drops the record without
-  opening a diagnostic leaf or using a weaker fallback. Before opening or
-  lazily creating the persistent guard, the module validates any existing
-  active file and each existing backup through the held directory as regular,
-  with `st_nlink == 1`, and no larger than 1,048,576 bytes. It then validates
-  any existing guard the same no-follow way and requires it to be regular with
-  `st_nlink == 1`. If any prevalidation fails, no guard is opened or created;
-  the size bound applies only to active and backup files. The module verifies
-  that the opened guard descriptor and held-directory name identify the same
-  regular, singly-linked file before attempting the advisory lock and again
-  after acquisition. Under that guard, it revalidates the active and every
-  existing backup candidate for races, then verifies that the opened active
-  descriptor and held-directory name identify the same regular, singly-linked
-  file before and during append. It appends to `debug_logs/runtime.jsonl`,
-  rotates before the active file would exceed that bound, and retains
-  `runtime.jsonl.1` through `.5`. After a partial append or synchronization
-  failure, best-effort rollback truncates only if the descriptor remains the
-  exact inode captured before the append and that inode remains regular and
-  singly linked. These validations cover only the identities observed at each
-  check; they do not make concurrent external filesystem changes transactional.
-  Invalid input, contention, unsafe storage, serialization, append,
-  synchronization, flush, fsync, rollback, and rotation failures covered by
-  `Exception` drop
-  only that record and never recurse. Process-control `BaseException` failures
-  deliberately propagate from this low-level surface so each consumer can
+  100-millisecond deadline. `Workspace` owns the immutable canonical-root
+  identity and supplies the package-internal no-follow open and reverification
+  seam plus the `debug_logs` scaffold declaration. For each supported storage
+  attempt, this module owns and holds both the verified root descriptor and a
+  child `debug_logs` descriptor for the complete guard, rotation, append,
+  rollback, and cleanup critical section. It creates or opens the child relative
+  to the root, verifies each opened and named directory identity, and performs
+  every guard, active-log, and five-backup leaf stat, open, create, unlink, and
+  rename relative to the child descriptor; leaf stats do not follow symlinks.
+  The module rechecks both canonical directory identities before each forward
+  leaf mutation, and root, child, and final-leaf opens request `O_NONBLOCK` where
+  the platform defines it. An unavailable root identity or a platform lacking
+  `O_DIRECTORY`, `O_NOFOLLOW`, descriptor-relative mkdir/open/stat/unlink/rename,
+  or no-follow stat support drops the record without opening a diagnostic leaf
+  or using a weaker fallback. Before opening or lazily creating the persistent
+  guard, the module validates any existing active file and each existing backup
+  through the held child directory as regular, with `st_nlink == 1`, a meaningful
+  inode identity, and no larger than 1,048,576 bytes. It then validates any
+  existing guard the same no-follow way and requires it to be regular with
+  `st_nlink == 1` and a meaningful identity. If any prevalidation fails, no guard
+  is opened or created; the size bound applies only to active and backup files.
+  The module verifies that the opened guard descriptor and held-directory name
+  identify the same regular, singly-linked file before attempting the advisory
+  lock and again after acquisition. Under that guard, it snapshots each active
+  and backup name as absent or as its exact validated meaningful inode, checks
+  the expected absence or identity of every source and destination immediately
+  before each rotation unlink or rename, and updates the expected state after
+  every successful mutation. It then verifies that the opened active descriptor
+  and held-directory name identify the same regular, singly-linked file before
+  and during append. It appends to `debug_logs/runtime.jsonl`, rotates before the
+  active file would exceed the bound, and retains `runtime.jsonl.1` through `.5`.
+  After a partial append or synchronization failure, best-effort rollback
+  truncates only if the descriptor remains the exact inode captured before the
+  append and that inode remains regular and singly linked. These validations
+  cover only the identities observed at each check; they do not make concurrent
+  external filesystem changes transactional. Invalid input, contention, unsafe
+  storage, serialization, append, synchronization, flush, fsync, rollback,
+  rotation, and cleanup failures covered by `Exception` drop only that record
+  and never recurse. Cleanup still attempts every independently acquired
+  descriptor and lock. An original body process-control `BaseException` wins;
+  otherwise the first cleanup process-control failure propagates after all later
+  cleanup attempts with its original object and traceback so each consumer can
   apply its boundary-specific fail-safe policy.
 - **Primary verification/documentation:** `tests/test_debug_log.py`,
   `tests/test_workspace_and_config.py`, `docs/design/overview.md`,
@@ -1595,14 +1601,26 @@ every intermediate arrow. The current runtime graph is acyclic.
   boundary.
 - **Supported surface:** Package-supported `FilesystemConversationCatalog`,
   `FilesystemConversationEventStore`, `Workspace`, and
-  `initialize_workspace`. `Workspace.inspect_debate_context` is the strict,
-  separate context-sidecar inspection operation; topology, serialization, and
-  lock-registry details are internal.
+  `initialize_workspace`. Package-internal `open_workspace_root_directory` and
+  `verify_workspace_root_directory` provide the diagnostic storage boundary and
+  are deliberately absent from the project-root facade.
+  `Workspace.inspect_debate_context` is the strict, separate context-sidecar
+  inspection operation; topology, serialization, and lock-registry details are
+  internal.
 - **Direct internal dependencies:** `agents`, `conversations`, `errors`, and
   `models`.
 - **State, resources, and side effects:** Owns topology, path and symlink
-  security, strict UTF-8 and JSON I/O, overrides, agent and debate state, logs,
-  results, per-conversation metadata under
+  security, and each instance's immutable meaningful canonical-root identity.
+  Construction makes one nonmutating no-follow identity probe and retains no
+  descriptor: an existing directory binds immediately, a specifically missing
+  root remains pending for one binding attempt after `initialize()` creates it,
+  and any other unavailable state fails closed without later rebinding. The
+  package-internal helpers open and reverify the bound named root and descriptor;
+  a replacement, symlink, non-directory, or identity mismatch raises
+  `WorkspaceSecurityError`, while an unavailable identity or unsupported safe
+  primitive raises an ordinary `OSError`. The module also owns strict UTF-8 and
+  JSON I/O, overrides, agent and debate state, logs, results, per-conversation
+  metadata under
   `discussion_logs/<session_id>/interactive/conversations/<conversation_id>/metadata.json`,
   authoritative visible events under
   `discussion_logs/<session_id>/interactive/conversations/<conversation_id>/transcript.jsonl`,
@@ -1642,14 +1660,17 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 ## Consistency Notes
 
-- `Workspace` remains the sole containment and no-symlink authority and only
-  declares the `debug_logs` scaffold. `debug_log` owns its safe event schema,
-  weak per-workspace process locks, independent advisory guard, regular-file
-  and single-link validation for guard/active/backup files, active/backup size
-  validation, append rollback, and bounded rotation. This independent guard
-  intentionally does not reuse the backend's private access-claim lock: access
-  claims fail closed, while ordinary diagnostic `Exception` failures drop their
-  record.
+- `Workspace` remains the sole containment and no-symlink authority, owns each
+  instance's immutable canonical-root identity and package-internal root
+  open/reverification policy, and declares the `debug_logs` scaffold.
+  `debug_log` depends one way on that non-facade seam and owns each attempt's
+  root and child descriptors, safe event schema, weak per-workspace process
+  locks, independent advisory guard, leaf mutation, regular-file and single-link
+  validation for guard/active/backup files, active/backup size validation,
+  expected rotation state, append rollback, bounded rotation, and cleanup. This
+  independent guard intentionally does not reuse the backend's private
+  access-claim lock: access claims fail closed, while ordinary diagnostic
+  `Exception` failures drop their record.
   Process-control `BaseException` failures deliberately leave the low-level
   surface, and `backend`, `cli`, `interactive_controller._core`, `orchestrator`,
   and `smoke` each guard every trace and error call privately so diagnostics
