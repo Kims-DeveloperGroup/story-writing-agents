@@ -1336,7 +1336,7 @@ print(
         process = self._spawn_cli((), terminal_columns=36)
         process.wait_for_text("story[lobby]> ")
         mark = process.output_mark()
-        process.send_text("/settings\n\n")
+        process.send_line("/settings")
         process.wait_for_text("6. [available] Cancel", after=mark)
         process.send_line("4")
         process.wait_for_text("Providers > ", after=mark)
@@ -1351,7 +1351,7 @@ print(
         process.send_line("1")
         process.wait_for_text("Settings saved", after=mark)
         process.wait_for_text("story[lobby]> ", after=mark)
-        process.send_text("/quit\n\n")
+        process.send_line("/quit")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
         self.assertEqual(
             self.workspace.read_json("config/agent_configs.json")["plot_architect"][
@@ -1543,9 +1543,17 @@ print(
         process.wait_for_text("[session]", after=veof_mark)
         process.wait_for_text("story[lobby]> ", after=veof_mark)
         recall_mark = process.output_mark()
-        process.send_text("\x1bOA\n")
+        process.send_text("\x1bOA")
         process.wait_for_text("story[lobby]> /status", after=recall_mark)
-        process.wait_for_text("[session]", after=recall_mark)
+        completion_mark = process.output_mark()
+        process.send_text("\n")
+        process.wait_for_text(
+            "story[lobby]> /status ",
+            after=completion_mark,
+        )
+        submit_mark = process.output_mark()
+        process.send_text("\n")
+        process.wait_for_text("[session]", after=submit_mark)
 
         process.send_text("/quit\n\n")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
@@ -2006,9 +2014,10 @@ print(
         process.send_line("/conversation new Second Subject")
         process.wait_for_text("Subject: Second Subject", after=mark)
         mark = process.output_mark()
-        process.send_text("/conversation list\n\n")
+        process.send_line("/conversation list")
         listed = process.wait_for_text("First Subject", after=mark)
         process.wait_for_text("Second Subject", after=mark)
+        process.wait_for_text("story[alpha:lead]> ", after=mark)
         self.assertIn("focused", listed)
 
         mark = process.output_mark()
@@ -2018,16 +2027,17 @@ print(
         process.send_line("/conversation subject Renamed Subject")
         process.wait_for_text("Subject: Renamed Subject", after=mark)
         mark = process.output_mark()
-        process.send_text("/conversation archive\n\n")
+        process.send_line("/conversation archive")
         confirmation = process.wait_for_text("confirm [y/N]> ", after=mark)
         self.assertIn("Choices: y/yes or n/no", confirmation)
         self.assertIn("Default: no", confirmation)
         process.send_line("yes")
         process.wait_for_text("Archived ", after=mark)
         process.wait_for_text("Subject: Second Subject", after=mark)
+        process.wait_for_text("story[alpha:lead]> ", after=mark)
 
         mark = process.output_mark()
-        process.send_text("/to plot\n\n")
+        process.send_line("/to plot")
         process.wait_for_text(
             "Sticky target set to plot_architect.",
             after=mark,
@@ -2061,7 +2071,7 @@ print(
         process.send_interrupt()
         process.wait_for_text("[cancelled] No action was taken.", after=mark)
         process.wait_for_text("story[alpha:plot]> ", after=mark)
-        process.send_text("/quit\n\n")
+        process.send_line("/quit")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
 
         catalog = FilesystemConversationCatalog(self.workspace)
@@ -2141,7 +2151,7 @@ print(
         )
 
         mark = process.output_mark()
-        process.send_text("/session pause\n\n")
+        process.send_line("/session pause")
         confirmation = process.wait_for_text("confirm [y/N]> ", after=mark)
         self.assertIn("Question: Pause session alpha?", confirmation)
         self.assertIn("Choices: y/yes or n/no", confirmation)
@@ -2149,7 +2159,7 @@ print(
         process.send_line("y")
         process.wait_for_text("[session] Paused alpha; default retained.", after=mark)
         process.wait_for_text("story[lobby]> ", after=mark)
-        process.send_text("/quit\n\n")
+        process.send_line("/quit")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
 
         alpha = self.workspace.read_json(f"{_SESSION_DIRECTORY}/alpha.json")
@@ -2840,7 +2850,8 @@ asyncio.run(main())
 
         selected = self._seed_default_session()
         process = self._spawn_cli(
-            ("chat", "alpha", "--workspace", str(self.workspace.root))
+            ("chat", "alpha", "--workspace", str(self.workspace.root)),
+            environment_overrides={"TERM": "xterm-256color"},
         )
         process.wait_for_text("story[alpha:lead]> ")
 
