@@ -12,6 +12,7 @@ import socket
 import stat
 import subprocess
 import sys
+import tempfile
 import unittest
 from dataclasses import FrozenInstanceError, fields
 from enum import StrEnum
@@ -38,7 +39,10 @@ from story_writing_agents import backend as backend_module
 from story_writing_agents import errors as errors_module
 from story_writing_agents import models as models_module
 from story_writing_agents import session_lifecycle as lifecycle_module
-from story_writing_agents.debug_log import DEBUG_LOG_RELATIVE_PATH
+from story_writing_agents.debug_log import (
+    DEBUG_LOG_RELATIVE_PATH,
+    WorkspaceDebugLog,
+)
 
 from tests.helpers import initialized_workspace
 
@@ -157,6 +161,25 @@ def _debug_records(workspace: Any) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def _cleanup_rows_since(
+    workspace: Any,
+    mark: int,
+) -> list[tuple[object, ...]]:
+    """Project backend cleanup records after one exact log position."""
+
+    return [
+        (
+            record["level"],
+            record["phase"],
+            record.get("outcome"),
+            record.get("session_id"),
+        )
+        for record in _debug_records(workspace)[mark:]
+        if record["component"] == "backend"
+        and record["operation"] == "cleanup"
+    ]
 
 
 def _race_for_dead_claim(
@@ -415,6 +438,36 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         backend = AgentBackend(self.workspace, executable=sys.executable)
         self.addCleanup(backend.close)
         return backend
+
+    def prepare_close_state(
+        self,
+        backend: AgentBackend,
+        label: str,
+        tokens: dict[str, str],
+    ) -> Path:
+        """Populate all close-owned resource collections for one case."""
+
+        backend._access_claim_tokens.update(tokens)
+        backend._thread_lock(f"{label}_lock", "codex", "plot_architect")
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        staging = Path(temporary.name) / f"PRIVATE_{label.upper()}_STAGING"
+        staging.mkdir()
+        backend._staging_directories.add(staging)
+        return staging
+
+    def assert_close_resources_cleared(
+        self,
+        backend: AgentBackend,
+        staging: Path,
+    ) -> None:
+        """Require the original complete-cleanup state after close returns."""
+
+        self.assertTrue(backend._closed)
+        self.assertEqual(backend._access_claim_tokens, {})
+        self.assertEqual(backend._thread_locks, {})
+        self.assertEqual(backend._staging_directories, set())
+        self.assertFalse(staging.exists())
 
     def write_manifest(self, path_session_id: str, **changes: Any) -> dict[str, Any]:
         """Persist one valid V2 manifest with optional field replacements."""
@@ -845,6 +898,281 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         self.assertFalse(self.workspace.path(_access_relative("owned")).exists())
         self.assertEqual(_artifact_snapshot(changed_path), before)
         self.assertEqual(backend._access_claim_tokens, {})
+
+    def test_close_success_records_terminal_and_is_idempotent(self) -> None:
+        backend = self.backend()
+        tokens = {"close_success": "PRIVATE_CLOSE_SUCCESS_TOKEN"}
+        staging = self.prepare_close_state(backend, "close_success", tokens)
+        attempts: list[tuple[str, str]] = []
+
+        def release(session_id: str, token: str) -> None:
+            attempts.append((session_id, token))
+
+        mark = len(_debug_records(self.workspace))
+        with mock.patch.object(
+            backend,
+            "_release_access_claim",
+            side_effect=release,
+        ):
+            self.assertIsNone(backend.close())
+
+        self.assertEqual(attempts, list(tokens.items()))
+        self.assert_close_resources_cleared(backend, staging)
+        self.assertEqual(
+            _cleanup_rows_since(self.workspace, mark),
+            [
+                ("trace", "started", None, None),
+                ("trace", "succeeded", "completed", None),
+            ],
+        )
+        raw = self.workspace.path(DEBUG_LOG_RELATIVE_PATH).read_text(
+            encoding="utf-8"
+        )
+        for private in (*tokens.values(), str(staging), str(self.workspace.root)):
+            self.assertNotIn(private, raw)
+
+        repeat_mark = len(_debug_records(self.workspace))
+        self.assertIsNone(backend.close())
+        self.assertEqual(len(_debug_records(self.workspace)), repeat_mark)
+
+    def test_close_ordinary_release_failures_record_failed_terminal(self) -> None:
+        cases = (
+            ("one", ("close_beta",)),
+            ("multiple", ("close_alpha", "close_gamma")),
+        )
+        for label, failed_sessions in cases:
+            with self.subTest(label=label):
+                backend = self.backend()
+                tokens = {
+                    "close_alpha": "PRIVATE_CLOSE_ALPHA_TOKEN",
+                    "close_beta": "PRIVATE_CLOSE_BETA_TOKEN",
+                    "close_gamma": "PRIVATE_CLOSE_GAMMA_TOKEN",
+                }
+                staging = self.prepare_close_state(
+                    backend,
+                    f"ordinary_{label}",
+                    tokens,
+                )
+                failures = {
+                    session_id: OSError(f"PRIVATE_{session_id.upper()}_FAILURE")
+                    for session_id in failed_sessions
+                }
+                failure_messages = {
+                    session_id: str(failure)
+                    for session_id, failure in failures.items()
+                }
+                attempts: list[tuple[str, str]] = []
+
+                def release(session_id: str, token: str) -> None:
+                    attempts.append((session_id, token))
+                    failure = failures.get(session_id)
+                    if failure is not None:
+                        raise failure
+
+                mark = len(_debug_records(self.workspace))
+                with mock.patch.object(
+                    backend,
+                    "_release_access_claim",
+                    side_effect=release,
+                ):
+                    self.assertIsNone(backend.close())
+
+                self.assertEqual(attempts, list(tokens.items()))
+                self.assert_close_resources_cleared(backend, staging)
+                expected = [("trace", "started", None, None)]
+                expected.extend(
+                    ("error", "failed", "failed", session_id)
+                    for session_id in tokens
+                    if session_id in failures
+                )
+                expected.append(("trace", "failed", "failed", None))
+                self.assertEqual(
+                    _cleanup_rows_since(self.workspace, mark),
+                    expected,
+                )
+                for failure in failures.values():
+                    self.assertIsNone(failure.__cause__)
+                    self.assertIsNone(failure.__context__)
+                raw = self.workspace.path(DEBUG_LOG_RELATIVE_PATH).read_text(
+                    encoding="utf-8"
+                )
+                for private in (
+                    *tokens.values(),
+                    *failure_messages.values(),
+                    str(staging),
+                    str(self.workspace.root),
+                ):
+                    self.assertNotIn(private, raw)
+
+    def test_close_diagnostic_control_flow_does_not_change_cleanup(self) -> None:
+        error_backend = self.backend()
+        error_tokens = {
+            "error_sink_alpha": "PRIVATE_ERROR_SINK_ALPHA_TOKEN",
+            "error_sink_beta": "PRIVATE_ERROR_SINK_BETA_TOKEN",
+        }
+        error_staging = self.prepare_close_state(
+            error_backend,
+            "error_sink",
+            error_tokens,
+        )
+        error_failure = OSError("PRIVATE_ERROR_SINK_RELEASE_FAILURE")
+        error_attempts: list[tuple[str, str]] = []
+
+        def release_for_error_sink(session_id: str, token: str) -> None:
+            error_attempts.append((session_id, token))
+            if session_id == "error_sink_alpha":
+                raise error_failure
+
+        error_mark = len(_debug_records(self.workspace))
+        with (
+            mock.patch.object(
+                error_backend,
+                "_release_access_claim",
+                side_effect=release_for_error_sink,
+            ),
+            mock.patch.object(
+                WorkspaceDebugLog,
+                "error",
+                side_effect=KeyboardInterrupt("diagnostic interrupt"),
+            ) as debug_error,
+        ):
+            self.assertIsNone(error_backend.close())
+
+        self.assertEqual(error_attempts, list(error_tokens.items()))
+        debug_error.assert_called_once()
+        self.assertIs(debug_error.call_args.args[2], error_failure)
+        self.assert_close_resources_cleared(error_backend, error_staging)
+        self.assertEqual(
+            _cleanup_rows_since(self.workspace, error_mark),
+            [
+                ("trace", "started", None, None),
+                ("trace", "failed", "failed", None),
+            ],
+        )
+
+        trace_backend = self.backend()
+        trace_tokens = {
+            "trace_sink_alpha": "PRIVATE_TRACE_SINK_ALPHA_TOKEN",
+            "trace_sink_beta": "PRIVATE_TRACE_SINK_BETA_TOKEN",
+        }
+        trace_staging = self.prepare_close_state(
+            trace_backend,
+            "trace_sink",
+            trace_tokens,
+        )
+        trace_failure = OSError("PRIVATE_TRACE_SINK_RELEASE_FAILURE")
+        trace_attempts: list[tuple[str, str]] = []
+
+        def release_for_trace_sink(session_id: str, token: str) -> None:
+            trace_attempts.append((session_id, token))
+            if session_id == "trace_sink_alpha":
+                raise trace_failure
+
+        trace_mark = len(_debug_records(self.workspace))
+        with (
+            mock.patch.object(
+                trace_backend,
+                "_release_access_claim",
+                side_effect=release_for_trace_sink,
+            ),
+            mock.patch.object(
+                WorkspaceDebugLog,
+                "trace",
+                side_effect=SystemExit("diagnostic exit"),
+            ) as debug_trace,
+        ):
+            self.assertIsNone(trace_backend.close())
+
+        self.assertEqual(trace_attempts, list(trace_tokens.items()))
+        self.assert_close_resources_cleared(trace_backend, trace_staging)
+        self.assertEqual(debug_trace.call_count, 2)
+        self.assertEqual(
+            [call.kwargs["phase"].value for call in debug_trace.call_args_list],
+            ["started", "failed"],
+        )
+        self.assertEqual(
+            [
+                None
+                if call.kwargs.get("outcome") is None
+                else call.kwargs["outcome"].value
+                for call in debug_trace.call_args_list
+            ],
+            [None, "failed"],
+        )
+        self.assertEqual(
+            _cleanup_rows_since(self.workspace, trace_mark),
+            [("error", "failed", "failed", "trace_sink_alpha")],
+        )
+        raw = self.workspace.path(DEBUG_LOG_RELATIVE_PATH).read_text(
+            encoding="utf-8"
+        )
+        for private in (
+            *error_tokens.values(),
+            *trace_tokens.values(),
+            str(error_failure),
+            str(trace_failure),
+            str(error_staging),
+            str(trace_staging),
+            str(self.workspace.root),
+        ):
+            self.assertNotIn(private, raw)
+
+    def test_close_release_base_exception_preserves_interrupted_state(self) -> None:
+        backend = self.backend()
+        tokens = {
+            "interrupt_alpha": "PRIVATE_INTERRUPT_ALPHA_TOKEN",
+            "interrupt_beta": "PRIVATE_INTERRUPT_BETA_TOKEN",
+        }
+        staging = self.prepare_close_state(backend, "interrupt", tokens)
+        failure = KeyboardInterrupt("PRIVATE_APPLICATION_RELEASE_INTERRUPT")
+        failure_message = str(failure)
+        attempts: list[tuple[str, str]] = []
+
+        def release(session_id: str, token: str) -> None:
+            attempts.append((session_id, token))
+            raise failure
+
+        mark = len(_debug_records(self.workspace))
+        with (
+            mock.patch.object(
+                backend,
+                "_release_access_claim",
+                side_effect=release,
+            ),
+            self.assertRaises(KeyboardInterrupt) as raised,
+        ):
+            backend.close()
+
+        self.assertIs(raised.exception, failure)
+        self.assertEqual(str(raised.exception), failure_message)
+        self.assertIsNone(raised.exception.__cause__)
+        self.assertIsNone(raised.exception.__context__)
+        self.assertEqual(attempts, [next(iter(tokens.items()))])
+        self.assertTrue(backend._closed)
+        self.assertEqual(backend._access_claim_tokens, tokens)
+        self.assertTrue(backend._thread_locks)
+        self.assertEqual(backend._staging_directories, {staging})
+        self.assertTrue(staging.is_dir())
+        self.assertEqual(
+            _cleanup_rows_since(self.workspace, mark),
+            [("trace", "started", None, None)],
+        )
+        raw = self.workspace.path(DEBUG_LOG_RELATIVE_PATH).read_text(
+            encoding="utf-8"
+        )
+        for private in (
+            *tokens.values(),
+            failure_message,
+            str(staging),
+            str(self.workspace.root),
+        ):
+            self.assertNotIn(private, raw)
+
+        repeat_mark = len(_debug_records(self.workspace))
+        self.assertIsNone(backend.close())
+        self.assertEqual(len(_debug_records(self.workspace)), repeat_mark)
+        self.assertEqual(backend._access_claim_tokens, tokens)
+        self.assertEqual(backend._staging_directories, {staging})
 
     def test_write_failures_compensate_only_newly_acquired_access(self) -> None:
         backend = self.backend()

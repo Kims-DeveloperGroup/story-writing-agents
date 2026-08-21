@@ -1039,10 +1039,12 @@ class AgentBackend:
             DebugPhase.STARTED,
         )
         self._closed = True
+        release_failed = False
         for session, token in tuple(self._access_claim_tokens.items()):
             try:
                 self._release_access_claim(session, token)
             except Exception as exc:
+                release_failed = True
                 self._record_debug_error(
                     DebugOperation.CLEANUP,
                     exc,
@@ -1055,8 +1057,8 @@ class AgentBackend:
         self._staging_directories.clear()
         self._trace_debug(
             DebugOperation.CLEANUP,
-            DebugPhase.SUCCEEDED,
-            outcome=DebugOutcome.COMPLETED,
+            DebugPhase.FAILED if release_failed else DebugPhase.SUCCEEDED,
+            outcome=DebugOutcome.FAILED if release_failed else DebugOutcome.COMPLETED,
         )
 
     async def _invoke_codex(
