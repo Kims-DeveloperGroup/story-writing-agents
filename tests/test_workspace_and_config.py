@@ -229,6 +229,48 @@ class WorkspaceTests(unittest.TestCase):
             "preserve-existing-content",
         )
 
+    def test_debug_log_topology_is_legacy_compatible_and_preserves_bytes(
+        self,
+    ) -> None:
+        workspace = initialized_workspace(self)
+        diagnostics = {
+            "debug_logs/runtime.jsonl": b"active\n",
+            "debug_logs/runtime.jsonl.1": b"backup\n",
+            "debug_logs/.runtime.lock": b"guard",
+        }
+        for relative, content in diagnostics.items():
+            workspace.path(relative).write_bytes(content)
+
+        workspace.initialize()
+        self.assertTrue(workspace.path("debug_logs").is_dir())
+        self.assertTrue(workspace.path("debug_logs/.gitkeep").is_file())
+        self.assertEqual(
+            {
+                relative: workspace.path(relative).read_bytes()
+                for relative in diagnostics
+            },
+            diagnostics,
+        )
+
+        outline_before = workspace.read_text("core_documents/global_outline.md")
+        for child in workspace.path("debug_logs").iterdir():
+            child.unlink()
+        workspace.path("debug_logs").rmdir()
+        legacy = Workspace(workspace.root)
+        self.assertEqual(
+            legacy.read_text("core_documents/global_outline.md"),
+            outline_before,
+        )
+        self.assertFalse(legacy.root.joinpath("debug_logs").exists())
+
+        legacy.initialize()
+        self.assertTrue(legacy.path("debug_logs").is_dir())
+        self.assertTrue(legacy.path("debug_logs/.gitkeep").is_file())
+        self.assertEqual(
+            legacy.read_text("core_documents/global_outline.md"),
+            outline_before,
+        )
+
     def test_prompt_initialization_preserves_customizations_unless_overwritten(
         self,
     ) -> None:

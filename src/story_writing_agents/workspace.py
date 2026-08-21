@@ -175,6 +175,7 @@ WORKSPACE_DIRECTORIES: tuple[str, ...] = (
     "agent_states/plot_architect_state",
     "agent_states/character_custodian_state",
     "agent_states/execution_specialist_state",
+    "debug_logs",
     "discussion_logs",
     "manuscript",
 )
@@ -246,6 +247,7 @@ class Workspace:
             "agent_states/plot_architect_state",
             "agent_states/character_custodian_state",
             "agent_states/execution_specialist_state",
+            "debug_logs",
             "discussion_logs",
             "manuscript",
         ):

@@ -26,6 +26,11 @@ claims, prompt staging, routes, processes, and threads;
 `Workspace` owns path-safe persistence, inspection, and atomic replacement. See
 [Filesystem safety](../operations/filesystem-safety.md).
 
+The internal `debug_log` module borrows that containment boundary and owns its
+own safe event schema, per-workspace process serialization, independent
+cross-process guard, append rollback, and bounded rotation. It has no
+project-root export, and current application call sites do not invoke it.
+
 ## Fixed collaboration model
 
 The lead moderates and finalizes but does not vote. Three specialists audit each
@@ -57,9 +62,11 @@ collaborators and mutable process state.
 
 The supported terminal import remains
 `from story_writing_agents.interactive_terminal import InteractiveTerminal`.
-Its package facade preserves the exact existing public objects and signatures;
-package leaves are internal. The CLI calls one package-internal factory to
-construct a stream-backed terminal around one `RawTerminalDriver`. The
+Its package facade preserves the exact existing public objects and established
+call compatibility; `write_error()` alone adds the optional keyword-only
+`debug_log_path=None` presentation seam. Package leaves are internal. The CLI
+calls one package-internal factory to construct a stream-backed terminal around
+one `RawTerminalDriver`. The
 standalone line-editor facade delegates to that same driver implementation and
 contains no second raw-terminal lifecycle. Each constructed stream terminal or
 standalone editor has one isolated 100-entry process-local main-command store;

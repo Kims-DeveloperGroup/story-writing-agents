@@ -16,7 +16,7 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 33.
+Importable production units indexed: 34.
 
 ## Current Dependency Direction
 
@@ -56,6 +56,7 @@ interactive_controller._runtime_policy -> conversation_retrieval/conversation_se
                                        -> errors/interactive_terminal/models/workspace
 
 smoke -> agents/conversation_retrieval/conversation_search/conversations/models/orchestrator/session_lifecycle/workspace
+debug_log -> agents/workspace
 directives -> config/workspace/errors/agents
 interactive_commands -> agents
 interactive_line_editor -> interactive_commands/interactive_terminal
@@ -434,6 +435,46 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_conversation_event_store.py`,
   `docs/reference/conversation-catalog.md`, and
   `docs/reference/conversation-transcripts.md`.
+
+### `story_writing_agents.debug_log`
+
+- **Source:** `src/story_writing_agents/debug_log.py`
+- **Responsibility:** Persist content-safe bounded workspace runtime diagnostics.
+- **Supported surface:** No project-root public import. Its module-supported
+  internal surface is `WorkspaceDebugLog`; the fixed `DebugLevel`,
+  `DebugComponent`, `DebugOperation`, `DebugPhase`, and `DebugOutcome` enums;
+  and the exact path, size, backup-count, frame-count, and lock-timeout
+  constants listed in its `__all__`. `WorkspaceDebugLog.path` joins the fixed
+  relative path to the already-resolved workspace root without filesystem
+  access; the borrowed workspace itself remains private. Its
+  `trace` and `error` accept only the fixed taxonomy, validated optional
+  correlation IDs, and an optional fixed outcome. No arbitrary detail mapping
+  or caller-supplied timestamp, message, path, traceback field, or serialized
+  value is accepted.
+- **Direct internal dependencies:** `agents` and `workspace`.
+- **State, resources, and side effects:** Import and construction perform no
+  filesystem I/O or application startup. Calls own schema-v1 UTC timestamps,
+  compact ASCII-safe JSONL serialization, qualified exception-type projection,
+  and at most the nearest 32 module/function/positive-line frame facts; they
+  never inspect exception prose, filenames, source lines, locals, arguments,
+  representations, causes, contexts, or notes. Exact validated session,
+  conversation, debate, and canonical agent IDs are the only variable
+  correlation strings. A guarded process-wide weak lock registry serializes
+  one resolved workspace in process, and the persistent
+  `debug_logs/.runtime.lock` independently provides a bounded 100-millisecond
+  POSIX/Windows cross-process advisory-lock attempt. Under that guard the
+  module validates contained non-symlink regular active/backup paths no larger
+  than 1,048,576 bytes, appends to `debug_logs/runtime.jsonl`, best-effort
+  truncates a partial failed append, rotates before the active file would
+  exceed that bound, and retains `runtime.jsonl.1` through `.5`. Invalid input,
+  contention, unsafe storage,
+  serialization, append, synchronization, flush, fsync, rollback, and rotation
+  failures drop only that record and never recurse or mask caller control flow.
+- **Primary verification/documentation:** `tests/test_debug_log.py`,
+  `tests/test_workspace_and_config.py`, `docs/design/overview.md`,
+  `docs/design/persistence.md`, `docs/operations/filesystem-safety.md`,
+  `docs/operations/privacy-and-provider.md`, and
+  `docs/reference/configuration/session-storage.md`.
 
 ### `story_writing_agents.directives`
 
@@ -868,6 +909,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   `InteractiveTerminal` in the exact established `__all__` order. The facade
   exports the defining objects without wrapper subclasses and preserves their
   canonical `story_writing_agents.interactive_terminal` identities. The
+  supported `InteractiveTerminal.write_error` accepts an additive optional
+  keyword-only `debug_log_path`; omission preserves the exact established
+  two-notice record, while supplied safe one-line strict-UTF-8 text adds
+  exactly one third notice labelled `debug log` without changing the typed
+  error value. The
   unlisted `InteractiveSemanticOutput` binds one terminal's semantic write
   capability for controller use, and the existing `Field`, `ListView`,
   `Message`, `Notice`, `Panel`, `Record`, `Section`, `SemanticRole`, and
@@ -1151,7 +1197,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   re-exported by the package facade. Constructor and public method signatures,
   validation, typed input outcomes, established plain record contents/order,
   error redaction/caps, composition behavior, callback granularity, and fixed
-  callback-width semantics remain compatible. Its package-internal stream
+  callback-width semantics remain compatible. `write_error` alone adds the
+  optional keyword-only `debug_log_path` presentation seam: `None` preserves
+  the established error record exactly, and supplied validated text becomes
+  one sanitized third notice labelled `debug log`. Its package-internal stream
   factory coordinates the driver, controls, command metadata, and current
   capability profile. Lobby, attached-session, and conversation-scope
   orientation plus specialized run, agent, typed-error, help, agent-roster,
@@ -1214,6 +1263,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   and the core itself own no history.
   The semantic adapter retains only the
   terminal's bound component capability and acquires no stream or raw resource.
+  The optional debug-log path is call-local presentation input and is not
+  retained by the terminal or semantic adapter.
   There is no runtime, filesystem, persistence, subprocess, network, or
   import-time operational I/O.
 - **Primary verification/documentation:** `tests/test_interactive_terminal.py`,
@@ -1429,7 +1480,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   colliding files, and return `None` when absent for legacy debates. A
   guarded process-wide weak lock registry serializes operations per
   workspace/session/conversation. The fixed initialized topology includes
-  `agent_states/orchestrator_state/conversation_defaults`; new workspaces also
+  `agent_states/orchestrator_state/conversation_defaults` and `debug_logs`;
+  existing initialized workspaces need neither directory until diagnostics
+  first append lazily. `debug_log`, not `Workspace`, owns the files, lock,
+  schema, append, and rotation inside that directory. New workspaces also
   receive the canonical five-key system-default document with null Codex model
   and reasoning values, while existing system-default bytes are never migrated
   or rewritten by initialization. `cli_context` owns the schema stored in the
@@ -1441,7 +1495,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   catalog validation and one authoritative transcript read, then delegates the
   pure fixed-policy selection to `conversations`.
 - **Primary verification/documentation:** `tests/test_workspace_and_config.py`,
-  `tests/test_agent_state.py`, `tests/test_lifecycle_atomicity.py`,
+  `tests/test_debug_log.py`, `tests/test_agent_state.py`,
+  `tests/test_lifecycle_atomicity.py`,
   `tests/test_public_api_and_cli.py`, `tests/test_conversation_catalog.py`,
   `tests/conversation_event_store_contract.py`,
   `tests/test_conversation_event_store.py`,
@@ -1453,6 +1508,14 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 ## Consistency Notes
 
+- `Workspace` remains the sole containment and no-symlink authority and only
+  declares the `debug_logs` scaffold. `debug_log` owns its safe event schema,
+  weak per-workspace process locks, independent advisory guard, active file,
+  append rollback, and bounded rotation. This independent guard intentionally
+  does not reuse the backend's private access-claim lock: access claims fail
+  closed, while diagnostics drop failures and never affect caller control flow.
+  The diagnostics module is not re-exported by the project facade, and its
+  import and handle construction perform no filesystem operation.
 - `Workspace` initializes the canonical five-key system-default document but
   never rewrites an existing one. `ConfigManager` owns full system and per-agent
   schema validation and the shared Codex model/reasoning validators plus
