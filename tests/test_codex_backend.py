@@ -1166,6 +1166,86 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
     def provider_invocations(self) -> list[dict[str, object]]:
         return [item for item in self.invocations() if "payload" in item]
 
+    def provider_debug_records(
+        self,
+        *,
+        session_id: str,
+        correlation_field: str,
+        correlation_id: str,
+    ) -> list[dict[str, object]]:
+        """Return provider diagnostics for one exact public correlation."""
+
+        path = self.workspace.path(DEBUG_LOG_RELATIVE_PATH)
+        if not path.exists():
+            return []
+        return [
+            record
+            for record in (
+                json.loads(line)
+                for line in path.read_text(encoding="utf-8").splitlines()
+            )
+            if record["component"] == "backend"
+            and record["operation"] == "provider_invocation"
+            and record.get("session_id") == session_id
+            and record.get(correlation_field) == correlation_id
+        ]
+
+    def assert_interrupted_provider_records(
+        self,
+        records: list[dict[str, object]],
+        *,
+        session_id: str,
+        correlation_field: str,
+        correlation_id: str,
+        exception_type: type[BaseException],
+    ) -> None:
+        """Assert one STARTED and one correlated interrupted terminal row."""
+
+        self.assertEqual(len(records), 2)
+        expected_common = {
+            "schema_version": 1,
+            "component": "backend",
+            "operation": "provider_invocation",
+            "session_id": session_id,
+            correlation_field: correlation_id,
+            "agent_id": PLOT_ARCHITECT,
+        }
+        self.assertEqual(
+            {
+                key: value
+                for key, value in records[0].items()
+                if key != "timestamp"
+            },
+            {
+                **expected_common,
+                "level": "trace",
+                "phase": "started",
+            },
+        )
+        exception = records[1]["exception"]
+        self.assertIs(type(exception), dict)
+        self.assertEqual(
+            {
+                key: value
+                for key, value in records[1].items()
+                if key not in {"timestamp", "exception"}
+            },
+            {
+                **expected_common,
+                "level": "error",
+                "phase": "cancelled",
+                "outcome": "interrupted",
+            },
+        )
+        self.assertEqual(
+            set(exception),  # type: ignore[arg-type]
+            {"type", "frames", "frames_truncated"},
+        )
+        self.assertEqual(
+            exception["type"],  # type: ignore[index]
+            f"builtins.{exception_type.__name__}",
+        )
+
     def thread(self, session_id: str) -> dict[str, object]:
         manifest = self.workspace.read_json(
             "agent_states/orchestrator_state/provider_sessions/"
@@ -1413,6 +1493,394 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             f"{session_id}.json"
         )
         self.assertEqual(manifest["provider_threads"], {})
+
+    async def test_bound_agent_control_failures_emit_interrupted_terminal_records(
+        self,
+    ) -> None:
+        """Trace both control-flow failures at every bound provider operation."""
+
+        operations = (
+            ("invoke", "_invoke_codex", "debate_id"),
+            ("converse", "_converse_codex", "conversation_id"),
+            (
+                "retrieval",
+                "_converse_with_retrieval_codex",
+                "conversation_id",
+            ),
+        )
+        for ordinal, (operation, seam, correlation_field) in enumerate(
+            operations,
+            start=1,
+        ):
+            for exception_type in (KeyboardInterrupt, SystemExit):
+                with self.subTest(
+                    operation=operation,
+                    exception_type=exception_type.__name__,
+                ):
+                    suffix = exception_type.__name__.lower()
+                    session_id = f"control_{operation}_{suffix}"
+                    correlation_id = f"correlation_{ordinal}_{suffix}"
+                    story_marker = f"PRIVATE_STORY_{operation}_{suffix}"
+                    failure_marker = f"PRIVATE_FAILURE_{operation}_{suffix}"
+                    failure = exception_type(failure_marker)
+                    original_cause = failure.__cause__
+                    original_context = failure.__context__
+                    backend = AgentBackend(
+                        self.workspace,
+                        executable=str(self.executable),
+                    )
+                    self.addCleanup(backend.close)
+                    backend.create_session_with_access(session_id)
+                    bound = await backend.bind(self.definition())
+                    handler = _RecordingRetrievalHandler()
+                    if operation == "invoke":
+                        request: object = replace(
+                            self.request(
+                                session_id=session_id,
+                                debate_id=correlation_id,
+                            ),
+                            user_payload=story_marker,
+                        )
+                    elif operation == "converse":
+                        request = self.conversation_request(
+                            session_id=session_id,
+                            conversation_id=correlation_id,
+                            content=story_marker,
+                        )
+                    else:
+                        request = self.retrieval_request(
+                            session_id=session_id,
+                            conversation_id=correlation_id,
+                            content=story_marker,
+                        )
+
+                    with (
+                        mock.patch.object(
+                            backend,
+                            seam,
+                            side_effect=failure,
+                        ) as provider_call,
+                        self.assertRaises(exception_type) as raised,
+                    ):
+                        if operation == "invoke":
+                            await bound.invoke(request)  # type: ignore[arg-type]
+                        elif operation == "converse":
+                            await bound.converse(request)  # type: ignore[arg-type]
+                        else:
+                            await bound.converse_with_retrieval(
+                                request,  # type: ignore[arg-type]
+                                handler,
+                            )
+
+                    self.assertIs(raised.exception, failure)
+                    self.assertIs(type(raised.exception), exception_type)
+                    self.assertEqual(str(raised.exception), failure_marker)
+                    self.assertIs(failure.__cause__, original_cause)
+                    self.assertIs(failure.__context__, original_context)
+                    provider_call.assert_awaited_once()
+                    self.assertEqual(handler.actions, [])
+                    lock = backend._thread_lock(
+                        session_id,
+                        bound.vendor,
+                        bound.definition.agent_id,
+                    )
+                    self.assertFalse(lock.locked())
+                    manifest = self.workspace.read_json(
+                        "agent_states/orchestrator_state/provider_sessions/"
+                        f"{session_id}.json"
+                    )
+                    self.assertEqual(manifest["provider_threads"], {})
+                    records = self.provider_debug_records(
+                        session_id=session_id,
+                        correlation_field=correlation_field,
+                        correlation_id=correlation_id,
+                    )
+                    self.assert_interrupted_provider_records(
+                        records,
+                        session_id=session_id,
+                        correlation_field=correlation_field,
+                        correlation_id=correlation_id,
+                        exception_type=exception_type,
+                    )
+                    raw_debug_log = self.workspace.path(
+                        DEBUG_LOG_RELATIVE_PATH
+                    ).read_text(encoding="utf-8")
+                    for private in (
+                        story_marker,
+                        failure_marker,
+                        str(self.workspace.root),
+                        str(bound.staging_directory),
+                    ):
+                        self.assertNotIn(private, raw_debug_log)
+
+    async def test_retrieval_handler_control_failures_taint_and_trace_interruption(
+        self,
+    ) -> None:
+        """Keep pending retrieval taint while tracing handler interruptions."""
+
+        for ordinal, exception_type in enumerate(
+            (KeyboardInterrupt, SystemExit),
+            start=1,
+        ):
+            with self.subTest(exception_type=exception_type.__name__):
+                suffix = exception_type.__name__.lower()
+                session_id = f"handler_control_{suffix}"
+                conversation_id = f"handler_conversation_{ordinal}"
+                story_marker = f"PRIVATE_HANDLER_STORY_{suffix}"
+                failure_marker = f"PRIVATE_HANDLER_FAILURE_{suffix}"
+                failure = exception_type(failure_marker)
+                original_cause = failure.__cause__
+                original_context = failure.__context__
+                backend = AgentBackend(
+                    self.workspace,
+                    executable=str(self.executable),
+                )
+                self.addCleanup(backend.close)
+                backend.create_session_with_access(session_id)
+                bound = await backend.bind(self.definition())
+                request = self.retrieval_request(
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                    content=story_marker,
+                )
+                search = _retrieval_action_json(
+                    request,
+                    kind=ConversationRetrievalActionKind.SEARCH_CONVERSATIONS,
+                    action_index=1,
+                    query="Needle source",
+                )
+                handler = _RaisingRetrievalHandler(failure)
+
+                with (
+                    mock.patch.dict(
+                        os.environ,
+                        {"STORY_FAKE_CODEX_OUTPUTS": json.dumps((search,))},
+                    ),
+                    self.assertRaises(exception_type) as raised,
+                ):
+                    await bound.converse_with_retrieval(request, handler)
+
+                self.assertIs(raised.exception, failure)
+                self.assertEqual(str(raised.exception), failure_marker)
+                self.assertIs(failure.__cause__, original_cause)
+                self.assertIs(failure.__context__, original_context)
+                self.assertEqual(handler.calls, 1)
+                self.assertIs(self.thread(session_id)["tainted"], True)
+                self.assertFalse(
+                    backend._thread_lock(
+                        session_id,
+                        bound.vendor,
+                        bound.definition.agent_id,
+                    ).locked()
+                )
+                records = self.provider_debug_records(
+                    session_id=session_id,
+                    correlation_field="conversation_id",
+                    correlation_id=conversation_id,
+                )
+                self.assert_interrupted_provider_records(
+                    records,
+                    session_id=session_id,
+                    correlation_field="conversation_id",
+                    correlation_id=conversation_id,
+                    exception_type=exception_type,
+                )
+                raw_debug_log = self.workspace.path(
+                    DEBUG_LOG_RELATIVE_PATH
+                ).read_text(encoding="utf-8")
+                for private in (
+                    story_marker,
+                    failure_marker,
+                    str(self.workspace.root),
+                    str(bound.staging_directory),
+                ):
+                    self.assertNotIn(private, raw_debug_log)
+
+    async def test_debug_sink_control_failures_preserve_bound_interruptions(
+        self,
+    ) -> None:
+        """Prevent diagnostic control flow from replacing bound-agent failures."""
+
+        cases = (
+            ("invoke", KeyboardInterrupt, SystemExit, "debate_id"),
+            ("converse", SystemExit, KeyboardInterrupt, "conversation_id"),
+            ("retrieval", KeyboardInterrupt, SystemExit, "conversation_id"),
+        )
+        seams = {
+            "invoke": "_invoke_codex",
+            "converse": "_converse_codex",
+        }
+        for ordinal, (
+            operation,
+            application_type,
+            sink_type,
+            correlation_field,
+        ) in enumerate(cases, start=1):
+            with self.subTest(
+                operation=operation,
+                application_type=application_type.__name__,
+                sink_type=sink_type.__name__,
+            ):
+                session_id = f"sink_control_{operation}"
+                correlation_id = f"sink_correlation_{ordinal}"
+                story_marker = f"PRIVATE_SINK_STORY_{operation}"
+                application_marker = f"PRIVATE_APPLICATION_{operation}"
+                sink_marker = f"PRIVATE_DIAGNOSTIC_{operation}"
+                application_failure = application_type(application_marker)
+                sink_failure = sink_type(sink_marker)
+                original_cause = application_failure.__cause__
+                original_context = application_failure.__context__
+                backend = AgentBackend(
+                    self.workspace,
+                    executable=str(self.executable),
+                )
+                self.addCleanup(backend.close)
+                backend.create_session_with_access(session_id)
+                bound = await backend.bind(self.definition())
+                handler: object = _RecordingRetrievalHandler()
+                provider_patch: contextlib.AbstractContextManager[object]
+                if operation == "invoke":
+                    request: object = replace(
+                        self.request(
+                            session_id=session_id,
+                            debate_id=correlation_id,
+                        ),
+                        user_payload=story_marker,
+                    )
+                    provider_patch = mock.patch.object(
+                        backend,
+                        seams[operation],
+                        side_effect=application_failure,
+                    )
+                elif operation == "converse":
+                    request = self.conversation_request(
+                        session_id=session_id,
+                        conversation_id=correlation_id,
+                        content=story_marker,
+                    )
+                    provider_patch = mock.patch.object(
+                        backend,
+                        seams[operation],
+                        side_effect=application_failure,
+                    )
+                else:
+                    request = self.retrieval_request(
+                        session_id=session_id,
+                        conversation_id=correlation_id,
+                        content=story_marker,
+                    )
+                    search = _retrieval_action_json(
+                        request,
+                        kind=ConversationRetrievalActionKind.SEARCH_CONVERSATIONS,
+                        action_index=1,
+                        query="Needle source",
+                    )
+                    handler = _RaisingRetrievalHandler(application_failure)
+                    provider_patch = mock.patch.dict(
+                        os.environ,
+                        {"STORY_FAKE_CODEX_OUTPUTS": json.dumps((search,))},
+                    )
+
+                with (
+                    provider_patch,
+                    mock.patch.object(
+                        WorkspaceDebugLog,
+                        "error",
+                        side_effect=sink_failure,
+                    ) as debug_error,
+                    self.assertRaises(application_type) as raised,
+                ):
+                    if operation == "invoke":
+                        await bound.invoke(request)  # type: ignore[arg-type]
+                    elif operation == "converse":
+                        await bound.converse(request)  # type: ignore[arg-type]
+                    else:
+                        await bound.converse_with_retrieval(
+                            request,  # type: ignore[arg-type]
+                            handler,  # type: ignore[arg-type]
+                        )
+
+                self.assertIs(raised.exception, application_failure)
+                self.assertEqual(str(raised.exception), application_marker)
+                self.assertIs(application_failure.__cause__, original_cause)
+                self.assertIs(application_failure.__context__, original_context)
+                debug_error.assert_called_once()
+                self.assertIs(debug_error.call_args.args[2], application_failure)
+                self.assertEqual(debug_error.call_args.args[0].value, "backend")
+                self.assertEqual(
+                    debug_error.call_args.args[1].value,
+                    "provider_invocation",
+                )
+                self.assertEqual(
+                    debug_error.call_args.kwargs["phase"].value,
+                    "cancelled",
+                )
+                self.assertEqual(
+                    debug_error.call_args.kwargs["outcome"].value,
+                    "interrupted",
+                )
+                self.assertEqual(
+                    debug_error.call_args.kwargs["session_id"],
+                    session_id,
+                )
+                self.assertEqual(
+                    debug_error.call_args.kwargs[correlation_field],
+                    correlation_id,
+                )
+                self.assertEqual(
+                    debug_error.call_args.kwargs["agent_id"],
+                    PLOT_ARCHITECT,
+                )
+                records = self.provider_debug_records(
+                    session_id=session_id,
+                    correlation_field=correlation_field,
+                    correlation_id=correlation_id,
+                )
+                self.assertEqual(len(records), 1)
+                self.assertEqual(
+                    {
+                        key: value
+                        for key, value in records[0].items()
+                        if key != "timestamp"
+                    },
+                    {
+                        "schema_version": 1,
+                        "level": "trace",
+                        "component": "backend",
+                        "operation": "provider_invocation",
+                        "phase": "started",
+                        "session_id": session_id,
+                        correlation_field: correlation_id,
+                        "agent_id": PLOT_ARCHITECT,
+                    },
+                )
+                self.assertFalse(
+                    backend._thread_lock(
+                        session_id,
+                        bound.vendor,
+                        bound.definition.agent_id,
+                    ).locked()
+                )
+                if operation == "retrieval":
+                    self.assertEqual(handler.calls, 1)  # type: ignore[attr-defined]
+                    self.assertIs(self.thread(session_id)["tainted"], True)
+                else:
+                    manifest = self.workspace.read_json(
+                        "agent_states/orchestrator_state/provider_sessions/"
+                        f"{session_id}.json"
+                    )
+                    self.assertEqual(manifest["provider_threads"], {})
+                raw_debug_log = self.workspace.path(
+                    DEBUG_LOG_RELATIVE_PATH
+                ).read_text(encoding="utf-8")
+                for private in (
+                    story_marker,
+                    application_marker,
+                    sink_marker,
+                    str(self.workspace.root),
+                    str(bound.staging_directory),
+                ):
+                    self.assertNotIn(private, raw_debug_log)
 
     async def test_trace_failure_preserves_provider_result_taint_and_cleanup(
         self,
