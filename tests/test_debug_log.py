@@ -109,11 +109,11 @@ def _file_link_snapshot(path: Path) -> tuple[bytes, int, int, int]:
 
 def _debug_namespace_snapshot(
     workspace: Workspace,
-) -> dict[str, tuple[int, int, int, int, bytes]]:
+) -> dict[str, tuple[int, int, int, int, bytes | None]]:
     """Capture every debug-directory name, identity, link count, and bytes."""
 
     directory = workspace.path(DEBUG_LOG_DIRECTORY)
-    snapshot: dict[str, tuple[int, int, int, int, bytes]] = {}
+    snapshot: dict[str, tuple[int, int, int, int, bytes | None]] = {}
     for path in sorted(directory.iterdir()):
         value = os.stat(path, follow_symlinks=False)
         snapshot[path.name] = (
@@ -121,7 +121,7 @@ def _debug_namespace_snapshot(
             value.st_dev,
             value.st_ino,
             value.st_nlink,
-            path.read_bytes(),
+            path.read_bytes() if path.is_file() else None,
         )
     return snapshot
 
@@ -652,9 +652,104 @@ class DebugLogStorageTests(unittest.TestCase):
                 workspace = initialized_workspace(self)
                 log = WorkspaceDebugLog(workspace)
                 workspace.path(relative).write_bytes(b"x" * (DEBUG_LOG_MAX_BYTES + 1))
-                before = _rotation_snapshot(workspace)
+                guard = workspace.path(DEBUG_LOG_GUARD_RELATIVE_PATH)
+                self.assertFalse(guard.exists())
+                before = _debug_namespace_snapshot(workspace)
                 _trace(log)
-                self.assertEqual(_rotation_snapshot(workspace), before)
+                self.assertEqual(_debug_namespace_snapshot(workspace), before)
+                self.assertFalse(guard.exists())
+
+    def test_precheck_rejects_hard_linked_candidates_before_guard_creation(
+        self,
+    ) -> None:
+        candidates = (
+            DEBUG_LOG_RELATIVE_PATH,
+            *(
+                f"{DEBUG_LOG_RELATIVE_PATH}.{index}"
+                for index in range(1, DEBUG_LOG_BACKUP_COUNT + 1)
+            ),
+        )
+        for relative in candidates:
+            with self.subTest(relative=relative):
+                workspace = initialized_workspace(self)
+                log = WorkspaceDebugLog(workspace)
+                guard = workspace.path(DEBUG_LOG_GUARD_RELATIVE_PATH)
+                self.assertFalse(guard.exists())
+                with tempfile.TemporaryDirectory(
+                    dir=workspace.root.parent
+                ) as temporary:
+                    outside = Path(temporary) / "outside-candidate"
+                    outside.write_bytes(b"outside candidate bytes")
+                    _hard_link_or_skip(self, outside, workspace.path(relative))
+                    outside_before = _file_link_snapshot(outside)
+                    namespace_before = _debug_namespace_snapshot(workspace)
+
+                    _trace(log)
+
+                    self.assertEqual(
+                        _file_link_snapshot(outside),
+                        outside_before,
+                    )
+                    self.assertEqual(
+                        _debug_namespace_snapshot(workspace),
+                        namespace_before,
+                    )
+                    self.assertFalse(guard.exists())
+
+    def test_post_lock_revalidation_contains_candidate_mutation_after_precheck(
+        self,
+    ) -> None:
+        active = self.workspace.path(DEBUG_LOG_RELATIVE_PATH)
+        guard = self.workspace.path(DEBUG_LOG_GUARD_RELATIVE_PATH)
+        real_open = debug_module._open_verified_regular_file
+        opened: list[Path] = []
+        snapshots: dict[
+            str,
+            object,
+        ] = {}
+
+        with tempfile.TemporaryDirectory(
+            dir=self.workspace.root.parent
+        ) as temporary:
+            outside = Path(temporary) / "outside-race"
+            outside.write_bytes(b"outside race bytes")
+            _hard_link_or_skip(self, outside, active)
+            active.unlink()
+
+            def mutate_before_guard_open(
+                path: Path,
+                *,
+                read_write: bool,
+            ) -> int:
+                if path == guard:
+                    os.link(outside, active)
+                    snapshots["outside"] = _file_link_snapshot(outside)
+                descriptor = real_open(path, read_write=read_write)
+                opened.append(path)
+                if path == guard:
+                    snapshots["namespace"] = _debug_namespace_snapshot(
+                        self.workspace
+                    )
+                return descriptor
+
+            with mock.patch.object(
+                debug_module,
+                "_open_verified_regular_file",
+                side_effect=mutate_before_guard_open,
+            ):
+                _trace(self.log)
+
+            self.assertEqual(opened, [guard])
+            self.assertEqual(
+                _file_link_snapshot(outside),
+                snapshots["outside"],
+            )
+            self.assertEqual(
+                _debug_namespace_snapshot(self.workspace),
+                snapshots["namespace"],
+            )
+            self.assertTrue(guard.is_file())
+            self.assertEqual(active.read_bytes(), b"outside race bytes")
 
     def test_rotation_reuses_the_no_follow_active_validation_stat(self) -> None:
         active = self.workspace.path(DEBUG_LOG_RELATIVE_PATH)
@@ -910,8 +1005,13 @@ class DebugLogStorageTests(unittest.TestCase):
             with self.subTest(relative=relative):
                 workspace = initialized_workspace(self)
                 workspace.path(relative).mkdir()
+                guard = workspace.path(DEBUG_LOG_GUARD_RELATIVE_PATH)
+                before = _debug_namespace_snapshot(workspace)
                 _trace(WorkspaceDebugLog(workspace))
+                self.assertEqual(_debug_namespace_snapshot(workspace), before)
                 self.assertTrue(workspace.path(relative).is_dir())
+                if relative != DEBUG_LOG_GUARD_RELATIVE_PATH:
+                    self.assertFalse(guard.exists())
 
     def test_threads_using_independent_handles_leave_complete_unique_lines(self) -> None:
         ready = threading.Barrier(9)
@@ -1077,6 +1177,73 @@ class DebugLogStorageTests(unittest.TestCase):
 
         with mock.patch.object(debug_module.os, "fsync", side_effect=OSError("fsync")):
             _trace(self.log, session_id="fsync")
+        self.assertEqual(self.log.path.read_bytes(), baseline)
+
+        _trace(self.log, session_id="recovered")
+        self.assertEqual(
+            [record["session_id"] for record in _records(self.workspace)],
+            ["baseline", "recovered"],
+        )
+
+    def test_post_open_active_fstat_failure_closes_descriptors_and_recovers(
+        self,
+    ) -> None:
+        _trace(self.log, session_id="baseline")
+        baseline = self.log.path.read_bytes()
+        active = self.workspace.path(DEBUG_LOG_RELATIVE_PATH)
+        guard = self.workspace.path(DEBUG_LOG_GUARD_RELATIVE_PATH)
+        real_open = debug_module._open_verified_regular_file
+        real_fstat = os.fstat
+        real_close = os.close
+        opened: dict[Path, int] = {}
+        closed: list[int] = []
+        active_size_failed = False
+
+        def track_open(path: Path, *, read_write: bool) -> int:
+            descriptor = real_open(path, read_write=read_write)
+            opened[path] = descriptor
+            return descriptor
+
+        def fail_active_size(descriptor: int) -> os.stat_result:
+            nonlocal active_size_failed
+            if (
+                descriptor == opened.get(active)
+                and not active_size_failed
+            ):
+                active_size_failed = True
+                raise OSError("post-open active size unavailable")
+            return real_fstat(descriptor)
+
+        def track_close(descriptor: int) -> None:
+            closed.append(descriptor)
+            real_close(descriptor)
+
+        with (
+            mock.patch.object(
+                debug_module,
+                "_open_verified_regular_file",
+                side_effect=track_open,
+            ),
+            mock.patch.object(
+                debug_module.os,
+                "fstat",
+                side_effect=fail_active_size,
+            ),
+            mock.patch.object(
+                debug_module.os,
+                "close",
+                side_effect=track_close,
+            ),
+            mock.patch.object(debug_module.os, "ftruncate") as truncate,
+        ):
+            _trace(self.log, session_id="dropped")
+
+        self.assertTrue(active_size_failed)
+        self.assertEqual(set(opened), {guard, active})
+        self.assertNotEqual(opened[guard], opened[active])
+        self.assertEqual(closed.count(opened[guard]), 1)
+        self.assertEqual(closed.count(opened[active]), 1)
+        truncate.assert_not_called()
         self.assertEqual(self.log.path.read_bytes(), baseline)
 
         _trace(self.log, session_id="recovered")
