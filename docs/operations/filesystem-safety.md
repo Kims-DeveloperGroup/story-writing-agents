@@ -46,18 +46,21 @@ Do not replace the guard pathname while a workspace may be used.
 ## Debug-log filesystem safety
 
 The internal debug writer uses `Workspace` containment and no-symlink checks
-for `debug_logs/`, `.runtime.lock`, the active log, and every backup. Every
-existing guard, active, and backup path must name a regular file with a
-filesystem link count of exactly one (`st_nlink == 1`). Before opening or
-lazily creating `.runtime.lock`, the writer validates the active log and all
-five backup paths; if that validation fails, no guard file is opened or created.
-It verifies the opened guard descriptor against its pathname before attempting
-the advisory lock and again after acquisition. Under that lock it revalidates
-the active and backup paths, then verifies the opened active descriptor against
-its pathname before append. Active and backup files must be no larger than 1 MiB.
-Hard-linked, nonregular, oversized, or otherwise unsafe storage is preserved
-rather than repaired, and that diagnostic record is dropped without changing
-caller control flow.
+for `debug_logs/`, `.runtime.lock`, the active log, and every backup. Before
+opening or lazily creating `.runtime.lock`, the writer validates the active-log
+path and all five backup candidates, requiring every existing file to be
+regular, singly linked, and no larger than 1 MiB. It then checks any existing
+guard without following symlinks and requires it to be regular with exactly one
+filesystem link (`st_nlink == 1`). If any prevalidation fails, no guard file is
+opened or created. The 1 MiB limit applies only to active and backup files, not
+the guard.
+The writer verifies the opened guard descriptor against its pathname before
+attempting the advisory lock and again after acquisition. Under that lock it
+revalidates the active and backup paths, then verifies the opened active
+descriptor against its pathname before append.
+Hard-linked or nonregular files, oversized active or backup files, and otherwise
+unsafe storage are preserved rather than repaired, and that diagnostic record
+is dropped without changing caller control flow.
 
 A guarded weak process-wide lock serializes writers for one resolved workspace.
 An independent persistent `.runtime.lock` then provides a POSIX or Windows
