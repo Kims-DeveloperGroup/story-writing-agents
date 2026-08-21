@@ -180,7 +180,7 @@ class BoundAgent:
                     outcome=DebugOutcome.INTERRUPTED,
                 )
                 raise
-            except Exception as exc:
+            except BaseException as exc:
                 self.backend._record_debug_error(
                     DebugOperation.PROVIDER_INVOCATION,
                     exc,
@@ -234,7 +234,7 @@ class BoundAgent:
                     outcome=DebugOutcome.INTERRUPTED,
                 )
                 raise
-            except Exception as exc:
+            except BaseException as exc:
                 self.backend._record_debug_error(
                     DebugOperation.PROVIDER_INVOCATION,
                     exc,
@@ -320,7 +320,7 @@ class BoundAgent:
                     outcome=DebugOutcome.INTERRUPTED,
                 )
                 raise
-            except Exception as exc:
+            except BaseException as exc:
                 self.backend._record_debug_error(
                     DebugOperation.PROVIDER_INVOCATION,
                     exc,
