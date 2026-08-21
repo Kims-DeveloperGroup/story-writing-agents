@@ -15,10 +15,10 @@ Use this index to find one canonical answer instead of searching a long manual.
 | --- | --- |
 | Initialize a workspace; run or inspect a debate | Installed CLI and Python API |
 | Create, reopen, or pause a provider session | Installed CLI and Python API |
-| Open the TTY shell; list, create, open, switch, or pause sessions | Bare `story` or `story chat` |
+| Open the TTY shell; list, create, resume, switch, or pause sessions | Bare `story` or `story chat` |
 | Show registry help or shell status | Global in the installed shell |
 | Apply directives; safely inspect sessions or debates | Current attachment; no conversation focus required |
-| Create, list, focus, rename, or archive subject conversations | Installed shell after session attachment; catalog Python API |
+| Create, list, resume, rename, or archive subject conversations | Installed shell after session attachment; catalog Python API |
 | List or target agents; send ordinary, `@AGENT`, or `/say` turns | Installed shell; an active conversation must have current focus |
 | Read durable/access facts and perform exact session transitions | Python API; used by the installed shell and runtime |
 | Parse the interactive command language and route metadata | Python API; the shell dispatches a documented subset |

@@ -148,16 +148,16 @@ def next_session_action(
     if state.access_state is SessionAccessState.OWNERSHIP_UNKNOWN:
         return "Verify ownership; do not remove the access claim."
     if state.durable_state is SessionDurableState.PAUSED:
-        return "Open the session to make it ready."
+        return "Resume the session to make it ready."
     if state.access_state is SessionAccessState.CLAIMABLE:
-        return "Open the session."
+        return "Resume the session."
     if not provider_ready:
         return "Repair provider configuration, then retry."
     if attached and not focused:
         return "Create or choose a conversation."
     if attached and focused:
         return "Continue with the current focus."
-    return "Open the session."
+    return "Resume the session."
 
 
 def classify_session_failure(failure: Exception) -> InteractiveError:

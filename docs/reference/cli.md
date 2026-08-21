@@ -85,19 +85,31 @@ and invocation precedence is in
 ## Interactive management, scope, and status
 
 Both streams must be TTYs before workspace/backend access or exit `2`. Capable
-POSIX main prompts, bare `/run` composition, and yes/no confirmation use live
-editing. Main prompts project canonical root, subcommand, and finite fixed-option
+POSIX main, composition, confirmation, picker, and settings-prompt reads use the
+terminal-owned live editor. The complete live frame—context, prompt, editable
+buffer, suggestions or choices, validation, and redraws—is cleared before a
+submit, commit, cancel, interrupt, or EOF returns; an exceptional failure
+attempts the same cleanup before propagating. Persistent semantic
+orientation, validation, cancellation, discard, error, and result records are
+written after that boundary and remain visible. Conversation-subject input is
+always an ordinary read.
+
+Main prompts project canonical root, subcommand, and finite fixed-option
 candidates into a selectable semantic palette. Opening highlights the first
-match; Up/Down moves that highlight instead of history, Tab replaces the full
-active token with the highlighted candidate without adding whitespace, and
-Escape restores the first pre-completion snapshot when present and dismisses
-that exact state. Closed-palette Up/Down uses process-local command history;
-Shift-Tab has no action. Composition shows only the preview-only `/send` then `/cancel`,
-filtered by an exact, case-sensitive whole-buffer slash prefix. Confirmation
-has no suggestions, and the subject remains an ordinary read. `TERM=dumb`,
-unavailable capabilities, and non-POSIX editing safely use `input()` once per
-attempt with no palette or completion-key ownership; composition and
-confirmation pass their structured plain semantic prompt once.
+match; Up/Down moves that highlight instead of history. Tab replaces the full
+active token, adding exactly one ASCII space only when the replaced token ended
+at the buffer end. Enter on a highlighted static suggestion performs the same
+completion without submitting, closes the palette, and requires a later Enter
+to submit. Escape restores the first pre-completion snapshot when present and
+dismisses that exact state. Closed-palette Up/Down uses process-local command
+history; Shift-Tab has no action.
+
+Composition shows only the preview-only `/send` then `/cancel`, filtered by an
+exact, case-sensitive whole-buffer slash prefix. Confirmation has no
+suggestions. `TERM=dumb`, unavailable capabilities, and non-POSIX editing use
+ordinary line input with no pre-Enter palette or cursor cleanup. Printed prompt
+and input text remain visible, and no synthetic final control frame is added;
+composition and confirmation pass their structured plain semantic prompt once.
 
 The one stream terminal retains at most 100 exact nonblank main submissions for
 that process. Up recalls older entries, Down recalls newer entries, and Down
@@ -108,19 +120,34 @@ is preserved. Empty/blank input, Ctrl-C, empty VEOF, physical EOF, failures,
 composition, subjects, confirmations, and nested settings input are excluded.
 The 101st entry evicts only the oldest. Nothing is persisted.
 
+A capable live resume choice records the full explicit command after frame
+cleanup and terminal restoration. In ordinary-line fallback, a submitted
+omitted command is the history entry whether its fresh choice read opens a
+picker, reports no eligible rows, or reports an error. When a picker opens, the
+following numbered selection is history-free. Navigation, static
+completion-only Enter, Escape dismissal, cancel, interrupt, EOF, and input
+failure add nothing.
+
 Main matching is exact and case-sensitive at the cursor, with ASCII space/tab
 token boundaries. Root offers 21 main-available registry tokens, help offers 24
 including the composition-only commands, and agent-valued positions offer the
 four preferred prompt aliases—`lead`, `plot`, `character`, and `execution`—in
 route order. The parser still accepts all ten declared route aliases; runtime
-values are not synthesized. Fixed-only no-match positions show an empty open
+values are not synthesized by the static grammar projection. Fixed-only
+no-match positions show an empty open
 palette, while mixed free-value slots close it. Filtering retains an eligible
-highlight. The first changing Tab
-saves the full buffer/cursor snapshot; edits in the same grammar position keep
-it, and a grammar-position change resets it. Enter submits only the visible
-buffer to the parser once. The generic single-select picker and cancellable
-prompt seams remain package-internal; `/settings` consumes them without adding
-a supported terminal API.
+highlight. The first changing Tab saves the full buffer/cursor snapshot; edits
+in the same grammar position keep it, and a grammar-position change resets it.
+Static completion-only Enter is not a submission or history entry; a later
+submit sends the visible buffer to the parser once. The generic single-select
+picker and cancellable-prompt seams remain package-internal. `/settings`
+consumes both. A submitted omitted resume command uses the picker only when its
+fresh lifecycle/catalog read succeeds with eligible rows; an empty set or read
+failure reports the applicable result or error without a picker. The picker's
+capable form is live and transient; line fallback is numbered. Exact capable
+omitted resume commands also receive controller-owned pre-Enter choices through
+the existing main input; dynamic-choice Enter submits an explicit identity and
+bypasses the picker.
 
 `/settings` is alias-free, takes no argument, and is available with or without
 an attached session. It edits isolated Current and Pending snapshots for
@@ -128,20 +155,19 @@ Language, Persona, Maximum debate rounds, and Providers through a six-choice
 editor in this order: those four fields, Save, Cancel. `Providers` opens a
 nested canonical-agent picker, then a Provider/Model/Reasoning effort picker;
 Model and Reasoning edit only that agent and `null`/Inherit falls back to the
-system defaults. Settings pickers and prompts use a transient lifecycle:
-capable streams clear their transient rows before returning, while fallback
-readers omit duplicate synthetic final picker frames. Nested Escape returns to
+system defaults. Settings pickers and prompts follow the same transient input
+lifecycle as all capable input; fallback readers retain printed input and add no
+synthetic final picker frame. Nested Escape returns to
 the parent silently without a Current/Pending snapshot or cancellation record.
 Save and Cancel each open a transient yes/no confirmation with a changed-only
 Current/Pending context: only differing fields appear in both sections, each
 with a `(Changed)` cue, while no differences show `No pending settings changes.`
 `yes`/`y` commits the requested action; `no`/`n`, blank, or nested Escape
 returns to the settings picker, and invalid confirmation input retries. Top-
-level Escape, Ctrl-C, or EOF cancels the whole workflow without writing;
-on a capable raw terminal, entering `/settings` clears only its correlated
-committed display rows and never deletes the history entry. Callback and
-ordinary-line fallback paths leave committed input visible rather than claiming
-cursor cleanup, with history unchanged. `/cancel` is literal model text in the
+level Escape, Ctrl-C, or EOF cancels the whole workflow without writing. The
+submitted `/settings` line has already been cleared with the capable main frame;
+its history entry remains. Ordinary-line fallback leaves its printed input
+visible, with the same history semantics. `/cancel` is literal model text in the
 free-text prompt.
 
 Save validates the complete pending pair, then rejects any exact-byte change to
@@ -179,9 +205,69 @@ operation failure takes precedence over a simultaneous indicator failure;
 indicator-only failures use the existing internal-error path after cleanup.
 
 `/help [COMMAND]` (`/?`), `/status`, `/settings`, and `/session list` are global.
-Session grammar is `/session list | create NAME | open [NAME] | pause`. Explicit
-`story chat SESSION` creates an absent session or opens a persisted one. Bare
-entry opens a ready default and asks before reopening a paused default.
+Session grammar is `/session list | create NAME | resume [NAME] | pause`. Explicit
+`story chat SESSION` creates an absent session or resumes a persisted session.
+Bare entry resumes a ready default and asks for confirmation before resuming a
+paused default.
+
+On a capable main prompt, exact omitted `/session resume` displays all persisted
+sessions before submission, ordered by newest durable update then ID. Rows show
+session ID plus durable and process-access state. Current attachment is
+highlighted first, otherwise the saved default, otherwise the first row.
+Up/Down previews, Tab is a no-op, and Enter submits the highlighted identity as
+one complete explicit resume command. Escape only dismisses the rows and leaves
+the omitted command in the buffer. If that omitted command is submitted instead,
+including after Escape or through nonempty VEOF, the controller rereads the
+lifecycle list. A successful nonempty read opens a history-free picker, live on
+a capable stream; ordinary-line fallback shows the numbered form and accepts
+blank for the highlight, an in-range ASCII decimal ordinal, or exact `/cancel`.
+
+Picker cancellation or interrupt and rejection before acquisition are
+mutation-free; EOF performs normal shell cleanup without selecting. An empty
+list emits `[session] No story sessions found.` without opening the picker; a
+lifecycle-read failure reports the applicable error without opening it.
+Choosing the current attachment reports that it is already attached. Every
+other choice is freshly
+validated before acquisition or durable reopen. Later steps load destination
+focus, persist the destination default, release the source when switching, and
+only then commit in-memory scope. A successful paused-to-ready reopen is not
+rolled back by later failure; newly acquired access is released where possible,
+but durable lifecycle/default rollback is not promised. A reported default
+write failure may follow atomic replacement, and source-release failure after
+default persistence is fatal `cleanup_failed` with the new default retained.
+Inspect persisted state after either error. Explicit
+`/session resume NAME`, startup default handling, `/session list`, and standalone
+`story session reopen` remain direct and unchanged.
+
+Conversation selection grammar is exactly `/conversation resume [ID]`. With
+`ID`, it directly resolves the established exact full ID or accepted
+case-sensitive unique prefix of at least 12 characters across the complete
+session catalog, then rejects an archived result. With `ID` omitted, capable
+main input displays active conversations before submission in catalog order.
+Rows use subject
+labels and show a stable handle: the first 12 ID characters when unique across
+the complete catalog, otherwise the full ID.
+Current active focus is highlighted first, then an active saved default, then
+the first row. Capable Up/Down previews, Tab does nothing, Enter submits the full
+immutable ID through one explicit command, and Escape only dismisses the rows.
+Submitting the omitted command instead performs a fresh catalog read and, when
+needed for highlighting, a saved-default read. A successful read with active
+rows opens the generic picker: live and transient on a capable stream, or
+numbered blank/ordinal/`/cancel` input in fallback. Cancel and interrupt are
+mutation-free; EOF performs normal shell cleanup without selecting. No active
+rows emits
+`[conversation] No active conversations found.` without opening the picker;
+a catalog or saved-default read failure reports the applicable error without
+opening it.
+
+The committed full ID is freshly resolved against the complete catalog before
+selection. A now-missing or archived choice is rejected, refreshed metadata is
+used, and the saved default is committed before current focus changes. A
+reported save failure leaves in-memory focus unchanged but may follow atomic
+replacement of the persisted default; inspect the saved selection. The
+existing explicit-ID path, `/conversation list` active-only default and
+`--all`, startup restoration, agent routing, noninteractive behavior, schemas,
+and package/public terminal APIs are unchanged.
 
 Full help is one grouped semantic `Panel` in command-registry order; contextual
 help is one command record with its group, syntax, aliases, provider/artifact

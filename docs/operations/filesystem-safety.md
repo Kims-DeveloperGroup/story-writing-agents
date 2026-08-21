@@ -116,9 +116,12 @@ after successful replacement can leave the complete new record durable, but
 not partial JSON. Catalog mutations cannot alter provider sessions, debates,
 manuscripts, core documents, CLI defaults, or agent state.
 
-Session and conversation default saves also replace one complete fixed JSON
-file. A conversation-default failure preserves its prior bytes and cannot
-alter catalog metadata; operations spanning both files are not atomic. See
+Session and conversation default saves each atomically replace one complete
+fixed JSON file. Failure before replacement preserves the prior bytes. A
+failure reported after replacement can leave the complete new default durable,
+but not partial JSON. These saves do not alter catalog metadata or in-memory
+focus. Operations spanning files are not atomic, so inspect the persisted
+default after any reported save failure. See
 [Persistence](../design/persistence.md) for the cross-file consequence.
 
 `/settings` coordinates `config/system_defaults.json` and

@@ -53,8 +53,8 @@ Shell errors use trusted fixed copy and never reproduce exception messages.
 
 | Condition | Stable code | User effect |
 | --- | --- | --- |
-| A command needs current attachment | `session_not_attached` | Create or open a session first. |
-| Durable state is paused | `session_paused` | Open it before provider work. |
+| A command needs current attachment | `session_not_attached` | Create or resume a session first. |
+| Durable state is paused | `session_paused` | Resume the session to make it ready before provider work. |
 | Another live local process owns access | `session_access_blocked` | Close that process normally, then retry. |
 | Ownership cannot be verified | `session_ownership_unknown` | Preserve the claim and inspect recovery guidance. |
 | V1 state is detected | `workspace_version_unsupported` | Use the nondestructive manual reset procedure. |

@@ -43,6 +43,8 @@ from story_writing_agents.interactive_terminal._model import (
     ControlOutcomeKind,
     Field,
     InputPromptView,
+    KeyEvent,
+    LineInputState,
     MainInputHistoryState,
     Notice,
     Panel,
@@ -617,8 +619,14 @@ class SemanticInputDriverTests(unittest.TestCase):
     def test_signature_and_line_fallback_render_once_without_history(self) -> None:
         self.assertEqual(
             tuple(inspect.signature(RawTerminalDriver.read_input_line).parameters),
-            ("self", "view", "renderer", "suggestion_provider"),
+            ("self", "view", "renderer", "suggestion_provider", "transient"),
         )
+        signature = inspect.signature(RawTerminalDriver.read_input_line)
+        self.assertIs(
+            signature.parameters["transient"].kind,
+            inspect.Parameter.KEYWORD_ONLY,
+        )
+        self.assertIs(signature.parameters["transient"].default, False)
         fallback = mock.Mock(return_value=" exact fallback ")
         driver, input_stream, output, _fallback, termios_double, size_calls = _driver(
             "unused",
@@ -650,6 +658,137 @@ class SemanticInputDriverTests(unittest.TestCase):
         self.assertEqual(termios_double.get_calls, [])
         self.assertEqual(size_calls, [8])
         self.assertEqual(driver._history_state, MainInputHistoryState())
+
+    def test_transient_live_input_clears_commit_events_and_provider_failure(
+        self,
+    ) -> None:
+        view = InputPromptView((), Prompt("input>"))
+        cases: tuple[tuple[str, object], ...] = (
+            ("visible\n", "visible"),
+            ("\x03", KeyboardInterrupt),
+            ("\x04", EOFError),
+            ("", EOFError),
+        )
+        for characters, expected in cases:
+            with self.subTest(characters=repr(characters)):
+                driver, _input, output, fallback, termios_double, _size = _driver(
+                    characters
+                )
+                if isinstance(expected, str):
+                    self.assertEqual(
+                        driver.read_input_line(
+                            view,
+                            render_input_prompt,
+                            lambda _buffer: (),
+                            transient=True,
+                        ),
+                        expected,
+                    )
+                    self.assertEqual(output.records[-1], "\r\r\x1b[J")
+                else:
+                    with self.assertRaises(expected):  # type: ignore[arg-type]
+                        driver.read_input_line(
+                            view,
+                            render_input_prompt,
+                            lambda _buffer: (),
+                            transient=True,
+                        )
+                    self.assertEqual(output.records[-1], "\r\r\x1b[J\n")
+                fallback.assert_not_called()
+                self.assertEqual(
+                    [when for _fd, when, _attrs in termios_double.set_calls],
+                    [termios_double.TCSANOW, termios_double.TCSADRAIN],
+                )
+                self.assertEqual(driver._history_state, MainInputHistoryState())
+
+        driver, _input, output, fallback, termios_double, _size = _driver("x")
+
+        def failing_provider(buffer: str) -> tuple[object, ...]:
+            if buffer:
+                raise RuntimeError("preview failed")
+            return ()
+
+        with self.assertRaisesRegex(RuntimeError, "^preview failed$"):
+            driver.read_input_line(
+                view,
+                render_input_prompt,
+                failing_provider,  # type: ignore[arg-type]
+                transient=True,
+            )
+        self.assertEqual(output.records[-1], "\r\r\x1b[J\n")
+        fallback.assert_not_called()
+        self.assertEqual(
+            [when for _fd, when, _attrs in termios_double.set_calls],
+            [termios_double.TCSANOW, termios_double.TCSADRAIN],
+        )
+        self.assertEqual(driver._history_state, MainInputHistoryState())
+
+    def test_transient_prompt_clears_typed_outcomes_and_transition_failure(
+        self,
+    ) -> None:
+        view = InputPromptView((), Prompt("prompt>"))
+        cases = (
+            ("value\n", ControlOutcome(ControlOutcomeKind.COMMIT, text="value")),
+            ("\x1b", ControlOutcome(ControlOutcomeKind.CANCEL)),
+            ("\x03", ControlOutcome(ControlOutcomeKind.INTERRUPT)),
+            ("\x04", ControlOutcome(ControlOutcomeKind.EOF)),
+        )
+        for characters, expected in cases:
+            with self.subTest(characters=repr(characters)):
+                driver, _input, output, fallback, termios_double, _size = _driver(
+                    characters
+                )
+                readiness = (
+                    mock.patch.object(
+                        driver_module._select,
+                        "select",
+                        return_value=((), (), ()),
+                    )
+                    if characters == "\x1b"
+                    else mock.patch.object(
+                        driver_module._select,
+                        "select",
+                        wraps=driver_module._select.select,
+                    )
+                )
+                with readiness:
+                    self.assertEqual(
+                        driver.read_prompt(
+                            view,
+                            render_input_prompt,
+                            _controls.transition_prompt_input,
+                            transient=True,
+                        ),
+                        expected,
+                    )
+                self.assertIn("\x1b[J", output.records[-1])
+                fallback.assert_not_called()
+                self.assertEqual(
+                    [when for _fd, when, _attrs in termios_double.set_calls],
+                    [termios_double.TCSANOW, termios_double.TCSADRAIN],
+                )
+
+        driver, _input, output, fallback, termios_double, _size = _driver("x")
+
+        def failing_transition(
+            _state: LineInputState,
+            _event: KeyEvent,
+        ) -> tuple[LineInputState, ControlOutcome | None]:
+            raise RuntimeError("prompt transition failed")
+
+        with self.assertRaisesRegex(RuntimeError, "^prompt transition failed$"):
+            driver.read_prompt(
+                view,
+                render_input_prompt,
+                failing_transition,
+                transient=True,
+            )
+        self.assertEqual(output.records[-1], "\r\r\x1b[J\n")
+        fallback.assert_not_called()
+        self.assertEqual(
+            [when for _fd, when, _attrs in termios_double.set_calls],
+            [termios_double.TCSANOW, termios_double.TCSADRAIN],
+        )
 
     def test_live_input_uses_trusted_ansi_plain_cursor_and_reserved_noops(self) -> None:
         reserved = "\x1b[A\x1b[B\t\x1b[Z\x1b"
