@@ -7,7 +7,8 @@
 
 Key terms: **deterministic backend**—fixed local replies with no provider;
 **temporary mode**—a check whose workspace is removed; **persistent mode**—a
-check that retains diagnostics; **invariant**—a condition the smoke run verifies.
+check that retains its workspace and any diagnostics successfully written;
+**invariant**—a condition the smoke run verifies.
 
 Use smoke immediately after installation:
 
@@ -17,9 +18,10 @@ story smoke
 
 Temporary mode creates a uniquely named workspace, runs the check, prints one
 line of compact JSON, and removes the directory after normal success or a named
-invariant failure. It produces bounded operational debug records inside that
-workspace while running, but removes them with the workspace and prints no
-debug-log path or hint. A passing report contains `"status":"passed"`,
+invariant failure. It attempts bounded operational debug records inside that
+workspace while running, removes any successfully written records with the
+workspace, and prints no debug-log path or hint. A passing report contains
+`"status":"passed"`,
 `"provider_tested":false`, unique session and debate IDs, consensus on revision
 `r1`, one completed replacement round, and a disclaimer.
 
@@ -60,8 +62,10 @@ story smoke --workspace ./smoke-workspace
 
 Persistent mode initializes missing scaffold or reuses the directory. Every run
 uses unique session, conversation, debate, manuscript, and per-agent state
-identifiers, so repeated runs do not overwrite earlier diagnostics. The report
-identifies the retained workspace, session, and debate; inspect them with:
+identifiers, so story artifacts from repeated runs do not collide. Debug records
+append to the shared bounded runtime log when storage succeeds and may rotate
+under its retention limit. The report identifies the retained workspace,
+session, and debate; inspect them with:
 
 ```bash
 story inspect \
@@ -72,9 +76,10 @@ story inspect \
 
 This mode writes ordinary plaintext session data, two conversation records and
 transcripts, owner-isolated agent state, debate lifecycle/log/result/context
-files, a manuscript, and `debug_logs/runtime.jsonl` with fixed smoke, CLI, and
-runtime operational records. Those records contain no synthetic story content
-or provider stderr. It preserves pre-existing core-document bytes and CLI
+files, and a manuscript. It also attempts fixed smoke, CLI, and runtime records
+in `debug_logs/runtime.jsonl`; that file can remain absent when safe storage is
+unavailable. Successfully written records contain no synthetic story content or
+provider stderr. The run preserves pre-existing core-document bytes and CLI
 default files, but the supplied workspace is not read-only. See
 [debug-log privacy](../operations/privacy-and-provider.md#workspace-debug-log-privacy).
 

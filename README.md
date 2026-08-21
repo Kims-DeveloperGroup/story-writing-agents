@@ -102,7 +102,11 @@ For Python integrations, start with the [runtime API](docs/reference/runtime-api
 - Deadlocked and interrupted debates cannot resume under the same debate ID.
 - Workspace content, logs, provider metadata, agent state, and manuscripts are plaintext.
 - Artifact replacement is atomic per file with best-effort multi-file rollback, not a power-loss-safe transaction.
-- Smoke's explicit workspace is not read-only and retains plaintext diagnostics; abrupt termination can interrupt cleanup. A pass does not validate provider/model, terminal behavior, integration, or story quality. See the [smoke guide](docs/guides/smoke-test.md).
+- Smoke's explicit workspace is not read-only and retains any plaintext
+  diagnostic records that were successfully written; abrupt termination can
+  interrupt cleanup. A pass does not validate provider/model, terminal
+  behavior, integration, or story quality. See the
+  [smoke guide](docs/guides/smoke-test.md).
 - The interactive shell accepts one advisory line; bare `/run` owns multiline
   composition. Process-level PTY tests verify TTY gating and VINTR/VEOF delivery
   on supported POSIX. Retrieval is active-only and bounded; standalone artifact

@@ -95,9 +95,10 @@ The low-level writer suppresses ordinary `Exception` failures. CLI, backend,
 runtime, controller, and smoke each add a private guard that catches diagnostic
 `BaseException`, so even a sink `KeyboardInterrupt` or `SystemExit` cannot
 replace the application's result, exception, cancellation, cleanup, output, or
-exit status. Explicit smoke retains best-effort records; implicit smoke removes
-its temporary workspace and log. A hint therefore does not guarantee that a
-record exists.
+exit status. Explicit smoke retains any best-effort records successfully
+written; implicit smoke removes its temporary workspace and any log that was
+successfully written. A hint or retained explicit workspace therefore does not
+guarantee that a record exists.
 
 Interactive errors after workspace resolution add exactly
 `[debug log] If available, workspace-relative: debug_logs/runtime.jsonl`.
@@ -126,8 +127,9 @@ metadata and do not echo provider response values. Progress exposes fixed facts;
 sources intentionally reveal subject/citation, never
 query/event/candidate/critique/error/model prose.
 
-Separately, after a durable advisory user event, generic `StoryRuntime`
-persistence stores failure type plus sanitized detail. Its known-value sanitizer:
+Separately, after a durable advisory user event, an ordinary `Exception` from a
+`StoryRuntime` turn attempts to store failure type plus sanitized detail in the
+transcript. Its known-value sanitizer:
 
 - replaces current/context/retrieval variants with `<redacted>` and workspace
   roots with `<workspace>`;
@@ -135,9 +137,14 @@ persistence stores failure type plus sanitized detail. Its known-value sanitizer
 - falls back to `ExceptionType: unavailable diagnostic`; and
 - caps output at 4,096 characters with an in-limit truncation marker.
 
-Cancellation stores fixed `CancelledError: conversation turn was cancelled`.
-Only supplied/known variants are redacted; this is not a general secret detector.
-Replies are unchanged. Terminal summaries use a separate boundary.
+`asyncio` cancellation stores fixed
+`CancelledError: conversation turn was cancelled`. Provider
+`KeyboardInterrupt` and `SystemExit` store no transcript outcome or exception
+value. Their separate runtime debug submission admits only the fixed operational
+fields and safe exception type/frame projection described above, and its failure
+does not replace the original exception. Only supplied/known variants are
+redacted; this is not a general secret detector. Replies are unchanged. Terminal
+summaries use a separate boundary.
 
 ## Codex and credentials
 

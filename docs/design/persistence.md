@@ -41,11 +41,16 @@ fixed replacements for unsafe type, module, or function names. It does not
 accept a caller timestamp, message, path, traceback text, or arbitrary detail
 or payload mapping.
 
-`Workspace` owns containment, no-symlink checks, and the `debug_logs/` scaffold.
-The internal writer separately owns this schema and the lifecycle of its guard
-and log files: lazy creation, single-link regular-file validation, active/backup
-size validation, append, rollback, and rotation. It is not exported from the
-project-root facade, and constructing the writer performs no filesystem work.
+`Workspace` owns initial containment, no-symlink resolution, and the
+`debug_logs/` scaffold. For each supported storage attempt, the internal writer
+opens and holds the verified canonical debug directory, performs no-follow leaf
+operations relative to that descriptor, and separately owns this schema and the
+lifecycle of its guard and log files: lazy creation, single-link regular-file
+validation, active/backup size validation, append, best-effort exact-inode
+rollback, and rotation. A platform without the required safe
+descriptor-relative primitives drops the record instead of using a weaker
+fallback. The writer is not exported from the project-root facade, and
+constructing it performs no filesystem work.
 `StoryRuntime` construction only retains that I/O-free handle and emits nothing.
 `AgentBackend` begins emitting only after the complete configuration snapshot
 loads successfully; CLI, controller, and smoke emission starts only after
@@ -140,12 +145,16 @@ in fixed order, then exclusively creates the manuscript; cross-file rollback is
 best effort. No sidecar, log, default, transcript, result, state, and artifact
 set forms one database transaction.
 
-One-step and retrieval turns append exactly one user event before provider work,
-then one reply or sanitized runtime error. Retrieval adds no control, source,
-sidecar, catalog, default, debate, state, or artifact record; compatible
-provider-thread metadata may update. Hard interruption can leave an unmatched
-user event, which later context excludes. Consensus snapshots never append the
-transcript.
+One-step and retrieval turns append exactly one user event before provider work.
+Success appends one reply; ordinary failures attempt one sanitized runtime error,
+and `asyncio.CancelledError` attempts its fixed runtime error. Provider
+`KeyboardInterrupt` or `SystemExit` appends no transcript outcome: the runtime
+instead attempts a separate `cancelled`/`interrupted` operational record and
+re-raises the identical exception without automatic retry. The unmatched user
+event remains visible to full transcript reads and is excluded from later context.
+Retrieval adds no control, source, sidecar, catalog, default, debate, state, or
+artifact record; compatible provider-thread metadata may update. Consensus
+snapshots never append the transcript.
 
 The canonical path tree is in [Session storage](../reference/configuration/session-storage.md).
 Accessor signatures are in [Workspace API](../reference/workspace-api.md),

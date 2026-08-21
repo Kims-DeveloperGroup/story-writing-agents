@@ -45,44 +45,62 @@ Do not replace the guard pathname while a workspace may be used.
 
 ## Debug-log filesystem safety
 
-The internal debug writer uses `Workspace` containment and no-symlink checks
-for `debug_logs/`, `.runtime.lock`, the active log, and every backup. Before
-opening or lazily creating `.runtime.lock`, the writer validates the active-log
-path and all five backup candidates, requiring every existing file to be
-regular, singly linked, and no larger than 1 MiB. It then checks any existing
-guard without following symlinks and requires it to be regular with exactly one
-filesystem link (`st_nlink == 1`). If any prevalidation fails, no guard file is
-opened or created. The 1 MiB limit applies only to active and backup files, not
-the guard.
-The writer verifies the opened guard descriptor against its pathname before
-attempting the advisory lock and again after acquisition. Under that lock it
-revalidates the active and backup paths, then verifies the opened active
-descriptor against its pathname before append.
+The internal debug writer begins with `Workspace` containment and no-symlink
+resolution for `debug_logs/`. It then opens that canonical directory without
+following its final name, verifies the opened and named directory identities,
+and holds the directory descriptor for the complete critical section. Every
+leaf stat, open, create, unlink, and rename for `.runtime.lock`, the active log,
+and its backups is relative to that descriptor; leaf stats do not follow
+symlinks. The writer rechecks the canonical directory identity before every
+forward leaf mutation. Directory and final leaf opens request `O_NONBLOCK` where
+the platform defines it, and final leaf opens are verified as regular, singly
+linked files before use.
+
+Before opening or lazily creating `.runtime.lock`, the writer validates the
+active-log name and all five backup candidates through the held directory,
+requiring every existing file to be regular, singly linked, and no larger than
+1 MiB. It then applies the same no-follow regular and single-link checks to any
+existing guard. If any prevalidation fails, no guard file is opened or created.
+The 1 MiB limit applies only to active and backup files, not the guard. The
+writer verifies the opened guard descriptor against its held-directory name
+before attempting the advisory lock and again after acquisition. Under that
+lock it revalidates active and backup names, then verifies the opened active
+descriptor against its held-directory name before and during append.
 Hard-linked or nonregular files, oversized active or backup files, and otherwise
 unsafe storage are preserved rather than repaired, and that diagnostic record
 is dropped without changing caller control flow.
 
+Safe storage requires `O_DIRECTORY`, `O_NOFOLLOW`, descriptor-relative
+open/stat/unlink/rename operations, and no-follow stat support. If the platform
+lacks any required primitive, the writer drops the record without opening a
+diagnostic leaf or changing the caller's result, exception, output, or exit.
+There is no less-contained fallback destination.
+
 A guarded weak process-wide lock serializes writers for one resolved workspace.
-An independent persistent `.runtime.lock` then provides a POSIX or Windows
-cross-process advisory-lock attempt. The process and advisory waits share one
-100-millisecond deadline. This guard is intentionally separate from the
-provider-session access-claim guard: session access uncertainty fails closed,
-while diagnostic contention or failure must not affect caller control flow.
+After the safe-primitive and directory checks pass, an independent persistent
+`.runtime.lock` attempts the available POSIX or Windows cross-process advisory
+lock. A platform without either advisory mechanism drops the record. The process
+and advisory waits share one 100-millisecond deadline. This guard is
+intentionally separate from the provider-session access-claim guard: session
+access uncertainty fails closed, while diagnostic contention or failure must
+not affect caller control flow.
 
 Under the guard, rotation happens before an append would exceed 1 MiB. It keeps
 five backups, shifts the newest prior active file to `.1`, and discards only the
-oldest backup when the set is full. Append writes are flushed and synchronized;
-after a partial write or synchronization failure, the writer makes a best-effort
-attempt to truncate the active file to its prior size. Rotation and rollback do
-not form a transaction. Lock, validation, append, flush, synchronization,
-rollback, rotation, and cleanup failures are suppressed; a record may be
-dropped, and a failed rotation can leave fewer retained files.
+oldest backup when the set is full. Append writes are flushed and synchronized.
+After a partial write or synchronization failure, rollback truncates only when
+the open descriptor still identifies the exact inode captured before append and
+that inode remains regular and singly linked. Otherwise rollback is skipped.
+Rotation and rollback do not form a transaction. Lock, validation, append,
+flush, synchronization, rollback, rotation, and cleanup failures are suppressed;
+a record may be dropped, and a failed rotation can leave fewer retained files.
 
-Do not edit, replace, or create another hard link to `.runtime.lock` or the
-active/backup files while the workspace may be used. Validation covers the
-state observed when a file is opened or checked for rotation; it cannot make
-concurrent external filesystem changes transactional. Paths and retention are
-listed in
+Do not rename or replace `debug_logs/`, and do not edit, replace, or create
+another hard link to `.runtime.lock` or the active/backup files while the
+workspace may be used. Holding the directory descriptor prevents a renamed or
+replaced pathname from redirecting leaf operations, but validation still covers
+only the identities observed at each check. It cannot make concurrent external
+filesystem changes transactional. Paths and retention are listed in
 [Session storage](../reference/configuration/session-storage.md#runtime-debug-log-storage).
 
 ## Conversation transcript safety

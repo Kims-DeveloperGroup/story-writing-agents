@@ -53,7 +53,8 @@ On a pass, `provider_tested:false`; checks, in order, are
 `consensus_context`, `revision_workflow`, `consensus_persisted`,
 `manuscript_committed`, and `core_documents_unchanged`.
 
-Implicit workspaces are removed; explicit ones retain plaintext diagnostics.
+Implicit workspaces are removed; explicit ones retain any plaintext diagnostics
+that were successfully written.
 Exit `0` passes, `1` names a failed invariant, and `2` covers usage/setup or an
 unexpected failure. See the [smoke guide](../guides/smoke-test.md).
 
@@ -71,11 +72,19 @@ effect; those operations retain their domain-state contract.
 | Boundary or result | Internal behavior | What the user sees |
 | --- | --- | --- |
 | Before a usable workspace | No workspace-bound logger is available, so this invocation submits no record. | Argparse, TTY, interactive-option, initialization, and discovery errors retain their established output and show no debug-log hint. |
-| Resolved or initialized workspace; normal activity | The owning CLI, controller, backend, or runtime attempts fixed trace records. | Normal success and domain-result output is unchanged. The active log may be inspected at the fixed relative path. |
+| Resolved or initialized workspace; normal activity | The owning CLI, controller, backend, or runtime attempts fixed trace records. | Normal success and domain-result output is unchanged. When created, the active log may be inspected at the fixed relative path. |
 | Handled post-workspace application error | The responsible boundary may attempt a content-safe error record; presentation does not depend on that record succeeding. | Interactive rendering adds the exact third notice below. A caught noninteractive exception preserves its first stderr line and adds the exact second line below. |
 | Diagnostic submission fails | Consumer-private guards catch even a diagnostic `BaseException`; the record may be absent. | The operation's result, exception, cancellation, cleanup, output, and exit status remain authoritative. A displayed hint is only an availability notice. |
 | Implicit smoke | Fixed records exist only inside the temporary workspace while it runs; normal return or exception propagation removes that workspace. | A returned compact report has no debug path or hint; a propagated exception also exposes none, and no workspace remains to inspect. |
-| Explicit smoke | Fixed smoke, CLI, and runtime records are retained in the supplied workspace. | Reports retain their established output. A propagated `Exception` caught by the CLI gets the second stderr line only if the CLI can successfully resolve the workspace afterward. |
+| Explicit smoke | Fixed smoke, CLI, and runtime records are attempted; any successfully written records remain in the supplied workspace. | Reports retain their established output. A propagated `Exception` caught by the CLI gets the second stderr line only if the CLI can successfully resolve the workspace afterward. |
+
+Each submitted interactive command is classified independently when its final
+trace can be written. A normally returned command that successfully rendered a
+typed handled error ends `failed`/`rejected`; a normally returned command that
+rendered no typed error ends `succeeded`/`completed`. This records whether that
+command displayed a handled error, not whether it mutated story/session state or
+retried provider work. An earlier command's error cannot reclassify a later
+command, and neither classification changes terminal output or domain results.
 
 Every rendered interactive application error after workspace resolution adds
 this exact third notice to its existing error panel:
@@ -94,8 +103,8 @@ Debug log (if available, workspace-relative): debug_logs/runtime.jsonl
 Returned nonexception outcomes do not use the exception hint: a smoke invariant
 exit `1` remains compact JSON, and run deadlock/failed-result exits `3`/`4`
 retain their established JSON. Success output also has no hint. “If available”
-is literal: contention, unsafe storage, or another logging failure can drop a
-record.
+is literal: contention, unsafe storage, unavailable safe descriptor-relative
+filesystem primitives, or another logging failure can drop a record.
 
 Users can inspect the fixed path beneath the workspace root, but cannot
 configure another destination or recover provider stderr through this feature.

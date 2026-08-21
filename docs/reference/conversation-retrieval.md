@@ -136,7 +136,13 @@ Malformed JSON remains `BackendProtocolError`; memory/storage errors retain type
 Runtime locks conversation through context/user/loop/outcome; backend locks the
 provider thread through calls/actions. After user append, cancellation
 best-effort stores `CancelledError: conversation turn was cancelled`, then
-re-raises `asyncio.CancelledError`; failure leaves the user unmatched.
-Incomplete failed/cancelled history is tainted, so the next compatible call
-starts fresh. A completed answer stays untainted if reply storage fails. Only
-the transcript pair and provider metadata mutate.
+re-raises `asyncio.CancelledError`; ordinary failure uses the safe transcript
+error policy. A provider `KeyboardInterrupt` or `SystemExit` instead appends no
+transcript outcome, attempts one separate runtime-component
+`cancelled`/`interrupted` record, and re-raises the identical exception without
+automatic retry. Failure to store an outcome or this process-control path leaves
+the user unmatched and excluded from later context. Incomplete failed/cancelled
+history is tainted when required, so the next compatible call starts fresh. A
+completed answer stays untainted if reply storage fails. Apart from the separate
+best-effort diagnostic log, retrieval-domain mutations remain limited to
+transcript events and provider metadata.

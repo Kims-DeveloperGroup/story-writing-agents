@@ -45,10 +45,14 @@ files; prompt overwrite replaces only the four role prompts.
 ## Runtime debug-log storage
 
 New initialization scaffolds `debug_logs/`; an existing initialized workspace
-without that directory remains valid, and the diagnostics writer creates it on
-its first log attempt. Importing or constructing the internal writer creates
-nothing. The active `runtime.jsonl` and persistent `.runtime.lock` guard are
-lazy, and backups appear only after rotation.
+without that directory remains valid. On a platform with the required safe
+descriptor-relative and no-follow primitives, the diagnostics writer creates
+the directory on its first storage attempt. Without those primitives, it drops
+the record and the directory may remain absent. Importing or constructing the
+internal writer creates nothing. The active `runtime.jsonl` and persistent
+`.runtime.lock` guard remain lazy: the writer creates them only during storage
+attempts, and backups appear only after rotation. A guard or active file does
+not by itself prove that any complete record was appended.
 
 Each JSONL file is limited to 1,048,576 bytes. Rotation keeps the active file
 plus five backups, with `.1` newest and `.5` oldest, for at most 6 MiB of JSONL

@@ -54,6 +54,15 @@ return values, raised exceptions, cancellation, transcript ordering,
 persistence, and artifact behavior remain unchanged when diagnostics succeed or
 fail.
 
+After the advisory or retrieval user event is durable, a provider
+`KeyboardInterrupt` or `SystemExit` makes exactly one runtime-component error
+submission for `advisory_turn` or `retrieval_turn` with phase `cancelled` and
+outcome `interrupted`. The runtime re-raises the identical exception. It appends
+no transcript `runtime_error`, performs no automatic retry, and leaves the user
+event unmatched and therefore excluded from later context. Failure of this
+diagnostic submission cannot replace the exception or alter transcript and
+cleanup behavior.
+
 Consequently, `inspect_session()`, `inspect_debate()`, and
 `inspect_debate_context()` remain read-only for session/debate state but may
 append a bounded operational record. There is no public logger parameter,
