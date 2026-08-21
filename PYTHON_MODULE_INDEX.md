@@ -486,28 +486,43 @@ every intermediate arrow. The current runtime graph is acyclic.
   representations, causes, contexts, or notes. Exact validated session,
   conversation, debate, and canonical agent IDs are the only variable
   correlation strings. A guarded process-wide weak lock registry serializes
-  one resolved workspace in process, and the persistent
-  `debug_logs/.runtime.lock` independently provides a bounded 100-millisecond
-  POSIX/Windows cross-process advisory-lock attempt. `Workspace` supplies
-  containment and no-symlink resolution plus the `debug_logs` scaffold. Before
-  opening or lazily creating the persistent guard, this module validates any
-  existing active file and each existing file among the five backup candidates
-  as regular, with `st_nlink == 1`, and no larger than 1,048,576 bytes. It then
-  validates any existing guard without following symlinks and requires it to
-  be regular with `st_nlink == 1`. If any prevalidation fails, no guard is
-  opened or created. The size bound applies only to active and backup files.
-  The module verifies that the opened and named guard views are the same
+  one resolved workspace in process. After the safe-primitive gate passes, the
+  persistent `debug_logs/.runtime.lock` independently makes a bounded
+  POSIX/Windows cross-process advisory-lock attempt within the shared
+  100-millisecond deadline. `Workspace` supplies
+  initial containment and no-symlink resolution plus the `debug_logs` scaffold.
+  For each supported storage attempt, this module opens the canonical debug
+  directory without following its final name, verifies its opened and named
+  identities, and holds that descriptor for the complete guard, rotation,
+  append, and rollback critical section. Every leaf stat, open, create, unlink,
+  and rename for the guard, active log, and five backups is relative to the held
+  descriptor; leaf stats do not follow symlinks. The module rechecks the
+  canonical directory identity before each forward leaf mutation, and directory
+  and final-leaf opens request `O_NONBLOCK` where the platform defines it. A
+  platform lacking `O_DIRECTORY`, `O_NOFOLLOW`, descriptor-relative
+  open/stat/unlink/rename, or no-follow stat support drops the record without
+  opening a diagnostic leaf or using a weaker fallback. Before opening or
+  lazily creating the persistent guard, the module validates any existing
+  active file and each existing backup through the held directory as regular,
+  with `st_nlink == 1`, and no larger than 1,048,576 bytes. It then validates
+  any existing guard the same no-follow way and requires it to be regular with
+  `st_nlink == 1`. If any prevalidation fails, no guard is opened or created;
+  the size bound applies only to active and backup files. The module verifies
+  that the opened guard descriptor and held-directory name identify the same
   regular, singly-linked file before attempting the advisory lock and again
   after acquisition. Under that guard, it revalidates the active and every
-  existing backup candidate for races, then verifies that the opened and named
-  active views are the same regular, singly-linked file before append. It
-  appends to `debug_logs/runtime.jsonl`,
-  best-effort truncates a partial failed append, rotates before the active file
-  would exceed that bound, and retains `runtime.jsonl.1` through `.5`. These
-  validations cover only the state observed at open or rotation-check time and
-  do not make concurrent external filesystem changes transactional. Invalid
-  input, contention, unsafe storage, serialization, append, synchronization,
-  flush, fsync, rollback, and rotation failures covered by `Exception` drop
+  existing backup candidate for races, then verifies that the opened active
+  descriptor and held-directory name identify the same regular, singly-linked
+  file before and during append. It appends to `debug_logs/runtime.jsonl`,
+  rotates before the active file would exceed that bound, and retains
+  `runtime.jsonl.1` through `.5`. After a partial append or synchronization
+  failure, best-effort rollback truncates only if the descriptor remains the
+  exact inode captured before the append and that inode remains regular and
+  singly linked. These validations cover only the identities observed at each
+  check; they do not make concurrent external filesystem changes transactional.
+  Invalid input, contention, unsafe storage, serialization, append,
+  synchronization, flush, fsync, rollback, and rotation failures covered by
+  `Exception` drop
   only that record and never recurse. Process-control `BaseException` failures
   deliberately propagate from this low-level surface so each consumer can
   apply its boundary-specific fail-safe policy.
@@ -720,7 +735,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   controller also owns its current attached-session identifier, current-focus
   conversation metadata, sticky target, current CLI-context snapshot,
   process-local per-session latest accepted STARTED debate-ID map, and
-  one-run/closed state. It retains one workspace-bound debug-log handle,
+  one-run/closed state. It also retains a controller-private count of
+  successfully rendered typed errors. Each submitted command snapshots that
+  count before dispatch and independently records `failed`/`rejected` when a
+  normally returned path rendered a new typed error, or
+  `succeeded`/`completed` when it rendered none; an earlier command cannot
+  reclassify a later one. It retains one workspace-bound debug-log handle,
   best-effort records fixed lobby, command, attachment, focus, cleanup, and
   safe failure facts, and routes every post-workspace typed error through the
   fixed debug-log-path notice without retaining or resolving that notice.
@@ -1438,8 +1458,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   order, makes result and terminal state durable before terminal debate
   progress, preserves typed observer failures, and retains external
   cancellation while best-effort recording interruption. It also sequences
-  ordinary debate persistence and unchanged one-step advisory context-read,
-  user-append, provider-call, and reply/error-append flow.
+  ordinary debate persistence and the one-step advisory context-read,
+  user-append, provider-call, and reply/error-append flow. After the user event
+  is durable, a provider-phase `KeyboardInterrupt` or `SystemExit` in either
+  one-step advisory or bounded retrieval attempts a `cancelled`/`interrupted`
+  runtime terminal diagnostic, appends no transcript outcome, performs no
+  automatic retry, and re-raises the identical exception. The unmatched user
+  transcript event remains, and consensus execution is unchanged.
   Before any provider-bound workflow, the runtime requires exact synchronous
   backend lifecycle hooks and performs provider-configuration validation,
   lifecycle pre-read, access acquisition, and lifecycle post-read in that
