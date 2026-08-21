@@ -32,6 +32,7 @@ from story_writing_agents.interactive_terminal import (
     InteractiveError,
     InteractiveErrorCode,
     InteractiveErrorSpec,
+    InteractiveMainInput,
     InteractiveMainCommitCleanup,
     InteractivePromptInput,
     InteractiveTerminal,
@@ -309,6 +310,13 @@ class PublicCompatibilityFoundationTests(unittest.TestCase):
         self.assertNotIn("InteractivePromptInput", terminal_facade.__all__)
         self.assertFalse(hasattr(__import__("story_writing_agents"), "InteractivePromptInput"))
         self.assertIs(
+            terminal_facade.InteractiveMainInput,
+            InteractiveMainInput,
+        )
+        self.assertIs(InteractiveMainInput, _core.InteractiveMainInput)
+        self.assertNotIn("InteractiveMainInput", terminal_facade.__all__)
+        self.assertFalse(hasattr(__import__("story_writing_agents"), "InteractiveMainInput"))
+        self.assertIs(
             terminal_facade.InteractiveMainCommitCleanup,
             InteractiveMainCommitCleanup,
         )
@@ -430,10 +438,18 @@ class PublicCompatibilityFoundationTests(unittest.TestCase):
             InteractivePromptInput: (
                 ("terminal", positional, required),
             ),
+            InteractiveMainInput: (
+                ("terminal", positional, required),
+            ),
+            InteractiveMainInput.read_main: (
+                ("choice_provider", positional, required),
+                ("session_id", keyword, None),
+                ("agent_id", keyword, None),
+            ),
             InteractivePromptInput.read_prompt: (
                 ("prompt", positional, required),
                 ("context", keyword, ()),
-                ("transient", keyword, False),
+                ("transient", keyword, True),
             ),
         }
         for value, expected_shape in expected.items():
@@ -1088,7 +1104,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
         with self.assertRaisesRegex(TypeError, "InteractiveTerminal"):
             InteractivePromptInput(object())  # type: ignore[arg-type]
 
-    def test_main_commit_cleanup_is_one_shot_and_fallback_safe(self) -> None:
+    def test_main_commit_cleanup_is_temporary_resource_free_noop(self) -> None:
         output = io.StringIO()
         driver = RawTerminalDriver(
             lambda _prompt: "fallback",
@@ -1101,17 +1117,12 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
         terminal = InteractiveTerminal(lambda _prompt: "", lambda _text: None)
         cleanup = InteractiveMainCommitCleanup(terminal)
         cleanup.clear_main_commit_display()
-
-        driver._main_commit_display = _driver._CommittedMainDisplay(2)
-        driver.clear_main_commit_display()
-        self.assertEqual(output.getvalue(), "\r\x1b[A\x1b[A\r\x1b[J")
-        driver.clear_main_commit_display()
-        self.assertEqual(output.getvalue(), "\r\x1b[A\x1b[A\r\x1b[J")
-
-        driver._main_commit_display = _driver._CommittedMainDisplay(1)
         self.assertEqual(driver.read_line("story[lobby]> "), "fallback")
-        driver.clear_main_commit_display()
-        self.assertEqual(output.getvalue(), "\r\x1b[A\x1b[A\r\x1b[J")
+        cleanup.clear_main_commit_display()
+        self.assertEqual(output.getvalue(), "")
+        self.assertNotIn("_main_commit_display", RawTerminalDriver.__slots__)
+        self.assertFalse(hasattr(driver, "_main_commit_display"))
+        self.assertFalse(hasattr(driver, "clear_main_commit_display"))
 
     def test_prompt_adapter_and_driver_fallback_are_typed_literal_and_history_free(
         self,
@@ -1496,6 +1507,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
         driver.read_main_command_line.side_effect = (
             "/status",
             "/help",
+            "/session open alpha",
         )
         driver.read_input_line.side_effect = (
             "composition line",
@@ -1560,25 +1572,53 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             ),
             ControlOutcome(ControlOutcomeKind.COMMIT, text="model"),
         )
+        picker = Picker(
+            Prompt("Resume"),
+            (
+                Choice("/session open alpha", "Alpha"),
+                Choice("/session open beta", "Beta"),
+            ),
+        )
+        choice_provider = mock.Mock(return_value=picker)
+        self.assertEqual(
+            InteractiveMainInput(terminal).read_main(choice_provider),
+            TerminalAction(
+                TerminalActionKind.LINE,
+                text="/session open alpha",
+            ),
+        )
         terminal.write_status(TerminalMessageKind.RESULT, "ready")
         self.assertEqual(driver.capabilities.call_count, 3)
-        self.assertEqual(
-            driver.read_main_command_line.call_args_list,
-            [
-                mock.call(
-                    "story[lobby]> ",
-                    _core._main_command_completion,
-                    _controls.project_main_suggestion_palette,
-                    render_component,
-                ),
-                mock.call(
-                    "story[lobby]> ",
-                    _core._main_command_completion,
-                    _controls.project_main_suggestion_palette,
-                    render_component,
-                ),
-            ],
+        main_calls = driver.read_main_command_line.call_args_list
+        self.assertEqual(len(main_calls), 3)
+        for call in main_calls:
+            self.assertEqual(call.args[0], "story[lobby]> ")
+            self.assertTrue(callable(call.args[1]))
+            self.assertTrue(callable(call.args[2]))
+            self.assertIs(call.args[3], render_component)
+        for call in main_calls[:2]:
+            self.assertEqual(
+                call.args[1]("/s", 2),
+                _core._main_command_completion("/s", 2),
+            )
+        dynamic_completion = main_calls[2].args[1]
+        dynamic_projector = main_calls[2].args[2]
+        dynamic_state, outcome = transition_main_command_input(
+            _model.MainCommandControlState(),
+            KeyEvent(KeyKind.TEXT, text="/"),
+            MainInputHistoryState(),
+            dynamic_completion,
         )
+        self.assertIsNone(outcome)
+        self.assertEqual(
+            dynamic_projector(dynamic_state),
+            SuggestionPalette(
+                "/",
+                picker.choices,
+                highlighted_id="/session open alpha",
+            ),
+        )
+        choice_provider.assert_called_once_with("/", 1)
         self.assertEqual(
             driver.read_input_line.call_args_list,
             [
@@ -1590,6 +1630,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
                     ),
                     render_input_prompt,
                     _controls.project_composition_suggestions,
+                    transient=True,
                 ),
                 mock.call(
                     _core._composer_input_view(
@@ -1599,6 +1640,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
                     ),
                     render_input_prompt,
                     _controls.project_composition_suggestions,
+                    transient=True,
                 ),
                 mock.call(
                     _core._confirmation_input_view(
@@ -1608,6 +1650,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
                     ),
                     render_input_prompt,
                     _core._empty_slash_suggestions,
+                    transient=True,
                 ),
             ],
         )
@@ -1619,6 +1662,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             ),
             render_input_prompt,
             transition_prompt_input,
+            transient=True,
         )
         self.assertEqual(
             driver.write_text.call_args_list,

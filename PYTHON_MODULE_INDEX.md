@@ -892,6 +892,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   construction boundary and binds trusted semantic input rendering to the sole
   raw driver without exposing renderer or driver details. Unlisted
   `build_contextual_terminal` preserves the completed contextual-callback seam.
+  Unlisted resource-free `InteractiveMainInput` accepts one call-local dynamic
+  `Picker` provider for a main read; callback construction bypasses it, while
+  capable stream construction projects opaque committed identities through the
+  existing selectable main-control vocabulary without changing public
+  `InteractiveTerminal.read_main`.
   Unlisted `MainInputHistoryState`,
   `MainInputControlState`, `append_main_input_history`, and
   `transition_main_input` bindings expose the internal pure history seam to the
@@ -903,23 +908,21 @@ every intermediate arrow. The current runtime graph is acyclic.
   and confirmation prompts, while internal construction binds distinct
   ordinary, history-aware main, and history-free semantic composition and
   confirmation readers without prompt inspection. Unlisted
-  `InteractivePickerInput`, `Choice`, `Prompt`, `ControlOutcome`, and
+  `InteractivePickerInput`, `Choice`, `Picker`, `Prompt`, `ControlOutcome`, and
   `ControlOutcomeKind` bindings provide one resource-free generic picker input
   boundary without exposing opaque choice identities, terminal leaves, or a
   new package-supported API. Unlisted `InteractivePromptInput` binds one
   resource-free semantic cancellable-line capability for nested settings input;
   callback and stream factories respectively provide deterministic plain and
   sole-driver-backed implementations without changing the exact public
-  `__all__`. Both unlisted input adapters accept an opt-in call-local transient
-  lifecycle used by settings: capable stream construction delegates display
-  clearing to the sole driver, while callback construction omits synthetic
-  picker final frames it cannot erase. Their default route remains unchanged.
-  Unlisted `InteractiveMainCommitCleanup` binds a resource-free, one-shot
-  committed-main display cleanup capability for controller use. Callback
-  construction binds a no-op, while stream construction delegates correlated
-  row ownership and fixed cursor cleanup to the sole driver; neither the class
-  nor its operation expands the exact public `__all__` or `InteractiveTerminal`
-  method surface.
+  `__all__`. Both unlisted input adapters retain a validated transient argument
+  while enforcing the submitted-input lifecycle: capable stream construction
+  clears before return, and callback or fallback construction emits no
+  synthetic final picker frame it cannot erase. The temporary unlisted
+  `InteractiveMainCommitCleanup` compatibility binding is a resource-free
+  no-op until its controller consumer migrates to `InteractiveMainInput`; no
+  terminal cleanup token remains, and neither adapter expands the exact public
+  `__all__` or `InteractiveTerminal` method surface.
   Unlisted `InteractiveAdvisoryProgress`, `InteractiveDebateProgress`, and
   `AdvisoryProgressError` bind advisory and consensus async progress lifecycles
   through the same facade: callback and incapable terminals await silently,
@@ -1006,10 +1009,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   commits with oldest-first eviction at 100, while `transition_main_input`
   performs pure newest/older/newer history navigation, draft restoration, and
   overlay-open arrow suppression. `project_main_suggestion_palette` turns one
-  correlated completion projection into the existing semantic palette, while
-  `transition_main_command_input` owns palette open/filter/highlight/clamp,
-  Tab replacement and snapshot, Escape restoration and latch, and the exact
-  open-palette versus closed-history arrow routing. `transition_composer_line`
+  correlated completion projection into the existing semantic palette;
+  `project_main_choice_completion` and `project_main_choice_palette` adapt
+  controller-owned semantic choices into that same immutable state while
+  keeping committed identities opaque. `transition_main_command_input` owns
+  mutually exclusive completion and choice cycles, palette
+  open/filter/highlight/clamp, static Tab/Enter completion and snapshot,
+  dynamic Up/Down highlight and direct Enter commit, Escape restoration and
+  latch, and the exact open-palette versus closed-history arrow routing.
+  `transition_composer_line`
   applies exact `/send`, `/cancel`, `/say /send`, and `/say /cancel` semantics
   to immutable composer state, while `transition_confirmation_answer`
   classifies canonical yes/no/default answers and explicit rejection.
@@ -1097,13 +1105,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   generic single-select lifecycle that does not reuse editable-line state. The
   driver provides one-write output, redraws on the full immutable main-command
   or picker control state, and normalizes established editing and picker keys.
-  Supported package-internal `clear_main_commit_display` consumes at most one
-  live main submission correlated only after restoration and successful history
-  append; it clears the exact committed rows without adding a line break.
-  Its optional per-read transient flag clears capable picker and cancellable
-  prompt rows on completion or cancellation before returning the typed outcome;
-  line fallback cannot erase and instead omits the duplicate picker final
-  frame. The default retains the established final-frame behavior. Supported
+  Capable main reads clear the complete submitted input and overlay before
+  restoration and return, then append one successful exact nonblank committed
+  line to history; completion-only Enter does not submit and appends nothing.
+  `read_input_line` plus picker and cancellable-prompt reads accept a per-read
+  transient flag that clears capable rows on commit, cancel, interrupt, EOF,
+  or failure. Line fallback cannot erase prior text, and transient picker
+  fallback omits the synthetic final frame. Supported
   package-internal `run_advisory_progress` accepts one awaitable and injected
   fixed-glyph renderer, awaits silently without raw cursor capability, and on a
   capable stream joins the operation with one indicator task. Internal
@@ -1116,10 +1124,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   flushes, and exact restoration. It retains exactly one bounded process-local
   main-input history store per driver instance; each main read resets only its
   call-local navigation state, and a successful fallback commit or restored
-  live commit is appended once. It also retains at most one nonpersistent live
-  main-display cleanup token; fallback reads create none, every intervening
-  input or output invalidates it, and only its explicit one-shot operation emits
-  the fixed functional controls. The same read loop owns call-local one-byte
+  live commit is appended once after capable display clearing and restoration.
+  It retains no committed-main display token. The same read loop owns
+  call-local one-byte
   incremental decoding and the fixed 50-millisecond Escape readiness lookahead,
   so available ordinary bytes are reprocessed without a second reader or sleep
   loop. Completion, prompt-control, and palette collaborators are call-local and
@@ -1178,14 +1185,21 @@ every intermediate arrow. The current runtime graph is acyclic.
   constructs ordered structured composition and confirmation input views and
   maps their pure control outcomes without changing public result contracts.
   Its package-internal command-completion adapter translates canonical command
-  contexts into terminal completion models, and its unlisted facade adapter
-  supplies the pure selectable control projection plus existing semantic
-  palette renderer to the driver.
+  contexts into terminal completion models. Its package-internal main-choice
+  adapter validates a call-local provider, caches only the active controller-
+  supplied immutable `Picker` for rendering correlation, and gives dynamic choices
+  precedence over static completion for that exact control state; fallback
+  never invokes the provider. Its unlisted facade adapters supply the pure
+  selectable control projection plus existing semantic palette renderer to the
+  driver.
   The internal contextual factory preserves explicit ordinary/main/composition
   callback routing through deterministic plain semantic adapters, while the
   real stream factory binds the selectable main-command route, both preview
   providers, semantic composition and confirmation input, plus the pure
-  main-input transitions to one driver. Resource-free `InteractivePickerInput`
+  main-input transitions to one driver. Resource-free `InteractiveMainInput`
+  preserves the public main prompt and `TerminalAction` contracts while passing
+  one call-local choice provider only to capable stream input. Resource-free
+  `InteractivePickerInput`
   validates and initializes one generic picker, then delegates only its
   immutable control state; callback construction binds deterministic plain
   complete-list picker input, and stream construction binds the same adapter to
@@ -1193,19 +1207,20 @@ every intermediate arrow. The current runtime graph is acyclic.
   collaborators. Resource-free `InteractivePromptInput` constructs one existing
   `InputPromptView` and returns typed commit, nested-cancel, interrupt, or EOF;
   callback and stream construction bind it to plain or driver-owned input
-  without adding a component kind or raw resource owner. Both adapters accept a
-  validated opt-in transient flag and pass it only to collaborators that support
-  that lifecycle; default calls retain the established picker final frame and
-  prompt behavior, while transient callback pickers omit the duplicate final
-  frame. Resource-free `InteractiveAdvisoryProgress` and
+  without adding a component kind or raw resource owner. Both adapters retain a
+  validated transient flag but always use the submitted-input lifecycle:
+  capable frames clear before return and callback/fallback picker input omits a
+  synthetic final frame. Stream-backed composition and confirmation lines use
+  that same capable pre-return clearing without changing persistent semantic
+  records. Resource-free `InteractiveAdvisoryProgress` and
   `InteractiveDebateProgress` bind the terminal's advisory and consensus
   awaitable wrappers: callback construction remains visually silent, and stream
   construction injects the pure fixed-glyph renderer into the sole driver
   without exposing capabilities or streams.
-  Resource-free `InteractiveMainCommitCleanup` binds only the terminal's private
-  cleanup callback: callback terminals use a no-op and the real stream factory
-  binds the sole driver's correlated one-shot operation. The supported public
-  terminal class and facade exports remain unchanged.
+  The temporary resource-free `InteractiveMainCommitCleanup` compatibility
+  binding is a no-op for the not-yet-migrated controller consumer; the driver
+  owns no post-return cleanup token. The supported public terminal class and
+  facade exports remain unchanged.
 - **Direct internal dependencies:** `agents`, `interactive_commands`,
   `interactive_terminal._controls`, `interactive_terminal._driver`,
   `interactive_terminal._model`, and `interactive_terminal._render`.
@@ -1214,10 +1229,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   and an explicit width but inspect no stream and acquire no resource.
   Stream-factory instances delegate all raw terminal state, width detection,
   keys, writes, flushes, restoration, readiness, incremental decoding, and the
-  bounded process-local main-input history store, optional correlated
-  committed-main cleanup token, plus advisory indicator task and cleanup to one
-  driver. Main completion,
-  palette, and composition providers plus semantic
+  bounded process-local main-input history store, plus advisory indicator task
+  and cleanup to one driver. Main completion, call-local choice, palette, and
+  composition providers plus semantic
   input renderers are selected per call and never retained by that driver;
   composition, confirmation, cancellable prompt, and picker input are history-
   free, while subject input remains ordinary. Callback-constructed terminals
