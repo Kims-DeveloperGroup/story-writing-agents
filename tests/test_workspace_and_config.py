@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import errno
+import inspect
 import json
+import os
 import pickle
+import stat
 import tempfile
 import unittest
 from dataclasses import FrozenInstanceError, fields
@@ -11,6 +15,7 @@ from pathlib import Path
 from types import MappingProxyType
 from unittest import mock
 
+import story_writing_agents
 from story_writing_agents import (
     AGENT_SPECS,
     CHARACTER_CUSTODIAN,
@@ -29,6 +34,7 @@ from story_writing_agents import (
     initialize_workspace,
     parse_directive,
 )
+from story_writing_agents import workspace as workspace_module
 from story_writing_agents.agents import CORE_DOCUMENTS
 from story_writing_agents.config import (
     AgentConfig,
@@ -153,6 +159,257 @@ class AgentRosterTests(unittest.TestCase):
 
 
 class WorkspaceTests(unittest.TestCase):
+    def test_root_identity_seams_preserve_public_surface_and_verify_existing_root(
+        self,
+    ) -> None:
+        self.assertEqual(
+            tuple(inspect.signature(Workspace.__init__).parameters),
+            ("self", "root"),
+        )
+        self.assertEqual(
+            tuple(inspect.signature(Workspace.initialize).parameters),
+            ("self", "overwrite_prompts"),
+        )
+        self.assertEqual(
+            tuple(
+                inspect.signature(
+                    workspace_module.open_workspace_root_directory
+                ).parameters
+            ),
+            ("workspace",),
+        )
+        self.assertEqual(
+            tuple(
+                inspect.signature(
+                    workspace_module.verify_workspace_root_directory
+                ).parameters
+            ),
+            ("workspace", "descriptor"),
+        )
+        for internal_name in (
+            "open_workspace_root_directory",
+            "verify_workspace_root_directory",
+        ):
+            self.assertNotIn(internal_name, story_writing_agents.__all__)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "workspace"
+            root.mkdir()
+            workspace = Workspace(root)
+            expected = os.stat(root, follow_symlinks=False)
+            descriptor = workspace_module.open_workspace_root_directory(workspace)
+            try:
+                workspace_module.verify_workspace_root_directory(
+                    workspace,
+                    descriptor,
+                )
+                opened = os.fstat(descriptor)
+                self.assertEqual(
+                    (opened.st_dev, opened.st_ino),
+                    (expected.st_dev, expected.st_ino),
+                )
+                self.assertTrue(stat.S_ISDIR(opened.st_mode))
+            finally:
+                os.close(descriptor)
+
+    def test_existing_root_identity_rejects_symlink_and_directory_replacements(
+        self,
+    ) -> None:
+        for replacement_kind in ("directory", "symlink"):
+            with self.subTest(replacement_kind=replacement_kind):
+                with tempfile.TemporaryDirectory() as temporary:
+                    parent = Path(temporary)
+                    root = parent / "workspace"
+                    parked = parent / "parked-workspace"
+                    outside = parent / "outside-workspace"
+                    root.mkdir()
+                    (root / "parked-sentinel").write_bytes(b"parked bytes")
+                    outside.mkdir()
+                    (outside / "outside-sentinel").write_bytes(b"outside bytes")
+                    workspace = Workspace(root)
+                    descriptor = workspace_module.open_workspace_root_directory(
+                        workspace
+                    )
+
+                    root.rename(parked)
+                    if replacement_kind == "directory":
+                        root.mkdir()
+                        (root / "replacement-sentinel").write_bytes(
+                            b"replacement bytes"
+                        )
+                    else:
+                        try:
+                            root.symlink_to(outside, target_is_directory=True)
+                        except NotImplementedError as exc:
+                            self.skipTest(
+                                f"directory symlink creation is unsupported: {exc}"
+                            )
+                        except OSError as exc:
+                            unsupported = {
+                                errno.EACCES,
+                                errno.EPERM,
+                                errno.ENOSYS,
+                                getattr(errno, "ENOTSUP", errno.EINVAL),
+                                getattr(errno, "EOPNOTSUPP", errno.EINVAL),
+                            }
+                            if exc.errno in unsupported:
+                                self.skipTest(
+                                    "directory symlink creation is unsupported: "
+                                    f"{exc}"
+                                )
+                            raise
+                    parked_before = tuple(
+                        (path.name, path.read_bytes())
+                        for path in sorted(parked.iterdir())
+                    )
+                    outside_before = tuple(
+                        (path.name, path.read_bytes())
+                        for path in sorted(outside.iterdir())
+                    )
+                    replacement_before = (
+                        tuple(
+                            (path.name, path.read_bytes())
+                            for path in sorted(root.iterdir())
+                        )
+                        if replacement_kind == "directory"
+                        else os.readlink(root)
+                    )
+                    try:
+                        with self.assertRaises(WorkspaceSecurityError):
+                            workspace_module.verify_workspace_root_directory(
+                                workspace,
+                                descriptor,
+                            )
+                        with self.assertRaises(WorkspaceSecurityError):
+                            workspace_module.open_workspace_root_directory(
+                                workspace
+                            )
+                    finally:
+                        os.close(descriptor)
+
+                    self.assertEqual(
+                        tuple(
+                            (path.name, path.read_bytes())
+                            for path in sorted(parked.iterdir())
+                        ),
+                        parked_before,
+                    )
+                    self.assertEqual(
+                        tuple(
+                            (path.name, path.read_bytes())
+                            for path in sorted(outside.iterdir())
+                        ),
+                        outside_before,
+                    )
+                    if replacement_kind == "directory":
+                        self.assertEqual(
+                            tuple(
+                                (path.name, path.read_bytes())
+                                for path in sorted(root.iterdir())
+                            ),
+                            replacement_before,
+                        )
+                    else:
+                        self.assertEqual(os.readlink(root), replacement_before)
+
+    def test_missing_root_identity_binds_once_during_initialization(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            root = parent / "workspace"
+            workspace = Workspace(root)
+
+            with self.assertRaises(OSError):
+                workspace_module.open_workspace_root_directory(workspace)
+            self.assertFalse(root.exists())
+
+            workspace.initialize()
+            bound = os.stat(root, follow_symlinks=False)
+            descriptor = workspace_module.open_workspace_root_directory(workspace)
+            os.close(descriptor)
+            workspace.initialize()
+            repeated = os.stat(root, follow_symlinks=False)
+            self.assertEqual(
+                (repeated.st_dev, repeated.st_ino),
+                (bound.st_dev, bound.st_ino),
+            )
+
+            parked = parent / "parked-workspace"
+            root.rename(parked)
+            root.mkdir()
+            with self.assertRaises(WorkspaceSecurityError):
+                workspace_module.open_workspace_root_directory(workspace)
+            self.assertEqual(tuple(root.iterdir()), ())
+            self.assertTrue((parked / "core_documents").is_dir())
+
+    def test_unavailable_non_directory_and_zero_root_identity_fail_closed(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            ordinary_root = parent / "ordinary-root"
+            ordinary_root.mkdir()
+            canonical_root = ordinary_root.resolve()
+            real_stat = os.stat
+
+            def unavailable_probe(path: object, *args: object, **kwargs: object):
+                if (
+                    Path(path) == canonical_root
+                    and kwargs.get("follow_symlinks") is False
+                ):
+                    raise OSError("PRIVATE_ROOT_STAT_FAILURE")
+                return real_stat(path, *args, **kwargs)
+
+            with mock.patch.object(
+                workspace_module.os,
+                "stat",
+                side_effect=unavailable_probe,
+            ):
+                unavailable = Workspace(ordinary_root)
+
+            zero_value = mock.Mock(
+                st_mode=stat.S_IFDIR | 0o700,
+                st_dev=0,
+                st_ino=0,
+            )
+
+            def zero_probe(path: object, *args: object, **kwargs: object):
+                if (
+                    Path(path) == canonical_root
+                    and kwargs.get("follow_symlinks") is False
+                ):
+                    return zero_value
+                return real_stat(path, *args, **kwargs)
+
+            with mock.patch.object(
+                workspace_module.os,
+                "stat",
+                side_effect=zero_probe,
+            ):
+                zero = Workspace(ordinary_root)
+
+            file_root = parent / "not-a-directory"
+            file_root.write_bytes(b"not a workspace")
+            non_directory = Workspace(file_root)
+
+            for label, workspace in (
+                ("unavailable", unavailable),
+                ("zero", zero),
+                ("non_directory", non_directory),
+            ):
+                with (
+                    self.subTest(label=label),
+                    mock.patch.object(
+                        workspace_module.os,
+                        "open",
+                        side_effect=AssertionError(
+                            "unbound root identity reached open"
+                        ),
+                    ) as opened,
+                    self.assertRaises(OSError),
+                ):
+                    workspace_module.open_workspace_root_directory(workspace)
+                opened.assert_not_called()
+
     def test_initial_system_defaults_are_exact_and_legacy_bytes_are_preserved(
         self,
     ) -> None:

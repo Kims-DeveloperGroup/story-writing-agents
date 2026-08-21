@@ -8,6 +8,7 @@ import errno
 import inspect
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -15,9 +16,11 @@ import tempfile
 import threading
 import time
 import unittest
+from collections.abc import Callable
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
+from types import TracebackType
 from unittest import mock
 
 import story_writing_agents
@@ -137,15 +140,77 @@ def _debug_namespace_snapshot(
     return _directory_namespace_snapshot(workspace.path(DEBUG_LOG_DIRECTORY))
 
 
+def _root_storage_snapshot(
+    root: Path,
+) -> tuple[
+    dict[str, tuple[int, int, int, int, bytes | None]],
+    dict[str, tuple[int, int, int, int, bytes | None]],
+]:
+    """Capture one root namespace and its complete debug-storage namespace."""
+
+    return (
+        _directory_namespace_snapshot(root),
+        _directory_namespace_snapshot(root / DEBUG_LOG_DIRECTORY),
+    )
+
+
+def _assert_descriptor_closed(
+    test_case: unittest.TestCase,
+    descriptor: int,
+) -> None:
+    """Assert one captured descriptor is closed without relying on procfs."""
+
+    try:
+        os.fstat(descriptor)
+    except OSError as exc:
+        test_case.assertEqual(exc.errno, errno.EBADF)
+        return
+    os.close(descriptor)
+    test_case.fail(f"descriptor {descriptor} remained open")
+
+
+def _traceback_contains(
+    current: TracebackType | None,
+    expected: TracebackType,
+) -> bool:
+    """Return whether one exact injected traceback remains in the final chain."""
+
+    while current is not None:
+        if current is expected:
+            return True
+        current = current.tb_next
+    return False
+
+
+def _capture_raised(
+    test_case: unittest.TestCase,
+    expected_type: type[BaseException],
+    callback: Callable[[], None],
+) -> tuple[BaseException, TracebackType]:
+    """Call once and retain an exact exception traceback before unittest clears it."""
+
+    try:
+        callback()
+    except BaseException as caught:
+        test_case.assertIsInstance(caught, expected_type)
+        assert caught.__traceback__ is not None
+        return caught, caught.__traceback__
+    test_case.fail(f"{expected_type.__name__} was not raised")
+    raise AssertionError("unreachable")
+
+
 @contextlib.contextmanager
 def _held_debug_directory(workspace: Workspace):
-    """Yield one production-opened debug directory and close it exactly once."""
+    """Yield one production-opened debug directory and close both descriptors."""
 
     directory = debug_module._prepare_debug_directory(workspace)
     try:
         yield directory
     finally:
-        os.close(directory.descriptor)
+        try:
+            os.close(directory.descriptor)
+        finally:
+            os.close(directory.root_descriptor)
 
 
 class _DebugDirectorySwap:
@@ -184,6 +249,243 @@ class _DebugDirectorySwap:
         self.canonical.unlink()
         os.rename(self.parked, self.canonical)
         self.swapped = False
+
+
+class _WorkspaceRootSwap:
+    """Temporarily replace a bound workspace root without following links."""
+
+    def __init__(
+        self,
+        test_case: unittest.TestCase,
+        workspace: Workspace,
+        temporary: Path,
+        *,
+        replacement_kind: str,
+    ) -> None:
+        self.test_case = test_case
+        self.canonical = workspace.root
+        self.parked = temporary / "parked-workspace"
+        self.outside = temporary / "outside-workspace"
+        self.replacement_kind = replacement_kind
+        self.swapped = False
+        self.outside.mkdir()
+        (self.outside / "outside-sentinel").write_bytes(b"outside root bytes")
+
+    @property
+    def replacement(self) -> Path:
+        return self.outside if self.replacement_kind == "symlink" else self.canonical
+
+    def __enter__(self) -> _WorkspaceRootSwap:
+        return self
+
+    def activate(self) -> None:
+        if self.swapped:
+            raise AssertionError("workspace root was already swapped")
+        os.rename(self.canonical, self.parked)
+        if self.replacement_kind == "symlink":
+            try:
+                self.canonical.symlink_to(
+                    self.outside,
+                    target_is_directory=True,
+                )
+            except NotImplementedError as exc:
+                os.rename(self.parked, self.canonical)
+                self.test_case.skipTest(
+                    f"directory symlink creation is unsupported: {exc}"
+                )
+            except OSError as exc:
+                unsupported = {
+                    errno.EACCES,
+                    errno.EPERM,
+                    errno.ENOSYS,
+                    getattr(errno, "ENOTSUP", errno.EINVAL),
+                    getattr(errno, "EOPNOTSUPP", errno.EINVAL),
+                }
+                if exc.errno not in unsupported:
+                    os.rename(self.parked, self.canonical)
+                    raise
+                os.rename(self.parked, self.canonical)
+                self.test_case.skipTest(
+                    f"directory symlink creation is unsupported: {exc}"
+                )
+        elif self.replacement_kind == "directory":
+            self.canonical.mkdir()
+        else:
+            raise AssertionError(f"unknown replacement kind: {self.replacement_kind}")
+        replacement_debug = self.replacement / DEBUG_LOG_DIRECTORY
+        replacement_debug.mkdir()
+        _seed_debug_storage(
+            replacement_debug,
+            prefix=f"replacement-{self.replacement_kind}",
+        )
+        (self.replacement / "replacement-sentinel").write_bytes(
+            b"replacement root bytes"
+        )
+        self.swapped = True
+
+    def canonical_snapshot(self) -> tuple[int, int, int, int, str | None]:
+        value = os.stat(self.canonical, follow_symlinks=False)
+        return (
+            value.st_mode,
+            value.st_dev,
+            value.st_ino,
+            value.st_nlink,
+            os.readlink(self.canonical) if stat.S_ISLNK(value.st_mode) else None,
+        )
+
+    def __exit__(self, *_exc: object) -> None:
+        if not self.swapped:
+            return
+        if self.replacement_kind == "symlink":
+            self.canonical.unlink()
+        else:
+            shutil.rmtree(self.canonical)
+        os.rename(self.parked, self.canonical)
+        self.swapped = False
+
+
+class _ControlledProcessLock:
+    """Delegate to a real lock while injecting one post-release failure."""
+
+    def __init__(self, failure: BaseException | None = None) -> None:
+        self._lock = threading.Lock()
+        self.failure = failure
+        self.release_attempts = 0
+        self.injection_traceback: TracebackType | None = None
+
+    def acquire(self, *, timeout: float) -> bool:
+        return self._lock.acquire(timeout=timeout)
+
+    def release(self) -> None:
+        self.release_attempts += 1
+        self._lock.release()
+        if self.failure is not None and self.release_attempts == 1:
+            try:
+                raise self.failure
+            except BaseException as caught:
+                self.injection_traceback = caught.__traceback__
+                raise
+
+    def locked(self) -> bool:
+        return self._lock.locked()
+
+    def assert_reusable(self, test_case: unittest.TestCase) -> None:
+        test_case.assertTrue(self._lock.acquire(blocking=False))
+        self._lock.release()
+
+
+class _AttemptCleanupHarness:
+    """Capture one real logging attempt and inject named cleanup failures."""
+
+    def __init__(self, failures: dict[str, BaseException]) -> None:
+        self.failures = failures
+        self.descriptors: dict[str, int] = {}
+        self.close_attempts: list[str] = []
+        self.release_attempts = 0
+        self.injection_tracebacks: dict[str, TracebackType] = {}
+        self._real_prepare = debug_module._prepare_debug_directory
+        self._real_open = debug_module._open_verified_regular_file
+        self._real_close = os.close
+        self._real_release = debug_module._release_advisory_lock
+
+    def prepare(self, workspace: Workspace) -> object:
+        directory = self._real_prepare(workspace)
+        self.descriptors["root"] = directory.root_descriptor
+        self.descriptors["debug"] = directory.descriptor
+        return directory
+
+    def open(
+        self,
+        directory: object,
+        filename: str,
+        *,
+        read_write: bool,
+    ) -> int:
+        descriptor = self._real_open(
+            directory,
+            filename,
+            read_write=read_write,
+        )
+        role = "guard" if filename == _GUARD_NAME else "active"
+        self.descriptors[role] = descriptor
+        return descriptor
+
+    def close(self, descriptor: int) -> None:
+        role = next(
+            (
+                candidate
+                for candidate, captured in self.descriptors.items()
+                if captured == descriptor
+            ),
+            f"untracked:{descriptor}",
+        )
+        self.close_attempts.append(role)
+        self._real_close(descriptor)
+        failure = self.failures.get(role)
+        if failure is not None:
+            self._raise(role, failure)
+
+    def release(self, descriptor: int) -> None:
+        self.release_attempts += 1
+        self._real_release(descriptor)
+        failure = self.failures.get("release")
+        if failure is not None:
+            self._raise("release", failure)
+
+    def _raise(self, role: str, failure: BaseException) -> None:
+        try:
+            raise failure
+        except BaseException as caught:
+            assert caught.__traceback__ is not None
+            self.injection_tracebacks[role] = caught.__traceback__
+            raise
+
+    def assert_closed(self, test_case: unittest.TestCase) -> None:
+        test_case.assertEqual(
+            set(self.descriptors),
+            {"root", "debug", "guard", "active"},
+        )
+        for role, descriptor in self.descriptors.items():
+            test_case.assertEqual(self.close_attempts.count(role), 1)
+            _assert_descriptor_closed(test_case, descriptor)
+
+
+@contextlib.contextmanager
+def _instrument_cleanup_attempt(
+    harness: _AttemptCleanupHarness,
+    process_lock: _ControlledProcessLock,
+):
+    """Patch one attempt through real resources and controlled cleanup seams."""
+
+    holder = mock.Mock(lock=process_lock)
+    with (
+        mock.patch.object(
+            debug_module,
+            "_process_lock_for",
+            return_value=holder,
+        ),
+        mock.patch.object(
+            debug_module,
+            "_prepare_debug_directory",
+            side_effect=harness.prepare,
+        ),
+        mock.patch.object(
+            debug_module,
+            "_open_verified_regular_file",
+            side_effect=harness.open,
+        ),
+        mock.patch.object(
+            debug_module,
+            "_release_advisory_lock",
+            side_effect=harness.release,
+        ),
+        mock.patch.object(
+            debug_module.os,
+            "close",
+            side_effect=harness.close,
+        ),
+    ):
+        yield
 
 
 def _seed_debug_storage(directory: Path, *, prefix: str) -> None:
@@ -717,32 +1019,165 @@ class DebugLogStorageTests(unittest.TestCase):
         active = self.workspace.path(DEBUG_LOG_RELATIVE_PATH)
         prior_active = b"active" * (DEBUG_LOG_MAX_BYTES // 6)
         active.write_bytes(prior_active)
+        prior_active_identity = (
+            active.stat().st_dev,
+            active.stat().st_ino,
+        )
         prior_backups: dict[int, bytes] = {}
+        prior_backup_identities: dict[int, tuple[int, int]] = {}
         for index in range(1, DEBUG_LOG_BACKUP_COUNT + 1):
             value = f"backup-{index}".encode("ascii")
             prior_backups[index] = value
-            self.workspace.path(f"{DEBUG_LOG_RELATIVE_PATH}.{index}").write_bytes(value)
+            backup = self.workspace.path(f"{DEBUG_LOG_RELATIVE_PATH}.{index}")
+            backup.write_bytes(value)
+            backup_stat = backup.stat()
+            prior_backup_identities[index] = (
+                backup_stat.st_dev,
+                backup_stat.st_ino,
+            )
         _trace(self.log)
         self.assertEqual(active.stat().st_size, len(payload))
         self.assertEqual(len(_records(self.workspace)), 1)
+        first_backup = self.workspace.path(f"{DEBUG_LOG_RELATIVE_PATH}.1")
+        self.assertEqual(first_backup.read_bytes(), prior_active)
         self.assertEqual(
-            self.workspace.path(f"{DEBUG_LOG_RELATIVE_PATH}.1").read_bytes(),
-            prior_active,
+            (first_backup.stat().st_dev, first_backup.stat().st_ino),
+            prior_active_identity,
         )
         for index in range(2, DEBUG_LOG_BACKUP_COUNT + 1):
+            backup = self.workspace.path(f"{DEBUG_LOG_RELATIVE_PATH}.{index}")
             self.assertEqual(
-                self.workspace.path(f"{DEBUG_LOG_RELATIVE_PATH}.{index}").read_bytes(),
+                backup.read_bytes(),
                 prior_backups[index - 1],
+            )
+            self.assertEqual(
+                (backup.stat().st_dev, backup.stat().st_ino),
+                prior_backup_identities[index - 1],
             )
         artifacts = [
             active,
             *(self.workspace.path(f"{DEBUG_LOG_RELATIVE_PATH}.{index}") for index in range(1, 6)),
         ]
+        active_identity = (active.stat().st_dev, active.stat().st_ino)
+        self.assertNotIn(
+            active_identity,
+            {
+                (path.stat().st_dev, path.stat().st_ino)
+                for path in artifacts[1:]
+            },
+        )
         self.assertTrue(all(path.stat().st_size <= DEBUG_LOG_MAX_BYTES for path in artifacts))
         self.assertLessEqual(
             sum(path.stat().st_size for path in artifacts),
             6 * DEBUG_LOG_MAX_BYTES,
         )
+
+    def test_rotation_cas_rejects_replaced_sources_and_destinations(self) -> None:
+        cases = (
+            ("oldest_backup", f"{_ACTIVE_NAME}.5", 2, "replace", True),
+            ("source_4", f"{_ACTIVE_NAME}.4", 2, "replace", True),
+            ("destination_5", f"{_ACTIVE_NAME}.5", 3, "create", True),
+            ("source_3", f"{_ACTIVE_NAME}.3", 2, "replace", True),
+            ("destination_4", f"{_ACTIVE_NAME}.4", 3, "create", True),
+            ("source_2", f"{_ACTIVE_NAME}.2", 2, "replace", True),
+            ("destination_3", f"{_ACTIVE_NAME}.3", 3, "create", True),
+            ("source_1", f"{_ACTIVE_NAME}.1", 2, "replace", True),
+            ("destination_2", f"{_ACTIVE_NAME}.2", 3, "create", True),
+            ("active_source", _ACTIVE_NAME, 2, "replace", True),
+            ("active_destination", f"{_ACTIVE_NAME}.1", 3, "create", True),
+            (
+                "unexpected_absent_destination",
+                f"{_ACTIVE_NAME}.5",
+                2,
+                "create",
+                False,
+            ),
+        )
+        for label, target, occurrence, action, seed_oldest in cases:
+            with self.subTest(label=label):
+                workspace = initialized_workspace(self)
+                log = WorkspaceDebugLog(workspace)
+                payload = _trace_payload(log)
+                workspace.path(DEBUG_LOG_GUARD_RELATIVE_PATH).write_bytes(
+                    b"safe guard"
+                )
+                workspace.path(DEBUG_LOG_RELATIVE_PATH).write_bytes(
+                    b"a" * (DEBUG_LOG_MAX_BYTES - len(payload) + 1)
+                )
+                for index in range(1, DEBUG_LOG_BACKUP_COUNT + 1):
+                    if index == DEBUG_LOG_BACKUP_COUNT and not seed_oldest:
+                        continue
+                    workspace.path(
+                        f"{DEBUG_LOG_RELATIVE_PATH}.{index}"
+                    ).write_bytes(f"backup-{index}".encode("ascii"))
+
+                process_lock = debug_module._process_lock_for(workspace)
+                real_append = debug_module._append_under_guard
+                real_validate = debug_module._validate_existing_regular
+                calls: dict[str, int] = {}
+                raced_snapshot: dict[
+                    str,
+                    tuple[int, int, int, int, bytes | None],
+                ] = {}
+
+                def validate_with_race(
+                    directory: object,
+                    filename: str,
+                ) -> object:
+                    calls[filename] = calls.get(filename, 0) + 1
+                    if filename == target and calls[filename] == occurrence:
+                        target_path = workspace.root / DEBUG_LOG_DIRECTORY / target
+                        if action == "replace":
+                            self.assertTrue(target_path.exists())
+                            staged = (
+                                workspace.root
+                                / DEBUG_LOG_DIRECTORY
+                                / f"replacement-{label}"
+                            )
+                            staged.write_bytes(f"replacement:{label}".encode("ascii"))
+                            os.replace(staged, target_path)
+                        else:
+                            self.assertFalse(target_path.exists())
+                            target_path.write_bytes(
+                                f"unexpected:{label}".encode("ascii")
+                            )
+                        raced_snapshot.update(
+                            _debug_namespace_snapshot(workspace)
+                        )
+                    return real_validate(directory, filename)
+
+                def append_with_race(
+                    directory: object,
+                    append_payload: bytes,
+                ) -> None:
+                    with mock.patch.object(
+                        debug_module,
+                        "_validate_existing_regular",
+                        side_effect=validate_with_race,
+                    ):
+                        real_append(directory, append_payload)
+
+                with mock.patch.object(
+                    debug_module,
+                    "_append_under_guard",
+                    side_effect=append_with_race,
+                ):
+                    _trace(log, session_id="rotation_cas_dropped")
+
+                self.assertTrue(raced_snapshot)
+                self.assertEqual(
+                    _debug_namespace_snapshot(workspace),
+                    raced_snapshot,
+                )
+                self.assertNotIn(
+                    b"rotation_cas_dropped",
+                    b"".join(
+                        value[-1] or b""
+                        for value in raced_snapshot.values()
+                    ),
+                )
+                self.assertTrue(process_lock.lock.acquire(blocking=False))
+                process_lock.lock.release()
 
     def test_preexisting_oversized_active_or_backup_drops_without_mutation(self) -> None:
         for relative in (
@@ -863,6 +1298,8 @@ class DebugLogStorageTests(unittest.TestCase):
         payload = b"{}\n"
         validated = mock.Mock(
             st_size=DEBUG_LOG_MAX_BYTES - len(payload) + 1,
+            st_dev=7,
+            st_ino=11,
         )
         opened = mock.Mock(st_size=0, st_dev=1, st_ino=2, st_nlink=1)
 
@@ -899,7 +1336,7 @@ class DebugLogStorageTests(unittest.TestCase):
             ):
                 debug_module._append_under_guard(directory, payload)
 
-        self.assertEqual(validate.call_count, DEBUG_LOG_BACKUP_COUNT + 3)
+        self.assertEqual(validate.call_count, 17)
         self.assertEqual(
             validate.call_args_list[0],
             mock.call(directory, _ACTIVE_NAME),
@@ -943,6 +1380,190 @@ class DebugLogStorageTests(unittest.TestCase):
                     DebugPhase.OBSERVED,
                 )
                 self.assertEqual(sentinel.read_bytes(), b"outside")
+
+    def test_workspace_root_replacement_before_or_after_log_construction_is_contained(
+        self,
+    ) -> None:
+        for replacement_kind in ("directory", "symlink"):
+            for logger_before_swap in (False, True):
+                with self.subTest(
+                    replacement_kind=replacement_kind,
+                    logger_before_swap=logger_before_swap,
+                ):
+                    workspace = initialized_workspace(self)
+                    log = WorkspaceDebugLog(workspace) if logger_before_swap else None
+                    with tempfile.TemporaryDirectory(
+                        dir=workspace.root.parent
+                    ) as temporary, _WorkspaceRootSwap(
+                        self,
+                        workspace,
+                        Path(temporary),
+                        replacement_kind=replacement_kind,
+                    ) as swap:
+                        swap.activate()
+                        if log is None:
+                            log = WorkspaceDebugLog(workspace)
+                        canonical_before = swap.canonical_snapshot()
+                        parked_before = _root_storage_snapshot(swap.parked)
+                        replacement_before = _root_storage_snapshot(
+                            swap.replacement
+                        )
+                        outside_before = _directory_namespace_snapshot(
+                            swap.outside
+                        )
+
+                        _trace(log, session_id="root_replacement_dropped")
+
+                        self.assertEqual(
+                            swap.canonical_snapshot(),
+                            canonical_before,
+                        )
+                        self.assertEqual(
+                            _root_storage_snapshot(swap.parked),
+                            parked_before,
+                        )
+                        self.assertEqual(
+                            _root_storage_snapshot(swap.replacement),
+                            replacement_before,
+                        )
+                        self.assertEqual(
+                            _directory_namespace_snapshot(swap.outside),
+                            outside_before,
+                        )
+                        for snapshot in (
+                            parked_before[1],
+                            replacement_before[1],
+                        ):
+                            self.assertNotIn(
+                                b"root_replacement_dropped",
+                                b"".join(
+                                    value[-1] or b""
+                                    for value in snapshot.values()
+                                ),
+                            )
+
+                    _trace(log, session_id="root_replacement_recovered")
+                    self.assertEqual(
+                        [record["session_id"] for record in _records(workspace)],
+                        ["root_replacement_recovered"],
+                    )
+
+    def test_workspace_root_swap_after_root_or_debug_acquisition_closes_resources(
+        self,
+    ) -> None:
+        for stage in ("root", "debug"):
+            for replacement_kind in ("directory", "symlink"):
+                with self.subTest(
+                    stage=stage,
+                    replacement_kind=replacement_kind,
+                ):
+                    workspace = initialized_workspace(self)
+                    log = WorkspaceDebugLog(workspace)
+                    real_open_root = debug_module.open_workspace_root_directory
+                    real_prepare = debug_module._prepare_debug_directory
+                    real_close = os.close
+                    descriptors: dict[str, int] = {}
+                    closed: list[int] = []
+                    captured: dict[str, object] = {}
+
+                    def track_close(descriptor: int) -> None:
+                        closed.append(descriptor)
+                        real_close(descriptor)
+
+                    with tempfile.TemporaryDirectory(
+                        dir=workspace.root.parent
+                    ) as temporary, _WorkspaceRootSwap(
+                        self,
+                        workspace,
+                        Path(temporary),
+                        replacement_kind=replacement_kind,
+                    ) as swap:
+
+                        def activate_and_capture() -> None:
+                            swap.activate()
+                            captured["canonical"] = swap.canonical_snapshot()
+                            captured["parked"] = _root_storage_snapshot(
+                                swap.parked
+                            )
+                            captured["replacement"] = _root_storage_snapshot(
+                                swap.replacement
+                            )
+
+                        def open_root_then_swap(candidate: Workspace) -> int:
+                            descriptor = real_open_root(candidate)
+                            descriptors["root"] = descriptor
+                            activate_and_capture()
+                            return descriptor
+
+                        def prepare_debug_then_swap(candidate: Workspace) -> object:
+                            directory = real_prepare(candidate)
+                            descriptors["root"] = directory.root_descriptor
+                            descriptors["debug"] = directory.descriptor
+                            activate_and_capture()
+                            return directory
+
+                        root_patch = (
+                            mock.patch.object(
+                                debug_module,
+                                "open_workspace_root_directory",
+                                side_effect=open_root_then_swap,
+                            )
+                            if stage == "root"
+                            else contextlib.nullcontext()
+                        )
+                        prepare_patch = (
+                            mock.patch.object(
+                                debug_module,
+                                "_prepare_debug_directory",
+                                side_effect=prepare_debug_then_swap,
+                            )
+                            if stage == "debug"
+                            else contextlib.nullcontext()
+                        )
+                        with (
+                            root_patch,
+                            prepare_patch,
+                            mock.patch.object(
+                                debug_module,
+                                "_open_verified_regular_file",
+                                side_effect=AssertionError(
+                                    "swapped root reached file mutation"
+                                ),
+                            ) as opened_file,
+                            mock.patch.object(
+                                debug_module.os,
+                                "close",
+                                side_effect=track_close,
+                            ),
+                        ):
+                            _trace(log, session_id="root_acquisition_dropped")
+
+                        opened_file.assert_not_called()
+                        self.assertEqual(
+                            swap.canonical_snapshot(),
+                            captured["canonical"],
+                        )
+                        self.assertEqual(
+                            _root_storage_snapshot(swap.parked),
+                            captured["parked"],
+                        )
+                        self.assertEqual(
+                            _root_storage_snapshot(swap.replacement),
+                            captured["replacement"],
+                        )
+                        self.assertEqual(
+                            set(descriptors),
+                            {"root"} if stage == "root" else {"root", "debug"},
+                        )
+                        for descriptor in descriptors.values():
+                            self.assertEqual(closed.count(descriptor), 1)
+                            _assert_descriptor_closed(self, descriptor)
+
+                    _trace(log, session_id="root_acquisition_recovered")
+                    self.assertEqual(
+                        [record["session_id"] for record in _records(workspace)],
+                        ["root_acquisition_recovered"],
+                    )
 
     @unittest.skipUnless(
         os.name == "posix",
@@ -1161,8 +1782,7 @@ class DebugLogStorageTests(unittest.TestCase):
                 )
 
     def test_directory_identity_mismatch_is_rejected_portably(self) -> None:
-        path = self.workspace.path(DEBUG_LOG_DIRECTORY)
-        directory = debug_module._DebugDirectory(path, 17)
+        directory = debug_module._DebugDirectory(self.workspace, 17, 18)
         opened = mock.Mock(
             st_mode=stat.S_IFDIR | 0o700,
             st_dev=3,
@@ -1175,6 +1795,10 @@ class DebugLogStorageTests(unittest.TestCase):
         )
 
         with (
+            mock.patch.object(
+                debug_module,
+                "verify_workspace_root_directory",
+            ) as verify_root,
             mock.patch.object(debug_module.os, "fstat", return_value=opened),
             mock.patch.object(
                 debug_module.os,
@@ -1185,29 +1809,72 @@ class DebugLogStorageTests(unittest.TestCase):
         ):
             debug_module._verify_debug_directory(directory)
 
-        named_stat.assert_called_once_with(path, follow_symlinks=False)
+        verify_root.assert_called_once_with(self.workspace, 17)
+        named_stat.assert_called_once_with(
+            DEBUG_LOG_DIRECTORY,
+            dir_fd=17,
+            follow_symlinks=False,
+        )
 
     def test_unsupported_directory_relative_platform_drops_and_recovers(
         self,
     ) -> None:
-        before = _debug_namespace_snapshot(self.workspace)
-        with (
-            mock.patch.object(debug_module.os, "O_DIRECTORY", 0),
-            mock.patch.object(
-                debug_module.os,
-                "open",
-                side_effect=AssertionError("unsupported platform reached open"),
-            ) as opened,
-        ):
-            _trace(self.log, session_id="unsupported_platform")
-
-        opened.assert_not_called()
-        self.assertEqual(_debug_namespace_snapshot(self.workspace), before)
-        _trace(self.log, session_id="supported_platform")
-        self.assertEqual(
-            [record["session_id"] for record in _records(self.workspace)],
-            ["supported_platform"],
+        cases: tuple[tuple[str, str, object], ...] = (
+            ("O_DIRECTORY", "flag", "O_DIRECTORY"),
+            ("O_NOFOLLOW", "flag", "O_NOFOLLOW"),
+            ("mkdir_dir_fd", "dir_fd", os.mkdir),
+            ("open_dir_fd", "dir_fd", os.open),
+            ("stat_dir_fd", "dir_fd", os.stat),
+            ("unlink_dir_fd", "dir_fd", os.unlink),
+            ("rename_dir_fd", "dir_fd", os.rename),
+            ("stat_no_follow", "follow", os.stat),
         )
+        for label, capability, value in cases:
+            with self.subTest(label=label):
+                workspace = initialized_workspace(self)
+                log = WorkspaceDebugLog(workspace)
+                directory = workspace.path(DEBUG_LOG_DIRECTORY)
+                workspace.path(f"{DEBUG_LOG_DIRECTORY}/.gitkeep").unlink()
+                directory.rmdir()
+                before = _directory_namespace_snapshot(workspace.root)
+
+                with contextlib.ExitStack() as stack:
+                    if capability == "flag":
+                        stack.enter_context(
+                            mock.patch.object(debug_module.os, str(value), 0)
+                        )
+                    elif capability == "dir_fd":
+                        supported = set(os.supports_dir_fd)
+                        self.assertIn(value, supported)
+                        stack.enter_context(
+                            mock.patch.object(
+                                debug_module.os,
+                                "supports_dir_fd",
+                                supported.difference({value}),
+                            )
+                        )
+                    else:
+                        supported = set(os.supports_follow_symlinks)
+                        self.assertIn(value, supported)
+                        stack.enter_context(
+                            mock.patch.object(
+                                debug_module.os,
+                                "supports_follow_symlinks",
+                                supported.difference({value}),
+                            )
+                        )
+                    _trace(log, session_id=f"unsupported_{label}")
+
+                self.assertEqual(
+                    _directory_namespace_snapshot(workspace.root),
+                    before,
+                )
+                self.assertFalse(directory.exists())
+                _trace(log, session_id=f"recovered_{label}")
+                self.assertEqual(
+                    [record["session_id"] for record in _records(workspace)],
+                    [f"recovered_{label}"],
+                )
 
     @unittest.skipUnless(
         os.name == "posix",
@@ -1997,6 +2664,366 @@ class DebugLogStorageTests(unittest.TestCase):
             [record["session_id"] for record in _records(self.workspace)],
             ["baseline", "recovered"],
         )
+
+    def test_successful_append_propagates_each_cleanup_control_and_closes_all(
+        self,
+    ) -> None:
+        for exception_type in (KeyboardInterrupt, SystemExit):
+            for role in (
+                "release",
+                "active",
+                "guard",
+                "debug",
+                "root",
+                "process_lock",
+            ):
+                with self.subTest(
+                    exception_type=exception_type.__name__,
+                    role=role,
+                ):
+                    workspace = initialized_workspace(self)
+                    log = WorkspaceDebugLog(workspace)
+                    control = exception_type(
+                        f"PRIVATE_CLEANUP_{exception_type.__name__}_{role}"
+                    )
+                    harness = _AttemptCleanupHarness(
+                        {} if role == "process_lock" else {role: control}
+                    )
+                    process_lock = _ControlledProcessLock(
+                        control if role == "process_lock" else None
+                    )
+
+                    with _instrument_cleanup_attempt(harness, process_lock):
+                        caught, final_traceback = _capture_raised(
+                            self,
+                            exception_type,
+                            lambda: _trace(
+                                log,
+                                session_id="cleanup_success",
+                            ),
+                        )
+
+                    self.assertIs(caught, control)
+                    self.assertIsNone(control.__cause__)
+                    self.assertIsNone(control.__context__)
+                    injected = (
+                        process_lock.injection_traceback
+                        if role == "process_lock"
+                        else harness.injection_tracebacks[role]
+                    )
+                    assert injected is not None
+                    self.assertTrue(
+                        _traceback_contains(final_traceback, injected)
+                    )
+                    harness.assert_closed(self)
+                    self.assertEqual(harness.release_attempts, 1)
+                    self.assertEqual(process_lock.release_attempts, 1)
+                    process_lock.assert_reusable(self)
+                    self.assertEqual(
+                        [record["session_id"] for record in _records(workspace)],
+                        ["cleanup_success"],
+                    )
+                    raw = log.path.read_text(encoding="utf-8")
+                    self.assertNotIn("PRIVATE_CLEANUP", raw)
+                    self.assertNotIn(str(workspace.root), raw)
+
+                    _trace(log, session_id="cleanup_recovered")
+                    self.assertEqual(
+                        [record["session_id"] for record in _records(workspace)],
+                        ["cleanup_success", "cleanup_recovered"],
+                    )
+
+    def test_body_control_wins_and_cleanup_control_wins_over_ordinary_body(
+        self,
+    ) -> None:
+        cases = (
+            (OSError, KeyboardInterrupt, "cleanup"),
+            (KeyboardInterrupt, SystemExit, "body"),
+            (SystemExit, KeyboardInterrupt, "body"),
+        )
+        for body_type, cleanup_type, winner in cases:
+            with self.subTest(
+                body_type=body_type.__name__,
+                cleanup_type=cleanup_type.__name__,
+            ):
+                workspace = initialized_workspace(self)
+                log = WorkspaceDebugLog(workspace)
+                _trace(log, session_id="baseline")
+                baseline = log.path.read_bytes()
+                body = body_type(f"PRIVATE_BODY_{body_type.__name__}")
+                cleanup = cleanup_type(
+                    f"PRIVATE_CLEANUP_{cleanup_type.__name__}"
+                )
+                harness = _AttemptCleanupHarness({"release": cleanup})
+                process_lock = _ControlledProcessLock()
+                body_traceback: TracebackType | None = None
+
+                def fail_body(_descriptor: int, _value: object) -> int:
+                    nonlocal body_traceback
+                    try:
+                        raise body
+                    except BaseException as caught:
+                        body_traceback = caught.__traceback__
+                        raise
+
+                expected = body if winner == "body" else cleanup
+                expected_type = type(expected)
+                with (
+                    _instrument_cleanup_attempt(harness, process_lock),
+                    mock.patch.object(
+                        debug_module.os,
+                        "write",
+                        side_effect=fail_body,
+                    ),
+                ):
+                    caught, final_traceback = _capture_raised(
+                        self,
+                        expected_type,
+                        lambda: _trace(log, session_id="body_failure"),
+                    )
+
+                self.assertIs(caught, expected)
+                expected_traceback = (
+                    body_traceback
+                    if winner == "body"
+                    else harness.injection_tracebacks["release"]
+                )
+                assert expected_traceback is not None
+                self.assertTrue(
+                    _traceback_contains(final_traceback, expected_traceback)
+                )
+                self.assertIsNone(expected.__cause__)
+                self.assertIsNone(expected.__context__)
+                harness.assert_closed(self)
+                self.assertEqual(harness.release_attempts, 1)
+                process_lock.assert_reusable(self)
+                self.assertEqual(log.path.read_bytes(), baseline)
+                raw = log.path.read_text(encoding="utf-8")
+                for private in ("PRIVATE_BODY", "PRIVATE_CLEANUP", str(workspace.root)):
+                    self.assertNotIn(private, raw)
+
+                _trace(log, session_id="body_recovered")
+                self.assertEqual(
+                    [record["session_id"] for record in _records(workspace)],
+                    ["baseline", "body_recovered"],
+                )
+
+    def test_multiple_cleanup_controls_attempt_all_and_keep_first_control(
+        self,
+    ) -> None:
+        workspace = initialized_workspace(self)
+        log = WorkspaceDebugLog(workspace)
+        release = KeyboardInterrupt("PRIVATE_FIRST_RELEASE_CONTROL")
+        failures: dict[str, BaseException] = {
+            "active": OSError("PRIVATE_ORDINARY_ACTIVE_CLOSE"),
+            "release": release,
+            "guard": SystemExit("PRIVATE_GUARD_CONTROL"),
+            "debug": KeyboardInterrupt("PRIVATE_DEBUG_CONTROL"),
+            "root": SystemExit("PRIVATE_ROOT_CONTROL"),
+        }
+        process_control = KeyboardInterrupt("PRIVATE_PROCESS_CONTROL")
+        harness = _AttemptCleanupHarness(failures)
+        process_lock = _ControlledProcessLock(process_control)
+
+        with _instrument_cleanup_attempt(harness, process_lock):
+            caught, final_traceback = _capture_raised(
+                self,
+                KeyboardInterrupt,
+                lambda: _trace(log, session_id="multiple_cleanup"),
+            )
+
+        self.assertIs(caught, release)
+        self.assertTrue(
+            _traceback_contains(
+                final_traceback,
+                harness.injection_tracebacks["release"],
+            )
+        )
+        self.assertEqual(
+            set(harness.injection_tracebacks),
+            {"active", "release", "guard", "debug", "root"},
+        )
+        self.assertIsNotNone(process_lock.injection_traceback)
+        harness.assert_closed(self)
+        self.assertEqual(harness.release_attempts, 1)
+        self.assertEqual(process_lock.release_attempts, 1)
+        process_lock.assert_reusable(self)
+        self.assertEqual(
+            [record["session_id"] for record in _records(workspace)],
+            ["multiple_cleanup"],
+        )
+        raw = log.path.read_text(encoding="utf-8")
+        self.assertNotIn("PRIVATE_", raw)
+        self.assertNotIn(str(workspace.root), raw)
+
+    def test_open_verification_and_rollback_cleanup_precedence(self) -> None:
+        for body_type, cleanup_type, winner in (
+            (OSError, KeyboardInterrupt, "cleanup"),
+            (KeyboardInterrupt, SystemExit, "body"),
+            (SystemExit, KeyboardInterrupt, "body"),
+        ):
+            with self.subTest(
+                seam="open_verification",
+                body_type=body_type.__name__,
+                cleanup_type=cleanup_type.__name__,
+            ):
+                workspace = initialized_workspace(self)
+                body = body_type("PRIVATE_OPEN_VERIFICATION_BODY")
+                cleanup = cleanup_type("PRIVATE_OPEN_VERIFICATION_CLEANUP")
+                body_traceback: TracebackType | None = None
+                cleanup_traceback: TracebackType | None = None
+                opened_descriptor: int | None = None
+                close_attempts = 0
+                real_close = os.close
+
+                def fail_verification(
+                    descriptor: int,
+                    _directory: object,
+                    _filename: str,
+                ) -> None:
+                    nonlocal body_traceback, opened_descriptor
+                    opened_descriptor = descriptor
+                    try:
+                        raise body
+                    except BaseException as caught:
+                        body_traceback = caught.__traceback__
+                        raise
+
+                def close_then_fail(descriptor: int) -> None:
+                    nonlocal cleanup_traceback, close_attempts
+                    close_attempts += 1
+                    real_close(descriptor)
+                    try:
+                        raise cleanup
+                    except BaseException as caught:
+                        cleanup_traceback = caught.__traceback__
+                        raise
+
+                expected = body if winner == "body" else cleanup
+                with _held_debug_directory(workspace) as directory:
+                    with (
+                        mock.patch.object(
+                            debug_module,
+                            "_verify_open_file",
+                            side_effect=fail_verification,
+                        ),
+                        mock.patch.object(
+                            debug_module.os,
+                            "close",
+                            side_effect=close_then_fail,
+                        ),
+                    ):
+                        caught, final_traceback = _capture_raised(
+                            self,
+                            type(expected),
+                            lambda: debug_module._open_verified_regular_file(
+                                directory,
+                                _ACTIVE_NAME,
+                                read_write=False,
+                            ),
+                        )
+
+                self.assertIs(caught, expected)
+                expected_traceback = (
+                    body_traceback if winner == "body" else cleanup_traceback
+                )
+                assert expected_traceback is not None
+                self.assertTrue(
+                    _traceback_contains(final_traceback, expected_traceback)
+                )
+                self.assertEqual(close_attempts, 1)
+                assert opened_descriptor is not None
+                _assert_descriptor_closed(self, opened_descriptor)
+
+        for body_type, winner in (
+            (OSError, "rollback"),
+            (KeyboardInterrupt, "body"),
+            (SystemExit, "body"),
+        ):
+            with self.subTest(
+                seam="rollback",
+                body_type=body_type.__name__,
+            ):
+                workspace = initialized_workspace(self)
+                log = WorkspaceDebugLog(workspace)
+                _trace(log, session_id="rollback_baseline")
+                baseline = log.path.read_bytes()
+                body = body_type("PRIVATE_ROLLBACK_BODY")
+                rollback = SystemExit("PRIVATE_ROLLBACK_CONTROL")
+                later = KeyboardInterrupt("PRIVATE_LATER_GUARD_CONTROL")
+                harness = _AttemptCleanupHarness({"guard": later})
+                process_lock = _ControlledProcessLock()
+                body_traceback: TracebackType | None = None
+                rollback_traceback: TracebackType | None = None
+                rollback_identity: tuple[int, int] | None = None
+
+                def fail_body(_descriptor: int, _value: object) -> int:
+                    nonlocal body_traceback
+                    try:
+                        raise body
+                    except BaseException as caught:
+                        body_traceback = caught.__traceback__
+                        raise
+
+                def fail_rollback(
+                    descriptor: int,
+                    expected_identity: tuple[int, int],
+                ) -> None:
+                    nonlocal rollback_traceback, rollback_identity
+                    opened = os.fstat(descriptor)
+                    rollback_identity = (opened.st_dev, opened.st_ino)
+                    self.assertEqual(rollback_identity, expected_identity)
+                    try:
+                        raise rollback
+                    except BaseException as caught:
+                        rollback_traceback = caught.__traceback__
+                        raise
+
+                expected = body if winner == "body" else rollback
+                with (
+                    _instrument_cleanup_attempt(harness, process_lock),
+                    mock.patch.object(
+                        debug_module.os,
+                        "write",
+                        side_effect=fail_body,
+                    ),
+                    mock.patch.object(
+                        debug_module,
+                        "_verify_rollback_descriptor",
+                        side_effect=fail_rollback,
+                    ) as verify_rollback,
+                    mock.patch.object(debug_module.os, "ftruncate") as truncate,
+                ):
+                    caught, final_traceback = _capture_raised(
+                        self,
+                        type(expected),
+                        lambda: _trace(log, session_id="rollback_failure"),
+                    )
+
+                self.assertIs(caught, expected)
+                expected_traceback = (
+                    body_traceback if winner == "body" else rollback_traceback
+                )
+                assert expected_traceback is not None
+                self.assertTrue(
+                    _traceback_contains(final_traceback, expected_traceback)
+                )
+                verify_rollback.assert_called_once()
+                self.assertIsNotNone(rollback_identity)
+                truncate.assert_not_called()
+                harness.assert_closed(self)
+                self.assertIn("guard", harness.injection_tracebacks)
+                process_lock.assert_reusable(self)
+                self.assertEqual(log.path.read_bytes(), baseline)
+
+                _trace(log, session_id="rollback_recovered")
+                self.assertEqual(
+                    [record["session_id"] for record in _records(workspace)],
+                    ["rollback_baseline", "rollback_recovered"],
+                )
+                raw = log.path.read_text(encoding="utf-8")
+                self.assertNotIn("PRIVATE_", raw)
+                self.assertNotIn(str(workspace.root), raw)
 
     def test_lock_rotation_rollback_and_cleanup_failures_never_escape(self) -> None:
         payload = _trace_payload(self.log)
