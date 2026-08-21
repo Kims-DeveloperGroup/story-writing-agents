@@ -230,6 +230,7 @@ class InteractiveController:
         "_conversation_memory_service",
         "_context",
         "_debug_log",
+        "_error_write_count",
         "_last_started_debate_by_session",
         "_main_input",
         "_picker_input",
@@ -277,6 +278,7 @@ class InteractiveController:
             raise TypeError("terminal must be an InteractiveTerminal")
         self._workspace = workspace
         self._debug_log = WorkspaceDebugLog(workspace)
+        self._error_write_count = 0
         self._context = context
         self._backend = backend
         self._terminal = terminal
@@ -357,6 +359,7 @@ class InteractiveController:
             error,
             debug_log_path=_DEBUG_LOG_NOTICE,
         )
+        self._error_write_count += 1
 
     def _record_debug_error(
         self,
@@ -1486,6 +1489,7 @@ class InteractiveController:
             conversation_id=conversation_id,
             agent_id=agent_id,
         )
+        error_write_count = self._error_write_count
         try:
             should_exit = self._dispatch_session_lobby_action_unlogged(
                 action,
@@ -1516,9 +1520,10 @@ class InteractiveController:
                 agent_id=agent_id,
             )
             raise
+        rejected = self._error_write_count > error_write_count
         self._trace_debug(
             DebugOperation.INTERACTIVE_COMMAND,
-            DebugPhase.SUCCEEDED,
+            DebugPhase.FAILED if rejected else DebugPhase.SUCCEEDED,
             session_id=self._attached_session_id,
             conversation_id=(
                 None
@@ -1530,7 +1535,11 @@ class InteractiveController:
                 if self._attached_session_id is not None
                 else None
             ),
-            outcome=DebugOutcome.COMPLETED,
+            outcome=(
+                DebugOutcome.REJECTED
+                if rejected
+                else DebugOutcome.COMPLETED
+            ),
         )
         return should_exit
 
