@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import inspect
+import json
 import os
 import socket
 import subprocess
@@ -715,12 +716,15 @@ class ControllerContractTests(ControllerTestCase):
         self.assertIsNone(controller._focused_conversation)
         self.assertIsNone(controller._conversation_memory_service)
 
-    def test_trace_failure_preserves_success_output_and_cleanup(self) -> None:
-        """Keep the normal lobby exit independent of fatal trace callbacks."""
+    def test_trace_failure_preserves_rejected_and_success_output_and_cleanup(
+        self,
+    ) -> None:
+        """Keep handled errors and normal exit independent of fatal traces."""
 
         workspace = self.make_workspace()
         controller, backend, callbacks = self.make_controller(
             workspace,
+            "/search PRIVATE_TRACE_SEARCH",
             "/quit",
         )
         failed_log = mock.Mock()
@@ -738,6 +742,13 @@ class ControllerContractTests(ControllerTestCase):
 
         close.assert_called_once_with()
         self.assertGreater(failed_log.trace.call_count, 0)
+        self.assertEqual(
+            callbacks.records.count(
+                _error_record(InteractiveErrorCode.SESSION_NOT_ATTACHED)
+            ),
+            1,
+        )
+        self.assertNotIn("PRIVATE_TRACE_SEARCH", "".join(callbacks.records))
         self.assertNotIn("diagnostic trace failure", "".join(callbacks.records))
         self.assertIsNone(controller._runner)
         self.assertIsNone(controller._attached_session_id)
@@ -2031,6 +2042,63 @@ class ControllerConversationStartupTests(ControllerTestCase):
 
 class ControllerCommandTests(ControllerTestCase):
     """Verify global commands and intentionally unavailable shell domains."""
+
+    def test_handled_error_then_success_has_independent_terminal_records(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        controller, _backend, callbacks = self.make_controller(
+            workspace,
+            "/search PRIVATE_SEARCH_TEXT",
+            "/help",
+            "/quit",
+        )
+
+        self.assertEqual(controller.run_session_lobby(), 0)
+
+        self.assertEqual(
+            callbacks.records.count(
+                _error_record(InteractiveErrorCode.SESSION_NOT_ATTACHED)
+            ),
+            1,
+        )
+        raw = workspace.path("debug_logs/runtime.jsonl").read_text(
+            encoding="utf-8"
+        )
+        records = [
+            record
+            for record in (json.loads(line) for line in raw.splitlines())
+            if record["component"] == "interactive_controller"
+            and record["operation"] == "interactive_command"
+        ]
+        self.assertEqual(
+            [
+                (
+                    record["level"],
+                    record["phase"],
+                    record.get("outcome"),
+                )
+                for record in records
+            ],
+            [
+                ("trace", "started", None),
+                ("trace", "failed", "rejected"),
+                ("trace", "started", None),
+                ("trace", "succeeded", "completed"),
+                ("trace", "started", None),
+                ("trace", "succeeded", "completed"),
+            ],
+        )
+        for record in records:
+            self.assertNotIn("session_id", record)
+            self.assertNotIn("conversation_id", record)
+            self.assertNotIn("agent_id", record)
+        for prohibited in (
+            "PRIVATE_SEARCH_TEXT",
+            "/search",
+            str(workspace.root),
+        ):
+            self.assertNotIn(prohibited, raw)
 
     def test_help_parser_interrupt_and_unsupported_domains_are_nonmutating(
         self,
