@@ -1,7 +1,8 @@
 # Backend and session API
 
 > **Availability:** `AgentBackend`, `BoundAgent`, the exact lifecycle API, and
-> pure lifecycle contracts are implemented. Codex is the only supported provider.
+> pure lifecycle contracts are implemented for Codex and Antigravity. Codex is
+> the default provider.
 
 Key terms: **binding**—agent/provider pairing; **manifest**—durable session and
 thread state; **access claim**—temporary exclusive process ownership;
@@ -12,7 +13,10 @@ thread state; **access claim**—temporary exclusive process ownership;
 ```python
 AgentBackend(workspace: Workspace | str | pathlib.Path, *, executable: str = "codex",
              model: str | None = None, timeout_seconds: float = 300,
-             backend_overrides: Mapping[str, str] | None = None)
+             backend_overrides: Mapping[str, str] | None = None,
+             antigravity_executable: str = "agy",
+             antigravity_model: str | None = None,
+             antigravity_effort: str | None = None)
 await AgentBackend.bind(definition: AgentDefinition) -> BoundAgent
 await BoundAgent.invoke(request: AgentRequest) -> AgentReply
 await BoundAgent.converse(request: ConversationRequest) -> ConversationReply
@@ -20,27 +24,32 @@ await BoundAgent.converse_with_retrieval(request, handler) -> ConversationRetrie
 AgentBackend.close() -> None
 ```
 
-`model=None` resolves separately for each bound agent: that agent's
-`codex_model`, then the workspace `codex_model` system default, then the Codex
-provider default. A non-null constructor model has precedence over every
-persisted agent and system model. The persisted reasoning value resolves the
-same way, from per-agent `codex_reasoning_effort` to the workspace system
-default and then the provider default; there is no constructor reasoning
-argument. Timeout is positive. Overrides map canonical agents to providers;
-reserved `gemini` fails configuration validation. A bound agent exposes
-`backend`, `definition`, `vendor`, and `staging_directory`.
+`model=None` resolves separately for each Codex-bound agent: per-agent
+`codex_model`, workspace `codex_model`, then the provider default. A non-null
+constructor model has precedence over every persisted Codex model. Codex
+reasoning resolves per agent, then from the workspace, then the provider
+default; there is no constructor reasoning argument.
+
+For Antigravity, the executable defaults to `agy`. Constructor model and effort
+have precedence over per-agent `antigravity_model`/`antigravity_effort`, then
+workspace values, then provider defaults. Effort is `None`, `low`, `medium`, or
+`high`. Timeout is positive and bounds both adapters. Overrides map canonical
+agents to exactly `codex` or `antigravity`; omitted routes use Codex. `gemini`
+raises `backend 'gemini' is no longer supported; use 'antigravity'`. A bound
+agent exposes `backend`, `definition`, `vendor`, and `staging_directory`.
 Provider calls require ready access already held by the backend. Runtime owns
 transcripts and retrieval authorization; backend owns provider metadata,
 processes, access claims, and per-thread serialization.
 
-Construction first validates the complete five-key
-`config/system_defaults.json` object and the complete roster in
-`config/agent_configs.json`, even when a non-null constructor model would
-override persisted model fields. It then snapshots the resolved per-agent
-model and reasoning values for that backend's lifetime. Editing either file
-does not refresh an active backend, existing binding, provider thread,
-fingerprint, or request payload; the next backend construction observes the
-new valid values.
+Construction first validates the complete seven-field
+`config/system_defaults.json` object and closed per-agent objects in
+`config/agent_configs.json`, even when non-null constructor model/effort values
+would override persisted fields. Optional fields and canonical agents may be
+absent; validation still produces a complete roster snapshot. It then snapshots
+provider routes and resolved per-agent model/effort values for that backend's
+lifetime. Editing either file does not refresh an active backend, existing
+binding, provider thread, fingerprint, or request payload; the next backend
+construction observes the new valid values.
 
 When present, the optional invocation arguments are inserted in this exact
 order immediately after `exec` and before any `resume` marker:
@@ -50,13 +59,19 @@ order immediately after `exec` and before any `resume` marker:
 --config model_reasoning_effort="LEVEL"
 ```
 
-Either line is omitted when its effective value is null. The reasoning levels
+These are Codex arguments. Either line is omitted when its effective value is
+null. The reasoning levels
 are exactly `minimal`, `low`, `medium`, `high`, and `xhigh`; model/provider
 support for `xhigh` is not inferred by workspace validation. The configured
 values change only the invocation arguments and do not become definition,
 thread-identity, lifecycle, or request-payload fields. Validation and the
 workspace schema are specified in
 [Agent configuration](configuration/agent-configuration.md#system-defaults).
+
+Antigravity uses `--model MODEL` and `--effort LEVEL` only when their effective
+values are non-null. Provider conversation resume adds `--conversation ID`.
+Those process arguments do not change definition fingerprints, lifecycle
+identity, or request payload fields.
 
 ## Lifecycle value contracts
 
@@ -102,7 +117,7 @@ These are the complete lifecycle surface:
 | --- | --- |
 | `get_session_lifecycle` | Provider-free read; missing returns `absent` only when manifest and claim are both absent. |
 | `list_session_lifecycles` | Provider-free, newest durable update then ID; validates all encountered lifecycle files. |
-| `validate_provider_configuration` | No claim or provider call; exact `True` or a typed failure. |
+| `validate_provider_configuration` | No claim or provider turn; resolves executables for effective routes and, for Antigravity, performs a bounded isolated `agy --help` capability probe. Exact `True` or a typed failure. |
 | `acquire_session_access` | Claim an existing session without changing durable bytes. |
 | `release_session_access` | Release only this backend's exact claim; otherwise read-only. |
 | `create_session_with_access` | Exclusively create a ready V2 manifest and retain access. |
@@ -128,10 +143,15 @@ Release compares the opaque token under the guard and removes only the claim
 recorded by this backend. Failed create/access/reopen compensates only a claim
 newly acquired by that operation. A caller that already held access keeps it on
 later failure. `close()` best-effort releases its recorded claims and removes
-prompt staging; it never pauses durable state or permits backend reuse.
+ephemeral Codex staging. Antigravity definitions, isolated working directories,
+and provider-native state are retained. Close never pauses durable state,
+deletes manifest thread references, or permits backend reuse. There is no
+user-facing session close/delete method.
 
 V1 manifests, access sidecars, and guards raise
 `WorkspaceVersionUnsupportedError` without migration, deletion, or rewriting.
 Malformed, orphaned, path-mismatched, or changed V2 data fails closed. Exact
 paths and schemas are in [Session storage](configuration/session-storage.md);
 user-visible transitions are in [Session lifecycle](../design/session-lifecycle.md).
+Antigravity-specific setup, process controls, and retention are in
+[Use Antigravity agents](../guides/antigravity.md).

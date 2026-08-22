@@ -2,7 +2,8 @@
 
 > **Availability:** these controls cover local reads, advisory turns, and
 > retrieval-enabled turns, management commands, and focused-context consensus.
-> They do not make Codex, its executable, workspace, or terminal trusted.
+> They do not make either provider, its executable, the workspace, or the
+> terminal trusted.
 
 Key terms: **plaintext**—unencrypted content; **visible context**—events sent in
 a request; **provider-private history**—vendor thread state; **diagnostic**—
@@ -64,11 +65,13 @@ provider forget.
 
 ## Diagnostic redaction
 
-Concrete `AgentBackend` drains nonzero Codex stderr but never decodes, exposes,
-or persists it. It raises `BackendProtocolError` with exact
-`Codex CLI exited with status N`. Python callers retain exception type/status,
-but lose stderr detail; reproduce the provider failure directly if that detail
-is required.
+Concrete `AgentBackend` drains nonzero provider stderr but never includes it in
+the raised or persisted diagnostic. For example, Codex nonzero exit raises
+`BackendProtocolError` with exact `Codex CLI exited with status N`;
+Antigravity uses fixed provider-specific diagnostics for capability, transport,
+protocol, and timeout failures. Python callers retain
+the exception category, but lose stderr detail; reproduce the provider failure
+outside this runtime if that detail is required.
 
 Provider-controlled revision IDs, duplicate JSON keys, and disallowed/duplicate
 core-update filenames produce fixed protocol copy without echoing values. Other
@@ -90,22 +93,44 @@ Cancellation stores fixed `CancelledError: conversation turn was cancelled`.
 Only supplied/known variants are redacted; this is not a general secret detector.
 Replies are unchanged. Terminal summaries use a separate boundary.
 
-## Codex and credentials
+## Provider processes and credentials
 
 Codex runs without shell evaluation in isolated staging: read-only sandbox, no
 approvals, ignored project/user configuration, and disabled shell, web, app,
 and multi-agent tools. Installation-level or vendor-global instructions can
 still apply, and the vendor may retain remote conversations.
 
+Antigravity also runs without shell evaluation. The backend sends confidential
+story request JSON through standard input and requests streamed JSON output. It
+disables slash commands, selects plan mode, applies sandbox controls, and does
+not request an approval bypass. The process argument list still contains
+runtime-owned output schema, the isolated provider-state path, optional
+model/effort, and an optional provider conversation ID. The child process
+inherits the runtime environment. Do not place credentials in model names,
+paths, configuration fields, shell history, or diagnostics, and start the
+runtime only from an environment whose inherited variables are suitable for a
+provider subprocess.
+
 Workspace fallback and per-agent Codex model/reasoning values are plaintext
 configuration. An `AgentBackend` passes each bound agent's effective non-null
 values to the local Codex process as `--model` and
 `--config model_reasoning_effort="LEVEL"` arguments;
 they are not inserted into request payloads, definitions, fingerprints, or
-provider-thread identity. Treat them as locally exposed process configuration,
-not as a place to store secrets.
+provider-thread identity. Antigravity model/effort values are likewise
+plaintext local process configuration and appear in arguments when set. Treat
+all provider settings as locally exposed process configuration, not as a place
+to store secrets.
+
+Antigravity's isolated provider-native state is also plaintext and is retained
+when a backend closes. Taint or definition-fingerprint mismatch starts a fresh
+provider conversation without deleting prior provider data. Protect the
+workspace and provider-state paths with OS-level controls; the runtime provides
+neither encryption nor secure erase.
 
 Use `codex login` or process-environment `CODEX_API_KEY`. Never put credentials
 in story content, configuration, filenames, prompts, replies, transcripts, or
-logs. Public models have no hidden-reasoning field; ordinary returned content is
-visible and may persist. `story smoke` uses synthetic data and no provider.
+logs. For Antigravity installation and browser/SSH authentication, follow the
+[Antigravity guide](../guides/antigravity.md); do not copy authentication
+material into story configuration. Public models have no hidden-reasoning
+field; ordinary returned content is visible and may persist. `story smoke`
+uses synthetic data and neither provider.

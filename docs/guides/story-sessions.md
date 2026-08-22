@@ -113,32 +113,36 @@ while attached. It shows separate Current and Pending values for Language,
 Persona, Maximum debate rounds, and Providers. The top-level choices are those
 four rows followed by Save and Cancel. Choose Providers to select an agent in
 canonical roster order, then choose Provider, Model, or Reasoning effort for
-that agent.
+that agent. Provider choices are Codex and Antigravity. Changing the route does
+not erase the inactive provider's saved model or effort.
 
 On a capable terminal, Up/Down moves the current picker highlight and Enter
 opens or commits it. Escape from a nested picker or prompt restores that
 field's prior pending value and returns to its parent. Escape at the top level,
 Cancel, Ctrl-C, or EOF cancels the whole workflow without saving. Plain
-fallback uses the picker's numbered grammar. In the per-agent Codex model text
-prompt, blank means inherit the workspace system model and `/cancel` is literal
-model text rather than a command.
+fallback uses the picker's numbered grammar. In the per-agent active-provider
+model text prompt, blank means inherit that provider's workspace system model
+and `/cancel` is literal model text rather than a command.
 
 Language offers `KO`, `EN`, `JA`, `ZH`, `ES`, `FR`, `DE`, `PT`, `IT`, and `RU`.
 Persona uses the safe lexical template catalog. Debate rounds accept a
 nonnegative ASCII integer, including audit-only `0`. Providers are edited per
-agent in roster order: Codex is enabled; reserved Gemini is disabled for new
-selection, while an existing Gemini route may be preserved or remediated to
-Codex. Model accepts exact safe text or blank to inherit the workspace system
-model. Reasoning offers Inherit, `minimal`, `low`, `medium`, `high`, and
-`xhigh`; Inherit uses the workspace system reasoning value, then the provider
-default.
+agent in roster order: Codex is the default, and Antigravity is also available.
+Model accepts exact safe text or blank to inherit the active provider's
+workspace system model. Codex effort offers Inherit, `minimal`, `low`,
+`medium`, `high`, and `xhigh`; Antigravity effort offers Inherit, `low`,
+`medium`, and `high`. Inherit uses the active provider's workspace system
+value, then its provider default. The legacy backend name `gemini` is rejected;
+use `antigravity`.
 
 Save fails closed if either configuration file or the persona catalog changed
 after opening. A successful save affects only the next shell/backend
 construction; the active shell keeps its construction-time configuration
 snapshot, and live session or explicit overrides still take precedence. See
 [Agent configuration](../reference/configuration/agent-configuration.md) and
-[Filesystem safety](../operations/filesystem-safety.md).
+[Filesystem safety](../operations/filesystem-safety.md). Antigravity setup and
+provider-specific precedence are in the
+[Antigravity guide](antigravity.md).
 
 ## Manage conversations and routing
 
@@ -204,7 +208,7 @@ commands, storage/provider schemas, or package APIs.
 
 Agent retrieval is conditional. The shell shows `[context]` progress, reply,
 and sources. Only user and outcome enter the transcript; local reads never call
-Codex or alter defaults/focus.
+a provider or alter defaults/focus.
 
 ## Turn the current focus into consensus
 

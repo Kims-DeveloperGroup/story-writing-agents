@@ -1,7 +1,7 @@
 # Troubleshooting
 
 > **Availability:** these remedies cover the CLI, conversations, Codex,
-> workspace persistence, and Python APIs.
+> Antigravity, workspace persistence, and Python APIs.
 
 Key terms: **preflight**—checks before provider work; **strict UTF-8**—rejects
 invalid bytes; **immutable ID**—cannot be reused; **access claim**—temporary
@@ -18,6 +18,19 @@ story --help
 ```
 
 Editable changes appear immediately; new script names require reinstalling.
+
+If the runtime reports `Antigravity CLI executable was not found`, install the
+Antigravity CLI and make `agy` visible to the same shell that launches `story`:
+
+```bash
+source ~/.zshrc
+command -v agy
+agy --version
+```
+
+If a nonstandard executable path is intentional, pass
+`--antigravity-executable PATH`. See the
+[Antigravity setup guide](antigravity.md#install-and-authenticate-agy).
 
 ## Interactive mode requires a terminal
 
@@ -83,8 +96,20 @@ Code `1` includes `failed_check`; repeat with `story smoke --workspace
 
 ## Provider configuration or session contention
 
-Confirm Codex login or `CODEX_API_KEY`, ready session, model, and timeout.
-Ambiguous provider failure may taint a thread; the next call starts fresh.
+For Codex, confirm `codex login` or `CODEX_API_KEY`, the ready session, model,
+and timeout. For Antigravity, confirm `agy` resolution and authentication, then
+check the configured model/effort and the same legacy-named
+`--codex-timeout` bound. The Antigravity capability preflight is a bounded,
+provider-free help probe: success verifies required headless flags, not
+authentication, connectivity, model access, or response quality. The fixed
+failure `Antigravity CLI headless capabilities could not be verified` means
+the configured executable did not pass that probe.
+
+The only supported backend names are `codex` and `antigravity`. A legacy
+`gemini` value fails with
+`backend 'gemini' is no longer supported; use 'antigravity'`.
+Ambiguous provider failure may taint a thread; the next call starts fresh
+without deleting prior provider-native data.
 
 `provider_preflight_failed` reports readiness `no` and next action
 `Repair provider configuration, then retry.`
@@ -125,8 +150,12 @@ entered turn must cancel and join, and its provider thread may restart. Fatal
 `operation_interrupted` means proof or terminal I/O failed and exits `2` through
 cleanup. `cleanup_failed` forces exit `2` and means Runner close, access release,
 or backend close may be incomplete. Before retrying, inspect retained temporary
-or claim state, stop a known owner normally, and preserve uncertain ownership.
+provider state or claim state, stop a known owner normally, and preserve
+uncertain ownership. Antigravity-native state is retained on backend close and
+is not a cleanup artifact; protect or back it up as plaintext session data.
 
 Malformed JSON/JSONL raises; preserve it before intervention. See
 [Inspection and recovery](inspection-and-recovery.md) and the
-[error reference](../reference/configuration/identifiers-and-errors.md).
+[error reference](../reference/configuration/identifiers-and-errors.md). The
+[Antigravity guide](antigravity.md#capability-preflight-and-fixed-errors)
+collects provider-specific setup, error, and lifecycle boundaries.
