@@ -418,6 +418,74 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             ["AGENTS.md"],
         )
 
+    async def test_request_encoding_failures_are_fixed_private_and_prelaunch(
+        self,
+    ) -> None:
+        adapter = self.adapter("encoding-state")
+        binding = adapter.bind(self.definition)
+        confidential_schema_value = type(
+            "CONFIDENTIAL_SCHEMA_VALUE",
+            (),
+            {},
+        )()
+        circular_payload: dict[str, object] = {
+            "story": "CONFIDENTIAL_CIRCULAR_PAYLOAD",
+        }
+        circular_payload["cycle"] = circular_payload
+        cases = (
+            (
+                "nonserializable schema",
+                {"type": "object", "const": confidential_schema_value},
+                {"story": "safe"},
+            ),
+            (
+                "circular payload",
+                {"type": "object"},
+                circular_payload,
+            ),
+            (
+                "surrogate payload",
+                {"type": "object"},
+                {"story": "CONFIDENTIAL_SURROGATE_PAYLOAD\ud800"},
+            ),
+        )
+        forbidden_process = mock.AsyncMock(
+            side_effect=AssertionError("provider process invoked")
+        )
+
+        with mock.patch(
+            "story_writing_agents.antigravity_adapter.run_process",
+            forbidden_process,
+        ):
+            for label, schema, payload in cases:
+                with self.subTest(failure=label):
+                    with self.assertRaises(ProviderInvocationError) as caught:
+                        await adapter.invoke(
+                            binding,
+                            ProviderInvocation(
+                                session_id=f"encoding-{label.replace(' ', '-')}",
+                                schema=schema,
+                                payload=payload,
+                                thread_id=None,
+                            ),
+                        )
+
+                    error = caught.exception
+                    self.assertEqual(
+                        str(error),
+                        "Antigravity request could not be encoded",
+                    )
+                    self.assertEqual(
+                        error.args,
+                        ("Antigravity request could not be encoded",),
+                    )
+                    self.assertIs(error.taint_existing_thread, False)
+                    self.assertNotIn("CONFIDENTIAL", str(error))
+                    self.assertIsNone(error.__cause__)
+                    self.assertIsNone(error.__context__)
+
+        forbidden_process.assert_not_awaited()
+
     async def test_backend_routes_and_persists_antigravity_conversation_id(
         self,
     ) -> None:

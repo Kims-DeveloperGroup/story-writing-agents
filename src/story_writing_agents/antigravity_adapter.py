@@ -223,29 +223,38 @@ class AntigravityAdapter:
                 taint_existing_thread=False,
             ) from exc
 
-        command = self.command(
-            gemini_directory=gemini_directory,
-            working_directory=working_directory,
-            schema=invocation.schema,
-            thread_id=invocation.thread_id,
-        )
-        prompt = json.dumps(
-            dict(invocation.payload),
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
-        input_event = {
-            "event": "user",
-            "message": {"content": prompt},
-        }
-        stdin = (
-            json.dumps(
-                input_event,
+        encoding_failed = False
+        try:
+            command = self.command(
+                gemini_directory=gemini_directory,
+                working_directory=working_directory,
+                schema=invocation.schema,
+                thread_id=invocation.thread_id,
+            )
+            prompt = json.dumps(
+                dict(invocation.payload),
                 ensure_ascii=False,
                 separators=(",", ":"),
             )
-            + "\n"
-        ).encode("utf-8")
+            input_event = {
+                "event": "user",
+                "message": {"content": prompt},
+            }
+            stdin = (
+                json.dumps(
+                    input_event,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ).encode("utf-8")
+        except (TypeError, ValueError, RecursionError, UnicodeEncodeError):
+            encoding_failed = True
+        if encoding_failed:
+            raise ProviderInvocationError(
+                "Antigravity request could not be encoded",
+                taint_existing_thread=False,
+            ) from None
         try:
             result = await run_process(
                 ProcessRequest(
