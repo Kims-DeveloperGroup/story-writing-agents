@@ -19,7 +19,7 @@ The workspace uses separate inspectable files rather than a database:
 | Conversation metadata and transcript | Catalog and event-store adapters |
 | Retrieval actions, observations, progress, sources | Process/terminal only |
 | Current conversation and agent focus | Controller memory only |
-| Approved manuscript | Workspace artifact commit |
+| Canonical writing artifacts and provenance | `WritingArtifactRepository` |
 
 <a id="debate-context-sidecar"></a>
 
@@ -94,10 +94,19 @@ its duplicated message list. Agent history remains owner-isolated and bounded,
 though provider output in visible fields may still be sensitive.
 
 Terminal result creation and lifecycle transition finish before terminal
-progress. Approved artifact commit validates the whole set, replaces core files
-in fixed order, then exclusively creates the manuscript; cross-file rollback is
-best effort. No sidecar, log, default, transcript, result, state, and artifact
-set forms one database transaction.
+progress. Approved artifact publication is a separate recoverable transaction:
+it journals the complete intended manuscript/core set, publishes and verifies
+the target bytes, writes immutable commit history, publishes the catalog last,
+then removes the journal. The next artifact access rolls a valid interrupted
+journal forward; untrusted divergence writes a persistent block marker and
+fails all later artifact access closed.
+
+That artifact transaction does not combine sidecars, blackboards, defaults,
+transcripts, debate lifecycle, results, provider state, and agent state into one
+database transaction. Infrastructure interruption can therefore leave a
+recoverable artifact journal alongside an incomplete non-artifact operation.
+Exact artifact paths, eligibility, journal states, and user responses are in
+[Canonical writing artifacts](../reference/writing-artifacts.md).
 
 One-step and retrieval turns append exactly one user event before provider work,
 then one reply or sanitized runtime error. Retrieval adds no control, source,

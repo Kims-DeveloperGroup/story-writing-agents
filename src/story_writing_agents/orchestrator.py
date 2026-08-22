@@ -106,6 +106,8 @@ from .session_lifecycle import (
     provider_work_is_ready,
 )
 from .workspace import FilesystemConversationEventStore, Workspace
+from .writing_artifacts import manuscript_artifact_path
+from .writing_artifacts.repository import WritingArtifactRepository
 
 
 class _ProgressEmitter:
@@ -1049,6 +1051,7 @@ class StoryRuntime:
             workspace if isinstance(workspace, Workspace) else Workspace(workspace)
         )
         self.backend = backend
+        self.artifacts = WritingArtifactRepository(self.workspace.root)
         self.conversation_event_store = (
             conversation_event_store
             if conversation_event_store is not None
@@ -1067,6 +1070,7 @@ class StoryRuntime:
         )
         self.prompts = PromptAssembler(
             self.workspace,
+            artifact_repository=self.artifacts,
             backend_overrides=backend_overrides,
             configuration_snapshot=self._configuration_snapshot,
         )
@@ -1418,7 +1422,7 @@ class StoryRuntime:
         session_id: str,
         prompt: str,
         *,
-        manuscript_name: str | None = None,
+        output_path: str,
         max_debate_rounds: int | None = None,
         debate_id: str | None = None,
         conversation_context: DebateContextRequest | None = None,
@@ -1437,7 +1441,7 @@ class StoryRuntime:
             session_id=session_id,
             payload=prompt,
             input_kind=InputKind.PROMPT,
-            manuscript_name=manuscript_name,
+            output_path=output_path,
             max_debate_rounds=max_debate_rounds,
             debate_id=debate_id,
             conversation_context=conversation_context,
@@ -1449,7 +1453,7 @@ class StoryRuntime:
         session_id: str,
         draft: str,
         *,
-        manuscript_name: str | None = None,
+        output_path: str,
         max_debate_rounds: int | None = None,
         debate_id: str | None = None,
         conversation_context: DebateContextRequest | None = None,
@@ -1457,17 +1461,18 @@ class StoryRuntime:
     ) -> DebateResult:
         """Run a supplied-draft debate with optional context and progress facts.
 
-        Validation, context capture and sidecar durability precede provider work;
-        the supplied draft produces a trusted drafted fact without a drafting
-        provider call. Terminal durability, expected failures, observer errors,
-        cancellation, and raised persistence uncertainty match ``run_prompt``.
+        Validation, context capture and sidecar durability precede provider work.
+        The execution specialist authors the first candidate from the supplied
+        draft before consensus. Terminal durability, expected failures, observer
+        errors, cancellation, and raised persistence uncertainty match
+        ``run_prompt``.
         """
 
         return await self._run(
             session_id=session_id,
             payload=draft,
             input_kind=InputKind.DRAFT,
-            manuscript_name=manuscript_name,
+            output_path=output_path,
             max_debate_rounds=max_debate_rounds,
             debate_id=debate_id,
             conversation_context=conversation_context,
@@ -1480,7 +1485,7 @@ class StoryRuntime:
         session_id: str,
         payload: str,
         input_kind: InputKind,
-        manuscript_name: str | None,
+        output_path: str,
         max_debate_rounds: int | None,
         debate_id: str | None,
         conversation_context: DebateContextRequest | None,
@@ -1501,6 +1506,9 @@ class StoryRuntime:
         session = self.workspace.validate_identifier(session_id)
         if not isinstance(payload, str) or not payload:
             raise ValueError(f"{input_kind.value} payload must be non-empty text")
+        # Validate the required part-scoped output before session acquisition or
+        # any debate-state mutation. Publication repeats this validation.
+        manuscript_artifact_path(output_path)
         debate = (
             self.workspace.validate_identifier(debate_id, label="debate ID")
             if debate_id is not None
@@ -1527,7 +1535,6 @@ class StoryRuntime:
         )
         progress = _ProgressEmitter(self._validate_progress_sink(progress_sink))
 
-        target_name = manuscript_name or f"{session}_{debate}.md"
         self._acquire_ready_session_access(session)
 
         context_snapshot: ConversationContextWindow | None = None
@@ -1594,7 +1601,7 @@ class StoryRuntime:
                 debate=debate,
                 payload=payload,
                 input_kind=input_kind,
-                target_name=target_name,
+                output_path=output_path,
                 round_limit=round_limit,
                 reservation_token=reservation_token,
                 conversation_context=context_snapshot,
@@ -1681,7 +1688,7 @@ class StoryRuntime:
         debate: str,
         payload: str,
         input_kind: InputKind,
-        target_name: str,
+        output_path: str,
         round_limit: int,
         reservation_token: str,
         conversation_context: ConversationContextWindow | None,
@@ -1751,69 +1758,39 @@ class StoryRuntime:
         current_revision = "r0"
         revision_cycles = 0
 
-        if input_kind is InputKind.PROMPT:
-            try:
-                reply = await self._invoke(
-                    self._request(
-                        session=session,
-                        debate=debate,
-                        agent_id=EXECUTION_SPECIALIST,
-                        phase=Phase.DRAFT,
-                        round_number=0,
-                        revision_id=current_revision,
-                        task=(
-                            "Create a complete revision 0 candidate from the user "
-                            "prompt. Do not audit it in this response."
-                        ),
-                        user_payload=payload,
-                        messages=tuple(messages),
-                        conversation_context=conversation_context,
-                    )
-                )
-                self._validate_candidate_reply(reply, current_revision)
-            except Exception as exc:
-                record(
-                    sender=EXECUTION_SPECIALIST,
-                    phase=Phase.DRAFT.value,
-                    round_number=0,
-                    revision=current_revision,
-                    kind="error",
-                    content=self._error_text(exc),
-                )
-                self._remember(
-                    agent_id=EXECUTION_SPECIALIST,
+        try:
+            reply = await self._invoke(
+                self._request(
                     session=session,
                     debate=debate,
+                    agent_id=EXECUTION_SPECIALIST,
                     phase=Phase.DRAFT,
                     round_number=0,
-                    revision=current_revision,
-                    kind="error",
-                    content="backend outcome failed validation or execution",
-                )
-                return self._finish(
-                    session=session,
-                    debate=debate,
-                    reservation_token=reservation_token,
-                    input_kind=input_kind,
-                    status=DebateStatus.FAILED,
                     revision_id=current_revision,
-                    rounds_completed=0,
-                    final_candidate=None,
-                    latest_candidate=None,
-                    manuscript_path=None,
-                    messages=messages,
-                    error=self._error_text(exc),
-                    failure_kind=self._classify_debate_failure(exc),
-                    progress=progress,
+                    task=(
+                        "Create a complete revision 0 candidate from the user "
+                        "prompt. Do not audit it in this response."
+                        if input_kind is InputKind.PROMPT
+                        else (
+                            "Create a complete revision 0 candidate from the supplied "
+                            "draft. Preserve sound material, apply the requested "
+                            "changes, and do not audit it in this response."
+                        )
+                    ),
+                    user_payload=payload,
+                    messages=tuple(messages),
+                    conversation_context=conversation_context,
                 )
-            candidate = reply.content
+            )
+            self._validate_candidate_reply(reply, current_revision)
+        except Exception as exc:
             record(
                 sender=EXECUTION_SPECIALIST,
                 phase=Phase.DRAFT.value,
                 round_number=0,
                 revision=current_revision,
-                kind="candidate",
-                content=candidate,
+                kind="error",
+                content=self._error_text(exc),
             )
             self._remember(
                 agent_id=EXECUTION_SPECIALIST,
@@ -1822,11 +1799,45 @@ class StoryRuntime:
                 phase=Phase.DRAFT,
                 round_number=0,
                 revision=current_revision,
-                kind="candidate_created",
-                content="revision 0 candidate created",
+                kind="error",
+                content="backend outcome failed validation or execution",
             )
-        else:
-            candidate = payload
+            return self._finish(
+                session=session,
+                debate=debate,
+                reservation_token=reservation_token,
+                input_kind=input_kind,
+                status=DebateStatus.FAILED,
+                revision_id=current_revision,
+                rounds_completed=0,
+                final_candidate=None,
+                latest_candidate=None,
+                manuscript_path=None,
+                messages=messages,
+                error=self._error_text(exc),
+                failure_kind=self._classify_debate_failure(exc),
+                progress=progress,
+            )
+        candidate = reply.content
+        candidate_author_agent_id = EXECUTION_SPECIALIST
+        record(
+            sender=EXECUTION_SPECIALIST,
+            phase=Phase.DRAFT.value,
+            round_number=0,
+            revision=current_revision,
+            kind="candidate",
+            content=candidate,
+        )
+        self._remember(
+            agent_id=EXECUTION_SPECIALIST,
+            session=session,
+            debate=debate,
+            phase=Phase.DRAFT,
+            round_number=0,
+            revision=current_revision,
+            kind="candidate_created",
+            content="revision 0 candidate created",
+        )
         progress.emit(
             DebateProgressEvent(
                 session_id=session,
@@ -2023,6 +2034,7 @@ class StoryRuntime:
                 )
 
             candidate = synthesis.content
+            candidate_author_agent_id = LEAD_ORCHESTRATOR
             current_revision = next_revision
             revision_cycles += 1
             record(
@@ -2098,10 +2110,14 @@ class StoryRuntime:
             )
             artifact_commit_started = True
             manuscript_path, applied_updates = (
-                self.workspace.commit_approved_artifacts(
-                    target_name,
-                    candidate,
-                    updates,
+                self.artifacts.commit_consensus(
+                    output_path=output_path,
+                    candidate=candidate,
+                    core_updates=updates,
+                    session_id=session,
+                    debate_id=debate,
+                    revision_id=current_revision,
+                    candidate_author_agent_id=candidate_author_agent_id,
                 )
             )
         except Exception as exc:
@@ -3474,7 +3490,7 @@ class RuntimeSession:
         self,
         prompt: str,
         *,
-        manuscript_name: str | None = None,
+        output_path: str,
         max_debate_rounds: int | None = None,
         debate_id: str | None = None,
         conversation_context: DebateContextRequest | None = None,
@@ -3489,7 +3505,7 @@ class RuntimeSession:
         return await self.runtime.run_prompt(
             self.session_id,
             prompt,
-            manuscript_name=manuscript_name,
+            output_path=output_path,
             max_debate_rounds=max_debate_rounds,
             debate_id=debate_id,
             conversation_context=conversation_context,
@@ -3500,7 +3516,7 @@ class RuntimeSession:
         self,
         draft: str,
         *,
-        manuscript_name: str | None = None,
+        output_path: str,
         max_debate_rounds: int | None = None,
         debate_id: str | None = None,
         conversation_context: DebateContextRequest | None = None,
@@ -3515,7 +3531,7 @@ class RuntimeSession:
         return await self.runtime.run_draft(
             self.session_id,
             draft,
-            manuscript_name=manuscript_name,
+            output_path=output_path,
             max_debate_rounds=max_debate_rounds,
             debate_id=debate_id,
             conversation_context=conversation_context,

@@ -99,6 +99,8 @@ class ScriptedTerminalCallbacks:
 
     def read_line(self, prompt: str) -> str:
         self.prompts.append(prompt)
+        if "Manuscript output" in prompt:
+            return f"part-01/interactive-{len(self.prompts)}.md"
         if not self.reads:
             raise AssertionError(f"unexpected input request: {prompt}")
         value = self.reads.pop(0)

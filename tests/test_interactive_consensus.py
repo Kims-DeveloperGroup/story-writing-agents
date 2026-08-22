@@ -73,6 +73,7 @@ class ScriptedConsensusRuntime:
     def __init__(self, *outcomes: ConsensusOutcome | BaseException) -> None:
         self.outcomes = list(outcomes)
         self.calls: list[dict[str, Any]] = []
+        self.output_paths: list[str] = []
         self.loops: list[asyncio.AbstractEventLoop] = []
         self.tasks: list[asyncio.Task[object] | None] = []
         self.on_call: Any = None
@@ -82,6 +83,7 @@ class ScriptedConsensusRuntime:
         session_id: str,
         prompt: str,
         *,
+        output_path,
         conversation_context,
         progress_sink,
     ) -> DebateResult:
@@ -91,6 +93,7 @@ class ScriptedConsensusRuntime:
             session_id,
             prompt,
             InputKind.PROMPT,
+            output_path,
             conversation_context,
             progress_sink,
         )
@@ -100,6 +103,7 @@ class ScriptedConsensusRuntime:
         session_id: str,
         draft: str,
         *,
+        output_path,
         conversation_context,
         progress_sink,
     ) -> DebateResult:
@@ -109,6 +113,7 @@ class ScriptedConsensusRuntime:
             session_id,
             draft,
             InputKind.DRAFT,
+            output_path,
             conversation_context,
             progress_sink,
         )
@@ -127,6 +132,7 @@ class ScriptedConsensusRuntime:
         session_id: str,
         payload: str,
         input_kind: InputKind,
+        output_path: str,
         conversation_context,
         progress_sink,
     ) -> DebateResult:
@@ -148,6 +154,7 @@ class ScriptedConsensusRuntime:
                 "conversation_context": conversation_context,
             }
         )
+        self.output_paths.append(output_path)
         if self.on_call is not None:
             self.on_call()
         if isinstance(outcome, BaseException):
@@ -208,7 +215,7 @@ class ScriptedConsensusRuntime:
         final_candidate = None
         failure_kind = outcome.failure_kind
         if outcome.status is DebateStatus.CONSENSUS:
-            manuscript_path = f"manuscript/{debate_id}.md"
+            manuscript_path = f"manuscript/{output_path}"
             final_candidate = "trusted candidate"
             self._emit(
                 progress_sink,
@@ -560,7 +567,7 @@ class InteractiveConsensusResultTests(InteractiveConversationTestCase):
             with self.subTest(code=code):
                 self.assertIn(_error_record(code), rendered)
         self.assertIn("debate_1", rendered)
-        self.assertIn("manuscript/debate_1.md", rendered)
+        self.assertIn("manuscript/part-01/interactive-2.md", rendered)
         self.assertIn("global_outline.md", rendered)
         self.assertIn("r0", rendered)
         self.assertNotIn("RAW_RESULT_SECRET", rendered)

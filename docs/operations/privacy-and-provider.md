@@ -12,7 +12,8 @@ stored or displayed failure text.
 
 There is no encryption, access control, secure erase, or retention policy.
 Documents, debate/context records, provider metadata, subjects, transcripts,
-scrollback, and manuscripts rely on OS/terminal-service protection.
+scrollback, manuscripts, artifact catalogs, commit provenance, transaction
+journals, and recovery markers rely on OS/terminal-service protection.
 
 Blackboards can contain input, drafts, reviews, and errors. Provider output is
 not generally scrubbed; archive neither deletes nor conceals conversations;
@@ -48,7 +49,9 @@ user/reply pairs from the current session. It cannot request archives, another
 session/workspace, arbitrary IDs, runtime errors, private state, tools, or native
 data. Observations are framed as untrusted story data.
 
-Agent definitions separately supply allowlisted core documents. Debates,
+Agent definitions separately supply only current provenance-backed allowlisted
+core documents. A generic manual edit remains on disk but is omitted after its
+hash diverges; the runtime does not send stale bytes or delete them. Debates,
 manuscripts, core updates, and owner state are not retrieval memory. Direct
 routing selects a shared-transcript responder, not a private channel.
 

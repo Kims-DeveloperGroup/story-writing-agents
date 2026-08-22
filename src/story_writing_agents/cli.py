@@ -137,7 +137,12 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help="strict-UTF-8 draft file relative to the current directory",
     )
-    run.add_argument("--output", metavar="MANUSCRIPT_PATH")
+    run.add_argument(
+        "--output",
+        required=True,
+        metavar="PART/PATH.md",
+        help="required create-only manuscript path beneath manuscript/PART/",
+    )
     run.add_argument("--debate-id")
     run.add_argument("--max-debate-rounds", type=int)
 
@@ -654,7 +659,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         runtime = StoryRuntime(workspace, backend)
         options = {
-            "manuscript_name": arguments.output,
+            "output_path": arguments.output,
             "max_debate_rounds": arguments.max_debate_rounds,
             "debate_id": arguments.debate_id,
         }

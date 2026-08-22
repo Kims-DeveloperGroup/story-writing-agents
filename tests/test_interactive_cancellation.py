@@ -341,12 +341,13 @@ class BlockingConsensusRuntime:
         session_id: str,
         prompt: str,
         *,
+        output_path: str,
         conversation_context: object,
         progress_sink: Callable[[DebateProgressEvent], None],
     ) -> DebateResult:
         """Delegate prompt cancellation to the common blocking implementation."""
 
-        del prompt
+        del prompt, output_path
         return await self._block(
             session_id,
             InputKind.PROMPT,
@@ -359,12 +360,13 @@ class BlockingConsensusRuntime:
         session_id: str,
         draft: str,
         *,
+        output_path: str,
         conversation_context: object,
         progress_sink: Callable[[DebateProgressEvent], None],
     ) -> DebateResult:
         """Delegate draft cancellation to the common blocking implementation."""
 
-        del draft
+        del draft, output_path
         return await self._block(
             session_id,
             InputKind.DRAFT,
@@ -1439,7 +1441,7 @@ class ConsensusCancellationTests(InteractiveCancellationTestCase):
         manuscripts = all_manuscripts(workspace)
         self.assertEqual(len(manuscripts), 1)
         self.assertNotIn("cancelled_debate", manuscripts[0].name)
-        self.assertIn("retry_debate", manuscripts[0].name)
+        self.assertEqual(manuscripts[0].name, "interactive-4.md")
         rendered = "".join(callbacks.records)
         self.assertEqual(
             rendered.count(

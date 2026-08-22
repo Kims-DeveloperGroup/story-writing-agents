@@ -63,10 +63,12 @@ story init ./first-story
 cd ./first-story
 ```
 
-`init` creates missing scaffold files without replacing existing content. Edit
-the four files under `core_documents/` and the four role prompts under
-`config/agents/<agent-id>/AGENTS.md`; all are strict UTF-8 Markdown. The runtime
-reads current content before each provider phase.
+`init` creates missing scaffold directories and configuration without replacing
+existing content. It does not create core-document templates. The four role
+prompts under `config/agents/<agent-id>/AGENTS.md` are strict UTF-8 Markdown.
+Canonical core documents are created or changed only when story agents return
+full-text updates after unanimous consensus; the runtime does not treat a
+manually created placeholder as an agent-produced artifact.
 
 ## 4. Begin the human workflow
 
@@ -82,14 +84,17 @@ At the lobby prompt, create a durable session and subject conversation:
 /session create first_novel
 /conversation new Opening scene
 Which established fact should anchor the opening?
-/run Draft a restrained opening using the current conversation focus.
+/run --output part-01/opening.md Draft a restrained opening using the current conversation focus.
 /inspect last
 /status
 /quit
 ```
 
-The ordinary question is one advisory line. `/run PROMPT` starts consensus with
-one bounded snapshot of the current focus. `/inspect last` shows safe metadata
+The ordinary question is one advisory line. `/run --output PART/PATH.md PROMPT`
+starts consensus with one bounded snapshot of the current focus. Ask the agents
+to establish or modify outlines, character sheets, or narrative rules in that
+prompt when needed; only the lead's post-approval full-text updates are
+published. `/inspect last` shows safe metadata
 for this process's latest accepted run. `/status` names the durable state,
 process access, defaults, current attachment and focus, provider readiness, and
 next action. `/quit` releases access without pausing. Run `story` again to resume
@@ -105,9 +110,11 @@ fallback; an empty or failed read reports its result or error without a picker.
 
 Scripts, pipelines, and other non-TTY callers must use noninteractive
 `story run`; it never receives conversation focus. Use explicit workspace and
-session inputs in the [single automation example](guides/glasswater-scenario.md#use-one-explicit-automation-call-then-pause),
+session and `--output PART/PATH.md` inputs in the [single automation example](guides/glasswater-scenario.md#use-one-explicit-automation-call-then-pause),
 then consult the exact [CLI contract](reference/cli.md#workspace-noninteractive-behavior-and-exits).
 
 Continue with [Workspaces](guides/workspaces.md), [Consensus runs](guides/consensus-runs.md),
 or the complete interactive [Glasswater journey](guides/glasswater-scenario.md).
 Exact grammar and exits live in the [CLI reference](reference/cli.md).
+The exact output and provenance contract is in
+[Canonical writing artifacts](reference/writing-artifacts.md).

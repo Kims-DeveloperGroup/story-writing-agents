@@ -16,8 +16,11 @@ filesystem operation; **collision**—attempted reuse of reserved identity.
 | Language token | `[A-Za-z][A-Za-z0-9-]{0,15}`; case preserved. |
 | Provider thread ID | `[A-Za-z0-9][A-Za-z0-9_-]{0,127}`. |
 
-Conversation subjects have a separate Unicode contract. Manuscript names may
-use safe relative subdirectories, but not absolute paths, traversal, or symlinks.
+Conversation subjects have a separate Unicode contract. Required manuscript
+outputs use normalized `PART/PATH.md` without a leading `manuscript/`; they
+cannot be absolute, traverse with `..`, target a symlink, or use a root-level
+filename. The complete grammar is in
+[Canonical writing artifacts](../writing-artifacts.md).
 
 ## Public exception hierarchy
 

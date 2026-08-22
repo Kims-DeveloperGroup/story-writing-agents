@@ -1,9 +1,9 @@
 # Filesystem safety
 
-> **Availability:** containment and no-symlink checks, exclusive manuscript and
-> conversation creation, serialized transcript replacement, atomic per-file
-> default/metadata replacement, guarded interactive settings persistence, and
-> best-effort rollback are implemented.
+> **Availability:** generic workspace containment, descriptor-relative
+> writing-artifact publication and recovery, exclusive conversation creation,
+> serialized transcript replacement, atomic per-file default/metadata
+> replacement, and guarded interactive settings persistence are implemented.
 
 Key terms: **containment**—keeping paths beneath the workspace root; **symlink**—
 a filesystem alias the runtime rejects; **exclusive creation**—failure instead
@@ -26,10 +26,19 @@ Workspace and template identifiers have additional validation.
 CLI discovery chooses the nearest initialized ancestor and never initializes a
 directory. Use an explicit path for automation or nested workspaces.
 
-Orchestration core-document access is limited to the four fixed filenames.
-Manuscript names may use safe relative subdirectories beneath `manuscript/`.
-A direct client of generic `Workspace.write_text()` is trusted and can modify
-any safely contained relative file; containment is not authorization.
+Orchestration core-document access is limited to four exact filenames.
+Manuscript outputs require `PART/PATH.md` and publish beneath
+`manuscript/PART/`. A direct client of generic `Workspace.write_text()` is
+trusted and can modify any safely contained relative file; containment is not
+authorization, and generic writes do not create artifact provenance.
+
+Writing artifacts use a stronger domain adapter. It opens the workspace root
+and every directory by descriptor without following links, verifies root and
+component identity, requires each read target to be a unique regular file with
+one link, and rechecks the name and file after reading. Symlinks, hard links,
+nonregular files, root replacement, and concurrent change fail closed. Hosts
+without the required descriptor-relative, no-follow, listing, and advisory-lock
+primitives cannot construct the artifact repository.
 
 Conversation adapters and default helpers bind safe IDs to fixed paths. They
 check every component and require embedded IDs to match the owning path. This
@@ -62,23 +71,25 @@ path-mismatched record raises `WorkspaceFormatError`. Symlinks raise
 
 ## Mutation guarantees
 
-The runtime never silently overwrites a manuscript. A regular existing target
-raises `ManuscriptExistsError`; a symlink target or component is rejected with
-`WorkspaceSecurityError`. Complete core-update and manuscript preconditions are
-validated before content mutation.
+The runtime never silently overwrites a manuscript. Any existing target raises
+`ManuscriptExistsError`; unsafe path state raises `WorkspaceSecurityError`.
+Complete output grammar, core allowlist, strict-UTF-8 content, identity,
+authorship, old hashes, and new hashes are validated or recorded before target
+publication.
 
-Individual replacements are staged in the destination directory, flushed, and
-atomically replaced. New manuscripts and conversation identities use exclusive
-creation. Approved artifact commit writes allowlisted core documents first and
-the manuscript last. If a later step fails, the runtime makes a best-effort
-attempt to remove the new manuscript and restore each earlier core file;
-rollback failures are attached to the original exception.
+Writing-artifact publication is journaled, serialized by process and workspace
+artifact locks, and catalog-last. Target replacement compares the current bytes
+with the journal's expected prior hash, writes a temporary unique regular file,
+flushes it, atomically renames it, and verifies the new hash. After all targets,
+the repository publishes immutable commit history and then the current catalog.
+An interrupted valid journal rolls forward on the next artifact access; target
+divergence or invalid recovery state writes a persistent marker and blocks all
+later artifact access. This avoids partial eligibility but is not one
+transaction with logs, debate state, results, or provider state. See
+[Canonical writing artifacts](../reference/writing-artifacts.md).
 
-These are per-file guarantees, not a transactional filesystem or database.
-There is no single atomic boundary across core documents, manuscript, logs,
-state, and result. Rollback may fail, and abrupt process, operating-system,
-hardware, filesystem, or power failure may leave a partially durable
-cross-file operation. Inspect after infrastructure interruption.
+Conversation identities still use exclusive creation, and their metadata and
+transcripts use the separate atomic replacement guarantees below.
 
 Conversation rename and status changes atomically replace one complete metadata
 file. Failure before replacement preserves the old record. A failure reported

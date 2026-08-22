@@ -76,6 +76,15 @@ The exact 120-name export inventory is:
 `Runtime` is exactly an alias of `StoryRuntime`; `Session` is exactly an alias
 of `RuntimeSession`. They do not provide different behavior.
 
+Canonical artifact value contracts live in
+`story_writing_agents.writing_artifacts`, but are intentionally absent from the
+120-name package-root facade. The subpackage exposes immutable path, catalog,
+kind, and reference values; filesystem-backed `WritingArtifactRepository` is an
+internal runtime collaborator imported from
+`story_writing_agents.writing_artifacts.repository`. This module boundary does
+not provide standalone artifact commands or the not-yet-implemented file-
+reference UI. See [Canonical writing artifacts](writing-artifacts.md).
+
 ## Enum values
 
 | Enum | Exact values |
@@ -108,6 +117,7 @@ aliases. See [Backend and sessions](backend-and-sessions.md#lifecycle-value-cont
 - [Agent contracts](agent-contracts.md)
 - [Runtime API](runtime-api.md)
 - [Workspace API](workspace-api.md)
+- [Canonical writing artifacts](writing-artifacts.md)
 - [Conversation catalog](conversation-catalog.md)
 - [Conversation transcripts](conversation-transcripts.md)
 - [Conversation search and cited transcript pages](conversation-search.md)

@@ -26,12 +26,16 @@ absolute paths and hashes, not full text; its fingerprint covers the agent,
 backend, language, component identities, and hashes. Runtime bindings are
 cached by `(agent_id, fingerprint)`.
 
-| Agent | Bound core documents |
+| Agent | Bound core documents when current and provenance-backed |
 | --- | --- |
 | `lead_orchestrator` | all four |
 | `plot_architect` | global and part outlines |
 | `character_custodian` | character sheets |
 | `execution_specialist` | narrative rules |
+
+Absent, manually created, stale, and otherwise unprovenanced core documents are
+omitted. Exact eligibility is in
+[Canonical writing artifacts](writing-artifacts.md).
 
 ## Debate request
 

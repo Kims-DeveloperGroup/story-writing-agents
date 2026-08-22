@@ -689,9 +689,10 @@ class ConversationRuntimeSuccessTests(_ConversationRuntimeCase):
             reference.path.relative_to(workspace.root).name
             for reference in definition.context_document_files
         )
+        self.assertEqual(relative_contexts, ())
         self.assertEqual(
-            relative_contexts,
             AGENT_SPECS[CHARACTER_CUSTODIAN].context_documents,
+            ("character_sheets.md",),
         )
         self.assertTrue(set(relative_contexts).issubset(CORE_DOCUMENTS))
         self.assertTrue(
@@ -1911,7 +1912,13 @@ class ConversationRuntimeArtifactTests(_ConversationRuntimeCase):
         after = _tree_snapshot(workspace.root)
         self.assertEqual(
             _changed_paths(before, after),
-            {_transcript_path("session_a", success_metadata.conversation_id)},
+            {
+                _transcript_path("session_a", success_metadata.conversation_id),
+                (
+                    "agent_states/orchestrator_state/writing_artifacts/"
+                    ".artifacts.lock"
+                ),
+            },
         )
         self.assertEqual(
             catalog.get("session_a", success_metadata.conversation_id),

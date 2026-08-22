@@ -101,6 +101,7 @@ ACTION_FIELDS = (
     "text",
     "agent_id",
     "argument",
+    "output_path",
     "count",
     "start_sequence",
     "error",
@@ -111,6 +112,7 @@ FIELD_SAMPLES = {
     "text": "text",
     "agent_id": PLOT_ARCHITECT,
     "argument": "argument",
+    "output_path": "part-01/chapter.md",
     "count": 1,
     "start_sequence": 1,
     "error": "error",
@@ -129,9 +131,9 @@ ACTION_RULES = {
     ActionKind.COMPOSE: (set(), set()),
     ActionKind.SEND: (set(), set()),
     ActionKind.CANCEL: (set(), set()),
-    ActionKind.RUN: ({"text"}, set()),
-    ActionKind.RUN_FRESH: ({"text"}, {"text"}),
-    ActionKind.DRAFT_FILE: ({"argument"}, {"argument"}),
+    ActionKind.RUN: ({"text", "output_path"}, set()),
+    ActionKind.RUN_FRESH: ({"text", "output_path"}, {"text"}),
+    ActionKind.DRAFT_FILE: ({"argument", "output_path"}, {"argument"}),
     ActionKind.SEARCH: ({"text"}, {"text"}),
     ActionKind.TRANSCRIPT: (
         {"argument", "count", "start_sequence"},
@@ -477,11 +479,11 @@ class CommandRegistryTests(unittest.TestCase):
             ),
             CommandSpec(
                 "Consensus",
-                "/run [PROMPT] | /run --fresh PROMPT",
+                "/run [--fresh] [--output PART/PATH.md] [PROMPT]",
                 (),
                 True,
                 True,
-                "/run Outline chapter one",
+                "/run --output part-01/chapter-01.md Outline chapter one",
             ),
             CommandSpec(
                 "Consensus",
@@ -604,7 +606,7 @@ class CommandRegistryTests(unittest.TestCase):
         run_spec = next(spec for spec in COMMANDS if spec.syntax.startswith("/run"))
         self.assertEqual(
             run_spec.syntax,
-            "/run [PROMPT] | /run --fresh PROMPT",
+            "/run [--fresh] [--output PART/PATH.md] [PROMPT]",
         )
 
         cases = (
@@ -613,6 +615,14 @@ class CommandRegistryTests(unittest.TestCase):
             (
                 "/run --fresh PROMPT",
                 InteractiveAction(ActionKind.RUN_FRESH, text="PROMPT"),
+            ),
+            (
+                "/run --output part-01/chapter.md PROMPT",
+                InteractiveAction(
+                    ActionKind.RUN,
+                    text="PROMPT",
+                    output_path="part-01/chapter.md",
+                ),
             ),
         )
         for line, expected in cases:
@@ -868,9 +878,9 @@ class SuccessfulParsingTests(unittest.TestCase):
     def test_run_fresh_recognizes_the_first_non_delimiter_token(self) -> None:
         cases = (
             ("/run --fresh prompt", "prompt"),
-            ("/run  --fresh  prompt  ", " prompt  "),
-            ("/run\t\t--fresh\t\tprompt\t", "\tprompt\t"),
-            ("/run --fresh\t prompt", " prompt"),
+            ("/run  --fresh  prompt  ", "prompt  "),
+            ("/run\t\t--fresh\t\tprompt\t", "prompt\t"),
+            ("/run --fresh\t prompt", "prompt"),
         )
         for line, text in cases:
             with self.subTest(line=line):
@@ -1611,7 +1621,7 @@ class CommandCompletionProjectionTests(unittest.TestCase):
             ("/to ", 4, "target.agent", 4, 4, self.AGENTS),
             ("/agent ", 7, "target.agent", 7, 7, self.AGENTS),
             ("/persona ", 9, "persona.agent", 9, 9, self.AGENTS),
-            ("/run ", 5, "run.flag", 5, 5, ("--fresh",)),
+            ("/run ", 5, "run.flag", 5, 5, ("--fresh", "--output")),
             ("/conversation list ", 19, "conversation.list.flag", 19, 19, ("--all",)),
             ("/help ", 6, "help.command", 6, 6, self.HELP),
             ("/? ", 3, "help.command", 3, 3, self.HELP),
@@ -1668,7 +1678,14 @@ class CommandCompletionProjectionTests(unittest.TestCase):
                 5,
                 self.MENTIONS,
             ),
-            ("/run --fresh", (5, 8, 12), "run.flag", 5, 12, ("--fresh",)),
+            (
+                "/run --fresh",
+                (5, 8, 12),
+                "run.flag",
+                5,
+                12,
+                ("--fresh", "--output"),
+            ),
             (
                 "/conversation list --all",
                 (19, 22, 24),
@@ -1752,7 +1769,7 @@ class CommandCompletionProjectionTests(unittest.TestCase):
             ("/to pl", 6, "target.agent", self.AGENTS),
             ("/help ru", 8, "help.command", self.HELP),
             ("/inspect la", 11, "inspect.argument", ("last",)),
-            ("/run --f", 8, "run.flag", ("--fresh",)),
+            ("/run --f", 8, "run.flag", ("--fresh", "--output")),
         ):
             with self.subTest(buffer=buffer):
                 projected = project_command_completion(buffer, cursor)

@@ -3451,6 +3451,8 @@ class ConcreteBackendCliTests(unittest.TestCase):
                 "character_custodian=gemini",
                 "--draft",
                 "draft",
+                "--output",
+                "part-01/draft.md",
             ]
         )
         self.assertEqual(

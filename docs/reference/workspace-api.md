@@ -26,15 +26,14 @@ Workspace.read_persona(template_name: str) -> str
 Workspace.persona_path(template_name: str) -> pathlib.Path
 Workspace.persona_exists(template_name: str) -> bool
 Workspace.read_core_documents(filenames: tuple[str, ...]) -> dict[str, str]
-Workspace.read_manuscript(manuscript_name: str) -> str
-Workspace.write_manuscript(manuscript_name: str, content: str) -> pathlib.Path
 Workspace.load_session_overrides(session_id: str) -> dict[str, Any]
 Workspace.save_session_overrides(session_id: str, overrides: Mapping[str, Any]) -> pathlib.Path
 ```
 
 Initialization creates missing scaffold and normally preserves existing files.
 With `overwrite_prompts=True`, it replaces exactly the four canonical role
-prompts and preserves all other existing content.
+prompts and preserves all other existing content. Initialization creates the
+`core_documents/` directory but no core-document templates or manuscript.
 
 The workspace root is resolved once. Public path operations accept only safely
 contained workspace-relative paths with no absolute path, `..`, or symlink
@@ -42,9 +41,12 @@ component. Text is strict UTF-8. JSON readers reject malformed structures where
 the consuming contract performs schema validation.
 
 `write_text` and `write_json` atomically replace one file when overwrite is
-allowed. `write_manuscript` never overwrites. A direct caller of generic write
-methods is a trusted workspace client and may change any safely contained
-relative file; orchestration itself restricts core updates to four names.
+allowed. A direct caller of generic write methods is a trusted workspace client
+and may change any safely contained relative file. Those generic writes do not
+create writing-artifact provenance; manually changed core or manuscript bytes
+are ineligible until they match a valid publication. Orchestration restricts
+core updates to four names and delegates publication to the separate artifact
+repository.
 
 ## Orchestration persistence primitives
 
@@ -70,8 +72,6 @@ Workspace.save_debate_context(session_id: str, debate_id: str, *,
 Workspace.inspect_debate_context(session_id: str, debate_id: str) -> dict[str, Any] | None
 Workspace.inspect_debate(session_id: str, debate_id: str) -> dict[str, Any]
 Workspace.inspect_session(session_id: str) -> dict[str, Any]
-Workspace.commit_approved_artifacts(manuscript_name: str, candidate: str,
-    core_updates: Mapping[str, str]) -> tuple[str, tuple[str, ...]]
 ```
 
 These methods are public but are low-level orchestration primitives; normal
@@ -86,11 +86,11 @@ absent context sidecar. It does not change `inspect_debate()` or
 `inspect_session()`. The schema is owned by
 [Persistence](../design/persistence.md#debate-context-sidecar).
 
-Artifact commit validates the complete update map and manuscript target before
-content writes. It stages and atomically replaces allowlisted core documents in
-fixed order, then exclusively creates the exact approved manuscript. On later
-failure it attempts to remove the manuscript and restore earlier core files.
-That rollback is best effort, not a transaction spanning files, logs, or state.
+`Workspace` no longer exposes manuscript read/write or approved-artifact commit
+helpers. `StoryRuntime` owns the supported orchestration entry and uses the
+domain-specific, module-internal `WritingArtifactRepository` for provenance,
+create-only part manuscripts, catalog-last publication, and recovery. See
+[Canonical writing artifacts](writing-artifacts.md).
 
 ## Directive utility
 

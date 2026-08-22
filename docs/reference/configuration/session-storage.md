@@ -1,7 +1,8 @@
 # Session and workspace storage
 
-> **Availability:** V2 defaults, provider sessions, debates, conversations, and
-> manuscripts persist as strict UTF-8 plaintext workspace files.
+> **Availability:** V2 defaults, provider sessions, debates, conversations,
+> provenance-backed core documents, and part-scoped manuscripts persist as
+> strict UTF-8 plaintext workspace files.
 
 Key terms: **default**—a persisted command or conversation fallback;
 **manifest**—durable provider state; **access claim**—temporary process ownership.
@@ -13,7 +14,7 @@ Key terms: **default**—a persisted command or conversation fallback;
 ```text
 workspace/
 ├── config/{system_defaults.json,agent_configs.json,agents/,persona_templates/}
-├── core_documents/{global_outline.md,part_outlines.md,character_sheets.md,narrative_rules.md}
+├── core_documents/{global_outline.md,part_outlines.md,character_sheets.md,narrative_rules.md} [lazy agent publications]
 ├── agent_states/
 │   ├── orchestrator_state/
 │   │   ├── sessions/<session_id>.json                          [lazy overrides]
@@ -22,18 +23,29 @@ workspace/
 │   │   ├── provider_sessions/.access-claims.lock               [lazy guard]
 │   │   ├── provider_sessions/<session_id>.json                 [lazy manifest]
 │   │   ├── provider_sessions/<session_id>.access.json          [temporary claim]
-│   │   └── debates/<session_id>/<debate_id>.jsonl              [lazy history]
+│   │   ├── debates/<session_id>/<debate_id>.jsonl              [lazy history]
+│   │   └── writing_artifacts/
+│   │       ├── catalog.json                                    [lazy current provenance]
+│   │       ├── commits/<commit_id>.json                        [lazy immutable history]
+│   │       ├── transactions/<commit_id>.json                   [temporary recovery journal]
+│   │       ├── .artifacts.lock                                 [persistent advisory lock]
+│   │       └── recovery_blocked.json                           [exceptional fail-closed marker]
 │   └── {plot_architect,character_custodian,execution_specialist}_state/
 │       └── debates/<session_id>/<debate_id>.jsonl
 ├── discussion_logs/<session_id>/
 │   ├── <debate_id>.{state.json,jsonl,result.json}
 │   ├── <debate_id>.context.json                                [lazy debate context]
 │   └── interactive/conversations/<conversation_id>/{metadata.json,transcript.jsonl}
-└── manuscript/<safe-output-path>
+└── manuscript/<part-id>/<safe-relative-markdown-path>           [lazy create-only output]
 ```
 
-Initialization adds `.gitkeep` to empty directories. Normal init preserves
-files; prompt overwrite replaces only the four role prompts.
+Initialization adds `.gitkeep` to selected empty state and manuscript
+directories. Normal init preserves files; prompt overwrite replaces only the
+four role prompts. Initialization
+does not create any of the four core documents or a manuscript. Artifact state
+appears only when the artifact repository is accessed or a unanimous run
+publishes output; `recovery_blocked.json` appears only after recovery cannot be
+trusted. See [Canonical writing artifacts](../writing-artifacts.md).
 
 ## Default records
 

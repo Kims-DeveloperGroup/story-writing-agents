@@ -20,6 +20,7 @@ from unittest import mock
 import story_writing_agents
 from story_writing_agents.agents import (
     AGENT_SPECS,
+    EXECUTION_SPECIALIST,
     PLOT_ARCHITECT,
     ROSTER,
     SPECIALIST_IDS,
@@ -143,6 +144,8 @@ class ScriptedTerminalCallbacks:
         """Return the next scripted line after recording its exact prompt."""
 
         self.prompts.append(prompt)
+        if "Manuscript output" in prompt:
+            return f"part-01/controller-{len(self.prompts)}.md"
         if not self.reads:
             raise AssertionError(f"unexpected input request: {prompt}")
         value = self.reads.pop(0)
@@ -863,6 +866,7 @@ class ControllerContractTests(ControllerTestCase):
                 "run_inputs",
                 "session_lifecycle",
                 "workspace",
+                "writing_artifacts",
             },
             "interactive_controller._session_policy": {
                 "errors",
@@ -1132,7 +1136,7 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 33)
+        self.assertEqual(len(modules), 38)
 
 
 class ControllerDebateVisibilityTests(ControllerTestCase):
@@ -1168,9 +1172,34 @@ class ControllerDebateVisibilityTests(ControllerTestCase):
             draft_start,
             (
                 ("user",),
-                tuple(SPECIALIST_IDS),
-                "Accept supplied draft as revision 0; request specialist audits.",
+                (EXECUTION_SPECIALIST,),
+                "Ask Execution Specialist to author revision 0 from the supplied draft.",
             ),
+        )
+        drafted = (
+            (EXECUTION_SPECIALIST,),
+            tuple(SPECIALIST_IDS),
+            "Draft complete; request specialist audits.",
+        )
+        self.assertEqual(
+            controller._debate_handoff_for_phase(
+                self._event(
+                    DebateProgressPhase.DRAFTED,
+                    input_kind=InputKind.DRAFT,
+                    revision_id="r0",
+                )
+            ),
+            drafted,
+        )
+        self.assertEqual(
+            controller._debate_handoff_for_phase(
+                self._event(
+                    DebateProgressPhase.DRAFTED,
+                    input_kind=InputKind.PROMPT,
+                    revision_id="r0",
+                )
+            ),
+            drafted,
         )
         synthesized = controller._debate_handoff_for_phase(
             self._event(

@@ -12,7 +12,8 @@ AgentRouteSpec(agent_id: str, prompt_alias: str, aliases: tuple[str, ...],
 AGENT_ROUTES: tuple[AgentRouteSpec, ...]
 InteractiveAction(kind: ActionKind, *, text: str | None = None,
                   agent_id: str | None = None,
-                  argument: str | None = None, count: int | None = None,
+                  argument: str | None = None, output_path: str | None = None,
+                  count: int | None = None,
                   start_sequence: int | None = None,
                   error: str | None = None, suggestion: str | None = None)
 CommandSpec(group: str, syntax: str, aliases: tuple[str, ...],
@@ -61,7 +62,7 @@ only the four preferred prompt aliases—`lead`, `plot`, `character`, and
 | --- | --- |
 | Conversation | `/compose`; `/send`; `/cancel`; `/say TEXT` |
 | Agents | `/to NAME`; `/agents`; `/language LANG`; `/persona AGENT NAME`; `/reset`; `/settings` |
-| Consensus | `/run [PROMPT] \| /run --fresh PROMPT`; `/draft-file PATH` |
+| Consensus | `/run [--fresh] [--output PART/PATH.md] [PROMPT]`; `/draft-file PATH` |
 | Sessions | `/session list \| create NAME \| resume [NAME] \| pause` |
 | Conversations | `/conversation new [SUBJECT] \| list [--all] [QUERY] \| resume [ID] \| subject SUBJECT \| archive [ID]` |
 | Inspection | `/search QUERY`; `/transcript ID [COUNT] [--from SEQUENCE]`; `/inspect [DEBATE\|last]`; `/history [COUNT]`; `/status`; `/help [COMMAND]` |
@@ -72,9 +73,12 @@ possible provider/artifact use, not shell gates. Parsing performs no I/O.
 `/settings` is provider-free and has `may_write_artifacts=True` because an
 explicit Save may replace configuration documents.
 
-Registry membership is not main-prompt availability: the installed shell
-rejects standalone `/compose`, `/send`, and `/cancel`. Bare `/run` composition
-recognizes `/send` and `/cancel`; `/say /send` and `/say /cancel` are exact
+For `/run`, `--output` must be first, or immediately after `--fresh`. The parser
+preserves its `PART/PATH.md` token in `output_path`; the controller validates
+the artifact grammar and prompts when it is absent. Registry membership is not
+main-prompt availability: the installed shell rejects standalone `/compose`,
+`/send`, and `/cancel`. Run composition recognizes `/send` and `/cancel`;
+`/say /send` and `/say /cancel` are exact
 aliases.
 
 ## Line contract

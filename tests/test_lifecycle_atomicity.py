@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import unittest
-from pathlib import Path
 from unittest import mock
 
 from story_writing_agents import (
@@ -19,6 +18,7 @@ from story_writing_agents import (
     DebateProgressPhase,
     DebateResult,
     DebateStatus,
+    EXECUTION_SPECIALIST,
     Phase,
     ProgressObserverError,
     SPECIALIST_IDS,
@@ -79,6 +79,8 @@ class _GatedApprovalBackend(BindingBackendMixin):
 
     async def invoke(self, request):
         self.requests.append(request)
+        if request.phase is Phase.DRAFT:
+            return AgentReply.candidate(request.revision_id, request.user_payload)
         if request.phase is Phase.AUDIT:
             self.entered.set()
             await self.release.wait()
@@ -118,7 +120,7 @@ class DebateReservationTests(unittest.IsolatedAsyncioTestCase):
                     "atomic_session",
                     "atomic-candidate",
                     debate_id="atomic_debate",
-                    manuscript_name="atomic.md",
+                    output_path="part-01/atomic.md",
                 )
             except BaseException as exc:
                 outcome = exc
@@ -156,7 +158,7 @@ class DebateReservationTests(unittest.IsolatedAsyncioTestCase):
             ["atomic.md"],
         )
         self.assertEqual(
-            workspace.read_manuscript("atomic.md"),
+            workspace.read_text("manuscript/part-01/atomic.md"),
             "atomic-candidate",
         )
 
@@ -171,6 +173,7 @@ class DebateReservationTests(unittest.IsolatedAsyncioTestCase):
             [message["kind"] for message in inspected["messages"]],
             [
                 "draft",
+                "candidate",
                 "approval",
                 "approval",
                 "approval",
@@ -249,6 +252,7 @@ class DebateReservationTests(unittest.IsolatedAsyncioTestCase):
                     ).run_draft(
                         f"pre_{index}",
                         "candidate",
+                        output_path=f"part-01/pre-{index}.md",
                         debate_id=f"pre_debate_{index}",
                         conversation_context=request,  # type: ignore[arg-type]
                         progress_sink=events.append,
@@ -271,6 +275,7 @@ class DebateReservationTests(unittest.IsolatedAsyncioTestCase):
             await StoryRuntime(workspace, backend).run_draft(
                 "collision_session",
                 "candidate",
+                output_path="part-01/collision.md",
                 debate_id="collision_debate",
                 conversation_context=DebateContextRequest(
                     conversation_id="conversation_a",
@@ -314,6 +319,7 @@ class DebateReservationTests(unittest.IsolatedAsyncioTestCase):
             ).run_draft(
                 "format_context_session",
                 "candidate",
+                output_path="part-01/format-context.md",
                 debate_id="format_context_debate",
                 conversation_context=DebateContextRequest(
                     conversation_id="conversation_a",
@@ -426,6 +432,7 @@ class DebateReservationTests(unittest.IsolatedAsyncioTestCase):
                     ).run_draft(
                         f"async_lifecycle_{index}",
                         "candidate",
+                        output_path=f"part-01/async-lifecycle-{index}.md",
                         debate_id=f"async_lifecycle_debate_{index}",
                         conversation_context=DebateContextRequest(
                             conversation_id="conversation_a",
@@ -492,6 +499,7 @@ class DebateReservationTests(unittest.IsolatedAsyncioTestCase):
                     ).run_draft(
                         f"async_read_{index}",
                         "candidate",
+                        output_path=f"part-01/async-read-{index}.md",
                         debate_id=f"async_read_debate_{index}",
                         conversation_context=DebateContextRequest(
                             conversation_id="conversation_a",
@@ -542,6 +550,7 @@ class DebateReservationTests(unittest.IsolatedAsyncioTestCase):
             await StoryRuntime(workspace, backend).run_draft(
                 "sidecar_session",
                 "candidate",
+                output_path="part-01/sidecar.md",
                 debate_id="sidecar_debate",
                 conversation_context=DebateContextRequest(
                     conversation_id="conversation_a",
@@ -576,6 +585,8 @@ class _CancellableAuditBackend(BindingBackendMixin):
         self.blocker = asyncio.Event()
 
     async def invoke(self, request):
+        if request.phase is Phase.DRAFT:
+            return AgentReply.candidate(request.revision_id, request.user_payload)
         if request.phase is not Phase.AUDIT:
             raise AssertionError(f"unexpected phase: {request.phase}")
         self.started.add(request.agent_id)
@@ -603,9 +614,12 @@ class _BlockingAuditBindBackend(BindingBackendMixin):
         agent_id = definition.agent_id
         if agent_id not in SPECIALIST_IDS:
             raise AssertionError(f"unexpected binding: {agent_id}")
+        if agent_id == EXECUTION_SPECIALIST:
+            return await super().bind(definition)
         self.started.add(agent_id)
         self.active.add(agent_id)
-        if self.started == set(SPECIALIST_IDS):
+        expected = set(SPECIALIST_IDS).difference({EXECUTION_SPECIALIST})
+        if self.started == expected:
             self.all_started.set()
         try:
             await self.blocker.wait()
@@ -615,6 +629,13 @@ class _BlockingAuditBindBackend(BindingBackendMixin):
         finally:
             self.active.discard(agent_id)
         raise AssertionError("blocking bind unexpectedly released")
+
+    async def invoke(self, request):
+        if request.phase is Phase.DRAFT:
+            return AgentReply.candidate(request.revision_id, request.user_payload)
+        if request.phase is Phase.AUDIT:
+            return AgentReply.approval(request.revision_id)
+        raise AssertionError(f"unexpected phase: {request.phase}")
 
 
 class InterruptionTests(unittest.IsolatedAsyncioTestCase):
@@ -629,26 +650,33 @@ class InterruptionTests(unittest.IsolatedAsyncioTestCase):
                 "bind_cancel_session",
                 "candidate",
                 debate_id="bind_cancel_debate",
-                manuscript_name="must-not-exist.md",
+                output_path="part-01/must-not-exist.md",
             )
         )
         await asyncio.wait_for(backend.all_started.wait(), timeout=1)
         binding_tasks = tuple(runtime._binding_tasks.values())
-        self.assertEqual(len(binding_tasks), len(SPECIALIST_IDS))
+        expected_pending = set(SPECIALIST_IDS).difference(
+            {EXECUTION_SPECIALIST}
+        )
+        self.assertEqual(len(binding_tasks), len(expected_pending))
 
         runtime_task.cancel()
         with self.assertRaises(asyncio.CancelledError):
             await asyncio.wait_for(runtime_task, timeout=1)
         await asyncio.sleep(0)
 
-        self.assertEqual(backend.started, set(SPECIALIST_IDS))
-        self.assertEqual(backend.cancelled, set(SPECIALIST_IDS))
+        self.assertEqual(backend.started, expected_pending)
+        self.assertEqual(backend.cancelled, expected_pending)
         self.assertEqual(backend.active, set())
         self.assertTrue(all(task.done() for task in binding_tasks))
         self.assertTrue(all(task.cancelled() for task in binding_tasks))
         self.assertEqual(runtime._binding_tasks, {})
         self.assertEqual(runtime._binding_waiters, {})
-        self.assertEqual(runtime._bound_agents, {})
+        self.assertEqual(len(runtime._bound_agents), 1)
+        self.assertEqual(
+            {key[0] for key in runtime._bound_agents},
+            {EXECUTION_SPECIALIST},
+        )
 
     async def test_external_cancellation_is_terminal_durable_and_non_reusable(
         self,
@@ -661,7 +689,7 @@ class InterruptionTests(unittest.IsolatedAsyncioTestCase):
                 "cancel_session",
                 "cancel-candidate",
                 debate_id="cancel_debate",
-                manuscript_name="cancelled.md",
+                output_path="part-01/cancelled.md",
             )
         )
         await backend.all_started.wait()
@@ -702,7 +730,7 @@ class InterruptionTests(unittest.IsolatedAsyncioTestCase):
                 "cancel_session",
                 "retry-candidate",
                 debate_id="cancel_debate",
-                manuscript_name="retry.md",
+                output_path="part-01/retry.md",
             )
         self.assertEqual(retry_backend.requests, [])
 
@@ -710,10 +738,13 @@ class InterruptionTests(unittest.IsolatedAsyncioTestCase):
             "cancel_session",
             "new-candidate",
             debate_id="new_debate",
-            manuscript_name="new.md",
+            output_path="part-01/new.md",
         )
         self.assertEqual(new_result.status, DebateStatus.CONSENSUS)
-        self.assertEqual(workspace.read_manuscript("new.md"), "new-candidate")
+        self.assertEqual(
+            workspace.read_text("manuscript/part-01/new.md"),
+            "new-candidate",
+        )
 
     async def test_successful_interrupted_observer_preserves_cancellation(
         self,
@@ -725,6 +756,7 @@ class InterruptionTests(unittest.IsolatedAsyncioTestCase):
             StoryRuntime(workspace, backend).run_draft(
                 "observed_cancel",
                 "candidate",
+                output_path="part-01/observed-cancel.md",
                 debate_id="observed_cancel_debate",
                 progress_sink=events.append,
             )
@@ -781,6 +813,7 @@ class InterruptionTests(unittest.IsolatedAsyncioTestCase):
                     StoryRuntime(workspace, backend).run_draft(
                         f"cancel_sink_{label}",
                         "candidate",
+                        output_path=f"part-01/cancel-sink-{label}.md",
                         debate_id=f"cancel_sink_{label}_debate",
                         progress_sink=observe,  # type: ignore[arg-type]
                     )
@@ -813,37 +846,6 @@ class InterruptionTests(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertEqual(inspected["status"], "interrupted")
                 self.assertIsNone(inspected["result"])
-
-
-class MutationBoundaryTests(unittest.TestCase):
-    def test_failure_after_manuscript_link_uses_mutation_callback_for_rollback(
-        self,
-    ) -> None:
-        workspace = initialized_workspace(self)
-        original_unlink = Path.unlink
-        failed_once = False
-
-        def fail_first_temporary_unlink(
-            path: Path,
-            *args,
-            **kwargs,
-        ) -> None:
-            nonlocal failed_once
-            if path.suffix == ".tmp" and not failed_once:
-                failed_once = True
-                raise OSError("simulated failure after manuscript link")
-            original_unlink(path, *args, **kwargs)
-
-        with mock.patch.object(Path, "unlink", new=fail_first_temporary_unlink):
-            with self.assertRaisesRegex(OSError, "after manuscript link"):
-                workspace.commit_approved_artifacts(
-                    "link-boundary.md",
-                    "candidate",
-                    {},
-                )
-
-        self.assertTrue(failed_once)
-        self.assertFalse(workspace.path("manuscript/link-boundary.md").exists())
 
 
 if __name__ == "__main__":

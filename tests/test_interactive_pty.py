@@ -2457,6 +2457,8 @@ print(
 
         mark = process.output_mark()
         process.send_text("/run\n\n")
+        process.wait_for_text("Manuscript output", after=mark)
+        process.send_line("part-01/composed.md")
         process.wait_for_text("compose[run:1]> ", after=mark)
         preview_bytes = _durable_tree_without_access(self.workspace.root)
         preview_mark = process.output_mark()
@@ -2490,10 +2492,9 @@ print(
         process.wait_for_text("compose[run:5]> ", after=mark)
         process.send_line("/send")
         process.wait_for_text("core updates:", after=mark)
-        successful_output = process.wait_for_text(
-            "story[alpha:lead]> ",
-            after=mark,
-        )
+        process.wait_for_text("revision rounds:", after=mark)
+        process.wait_for_text("story[alpha:lead]> ", after=mark)
+        successful_output = process.text_after(mark)
         collapsed = "".join(successful_output.split())
         self.assertIn(
             "[compose]Sending4lines,33characterstoconsensus.",
@@ -2518,6 +2519,8 @@ print(
 
         mark = process.output_mark()
         process.send_text("/run\n\n")
+        process.wait_for_text("Manuscript output", after=mark)
+        process.send_line("part-01/discarded-by-command.md")
         process.wait_for_text("compose[run:1]> ", after=mark)
         process.send_line("discarded by slash command")
         process.wait_for_text("compose[run:2]> ", after=mark)
@@ -2535,6 +2538,8 @@ print(
 
         mark = process.output_mark()
         process.send_text("/run\n\n")
+        process.wait_for_text("Manuscript output", after=mark)
+        process.send_line("part-01/discarded-by-interrupt.md")
         process.wait_for_text("compose[run:1]> ", after=mark)
         process.send_line("discarded by interrupt")
         process.wait_for_text("compose[run:2]> ", after=mark)
@@ -2552,6 +2557,8 @@ print(
 
         mark = process.output_mark()
         process.send_text("/run\n\n")
+        process.wait_for_text("Manuscript output", after=mark)
+        process.send_line("part-01/discarded-by-eof.md")
         process.wait_for_text("compose[run:1]> ", after=mark)
         process.send_line("discarded by eof")
         process.wait_for_text("compose[run:2]> ", after=mark)
@@ -2856,7 +2863,9 @@ asyncio.run(main())
         process.wait_for_text("story[alpha:lead]> ")
 
         mark = process.output_mark()
-        process.send_line("/run seed consensus")
+        process.send_line(
+            "/run --output part-01/seed-consensus.md seed consensus"
+        )
         process.wait_for_text("Consensus [completed] [success]", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         mark = process.output_mark()
@@ -2876,7 +2885,9 @@ asyncio.run(main())
         self._set_provider_control(mode="block")
         records_before_cancel = len(self._provider_records())
         mark = process.output_mark()
-        process.send_line("/run cancel consensus")
+        process.send_line(
+            "/run --output part-01/cancel-consensus.md cancel consensus"
+        )
         process.wait_for_text("Started prompt consensus.", after=mark)
         process.wait_for_text("◐", after=mark)
 
@@ -2954,7 +2965,9 @@ asyncio.run(main())
 
         self._set_provider_control(mode="auto")
         mark = process.output_mark()
-        process.send_line("/run recovered consensus")
+        process.send_line(
+            "/run --output part-01/recovered-consensus.md recovered consensus"
+        )
         process.wait_for_text("Consensus [completed] [success]", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         manifest = self.workspace.read_json(manifest_path)
@@ -3160,15 +3173,26 @@ asyncio.run(main())
         )
         process.wait_for_text("story[alpha:lead]> ")
 
-        for command, code in (
-            ("/rn", "command_invalid"),
-            ("/to unknown_agent", "agent_invalid"),
-            ("/draft-file missing-draft.md", "draft_input_invalid"),
-            ("/transcript missing_conversation", "conversation_not_found"),
+        for command, code, output_path in (
+            ("/rn", "command_invalid", None),
+            ("/to unknown_agent", "agent_invalid", None),
+            (
+                "/draft-file missing-draft.md",
+                "draft_input_invalid",
+                "part-01/missing-draft.md",
+            ),
+            (
+                "/transcript missing_conversation",
+                "conversation_not_found",
+                None,
+            ),
         ):
             with self.subTest(code=code):
                 mark = process.output_mark()
                 process.send_line(command)
+                if output_path is not None:
+                    process.wait_for_text("Manuscript output", after=mark)
+                    process.send_line(output_path)
                 process.wait_for_text(f"[error {code}]", after=mark)
                 process.wait_for_text("[hint] ", after=mark)
                 process.wait_for_text("story[alpha:lead]> ", after=mark)

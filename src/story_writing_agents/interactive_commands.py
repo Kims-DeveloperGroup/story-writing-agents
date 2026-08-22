@@ -189,6 +189,7 @@ class InteractiveAction:
     text: str | None = None
     agent_id: str | None = None
     argument: str | None = None
+    output_path: str | None = None
     count: int | None = None
     start_sequence: int | None = None
     error: str | None = None
@@ -204,12 +205,20 @@ class InteractiveAction:
             "text": self.text,
             "agent_id": self.agent_id,
             "argument": self.argument,
+            "output_path": self.output_path,
             "count": self.count,
             "start_sequence": self.start_sequence,
             "error": self.error,
             "suggestion": self.suggestion,
         }
-        for field_name in ("text", "agent_id", "argument", "error", "suggestion"):
+        for field_name in (
+            "text",
+            "agent_id",
+            "argument",
+            "output_path",
+            "error",
+            "suggestion",
+        ):
             value = values[field_name]
             if value is not None and not isinstance(value, str):
                 raise TypeError(f"{field_name} must be a string or None")
@@ -269,10 +278,13 @@ _ACTION_FIELD_RULES: dict[
     ActionKind.COMPOSE: (_NO_FIELDS, _NO_FIELDS),
     ActionKind.SEND: (_NO_FIELDS, _NO_FIELDS),
     ActionKind.CANCEL: (_NO_FIELDS, _NO_FIELDS),
-    ActionKind.RUN: (frozenset({"text"}), _NO_FIELDS),
-    ActionKind.RUN_FRESH: (frozenset({"text"}), frozenset({"text"})),
+    ActionKind.RUN: (frozenset({"text", "output_path"}), _NO_FIELDS),
+    ActionKind.RUN_FRESH: (
+        frozenset({"text", "output_path"}),
+        frozenset({"text"}),
+    ),
     ActionKind.DRAFT_FILE: (
-        frozenset({"argument"}),
+        frozenset({"argument", "output_path"}),
         frozenset({"argument"}),
     ),
     ActionKind.SEARCH: (frozenset({"text"}), frozenset({"text"})),
@@ -413,11 +425,11 @@ COMMANDS: tuple[CommandSpec, ...] = (
     ),
     CommandSpec(
         "Consensus",
-        "/run [PROMPT] | /run --fresh PROMPT",
+        "/run [--fresh] [--output PART/PATH.md] [PROMPT]",
         (),
         True,
         True,
-        "/run Outline chapter one",
+        "/run --output part-01/chapter-01.md Outline chapter one",
     ),
     CommandSpec(
         "Consensus",
@@ -541,6 +553,7 @@ _CONVERSATION_COMMANDS: dict[str, str] = {
 
 _MAIN_COMPLETION_EXCLUSIONS = frozenset({"/compose", "/send", "/cancel"})
 _RUN_FRESH_FLAG = "--fresh"
+_RUN_OUTPUT_FLAG = "--output"
 _CONVERSATION_ALL_FLAG = "--all"
 _TRANSCRIPT_FROM_FLAG = "--from"
 _INSPECT_LAST_ARGUMENT = "last"
@@ -623,7 +636,16 @@ def project_command_completion(
             "run.flag",
             start,
             end,
-            (_RUN_FRESH_FLAG,),
+            (_RUN_FRESH_FLAG, _RUN_OUTPUT_FLAG),
+        )
+    if preceding == ("/run", _RUN_FRESH_FLAG):
+        if active_token and not active_token.startswith("-"):
+            return None
+        return _completion_context(
+            "run.fresh.flag",
+            start,
+            end,
+            (_RUN_OUTPUT_FLAG,),
         )
     if preceding == ("/conversation", "list"):
         if active_token and not active_token.startswith("-"):
@@ -902,7 +924,7 @@ def _parse_persona(tail: str | None) -> InteractiveAction:
 
 
 def _parse_run(tail: str | None) -> InteractiveAction:
-    """Parse bare, prompted, or ``--fresh`` run syntax without I/O.
+    """Parse bare, prompted, output-scoped, or fresh run syntax without I/O.
 
     Non-flag prompt text is preserved, while unknown leading flags or a blank
     fresh prompt return typed parse-error actions.
@@ -911,6 +933,21 @@ def _parse_run(tail: str | None) -> InteractiveAction:
     prompt = _optional_remainder(tail)
     if prompt is None:
         return InteractiveAction(ActionKind.RUN)
+
+    output_path: str | None = None
+    initial_fields = prompt.split(None, 2)
+    if initial_fields and initial_fields[0] == _RUN_OUTPUT_FLAG:
+        fields = initial_fields
+        if len(fields) < 2 or fields[1].startswith("--"):
+            return _parse_error("/run --output requires PART/PATH.md")
+        output_path = fields[1]
+        if len(fields) == 2:
+            return InteractiveAction(ActionKind.RUN, output_path=output_path)
+        return InteractiveAction(
+            ActionKind.RUN,
+            text=fields[2],
+            output_path=output_path,
+        )
 
     first_start = 0
     while first_start < len(prompt) and prompt[first_start] in " \t":
@@ -926,10 +963,23 @@ def _parse_run(tail: str | None) -> InteractiveAction:
     if first_end == len(prompt):
         return _parse_error("/run --fresh requires a prompt")
 
-    fresh_prompt = prompt[first_end + 1 :]
+    fresh_prompt = prompt[first_end:].lstrip(" \t")
+    fresh_fields = fresh_prompt.split(None, 2)
+    if fresh_fields and fresh_fields[0] == _RUN_OUTPUT_FLAG:
+        fields = fresh_fields
+        if len(fields) < 3 or fields[1].startswith("--"):
+            return _parse_error(
+                "/run --fresh --output requires PART/PATH.md and a prompt"
+            )
+        output_path = fields[1]
+        fresh_prompt = fields[2]
     if _is_ascii_blank(fresh_prompt):
         return _parse_error("/run --fresh requires a prompt")
-    return InteractiveAction(ActionKind.RUN_FRESH, text=fresh_prompt)
+    return InteractiveAction(
+        ActionKind.RUN_FRESH,
+        text=fresh_prompt,
+        output_path=output_path,
+    )
 
 
 def _parse_session(tail: str | None) -> InteractiveAction:

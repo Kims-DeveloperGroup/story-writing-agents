@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 from typing import Mapping
 
 from .agents import AGENT_SPECS
 from .config import ConfigurationSnapshot, ConfigManager
 from .conversations import ConversationContextWindow
+from .errors import WorkspaceFormatError
 from .models import (
     AgentDefinition,
     AgentRequest,
@@ -17,6 +19,7 @@ from .models import (
     PromptFileReference,
 )
 from .workspace import Workspace
+from .writing_artifacts.repository import WritingArtifactRepository
 
 
 class PromptAssembler:
@@ -26,10 +29,16 @@ class PromptAssembler:
         self,
         workspace: Workspace,
         *,
+        artifact_repository: WritingArtifactRepository | None = None,
         backend_overrides: Mapping[str, str] | None = None,
         configuration_snapshot: ConfigurationSnapshot | None = None,
     ) -> None:
         self.workspace = workspace
+        self.artifacts = (
+            artifact_repository
+            if artifact_repository is not None
+            else WritingArtifactRepository(workspace.root)
+        )
         self.config = ConfigManager(workspace)
         self.backend_overrides = dict(backend_overrides or {})
         if configuration_snapshot is not None and type(
@@ -70,17 +79,27 @@ class PromptAssembler:
                 self.workspace.root
             ).as_posix()
         )
-        context_document_files = tuple(
-            self._reference(f"core_documents/{filename}")
-            for filename in spec.context_documents
-        )
+        artifact_catalog = self.artifacts.catalog()
+        context_document_files: list[PromptFileReference] = []
+        for filename in spec.context_documents:
+            artifact_path = f"core_documents/{filename}"
+            entry = artifact_catalog.entries.get(artifact_path)
+            if entry is None:
+                continue
+            reference = self._reference(artifact_path)
+            if not hmac.compare_digest(reference.sha256, entry.sha256):
+                raise WorkspaceFormatError(
+                    "core document changed after artifact provenance verification"
+                )
+            context_document_files.append(reference)
+        context_document_file_tuple = tuple(context_document_files)
         fingerprint = self._fingerprint(
             agent_id=agent_id,
             backend=resolved.backend,
             language=resolved.language,
             system_prompt_file=system_prompt_file,
             persona_file=persona_file,
-            context_document_files=context_document_files,
+            context_document_files=context_document_file_tuple,
         )
         return AgentDefinition(
             agent_id=agent_id,
@@ -89,7 +108,7 @@ class PromptAssembler:
             system_prompt_file=system_prompt_file,
             persona_file=persona_file,
             language=resolved.language,
-            context_document_files=context_document_files,
+            context_document_files=context_document_file_tuple,
         )
 
     def build_request(

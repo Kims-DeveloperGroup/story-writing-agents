@@ -14,7 +14,7 @@
 | Interactive | `story` or `story chat [SESSION] [--workspace PATH] [--backend AGENT=BACKEND]... [--codex-model MODEL] [--codex-timeout SECONDS]` |
 | Initialize | `story init [WORKSPACE] [--overwrite-prompts]` |
 | Directive | `story directive [--workspace PATH] [--session ID] TEXT` |
-| Run | `story run [--workspace PATH] [--session ID] [--backend AGENT=BACKEND]... [--codex-model MODEL] [--codex-timeout SECONDS] [PROMPT | --prompt TEXT | --draft TEXT | --draft-file PATH] [--output PATH] [--debate-id ID] [--max-debate-rounds N]` |
+| Run | `story run [--workspace PATH] [--session ID] [--backend AGENT=BACKEND]... [--codex-model MODEL] [--codex-timeout SECONDS] [PROMPT | --prompt TEXT | --draft TEXT | --draft-file PATH] --output PART/PATH.md [--debate-id ID] [--max-debate-rounds N]` |
 | Inspect | `story inspect [--workspace PATH] [--session ID] [--debate ID]` |
 | Session create | `story session create SESSION [--workspace PATH]` |
 | Session reopen | `story session reopen [SESSION] [--workspace PATH]` |
@@ -310,11 +310,15 @@ reads can include archives. See [grammar](interactive-command-parser.md) and
 
 | Syntax | Context behavior |
 | --- | --- |
-| `/run PROMPT` or bare `/run` then `/send` | One bounded snapshot of current focus. |
-| `/run --fresh PROMPT` | Records focused identity; sends no transcript. |
-| `/draft-file PATH` | Strict-UTF-8 draft plus one focused snapshot. |
+| `/run --output PART/PATH.md PROMPT` or `/run --output PART/PATH.md` then `/send` | One bounded snapshot of current focus. |
+| `/run --fresh --output PART/PATH.md PROMPT` | Records focused identity; sends no transcript. |
+| `/draft-file PATH` | Strict-UTF-8 draft plus one focused snapshot; prompts for `PART/PATH.md`. |
 
-Runs revalidate scope and may write artifacts, never transcripts. Main Ctrl-C
+When interactive `--output` is omitted, the controller first prompts for a safe
+create-only `PART/PATH.md` beneath `manuscript/`; invalid input retries, cancel
+returns to the main prompt, and EOF exits normally. The noninteractive
+`--output` option is required by argument parsing. Runs revalidate scope and may
+write artifacts, never transcripts. Main Ctrl-C
 takes no action; composer Ctrl-C or `/cancel` discards its buffer; EOF cleans up.
 Missing cancellation proof is fatal. Exact terminal records are in the
 [terminal reference](interactive-terminal.md#exact-cancellation-records).
@@ -333,6 +337,9 @@ remain history-free.
 Except `init`/`smoke`, commands need the nearest initialized workspace. For
 `directive`, `run`, and `inspect`, explicit `--session` wins over the default.
 `story run` receives no conversation focus and does not reopen a paused session.
+It requires `--output PART/PATH.md`; there is no generated output name or
+root-level compatibility form. Exact path and provenance rules are in
+[Canonical writing artifacts](writing-artifacts.md).
 
 Exits: `0` success or normal shell exit; `1` failed smoke invariant; `2`
 usage/setup/fatal shell; `3` noninteractive deadlock; `4` noninteractive

@@ -23,8 +23,28 @@ readiness, with no resource or I/O. `AgentBackend` retains manifests, access
 claims, prompt staging, routes, processes, and threads;
 `BoundAgent` owns one binding. Codex is implemented; Gemini fails preflight.
 
-`Workspace` owns path-safe persistence, inspection, and atomic replacement. See
+`Workspace` owns generic path-safe persistence, inspection, and atomic
+replacement. The `writing_artifacts` package owns the stricter canonical-output
+grammar, provenance, publication, and recovery boundary; generic workspace
+writes never manufacture artifact provenance. See
 [Filesystem safety](../operations/filesystem-safety.md).
+
+## Writing-artifact ownership
+
+| Module | Responsibility |
+| --- | --- |
+| `writing_artifacts.__init__` | Side-effect-free facade for immutable artifact values; no repository construction or root-package export. |
+| `writing_artifacts.catalog` | Four exact core identities, part-scoped manuscript grammar, kinds, immutable provenance entries, and catalog schema. |
+| `writing_artifacts.references` | Immutable path/range value contracts and limits only; no parsing, picker, viewer, or provider integration yet. |
+| `writing_artifacts._storage` | Descriptor-relative, no-follow, unique-regular-file I/O, compare-before-publish replacement, root-identity verification, and artifact advisory locking. |
+| `writing_artifacts.repository` | Provenance validation, current catalog projection, strict reads, create-only manuscript commits, journal roll-forward, catalog-last visibility, and fail-closed recovery. |
+
+The package has no controller, terminal, backend, orchestrator, or generic
+`Workspace` dependency. `StoryRuntime` owns when a unanimous result may call
+the repository; prompt assembly consumes only its current eligible core paths.
+The interactive controller validates required manuscript output grammar but
+does not own storage or provenance. Exact user-visible states are in
+[Canonical writing artifacts](../reference/writing-artifacts.md).
 
 ## Fixed collaboration model
 

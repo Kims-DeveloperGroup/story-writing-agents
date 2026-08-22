@@ -23,21 +23,26 @@ await StoryRuntime.converse(session_id: str, conversation_id: str,
                             agent_id: str, text: str) -> ConversationResult
 await StoryRuntime.converse_with_retrieval(session_id, conversation_id, agent_id, text, *, memory_service, progress_sink=None) -> ConversationRetrievalResult
 await StoryRuntime.run_prompt(session_id: str, prompt: str, *,
-    manuscript_name: str | None = None,
+    output_path: str,
     max_debate_rounds: int | None = None, debate_id: str | None = None,
     conversation_context: DebateContextRequest | None = None,
     progress_sink: DebateProgressSink | None = None) -> DebateResult
 await StoryRuntime.run_draft(session_id: str, draft: str, *,
-    manuscript_name: str | None = None,
+    output_path: str,
     max_debate_rounds: int | None = None, debate_id: str | None = None,
     conversation_context: DebateContextRequest | None = None,
     progress_sink: DebateProgressSink | None = None) -> DebateResult
 ```
 
 `RuntimeSession` binds the session ID. Its `run_prompt()` and `run_draft()` share
-options, defaults, and result type; it also exposes
+the required `output_path`, other options, and result type; it also exposes
 both conversation methods, `inspect_debate()`, and `inspect_debate_context()`.
 `Runtime` and `Session` are exact aliases.
+
+`output_path` has no default and uses `PART/PATH.md` without a leading
+`manuscript/`. It is validated before session access, debate reservation, or
+provider work. Publication becomes `manuscript/PART/PATH.md` and refuses an
+existing target. See [Canonical writing artifacts](writing-artifacts.md).
 
 ## Debate context
 
@@ -111,7 +116,9 @@ ConversationRetrievalResult(*, session_id: str, conversation_id: str,
 
 Validation, observer errors, cancellation, and uncertain persistence raise.
 Expected debate failures normally return a terminal `failed`
-result. `DebateResult`, its JSON, context-omitted calls, and CLI exits are unchanged.
+result. `DebateResult`, its JSON, context-omitted calls, and CLI exits retain
+their documented shapes. The run signature has only the required canonical
+`output_path` contract.
 
 `converse()` remains one provider call with one user and reply/error pair.
 `converse_with_retrieval()` requires an exact same-session memory service and

@@ -55,6 +55,25 @@ Workspace failure returns safely only when the same session remains `ready` and
 `held_here`; failed proof clears scope and exits. `ProgressObserverError` marks
 preterminal debates `interrupted` when possible; later failures cannot rewrite results.
 
+## Writing-artifact recovery
+
+Every artifact catalog read, exact artifact read, or commit first checks for a
+pending publication journal under the artifact lock. A valid `prepared` or
+`artifacts_published` journal rolls forward: each target must still equal its
+recorded old or new hash, then commit history and the catalog are published
+last. Users may see an infrastructure failure followed by successful recovery
+on the next artifact access; inspect the associated debate because its result
+and lifecycle are outside the artifact transaction.
+
+If a journal is invalid or a target diverged, the repository writes
+`agent_states/orchestrator_state/writing_artifacts/recovery_blocked.json` and
+all later artifact access fails with `writing-artifact recovery is blocked`.
+Stop workspace processes, preserve a complete backup, and investigate the
+journal and target history. Do not delete or edit the lock, journal, catalog,
+commit records, or block marker to force recovery; no automatic repair command
+exists. Restore a verified backup when trustworthy reconstruction is not
+possible. See [Canonical writing artifacts](../reference/writing-artifacts.md).
+
 ## Controller cancellation proof
 
 One `asyncio.Runner` serves provider work. SIGINT recovery requires
@@ -88,10 +107,12 @@ active default can become focus.
 - Codex is the only provider; reserved `gemini` fails validation.
 - Provider calls have a timeout but no retry or rate-limit manager.
 - Owner history has no compaction, expiry, or retention policy.
-- Artifact rollback is best effort across files, not one transaction.
-- Advisory input is one line; bare `/run` owns multiline composition.
+- Artifact publication is recoverable and catalog-last, but does not share one
+  transaction with debate logs, lifecycle, results, or provider state.
+- Advisory input is one line; `/run --output PART/PATH.md` without prompt text
+  owns multiline composition. Bare `/run` first prompts for the output.
 - Conversation search is active-only; transcript reads retain no cursor.
-- Standalone compose/artifact commands are unavailable.
+- Standalone compose/artifact commands and artifact-reference UI are unavailable.
 
 See [Session lifecycle](../design/session-lifecycle.md),
 [Troubleshooting](../guides/troubleshooting.md), and

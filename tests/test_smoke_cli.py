@@ -1080,6 +1080,8 @@ class ExistingRunExitCodeTests(unittest.TestCase):
                             f"{outcome}_debate",
                             "--max-debate-rounds",
                             "0",
+                            "--output",
+                            f"part-01/{outcome}.md",
                         ]
                     )
 

@@ -70,8 +70,12 @@ when session and agent definition remain compatible.
 
 Core documents flow into agent definitions as durable project context. After
 unanimous approval, finalization may update only the allowed core documents and
-create the approved manuscript. The workspace owns safe persistence; the
-provider never writes these artifacts directly.
+create one approved manuscript at a required part-scoped path. Only current
+repository-provenanced core bytes flow into definitions; a manual edit remains
+on disk but becomes ineligible. The story agents author candidate and update
+text, while the runtime validates, journals, publishes, and catalogs it. The
+provider never writes workspace files directly. See
+[Canonical writing artifacts](reference/writing-artifacts.md).
 
 Continue with the [System overview](design/overview.md),
 [Consensus workflow](design/consensus-workflow.md), or

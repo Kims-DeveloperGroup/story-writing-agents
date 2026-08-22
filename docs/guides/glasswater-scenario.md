@@ -13,7 +13,9 @@ story smoke
 story
 ```
 
-Before entering the shell, edit the four `core_documents/` files: Mara finds a bell communicating through salt and vibration; Tovin understands harbor acoustics but avoids deep water; prose stays close-third past; and each chapter ends with one physical discovery.
+Initialization does not create core-document templates. Establish or modify
+story facts through the story agents after entering the shell; do not manually
+manufacture provenance.
 
 ## Create a session and focus subject A
 
@@ -22,8 +24,11 @@ Before entering the shell, edit the four `core_documents/` files: Mara finds a b
 /status
 /language EN
 /conversation new Bell continuity
+/run --output part-01/planning/story-baseline.md Establish these durable project facts in the appropriate core documents: Mara finds a bell communicating through salt and vibration; Tovin understands harbor acoustics but avoids deep water; prose stays close-third past; each chapter ends with one physical discovery. Produce the approved planning baseline.
 ```
 
+The run lets the execution specialist author the candidate and the lead publish
+any genuinely changed full-text core documents only after unanimous approval.
 `/status` distinguishes ready durable state, access held here, defaults, current attachment and focus, `lead` agent focus, provider readiness, and next action. Copy the handle as `A_HANDLE`, then route turns:
 
 ```text
@@ -78,11 +83,11 @@ picker, live on a capable terminal and numbered in ordinary-line fallback.
 ## Run consensus, quit, and restart
 
 ```text
-/run
+/run --output part-01/chapter-01.md
 Draft Chapter 1 from the core documents and the focused Bell continuity discussion.
 End with the first unexplained salt pattern.
 /send
-/run --fresh Draft a separate harbor opening without conversation history.
+/run --fresh --output part-01/alternates/harbor-opening.md Draft a separate harbor opening without conversation history.
 /inspect last
 /quit
 ```
@@ -108,7 +113,7 @@ story
 ```bash
 story run --workspace . --session glasswater_novel \
   --prompt 'Draft a council-vessel transition from core documents.' \
-  --debate-id glasswater_automation_01 --output glasswater/automation-01.md
+  --debate-id glasswater_automation_01 --output part-01/automation-01.md
 story session pause glasswater_novel --workspace .
 ```
 

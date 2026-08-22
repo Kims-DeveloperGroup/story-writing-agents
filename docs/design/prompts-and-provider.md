@@ -10,18 +10,22 @@ hash-derived identity; **binding**—the provider object for a definition;
 history**—state behind a provider thread ID.
 
 Stable prompt context and dynamic call data use different channels. A definition
-references the role prompt, persona, language, and allowlisted core documents by
-absolute path and SHA-256 digest. Verified file content is staged at binding;
-request JSON enters separately for each call.
+references the role prompt, persona, language, and current provenance-backed
+allowlisted core documents by absolute path and SHA-256 digest. Verified file
+content is staged at binding; request JSON enters separately for each call.
 
 ## Bound role context
 
-The plot architect receives global and part outlines; the character custodian
-gets character sheets; the execution specialist gets narrative rules; the lead
-gets all four core documents. Definitions include no unrelated workspace paths.
+When eligible, the plot architect receives global and part outlines; the
+character custodian gets character sheets; the execution specialist gets
+narrative rules; and the lead gets all four core documents. Absent, manual,
+stale, or unprovenanced core files are omitted rather than bound. Definitions
+include no unrelated workspace paths.
 
 The fingerprint covers agent, provider, language, component identities, and
-hashes. Editing one component changes the next definition and starts a fresh
+hashes. Editing a role prompt or persona changes the next definition. A manual
+core edit removes that document from eligibility; later agent republication can
+bind the new provenanced bytes. Either effective-context change starts a fresh
 provider thread for that agent. Identical bindings are cached for one runtime;
 provider conversation state is still partitioned by story session and agent.
 
@@ -74,4 +78,6 @@ change but do not encrypt or authorize content. Provider transcripts may be
 retained, and ending a story session keeps local thread references.
 
 Exact models are in [Agent contracts](../reference/agent-contracts.md); privacy
-implications are in [Privacy and provider exposure](../operations/privacy-and-provider.md).
+implications are in [Privacy and provider exposure](../operations/privacy-and-provider.md),
+and provenance states are in
+[Canonical writing artifacts](../reference/writing-artifacts.md).

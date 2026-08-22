@@ -17,7 +17,7 @@ flowchart TD
     R --> V
     V --> S[Save requested sidecar and initiation log]
     S --> ST[STARTED]
-    ST --> D[Create or accept r0]
+    ST --> D[Execution specialist authors r0]
     D --> DR[DRAFTED]
     DR --> AS[AUDIT_STARTED]
     AS --> AC[AUDIT_COMPLETED]
@@ -41,8 +41,10 @@ flowchart TD
 
 ## Before provider work
 
-The runtime validates the backend, nonempty input, IDs, round limit, optional
-context request, and observer, then prepares the story session. Included mode
+The runtime validates the backend, nonempty input, required
+`PART/PATH.md` output, IDs, round limit, optional context request, and observer,
+then prepares the story session. Output validation happens before session
+access, debate reservation, or provider work. Included mode
 performs exactly one synchronous context read and canonical validation before
 reservation. Fresh and context-omitted modes perform no context read. Any failure here
 emits nothing and leaves the debate ID unreserved.
@@ -55,9 +57,10 @@ terminal `failed`; it produces no result or progress.
 ## Trusted progress sequence
 
 `STARTED` follows the durable initiation entry and is the only event carrying
-context mode and counts. Prompt input then asks the execution specialist for
-`r0`; supplied-draft input skips that provider call. Both emit `DRAFTED` once
-`r0` exists.
+context mode and counts. Both prompt and supplied-draft input ask the execution
+specialist to author `r0`; for a supplied draft it preserves sound material and
+applies requested changes before any audit. `DRAFTED` follows the durable
+agent-authored candidate.
 
 Each revision emits `AUDIT_STARTED`, then the three specialists audit the same
 candidate and the same immutable context snapshot in parallel. Successful
@@ -71,7 +74,10 @@ There is no separate proposal event. Older approvals never count.
 
 At the round limit, conflicts produce a durable deadlock result and state before
 `DEADLOCK`. Unanimous approval allows lead finalization and artifact commit;
-the consensus result and state are then durable before
+finalization may return complete updates for only the four core documents. The
+artifact repository journal-publishes one create-only part manuscript and any
+core updates, then makes the provenance catalog visible last. The consensus
+result and state are then durable before
 `ARTIFACTS_COMMITTED`, followed by `CONSENSUS`. A handled provider, protocol,
 context-propagation, workspace, finalization, or artifact failure similarly
 saves its result and state before a typed `FAILED` event.
@@ -102,5 +108,7 @@ ordered cleanup. An interrupted debate cannot resume; `/run` creates a new ID.
 Exact shell records are in the [terminal reference](../reference/interactive-terminal.md#exact-cancellation-records).
 
 Exact types are in [Runtime API](../reference/runtime-api.md); artifact and
-sidecar storage are in [Persistence](persistence.md); operator response is in
+sidecar storage are in [Persistence](persistence.md), with the exact artifact
+contract in [Canonical writing artifacts](../reference/writing-artifacts.md);
+operator response is in
 [Recovery and limitations](../operations/recovery-and-limitations.md).

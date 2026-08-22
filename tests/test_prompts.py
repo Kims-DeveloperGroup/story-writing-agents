@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from dataclasses import fields
 from pathlib import Path
+from unittest import mock
 
 from story_writing_agents import (
     AGENT_SPECS,
@@ -22,10 +23,12 @@ from story_writing_agents import (
     PromptFileReference,
     ROSTER,
     StoryRuntime,
+    EXECUTION_SPECIALIST,
 )
 from story_writing_agents.errors import WorkspaceFormatError
 from story_writing_agents.config import ConfigManager
 from story_writing_agents.prompts import PromptAssembler
+from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
 
 from tests.helpers import ScriptedBackend, initialized_workspace
 
@@ -56,6 +59,23 @@ class PromptAssemblerTests(unittest.TestCase):
                 f"core_documents/{filename}",
                 f"CONTEXT_TOKEN::{filename}",
             )
+        WritingArtifactRepository(self.workspace.root).commit_consensus(
+            output_path="fixtures/prompt-context.md",
+            candidate="prompt fixture manuscript",
+            core_updates={
+                filename: f"CONTEXT_TOKEN::{filename}"
+                for filename in (
+                    "global_outline.md",
+                    "part_outlines.md",
+                    "character_sheets.md",
+                    "narrative_rules.md",
+                )
+            },
+            session_id="prompt_fixture",
+            debate_id="prompt_fixture",
+            revision_id="r0",
+            candidate_author_agent_id=EXECUTION_SPECIALIST,
+        )
         self.assembler = PromptAssembler(self.workspace)
 
     def test_request_contains_turn_payloads_but_no_system_prompt(self) -> None:
@@ -98,7 +118,12 @@ class PromptAssemblerTests(unittest.TestCase):
     ) -> None:
         self.assertEqual(
             tuple(inspect.signature(PromptAssembler).parameters),
-            ("workspace", "backend_overrides", "configuration_snapshot"),
+            (
+                "workspace",
+                "artifact_repository",
+                "backend_overrides",
+                "configuration_snapshot",
+            ),
         )
         snapshot = ConfigManager(self.workspace).load_configuration_snapshot()
         assembler = PromptAssembler(
@@ -505,20 +530,73 @@ class RuntimeBindingTests(unittest.IsolatedAsyncioTestCase):
         self.workspace.write_json("config/agent_configs.json", configs)
         await runtime._invoke(request)
 
-        self.assertEqual(len(backend.definitions), 6)
+        # The manually edited core file has no repository provenance and is
+        # therefore not part of the effective definition in this fixture.
+        self.assertEqual(len(backend.definitions), 5)
         self.assertEqual(
             len({item.fingerprint for item in backend.definitions}),
-            6,
+            5,
         )
         self.assertEqual(
             [item.language for item in backend.definitions],
-            ["EN", "EN", "EN", "EN", "FR", "FR"],
+            ["EN", "EN", "EN", "FR", "FR"],
         )
         self.assertTrue(
             all(
                 definition.agent_id == request.agent_id
                 for definition, request in backend.bound_invocations
             )
+        )
+
+    async def test_catalog_snapshot_race_fails_before_binding_or_provider(
+        self,
+    ) -> None:
+        repository = WritingArtifactRepository(self.workspace.root)
+        repository.commit_consensus(
+            output_path="part-01/prompt-race-fixture.md",
+            candidate="fixture manuscript",
+            core_updates={"global_outline.md": "verified outline"},
+            session_id="prompt_race_fixture",
+            debate_id="prompt_race_fixture",
+            revision_id="r0",
+            candidate_author_agent_id=EXECUTION_SPECIALIST,
+        )
+        backend = ScriptedBackend(
+            lambda request: AssertionError(
+                f"provider unexpectedly received {request.phase}"
+            )
+        )
+        runtime = StoryRuntime(self.workspace, backend)
+        request = self._audit_request(runtime)
+        catalog = runtime.prompts.artifacts.catalog
+
+        def snapshot_then_change():
+            snapshot = catalog()
+            self.workspace.write_text(
+                "core_documents/global_outline.md",
+                "changed after verified catalog snapshot",
+            )
+            return snapshot
+
+        with (
+            mock.patch.object(
+                runtime.prompts.artifacts,
+                "catalog",
+                side_effect=snapshot_then_change,
+            ),
+            self.assertRaisesRegex(
+                WorkspaceFormatError,
+                "changed after artifact provenance verification",
+            ),
+        ):
+            await runtime._invoke(request)
+
+        self.assertEqual(backend.definitions, [])
+        self.assertEqual(backend.bound_invocations, [])
+        self.assertEqual(backend.requests, [])
+        self.assertEqual(
+            self.workspace.read_text("core_documents/global_outline.md"),
+            "changed after verified catalog snapshot",
         )
 
     async def test_codex_defaults_do_not_change_definition_or_binding_identity(

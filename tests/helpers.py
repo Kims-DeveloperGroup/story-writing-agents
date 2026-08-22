@@ -29,11 +29,22 @@ RequestHandler: TypeAlias = Callable[[AgentRequest], HandlerResult]
 
 
 def initialized_workspace(test_case: TestCase) -> Workspace:
-    """Create an initialized temporary workspace owned by ``test_case``."""
+    """Create an initialized test workspace with explicit core inputs.
+
+    Workspace initialization deliberately does not author core writing
+    artifacts. Tests that exercise story-agent work supply those inputs as
+    fixtures instead of relying on legacy generated placeholders.
+    """
 
     temporary = tempfile.TemporaryDirectory()
     test_case.addCleanup(temporary.cleanup)
-    return Workspace(temporary.name).initialize()
+    workspace = Workspace(temporary.name).initialize()
+    for filename in CORE_DOCUMENTS:
+        workspace.write_text(
+            f"core_documents/{filename}",
+            f"test input for {filename}\n",
+        )
+    return workspace
 
 
 def core_snapshot(workspace: Workspace) -> dict[str, str]:
@@ -138,7 +149,24 @@ class ScriptedBackend(BindingBackendMixin):
 
     async def invoke(self, request: AgentRequest) -> AgentReply:
         self.requests.append(request)
-        result = self.handler(request)
+        try:
+            result = self.handler(request)
+        except AssertionError as exc:
+            neutral_unhandled_phase = str(exc) in {
+                str(request.phase),
+                f"unexpected phase: {request.phase}",
+            }
+            if request.phase is not Phase.DRAFT or not neutral_unhandled_phase:
+                raise
+            # Supplied drafts are no longer treated as already-authored
+            # candidates. Most workflow tests are concerned with a later
+            # phase, so their neutral backend still performs the required
+            # execution-specialist authoring hop without duplicating it in
+            # every handler.
+            result = AgentReply.candidate(
+                request.revision_id,
+                request.user_payload or "agent-authored candidate",
+            )
         if inspect.isawaitable(result):
             result = await result
         if isinstance(result, BaseException):
@@ -166,6 +194,8 @@ class ReverseCompletionApprovalBackend(BindingBackendMixin):
 
     async def invoke(self, request: AgentRequest) -> AgentReply:
         self.requests.append(request)
+        if request.phase is Phase.DRAFT:
+            return AgentReply.candidate(request.revision_id, request.user_payload)
         if request.phase is Phase.AUDIT:
             self.arrivals.append(request.agent_id)
             if len(self.arrivals) == len(SPECIALIST_IDS):
