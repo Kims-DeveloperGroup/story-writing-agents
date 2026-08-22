@@ -318,6 +318,180 @@ emit({"event": "result", "result": terminal})
 """
 
 
+_WINDOWS_FAKE_AGY_LAUNCHER = r"""import ctypes
+from ctypes import wintypes
+import os
+import subprocess
+import sys
+
+
+JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
+SYNCHRONIZE = 0x00100000
+WAIT_OBJECT_0 = 0
+WAIT_FAILED = 0xFFFFFFFF
+INFINITE = 0xFFFFFFFF
+
+
+class _IO_COUNTERS(ctypes.Structure):
+    _fields_ = [
+        ("ReadOperationCount", ctypes.c_ulonglong),
+        ("WriteOperationCount", ctypes.c_ulonglong),
+        ("OtherOperationCount", ctypes.c_ulonglong),
+        ("ReadTransferCount", ctypes.c_ulonglong),
+        ("WriteTransferCount", ctypes.c_ulonglong),
+        ("OtherTransferCount", ctypes.c_ulonglong),
+    ]
+
+
+class _JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+    _fields_ = [
+        ("PerProcessUserTimeLimit", ctypes.c_longlong),
+        ("PerJobUserTimeLimit", ctypes.c_longlong),
+        ("LimitFlags", wintypes.DWORD),
+        ("MinimumWorkingSetSize", ctypes.c_size_t),
+        ("MaximumWorkingSetSize", ctypes.c_size_t),
+        ("ActiveProcessLimit", wintypes.DWORD),
+        ("Affinity", ctypes.c_size_t),
+        ("PriorityClass", wintypes.DWORD),
+        ("SchedulingClass", wintypes.DWORD),
+    ]
+
+
+class _JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+    _fields_ = [
+        ("BasicLimitInformation", _JOBOBJECT_BASIC_LIMIT_INFORMATION),
+        ("IoInfo", _IO_COUNTERS),
+        ("ProcessMemoryLimit", ctypes.c_size_t),
+        ("JobMemoryLimit", ctypes.c_size_t),
+        ("PeakProcessMemoryUsed", ctypes.c_size_t),
+        ("PeakJobMemoryUsed", ctypes.c_size_t),
+    ]
+
+
+def main():
+    if os.name != "nt":
+        raise RuntimeError("the fake Antigravity job launcher requires Windows")
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateJobObjectW.argtypes = (ctypes.c_void_p, wintypes.LPCWSTR)
+    kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel32.SetInformationJobObject.argtypes = (
+        wintypes.HANDLE,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+    )
+    kernel32.SetInformationJobObject.restype = wintypes.BOOL
+    kernel32.AssignProcessToJobObject.argtypes = (
+        wintypes.HANDLE,
+        wintypes.HANDLE,
+    )
+    kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+    kernel32.OpenProcess.argtypes = (
+        wintypes.DWORD,
+        wintypes.BOOL,
+        wintypes.DWORD,
+    )
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.WaitForMultipleObjects.argtypes = (
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.HANDLE),
+        wintypes.BOOL,
+        wintypes.DWORD,
+    )
+    kernel32.WaitForMultipleObjects.restype = wintypes.DWORD
+    kernel32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+    kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    job_handle = None
+    parent_handle = None
+    child = None
+    child_handle = None
+    child_assigned = False
+    cleanup_error = None
+    result = 1
+    try:
+        job_handle = kernel32.CreateJobObjectW(None, None)
+        if not job_handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+        limits = _JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not kernel32.SetInformationJobObject(
+            job_handle,
+            JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+            ctypes.byref(limits),
+            ctypes.sizeof(limits),
+        ):
+            raise ctypes.WinError(ctypes.get_last_error())
+
+        parent_handle = kernel32.OpenProcess(SYNCHRONIZE, False, os.getppid())
+        if not parent_handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+
+        child = subprocess.Popen([sys.executable, sys.argv[1], *sys.argv[2:]])
+        child_handle = wintypes.HANDLE(int(child._handle))
+        if not kernel32.AssignProcessToJobObject(job_handle, child_handle):
+            if child.poll() is None:
+                raise ctypes.WinError(ctypes.get_last_error())
+            result = child.wait()
+        else:
+            child_assigned = True
+            handles = (wintypes.HANDLE * 2)(parent_handle, child_handle)
+            wait_result = kernel32.WaitForMultipleObjects(
+                len(handles),
+                handles,
+                False,
+                INFINITE,
+            )
+            if wait_result == WAIT_OBJECT_0:
+                result = 143
+            elif wait_result == WAIT_OBJECT_0 + 1:
+                result = child.wait()
+            elif wait_result == WAIT_FAILED:
+                raise ctypes.WinError(ctypes.get_last_error())
+            else:
+                raise RuntimeError(f"unexpected process wait result: {wait_result}")
+    finally:
+        job_closed = True
+        try:
+            if job_handle:
+                if not kernel32.CloseHandle(job_handle):
+                    job_closed = False
+                    cleanup_error = ctypes.WinError(ctypes.get_last_error())
+                job_handle = None
+        finally:
+            try:
+                if child is not None:
+                    try:
+                        if child.poll() is None:
+                            if not child_assigned or not job_closed:
+                                child.kill()
+                            elif kernel32.WaitForSingleObject(child_handle, 5000) != 0:
+                                child.kill()
+                            child.wait()
+                    finally:
+                        child._handle.Close()
+            finally:
+                if parent_handle:
+                    if (
+                        not kernel32.CloseHandle(parent_handle)
+                        and cleanup_error is None
+                    ):
+                        cleanup_error = ctypes.WinError(ctypes.get_last_error())
+                    parent_handle = None
+    if cleanup_error is not None:
+        raise cleanup_error
+    return result
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+"""
+
+
 def _empty_context() -> ConversationContextWindow:
     return ConversationContextWindow(
         events=(),
@@ -367,16 +541,23 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.fake_directory = Path(temporary.name)
-        fake_script = self.fake_directory / "fake-agy.py"
-        fake_script.write_text(_FAKE_AGY, encoding="utf-8")
+        self.fake_script = self.fake_directory / "fake-agy.py"
+        self.fake_script.write_text(_FAKE_AGY, encoding="utf-8")
+        self.windows_launcher = self.fake_directory / "fake-agy-windows-launcher.py"
         if os.name == "nt":
+            self.windows_launcher.write_text(
+                _WINDOWS_FAKE_AGY_LAUNCHER,
+                encoding="utf-8",
+            )
             self.executable = self.fake_directory / "fake-agy.cmd"
             self.executable.write_text(
-                f'@"{sys.executable}" "{fake_script}" %*\r\n',
+                f'@"{sys.executable}" "{self.windows_launcher}" '
+                f'"{self.fake_script}" %*\r\n'
+                "@exit /b %errorlevel%\r\n",
                 encoding="utf-8",
             )
         else:
-            self.executable = fake_script
+            self.executable = self.fake_script
             self.executable.chmod(0o755)
         self.log_path = self.fake_directory / "invocations.jsonl"
         self.environment = mock.patch.dict(
@@ -532,6 +713,31 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             self.invocations(),
             [{"record": 1}, {"record": "한"}],
         )
+
+    def test_windows_cleanup_launcher_is_syntax_valid_and_selected_portably(
+        self,
+    ) -> None:
+        launcher_code = compile(
+            _WINDOWS_FAKE_AGY_LAUNCHER,
+            "fake-agy-windows-launcher.py",
+            "exec",
+        )
+        launcher_namespace = {"__name__": "fake_agy_windows_launcher"}
+        exec(launcher_code, launcher_namespace)
+        self.assertIn("main", launcher_namespace)
+
+        if os.name == "nt":
+            command = self.executable.read_text(encoding="utf-8")
+            self.assertTrue(self.windows_launcher.is_file())
+            self.assertEqual(
+                self.windows_launcher.read_text(encoding="utf-8"),
+                _WINDOWS_FAKE_AGY_LAUNCHER,
+            )
+            self.assertIn(str(self.windows_launcher), command)
+            self.assertIn(str(self.fake_script), command)
+        else:
+            self.assertEqual(self.executable, self.fake_script)
+            self.assertFalse(self.windows_launcher.exists())
 
     async def test_all_phases_direct_and_retrieval_conversation_are_correlated(
         self,
