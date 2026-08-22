@@ -29,6 +29,7 @@ from story_writing_agents import (
 from story_writing_agents.antigravity_adapter import AntigravityAdapter
 from story_writing_agents.prompts import PromptAssembler
 from story_writing_agents.provider_adapter import (
+    ProviderBinding,
     ProviderInvocation,
     ProviderInvocationError,
     ProviderResult,
@@ -210,10 +211,21 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
     def directory_symlink(self, link: Path, target: Path) -> None:
         """Create one directory symlink or precisely skip unsupported hosts."""
 
+        self.file_symlink(link, target, target_is_directory=True)
+
+    def file_symlink(
+        self,
+        link: Path,
+        target: Path,
+        *,
+        target_is_directory: bool = False,
+    ) -> None:
+        """Create one symlink or precisely skip unsupported hosts."""
+
         try:
-            link.symlink_to(target, target_is_directory=True)
+            link.symlink_to(target, target_is_directory=target_is_directory)
         except NotImplementedError as exc:
-            self.skipTest(f"directory symlinks are unsupported: {exc}")
+            self.skipTest(f"symlinks are unsupported: {exc}")
         except OSError as exc:
             unsupported = {
                 errno.EACCES,
@@ -223,8 +235,108 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                 getattr(errno, "EOPNOTSUPP", errno.EINVAL),
             }
             if exc.errno in unsupported:
-                self.skipTest(f"directory symlinks are unsupported: {exc}")
+                self.skipTest(f"symlinks are unsupported: {exc}")
             raise
+
+    def hard_link(self, source: Path, link: Path) -> None:
+        """Create one hard link or precisely skip unsupported filesystems."""
+
+        try:
+            os.link(source, link)
+        except (AttributeError, NotImplementedError) as exc:
+            self.skipTest(f"hard links are unsupported: {exc}")
+        except OSError as exc:
+            unsupported = {
+                errno.EACCES,
+                errno.EPERM,
+                errno.EXDEV,
+                errno.ENOSYS,
+                getattr(errno, "ENOTSUP", errno.EINVAL),
+                getattr(errno, "EOPNOTSUPP", errno.EINVAL),
+            }
+            if exc.errno in unsupported:
+                self.skipTest(f"hard links are unsupported: {exc}")
+            raise
+
+    def fifo(self, path: Path) -> None:
+        """Create one FIFO or precisely skip unsupported hosts/filesystems."""
+
+        if not hasattr(os, "mkfifo"):
+            self.skipTest("FIFOs are unsupported")
+        try:
+            os.mkfifo(path, 0o600)
+        except (AttributeError, NotImplementedError) as exc:
+            self.skipTest(f"FIFOs are unsupported: {exc}")
+        except OSError as exc:
+            unsupported = {
+                errno.EACCES,
+                errno.EPERM,
+                errno.ENOSYS,
+                getattr(errno, "ENOTSUP", errno.EINVAL),
+                getattr(errno, "EOPNOTSUPP", errno.EINVAL),
+            }
+            if exc.errno in unsupported:
+                self.skipTest(f"FIFOs are unsupported: {exc}")
+            raise
+
+    def runtime_root(
+        self,
+        adapter: AntigravityAdapter,
+        session_id: str,
+    ) -> Path:
+        """Return the isolated runtime root for this test definition."""
+
+        return (
+            adapter.state_root
+            / "sessions"
+            / session_id
+            / self.definition.agent_id
+            / self.definition.fingerprint
+        )
+
+    def assert_rules_installation(self, target: Path, expected: bytes) -> None:
+        """Assert one exact private rules file and no temporary residue."""
+
+        self.assertEqual(target.read_bytes(), expected)
+        if os.name == "posix" and hasattr(os, "fchmod"):
+            self.assertEqual(_mode(target), 0o600)
+        self.assertEqual(
+            [
+                entry.name
+                for entry in target.parent.iterdir()
+                if entry.name.startswith(f".{target.name}.")
+            ],
+            [],
+        )
+
+    async def assert_workspace_preparation_failure(
+        self,
+        adapter: AntigravityAdapter,
+        binding: ProviderBinding,
+        session_id: str,
+    ) -> ProviderInvocationError:
+        """Assert one fixed private prelaunch workspace failure."""
+
+        forbidden_process = mock.AsyncMock(
+            side_effect=AssertionError("provider process invoked")
+        )
+        with (
+            mock.patch(
+                "story_writing_agents.antigravity_adapter.run_process",
+                forbidden_process,
+            ),
+            self.assertRaises(ProviderInvocationError) as caught,
+        ):
+            await adapter.invoke(binding, self.provider_invocation(session_id))
+        error = caught.exception
+        self.assertEqual(
+            str(error),
+            "Antigravity provider workspace could not be prepared",
+        )
+        self.assertIs(error.taint_existing_thread, False)
+        self.assertNotIn("PRIVATE", str(error))
+        forbidden_process.assert_not_awaited()
+        return error
 
     def test_binding_is_stable_isolated_and_uses_private_rules(self) -> None:
         state_root = self.workspace.path("binding-state")
@@ -248,6 +360,10 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first.staging_directory, expected_directory)
         self.assertEqual(
             (second.staging_directory / "AGENTS.md").read_bytes(),
+            rules_before,
+        )
+        self.assert_rules_installation(
+            second.staging_directory / "AGENTS.md",
             rules_before,
         )
         self.assertEqual(
@@ -663,6 +779,880 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                     )
                 forbidden_process.assert_not_awaited()
 
+    async def test_rules_target_symlinks_preserve_outside_and_never_launch(
+        self,
+    ) -> None:
+        for stage in ("binding", "workspace"):
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory(
+                dir=self.workspace.root.parent
+            ) as temporary:
+                adapter = self.adapter(f"rules-{stage}-link-state")
+                outside = Path(temporary) / "outside"
+                outside.mkdir()
+                outside.chmod(0o751)
+                outside_rules = outside / "AGENTS.md"
+                outside_rules.write_bytes(b"PRIVATE_OUTSIDE_RULES")
+                outside_rules.chmod(0o640)
+                (outside / "sentinel.bin").write_bytes(b"PRIVATE_OUTSIDE_BYTES")
+                outside_before = _directory_snapshot(outside)
+                forbidden_process = mock.AsyncMock(
+                    side_effect=AssertionError("provider process invoked")
+                )
+
+                if stage == "binding":
+                    target = (
+                        adapter.state_root
+                        / "definitions"
+                        / self.definition.agent_id
+                        / self.definition.fingerprint
+                        / "AGENTS.md"
+                    )
+                    target.parent.mkdir(parents=True)
+                    self.file_symlink(target, outside_rules)
+                    with (
+                        mock.patch(
+                            "story_writing_agents.antigravity_adapter.run_process",
+                            forbidden_process,
+                        ),
+                        self.assertRaisesRegex(
+                            OSError,
+                            "Antigravity rules target is unsafe",
+                        ),
+                    ):
+                        adapter.bind(self.definition)
+                else:
+                    binding = adapter.bind(self.definition)
+                    session_id = "rules-workspace-link"
+                    target = (
+                        self.runtime_root(adapter, session_id)
+                        / "workspace"
+                        / "AGENTS.md"
+                    )
+                    target.parent.mkdir(parents=True)
+                    self.file_symlink(target, outside_rules)
+                    error = await self.assert_workspace_preparation_failure(
+                        adapter,
+                        binding,
+                        session_id,
+                    )
+                    self.assertEqual(
+                        str(error.__cause__),
+                        "Antigravity rules target is unsafe",
+                    )
+
+                self.assertTrue(target.is_symlink())
+                self.assertEqual(target.readlink(), outside_rules)
+                self.assertEqual(_directory_snapshot(outside), outside_before)
+                self.assertEqual(
+                    [entry.name for entry in target.parent.iterdir()],
+                    ["AGENTS.md"],
+                )
+                forbidden_process.assert_not_awaited()
+
+    async def test_nonregular_and_multiply_linked_rules_are_rejected(
+        self,
+    ) -> None:
+        for kind in ("directory", "fifo", "hard link"):
+            with self.subTest(destination=kind), tempfile.TemporaryDirectory(
+                dir=self.workspace.root.parent
+            ) as temporary:
+                label = kind.replace(" ", "-")
+                adapter = self.adapter(f"unsafe-target-{label}-state")
+                binding = adapter.bind(self.definition)
+                session_id = f"unsafe-target-{label}"
+                target = (
+                    self.runtime_root(adapter, session_id)
+                    / "workspace"
+                    / "AGENTS.md"
+                )
+                target.parent.mkdir(parents=True)
+                outside = Path(temporary) / "outside"
+                outside.mkdir()
+                outside_file = outside / "rules.bin"
+                outside_file.write_bytes(b"PRIVATE_OUTSIDE_RULES")
+                if kind == "directory":
+                    target.mkdir()
+                    (target / "sentinel.bin").write_bytes(
+                        b"PRIVATE_DIRECTORY_BYTES"
+                    )
+                    before = _directory_snapshot(target)
+                elif kind == "fifo":
+                    self.fifo(target)
+                    before = os.lstat(target).st_mode
+                else:
+                    self.hard_link(outside_file, target)
+                    before = _directory_snapshot(outside)
+
+                error = await self.assert_workspace_preparation_failure(
+                    adapter,
+                    binding,
+                    session_id,
+                )
+
+                self.assertEqual(
+                    str(error.__cause__),
+                    "Antigravity rules target is unsafe",
+                )
+                if kind == "directory":
+                    self.assertEqual(_directory_snapshot(target), before)
+                elif kind == "fifo":
+                    self.assertTrue(stat.S_ISFIFO(os.lstat(target).st_mode))
+                    self.assertEqual(os.lstat(target).st_mode, before)
+                else:
+                    self.assertEqual(_directory_snapshot(outside), before)
+                    self.assertEqual(target.read_bytes(), b"PRIVATE_OUTSIDE_RULES")
+                    self.assertEqual(os.lstat(target).st_nlink, 2)
+                self.assertEqual(
+                    [
+                        entry.name
+                        for entry in target.parent.iterdir()
+                        if entry.name.startswith(".AGENTS.md.")
+                    ],
+                    [],
+                )
+
+        for kind in ("symlink", "directory", "fifo", "hard link"):
+            with self.subTest(source=kind), tempfile.TemporaryDirectory(
+                dir=self.workspace.root.parent
+            ) as temporary:
+                label = kind.replace(" ", "-")
+                adapter = self.adapter(f"unsafe-source-{label}-state")
+                binding = adapter.bind(self.definition)
+                source = binding.staging_directory / "AGENTS.md"
+                canonical = source.read_bytes()
+                session_id = f"unsafe-source-{label}"
+                target = (
+                    self.runtime_root(adapter, session_id)
+                    / "workspace"
+                    / "AGENTS.md"
+                )
+                target.parent.mkdir(parents=True)
+                target.write_bytes(b"PRIVATE_RETAINED_TARGET")
+                outside = Path(temporary) / "outside"
+                outside.mkdir()
+                outside_file = outside / "rules.bin"
+                outside_file.write_bytes(b"PRIVATE_OUTSIDE_RULES")
+
+                if kind == "symlink":
+                    source.unlink()
+                    self.file_symlink(source, outside_file)
+                    before = _directory_snapshot(outside)
+                elif kind == "directory":
+                    source.unlink()
+                    source.mkdir()
+                    (source / "sentinel.bin").write_bytes(
+                        b"PRIVATE_DIRECTORY_BYTES"
+                    )
+                    before = _directory_snapshot(source)
+                elif kind == "fifo":
+                    source.unlink()
+                    self.fifo(source)
+                    before = os.lstat(source).st_mode
+                else:
+                    hard_link = outside / "staged-rules-link.bin"
+                    self.hard_link(source, hard_link)
+                    before = _directory_snapshot(outside)
+
+                error = await self.assert_workspace_preparation_failure(
+                    adapter,
+                    binding,
+                    session_id,
+                )
+
+                self.assertEqual(target.read_bytes(), b"PRIVATE_RETAINED_TARGET")
+                self.assertEqual(
+                    [entry.name for entry in target.parent.iterdir()],
+                    ["AGENTS.md"],
+                )
+                self.assertIsInstance(error.__cause__, OSError)
+                if kind == "symlink":
+                    self.assertTrue(source.is_symlink())
+                    self.assertEqual(_directory_snapshot(outside), before)
+                elif kind == "directory":
+                    self.assertEqual(_directory_snapshot(source), before)
+                elif kind == "fifo":
+                    self.assertTrue(stat.S_ISFIFO(os.lstat(source).st_mode))
+                    self.assertEqual(os.lstat(source).st_mode, before)
+                else:
+                    self.assertEqual(source.read_bytes(), canonical)
+                    self.assertEqual(os.lstat(source).st_nlink, 2)
+                    self.assertEqual(_directory_snapshot(outside), before)
+
+    async def test_rules_identity_mismatches_and_leaf_swap_are_contained(
+        self,
+    ) -> None:
+        for mismatch in ("source path", "temporary descriptor"):
+            with self.subTest(mismatch=mismatch):
+                label = mismatch.replace(" ", "-")
+                adapter = self.adapter(f"rules-{label}-state")
+                binding = adapter.bind(self.definition)
+                source = binding.staging_directory / "AGENTS.md"
+                canonical = source.read_bytes()
+                session_id = f"rules-{label}"
+                target = (
+                    self.runtime_root(adapter, session_id)
+                    / "workspace"
+                    / "AGENTS.md"
+                )
+                target.parent.mkdir(parents=True)
+                target.write_bytes(b"PRIVATE_RETAINED_TARGET")
+
+                if mismatch == "source path":
+                    real_identity = AntigravityAdapter._rules_path_identity
+
+                    def mismatched_path_identity(
+                        path: Path,
+                        *,
+                        diagnostic: str,
+                    ) -> tuple[int, int]:
+                        identity = real_identity(path, diagnostic=diagnostic)
+                        if path == source:
+                            return identity[0], identity[1] + 1
+                        return identity
+
+                    contexts = (
+                        mock.patch.object(
+                            AntigravityAdapter,
+                            "_rules_path_identity",
+                            side_effect=mismatched_path_identity,
+                        ),
+                    )
+                    expected_cause = "Antigravity rules source is unsafe"
+                else:
+                    real_identity = AntigravityAdapter._rules_descriptor_identity
+                    identity_calls = 0
+
+                    def mismatched_descriptor_identity(
+                        descriptor: int,
+                        *,
+                        diagnostic: str,
+                    ) -> tuple[int, int]:
+                        nonlocal identity_calls
+                        identity_calls += 1
+                        identity = real_identity(
+                            descriptor,
+                            diagnostic=diagnostic,
+                        )
+                        if identity_calls == 2:
+                            return identity[0], identity[1] + 1
+                        return identity
+
+                    contexts = (
+                        mock.patch.object(
+                            AntigravityAdapter,
+                            "_read_rules_source",
+                            return_value=canonical,
+                        ),
+                        mock.patch.object(
+                            AntigravityAdapter,
+                            "_rules_descriptor_identity",
+                            side_effect=mismatched_descriptor_identity,
+                        ),
+                    )
+                    expected_cause = (
+                        "Antigravity rules temporary file is unsafe"
+                    )
+
+                with contextlib.ExitStack() as stack:
+                    for context in contexts:
+                        stack.enter_context(context)
+                    error = await self.assert_workspace_preparation_failure(
+                        adapter,
+                        binding,
+                        session_id,
+                    )
+
+                self.assertEqual(str(error.__cause__), expected_cause)
+                self.assertEqual(target.read_bytes(), b"PRIVATE_RETAINED_TARGET")
+                self.assertEqual(
+                    [entry.name for entry in target.parent.iterdir()],
+                    ["AGENTS.md"],
+                )
+
+        with tempfile.TemporaryDirectory(
+            dir=self.workspace.root.parent
+        ) as temporary:
+            adapter = self.adapter("rules-final-leaf-swap-state")
+            binding = adapter.bind(self.definition)
+            canonical = (binding.staging_directory / "AGENTS.md").read_bytes()
+            session_id = "rules-final-leaf-swap"
+            target = (
+                self.runtime_root(adapter, session_id)
+                / "workspace"
+                / "AGENTS.md"
+            )
+            target.parent.mkdir(parents=True)
+            target.write_bytes(b"PRIVATE_RETAINED_TARGET")
+            outside = Path(temporary) / "outside"
+            outside.mkdir()
+            outside_rules = outside / "AGENTS.md"
+            outside_rules.write_bytes(b"PRIVATE_OUTSIDE_RULES")
+            outside_rules.chmod(0o640)
+            outside_before = _directory_snapshot(outside)
+            probe = target.parent / "symlink-probe"
+            self.file_symlink(probe, outside_rules)
+            probe.unlink()
+            real_replace = os.replace
+            swaps: list[tuple[Path, Path]] = []
+
+            def swap_final_leaf(source: Path, destination: Path) -> None:
+                source = Path(source)
+                destination = Path(destination)
+                if destination == target:
+                    target.unlink()
+                    target.symlink_to(outside_rules)
+                    swaps.append((source, destination))
+                real_replace(source, destination)
+
+            process = mock.AsyncMock(
+                return_value=ProcessResult(
+                    stdout=_stream("rules-leaf-swap", response="safe response"),
+                    stderr=b"",
+                    returncode=0,
+                )
+            )
+            with (
+                mock.patch(
+                    "story_writing_agents.antigravity_adapter.os.replace",
+                    side_effect=swap_final_leaf,
+                ),
+                mock.patch(
+                    "story_writing_agents.antigravity_adapter.run_process",
+                    process,
+                ),
+            ):
+                result = await adapter.invoke(
+                    binding,
+                    self.provider_invocation(session_id),
+                )
+
+            self.assertEqual(
+                result,
+                ProviderResult("rules-leaf-swap", "safe response"),
+            )
+            self.assertEqual(len(swaps), 1)
+            self.assertFalse(target.is_symlink())
+            self.assert_rules_installation(target, canonical)
+            self.assertEqual(_directory_snapshot(outside), outside_before)
+            request = process.await_args.args[0]
+            self.assertEqual(request.cwd, target.parent)
+
+        for installed_kind in ("symlink", "foreign hard link"):
+            with self.subTest(installed=installed_kind), tempfile.TemporaryDirectory(
+                dir=self.workspace.root.parent
+            ) as temporary:
+                label = installed_kind.replace(" ", "-")
+                adapter = self.adapter(f"rules-installed-{label}-state")
+                binding = adapter.bind(self.definition)
+                session_id = f"rules-installed-{label}"
+                target = (
+                    self.runtime_root(adapter, session_id)
+                    / "workspace"
+                    / "AGENTS.md"
+                )
+                target.parent.mkdir(parents=True)
+                target.write_bytes(b"PRIVATE_RETAINED_TARGET")
+                retained = target.parent / "retained.bin"
+                retained.write_bytes(b"PRIVATE_RETAINED_ENTRY")
+                outside = Path(temporary) / "outside"
+                outside.mkdir()
+                outside_rules = outside / "AGENTS.md"
+                outside_rules.write_bytes(b"PRIVATE_OUTSIDE_RULES")
+                outside_rules.chmod(0o640)
+                probe = outside / "link-probe"
+                if installed_kind == "symlink":
+                    self.file_symlink(probe, outside_rules)
+                else:
+                    self.hard_link(outside_rules, probe)
+                probe.unlink()
+                outside_before = _directory_snapshot(outside)
+                outside_identity = (
+                    os.lstat(outside_rules).st_dev,
+                    os.lstat(outside_rules).st_ino,
+                    _mode(outside_rules),
+                    outside_rules.read_bytes(),
+                )
+                real_replace = os.replace
+                replacements: list[tuple[Path, Path]] = []
+
+                def install_suspicious_leaf(
+                    source: Path,
+                    destination: Path,
+                ) -> None:
+                    source = Path(source)
+                    destination = Path(destination)
+                    source.unlink()
+                    if installed_kind == "symlink":
+                        source.symlink_to(outside_rules)
+                    else:
+                        os.link(outside_rules, source)
+                    replacements.append((source, destination))
+                    real_replace(source, destination)
+
+                with mock.patch(
+                    "story_writing_agents.antigravity_adapter.os.replace",
+                    side_effect=install_suspicious_leaf,
+                ):
+                    error = await self.assert_workspace_preparation_failure(
+                        adapter,
+                        binding,
+                        session_id,
+                    )
+
+                self.assertEqual(
+                    str(error.__cause__),
+                    "Antigravity installed rules are unsafe",
+                )
+                self.assertEqual(len(replacements), 1)
+                temporary_path, destination = replacements[0]
+                self.assertEqual(destination, target)
+                self.assertFalse(temporary_path.exists())
+                self.assertEqual(_directory_snapshot(outside), outside_before)
+                self.assertEqual(
+                    (
+                        os.lstat(outside_rules).st_dev,
+                        os.lstat(outside_rules).st_ino,
+                        _mode(outside_rules),
+                        outside_rules.read_bytes(),
+                    ),
+                    outside_identity,
+                )
+                if installed_kind == "symlink":
+                    self.assertTrue(target.is_symlink())
+                    self.assertEqual(target.readlink(), outside_rules)
+                else:
+                    self.assertFalse(target.is_symlink())
+                    self.assertEqual(
+                        (
+                            os.lstat(target).st_dev,
+                            os.lstat(target).st_ino,
+                        ),
+                        outside_identity[:2],
+                    )
+                    self.assertEqual(os.lstat(target).st_nlink, 2)
+                self.assertEqual(
+                    retained.read_bytes(),
+                    b"PRIVATE_RETAINED_ENTRY",
+                )
+                self.assertEqual(
+                    sorted(entry.name for entry in target.parent.iterdir()),
+                    ["AGENTS.md", "retained.bin"],
+                )
+
+    async def test_rules_writes_are_complete_bounded_and_failure_safe(
+        self,
+    ) -> None:
+        for behavior in ("partial writes", "fchmod failure"):
+            with self.subTest(success=behavior):
+                label = behavior.replace(" ", "-")
+                adapter = self.adapter(f"rules-{label}-state")
+                binding = adapter.bind(self.definition)
+                canonical = (binding.staging_directory / "AGENTS.md").read_bytes()
+                session_id = f"rules-{label}"
+                target = (
+                    self.runtime_root(adapter, session_id)
+                    / "workspace"
+                    / "AGENTS.md"
+                )
+                retained = target.parent / "retained.bin"
+                if behavior == "fchmod failure":
+                    target.parent.mkdir(parents=True)
+                    target.write_bytes(b"PRIVATE_RETAINED_TARGET")
+                    retained.write_bytes(b"PRIVATE_RETAINED_ENTRY")
+                process = mock.AsyncMock(
+                    return_value=ProcessResult(
+                        stdout=_stream(
+                            f"rules-{label}",
+                            response="safe response",
+                        ),
+                        stderr=b"",
+                        returncode=0,
+                    )
+                )
+                real_write = os.write
+                write_sizes: list[int] = []
+
+                def partial_write(descriptor: int, content) -> int:
+                    written = real_write(descriptor, content[:7])
+                    write_sizes.append(written)
+                    return written
+
+                seam = (
+                    mock.patch(
+                        "story_writing_agents.antigravity_adapter.os.write",
+                        side_effect=partial_write,
+                    )
+                    if behavior == "partial writes"
+                    else mock.patch(
+                        "story_writing_agents.antigravity_adapter.os.fchmod",
+                        side_effect=OSError(
+                            errno.ENOTSUP,
+                            "PRIVATE_FCHMOD_FAILURE",
+                        ),
+                    )
+                )
+                with (
+                    seam,
+                    mock.patch(
+                        "story_writing_agents.antigravity_adapter.run_process",
+                        process,
+                    ),
+                ):
+                    result = await adapter.invoke(
+                        binding,
+                        self.provider_invocation(session_id),
+                    )
+
+                self.assertEqual(
+                    result,
+                    ProviderResult(f"rules-{label}", "safe response"),
+                )
+                self.assertEqual(target.read_bytes(), canonical)
+                self.assertEqual(
+                    [
+                        entry.name
+                        for entry in target.parent.iterdir()
+                        if entry.name.startswith(".AGENTS.md.")
+                    ],
+                    [],
+                )
+                if behavior == "partial writes":
+                    self.assertGreater(len(write_sizes), 1)
+                    self.assertEqual(sum(write_sizes), len(canonical))
+                    self.assertTrue(all(0 < size <= 7 for size in write_sizes))
+                else:
+                    self.assertEqual(
+                        retained.read_bytes(),
+                        b"PRIVATE_RETAINED_ENTRY",
+                    )
+                process.assert_awaited_once()
+
+        failures = (
+            (
+                "collisions",
+                "Antigravity rules temporary file name attempts were exhausted",
+            ),
+            (
+                "create",
+                "Antigravity rules temporary file could not be created",
+            ),
+            (
+                "write",
+                "Antigravity rules temporary file could not be written",
+            ),
+            ("close", "[Errno 5] PRIVATE_CLOSE_FAILURE"),
+            ("replace", "Antigravity rules replacement failed"),
+            (
+                "unlink",
+                "Antigravity rules temporary file could not be written",
+            ),
+        )
+        for behavior, expected_cause in failures:
+            with self.subTest(failure=behavior):
+                adapter = self.adapter(f"rules-{behavior}-failure-state")
+                binding = adapter.bind(self.definition)
+                canonical = (binding.staging_directory / "AGENTS.md").read_bytes()
+                session_id = f"rules-{behavior}-failure"
+                target = (
+                    self.runtime_root(adapter, session_id)
+                    / "workspace"
+                    / "AGENTS.md"
+                )
+                target.parent.mkdir(parents=True)
+                target.write_bytes(b"PRIVATE_RETAINED_TARGET")
+                retained = target.parent / "retained.bin"
+                retained.write_bytes(b"PRIVATE_RETAINED_ENTRY")
+                real_open = os.open
+                real_close = os.close
+                temporary_descriptors: set[int] = set()
+                temporary_attempts: list[Path] = []
+
+                def open_with_failure(
+                    path,
+                    flags: int,
+                    mode: int = 0o777,
+                ) -> int:
+                    path = Path(path)
+                    if flags & os.O_CREAT:
+                        temporary_attempts.append(path)
+                        if behavior == "collisions":
+                            raise FileExistsError(errno.EEXIST, "collision")
+                        if behavior == "create":
+                            raise OSError(errno.EACCES, "PRIVATE_CREATE_FAILURE")
+                    descriptor = real_open(path, flags, mode)
+                    if flags & os.O_CREAT:
+                        temporary_descriptors.add(descriptor)
+                    return descriptor
+
+                def close_with_failure(descriptor: int) -> None:
+                    real_close(descriptor)
+                    if behavior == "close" and descriptor in temporary_descriptors:
+                        raise OSError(errno.EIO, "PRIVATE_CLOSE_FAILURE")
+
+                def write_with_failure(_descriptor: int, _content) -> int:
+                    raise OSError(errno.EIO, "PRIVATE_WRITE_FAILURE")
+
+                def replace_with_failure(_source, _target) -> None:
+                    raise OSError(errno.EIO, "PRIVATE_REPLACE_FAILURE")
+
+                def unlink_with_failure(_path) -> None:
+                    raise OSError(errno.EIO, "PRIVATE_UNLINK_FAILURE")
+
+                with contextlib.ExitStack() as stack:
+                    if behavior == "collisions":
+                        stack.enter_context(
+                            mock.patch(
+                                "story_writing_agents.antigravity_adapter.uuid4",
+                                side_effect=[
+                                    mock.Mock(hex=f"{attempt:032x}")
+                                    for attempt in range(16)
+                                ],
+                            )
+                        )
+                    if behavior in ("collisions", "create", "close"):
+                        stack.enter_context(
+                            mock.patch(
+                                "story_writing_agents.antigravity_adapter.os.open",
+                                side_effect=open_with_failure,
+                            )
+                        )
+                    if behavior == "close":
+                        stack.enter_context(
+                            mock.patch(
+                                "story_writing_agents.antigravity_adapter.os.close",
+                                side_effect=close_with_failure,
+                            )
+                        )
+                    if behavior in ("write", "unlink"):
+                        stack.enter_context(
+                            mock.patch(
+                                "story_writing_agents.antigravity_adapter.os.write",
+                                side_effect=write_with_failure,
+                            )
+                        )
+                    if behavior == "replace":
+                        stack.enter_context(
+                            mock.patch(
+                                "story_writing_agents.antigravity_adapter.os.replace",
+                                side_effect=replace_with_failure,
+                            )
+                        )
+                    if behavior == "unlink":
+                        stack.enter_context(
+                            mock.patch(
+                                "story_writing_agents.antigravity_adapter.os.unlink",
+                                side_effect=unlink_with_failure,
+                            )
+                        )
+                    error = await self.assert_workspace_preparation_failure(
+                        adapter,
+                        binding,
+                        session_id,
+                    )
+
+                self.assertEqual(str(error.__cause__), expected_cause)
+                self.assertEqual(target.read_bytes(), b"PRIVATE_RETAINED_TARGET")
+                self.assertEqual(retained.read_bytes(), b"PRIVATE_RETAINED_ENTRY")
+                temporaries = [
+                    entry
+                    for entry in target.parent.iterdir()
+                    if entry.name.startswith(".AGENTS.md.")
+                ]
+                if behavior == "unlink":
+                    self.assertEqual(len(temporaries), 1)
+                    temporaries[0].unlink()
+                else:
+                    self.assertEqual(temporaries, [])
+                if behavior == "collisions":
+                    self.assertEqual(len(temporary_attempts), 16)
+                    self.assertEqual(len(set(temporary_attempts)), 16)
+                elif behavior == "create":
+                    self.assertEqual(len(temporary_attempts), 1)
+                self.assertEqual(
+                    sorted(entry.name for entry in target.parent.iterdir()),
+                    ["AGENTS.md", "retained.bin"],
+                )
+                self.assertEqual(
+                    (binding.staging_directory / "AGENTS.md").read_bytes(),
+                    canonical,
+                )
+
+    async def test_rules_cleanup_exception_precedence_is_exact(self) -> None:
+        controls = (KeyboardInterrupt, SystemExit, asyncio.CancelledError)
+        for precedence in ("body control", "cleanup control"):
+            for exception_type in controls:
+                with self.subTest(
+                    precedence=precedence,
+                    exception=exception_type.__name__,
+                ):
+                    label = f"{precedence}-{exception_type.__name__}".replace(
+                        " ", "-"
+                    ).lower()
+                    adapter = self.adapter(f"rules-{label}-state")
+                    binding = adapter.bind(self.definition)
+                    canonical = (
+                        binding.staging_directory / "AGENTS.md"
+                    ).read_bytes()
+                    session_id = f"rules-{label}"
+                    target = (
+                        self.runtime_root(adapter, session_id)
+                        / "workspace"
+                        / "AGENTS.md"
+                    )
+                    target.parent.mkdir(parents=True)
+                    target.write_bytes(b"PRIVATE_RETAINED_TARGET")
+                    body_control = exception_type(
+                        f"PRIVATE_BODY_{exception_type.__name__.upper()}"
+                    )
+                    cleanup_control = exception_type(
+                        f"PRIVATE_CLEANUP_{exception_type.__name__.upper()}"
+                    )
+                    body_failure: BaseException = (
+                        body_control
+                        if precedence == "body control"
+                        else OSError(errno.EIO, "PRIVATE_ORDINARY_BODY")
+                    )
+                    expected = (
+                        body_control
+                        if precedence == "body control"
+                        else cleanup_control
+                    )
+                    real_open = os.open
+                    real_close = os.close
+                    temporary_descriptors: set[int] = set()
+
+                    def tracking_open(
+                        path,
+                        flags: int,
+                        mode: int = 0o777,
+                    ) -> int:
+                        descriptor = real_open(path, flags, mode)
+                        if flags & os.O_CREAT:
+                            temporary_descriptors.add(descriptor)
+                        return descriptor
+
+                    def failing_close(descriptor: int) -> None:
+                        real_close(descriptor)
+                        if descriptor in temporary_descriptors:
+                            raise cleanup_control
+
+                    forbidden_process = mock.AsyncMock(
+                        side_effect=AssertionError("provider process invoked")
+                    )
+                    with (
+                        mock.patch.object(
+                            AntigravityAdapter,
+                            "_read_rules_source",
+                            return_value=canonical,
+                        ),
+                        mock.patch(
+                            "story_writing_agents.antigravity_adapter.os.open",
+                            side_effect=tracking_open,
+                        ),
+                        mock.patch(
+                            "story_writing_agents.antigravity_adapter.os.write",
+                            side_effect=body_failure,
+                        ),
+                        mock.patch(
+                            "story_writing_agents.antigravity_adapter.os.close",
+                            side_effect=failing_close,
+                        ),
+                        mock.patch(
+                            "story_writing_agents.antigravity_adapter.run_process",
+                            forbidden_process,
+                        ),
+                        self.assertRaises(exception_type) as caught,
+                    ):
+                        await adapter.invoke(
+                            binding,
+                            self.provider_invocation(session_id),
+                        )
+
+                    self.assertIs(caught.exception, expected)
+                    self.assertEqual(
+                        target.read_bytes(),
+                        b"PRIVATE_RETAINED_TARGET",
+                    )
+                    self.assertEqual(
+                        [entry.name for entry in target.parent.iterdir()],
+                        ["AGENTS.md"],
+                    )
+                    forbidden_process.assert_not_awaited()
+
+        adapter = self.adapter("rules-ordinary-precedence-state")
+        binding = adapter.bind(self.definition)
+        canonical = (binding.staging_directory / "AGENTS.md").read_bytes()
+        session_id = "rules-ordinary-precedence"
+        target = (
+            self.runtime_root(adapter, session_id) / "workspace" / "AGENTS.md"
+        )
+        target.parent.mkdir(parents=True)
+        target.write_bytes(b"PRIVATE_RETAINED_TARGET")
+        real_open = os.open
+        real_close = os.close
+        temporary_descriptors: set[int] = set()
+
+        def tracking_open(path, flags: int, mode: int = 0o777) -> int:
+            descriptor = real_open(path, flags, mode)
+            if flags & os.O_CREAT:
+                temporary_descriptors.add(descriptor)
+            return descriptor
+
+        def ordinary_cleanup(descriptor: int) -> None:
+            real_close(descriptor)
+            if descriptor in temporary_descriptors:
+                raise OSError(errno.EIO, "PRIVATE_ORDINARY_CLEANUP")
+
+        with (
+            mock.patch.object(
+                AntigravityAdapter,
+                "_read_rules_source",
+                return_value=canonical,
+            ),
+            mock.patch(
+                "story_writing_agents.antigravity_adapter.os.open",
+                side_effect=tracking_open,
+            ),
+            mock.patch(
+                "story_writing_agents.antigravity_adapter.os.write",
+                side_effect=OSError(errno.EIO, "PRIVATE_ORDINARY_BODY"),
+            ),
+            mock.patch(
+                "story_writing_agents.antigravity_adapter.os.close",
+                side_effect=ordinary_cleanup,
+            ),
+        ):
+            error = await self.assert_workspace_preparation_failure(
+                adapter,
+                binding,
+                session_id,
+            )
+
+        self.assertEqual(
+            str(error.__cause__),
+            "Antigravity rules temporary file could not be written",
+        )
+        self.assertEqual(target.read_bytes(), b"PRIVATE_RETAINED_TARGET")
+        self.assertEqual(
+            [entry.name for entry in target.parent.iterdir()],
+            ["AGENTS.md"],
+        )
+
+        source = binding.staging_directory / "AGENTS.md"
+
+        def ordinary_source_cleanup(descriptor: int) -> None:
+            real_close(descriptor)
+            raise OSError(errno.EIO, "PRIVATE_ORDINARY_CLEANUP")
+
+        with mock.patch(
+            "story_writing_agents.antigravity_adapter.os.close",
+            side_effect=ordinary_source_cleanup,
+        ):
+            self.assertEqual(
+                AntigravityAdapter._read_rules_source(source),
+                canonical,
+            )
+
     def test_private_import_has_no_filesystem_or_public_surface_effect(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
         environment = dict(
@@ -860,6 +1850,10 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             (working_directory / "AGENTS.md").read_bytes(),
+            (binding.staging_directory / "AGENTS.md").read_bytes(),
+        )
+        self.assert_rules_installation(
+            working_directory / "AGENTS.md",
             (binding.staging_directory / "AGENTS.md").read_bytes(),
         )
         self.assertEqual(list(provider_directory.iterdir()), [])

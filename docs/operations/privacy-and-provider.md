@@ -189,11 +189,17 @@ systems, the adapter best-effort requests owner-only (`0700`) modes for its
 Antigravity state root and adapter-owned definition and session directory
 chains, and it rejects a detected link or non-directory in those components
 before a provider launch. It does not recursively change the backend-owned
-containing directory or provider-created files. Unsupported platforms,
-including Windows, and ordinary mode-setting failures retain platform behavior,
-so this is neither application access control nor race-proof containment.
-Protect the complete workspace and provider-state paths with OS-level controls;
-the runtime provides neither encryption nor secure erase.
+containing directory or provider-created files. Adapter-owned staged and
+workspace `AGENTS.md` rules leaves are verified as regular and singly linked
+when present, then installed through an exclusively created same-directory
+temporary with requested `0600` mode and atomic replacement. Detected symbolic
+links, non-regular entries, and multiply linked leaves are preserved and
+rejected before provider launch.
+Unsupported platforms, including Windows, and ordinary mode-setting failures
+retain platform behavior; parent-directory traversal is not descriptor-anchored,
+so these protections are neither application access control nor race-proof
+containment. Protect the complete workspace and provider-state paths with
+OS-level controls; the runtime provides neither encryption nor secure erase.
 
 Use `codex login` or process-environment `CODEX_API_KEY`. Never put credentials
 in story content, configuration, filenames, prompts, replies, transcripts, or
