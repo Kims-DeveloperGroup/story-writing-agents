@@ -3,8 +3,9 @@
 > **Availability:** filesystem persistence covers configuration, sessions,
 > conversations, debates, optional debate-context sidecars, canonical writing
 > artifacts, and content-free explicit-reference authorization evidence. The
-> evidence foundation is not yet connected to providers, agents, or shell
-> reference commands.
+> #189 backend can drive that evidence for an internal/Python referenced
+> invocation. `StoryRuntime` and shell reference commands do not create or
+> expose the operation yet.
 
 Key terms: **blackboard**—public debate JSONL; **sidecar**—context stored apart
 from established debate records; **create-only**—never replaces an existing
@@ -24,6 +25,7 @@ The workspace uses separate inspectable files rather than a database:
 | Current conversation and agent focus | Controller memory only |
 | Canonical writing artifacts and provenance | `WritingArtifactRepository` |
 | Explicit-reference operation and invocation evidence | `WritingArtifactRepository`; content-free create-only records |
+| Explicit-reference selected content | Transient repository/backend carriers and one immediate provider payload; no workspace evidence field |
 
 <a id="debate-context-sidecar"></a>
 
@@ -106,11 +108,17 @@ path/range, provenance, hashes, counts, correlation, states, checkpoints, and
 fixed outcomes—not selected bytes, source/provider text, prompts, or results.
 The private invocation manifest also binds a capability identifier; the
 validated history returned to callers does not expose it. Captured and
-delivered byte tuples are process-local, closeable values. A restart can
-validate history but cannot reconstruct or resume their transient
-capabilities. An empty reference batch creates neither evidence nor artifact
-I/O. These records are not part of the canonical writing-artifact catalog,
-completion, or picker namespace.
+delivered byte tuples are process-local, closeable values. The capability
+object is never serialized or sent to a provider; its identifier remains
+repository-private and is absent from provider payloads and validated history.
+A backend-created read coordinator advances the existing invocation records:
+the exact full provider action precedes `delivered`, a structurally valid
+substantive result precedes `result_received`, and final provenance
+revalidation precedes `accepted`. Selected text, provider payloads, and provider
+results never become evidence fields. A restart can validate history but cannot
+reconstruct or resume transient capabilities. An empty reference batch creates
+neither evidence nor artifact I/O. These records are not part of the canonical
+writing-artifact catalog, completion, or picker namespace.
 
 The blackboard retains input, candidates, audits, proposals, visible errors,
 finalization metadata, and commit record. Result JSON is a projection and omits

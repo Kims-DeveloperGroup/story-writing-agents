@@ -23,9 +23,11 @@ operation. See the
 `session_lifecycle` owns immutable provider-neutral lifecycle facts and pure
 readiness, with no resource or I/O. `AgentBackend` retains manifests, access
 claims, prompt staging, routes, processes, and threads. It owns private
-active-call retention and exact staging retirement; a `BoundAgent` is the
-immutable handle for one definition and is not the runtime selection owner.
-Codex is implemented; Gemini fails preflight.
+active-call retention, exact staging retirement, and the optional
+provider-enforced reference prelude supplied through the provider-neutral
+read-action boundary; a `BoundAgent` is the immutable handle for one definition
+and is not the runtime selection owner. Codex is implemented; Gemini fails
+preflight.
 
 `Workspace` owns generic path-safe persistence, inspection, and atomic
 replacement. The `writing_artifacts` package owns the stricter canonical-output
@@ -39,13 +41,17 @@ writes never manufacture artifact provenance. See
 | --- | --- |
 | `writing_artifacts.__init__` | Side-effect-free facade for immutable artifact values; no repository construction or root-package export. |
 | `writing_artifacts.catalog` | Four exact core identities, part-scoped manuscript grammar, kinds, immutable provenance entries, and catalog schema. |
-| `writing_artifacts.references` | Immutable path/range value contracts and limits only; no parsing, picker, viewer, or provider integration yet. |
+| `writing_artifacts.references` | Immutable path/range value contracts and limits only; parsing, picker, viewer, and provider integration belong to other modules. |
+| `writing_artifacts.read_actions` | Provider-neutral, content-free exact request/action contracts; private synchronous coordinator protocol and closeable content-bearing result contract. |
 | `writing_artifacts._storage` | Descriptor-relative, no-follow, unique-regular-file I/O, compare-before-publish replacement, root-identity verification, and artifact advisory locking. |
-| `writing_artifacts.repository` | Provenance validation, current catalog projection, strict reads, create-only manuscript commits, journal roll-forward, catalog-last visibility, and fail-closed recovery. |
+| `writing_artifacts.repository` | Provenance validation, current catalog projection, strict reads, create-only manuscript commits, journal roll-forward, catalog-last visibility, fail-closed recovery, and concrete one-use reference coordinators/capabilities. |
 
 The package has no controller, terminal, backend, orchestrator, or generic
-`Workspace` dependency. `StoryRuntime` owns when a unanimous result may call
-the repository; prompt assembly consumes only its current eligible core paths.
+`Workspace` dependency. The backend imports only the provider-neutral
+`read_actions` boundary; the repository remains the sole owner of filesystem
+reads, revalidation, capabilities, and evidence. `StoryRuntime` owns when a
+unanimous result may call the repository; prompt assembly consumes only its
+current eligible core paths. It does not yet propagate explicit references.
 The interactive controller validates required manuscript output grammar but
 does not own storage or provenance. Exact user-visible states are in
 [Canonical writing artifacts](../reference/writing-artifacts.md).

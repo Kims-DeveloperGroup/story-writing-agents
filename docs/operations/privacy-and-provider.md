@@ -2,9 +2,10 @@
 
 > **Availability:** these controls cover local reads, advisory turns, and
 > retrieval-enabled turns, management commands, focused-context consensus, and
-> the Python/internal explicit-reference authorization foundation. They do not
-> make Codex, its executable, workspace, or terminal trusted, and explicit
-> references are not yet connected to provider calls or story agents.
+> Python/internal explicit-reference authorization and backend enforcement.
+> They do not make Codex, its executable, workspace, or terminal trusted.
+> `StoryRuntime` and the installed shell still do not attach user references or
+> expose `$`/`$$`, picker, viewer, or reference-specific diagnostic behavior.
 
 Key terms: **plaintext**—unencrypted content; **visible context**—events sent in
 a request; **provider-private history**—vendor thread state; **diagnostic**—
@@ -54,28 +55,46 @@ provider projections, prompts, provider results, and diagnostic values derived
 from content. Authorization errors use fixed coded messages without echoing a
 path or selected text.
 
-Selected artifact bytes exist only in closeable, nonserializable in-process
-authorization and delivery carriers whose `repr` hides content. Closing drops
-the carrier's references to its byte tuples; Python and the operating system do
-not provide a secure memory-zeroing guarantee. The durable evidence remains
-plaintext and has no encryption, access control, secure erase, or retention
-policy.
+Before provider delivery, selected artifact byte tuples are held in closeable,
+nonserializable in-process authorization, delivery, and result carriers whose
+`repr` hides content. The backend transiently decodes them for the one provider
+payload described below. Closing drops the carriers' references to their byte
+tuples; Python and the operating system do not provide a secure memory-zeroing
+guarantee. The durable evidence remains plaintext and has no encryption,
+access control, secure erase, or retention policy.
 
-The repository writes `delivered` evidence before returning selected bytes and
-can record that its caller reported a result. Neither event proves that a
-provider or story agent received, read, understood, or used the text. Baseline
-core context does not satisfy explicit-reference evidence. #189 and #190 must
-connect the repository protocol to provider actions and agent enforcement;
-#164 must connect references to the shell. Until then, `${...}`, `$`, and `$$`
-are not operational user commands.
+For an optional referenced backend call, the first provider payload contains
+only fixed rules, exact operation/invocation correlation, and the complete
+ordered canonical path/range indicators. The capability object is never
+serialized, and its repository-private identifier is absent from provider
+requests, replies, validated public history, and diagnostics. After the
+provider returns the exact full read action, the backend places selected text
+only under `untrusted_writing_artifact_context` on the immediately following
+substantive payload. It does not copy the text into task, user input, candidate,
+blackboard messages, agent state, conversation history, retrieval observations,
+durable evidence, or diagnostics.
+
+The repository writes `delivered` before returning selected bytes to that
+backend path. The backend records `result_received` only after a structurally
+valid substantive result, performs final revalidation, records `accepted`, and
+then returns the reply. This proves the exact request, delivery sequence,
+result, and acceptance—not provider comprehension, obedience, or correct use.
+Baseline core context cannot satisfy explicit-reference evidence.
+
+Closing local authorization, delivery, and result carriers drops their Python
+references but offers neither secure memory erasure nor provider erasure. Once
+the substantive request is sent, provider-private or remote systems may retain
+its context under their own policy. `StoryRuntime` does not construct this
+backend path yet, and #164 must still connect references to the shell. Until
+#190 and #164 land, `${...}`, `$`, and `$$` are not operational user commands.
 
 ## Provider disclosure
 
-A Python one-step call sends current text and bounded complete turns. Retrieval
-starts there, then may add authorized active-conversation hits and complete
-user/reply pairs from the current session. It cannot request archives, another
-session/workspace, arbitrary IDs, runtime errors, private state, tools, or native
-data. Observations are framed as untrusted story data.
+A no-reference Python one-step call sends current text and bounded complete
+turns. Retrieval starts there, then may add authorized active-conversation hits
+and complete user/reply pairs from the current session. It cannot request
+archives, another session/workspace, arbitrary IDs, runtime errors, private
+state, tools, or native data. Observations are framed as untrusted story data.
 
 Agent definitions separately supply only current provenance-backed allowlisted
 core documents. A generic manual edit remains on disk but is omitted after its
