@@ -13,6 +13,17 @@ from .catalog import (
     canonical_artifact_kind,
     manuscript_artifact_path,
 )
+from .authorization import (
+    AuthorizedArtifactReference,
+    ReferenceAuthorizationError,
+    ReferenceAuthorizationErrorCode,
+    ReferenceEvidence,
+    ReferenceInvocationCorrelation,
+    ReferenceInvocationState,
+    ReferenceOperationHistory,
+    ReferenceOperationManifest,
+    ReferenceOperationState,
+)
 from .directives import parse_artifact_references
 from .references import (
     MAX_ARTIFACT_PATH_BYTES,
@@ -42,6 +53,15 @@ __all__ = (
     "ArtifactReference",
     "ArtifactReferenceBatch",
     "ArtifactReferenceDirectiveError",
+    "AuthorizedArtifactReference",
+    "ReferenceAuthorizationError",
+    "ReferenceAuthorizationErrorCode",
+    "ReferenceEvidence",
+    "ReferenceInvocationCorrelation",
+    "ReferenceInvocationState",
+    "ReferenceOperationHistory",
+    "ReferenceOperationManifest",
+    "ReferenceOperationState",
     "canonical_artifact_kind",
     "manuscript_artifact_path",
     "parse_artifact_references",

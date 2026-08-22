@@ -18,7 +18,21 @@ from ..errors import (
     WorkspaceFormatError,
     WorkspaceSecurityError,
 )
+from ._reference_evidence import ReferenceEvidenceStore
 from ._storage import ArtifactEntrySecurityError, SecureWorkspaceStorage
+from .authorization import (
+    ArtifactReferenceDelivery,
+    ReadCapability,
+    ReferenceAuthorization,
+    ReferenceAuthorizationError,
+    ReferenceAuthorizationErrorCode,
+    ReferenceInvocationCorrelation,
+    ReferenceInvocationState,
+    ReferenceOperationHistory,
+    ReferenceOperationManifest,
+    ReferenceOperationState,
+    build_authorized_references,
+)
 from .catalog import (
     ArtifactCatalog,
     ArtifactCatalogEntry,
@@ -26,7 +40,11 @@ from .catalog import (
     canonical_artifact_kind,
     manuscript_artifact_path,
 )
-from .references import ArtifactContentSnapshot
+from .references import (
+    ArtifactContentSnapshot,
+    ArtifactReference,
+    ArtifactReferenceBatch,
+)
 
 
 _STATE_DIRECTORY = "agent_states/orchestrator_state/writing_artifacts"
@@ -54,6 +72,12 @@ class WritingArtifactRepository:
     def __init__(self, workspace_root: str | Path) -> None:
         self._storage = SecureWorkspaceStorage(workspace_root)
         self._lock = threading.RLock()
+        self._reference_authorization_owner = object()
+        self._reference_evidence = ReferenceEvidenceStore(
+            self._storage,
+            _SNAPSHOTS_DIRECTORY,
+            _STAGING_DIRECTORY,
+        )
 
     def catalog(self) -> ArtifactCatalog:
         """Return only current, provenance-backed canonical entries."""
@@ -123,6 +147,355 @@ class WritingArtifactRepository:
                 return content.decode("utf-8", errors="strict")
             except UnicodeDecodeError as exc:
                 raise WorkspaceFormatError("artifact is not valid UTF-8") from exc
+
+    def capture_reference_authorization(
+        self,
+        *,
+        operation_id: str,
+        batch: ArtifactReferenceBatch,
+    ) -> ReferenceAuthorization | None:
+        """Capture one immutable, repository-authorized reference snapshot."""
+
+        if type(batch) is not ArtifactReferenceBatch:
+            raise TypeError("batch must be an ArtifactReferenceBatch")
+        if not batch.references:
+            return None
+        manifest = ReferenceOperationManifest(operation_id, batch.references)
+        began = False
+        with self._locked_repository():
+            try:
+                self._reference_evidence.begin_operation(manifest)
+                began = True
+                catalog = self._load_catalog()
+                sources: dict[str, tuple[ArtifactCatalogEntry, bytes]] = {}
+                for reference in batch.references:
+                    if reference.path in sources:
+                        continue
+                    entry = catalog.entries.get(reference.path)
+                    if entry is None:
+                        raise ReferenceAuthorizationError(
+                            ReferenceAuthorizationErrorCode.NOT_FOUND
+                        )
+                    try:
+                        content = self._storage.read_bytes(reference.path)
+                    except (FileNotFoundError, ArtifactEntrySecurityError):
+                        raise ReferenceAuthorizationError(
+                            ReferenceAuthorizationErrorCode.INELIGIBLE
+                        ) from None
+                    if hashlib.sha256(content).hexdigest() != entry.sha256:
+                        raise ReferenceAuthorizationError(
+                            ReferenceAuthorizationErrorCode.DRIFT
+                        )
+                    sources[reference.path] = (entry, content)
+                entries = tuple(sources[item.path][0] for item in batch.references)
+                contents = tuple(sources[item.path][1] for item in batch.references)
+                proofs, captured = build_authorized_references(
+                    batch,
+                    entries,
+                    contents,
+                )
+                self._reference_evidence.append_operation_event(
+                    operation_id,
+                    ReferenceOperationState.CAPTURED,
+                    proofs,
+                )
+                return ReferenceAuthorization(
+                    manifest,
+                    captured,
+                    owner=self._reference_authorization_owner,
+                )
+            except ReferenceAuthorizationError as exc:
+                if began:
+                    self._reference_evidence.append_operation_event(
+                        operation_id,
+                        ReferenceOperationState.TERMINATED,
+                        (),
+                        outcome=exc.code,
+                    )
+                raise
+
+    def authorize_reference_invocation(
+        self,
+        authorization: ReferenceAuthorization,
+        correlation: ReferenceInvocationCorrelation,
+    ) -> ReadCapability:
+        """Issue one durable, one-use capability over a captured operation."""
+
+        if type(authorization) is not ReferenceAuthorization:
+            raise TypeError("authorization must be a ReferenceAuthorization")
+        if type(correlation) is not ReferenceInvocationCorrelation:
+            raise TypeError("correlation must be a ReferenceInvocationCorrelation")
+        authorization.require_owner(self._reference_authorization_owner)
+        if correlation.operation_id != authorization.manifest.operation_id:
+            raise ReferenceAuthorizationError(
+                ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH
+            )
+        references = authorization.authorized_references
+        capability_id = uuid4().hex
+        with self._locked_repository():
+            self._reference_evidence.begin_invocation(
+                correlation,
+                capability_id,
+                references,
+            )
+        return ReadCapability(
+            authorization,
+            correlation,
+            capability_id=capability_id,
+            authorized_references=references,
+            owner=self._reference_authorization_owner,
+        )
+
+    def deliver_authorized_references(
+        self,
+        capability: ReadCapability,
+        requested: tuple[ArtifactReference, ...],
+    ) -> ArtifactReferenceDelivery:
+        """Consume a capability and return only its captured selected bytes."""
+
+        if type(capability) is not ReadCapability:
+            raise TypeError("capability must be a ReadCapability")
+        if type(requested) is not tuple or any(
+            type(item) is not ArtifactReference for item in requested
+        ):
+            raise TypeError("requested references must be an ArtifactReference tuple")
+        authorization = capability.consume(self._reference_authorization_owner)
+        try:
+            references, contents = authorization.delivery_snapshot(
+                self._reference_authorization_owner
+            )
+        except ReferenceAuthorizationError as exc:
+            self._terminate_invocation_after_failure(capability, exc.code)
+            raise
+        if references != capability.authorized_references:
+            self._terminate_invocation_after_failure(
+                capability,
+                ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH,
+            )
+            raise ReferenceAuthorizationError(
+                ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH
+            )
+        if requested != authorization.manifest.references:
+            self._terminate_invocation_after_failure(
+                capability,
+                ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH,
+            )
+            raise ReferenceAuthorizationError(
+                ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH
+            )
+        try:
+            with self._locked_repository():
+                self._revalidate_reference_authorization(authorization)
+                self._reference_evidence.append_invocation_event(
+                    capability.correlation,
+                    capability.capability_id,
+                    ReferenceInvocationState.DELIVERED,
+                    references,
+                )
+        except ReferenceAuthorizationError as exc:
+            self._terminate_invocation_after_failure(capability, exc.code)
+            raise
+        return ArtifactReferenceDelivery(
+            capability.correlation,
+            references,
+            contents,
+        )
+
+    def record_reference_result_received(
+        self,
+        capability: ReadCapability,
+    ) -> None:
+        """Persist that a provider result was received for this invocation."""
+
+        authorization = self._authorization_from_capability(capability)
+        with self._locked_repository():
+            self._reference_evidence.append_invocation_event(
+                capability.correlation,
+                capability.capability_id,
+                ReferenceInvocationState.RESULT_RECEIVED,
+                authorization.authorized_references,
+            )
+
+    def accept_reference_invocation(self, capability: ReadCapability) -> None:
+        """Revalidate and durably accept one provider invocation result."""
+
+        authorization = self._authorization_from_capability(capability)
+        references = authorization.authorized_references
+        try:
+            with self._locked_repository():
+                self._revalidate_reference_authorization(authorization)
+                self._reference_evidence.append_invocation_event(
+                    capability.correlation,
+                    capability.capability_id,
+                    ReferenceInvocationState.ACCEPTED,
+                    references,
+                )
+        except ReferenceAuthorizationError as exc:
+            self._terminate_invocation_after_failure(capability, exc.code)
+            raise
+
+    def terminate_reference_invocation(
+        self,
+        capability: ReadCapability,
+        outcome: ReferenceAuthorizationErrorCode,
+    ) -> None:
+        """Durably terminate an invocation with one content-free outcome."""
+
+        if type(outcome) is not ReferenceAuthorizationErrorCode:
+            raise TypeError("outcome must be a ReferenceAuthorizationErrorCode")
+        if type(capability) is not ReadCapability:
+            raise TypeError("capability must be a ReadCapability")
+        authorization = capability.retire(self._reference_authorization_owner)
+        with self._locked_repository():
+            self._reference_evidence.append_invocation_event(
+                capability.correlation,
+                capability.capability_id,
+                ReferenceInvocationState.TERMINATED,
+                authorization.authorized_references,
+                outcome=outcome,
+            )
+
+    def revalidate_reference_operation(
+        self,
+        authorization: ReferenceAuthorization,
+        *,
+        checkpoint: str,
+    ) -> None:
+        """Revalidate and record an explicit top-level operation checkpoint."""
+
+        if type(authorization) is not ReferenceAuthorization:
+            raise TypeError("authorization must be a ReferenceAuthorization")
+        authorization.require_owner(self._reference_authorization_owner)
+        references = authorization.authorized_references
+        try:
+            with self._locked_repository():
+                self._revalidate_reference_authorization(authorization)
+                self._reference_evidence.append_operation_event(
+                    authorization.manifest.operation_id,
+                    ReferenceOperationState.REVALIDATED,
+                    references,
+                    checkpoint=checkpoint,
+                )
+        except ReferenceAuthorizationError as exc:
+            with self._locked_repository():
+                self._reference_evidence.append_operation_event(
+                    authorization.manifest.operation_id,
+                    ReferenceOperationState.TERMINATED,
+                    references,
+                    outcome=exc.code,
+                )
+            authorization.close()
+            raise
+
+    def finish_reference_operation(
+        self,
+        authorization: ReferenceAuthorization,
+        *,
+        outcome: ReferenceAuthorizationErrorCode | None,
+    ) -> None:
+        """Accept after final revalidation, or terminate, then dispose bytes."""
+
+        if type(authorization) is not ReferenceAuthorization:
+            raise TypeError("authorization must be a ReferenceAuthorization")
+        if outcome is not None and type(outcome) is not ReferenceAuthorizationErrorCode:
+            raise TypeError("outcome must be a ReferenceAuthorizationErrorCode or None")
+        authorization.require_owner(self._reference_authorization_owner)
+        references = authorization.authorized_references
+        finished = False
+        try:
+            with self._locked_repository():
+                if outcome is None:
+                    self._revalidate_reference_authorization(authorization)
+                    state = ReferenceOperationState.ACCEPTED
+                else:
+                    state = ReferenceOperationState.TERMINATED
+                self._reference_evidence.append_operation_event(
+                    authorization.manifest.operation_id,
+                    state,
+                    references,
+                    outcome=outcome,
+                )
+                finished = True
+        except ReferenceAuthorizationError as exc:
+            if outcome is None:
+                with self._locked_repository():
+                    self._reference_evidence.append_operation_event(
+                        authorization.manifest.operation_id,
+                        ReferenceOperationState.TERMINATED,
+                        references,
+                        outcome=exc.code,
+                    )
+                    finished = True
+            raise
+        finally:
+            if finished:
+                authorization.close()
+
+    def inspect_reference_operation(
+        self,
+        operation_id: str,
+    ) -> ReferenceOperationHistory | None:
+        """Return one history, or ``None`` when the operation is absent."""
+
+        with self._locked_repository():
+            return self._reference_evidence.inspect(operation_id)
+
+    def _authorization_from_capability(
+        self,
+        capability: ReadCapability,
+        *,
+        require_consumed: bool = True,
+    ) -> ReferenceAuthorization:
+        if type(capability) is not ReadCapability:
+            raise TypeError("capability must be a ReadCapability")
+        return capability.authorization_for(
+            self._reference_authorization_owner,
+            require_consumed=require_consumed,
+        )
+
+    def _terminate_invocation_after_failure(
+        self,
+        capability: ReadCapability,
+        outcome: ReferenceAuthorizationErrorCode,
+    ) -> None:
+        with self._locked_repository():
+            self._reference_evidence.append_invocation_event(
+                capability.correlation,
+                capability.capability_id,
+                ReferenceInvocationState.TERMINATED,
+                capability.authorized_references,
+                outcome=outcome,
+            )
+
+    def _revalidate_reference_authorization(
+        self,
+        authorization: ReferenceAuthorization,
+    ) -> None:
+        """Require exact current provenance and bytes for the captured paths."""
+
+        authorization.require_owner(self._reference_authorization_owner)
+        references = authorization.authorized_references
+        catalog = self._load_catalog()
+        observed: set[str] = set()
+        for authorized in references:
+            path = authorized.reference.path
+            if path in observed:
+                continue
+            observed.add(path)
+            if catalog.entries.get(path) != authorized.catalog_entry:
+                raise ReferenceAuthorizationError(
+                    ReferenceAuthorizationErrorCode.DRIFT
+                )
+            try:
+                content = self._storage.read_bytes(path)
+            except (FileNotFoundError, ArtifactEntrySecurityError):
+                raise ReferenceAuthorizationError(
+                    ReferenceAuthorizationErrorCode.DRIFT
+                ) from None
+            if hashlib.sha256(content).hexdigest() != authorized.catalog_entry.sha256:
+                raise ReferenceAuthorizationError(
+                    ReferenceAuthorizationErrorCode.DRIFT
+                )
 
     def commit_consensus(
         self,

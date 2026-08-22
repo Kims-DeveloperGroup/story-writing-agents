@@ -1,7 +1,10 @@
 # Persistence design
 
 > **Availability:** filesystem persistence covers configuration, sessions,
-> conversations, debates, optional debate-context sidecars, and manuscripts.
+> conversations, debates, optional debate-context sidecars, canonical writing
+> artifacts, and content-free explicit-reference authorization evidence. The
+> evidence foundation is not yet connected to providers, agents, or shell
+> reference commands.
 
 Key terms: **blackboard**—public debate JSONL; **sidecar**—context stored apart
 from established debate records; **create-only**—never replaces an existing
@@ -20,6 +23,7 @@ The workspace uses separate inspectable files rather than a database:
 | Retrieval actions, observations, progress, sources | Process/terminal only |
 | Current conversation and agent focus | Controller memory only |
 | Canonical writing artifacts and provenance | `WritingArtifactRepository` |
+| Explicit-reference operation and invocation evidence | `WritingArtifactRepository`; content-free create-only records |
 
 <a id="debate-context-sidecar"></a>
 
@@ -87,6 +91,26 @@ runtime methods are read-only; existing debate/session inspection, logs, result
 JSON, and `DebateResult` remain unchanged.
 
 ## Durability boundaries
+
+Explicit-reference authorization has a separate durability boundary under
+`writing_artifacts/input_snapshots/`. For each nonempty operation, the
+repository publishes a schema-v1 manifest and `requested` event before reading
+the catalog or artifact content. Later operation and invocation events are
+create-only, canonically encoded records with contiguous sequences and
+contiguous invocation ordinals. A delivery event is durable before selected
+bytes leave the repository boundary. The same repository lease serializes
+these evidence writes with artifact reads and provenance revalidation.
+
+Durable evidence contains schema and operation/invocation identity,
+path/range, provenance, hashes, counts, correlation, states, checkpoints, and
+fixed outcomes—not selected bytes, source/provider text, prompts, or results.
+The private invocation manifest also binds a capability identifier; the
+validated history returned to callers does not expose it. Captured and
+delivered byte tuples are process-local, closeable values. A restart can
+validate history but cannot reconstruct or resume their transient
+capabilities. An empty reference batch creates neither evidence nor artifact
+I/O. These records are not part of the canonical writing-artifact catalog,
+completion, or picker namespace.
 
 The blackboard retains input, candidates, audits, proposals, visible errors,
 finalization metadata, and commit record. Result JSON is a projection and omits

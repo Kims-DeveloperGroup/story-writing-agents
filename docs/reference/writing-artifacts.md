@@ -2,11 +2,12 @@
 
 > **Availability:** unanimous consensus can publish the canonical files on this
 > page. The runtime uses their provenance catalog when supplying core context to
-> story agents. The `writing_artifacts` Python subpackage can now parse and
-> validate content-free reference directives, but the installed shell does not
-> make them operational. Standalone artifact commands, interactive `$`/`$$`
-> completion and selection, artifact attachment, and enforced agent reads are
-> not implemented yet.
+> story agents. The `writing_artifacts` Python subpackage can parse content-free
+> reference directives and exposes the repository authorization and evidence
+> values described below for Python/internal consumers. `StoryRuntime`, provider
+> read actions, story agents, and the installed shell do not use that foundation
+> yet. Standalone artifact commands, interactive `$`/`$$` completion and
+> selection, artifact attachment, and enforced agent reads remain unavailable.
 
 This reference uses **writing artifact** only for agent-produced story output.
 Transcripts, discussion logs, provider state, agent state, configuration, role
@@ -140,6 +141,102 @@ original input, compute the provider-text escape projection, and inspect
 ordered canonical path/range indicators. They cannot use this API alone to
 establish artifact eligibility, read content, supply it to a provider, require
 an agent to read it, or activate `${...}`, `$`, or `$$` behavior in the shell.
+
+## Authorized reads and lifecycle evidence
+
+> **Availability:** #191 implements repository authorization, transient
+> delivery, and durable content-free evidence for Python/internal consumers.
+> It does not connect parsed references to `StoryRuntime`, a provider action, a
+> story agent, or the installed shell. #189, #190, and #164 own those later
+> integrations. A recorded `delivered` event is therefore repository evidence,
+> not proof that an agent read or used the text.
+
+The `${canonical/path.md}` and `${canonical/path.md}#Lx-Ly` values remain
+content-free indicators. A caller holding `WritingArtifactRepository` can use
+an already parsed nonempty batch to:
+
+1. capture one immutable authorization for an operation;
+2. issue a repository-minted, one-use capability for the exact ordered batch;
+3. deliver the captured selected bytes through a closeable transient value;
+4. record a result, accept or terminate the invocation, and revalidate or
+   finish the overall operation; and
+5. inspect validated operation history later.
+
+These actions are exposed by the repository module, not by the project-root
+facade. The `writing_artifacts` subpackage exports the content-free value and
+error contracts: `AuthorizedArtifactReference`, `ReferenceOperationManifest`,
+`ReferenceInvocationCorrelation`, `ReferenceEvidence`,
+`ReferenceOperationHistory`, `ReferenceOperationState`,
+`ReferenceInvocationState`, `ReferenceAuthorizationError`, and
+`ReferenceAuthorizationErrorCode`. The transient authorization, capability,
+and delivery carriers remain package-internal, hide content from `repr`, and
+reject serialization. Authorization and delivery values are closeable; the
+capability is one-use. Closing releases the runtime's references to their byte
+tuples; it does not guarantee memory zeroing.
+
+### What the states mean
+
+Operation history follows `REQUESTED` → `CAPTURED` → zero or more
+`REVALIDATED` checkpoints → `ACCEPTED` or `TERMINATED`. The enum members are
+serialized with the lowercase values shown in the table.
+
+| Operation state | Internal event | What an inspecting caller can conclude |
+| --- | --- | --- |
+| `requested` | The create-only operation manifest and first evidence event exist before catalog or artifact reads. | A reference attempt was recorded. No bytes have been authorized. |
+| `captured` | Every ordered reference was eligible, selected, hashed, and held in one immutable in-memory capture. | The recorded provenance and selected-byte proof were valid at capture time. |
+| `revalidated` | Full catalog provenance and current file hash still match the capture at a caller-named checkpoint. | The captured identity was still current at that checkpoint; the event does not refresh the captured bytes. |
+| `accepted` | Final revalidation succeeded and all invocations are terminal, with at least one accepted invocation. | The repository-side reference operation completed successfully. This is not agent-read proof. |
+| `terminated` | A fixed coded cancellation, provider, workflow, authorization, drift, or evidence failure ended the operation. | The operation was not accepted; the content-free outcome identifies the failure category. |
+
+Each invocation follows `AUTHORIZED` → `DELIVERED` → `RESULT_RECEIVED` →
+`ACCEPTED`, with `TERMINATED` available from any nonterminal state. It has its
+own ordered history:
+
+| Invocation state | Internal event | What an inspecting caller can conclude |
+| --- | --- | --- |
+| `authorized` | The repository persisted correlation and issued one private capability for the captured batch. | One exact invocation attempt was authorized; no content has been returned. |
+| `delivered` | The capability was consumed, the source was revalidated, and evidence was persisted before the transient bytes were returned. | Repository delivery occurred for that exact batch. It does not prove provider or agent use. |
+| `result_received` | The caller explicitly recorded that an invocation result was received. | A result claim exists; #191 itself did not invoke a provider. |
+| `accepted` | Another full revalidation succeeded after the recorded result. | The repository accepted that invocation's evidence chain. |
+| `terminated` | A fixed coded failure ended the invocation. | The attempt cannot continue; a retry needs a newly issued capability and keeps the original captured snapshot. |
+
+The durable history contains ordered path and optional range, full catalog
+provenance, selected SHA-256 and byte count, source line count, agent/invocation
+correlation, lifecycle state, checkpoint, and terminal outcome. It contains no
+artifact text, captured bytes, parser source/provider text, provider prompt, or
+provider result. Baseline core-context reads do not create this history and
+cannot satisfy an explicit-reference evidence requirement.
+
+### Capture, limits, and revalidation
+
+Initial capture takes the repository lock, writes `requested` evidence, loads
+the trusted catalog, and securely reads each unique referenced path once even
+when several ranges use it. It validates the complete source as strict UTF-8
+without NUL before selecting bytes. Line ranges use universal newline records:
+CRLF, LF, and lone CR each end a line and remain in the selected byte slice;
+Unicode U+2028 remains ordinary content. Empty input has zero lines, and a
+final terminator creates no extra empty line.
+
+The inclusive limit is 128 KiB of selected UTF-8 bytes per reference and
+256 KiB across the ordered batch. Exact-limit selections are accepted. An
+out-of-bounds range or a value above either limit fails with a fixed,
+content-free code. These authorization limits are separate from the ranged
+viewer's 8 MiB defensive source limit.
+
+Delivery consumes the capability before checking the caller's requested tuple,
+so a mismatched order, path, or range cannot be retried with that capability.
+Before delivery, invocation acceptance, operation checkpoints, and final
+operation acceptance, the repository compares the complete current provenance
+and full-file hash with the original capture. The selected bytes are never
+refreshed. Even identical file bytes with newly published provenance are drift
+and terminate the affected path through the lifecycle.
+
+An empty reference batch returns without taking the artifact lock, reading
+storage, or creating history. For a nonempty batch,
+`inspect_reference_operation()` returns `None` only when the operation
+directory is absent. A present but partial, malformed, noncanonical, or
+inconsistently sequenced history raises the fixed `evidence_corrupt` error
+instead of being repaired or treated as absent.
 
 ## What a user can change
 
