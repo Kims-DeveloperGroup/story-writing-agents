@@ -1687,9 +1687,14 @@ class _RepositoryReferenceReadInvocation:
                     self._capability,
                     action.references,
                 )
-            except BaseException:
+            except ReferenceAuthorizationError:
                 self._state = "terminated"
                 self._close_result()
+                raise
+            except BaseException:
+                self._terminate_without_replacing(
+                    ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE
+                )
                 raise
             try:
                 try:
