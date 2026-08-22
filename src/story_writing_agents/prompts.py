@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import json
 from typing import Mapping
 
 from .agents import AGENT_SPECS
 from .config import ConfigurationSnapshot, ConfigManager
 from .conversations import ConversationContextWindow
-from .errors import WorkspaceFormatError
 from .models import (
     AgentDefinition,
     AgentRequest,
@@ -19,6 +17,7 @@ from .models import (
     PromptFileReference,
 )
 from .workspace import Workspace
+from .writing_artifacts import ArtifactContentSnapshot
 from .writing_artifacts.repository import WritingArtifactRepository
 
 
@@ -79,19 +78,13 @@ class PromptAssembler:
                 self.workspace.root
             ).as_posix()
         )
-        artifact_catalog = self.artifacts.catalog()
-        context_document_files: list[PromptFileReference] = []
-        for filename in spec.context_documents:
-            artifact_path = f"core_documents/{filename}"
-            entry = artifact_catalog.entries.get(artifact_path)
-            if entry is None:
-                continue
-            reference = self._reference(artifact_path)
-            if not hmac.compare_digest(reference.sha256, entry.sha256):
-                raise WorkspaceFormatError(
-                    "core document changed after artifact provenance verification"
-                )
-            context_document_files.append(reference)
+        requested_artifacts = tuple(
+            f"core_documents/{filename}" for filename in spec.context_documents
+        )
+        snapshots = self.artifacts.read_current(requested_artifacts)
+        context_document_files = [
+            self._artifact_reference(snapshot) for snapshot in snapshots
+        ]
         context_document_file_tuple = tuple(context_document_files)
         fingerprint = self._fingerprint(
             agent_id=agent_id,
@@ -158,11 +151,20 @@ class PromptAssembler:
 
     def _reference(self, relative: str) -> PromptFileReference:
         target = self.workspace.path(relative)
-        reference = PromptFileReference.from_path(target)
-        # Re-check the logical category after reading in case an untrusted
-        # workspace was changed concurrently.
-        self.workspace.path(relative)
-        return reference
+        return PromptFileReference.from_path(target)
+
+    def _artifact_reference(
+        self,
+        snapshot: ArtifactContentSnapshot,
+    ) -> PromptFileReference:
+        """Bind repository-verified bytes without retaining path authority."""
+
+        if type(snapshot) is not ArtifactContentSnapshot:
+            raise TypeError("artifact snapshot has an invalid type")
+        return PromptFileReference.from_bytes(
+            self.workspace.root / snapshot.path,
+            snapshot.content,
+        )
 
     def _fingerprint(
         self,

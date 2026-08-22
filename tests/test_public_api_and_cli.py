@@ -1455,9 +1455,9 @@ class CliTests(unittest.TestCase):
         workspace = Workspace(workspace_path)
         prompt_path = AGENT_SPECS[PLOT_ARCHITECT].system_prompt_file
         workspace.write_text(prompt_path, "custom prompt\n")
-        workspace.write_text(
-            "core_documents/global_outline.md",
+        workspace.path("core_documents/global_outline.md").write_text(
             "preserved outline\n",
+            encoding="utf-8",
         )
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):

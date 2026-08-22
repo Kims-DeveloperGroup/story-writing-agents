@@ -17,9 +17,10 @@ filesystem operation; **collision**—attempted reuse of reserved identity.
 | Provider thread ID | `[A-Za-z0-9][A-Za-z0-9_-]{0,127}`. |
 
 Conversation subjects have a separate Unicode contract. Required manuscript
-outputs use normalized `PART/PATH.md` without a leading `manuscript/`; they
-cannot be absolute, traverse with `..`, target a symlink, or use a root-level
-filename. The complete grammar is in
+outputs use a normalized `PART/PATH.md` suffix beneath the canonical
+`manuscript/` directory; they cannot be absolute, traverse with `..`, target a
+symlink, or use a single-component filename. `manuscript` is itself a legal
+part ID. The complete grammar is in
 [Canonical writing artifacts](../writing-artifacts.md).
 
 ## Public exception hierarchy

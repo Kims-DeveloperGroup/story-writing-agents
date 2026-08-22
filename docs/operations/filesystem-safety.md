@@ -28,17 +28,36 @@ directory. Use an explicit path for automation or nested workspaces.
 
 Orchestration core-document access is limited to four exact filenames.
 Manuscript outputs require `PART/PATH.md` and publish beneath
-`manuscript/PART/`. A direct client of generic `Workspace.write_text()` is
-trusted and can modify any safely contained relative file; containment is not
-authorization, and generic writes do not create artifact provenance.
+`manuscript/PART/`. Generic `Workspace.write_text()` and `write_json()` reject
+those four core paths and every canonical manuscript path: canonical
+application writes must go through the writing-artifact repository. Other
+safely contained workspace paths retain the generic helpers.
 
 Writing artifacts use a stronger domain adapter. It opens the workspace root
-and every directory by descriptor without following links, verifies root and
-component identity, requires each read target to be a unique regular file with
-one link, and rechecks the name and file after reading. Symlinks, hard links,
-nonregular files, root replacement, and concurrent change fail closed. Hosts
-without the required descriptor-relative, no-follow, listing, and advisory-lock
-primitives cannot construct the artifact repository.
+and every directory by descriptor without following links, retains and
+revalidates the complete ancestor chain, requires each read target to be a
+unique regular file with one link, opens reads nonblocking, and rechecks the
+name and file after reading. Symlinks, hard-linked artifacts, nonregular files,
+root or ancestor replacement, and detected concurrent change fail closed. Required
+descriptor-relative, no-follow, listing, link, advisory-lock, and native atomic
+no-replace rename primitives are checked on the first artifact I/O operation.
+The rename is `renameatx_np(RENAME_EXCL)` on Darwin and
+`renameat2(RENAME_NOREPLACE)` on Linux. Repository, runtime, and workspace
+construction remain available on an unsupported host; the artifact operation
+itself raises `WorkspaceSecurityError`.
+
+Artifact mutation additionally requires the workspace-local repository lease.
+The permanent lock and anchor are two names for the same regular inode; both
+names, link count, open descriptor, directory ancestry, and workspace root are
+verified before and after lock acquisition and around mutations. This paired
+hard link belongs only to lock identity. Canonical artifacts remain one-link
+regular files.
+
+This serializes supported repository writers. Generic `Workspace` writes to
+canonical paths are rejected. External/manual edits are supported only while
+all workspace processes are stopped. The adapter detects many identity and
+namespace changes, but does not claim safety against an actively hostile
+same-user process mutating live names during the native filesystem call.
 
 Conversation adapters and default helpers bind safe IDs to fixed paths. They
 check every component and require embedded IDs to match the owning path. This
@@ -79,12 +98,31 @@ publication.
 
 Writing-artifact publication is journaled, serialized by process and workspace
 artifact locks, and catalog-last. Target replacement compares the current bytes
-with the journal's expected prior hash, writes a temporary unique regular file,
-flushes it, atomically renames it, and verifies the new hash. After all targets,
-the repository publishes immutable commit history and then the current catalog.
+with the journal's expected prior hash and stages a unique regular temporary
+file with `O_EXCL` outside the authoritative transaction directory. After
+flushing it, the repository exclusively moves verified prior bytes to a unique
+`.held` staging name when replacing, then uses native no-replace rename to move
+the `.tmp` bytes into the absent target. Published bytes, retained path chain,
+root, and lease are then reverified.
+
+Publication does not unlink or use a replacing rename. A detected failure after
+target publication exclusively retires the new bytes to `.retired` and restores
+the exact `.held` prior bytes only when identity and the original path remain
+safe. Failed `.tmp` bytes and successful `.held` prior bytes remain retained;
+name collisions are preserved while a different exclusive staging name is
+tried.
+
+After all targets, the repository changes the journal from `prepared` to
+`artifacts_published`, publishes immutable commit history, and publishes the
+current catalog last. Completed journal retirement compares its exact hash
+before an exclusive no-replace move to `.completed` staging.
 An interrupted valid journal rolls forward on the next artifact access; target
-divergence or invalid recovery state writes a persistent marker and blocks all
-later artifact access. This avoids partial eligibility but is not one
+divergence, changed journal bytes, or invalid authoritative transaction state
+writes a persistent marker and blocks all later artifact access. Every `.tmp`,
+`.held`, `.retired`, and `.completed` file is retained under non-authoritative
+staging, ignored by transaction recovery and catalog listing, and may accumulate.
+Only JSON entries in `transactions/` are authoritative; any unexpected entry
+there blocks recovery. This avoids partial eligibility but is not one
 transaction with logs, debate state, results, or provider state. See
 [Canonical writing artifacts](../reference/writing-artifacts.md).
 

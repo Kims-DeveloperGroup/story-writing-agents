@@ -117,17 +117,23 @@ text. Create a referenced persona first. Rejection preserves prior overrides.
 `ManuscriptExistsError` means the target exists; preserve it, then use a new
 debate ID and distinct `PART/PATH.md` output. A manuscript revision belongs at
 a new path such as `part-01/revisions/chapter-r2.md`. Deletion, overwrite, a
-root manuscript path, and same-ID resume are unsupported.
+single-component output path, and same-ID resume are unsupported.
 
 ## A writing artifact disappeared from eligible context
 
 A manual or tool edit does not delete the file, but its SHA-256 no longer
 matches repository provenance, so catalog listing omits it and exact artifact
-reads reject it. Restore the exact recorded bytes or ask the agents to
-republish a core document through a new unanimous run. Changed manuscripts use
-a new part-scoped revision path. Internal transcripts, discussion logs, agent
-state, root-level manuscripts, symlinks, hard links, and nonregular files are
-never eligible.
+reads reject it. Make external edits only after every workspace process has
+stopped. Restore the exact recorded bytes or ask the agents to republish a core
+document through a new unanimous run. Changed manuscripts use a new part-scoped
+revision path. Internal transcripts, discussion logs, agent state,
+single-component manuscript files, symlinks, hard links, and nonregular files
+are never eligible.
+
+Files ending in `.tmp`, `.held`, `.retired`, or `.completed` under the internal
+writing-artifact `staging/` directory are retained publication evidence. They
+are never eligible or authoritative recovery journals and may accumulate; do
+not move them into `transactions/` or present them as story output.
 
 If access reports `writing-artifact recovery is blocked`, stop, preserve a full
 backup, and follow [artifact recovery](../operations/recovery-and-limitations.md#writing-artifact-recovery).

@@ -58,12 +58,25 @@ preterminal debates `interrupted` when possible; later failures cannot rewrite r
 ## Writing-artifact recovery
 
 Every artifact catalog read, exact artifact read, or commit first checks for a
-pending publication journal under the artifact lock. A valid `prepared` or
-`artifacts_published` journal rolls forward: each target must still equal its
-recorded old or new hash, then commit history and the catalog are published
-last. Users may see an infrastructure failure followed by successful recovery
-on the next artifact access; inspect the associated debate because its result
-and lifecycle are outside the artifact transaction.
+pending publication journal under the verified paired-lock lease. A valid
+`prepared` journal means target publication may not have started or may be
+partial; a valid `artifacts_published` journal means all targets were verified
+and only repository metadata may remain. Both roll forward: each target must
+still equal its recorded old or new hash, then immutable commit history and the
+catalog are published last. The completed journal is hash-checked and moved with
+native no-replace rename to a `.completed` name in staging. If the journal name
+or identity changed, the repository preserves it and blocks instead of retiring
+uncertain state. Users may see an infrastructure failure followed by successful
+recovery on the next artifact access; inspect the associated debate because its
+result and lifecycle are outside the artifact transaction.
+
+Publication temporaries live under the repository's separate `staging/`
+directory rather than `transactions/`. Failed `.tmp` bytes, prior `.held`
+bytes, failed published `.retired` bytes, and finished `.completed` journals are
+all retained there. This residue is normal internal state, is ignored and
+preserved by transaction recovery and catalog reads, and may grow. Only exact
+JSON journal names in `transactions/` are authoritative; any unexpected entry
+there is ambiguity and blocks recovery.
 
 If a journal is invalid or a target diverged, the repository writes
 `agent_states/orchestrator_state/writing_artifacts/recovery_blocked.json` and
@@ -73,6 +86,21 @@ journal and target history. Do not delete or edit the lock, journal, catalog,
 commit records, or block marker to force recovery; no automatic repair command
 exists. Restore a verified backup when trustworthy reconstruction is not
 possible. See [Canonical writing artifacts](../reference/writing-artifacts.md).
+
+Catalog listing and selective prompt-context reads omit an individual missing,
+unsafe, hard-linked, nonregular, or hash-stale artifact. They do not hide a
+workspace-root, ancestor, lock-lease, catalog-schema, or global provenance
+integrity failure; those errors propagate because safe enumeration is no longer
+possible. A manual byte edit is therefore nondestructive but makes that entry
+ineligible. Restoring the exact cataloged bytes can make it eligible again when
+the commit and catalog evidence remain valid.
+
+Stop every workspace process before a manual or external filesystem edit. The
+repository lease serializes supported repository writers, but an actively
+hostile same-user process mutating live names during the native no-replace call
+is outside the supported boundary. Darwin and Linux hosts without the required
+native atomic no-replace rename fail on their first artifact operation; other
+non-artifact workspace/runtime APIs remain usable.
 
 ## Controller cancellation proof
 

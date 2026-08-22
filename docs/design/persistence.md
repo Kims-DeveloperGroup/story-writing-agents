@@ -97,9 +97,11 @@ Terminal result creation and lifecycle transition finish before terminal
 progress. Approved artifact publication is a separate recoverable transaction:
 it journals the complete intended manuscript/core set, publishes and verifies
 the target bytes, writes immutable commit history, publishes the catalog last,
-then removes the journal. The next artifact access rolls a valid interrupted
-journal forward; untrusted divergence writes a persistent block marker and
-fails all later artifact access closed.
+then exclusively retires the completed journal to non-authoritative staging.
+The next artifact access rolls a valid interrupted journal forward; untrusted
+divergence writes a persistent block marker and fails all later artifact access
+closed. Retained `.tmp`, `.held`, `.retired`, and `.completed` staging files are
+ignored by recovery and catalog listing and may accumulate.
 
 That artifact transaction does not combine sidecars, blackboards, defaults,
 transcripts, debate lifecycle, results, provider state, and agent state into one

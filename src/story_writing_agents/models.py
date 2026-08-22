@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import re
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
@@ -281,19 +280,25 @@ class AgentStateEntry:
 
 @dataclass(frozen=True, slots=True)
 class PromptFileReference:
-    """Content-addressed reference to a strict UTF-8 prompt component."""
+    """Immutable content-addressed snapshot of one prompt component."""
 
     path: Path
     sha256: str
+    content: bytes = field(repr=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "path", Path(self.path))
+        if type(self.content) is not bytes:
+            raise TypeError("prompt content must be bytes")
         if (
             not isinstance(self.sha256, str)
             or len(self.sha256) != 64
             or any(character not in "0123456789abcdef" for character in self.sha256)
         ):
             raise ValueError("sha256 must be a lowercase SHA-256 hexadecimal digest")
+        if hashlib.sha256(self.content).hexdigest() != self.sha256:
+            raise ValueError("sha256 must match the immutable prompt content")
+        self._decode_utf8(self.path, self.content)
 
     @classmethod
     def from_path(cls, path: Path) -> PromptFileReference:
@@ -302,18 +307,28 @@ class PromptFileReference:
         target = Path(path)
         data = cls._read_bytes(target)
         cls._decode_utf8(target, data)
-        return cls(path=target, sha256=hashlib.sha256(data).hexdigest())
+        return cls(
+            path=target,
+            sha256=hashlib.sha256(data).hexdigest(),
+            content=data,
+        )
+
+    @classmethod
+    def from_bytes(cls, path: Path, content: bytes) -> PromptFileReference:
+        """Create a lexical source reference backed by immutable exact bytes."""
+
+        if type(content) is not bytes:
+            raise TypeError("prompt content must be bytes")
+        return cls(
+            path=Path(path),
+            sha256=hashlib.sha256(content).hexdigest(),
+            content=content,
+        )
 
     def read_text(self) -> str:
-        """Read strict UTF-8 only when the current content matches ``sha256``."""
+        """Decode the captured bytes after construction verified ``sha256``."""
 
-        data = self._read_bytes(self.path)
-        actual = hashlib.sha256(data).hexdigest()
-        if not hmac.compare_digest(actual, self.sha256):
-            raise WorkspaceFormatError(
-                f"referenced prompt file changed after reference creation: {self.path}"
-            )
-        return self._decode_utf8(self.path, data)
+        return self._decode_utf8(self.path, self.content)
 
     @staticmethod
     def _read_bytes(path: Path) -> bytes:

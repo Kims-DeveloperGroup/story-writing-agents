@@ -12,13 +12,13 @@ from pathlib import Path
 from typing import Mapping
 from uuid import uuid4
 
-from ..agents import CORE_DOCUMENTS, LEAD_ORCHESTRATOR, ROSTER
+from ..agents import CORE_DOCUMENTS, EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR
 from ..errors import (
     ManuscriptExistsError,
     WorkspaceFormatError,
     WorkspaceSecurityError,
 )
-from ._storage import SecureWorkspaceStorage
+from ._storage import ArtifactEntrySecurityError, SecureWorkspaceStorage
 from .catalog import (
     ArtifactCatalog,
     ArtifactCatalogEntry,
@@ -26,6 +26,7 @@ from .catalog import (
     canonical_artifact_kind,
     manuscript_artifact_path,
 )
+from .references import ArtifactContentSnapshot
 
 
 _STATE_DIRECTORY = "agent_states/orchestrator_state/writing_artifacts"
@@ -33,6 +34,7 @@ _CATALOG_PATH = f"{_STATE_DIRECTORY}/catalog.json"
 _COMMITS_DIRECTORY = f"{_STATE_DIRECTORY}/commits"
 _TRANSACTIONS_DIRECTORY = f"{_STATE_DIRECTORY}/transactions"
 _SNAPSHOTS_DIRECTORY = f"{_STATE_DIRECTORY}/input_snapshots"
+_STAGING_DIRECTORY = f"{_STATE_DIRECTORY}/staging"
 _LOCK_PATH = f"{_STATE_DIRECTORY}/.artifacts.lock"
 _RECOVERY_BLOCK_PATH = f"{_STATE_DIRECTORY}/recovery_blocked.json"
 _TRANSACTION_SCHEMA_VERSION = 1
@@ -62,7 +64,7 @@ class WritingArtifactRepository:
             for path, entry in catalog.entries.items():
                 try:
                     content = self._storage.read_bytes(path)
-                except (FileNotFoundError, WorkspaceFormatError, WorkspaceSecurityError):
+                except (FileNotFoundError, ArtifactEntrySecurityError):
                     continue
                 if hashlib.sha256(content).hexdigest() == entry.sha256:
                     current[path] = entry
@@ -72,6 +74,37 @@ class WritingArtifactRepository:
         """Return sorted complete workspace-relative eligible identities."""
 
         return tuple(sorted(self.catalog().entries))
+
+    def read_current(
+        self,
+        paths: tuple[str, ...],
+    ) -> tuple[ArtifactContentSnapshot, ...]:
+        """Return immutable current bytes for only the requested artifacts."""
+
+        if type(paths) is not tuple:
+            raise TypeError("artifact paths must be a tuple")
+        if len(set(paths)) != len(paths):
+            raise ValueError("artifact paths must be unique")
+        for path in paths:
+            if canonical_artifact_kind(path) is None:
+                raise WorkspaceSecurityError(
+                    "path is not a canonical writing artifact"
+                )
+        with self._locked_repository():
+            catalog = self._load_catalog()
+            snapshots: list[ArtifactContentSnapshot] = []
+            for path in paths:
+                entry = catalog.entries.get(path)
+                if entry is None:
+                    continue
+                try:
+                    content = self._storage.read_bytes(path)
+                except (FileNotFoundError, ArtifactEntrySecurityError):
+                    continue
+                if hashlib.sha256(content).hexdigest() != entry.sha256:
+                    continue
+                snapshots.append(ArtifactContentSnapshot(entry, content))
+            return tuple(snapshots)
 
     def read_text(self, path: str, *, max_bytes: int | None = None) -> str:
         """Read a current catalog entry only after hash and provenance checks."""
@@ -122,8 +155,13 @@ class WritingArtifactRepository:
             ("revision ID", revision_id),
         ):
             self._validate_identity(value, name)
-        if candidate_author_agent_id not in ROSTER:
-            raise WorkspaceSecurityError("candidate author is not a canonical story agent")
+        expected_candidate_author = (
+            EXECUTION_SPECIALIST if revision_id == "r0" else LEAD_ORCHESTRATOR
+        )
+        if candidate_author_agent_id != expected_candidate_author:
+            raise WorkspaceSecurityError(
+                "candidate author does not match the approved revision"
+            )
 
         with self._locked_repository():
             if self._storage.read_bytes_if_exists(manuscript_path) is not None:
@@ -245,6 +283,7 @@ class WritingArtifactRepository:
             _COMMITS_DIRECTORY,
             _TRANSACTIONS_DIRECTORY,
             _SNAPSHOTS_DIRECTORY,
+            _STAGING_DIRECTORY,
         ):
             self._storage.ensure_directory(path)
 
@@ -308,7 +347,8 @@ class WritingArtifactRepository:
                 new_content,
                 expected_sha256=old_hash,
                 expected_exists=old_exists,
-                create_only=bool(raw_target["create_only"]),
+                create_only=raw_target["create_only"],
+                staging_directory=_STAGING_DIRECTORY,
             )
             published = self._storage.read_bytes(path)
             if hashlib.sha256(published).hexdigest() != expected_hash:
@@ -331,7 +371,14 @@ class WritingArtifactRepository:
         assert isinstance(catalog_after, dict)
         ArtifactCatalog.from_dict(catalog_after)
         self._write_json_exact(_CATALOG_PATH, catalog_after)
-        self._storage.unlink(transaction_path, missing_ok=True)
+        self._storage.unlink(
+            transaction_path,
+            expected_sha256=hashlib.sha256(
+                self._json_bytes(transaction)
+            ).hexdigest(),
+            retirement_directory=_STAGING_DIRECTORY,
+            missing_ok=True,
+        )
 
     def _validate_transaction(
         self,
@@ -349,7 +396,10 @@ class WritingArtifactRepository:
         }
         if type(value) is not dict or set(value) != expected_fields:
             raise WorkspaceFormatError("transaction fields are invalid")
-        if value["schema_version"] != _TRANSACTION_SCHEMA_VERSION:
+        if (
+            type(value["schema_version"]) is not int
+            or value["schema_version"] != _TRANSACTION_SCHEMA_VERSION
+        ):
             raise WorkspaceFormatError("transaction schema is unsupported")
         transaction_id = value["transaction_id"]
         if (
@@ -360,6 +410,9 @@ class WritingArtifactRepository:
             raise WorkspaceFormatError("transaction identity is invalid")
         if value["state"] not in {"prepared", "artifacts_published"}:
             raise WorkspaceFormatError("transaction state is invalid")
+        commit = value["commit"]
+        self._validate_commit(commit, transaction_id=transaction_id)
+        assert isinstance(commit, dict)
         targets = value["targets"]
         if type(targets) is not list or not targets:
             raise WorkspaceFormatError("transaction targets are invalid")
@@ -386,13 +439,25 @@ class WritingArtifactRepository:
             if canonical_artifact_kind(path) is not parsed_kind or path in observed_paths:
                 raise WorkspaceFormatError("transaction artifact path is invalid")
             observed_paths.add(path)
-            if target["author_agent_id"] not in ROSTER:
-                raise WorkspaceFormatError("transaction author is invalid")
             if type(target["create_only"]) is not bool or type(target["old_exists"]) is not bool:
                 raise WorkspaceFormatError("transaction boolean field is invalid")
             if parsed_kind is ArtifactKind.MANUSCRIPT and target["create_only"] is not True:
                 raise WorkspaceFormatError("manuscript transaction must be create-only")
-            if re.fullmatch(r"[0-9a-f]{64}", target["new_sha256"] or "") is None:
+            if parsed_kind is ArtifactKind.CORE_DOCUMENT and target["create_only"] is not False:
+                raise WorkspaceFormatError("core-document transaction must replace")
+            expected_author = (
+                EXECUTION_SPECIALIST
+                if parsed_kind is ArtifactKind.MANUSCRIPT
+                and commit["revision_id"] == "r0"
+                else LEAD_ORCHESTRATOR
+            )
+            if target["author_agent_id"] != expected_author:
+                raise WorkspaceFormatError("transaction author is invalid")
+            if (
+                type(target["new_sha256"]) is not str
+                or re.fullmatch(r"[0-9a-f]{64}", target["new_sha256"])
+                is None
+            ):
                 raise WorkspaceFormatError("transaction new hash is invalid")
             old_hash = target["old_sha256"]
             if target["old_exists"]:
@@ -404,14 +469,49 @@ class WritingArtifactRepository:
             elif old_hash is not None:
                 raise WorkspaceFormatError("absent transaction target has an old hash")
         catalog = ArtifactCatalog.from_dict(value["catalog_after"])
-        commit = value["commit"]
-        self._validate_commit(commit, transaction_id=transaction_id)
+        target_metadata = {
+            target["path"]: (
+                target["kind"],
+                target["author_agent_id"],
+                target["new_sha256"],
+            )
+            for target in targets
+        }
+        commit_artifacts = commit["artifacts"]
+        assert isinstance(commit_artifacts, list)
+        commit_metadata = {
+            artifact["path"]: (
+                artifact["kind"],
+                artifact["author_agent_id"],
+                artifact["sha256"],
+            )
+            for artifact in commit_artifacts
+        }
+        if commit_metadata != target_metadata:
+            raise WorkspaceFormatError(
+                "transaction commit does not exactly match targets"
+            )
+        catalog_entries = {
+            path: entry
+            for path, entry in catalog.entries.items()
+            if entry.commit_id == transaction_id
+        }
+        if set(catalog_entries) != set(target_metadata):
+            raise WorkspaceFormatError(
+                "transaction catalog commit set does not match targets"
+            )
         for target in targets:
             entry = catalog.entries.get(target["path"])
             if (
                 entry is None
                 or entry.commit_id != transaction_id
                 or entry.sha256 != target["new_sha256"]
+                or entry.kind.value != target["kind"]
+                or entry.author_agent_id != target["author_agent_id"]
+                or entry.committed_at != commit["committed_at"]
+                or entry.session_id != commit["session_id"]
+                or entry.debate_id != commit["debate_id"]
+                or entry.revision_id != commit["revision_id"]
             ):
                 raise WorkspaceFormatError("transaction catalog does not match targets")
 
@@ -429,7 +529,9 @@ class WritingArtifactRepository:
         if type(value) is not dict or set(value) != fields:
             raise WorkspaceFormatError("artifact commit fields are invalid")
         if (
-            value["schema_version"] != _COMMIT_SCHEMA_VERSION
+            type(value["commit_id"]) is not str
+            or type(value["schema_version"]) is not int
+            or value["schema_version"] != _COMMIT_SCHEMA_VERSION
             or value["commit_id"] != transaction_id
         ):
             raise WorkspaceFormatError("artifact commit identity is invalid")
@@ -438,7 +540,7 @@ class WritingArtifactRepository:
                 raise WorkspaceFormatError("artifact commit metadata is invalid")
         try:
             timestamp = datetime.fromisoformat(value["committed_at"])
-        except ValueError as exc:
+        except (TypeError, ValueError) as exc:
             raise WorkspaceFormatError("artifact commit timestamp is invalid") from exc
         if timestamp.tzinfo is None or timestamp.utcoffset() is None:
             raise WorkspaceFormatError("artifact commit timestamp must be offset-aware")
@@ -462,9 +564,19 @@ class WritingArtifactRepository:
             if canonical_artifact_kind(path) is not kind or path in paths:
                 raise WorkspaceFormatError("artifact commit path is invalid")
             paths.add(path)
-            if artifact["author_agent_id"] not in ROSTER:
+            expected_author = (
+                EXECUTION_SPECIALIST
+                if kind is ArtifactKind.MANUSCRIPT
+                and value["revision_id"] == "r0"
+                else LEAD_ORCHESTRATOR
+            )
+            if artifact["author_agent_id"] != expected_author:
                 raise WorkspaceFormatError("artifact commit author is invalid")
-            if re.fullmatch(r"[0-9a-f]{64}", artifact["sha256"] or "") is None:
+            if (
+                type(artifact["sha256"]) is not str
+                or re.fullmatch(r"[0-9a-f]{64}", artifact["sha256"])
+                is None
+            ):
                 raise WorkspaceFormatError("artifact commit hash is invalid")
             if kind is ArtifactKind.MANUSCRIPT:
                 manuscript_count += 1
@@ -552,6 +664,7 @@ class WritingArtifactRepository:
             expected_sha256=None,
             expected_exists=False,
             create_only=True,
+            staging_directory=_STAGING_DIRECTORY,
         )
 
     def _replace_json(self, relative: str, value: object) -> None:
@@ -562,6 +675,7 @@ class WritingArtifactRepository:
             expected_sha256=hashlib.sha256(current).hexdigest(),
             expected_exists=True,
             create_only=False,
+            staging_directory=_STAGING_DIRECTORY,
         )
 
     def _write_immutable_json(self, relative: str, value: object) -> None:
@@ -579,6 +693,7 @@ class WritingArtifactRepository:
             expected_sha256=None,
             expected_exists=False,
             create_only=True,
+            staging_directory=_STAGING_DIRECTORY,
         )
 
     def _write_json_exact(self, relative: str, value: object) -> None:
@@ -594,6 +709,7 @@ class WritingArtifactRepository:
             ),
             expected_exists=current is not None,
             create_only=False,
+            staging_directory=_STAGING_DIRECTORY,
         )
 
     def _block_recovery(self, reason: str, *, cause: Exception | None = None) -> None:

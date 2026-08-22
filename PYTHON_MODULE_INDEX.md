@@ -30,8 +30,9 @@ __main__ -> cli -> interactive_controller -> interactive_controller._core
                  -> orchestrator -> conversation_retrieval -> agents/conversation_search
                  |               |                           -> conversations/errors
                  |               -> conversation_search -> conversations/errors
-                 |               -> prompts -> agents/config/conversations/errors
-                 |               |          -> models/workspace/writing_artifacts.repository
+                 |               -> prompts -> agents/config/conversations/models
+                 |               |          -> workspace/writing_artifacts
+                 |               |          -> writing_artifacts.repository
                  |               -> agents/backend/config/conversations/directives
                  |               -> errors/models/session_lifecycle/workspace
                  |               -> writing_artifacts/writing_artifacts.repository
@@ -76,9 +77,10 @@ story_writing_agents facade -> interactive_commands
 models -> conversations/agents/errors
 session_lifecycle -> (standard library only)
 workspace -> conversations -> agents/errors
+          -> models/writing_artifacts
 writing_artifacts -> writing_artifacts.catalog/references
 writing_artifacts.references -> writing_artifacts.catalog
-writing_artifacts.repository -> agents/errors/writing_artifacts._storage/catalog
+writing_artifacts.repository -> agents/errors/writing_artifacts._storage/catalog/references
 writing_artifacts._storage -> errors
 ```
 
@@ -215,7 +217,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `conversation_retrieval`, `errors`, `models`, `session_lifecycle`, and
   `workspace`.
 - **State, resources, and side effects:** Owns Codex subprocesses, temporary
-  prompt/output staging, exact V2 provider-session manifests at
+  prompt/output staging from immutable `PromptFileReference` bytes (never by
+  reopening their lexical source paths), exact V2 provider-session manifests at
   `agent_states/orchestrator_state/provider_sessions/<session_id>.json`, exact
   V2 process-access claims at sibling `<session_id>.access.json` paths, the
   lazily created workspace-global `.access-claims.lock` OS advisory guard,
@@ -1309,7 +1312,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   `conversation_context` field without changing context-free construction.
 - **Direct internal dependencies:** `agents`, `conversations`, and `errors`.
 - **State, resources, and side effects:** Value contracts own no process state;
-  `PromptFileReference` performs verified filesystem reads.
+  `PromptFileReference.from_path` performs one verified capture for ordinary
+  configuration inputs, while constructed references retain immutable strict-
+  UTF-8 bytes and never reopen their lexical source paths.
 - **Primary verification/documentation:** `tests/test_prompts.py`,
   `tests/test_codex_backend.py`, `tests/test_conversation_runtime.py`,
   `tests/test_session_lifecycle.py`, orchestration and state tests,
@@ -1396,14 +1401,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   optional keyword-only `configuration_snapshot` accepts one immutable
   persisted snapshot without changing the default on-demand construction path.
 - **Direct internal dependencies:** `agents`, `config`, `conversations`,
-  `errors`, `models`, `workspace`, and `writing_artifacts.repository`.
+  `models`, `workspace`, `writing_artifacts`, and
+  `writing_artifacts.repository`.
 - **State, resources, and side effects:** Reads verified prompt references and
   owner-isolated agent history. With no injected snapshot it resolves persisted
   configuration on demand; with a snapshot it reuses those persisted values but
-  still loads session runtime overrides for every definition. Only current
-  provenance-backed core documents are included in an agent definition; each
-  created reference must match the exact repository-verified catalog hash,
-  while absent placeholders, manual files, and hash-divergent files are omitted.
+  still loads session runtime overrides for every definition. It requests only
+  the agent's core context paths and binds repository-verified immutable byte
+  snapshots into prompt references; no later provider step reopens an artifact
+  path. Absent placeholders, manual files, and hash-divergent files are omitted.
   It forwards an optional canonical conversation-context object unchanged into
   each built `AgentRequest`. The assembler owns no write operation, but catalog
   projection delegates locked recovery and lazy internal-state setup to the
@@ -1493,8 +1499,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `initialize_workspace`. `Workspace.inspect_debate_context` is the strict,
   separate context-sidecar inspection operation; topology, serialization, and
   lock-registry details are internal.
-- **Direct internal dependencies:** `agents`, `conversations`, `errors`, and
-  `models`.
+- **Direct internal dependencies:** `agents`, `conversations`, `errors`,
+  `models`, and `writing_artifacts`.
 - **State, resources, and side effects:** Owns topology, path and symlink
   security, strict UTF-8 and JSON I/O, overrides, agent and debate state, logs,
   results, per-conversation metadata under
@@ -1503,8 +1509,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   `discussion_logs/<session_id>/interactive/conversations/<conversation_id>/transcript.jsonl`,
   immutable debate-context sidecars under
   `discussion_logs/<session_id>/<debate_id>.context.json`, and generic atomic
-  text/JSON replacement. It no longer creates core-document templates or owns
-  manuscript/core-document reads, writes, commits, or rollback. Context
+  text/JSON replacement, except that its supported generic text/JSON writers
+  reject canonical writing-artifact identities. It no longer creates core-
+  document templates or owns manuscript/core-document reads, writes, commits,
+  or rollback. Context
   sidecars use an exact identity-bound version-1 schema, require a non-null
   canonical snapshot for included mode and a null snapshot for fresh mode,
   reject malformed or colliding files, and return `None` when absent for legacy
@@ -1540,9 +1548,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   value facade.
 - **Supported surface:** Exactly the names in `__all__`: canonical core and
   resource-limit constants; `ArtifactKind`, `ArtifactCatalogEntry`,
-  `ArtifactCatalog`, `ArtifactLineRange`, and `ArtifactReference`; plus
-  `canonical_artifact_kind` and `manuscript_artifact_path`. The filesystem
-  repository and storage adapter are intentionally not re-exported.
+  `ArtifactCatalog`, `ArtifactContentSnapshot`, `ArtifactLineRange`, and
+  `ArtifactReference`; plus `canonical_artifact_kind` and
+  `manuscript_artifact_path`. The filesystem repository and storage adapter are
+  intentionally not re-exported.
 - **Direct internal dependencies:** `writing_artifacts.catalog` and
   `writing_artifacts.references`.
 - **State, resources, and side effects:** Owns no state or resource. Importing
@@ -1563,7 +1572,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `canonical_artifact_kind`, and `manuscript_artifact_path`. Canonical core
   identity is limited to the four exact `core_documents/*.md` paths;
   manuscripts require normalized `manuscript/<part-id>/.../*.md` identities,
-  and output syntax is the corresponding required `PART/PATH.md` suffix.
+  and output syntax is the corresponding required `PART/PATH.md` suffix. The
+  safe component `manuscript` is a legal part identifier.
 - **Direct internal dependencies:** None.
 - **State, resources, and side effects:** Immutable values and pure validation
   only; catalog mappings are copied and exposed read-only.
@@ -1575,19 +1585,21 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.writing_artifacts.references`
 
 - **Source:** `src/story_writing_agents/writing_artifacts/references.py`
-- **Responsibility:** Define immutable artifact-reference identities and
-  bounded resource constants.
-- **Supported surface:** Package-supported `ArtifactLineRange`,
-  `ArtifactReference`, `MAX_ARTIFACT_PATH_BYTES`, `MAX_REFERENCE_COUNT`,
-  `MAX_REFERENCE_UTF8_BYTES`, `MAX_REFERENCE_TOTAL_BYTES`, and
-  `MAX_VIEWER_UTF8_BYTES`. Token discovery, parsing, content resolution, and
-  provider framing are intentionally absent from this leaf.
+- **Responsibility:** Define immutable artifact-reference and verified-content
+  snapshot identities plus bounded resource constants.
+- **Supported surface:** Package-supported `ArtifactContentSnapshot`,
+  `ArtifactLineRange`, `ArtifactReference`, `MAX_ARTIFACT_PATH_BYTES`,
+  `MAX_REFERENCE_COUNT`, `MAX_REFERENCE_UTF8_BYTES`,
+  `MAX_REFERENCE_TOTAL_BYTES`, and `MAX_VIEWER_UTF8_BYTES`. Token discovery,
+  parsing, runtime token resolution, and provider framing are intentionally
+  absent from this leaf.
 - **Direct internal dependencies:** `writing_artifacts.catalog`.
-- **State, resources, and side effects:** Pure frozen values only; no I/O or
-  import-time operational side effect.
+- **State, resources, and side effects:** Pure frozen values, including an
+  exact hash-verified immutable byte snapshot, with no I/O or import-time
+  operational side effect.
 - **Primary verification/documentation:** `tests/test_writing_artifacts.py`,
-  `tests/test_public_api_and_cli.py`, `docs/reference/runtime-api.md`, and
-  `docs/reference/cli.md`.
+  `tests/test_public_api_and_cli.py`, `docs/reference/writing-artifacts.md`,
+  `docs/reference/runtime-api.md`, and `docs/reference/cli.md`.
 
 ### `story_writing_agents.writing_artifacts._storage`
 
@@ -1598,15 +1610,22 @@ every intermediate arrow. The current runtime graph is acyclic.
   `writing_artifacts.repository`.
 - **Direct internal dependencies:** `errors`.
 - **State, resources, and side effects:** Construction retains only the named
-  resolved workspace root and verifies required platform primitives without
-  opening it. First I/O binds a meaningful root `(st_dev, st_ino)` pair; every
+  resolved workspace root; required platform primitives are checked lazily on
+  first I/O, which binds a meaningful root `(st_dev, st_ino)` pair. Every
   later operation reopens and verifies that identity. Each traversal uses
-  call-local directory descriptors, `O_NOFOLLOW`, name/descriptor identity
-  checks, unique-regular-file checks, fsynced staged publication, and atomic
-  create-only links or replacements. The adapter owns the repository's
-  advisory lock descriptor only for the exact context-manager lifetime and
-  fails closed on unsupported primitives, symlinks, hardlinks, identity
-  changes, or ambiguous traversal.
+  retained and revalidated ancestor descriptors, `O_NOFOLLOW`, nonblocking
+  pre-stat/name/descriptor checks, unique-regular-file checks, fsync, and a
+  lazily required Darwin/Linux native atomic no-replace rename. Publication,
+  replacement holding, rollback, temporary cleanup, and completed-journal
+  removal never overwrite or unlink a name: prior, failed, and completed bytes
+  move exclusively into ignored non-authoritative staging and remain retained.
+  The adapter owns a permanent paired-hard-link lock identity, while each
+  context owns its descriptor/flock and mutation lease only for that lifetime.
+  It fails closed on unsupported primitives, special files, symlinks,
+  hardlinks, identity changes, lock replacement, destination collision, or
+  ambiguous traversal. The lease serializes supported repository writers;
+  manual filesystem mutation is supported only while workspace processes are
+  stopped, not as a hostile same-user live namespace writer.
 - **Primary verification/documentation:** `tests/test_writing_artifacts.py`,
   `tests/test_workspace_and_config.py`, `tests/test_orchestration_safety.py`,
   `docs/reference/writing-artifacts.md`, `docs/design/persistence.md`, and
@@ -1619,24 +1638,32 @@ every intermediate arrow. The current runtime graph is acyclic.
   recovery.
 - **Supported surface:** Module-supported internal
   `WritingArtifactRepository`, with current `catalog`, sorted `list_paths`,
-  verified `read_text`, and unanimous `commit_consensus` operations. It is not
-  exported by either package facade.
+  ordered selective immutable `read_current`, verified `read_text`, and
+  unanimous `commit_consensus` operations. It is not exported by either
+  package facade.
 - **Direct internal dependencies:** `agents`, `errors`,
-  `writing_artifacts._storage`, and `writing_artifacts.catalog`.
+  `writing_artifacts._storage`, `writing_artifacts.catalog`, and
+  `writing_artifacts.references`.
 - **State, resources, and side effects:** Owns a per-instance reentrant lock
   and the workspace-local
   `agent_states/orchestrator_state/writing_artifacts/.artifacts.lock`.
   Provenance state is the exact sibling `catalog.json`, `commits/`,
-  `transactions/`, and reserved `input_snapshots/` topology. Every read and
+  `transactions/`, reserved `input_snapshots/`, and non-journal `staging/`
+  topology. Staging retains exclusively named prior versions, failed
+  publications, and completed journals; recovery enumerates only authoritative
+  transaction JSON and ignores all such residue. Every read and
   commit performs locked recovery first; a staged journal contains the bytes
   and old/new hashes needed to roll forward, artifact bytes publish before an
   absence-or-exact immutable commit record and catalog-last provenance, and
   unexpected divergence creates a durable recovery-block marker and fails
   closed. Listings expose only cataloged
   canonical paths whose current unique regular-file bytes match repository
-  hashes. Consensus commits require a canonical story-agent author, publish
-  manuscripts create-only beneath a part directory, and allow only the four
-  lead-authored core updates. Manual, initialization, internal, unsupported,
+  hashes. Selective reads return only requested current entries as immutable
+  content snapshots. Consensus commits require the execution specialist for
+  revision-zero manuscripts and the lead for later manuscripts, publish them
+  create-only beneath a part directory, and allow only lead-authored core
+  updates. Transaction/commit/catalog sets and scalar schemas are correlated
+  exactly. Manual, initialization, internal, unsupported,
   unsafe, root-manuscript, symlink, hardlink, absent, and hash-divergent files
   cannot become eligible.
 - **Primary verification/documentation:** `tests/test_writing_artifacts.py`,
@@ -1645,6 +1672,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   `docs/design/persistence.md`, and `docs/operations/filesystem-safety.md`.
 
 ## Consistency Notes
+
+- Canonical core context crosses the repository/provider boundary only as an
+  `ArtifactContentSnapshot` converted to an immutable `PromptFileReference`.
+  `PromptAssembler` requests only the current agent's configured core paths;
+  provider binding and staging decode the captured bytes and never reopen the
+  lexical workspace path. `Workspace` generic writers reject canonical
+  artifact identities, while repository mutation remains protected by its
+  permanent paired lock and call-scoped lease.
 
 - `Workspace` initializes the canonical five-key system-default document but
   never rewrites an existing one. `ConfigManager` owns full system and per-agent

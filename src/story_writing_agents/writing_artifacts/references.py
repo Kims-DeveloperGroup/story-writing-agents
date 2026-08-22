@@ -8,13 +8,47 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .catalog import MAX_ARTIFACT_PATH_BYTES, canonical_artifact_kind
+import hashlib
+
+from .catalog import (
+    MAX_ARTIFACT_PATH_BYTES,
+    ArtifactCatalogEntry,
+    canonical_artifact_kind,
+)
 
 
 MAX_REFERENCE_COUNT = 16
 MAX_REFERENCE_UTF8_BYTES = 128 * 1024
 MAX_REFERENCE_TOTAL_BYTES = 256 * 1024
 MAX_VIEWER_UTF8_BYTES = 8 * 1024 * 1024
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactContentSnapshot:
+    """Exact repository-verified bytes for one current catalog entry."""
+
+    entry: ArtifactCatalogEntry
+    content: bytes
+
+    def __post_init__(self) -> None:
+        if type(self.entry) is not ArtifactCatalogEntry:
+            raise TypeError("entry must be an ArtifactCatalogEntry")
+        if type(self.content) is not bytes:
+            raise TypeError("artifact snapshot content must be bytes")
+        if hashlib.sha256(self.content).hexdigest() != self.entry.sha256:
+            raise ValueError("artifact snapshot content does not match provenance")
+
+    @property
+    def path(self) -> str:
+        return self.entry.path
+
+    def read_text(self) -> str:
+        """Decode the immutable verified bytes as strict UTF-8."""
+
+        try:
+            return self.content.decode("utf-8", errors="strict")
+        except UnicodeDecodeError as exc:
+            raise ValueError("artifact snapshot is not valid UTF-8") from exc
 
 
 @dataclass(frozen=True, slots=True)

@@ -19,6 +19,7 @@ from .references import (
     MAX_REFERENCE_TOTAL_BYTES,
     MAX_REFERENCE_UTF8_BYTES,
     MAX_VIEWER_UTF8_BYTES,
+    ArtifactContentSnapshot,
     ArtifactLineRange,
     ArtifactReference,
 )
@@ -32,6 +33,7 @@ __all__ = (
     "MAX_VIEWER_UTF8_BYTES",
     "ArtifactCatalog",
     "ArtifactCatalogEntry",
+    "ArtifactContentSnapshot",
     "ArtifactKind",
     "ArtifactLineRange",
     "ArtifactReference",

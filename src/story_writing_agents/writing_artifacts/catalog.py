@@ -79,8 +79,6 @@ def manuscript_artifact_path(output_path: object) -> str:
 
     parts = _validate_posix_path(output_path)
     assert isinstance(output_path, str)
-    if parts[0] == "manuscript":
-        raise ValueError("output path must use PART/PATH.md without manuscript/")
     artifact_path = f"manuscript/{output_path}"
     if canonical_artifact_kind(artifact_path) is not ArtifactKind.MANUSCRIPT:
         raise ValueError("output path must be PART/PATH.md with safe components")
@@ -175,7 +173,10 @@ class ArtifactCatalog:
     schema_version: int = CATALOG_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
-        if self.schema_version != CATALOG_SCHEMA_VERSION:
+        if (
+            type(self.schema_version) is not int
+            or self.schema_version != CATALOG_SCHEMA_VERSION
+        ):
             raise ValueError("catalog schema version is unsupported")
         if not isinstance(self.entries, Mapping):
             raise TypeError("catalog entries must be a mapping")
@@ -203,7 +204,10 @@ class ArtifactCatalog:
     def from_dict(cls, value: object) -> ArtifactCatalog:
         if type(value) is not dict or set(value) != {"entries", "schema_version"}:
             raise ValueError("artifact catalog fields are invalid")
-        if value["schema_version"] != CATALOG_SCHEMA_VERSION:
+        if (
+            type(value["schema_version"]) is not int
+            or value["schema_version"] != CATALOG_SCHEMA_VERSION
+        ):
             raise ValueError("catalog schema version is unsupported")
         raw_entries = value["entries"]
         if type(raw_entries) is not list:

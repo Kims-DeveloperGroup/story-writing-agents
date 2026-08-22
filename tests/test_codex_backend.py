@@ -46,10 +46,12 @@ from story_writing_agents import (
     ConversationRetrievalSearchItem,
     ConversationRetrievalSearchObservation,
     ConversationRetrievalSource,
+    EXECUTION_SPECIALIST,
     FilesystemConversationCatalog,
     FilesystemConversationEventStore,
     PLOT_ARCHITECT,
     Phase,
+    PromptFileReference,
     ROSTER,
     SessionAccessState,
     SessionDurableState,
@@ -80,6 +82,9 @@ from story_writing_agents.errors import (
 )
 from story_writing_agents.prompts import PromptAssembler
 from story_writing_agents.orchestrator import StoryRuntime
+from story_writing_agents.writing_artifacts.repository import (
+    WritingArtifactRepository,
+)
 
 from tests.helpers import all_manuscripts, core_snapshot, initialized_workspace
 
@@ -1241,6 +1246,67 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             )
         )
         self.assertNotIn("resume", argv)
+
+    async def test_binding_stages_immutable_bytes_after_all_source_paths_become_unsafe(
+        self,
+    ) -> None:
+        WritingArtifactRepository(self.workspace.root).commit_consensus(
+            output_path="fixtures/backend-context.md",
+            candidate="fixture manuscript",
+            core_updates={
+                "global_outline.md": "verified global outline",
+                "part_outlines.md": "verified part outline",
+            },
+            session_id="backend_snapshot",
+            debate_id="backend_snapshot",
+            revision_id="r0",
+            candidate_author_agent_id=EXECUTION_SPECIALIST,
+        )
+        definition = self.definition()
+        references = definition.file_references()
+        expected = tuple(reference.read_text() for reference in references)
+        self.assertEqual(len(definition.context_document_files), 2)
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+
+        system = definition.system_prompt_file.path
+        system.rename(system.with_name(f"{system.name}.removed"))
+        persona = definition.persona_file.path
+        persona.unlink()
+        context_symlink, context_hardlink = (
+            reference.path for reference in definition.context_document_files
+        )
+        symlink_source = self.fake_directory / "same-symlink.md"
+        symlink_source.write_bytes(definition.context_document_files[0].content)
+        context_symlink.unlink()
+        context_symlink.symlink_to(symlink_source)
+        hardlink_source = self.fake_directory / "same-hardlink.md"
+        hardlink_source.write_bytes(definition.context_document_files[1].content)
+        context_hardlink.unlink()
+        os.link(hardlink_source, context_hardlink)
+
+        with (
+            mock.patch.object(
+                PromptFileReference,
+                "_read_bytes",
+                side_effect=AssertionError("binding reread a prompt path"),
+            ) as reference_read,
+            mock.patch.object(
+                Path,
+                "read_bytes",
+                side_effect=AssertionError("binding read a filesystem path"),
+            ) as path_read,
+        ):
+            bound = await backend.bind(definition)
+        reference_read.assert_not_called()
+        path_read.assert_not_called()
+
+        staged = bound.staging_directory.joinpath("AGENTS.md").read_text(
+            encoding="utf-8"
+        )
+        for content in expected:
+            with self.subTest(content=content[:32]):
+                self.assertIn(content, staged)
 
     async def test_backend_defaults_snapshot_refresh_and_thread_identity_are_exact(
         self,

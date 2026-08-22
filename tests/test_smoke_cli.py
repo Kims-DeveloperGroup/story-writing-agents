@@ -279,9 +279,9 @@ class SmokePersistentTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         workspace = initialize_workspace(Path(temporary.name) / "workspace")
         for index, filename in enumerate(CORE_DOCUMENTS):
-            workspace.write_text(
-                f"core_documents/{filename}",
+            workspace.path(f"core_documents/{filename}").write_text(
                 "" if index == 0 else f"neutral-core-{index}\n",
+                encoding="utf-8",
             )
         core_before = {
             filename: workspace.path(

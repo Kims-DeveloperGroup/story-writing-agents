@@ -40,9 +40,12 @@ def initialized_workspace(test_case: TestCase) -> Workspace:
     test_case.addCleanup(temporary.cleanup)
     workspace = Workspace(temporary.name).initialize()
     for filename in CORE_DOCUMENTS:
-        workspace.write_text(
-            f"core_documents/{filename}",
+        # These are deliberately unprovenanced fixture inputs. Runtime code
+        # cannot create canonical writing artifacts through generic Workspace
+        # writes; repository-focused tests publish their own verified bytes.
+        workspace.path(f"core_documents/{filename}").write_text(
             f"test input for {filename}\n",
+            encoding="utf-8",
         )
     return workspace
 

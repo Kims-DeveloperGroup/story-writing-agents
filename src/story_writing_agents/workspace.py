@@ -51,6 +51,7 @@ from .models import (
     DebateMessage,
     DebateResult,
 )
+from .writing_artifacts import canonical_artifact_kind
 
 
 _SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
@@ -284,6 +285,15 @@ class Workspace:
         if not isinstance(content, str):
             raise WorkspaceFormatError("text content must be a string")
         target = self.path(relative)
+        workspace_relative = target.relative_to(self.root).as_posix()
+        try:
+            artifact_kind = canonical_artifact_kind(workspace_relative)
+        except ValueError:
+            artifact_kind = None
+        if artifact_kind is not None:
+            raise WorkspaceSecurityError(
+                "canonical writing artifacts must be published by the repository"
+            )
         target.parent.mkdir(parents=True, exist_ok=True)
         self._assert_contained(target.parent.resolve())
         self._atomic_write_bytes(

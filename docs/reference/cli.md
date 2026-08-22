@@ -337,8 +337,8 @@ remain history-free.
 Except `init`/`smoke`, commands need the nearest initialized workspace. For
 `directive`, `run`, and `inspect`, explicit `--session` wins over the default.
 `story run` receives no conversation focus and does not reopen a paused session.
-It requires `--output PART/PATH.md`; there is no generated output name or
-root-level compatibility form. Exact path and provenance rules are in
+It requires `--output PART/PATH.md`; it never generates an output name, and a
+single-component filename is invalid. Exact path and provenance rules are in
 [Canonical writing artifacts](writing-artifacts.md).
 
 Exits: `0` success or normal shell exit; `1` failed smoke invariant; `2`

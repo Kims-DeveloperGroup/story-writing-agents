@@ -153,6 +153,37 @@ class AgentRosterTests(unittest.TestCase):
 
 
 class WorkspaceTests(unittest.TestCase):
+    def test_generic_writes_reject_canonical_artifacts_but_keep_other_helpers(self) -> None:
+        workspace = initialized_workspace(self)
+        canonical_paths = (
+            *(f"core_documents/{filename}" for filename in CORE_DOCUMENTS),
+            "manuscript/part-01/chapter.md",
+            "manuscript/manuscript/chapter.md",
+        )
+        for relative in canonical_paths:
+            with self.subTest(relative=relative):
+                with self.assertRaisesRegex(
+                    WorkspaceSecurityError,
+                    "published by the repository",
+                ):
+                    workspace.write_text(relative, "generic write")
+                with self.assertRaisesRegex(
+                    WorkspaceSecurityError,
+                    "published by the repository",
+                ):
+                    workspace.write_json(relative, {"generic": "write"})
+
+        workspace.write_text("discussion_logs/unrelated.txt", "still writable")
+        workspace.write_json("agent_states/unrelated.json", {"value": 1})
+        self.assertEqual(
+            workspace.read_text("discussion_logs/unrelated.txt"),
+            "still writable",
+        )
+        self.assertEqual(
+            workspace.read_json("agent_states/unrelated.json"),
+            {"value": 1},
+        )
+
     def test_initial_system_defaults_are_exact_and_legacy_bytes_are_preserved(
         self,
     ) -> None:
@@ -254,7 +285,11 @@ class WorkspaceTests(unittest.TestCase):
             "manuscript/custom.md": "manuscript\n",
         }
         for relative, content in unrelated_contents.items():
-            workspace.write_text(relative, content)
+            if relative.startswith(("core_documents/", "manuscript/")):
+                workspace.path(relative).parent.mkdir(parents=True, exist_ok=True)
+                workspace.path(relative).write_text(content, encoding="utf-8")
+            else:
+                workspace.write_text(relative, content)
         unrelated_before = {
             relative: workspace.path(relative).read_bytes()
             for relative in unrelated_contents

@@ -41,12 +41,16 @@ component. Text is strict UTF-8. JSON readers reject malformed structures where
 the consuming contract performs schema validation.
 
 `write_text` and `write_json` atomically replace one file when overwrite is
-allowed. A direct caller of generic write methods is a trusted workspace client
-and may change any safely contained relative file. Those generic writes do not
-create writing-artifact provenance; manually changed core or manuscript bytes
-are ineligible until they match a valid publication. Orchestration restricts
-core updates to four names and delegates publication to the separate artifact
-repository.
+allowed, except that both reject the four canonical core-document paths and
+every canonical `manuscript/PART/PATH.md`. Canonical application writes must go
+through the artifact repository so bytes, authorship, commit history, and the
+current catalog cannot diverge. Generic writes remain available for other
+safely contained workspace files. An external filesystem edit can still make
+an artifact manual or stale; those bytes remain on disk but are ineligible
+unless a matching catalog and commit record exist and the current hash agrees.
+Stop all workspace processes before making such an external edit. Orchestration
+restricts core updates to four names and delegates publication to the separate
+artifact repository.
 
 ## Orchestration persistence primitives
 
@@ -91,6 +95,13 @@ helpers. `StoryRuntime` owns the supported orchestration entry and uses the
 domain-specific, module-internal `WritingArtifactRepository` for provenance,
 create-only part manuscripts, catalog-last publication, and recovery. See
 [Canonical writing artifacts](writing-artifacts.md).
+
+Constructing `Workspace`, `StoryRuntime`, or the artifact repository performs
+no artifact I/O. Platforms without the repository's secure filesystem
+primitives—including Darwin `renameatx_np(RENAME_EXCL)` or Linux
+`renameat2(RENAME_NOREPLACE)`—can continue to use non-artifact workspace and
+runtime APIs; the first catalog read, artifact read, or artifact commit raises
+`WorkspaceSecurityError`.
 
 ## Directive utility
 

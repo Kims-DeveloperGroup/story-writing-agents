@@ -49,16 +49,6 @@ class PromptAssemblerTests(unittest.TestCase):
             "persona": "prompt_persona",
         }
         self.workspace.write_json("config/agent_configs.json", configs)
-        for filename in (
-            "global_outline.md",
-            "part_outlines.md",
-            "character_sheets.md",
-            "narrative_rules.md",
-        ):
-            self.workspace.write_text(
-                f"core_documents/{filename}",
-                f"CONTEXT_TOKEN::{filename}",
-            )
         WritingArtifactRepository(self.workspace.root).commit_consensus(
             output_path="fixtures/prompt-context.md",
             candidate="prompt fixture manuscript",
@@ -294,25 +284,42 @@ class PromptAssemblerTests(unittest.TestCase):
     def test_each_agent_references_only_its_allowlisted_context_in_order(
         self,
     ) -> None:
-        for agent_id in ROSTER:
-            definition = self.assembler.build_definition(
-                session_id="context_session",
-                agent_id=agent_id,
-            )
-            with self.subTest(agent_id=agent_id):
-                self.assertEqual(
-                    definition.system_prompt_file.path,
-                    self.workspace.path(
-                        AGENT_SPECS[agent_id].system_prompt_file
-                    ),
+        read_current = self.assembler.artifacts.read_current
+        with mock.patch.object(
+            self.assembler.artifacts,
+            "read_current",
+            wraps=read_current,
+        ) as selective_read:
+            for agent_id in ROSTER:
+                definition = self.assembler.build_definition(
+                    session_id="context_session",
+                    agent_id=agent_id,
                 )
-                self.assertEqual(
-                    tuple(
-                        reference.path.name
-                        for reference in definition.context_document_files
-                    ),
-                    AGENT_SPECS[agent_id].context_documents,
+                with self.subTest(agent_id=agent_id):
+                    self.assertEqual(
+                        definition.system_prompt_file.path,
+                        self.workspace.path(
+                            AGENT_SPECS[agent_id].system_prompt_file
+                        ),
+                    )
+                    self.assertEqual(
+                        tuple(
+                            reference.path.name
+                            for reference in definition.context_document_files
+                        ),
+                        AGENT_SPECS[agent_id].context_documents,
+                    )
+
+        self.assertEqual(
+            [call.args[0] for call in selective_read.call_args_list],
+            [
+                tuple(
+                    f"core_documents/{filename}"
+                    for filename in AGENT_SPECS[agent_id].context_documents
                 )
+                for agent_id in ROSTER
+            ],
+        )
 
     def test_fingerprint_is_deterministic_and_tracks_effective_definition(
         self,
@@ -345,7 +352,7 @@ class PromptAssemblerTests(unittest.TestCase):
 
 
 class PromptFileReferenceTests(unittest.TestCase):
-    def test_reference_reads_strict_utf8_and_detects_content_tampering(
+    def test_reference_is_an_immutable_strict_utf8_content_snapshot(
         self,
     ) -> None:
         temporary = tempfile.TemporaryDirectory()
@@ -359,13 +366,19 @@ class PromptFileReferenceTests(unittest.TestCase):
             reference.sha256,
             hashlib.sha256(path.read_bytes()).hexdigest(),
         )
+        self.assertNotIn("valid-한글", repr(reference))
+        self.assertNotIn("content=", repr(reference))
 
         path.write_text("changed", encoding="utf-8")
-        with self.assertRaisesRegex(
-            WorkspaceFormatError,
-            "changed after reference creation",
-        ):
-            reference.read_text()
+        self.assertEqual(reference.read_text(), "valid-한글")
+        path.unlink()
+        self.assertEqual(reference.read_text(), "valid-한글")
+
+        copied = PromptFileReference.from_bytes(
+            path,
+            "copied-한글".encode("utf-8"),
+        )
+        self.assertEqual(copied.read_text(), "copied-한글")
 
     def test_reference_rejects_invalid_utf8_missing_files_and_bad_hashes(
         self,
@@ -382,7 +395,15 @@ class PromptFileReferenceTests(unittest.TestCase):
         for digest in ("0" * 63, "A" * 64, 42):
             with self.subTest(digest=digest):
                 with self.assertRaisesRegex(ValueError, "lowercase SHA-256"):
-                    PromptFileReference(invalid, digest)  # type: ignore[arg-type]
+                    PromptFileReference(  # type: ignore[arg-type]
+                        invalid,
+                        digest,
+                        b"valid",
+                    )
+        with self.assertRaisesRegex(ValueError, "match the immutable"):
+            PromptFileReference(invalid, "0" * 64, b"valid")
+        with self.assertRaisesRegex(WorkspaceFormatError, "valid UTF-8"):
+            PromptFileReference.from_bytes(invalid, b"\xff")
 
 
 class _BoundApprovalAgent:
@@ -510,9 +531,9 @@ class RuntimeBindingTests(unittest.IsolatedAsyncioTestCase):
         self.workspace.write_text(self.persona_path, "runtime-persona-v2")
         await runtime._invoke(request)
 
-        self.workspace.write_text(
-            "core_documents/global_outline.md",
+        self.workspace.path("core_documents/global_outline.md").write_text(
             "outline-v2",
+            encoding="utf-8",
         )
         await runtime._invoke(request)
 
@@ -548,7 +569,7 @@ class RuntimeBindingTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-    async def test_catalog_snapshot_race_fails_before_binding_or_provider(
+    async def test_repository_snapshot_race_binds_verified_immutable_bytes(
         self,
     ) -> None:
         repository = WritingArtifactRepository(self.workspace.root)
@@ -562,38 +583,32 @@ class RuntimeBindingTests(unittest.IsolatedAsyncioTestCase):
             candidate_author_agent_id=EXECUTION_SPECIALIST,
         )
         backend = ScriptedBackend(
-            lambda request: AssertionError(
-                f"provider unexpectedly received {request.phase}"
-            )
+            lambda request: AgentReply.approval(request.revision_id)
         )
         runtime = StoryRuntime(self.workspace, backend)
         request = self._audit_request(runtime)
-        catalog = runtime.prompts.artifacts.catalog
+        read_current = runtime.prompts.artifacts.read_current
 
-        def snapshot_then_change():
-            snapshot = catalog()
-            self.workspace.write_text(
-                "core_documents/global_outline.md",
+        def snapshot_then_change(paths):
+            snapshots = read_current(paths)
+            self.workspace.path("core_documents/global_outline.md").write_text(
                 "changed after verified catalog snapshot",
+                encoding="utf-8",
             )
-            return snapshot
+            return snapshots
 
-        with (
-            mock.patch.object(
-                runtime.prompts.artifacts,
-                "catalog",
-                side_effect=snapshot_then_change,
-            ),
-            self.assertRaisesRegex(
-                WorkspaceFormatError,
-                "changed after artifact provenance verification",
-            ),
+        with mock.patch.object(
+            runtime.prompts.artifacts,
+            "read_current",
+            side_effect=snapshot_then_change,
         ):
             await runtime._invoke(request)
 
-        self.assertEqual(backend.definitions, [])
-        self.assertEqual(backend.bound_invocations, [])
-        self.assertEqual(backend.requests, [])
+        self.assertEqual(len(backend.definitions), 1)
+        self.assertEqual(len(backend.bound_invocations), 1)
+        self.assertEqual(len(backend.requests), 1)
+        references = backend.definitions[0].context_document_files
+        self.assertEqual(references[0].read_text(), "verified outline")
         self.assertEqual(
             self.workspace.read_text("core_documents/global_outline.md"),
             "changed after verified catalog snapshot",

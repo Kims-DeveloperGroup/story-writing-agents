@@ -9,25 +9,40 @@ hash-derived identity; **binding**—the provider object for a definition;
 **visible context**—events explicitly sent in a request; **provider-private
 history**—state behind a provider thread ID.
 
-Stable prompt context and dynamic call data use different channels. A definition
-references the role prompt, persona, language, and current provenance-backed
-allowlisted core documents by absolute path and SHA-256 digest. Verified file
-content is staged at binding; request JSON enters separately for each call.
+Stable prompt context and dynamic call data use different channels. During
+definition construction, role prompts and personas are read once, while the
+artifact repository selectively reads only the current provenance-backed core
+documents allowlisted for that role. Every result becomes an immutable
+content-backed reference containing a lexical absolute path, SHA-256, and the
+exact captured bytes. The backend stages those bytes at binding and never
+rereads the canonical artifact paths. Request JSON enters separately for each
+call.
 
 ## Bound role context
 
 When eligible, the plot architect receives global and part outlines; the
 character custodian gets character sheets; the execution specialist gets
-narrative rules; and the lead gets all four core documents. Absent, manual,
-stale, or unprovenanced core files are omitted rather than bound. Definitions
-include no unrelated workspace paths.
+narrative rules; and the lead gets all four core documents. `read_current()`
+touches only those requested core paths, so accumulating manuscripts are not
+read while definitions are assembled. Absent, manual, stale, or unprovenanced
+core files are omitted rather than bound. Definitions include no unrelated
+workspace paths.
 
 The fingerprint covers agent, provider, language, component identities, and
-hashes. Editing a role prompt or persona changes the next definition. A manual
-core edit removes that document from eligibility; later agent republication can
-bind the new provenanced bytes. Either effective-context change starts a fresh
-provider thread for that agent. Identical bindings are cached for one runtime;
-provider conversation state is still partitioned by story session and agent.
+hashes. Editing a role prompt or persona changes the next definition. An
+external manual core edit made while workspace processes are stopped removes
+that document from eligibility; generic `Workspace` writes reject canonical
+artifact paths. Later agent republication can bind new provenanced bytes. Either
+effective-context change starts a fresh provider thread for that agent.
+Identical bindings are cached for one runtime; provider conversation state is
+still partitioned by story session and agent.
+
+Snapshot timing matters. Once a definition exists, changing, deleting, or
+replacing a source path does not change that definition or the bytes staged for
+its binding. A later definition construction performs a fresh verified read and
+may produce a different fingerprint. This prevents a path swap between
+repository verification and provider staging from changing what the agent
+receives.
 
 <a id="conversation-turn-flow"></a>
 

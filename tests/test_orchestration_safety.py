@@ -190,12 +190,21 @@ class BackendFailureTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(core_snapshot(workspace), before)
                 self.assertEqual(all_manuscripts(workspace), [])
 
-    async def test_prompt_file_changed_during_bind_fails_integrity_check(
+    async def test_prompt_snapshot_survives_path_change_during_bind(
         self,
     ) -> None:
         class ValidBoundAgent:
             async def invoke(self, request):
-                return AgentReply.approval(request.revision_id)
+                if request.phase is Phase.DRAFT:
+                    return AgentReply.candidate(
+                        request.revision_id,
+                        request.user_payload,
+                    )
+                if request.phase is Phase.AUDIT:
+                    return AgentReply.approval(request.revision_id)
+                if request.phase is Phase.FINALIZE:
+                    return AgentReply.finalization(request.revision_id)
+                raise AssertionError(request.phase)
 
         class TamperingBackend(BindingBackendMixin):
             async def bind(self, definition):
@@ -217,13 +226,12 @@ class BackendFailureTests(unittest.IsolatedAsyncioTestCase):
             output_path="part-01/must-not-exist.md",
         )
 
-        self.assertEqual(result.status, DebateStatus.FAILED)
-        self.assertIn(
-            "changed after reference creation",
-            result.error or "",
-        )
+        self.assertEqual(result.status, DebateStatus.CONSENSUS)
         self.assertEqual(core_snapshot(workspace), before)
-        self.assertEqual(all_manuscripts(workspace), [])
+        self.assertEqual(
+            [path.name for path in all_manuscripts(workspace)],
+            ["must-not-exist.md"],
+        )
 
     async def test_backend_exception_returns_failed_without_content_writes(
         self,
@@ -431,9 +439,13 @@ class FailureClassificationTests(unittest.IsolatedAsyncioTestCase):
 
                 runtime = StoryRuntime(workspace, ScriptedBackend(approve))
                 if label == "conflict":
-                    workspace.write_text(
-                        "manuscript/part-01/target.md",
+                    workspace.path("manuscript/part-01/target.md").parent.mkdir(
+                        parents=True,
+                        exist_ok=True,
+                    )
+                    workspace.path("manuscript/part-01/target.md").write_text(
                         "existing",
+                        encoding="utf-8",
                     )
                     commit_context = mock.patch.object(
                         runtime.artifacts,

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import contextlib
+import ctypes
 import errno
 import hashlib
 import os
 import stat
+import sys
 import threading
 from collections.abc import Iterator
 from pathlib import Path, PurePosixPath
@@ -20,6 +22,18 @@ except ImportError:  # pragma: no cover - the adapter rejects unsupported hosts.
     fcntl = None  # type: ignore[assignment]
 
 
+class ArtifactEntrySecurityError(WorkspaceSecurityError):
+    """One artifact name is unsafe while the workspace root remains bound."""
+
+
+class ArtifactRootSecurityError(WorkspaceSecurityError):
+    """The workspace root or one of its traversed ancestors changed."""
+
+
+class ArtifactLeaseSecurityError(WorkspaceSecurityError):
+    """The permanent repository lock identity is not stable."""
+
+
 class SecureWorkspaceStorage:
     """Perform call-local artifact I/O from one verified workspace root."""
 
@@ -27,18 +41,97 @@ class SecureWorkspaceStorage:
         self._root = Path(root)
         self._identity: tuple[int, int] | None = None
         self._identity_lock = threading.Lock()
-        self._require_primitives()
+        self._active_lease: tuple[
+            int,
+            str,
+            str,
+            int,
+            tuple[tuple[int, str, int, tuple[int, int]], ...],
+        ] | None = None
 
     @staticmethod
     def _require_primitives() -> None:
         required_flags = ("O_DIRECTORY", "O_NOFOLLOW")
         if any(not hasattr(os, name) for name in required_flags):
             raise WorkspaceSecurityError("safe artifact filesystem primitives unavailable")
-        dir_fd_functions = (os.open, os.mkdir, os.stat, os.unlink, os.rename, os.link)
+        dir_fd_functions = (os.open, os.mkdir, os.stat, os.link)
         if any(function not in os.supports_dir_fd for function in dir_fd_functions):
             raise WorkspaceSecurityError("descriptor-relative artifact I/O unavailable")
         if os.listdir not in os.supports_fd or fcntl is None:
             raise WorkspaceSecurityError("safe artifact locking or listing unavailable")
+        SecureWorkspaceStorage._native_rename_function()
+
+    @staticmethod
+    def _native_rename_function():
+        """Return one supported atomic no-replace rename function and flag."""
+
+        library = ctypes.CDLL(None, use_errno=True)
+        if sys.platform == "darwin" and hasattr(library, "renameatx_np"):
+            function = library.renameatx_np
+            flag = 0x00000004  # RENAME_EXCL
+        elif sys.platform.startswith("linux") and hasattr(library, "renameat2"):
+            function = library.renameat2
+            flag = 0x00000001  # RENAME_NOREPLACE
+        else:
+            raise WorkspaceSecurityError(
+                "atomic no-replace artifact rename unavailable"
+            )
+        function.argtypes = (
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        )
+        function.restype = ctypes.c_int
+        ctypes.set_errno(0)
+        probe = function(-1, b".", -1, b".", flag)
+        probe_error = ctypes.get_errno()
+        unsupported_errors = {
+            errno.EINVAL,
+            errno.ENOSYS,
+            getattr(errno, "ENOTSUP", errno.ENOSYS),
+            getattr(errno, "EOPNOTSUPP", errno.ENOSYS),
+        }
+        if probe != -1 or probe_error in unsupported_errors:
+            raise WorkspaceSecurityError(
+                "atomic no-replace artifact rename unavailable"
+            )
+        return function, flag
+
+    @classmethod
+    def _rename_noreplace(
+        cls,
+        source_directory: int,
+        source: str,
+        destination_directory: int,
+        destination: str,
+    ) -> None:
+        """Atomically move one name only when the destination is absent."""
+
+        function, flag = cls._native_rename_function()
+        ctypes.set_errno(0)
+        result = function(
+            source_directory,
+            os.fsencode(source),
+            destination_directory,
+            os.fsencode(destination),
+            flag,
+        )
+        if result == 0:
+            return
+        error_number = ctypes.get_errno()
+        if error_number in {errno.EEXIST, errno.ENOTEMPTY}:
+            raise FileExistsError(
+                error_number,
+                os.strerror(error_number),
+                destination,
+            )
+        raise OSError(
+            error_number,
+            os.strerror(error_number),
+            destination,
+        )
 
     @staticmethod
     def _parts(relative: object) -> tuple[str, ...]:
@@ -54,42 +147,53 @@ class SecureWorkspaceStorage:
 
     @contextlib.contextmanager
     def _open_root(self) -> Iterator[int]:
+        self._require_primitives()
         flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
         try:
             descriptor = os.open(self._root, flags)
         except OSError as exc:
-            raise WorkspaceSecurityError("cannot securely open workspace root") from exc
+            raise ArtifactRootSecurityError("cannot securely open workspace root") from exc
         try:
             observed = os.fstat(descriptor)
             identity = (observed.st_dev, observed.st_ino)
             if not stat.S_ISDIR(observed.st_mode) or any(value <= 0 for value in identity):
-                raise WorkspaceSecurityError("workspace root identity is not meaningful")
+                raise ArtifactRootSecurityError("workspace root identity is not meaningful")
             with self._identity_lock:
                 if self._identity is None:
                     self._identity = identity
                 elif self._identity != identity:
-                    raise WorkspaceSecurityError("workspace root identity changed")
+                    raise ArtifactRootSecurityError("workspace root identity changed")
             try:
                 yield descriptor
             except BaseException:
                 raise
             else:
-                try:
-                    verification = os.open(self._root, flags)
-                except OSError as exc:
-                    raise WorkspaceSecurityError(
-                        "workspace root identity changed during artifact I/O"
-                    ) from exc
-                try:
-                    final_root = os.fstat(verification)
-                    if (final_root.st_dev, final_root.st_ino) != identity:
-                        raise WorkspaceSecurityError(
-                            "workspace root identity changed during artifact I/O"
-                        )
-                finally:
-                    os.close(verification)
+                self._verify_root_identity(descriptor)
         finally:
             os.close(descriptor)
+
+    def _verify_root_identity(self, descriptor: int) -> None:
+        """Require the retained root descriptor to remain the named root."""
+
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        try:
+            verification = os.open(self._root, flags)
+        except OSError as exc:
+            raise ArtifactRootSecurityError(
+                "workspace root identity changed during artifact I/O"
+            ) from exc
+        try:
+            retained = os.fstat(descriptor)
+            named = os.fstat(verification)
+            if (named.st_dev, named.st_ino) != (
+                retained.st_dev,
+                retained.st_ino,
+            ):
+                raise ArtifactRootSecurityError(
+                    "workspace root identity changed during artifact I/O"
+                )
+        finally:
+            os.close(verification)
 
     @contextlib.contextmanager
     def _open_directory(
@@ -98,8 +202,12 @@ class SecureWorkspaceStorage:
         parts: tuple[str, ...],
         *,
         create: bool,
-    ) -> Iterator[int]:
+    ) -> Iterator[
+        tuple[int, tuple[tuple[int, str, int, tuple[int, int]], ...]]
+    ]:
         current = os.dup(root_descriptor)
+        descriptors = [current]
+        chain: list[tuple[int, str, int, tuple[int, int]]] = []
         try:
             for name in parts:
                 if create:
@@ -108,7 +216,7 @@ class SecureWorkspaceStorage:
                     except FileExistsError:
                         pass
                     except OSError as exc:
-                        raise WorkspaceSecurityError("cannot create artifact directory") from exc
+                        raise ArtifactRootSecurityError("cannot create artifact directory") from exc
                 try:
                     named = os.stat(name, dir_fd=current, follow_symlinks=False)
                     child = os.open(
@@ -119,7 +227,7 @@ class SecureWorkspaceStorage:
                 except FileNotFoundError:
                     raise
                 except OSError as exc:
-                    raise WorkspaceSecurityError("cannot securely traverse artifact path") from exc
+                    raise ArtifactRootSecurityError("cannot securely traverse artifact path") from exc
                 opened = os.fstat(child)
                 if (
                     not stat.S_ISDIR(named.st_mode)
@@ -127,22 +235,66 @@ class SecureWorkspaceStorage:
                     or (named.st_dev, named.st_ino) != (opened.st_dev, opened.st_ino)
                 ):
                     os.close(child)
-                    raise WorkspaceSecurityError("artifact directory changed during traversal")
-                os.close(current)
+                    raise ArtifactRootSecurityError("artifact directory changed during traversal")
+                identity = (opened.st_dev, opened.st_ino)
+                chain.append((current, name, child, identity))
+                descriptors.append(child)
                 current = child
-            yield current
+            self._verify_directory_chain(tuple(chain))
+            yield current, tuple(chain)
+            self._verify_directory_chain(tuple(chain))
         finally:
-            os.close(current)
+            for descriptor in reversed(descriptors):
+                os.close(descriptor)
+
+    @staticmethod
+    def _verify_directory_chain(
+        chain: tuple[tuple[int, str, int, tuple[int, int]], ...],
+    ) -> None:
+        """Revalidate every retained parent/name/descriptor relationship."""
+
+        for parent, name, child, identity in chain:
+            try:
+                named = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                opened = os.fstat(child)
+            except OSError as exc:
+                raise ArtifactRootSecurityError(
+                    "artifact directory ancestry changed"
+                ) from exc
+            if (
+                not stat.S_ISDIR(named.st_mode)
+                or not stat.S_ISDIR(opened.st_mode)
+                or (named.st_dev, named.st_ino) != identity
+                or (opened.st_dev, opened.st_ino) != identity
+            ):
+                raise ArtifactRootSecurityError(
+                    "artifact directory ancestry changed"
+                )
 
     @staticmethod
     def _read_file(directory: int, name: str, *, max_bytes: int | None = None) -> bytes:
         try:
             named = os.stat(name, dir_fd=directory, follow_symlinks=False)
-            descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory)
         except FileNotFoundError:
             raise
         except OSError as exc:
-            raise WorkspaceSecurityError("cannot securely open artifact file") from exc
+            raise ArtifactEntrySecurityError("cannot inspect artifact file") from exc
+        if not stat.S_ISREG(named.st_mode) or named.st_nlink != 1:
+            raise ArtifactEntrySecurityError(
+                "artifact file is not a unique regular file"
+            )
+        try:
+            descriptor = os.open(
+                name,
+                os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW,
+                dir_fd=directory,
+            )
+        except FileNotFoundError:
+            raise
+        except OSError as exc:
+            raise ArtifactEntrySecurityError(
+                "cannot securely open artifact file"
+            ) from exc
         try:
             opened = os.fstat(descriptor)
             if (
@@ -152,7 +304,7 @@ class SecureWorkspaceStorage:
                 or opened.st_nlink != 1
                 or (named.st_dev, named.st_ino) != (opened.st_dev, opened.st_ino)
             ):
-                raise WorkspaceSecurityError("artifact file is not a unique regular file")
+                raise ArtifactEntrySecurityError("artifact file is not a unique regular file")
             if max_bytes is not None and opened.st_size > max_bytes:
                 raise WorkspaceFormatError("artifact file exceeds the permitted size")
             chunks: list[bytes] = []
@@ -179,11 +331,11 @@ class SecureWorkspaceStorage:
                 final.st_mtime_ns,
                 final.st_ctime_ns,
             ):
-                raise WorkspaceSecurityError("artifact file changed while being read")
+                raise ArtifactEntrySecurityError("artifact file changed while being read")
             try:
                 final_name = os.stat(name, dir_fd=directory, follow_symlinks=False)
             except OSError as exc:
-                raise WorkspaceSecurityError(
+                raise ArtifactEntrySecurityError(
                     "artifact name changed while being read"
                 ) from exc
             if (
@@ -192,7 +344,7 @@ class SecureWorkspaceStorage:
                 or (final_name.st_dev, final_name.st_ino)
                 != (final.st_dev, final.st_ino)
             ):
-                raise WorkspaceSecurityError("artifact name changed while being read")
+                raise ArtifactEntrySecurityError("artifact name changed while being read")
             return b"".join(chunks)
         finally:
             os.close(descriptor)
@@ -200,7 +352,9 @@ class SecureWorkspaceStorage:
     def read_bytes(self, relative: str, *, max_bytes: int | None = None) -> bytes:
         parts = self._parts(relative)
         with self._open_root() as root:
-            with self._open_directory(root, parts[:-1], create=False) as directory:
+            with self._open_directory(root, parts[:-1], create=False) as opened:
+                directory, chain = opened
+                self._verify_directory_chain(chain)
                 return self._read_file(directory, parts[-1], max_bytes=max_bytes)
 
     def read_bytes_if_exists(
@@ -214,13 +368,18 @@ class SecureWorkspaceStorage:
     def list_names(self, relative: str) -> tuple[str, ...]:
         parts = self._parts(relative)
         with self._open_root() as root:
-            with self._open_directory(root, parts, create=False) as directory:
+            with self._open_directory(root, parts, create=False) as opened:
+                directory, chain = opened
+                self._verify_directory_chain(chain)
                 try:
                     names = os.listdir(directory)
                 except OSError as exc:
-                    raise WorkspaceSecurityError("cannot securely list artifact state") from exc
+                    raise ArtifactRootSecurityError(
+                        "cannot securely list artifact state"
+                    ) from exc
+                self._verify_directory_chain(chain)
         if any(type(name) is not str or name in {"", ".", ".."} for name in names):
-            raise WorkspaceSecurityError("artifact state contains an unsafe name")
+            raise ArtifactRootSecurityError("artifact state contains an unsafe name")
         return tuple(sorted(names))
 
     def ensure_directory(self, relative: str) -> None:
@@ -228,6 +387,16 @@ class SecureWorkspaceStorage:
         with self._open_root() as root:
             with self._open_directory(root, parts, create=True):
                 return
+
+    def _require_active_lease(self) -> None:
+        lease = self._active_lease
+        if lease is None:
+            raise ArtifactLeaseSecurityError(
+                "artifact mutation requires the repository lease"
+            )
+        directory, name, anchor, descriptor, chain = lease
+        self._verify_directory_chain(chain)
+        self._verify_lock_identity(directory, name, anchor, descriptor)
 
     def publish_bytes(
         self,
@@ -237,122 +406,458 @@ class SecureWorkspaceStorage:
         expected_sha256: str | None,
         expected_exists: bool,
         create_only: bool,
+        staging_directory: str | None = None,
     ) -> None:
         if type(content) is not bytes:
             raise TypeError("artifact content must be bytes")
+        self._require_active_lease()
         parts = self._parts(relative)
+        staging_parts = (
+            parts[:-1]
+            if staging_directory is None
+            else self._parts(staging_directory)
+        )
         with self._open_root() as root:
-            with self._open_directory(root, parts[:-1], create=True) as directory:
-                current: bytes | None
-                try:
-                    current = self._read_file(directory, parts[-1])
-                except FileNotFoundError:
-                    current = None
-                if create_only and current is not None:
-                    raise FileExistsError(relative)
-                if expected_exists != (current is not None):
-                    raise WorkspaceSecurityError("artifact changed before publication")
-                if current is not None and expected_sha256 is not None:
-                    if hashlib.sha256(current).hexdigest() != expected_sha256:
-                        raise WorkspaceSecurityError("artifact changed before publication")
-                temporary = f".artifacts-{uuid4().hex}.tmp"
-                descriptor = -1
-                try:
-                    descriptor = os.open(
-                        temporary,
-                        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                        0o600,
-                        dir_fd=directory,
+            with self._open_directory(root, parts[:-1], create=True) as target_opened:
+                directory, target_chain = target_opened
+                with self._open_directory(root, staging_parts, create=True) as stage_opened:
+                    stage_directory, stage_chain = stage_opened
+                    self._publish_bytes_locked(
+                        relative,
+                        parts[-1],
+                        content,
+                        expected_sha256=expected_sha256,
+                        expected_exists=expected_exists,
+                        create_only=create_only,
+                        directory=directory,
+                        target_chain=target_chain,
+                        stage_directory=stage_directory,
+                        stage_chain=stage_chain,
+                        root_descriptor=root,
                     )
-                    view = memoryview(content)
-                    while view:
-                        written = os.write(descriptor, view)
-                        if written <= 0:
-                            raise OSError(errno.EIO, "artifact write made no progress")
-                        view = view[written:]
-                    os.fsync(descriptor)
-                    staged = os.fstat(descriptor)
-                    if not stat.S_ISREG(staged.st_mode) or staged.st_nlink != 1:
-                        raise WorkspaceSecurityError(
-                            "staged artifact is not a unique regular file"
-                        )
-                    os.close(descriptor)
-                    descriptor = -1
-                    if create_only or not expected_exists:
-                        os.link(
-                            temporary,
-                            parts[-1],
-                            src_dir_fd=directory,
-                            dst_dir_fd=directory,
-                            follow_symlinks=False,
-                        )
-                        os.unlink(temporary, dir_fd=directory)
-                    else:
-                        os.rename(
-                            temporary,
-                            parts[-1],
-                            src_dir_fd=directory,
-                            dst_dir_fd=directory,
-                        )
-                    os.fsync(directory)
-                    if self._read_file(directory, parts[-1]) != content:
-                        raise WorkspaceSecurityError(
-                            "artifact publication could not be verified"
-                        )
-                finally:
-                    if descriptor >= 0:
-                        os.close(descriptor)
-                    try:
-                        os.unlink(temporary, dir_fd=directory)
-                    except FileNotFoundError:
-                        pass
 
-    def unlink(self, relative: str, *, missing_ok: bool = False) -> None:
-        parts = self._parts(relative)
-        with self._open_root() as root:
-            with self._open_directory(root, parts[:-1], create=False) as directory:
+    def _publish_bytes_locked(
+        self,
+        relative: str,
+        name: str,
+        content: bytes,
+        *,
+        expected_sha256: str | None,
+        expected_exists: bool,
+        create_only: bool,
+        directory: int,
+        target_chain: tuple[tuple[int, str, int, tuple[int, int]], ...],
+        stage_directory: int,
+        stage_chain: tuple[tuple[int, str, int, tuple[int, int]], ...],
+        root_descriptor: int,
+    ) -> None:
+        self._require_active_lease()
+        self._verify_directory_chain(target_chain)
+        self._verify_directory_chain(stage_chain)
+        try:
+            current = self._read_file(directory, name)
+        except FileNotFoundError:
+            current = None
+        current_identity: tuple[int, int] | None = None
+        if current is not None:
+            current_stat = os.stat(name, dir_fd=directory, follow_symlinks=False)
+            current_identity = (current_stat.st_dev, current_stat.st_ino)
+        if create_only and current is not None:
+            raise FileExistsError(relative)
+        if expected_exists != (current is not None):
+            raise ArtifactEntrySecurityError("artifact changed before publication")
+        if current is not None and (
+            expected_sha256 is None
+            or hashlib.sha256(current).hexdigest() != expected_sha256
+        ):
+            raise ArtifactEntrySecurityError("artifact changed before publication")
+
+        temporary = f".artifacts-{uuid4().hex}.tmp"
+        descriptor = -1
+        staged_identity: tuple[int, int] | None = None
+        holding: str | None = None
+        held_identity: tuple[int, int] | None = None
+        try:
+            descriptor = os.open(
+                temporary,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=stage_directory,
+            )
+            view = memoryview(content)
+            while view:
+                written = os.write(descriptor, view)
+                if written <= 0:
+                    raise OSError(errno.EIO, "artifact write made no progress")
+                view = view[written:]
+            os.fsync(descriptor)
+            staged = os.fstat(descriptor)
+            staged_identity = (staged.st_dev, staged.st_ino)
+            if (
+                not stat.S_ISREG(staged.st_mode)
+                or staged.st_nlink != 1
+                or any(value <= 0 for value in staged_identity)
+            ):
+                raise ArtifactEntrySecurityError(
+                    "staged artifact is not a unique regular file"
+                )
+            os.close(descriptor)
+            descriptor = -1
+
+            self._require_active_lease()
+            self._verify_directory_chain(target_chain)
+            try:
+                latest = self._read_file(directory, name)
+            except FileNotFoundError:
+                latest = None
+            if latest != current:
+                raise ArtifactEntrySecurityError(
+                    "artifact changed before publication"
+                )
+
+            if expected_exists:
+                assert current_identity is not None
+                holding, held_identity = self._move_to_retirement(
+                    directory,
+                    name,
+                    stage_directory,
+                    suffix="held",
+                )
+                if held_identity != current_identity:
+                    self._restore_retired_name(
+                        stage_directory,
+                        holding,
+                        directory,
+                        name,
+                        held_identity,
+                    )
+                    raise ArtifactEntrySecurityError(
+                        "artifact changed before publication"
+                    )
                 try:
-                    named = os.stat(parts[-1], dir_fd=directory, follow_symlinks=False)
-                    if not stat.S_ISREG(named.st_mode) or named.st_nlink != 1:
-                        raise WorkspaceSecurityError("refusing to unlink unsafe artifact state")
-                    os.unlink(parts[-1], dir_fd=directory)
-                    os.fsync(directory)
-                except FileNotFoundError:
-                    if not missing_ok:
-                        raise
+                    if self._read_file(stage_directory, holding) != current:
+                        raise ArtifactEntrySecurityError(
+                            "artifact changed before publication"
+                        )
+                except BaseException:
+                    self._restore_retired_name(
+                        stage_directory,
+                        holding,
+                        directory,
+                        name,
+                        held_identity,
+                    )
+                    raise
+
+            try:
+                self._rename_noreplace(
+                    stage_directory,
+                    temporary,
+                    directory,
+                    name,
+                )
+            except BaseException:
+                if holding is not None and held_identity is not None:
+                    self._restore_retired_name(
+                        stage_directory,
+                        holding,
+                        directory,
+                        name,
+                        held_identity,
+                    )
+                raise
+
+            try:
+                os.fsync(directory)
+                if stage_directory != directory:
+                    os.fsync(stage_directory)
+                self._require_active_lease()
+                self._verify_root_identity(root_descriptor)
+                self._verify_directory_chain(target_chain)
+                self._verify_directory_chain(stage_chain)
+                if self._read_file(directory, name) != content:
+                    raise ArtifactEntrySecurityError(
+                        "artifact publication could not be verified"
+                    )
+            except BaseException:
+                assert staged_identity is not None
+                self._rollback_publication(
+                    directory,
+                    name,
+                    stage_directory,
+                    staged_identity,
+                    target_chain,
+                    holding=holding,
+                    held_identity=held_identity,
+                )
+                raise
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+
+    @classmethod
+    def _move_to_retirement(
+        cls,
+        source_directory: int,
+        source: str,
+        retirement_directory: int,
+        *,
+        suffix: str,
+    ) -> tuple[str, tuple[int, int]]:
+        """Move one name to an exclusive non-authoritative retirement name."""
+
+        for attempt in range(128):
+            destination = f".artifacts-{uuid4().hex}-{attempt}.{suffix}"
+            try:
+                cls._rename_noreplace(
+                    source_directory,
+                    source,
+                    retirement_directory,
+                    destination,
+                )
+            except FileExistsError:
+                continue
+            moved = os.stat(
+                destination,
+                dir_fd=retirement_directory,
+                follow_symlinks=False,
+            )
+            if not stat.S_ISREG(moved.st_mode):
+                raise ArtifactEntrySecurityError(
+                    "artifact retirement moved a nonregular entry"
+                )
+            return destination, (moved.st_dev, moved.st_ino)
+        raise ArtifactEntrySecurityError(
+            "cannot acquire an exclusive artifact retirement name"
+        )
+
+    @classmethod
+    def _restore_retired_name(
+        cls,
+        retirement_directory: int,
+        retirement_name: str,
+        destination_directory: int,
+        destination: str,
+        expected_identity: tuple[int, int],
+    ) -> None:
+        """Restore retained state only when its identity and target are safe."""
+
+        retained = os.stat(
+            retirement_name,
+            dir_fd=retirement_directory,
+            follow_symlinks=False,
+        )
+        if (
+            not stat.S_ISREG(retained.st_mode)
+            or (retained.st_dev, retained.st_ino) != expected_identity
+        ):
+            raise ArtifactEntrySecurityError(
+                "artifact retirement identity changed"
+            )
+        cls._rename_noreplace(
+            retirement_directory,
+            retirement_name,
+            destination_directory,
+            destination,
+        )
+
+    @classmethod
+    def _rollback_publication(
+        cls,
+        directory: int,
+        name: str,
+        retirement_directory: int,
+        published_identity: tuple[int, int],
+        target_chain: tuple[tuple[int, str, int, tuple[int, int]], ...],
+        *,
+        holding: str | None,
+        held_identity: tuple[int, int] | None,
+    ) -> None:
+        """Retire failed publication bytes and restore prior state when safe."""
+
+        _, retired_identity = cls._move_to_retirement(
+            directory,
+            name,
+            retirement_directory,
+            suffix="retired",
+        )
+        if retired_identity != published_identity:
+            raise ArtifactEntrySecurityError(
+                "published artifact identity changed before rollback"
+            )
+        try:
+            cls._verify_directory_chain(target_chain)
+        except ArtifactRootSecurityError:
+            return
+        if holding is not None and held_identity is not None:
+            cls._restore_retired_name(
+                retirement_directory,
+                holding,
+                directory,
+                name,
+                held_identity,
+            )
+
+    def unlink(
+        self,
+        relative: str,
+        *,
+        expected_sha256: str,
+        retirement_directory: str,
+        missing_ok: bool = False,
+    ) -> None:
+        self._require_active_lease()
+        parts = self._parts(relative)
+        retirement_parts = self._parts(retirement_directory)
+        with self._open_root() as root:
+            with self._open_directory(root, parts[:-1], create=False) as opened:
+                directory, chain = opened
+                with self._open_directory(
+                    root,
+                    retirement_parts,
+                    create=True,
+                ) as retired_opened:
+                    retired_directory, retired_chain = retired_opened
+                    descriptor = -1
+                    try:
+                        descriptor = os.open(
+                            parts[-1],
+                            os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW,
+                            dir_fd=directory,
+                        )
+                        opened_file = os.fstat(descriptor)
+                        content = self._read_file(directory, parts[-1])
+                        named = os.stat(
+                            parts[-1], dir_fd=directory, follow_symlinks=False
+                        )
+                        expected_identity = (
+                            opened_file.st_dev,
+                            opened_file.st_ino,
+                        )
+                        if (
+                            not stat.S_ISREG(named.st_mode)
+                            or named.st_nlink != 1
+                            or (named.st_dev, named.st_ino) != expected_identity
+                            or hashlib.sha256(content).hexdigest()
+                            != expected_sha256
+                        ):
+                            raise ArtifactEntrySecurityError(
+                                "refusing to retire changed artifact state"
+                            )
+                        self._require_active_lease()
+                        self._verify_directory_chain(chain)
+                        self._verify_directory_chain(retired_chain)
+                        retired, retired_identity = self._move_to_retirement(
+                            directory,
+                            parts[-1],
+                            retired_directory,
+                            suffix="completed",
+                        )
+                        if retired_identity != expected_identity:
+                            self._restore_retired_name(
+                                retired_directory,
+                                retired,
+                                directory,
+                                parts[-1],
+                                retired_identity,
+                            )
+                            raise ArtifactEntrySecurityError(
+                                "refusing to retire changed artifact state"
+                            )
+                        if self._read_file(retired_directory, retired) != content:
+                            raise ArtifactEntrySecurityError(
+                                "retired artifact state changed"
+                            )
+                        os.fsync(directory)
+                        os.fsync(retired_directory)
+                        self._verify_directory_chain(chain)
+                        self._verify_directory_chain(retired_chain)
+                    except FileNotFoundError:
+                        if not missing_ok:
+                            raise
+                    finally:
+                        if descriptor >= 0:
+                            os.close(descriptor)
 
     @contextlib.contextmanager
     def exclusive_lock(self, relative: str) -> Iterator[None]:
         parts = self._parts(relative)
+        anchor = f"{parts[-1]}.anchor"
         with self._open_root() as root:
-            with self._open_directory(root, parts[:-1], create=True) as directory:
+            with self._open_directory(root, parts[:-1], create=True) as opened:
+                directory, chain = opened
                 try:
+                    try:
+                        named = os.stat(
+                            parts[-1],
+                            dir_fd=directory,
+                            follow_symlinks=False,
+                        )
+                    except FileNotFoundError:
+                        named = None
+                    if named is not None and (
+                        not stat.S_ISREG(named.st_mode) or named.st_nlink not in {1, 2}
+                    ):
+                        raise ArtifactLeaseSecurityError(
+                            "artifact lock is not a regular file"
+                        )
                     descriptor = os.open(
                         parts[-1],
-                        os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+                        os.O_RDWR | os.O_CREAT | os.O_NONBLOCK | os.O_NOFOLLOW,
                         0o600,
                         dir_fd=directory,
                     )
                 except OSError as exc:
-                    raise WorkspaceSecurityError("cannot securely open artifact lock") from exc
+                    raise ArtifactLeaseSecurityError(
+                        "cannot securely open artifact lock"
+                    ) from exc
                 locked = False
                 try:
+                    try:
+                        os.link(
+                            parts[-1],
+                            anchor,
+                            src_dir_fd=directory,
+                            dst_dir_fd=directory,
+                            follow_symlinks=False,
+                        )
+                    except FileExistsError:
+                        pass
                     self._verify_lock_identity(
                         directory,
                         parts[-1],
+                        anchor,
                         descriptor,
                     )
                     assert fcntl is not None
                     fcntl.flock(descriptor, fcntl.LOCK_EX)
                     locked = True
+                    self._verify_directory_chain(chain)
                     self._verify_lock_identity(
                         directory,
                         parts[-1],
+                        anchor,
                         descriptor,
+                    )
+                    if self._active_lease is not None:
+                        raise ArtifactLeaseSecurityError(
+                            "artifact repository lease is already active"
+                        )
+                    self._active_lease = (
+                        directory,
+                        parts[-1],
+                        anchor,
+                        descriptor,
+                        chain,
                     )
                     yield
                 finally:
                     try:
+                        if self._active_lease is not None:
+                            try:
+                                self._require_active_lease()
+                            finally:
+                                self._active_lease = None
                         if locked:
                             assert fcntl is not None
                             fcntl.flock(descriptor, fcntl.LOCK_UN)
@@ -360,27 +865,37 @@ class SecureWorkspaceStorage:
                         os.close(descriptor)
 
     @staticmethod
-    def _verify_lock_identity(directory: int, name: str, descriptor: int) -> None:
-        """Require one stable named unique-regular lock descriptor."""
+    def _verify_lock_identity(
+        directory: int,
+        name: str,
+        anchor: str,
+        descriptor: int,
+    ) -> None:
+        """Require two stable names for one permanent regular lock inode."""
 
         try:
             named = os.stat(name, dir_fd=directory, follow_symlinks=False)
+            anchored = os.stat(anchor, dir_fd=directory, follow_symlinks=False)
             opened = os.fstat(descriptor)
         except OSError as exc:
-            raise WorkspaceSecurityError(
+            raise ArtifactLeaseSecurityError(
                 "artifact lock identity changed"
             ) from exc
         named_identity = (named.st_dev, named.st_ino)
+        anchor_identity = (anchored.st_dev, anchored.st_ino)
         opened_identity = (opened.st_dev, opened.st_ino)
         if (
             not stat.S_ISREG(named.st_mode)
+            or not stat.S_ISREG(anchored.st_mode)
             or not stat.S_ISREG(opened.st_mode)
-            or named.st_nlink != 1
-            or opened.st_nlink != 1
+            or named.st_nlink != 2
+            or anchored.st_nlink != 2
+            or opened.st_nlink != 2
             or any(value <= 0 for value in named_identity)
             or any(value <= 0 for value in opened_identity)
+            or named_identity != anchor_identity
             or named_identity != opened_identity
         ):
-            raise WorkspaceSecurityError(
-                "artifact lock is not a stable unique regular file"
+            raise ArtifactLeaseSecurityError(
+                "artifact lock is not a stable paired regular file"
             )

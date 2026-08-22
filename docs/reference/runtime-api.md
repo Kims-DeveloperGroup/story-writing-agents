@@ -39,10 +39,20 @@ the required `output_path`, other options, and result type; it also exposes
 both conversation methods, `inspect_debate()`, and `inspect_debate_context()`.
 `Runtime` and `Session` are exact aliases.
 
-`output_path` has no default and uses `PART/PATH.md` without a leading
-`manuscript/`. It is validated before session access, debate reservation, or
-provider work. Publication becomes `manuscript/PART/PATH.md` and refuses an
-existing target. See [Canonical writing artifacts](writing-artifacts.md).
+`output_path` has no default and is the `PART/PATH.md` suffix appended beneath
+the canonical `manuscript/` directory. It is validated before session access,
+debate reservation, or provider work. Publication becomes
+`manuscript/PART/PATH.md` and refuses an existing target. `manuscript` is a
+legal `PART`, so `output_path="manuscript/chapter.md"` intentionally publishes
+`manuscript/manuscript/chapter.md`. See
+[Canonical writing artifacts](writing-artifacts.md).
+
+Consensus agents, not runtime development code, author published text. The
+execution specialist authors `r0`; a later synthesized manuscript revision is
+lead-authored; and core updates are lead-authored full replacements. The
+runtime validates the unanimous result and persists the exact returned bytes.
+An advisory conversation call cannot publish. A manuscript revision must use a
+new output path because manuscript targets are create-only.
 
 ## Debate context
 

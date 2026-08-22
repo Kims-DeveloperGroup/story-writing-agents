@@ -1197,7 +1197,7 @@ class ConversationRuntimePreflightTests(_ConversationRuntimeCase):
         self.assertEqual(len(returned_generators), 1)
         await returned_generators[0].aclose()
 
-    async def test_definition_is_reverified_for_new_and_cached_bindings(self) -> None:
+    async def test_definition_snapshots_survive_new_and_cached_path_changes(self) -> None:
         workspace, _, memory, conversation_id = self.memory_fixture()
         prompt_path = AGENT_SPECS[PLOT_ARCHITECT].system_prompt_file
 
@@ -1206,15 +1206,22 @@ class ConversationRuntimePreflightTests(_ConversationRuntimeCase):
 
         store = _TracingStore(memory)
         backend = _ConversationBackend(bind_hook=tamper_during_bind)
-        await self.assert_runtime_failure(
-            workspace=workspace,
-            backend=backend,
-            store=store,
-            conversation_id=conversation_id,
-            error=WorkspaceFormatError,
+        await StoryRuntime(
+            workspace,
+            backend,  # type: ignore[arg-type]
+            conversation_event_store=store,
+        ).converse(
+            "session_a",
+            conversation_id,
+            PLOT_ARCHITECT,
+            "snapshot survives bind-time change",
         )
-        self.assertEqual(store.append_calls, [])
-        self.assertEqual(backend.requests, [])
+        self.assertEqual(len(store.append_calls), 2)
+        self.assertEqual(len(backend.requests), 1)
+        self.assertNotIn(
+            "tampered during bind",
+            backend.definitions[0].system_prompt_file.read_text(),
+        )
 
         workspace = initialized_workspace(self)
         catalog = StaticConversationCatalog()
@@ -1240,21 +1247,19 @@ class ConversationRuntimePreflightTests(_ConversationRuntimeCase):
             workspace.write_text(prompt_path, "tampered after definition\n")
             return definition
 
-        before = memory.read("session_a", conversation_id)
         with mock.patch.object(
             runtime.prompts,
             "build_definition",
             side_effect=build_then_tamper,
         ):
-            with self.assertRaises(WorkspaceFormatError):
-                await runtime.converse(
-                    "session_a",
-                    conversation_id,
-                    PLOT_ARCHITECT,
-                    "must not append",
-                )
-        self.assertEqual(memory.read("session_a", conversation_id), before)
-        self.assertEqual(len(backend.requests), 1)
+            await runtime.converse(
+                "session_a",
+                conversation_id,
+                PLOT_ARCHITECT,
+                "cached snapshot survives path change",
+            )
+        self.assertEqual(len(memory.read("session_a", conversation_id)), 4)
+        self.assertEqual(len(backend.requests), 2)
 
     async def test_user_append_return_is_validated_before_provider(self) -> None:
         workspace, _, memory, conversation_id = self.memory_fixture()
@@ -1917,6 +1922,10 @@ class ConversationRuntimeArtifactTests(_ConversationRuntimeCase):
                 (
                     "agent_states/orchestrator_state/writing_artifacts/"
                     ".artifacts.lock"
+                ),
+                (
+                    "agent_states/orchestrator_state/writing_artifacts/"
+                    ".artifacts.lock.anchor"
                 ),
             },
         )
