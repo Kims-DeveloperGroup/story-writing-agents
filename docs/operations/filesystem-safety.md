@@ -14,19 +14,58 @@ of overwrite; **atomic file**—a replacement observed as old or complete new da
 `Workspace` resolves its root once and makes a nonmutating identity probe. An
 existing canonical directory with meaningful positive device and inode values
 binds that identity at construction. A specifically missing root remains
-pending until `initialize()` creates it and makes the one permitted binding
-attempt. Any other unavailable or nonmeaningful initial identity remains
+pending for one valid `initialize()` attempt. The method validates
+`overwrite_prompts` before I/O; a non-boolean value raises `TypeError` without
+consuming that attempt.
+
+At the start of the first valid attempt, a pending instance becomes terminal
+before capability checks or filesystem mutation. Safe initialization preflights
+the required descriptor-relative directory and atomic-file operations,
+no-follow flags and inspection, identity checks, synchronization, and cleanup.
+If any required primitive is unavailable, `initialize()` raises `OSError` before
+mutation rather than using a weaker fallback.
+
+The attempt walks the canonical root from an opened filesystem anchor, creates
+each missing component relative to its opened parent, and opens each component
+without following its name. It verifies the opened final root against its final
+named identity, then retains that root descriptor until initialization ends.
+All topology creation and default-file parent traversal is relative to that
+descriptor. Each new file is written and synchronized through an exclusively
+created temporary regular file. Before installation, its meaningful identity is
+captured; after installation, the target must have that same identity. The
+create-only path leaves an existing non-symlink target unchanged and never
+replaces a competing target. `overwrite_prompts=True` instead atomically
+replaces only the four canonical role prompts. Both paths preserve the
+established file bytes and create-versus-overwrite behavior.
+
+After all topology and default writes, initialization reopens the filesystem
+anchor, rewalks the complete canonical root without following component names,
+and requires that descriptor to match the retained root identity. It then closes
+the retained root descriptor. Only after that cleanup succeeds does the instance
+record a successful identity. A canonical ancestor or root replacement after
+the initial comparison cannot redirect writes: they remain on the retained
+root, the final rewalk rejects the changed name, and later debug-log storage has
+no successful identity to follow.
+
+The originating `OSError`, `KeyboardInterrupt`, or `SystemExit` from root
+creation, identity verification, child/default work, or file installation
+propagates unchanged; cleanup does not replace an active body failure. If the
+body succeeds and retained-root cleanup fails, that cleanup failure propagates
+unchanged. Safely created components and intended partial data on the retained
+root are not rolled back. Until complete success, every later `initialize()`
+call on that instance raises the established identity-unavailable `OSError`
+before root creation, stat or bind, child creation, or default writes. It neither
+retries nor repeats the original failure. Calls after successful initialization
+retain the established preserve-existing behavior and optional canonical-prompt
+overwrite.
+
+Any other unavailable or nonmeaningful construction-time identity remains
 unavailable for that `Workspace` instance rather than silently rebinding later.
-If the post-creation bind remains unavailable, `initialize()` raises `OSError`
-with `workspace root identity is unavailable` before creating workspace child
-directories or default files. The failure is terminal for that instance: every
-later `initialize()` call raises before child/default writes and never retries
-or rebinds. A parent or root directory just created by `mkdir` may remain; a new
-`Workspace` performs its own construction-time probe, so inspect and repair the
-root path before constructing one. An existing directory whose initial probe is
-unavailable or nonmeaningful retains the established limitation: normal
+An existing directory in that state retains the established limitation: normal
 pathname-based initialization may create its scaffold, but diagnostic storage
-remains unavailable for that instance.
+remains unavailable for that instance. A new `Workspace` performs its own
+construction-time probe, so inspect and repair a failed root path before
+constructing one.
 
 This identity protects internal diagnostic containment only. Public and domain
 operations retain pathname and no-symlink checks but do not compare the retained

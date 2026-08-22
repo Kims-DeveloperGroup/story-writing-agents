@@ -44,16 +44,33 @@ or payload mapping.
 `Workspace` owns canonical-root resolution, containment, no-symlink checks, its
 per-instance meaningful root identity, package-internal root open/reverification
 helpers, and the `debug_logs/` scaffold declaration. An existing directory binds
-at construction; a specifically missing root receives one binding attempt after
-initialization creates it; any other unavailable identity never silently
-rebinds on that instance. If the post-creation bind cannot produce a meaningful
-directory identity—including when a symlink appears at the missing root—
-`initialize()` raises `OSError` before creating workspace child directories or
-default files. That failed bind is terminal for the instance: every later
-`initialize()` call raises the same identity-unavailable `OSError` before child
-or default writes and never retries or rebinds. Parent or root directories
-already created by `mkdir` are not rolled back. A new `Workspace` makes its own
-construction-time identity probe.
+at construction; a specifically missing root remains pending for one valid
+`initialize()` attempt; any other unavailable identity never silently rebinds
+on that instance. Invalid `overwrite_prompts` input raises `TypeError` before
+I/O without consuming the pending attempt. The first valid attempt becomes
+terminal before capability checks or mutation and preflights the full required
+descriptor-relative directory and atomic-file capability set. It creates
+missing canonical-root components beneath opened parent descriptors, verifies
+the opened final root against its named identity, and retains that root
+descriptor across every topology and default write.
+
+Pending child directories and file parents are traversed relative to the
+retained root without following names. File writes stage exclusive temporary
+regular files and verify both the temporary and installed identities.
+Create-only installation preserves existing non-symlink entries without
+replacement; prompt overwrite remains limited to the four canonical role
+prompts. After all writes, the canonical root is rewalked and matched to the
+retained identity. Successful identity is recorded only after the retained
+descriptor closes.
+
+The first `OSError`, `KeyboardInterrupt`, or `SystemExit` propagates unchanged,
+with an active body failure taking precedence over cleanup failure. Safely
+created components and intended partial data on the retained root are not
+rolled back. After any failure before complete writes, rewalk, and cleanup,
+later `initialize()` calls reject with the established identity-unavailable
+`OSError` before root or child I/O and never retry. Calls after success and roots
+that existed at construction retain their established pathname behavior. A new
+`Workspace` makes its own construction-time identity probe.
 
 An existing directory whose construction-time probe is unavailable or
 nonmeaningful follows the established, separate limitation: normal

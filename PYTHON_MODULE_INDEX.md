@@ -1647,13 +1647,29 @@ every intermediate arrow. The current runtime graph is acyclic.
   security, and each instance's canonical-root identity lifecycle. Construction
   makes one nonmutating no-follow identity probe and retains no descriptor: an
   existing directory binds immediately, while a specifically missing root
-  remains pending for the one permitted bind after `initialize()` creates the
-  root. If that post-creation bind cannot establish a meaningful directory
-  identity, the instance enters a private terminal failed-bind state and the
-  first and every later `initialize()` call raises the established
-  identity-unavailable `OSError` before child scaffold or default writes,
-  without retry or rebind; parent/root creation is not rolled back, and a new
-  `Workspace` performs its own construction probe. An existing root whose
+  remains pending for its first valid `initialize()` attempt. Invalid
+  `overwrite_prompts` input raises `TypeError` before I/O without consuming that
+  attempt. A first valid pending attempt becomes terminal before capability
+  checks or mutation and preflights the required descriptor-relative directory
+  and atomic-file primitives. It walks or creates canonical-root components
+  without following names, verifies the opened and named root identities, and
+  retains the root descriptor throughout pending topology and default writes.
+  Directory and file-parent traversal stays beneath that descriptor. File
+  installation stages an exclusive temporary regular file, keeps create-only
+  and prompt-overwrite handling distinct, and verifies the staged and installed
+  identities. After all writes, initialization rewalks the canonical root and
+  matches it to the retained identity. Owned descriptors follow exact-once
+  cleanup, and the instance records success only after final root-descriptor
+  cleanup completes. Missing primitives raise `OSError` before mutation. The
+  exact first `OSError`, `KeyboardInterrupt`, or `SystemExit` from initialization
+  or final cleanup propagates unchanged; cleanup does not replace an active
+  failure, and created components or intended partial data are not rolled back.
+  After any earlier failure, every later `initialize()` call raises the
+  established identity-unavailable `OSError` before all filesystem operations
+  without retry or rebind. Roots existing at construction, repeated successful
+  calls, and ordinary post-initialization path operations retain their
+  established behavior; a new `Workspace` performs its own construction probe.
+  An existing root whose
   initial probe is unavailable or nonmeaningful remains in the distinct
   unavailable state: diagnostic helper access fails closed without rebinding,
   while established pathname-based initialization may still scaffold it. The
