@@ -343,13 +343,17 @@ class WorkspaceDebugLog:
 
         process_lock = _process_lock_for(self._workspace)
         deadline = time.monotonic() + DEBUG_LOG_LOCK_TIMEOUT_SECONDS
-        if not process_lock.lock.acquire(timeout=DEBUG_LOG_LOCK_TIMEOUT_SECONDS):
-            return
+        process_lock_acquired = False
         directory: _DebugDirectory | None = None
         descriptor: int | None = None
         locked = False
         body_failure: _ExceptionState | None = None
         try:
+            process_lock_acquired = process_lock.lock.acquire(
+                timeout=DEBUG_LOG_LOCK_TIMEOUT_SECONDS
+            )
+            if not process_lock_acquired:
+                return
             directory = _prepare_debug_directory(self._workspace)
             _validate_existing_regular(directory, _DEBUG_LOG_FILENAME)
             for index in range(1, DEBUG_LOG_BACKUP_COUNT + 1):
@@ -398,10 +402,11 @@ class WorkspaceDebugLog:
                 directory.root_descriptor,
                 cleanup_control,
             )
-        cleanup_control = _cleanup_process_lock(
-            process_lock,
-            cleanup_control,
-        )
+        if process_lock_acquired:
+            cleanup_control = _cleanup_process_lock(
+                process_lock,
+                cleanup_control,
+            )
         _raise_after_cleanup(body_failure, cleanup_control)
 
 
