@@ -301,10 +301,12 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Direct internal dependencies:** None.
 - **State, resources, and side effects:** `run_process` launches one child with
   piped stdin/stdout/stderr, drains both streams concurrently through
-  `communicate`, enforces the supplied timeout, and terminates then kills and
-  joins the child on timeout or cancellation. Optional cwd and environment are
-  explicit request values. The module owns no persistent or import-time state
-  and emits no provider-specific diagnostic.
+  `communicate`, and enforces the supplied timeout. On timeout, cancellation,
+  or any other post-launch communication failure, it stops a still-running
+  child by requesting termination, waiting up to two seconds, then killing and
+  joining when necessary; completed children are not signaled. Optional cwd
+  and environment are explicit request values. The module owns no persistent
+  or import-time state and emits no provider-specific diagnostic.
 - **Primary verification/documentation:** `tests/test_codex_backend.py`,
   `docs/reference/backend-and-sessions.md`, and
   `docs/operations/privacy-and-provider.md`.
