@@ -371,7 +371,6 @@ class AntigravityAdapter:
         try:
             command = self.command(
                 provider_state_directory=provider_state_directory,
-                working_directory=working_directory,
                 schema=invocation.schema,
                 thread_id=invocation.thread_id,
                 agent_id=binding.definition.agent_id,
@@ -496,7 +495,6 @@ class AntigravityAdapter:
         self,
         *,
         provider_state_directory: Path,
-        working_directory: Path,
         schema: Mapping[str, Any],
         thread_id: str | None,
         agent_id: str | None = None,
