@@ -421,12 +421,53 @@ class ReferenceReadRepositoryTests(unittest.TestCase):
         with self.assertRaises(ReferenceAuthorizationError) as raised:
             drift.handle_reference_read_action(_action(drift.request))
         self.assertIs(raised.exception.code, ReferenceAuthorizationErrorCode.DRIFT)
+        history = self.repository.inspect_reference_operation("drift")
+        assert history is not None
+        terminal = history.invocation_events[0][-1]
+        self.assertIs(
+            terminal.invocation_state,
+            ReferenceInvocationState.TERMINATED,
+        )
+        self.assertIs(
+            terminal.outcome,
+            ReferenceAuthorizationErrorCode.DRIFT,
+        )
         self.repository.finish_reference_operation(
             drift_authorization,
             outcome=ReferenceAuthorizationErrorCode.DRIFT,
         )
 
-    def test_cleanup_failure_never_replaces_wrong_action_failure(self) -> None:
+    def test_unexpected_delivery_failure_terminates_with_workflow_failure(
+        self,
+    ) -> None:
+        authorization, invocation = self.invocation("unexpected", "invoke", 1)
+        unexpected = OSError("revalidation failed")
+        with mock.patch.object(
+            self.repository,
+            "_revalidate_reference_authorization",
+            side_effect=unexpected,
+        ):
+            with self.assertRaises(OSError) as raised:
+                invocation.handle_reference_read_action(_action(invocation.request))
+        self.assertIs(raised.exception, unexpected)
+
+        history = self.repository.inspect_reference_operation("unexpected")
+        assert history is not None
+        terminal = history.invocation_events[0][-1]
+        self.assertIs(
+            terminal.invocation_state,
+            ReferenceInvocationState.TERMINATED,
+        )
+        self.assertIs(
+            terminal.outcome,
+            ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
+        )
+        self.repository.finish_reference_operation(
+            authorization,
+            outcome=ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
+        )
+
+    def test_cleanup_failure_never_replaces_primary_failure(self) -> None:
         authorization, invocation = self.invocation("cleanup", "invoke", 1)
         wrong = ReferenceReadAction(
             ReferenceReadActionKind.READ_WRITING_ARTIFACTS,
@@ -444,6 +485,29 @@ class ReferenceReadRepositoryTests(unittest.TestCase):
             raised.exception.code,
             ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH,
         )
+        authorization.close()
+
+        authorization, invocation = self.invocation(
+            "cleanup-unexpected",
+            "invoke",
+            1,
+        )
+        unexpected = OSError("revalidation failed")
+        with (
+            mock.patch.object(
+                self.repository,
+                "_revalidate_reference_authorization",
+                side_effect=unexpected,
+            ),
+            mock.patch.object(
+                self.repository,
+                "terminate_reference_invocation",
+                side_effect=RuntimeError("cleanup failed"),
+            ),
+        ):
+            with self.assertRaises(OSError) as raised:
+                invocation.handle_reference_read_action(_action(invocation.request))
+        self.assertIs(raised.exception, unexpected)
         authorization.close()
 
 
