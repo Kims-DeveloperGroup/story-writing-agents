@@ -773,29 +773,48 @@ class SmokePersistentTests(unittest.TestCase):
                     Path(temporary.name) / "workspace"
                 )
                 shutil.rmtree(workspace.path("debug_logs"))
-                with mock.patch.object(
-                    WorkspaceDebugLog,
-                    "_append",
-                    side_effect=OSError("diagnostic submission unavailable"),
-                ) as submission:
-                    if unavailable == "acquisition":
-                        with mock.patch.object(
+                if unavailable == "acquisition":
+                    with (
+                        mock.patch.object(
+                            WorkspaceDebugLog,
+                            "_record",
+                            side_effect=OSError(
+                                "runtime diagnostic submission unavailable"
+                            ),
+                        ) as runtime_submission,
+                        mock.patch.object(
+                            WorkspaceDebugLog,
+                            "_append",
+                        ) as submission,
+                        mock.patch.object(
                             smoke_module,
                             "WorkspaceDebugLog",
                             side_effect=OSError(
                                 "diagnostic acquisition unavailable"
                             ),
-                        ) as acquisition:
-                            report, exit_code = smoke_module.run_smoke(workspace)
-                        acquisition.assert_called_once_with(workspace)
-                    else:
+                        ) as acquisition,
+                    ):
                         report, exit_code = smoke_module.run_smoke(workspace)
-                    inspected_status = StoryRuntime(workspace).inspect_debate(
-                        report["session_id"],
-                        report["debate_id"],
-                    )["status"]
+                    acquisition.assert_called_once_with(workspace)
+                    self.assertTrue(runtime_submission.called)
+                else:
+                    with mock.patch.object(
+                        WorkspaceDebugLog,
+                        "_append",
+                        side_effect=OSError(
+                            "diagnostic submission unavailable"
+                        ),
+                    ) as submission:
+                        report, exit_code = smoke_module.run_smoke(workspace)
+                inspected_status = workspace.inspect_debate(
+                    report["session_id"],
+                    report["debate_id"],
+                )["status"]
 
-                self.assertTrue(submission.called)
+                if unavailable == "acquisition":
+                    submission.assert_not_called()
+                else:
+                    self.assertGreater(submission.call_count, 0)
 
                 self.assertEqual(exit_code, 0)
                 self.assertEqual(report["status"], "passed")
