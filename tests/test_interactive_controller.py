@@ -2749,10 +2749,21 @@ class ControllerSettingsTests(ControllerTestCase):
                 values.extend(
                     (
                         (f"{display_name} Provider", agent.backend or "codex (default)"),
-                        (f"{display_name} Model", agent.codex_model or "inherit"),
                         (
-                            f"{display_name} Reasoning",
+                            f"{display_name} Codex model",
+                            agent.codex_model or "inherit",
+                        ),
+                        (
+                            f"{display_name} Codex reasoning",
                             agent.codex_reasoning_effort or "inherit",
+                        ),
+                        (
+                            f"{display_name} Antigravity model",
+                            agent.antigravity_model or "inherit",
+                        ),
+                        (
+                            f"{display_name} Antigravity effort",
+                            agent.antigravity_effort or "inherit",
                         ),
                     )
                 )
@@ -2822,6 +2833,25 @@ class ControllerSettingsTests(ControllerTestCase):
                 ),
                 state=terminal_module.ViewState.OPEN,
             ),
+        )
+
+        changed = settings_module.update_agent_codex_model(
+            state,
+            PLOT_ARCHITECT,
+            "codex-model",
+        )
+        changed = settings_module.update_agent_antigravity_model(
+            changed,
+            PLOT_ARCHITECT,
+            "agy-model",
+        )
+        panel = InteractiveController._settings_panel(changed)
+        self.assertEqual(panel, self.expected_panel(changed))
+        rendered = render_plain(panel, width=120).text
+        self.assertIn("Plot & Structure Architect Codex model", rendered)
+        self.assertIn(
+            "Plot & Structure Architect Antigravity model",
+            rendered,
         )
 
     def test_settings_open_is_exact_six_item_provider_free_snapshot(self) -> None:
@@ -3026,7 +3056,13 @@ class ControllerSettingsTests(ControllerTestCase):
     def test_settings_edit_save_isolated_candidate_and_literal_cancel_text(self) -> None:
         workspace = self.make_workspace()
         agent_configs = workspace.read_json("config/agent_configs.json")
-        agent_configs[PLOT_ARCHITECT]["backend"] = "gemini"
+        agent_configs[PLOT_ARCHITECT].update(
+            {
+                "backend": "antigravity",
+                "antigravity_model": "inactive-agy-model",
+                "antigravity_effort": "medium",
+            }
+        )
         workspace.write_json("config/agent_configs.json", agent_configs)
         before = _tree_snapshot(workspace.root)
         controller, _backend, callbacks = self.make_controller(
@@ -3090,6 +3126,14 @@ class ControllerSettingsTests(ControllerTestCase):
             "xhigh",
         )
         self.assertEqual(
+            configured.agent_configs[PLOT_ARCHITECT].antigravity_model,
+            "inactive-agy-model",
+        )
+        self.assertEqual(
+            configured.agent_configs[PLOT_ARCHITECT].antigravity_effort,
+            "medium",
+        )
+        self.assertEqual(
             configured.agent_configs[PLOT_ARCHITECT].backend,
             "codex",
         )
@@ -3106,10 +3150,11 @@ class ControllerSettingsTests(ControllerTestCase):
             ),
             1,
         )
-        self.assertNotIn(
-            "Gemini — Current saved provider; choose Codex to remediate. "
-            "(disabled: Provider is not implemented.)",
-            rendered,
+        self.assertTrue(
+            any(
+                "Choose Codex or Antigravity." in prompt
+                for prompt in callbacks.prompts
+            )
         )
         self.assertGreaterEqual(
             sum("Choose a setting to edit" in prompt for prompt in callbacks.prompts),
@@ -3118,6 +3163,86 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertNotIn("Inherit", rendered)
         self.assertNotIn("Settings cancelled", rendered)
         self.assertEqual(callbacks.reads, [])
+
+    def test_antigravity_settings_edit_active_fields_and_preserve_codex(self) -> None:
+        workspace = self.make_workspace()
+        agent_configs = workspace.read_json("config/agent_configs.json")
+        agent_configs[PLOT_ARCHITECT].update(
+            {
+                "codex_model": "inactive-codex-model",
+                "codex_reasoning_effort": "xhigh",
+            }
+        )
+        workspace.write_json("config/agent_configs.json", agent_configs)
+        controller, _backend, callbacks = self.make_controller(
+            workspace,
+            "/settings",
+            "4",
+            "2",
+            "1",
+            "2",
+            "4",
+            "2",
+            "2",
+            "-unsafe",
+            "agy-model",
+            "4",
+            "2",
+            "3",
+            "4",
+            "5",
+            "1",
+            "/quit",
+            terminal_width=160,
+        )
+
+        with (
+            mock.patch.object(subprocess, "Popen") as popen,
+            mock.patch.object(subprocess, "run") as run,
+            mock.patch.object(socket, "create_connection") as connect,
+        ):
+            self.assertEqual(controller.run_session_lobby(), 0)
+        popen.assert_not_called()
+        run.assert_not_called()
+        connect.assert_not_called()
+
+        agent = settings_module.load_settings_state(
+            workspace
+        ).pending.agent_configs[PLOT_ARCHITECT]
+        self.assertEqual(
+            (
+                agent.backend,
+                agent.antigravity_model,
+                agent.antigravity_effort,
+                agent.codex_model,
+                agent.codex_reasoning_effort,
+            ),
+            (
+                "antigravity",
+                "agy-model",
+                "high",
+                "inactive-codex-model",
+                "xhigh",
+            ),
+        )
+        effort_prompt = next(
+            prompt
+            for prompt in callbacks.prompts
+            if "Antigravity effort [Plot & Structure Architect]" in prompt
+        )
+        self.assertIn("[available] low", effort_prompt)
+        self.assertIn("[available] medium", effort_prompt)
+        self.assertIn("[available] high", effort_prompt)
+        self.assertNotIn("minimal", effort_prompt)
+        self.assertNotIn("xhigh", effort_prompt)
+        rendered = "".join(callbacks.records)
+        self.assertIn(
+            "[validation] Antigravity model must be safe nonempty text, "
+            "or blank to inherit.\n",
+            rendered,
+        )
+        self.assertIn("Antigravity model", rendered)
+        self.assertIn("[saved] Settings saved", rendered)
 
     def test_nested_escape_returns_but_interrupt_and_eof_cancel_all(self) -> None:
         scenarios = (

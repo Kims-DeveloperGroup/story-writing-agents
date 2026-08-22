@@ -46,6 +46,7 @@ from story_writing_agents.errors import (
     WorkspaceSecurityError,
 )
 from story_writing_agents.workspace import (
+    DEFAULT_AGENT_CONFIGS,
     DEFAULT_AGENT_PROMPTS,
     DEFAULT_SYSTEM_CONFIG,
     WORKSPACE_DIRECTORIES,
@@ -165,11 +166,32 @@ class WorkspaceTests(unittest.TestCase):
                 "max_debate_rounds": 1,
                 "codex_model": None,
                 "codex_reasoning_effort": None,
+                "antigravity_model": None,
+                "antigravity_effort": None,
             },
+        )
+        expected_agent = {
+            "backend": "codex",
+            "language": None,
+            "persona": None,
+            "codex_model": None,
+            "codex_reasoning_effort": None,
+            "antigravity_model": None,
+            "antigravity_effort": None,
+        }
+        self.assertEqual(
+            DEFAULT_AGENT_CONFIGS,
+            {agent_id: expected_agent for agent_id in ROSTER},
+        )
+        self.assertEqual(
+            workspace.read_json("config/agent_configs.json"),
+            DEFAULT_AGENT_CONFIGS,
         )
         self.assertEqual(
             workspace.read_text("config/system_defaults.json"),
             "{\n"
+            '  "antigravity_effort": null,\n'
+            '  "antigravity_model": null,\n'
             '  "codex_model": null,\n'
             '  "codex_reasoning_effort": null,\n'
             '  "language": "KO",\n'
@@ -712,10 +734,13 @@ class ConfigurationCascadeTests(unittest.TestCase):
                 "max_debate_rounds",
                 "codex_model",
                 "codex_reasoning_effort",
+                "antigravity_model",
+                "antigravity_effort",
             ),
         )
-        self.assertIsNone(model_fields[-2].default)
-        self.assertIsNone(model_fields[-1].default)
+        self.assertTrue(
+            all(field.default is None for field in model_fields[-4:])
+        )
         legacy = SystemDefaults("KO", "global_persona", 1)
         self.assertEqual(
             legacy,
@@ -725,12 +750,37 @@ class ConfigurationCascadeTests(unittest.TestCase):
                 1,
                 codex_model=None,
                 codex_reasoning_effort=None,
+                antigravity_model=None,
+                antigravity_effort=None,
             ),
         )
         self.assertFalse(hasattr(legacy, "__dict__"))
         with self.assertRaises(FrozenInstanceError):
             legacy.codex_model = "changed"
         self.assertEqual(pickle.loads(pickle.dumps(legacy)), legacy)
+
+        agent_fields = fields(AgentConfig)
+        self.assertEqual(
+            tuple(field.name for field in agent_fields),
+            (
+                "backend",
+                "language",
+                "persona",
+                "codex_model",
+                "codex_reasoning_effort",
+                "antigravity_model",
+                "antigravity_effort",
+            ),
+        )
+        self.assertTrue(all(field.default is None for field in agent_fields))
+        legacy_agent = AgentConfig()
+        self.assertFalse(hasattr(legacy_agent, "__dict__"))
+        with self.assertRaises(FrozenInstanceError):
+            legacy_agent.antigravity_model = "changed"
+        self.assertEqual(
+            pickle.loads(pickle.dumps(legacy_agent)),
+            legacy_agent,
+        )
 
     def test_full_snapshot_is_exact_frozen_roster_complete_and_copy_isolated(
         self,
@@ -743,7 +793,7 @@ class ConfigurationCascadeTests(unittest.TestCase):
         configs = {agent_id: AgentConfig() for agent_id in ROSTER}
         defaults = SystemDefaults("KO", "global_persona", 1)
         snapshot = ConfigurationSnapshot(defaults, configs)
-        configs[PLOT_ARCHITECT] = AgentConfig(backend="gemini")
+        configs[PLOT_ARCHITECT] = AgentConfig(backend="antigravity")
 
         self.assertFalse(hasattr(snapshot, "__dict__"))
         self.assertIs(snapshot.system_defaults, defaults)
@@ -797,7 +847,7 @@ class ConfigurationCascadeTests(unittest.TestCase):
             defaults["language"] = "DE"
             self.workspace.write_json("config/system_defaults.json", defaults)
             agents = self.workspace.read_json("config/agent_configs.json")
-            agents[PLOT_ARCHITECT]["backend"] = "gemini"
+            agents[PLOT_ARCHITECT]["backend"] = "antigravity"
             agents[PLOT_ARCHITECT]["language"] = "FR"
             self.workspace.write_json("config/agent_configs.json", agents)
             reads_before_resolution = read.call_count
@@ -818,7 +868,7 @@ class ConfigurationCascadeTests(unittest.TestCase):
                         }
                     },
                 },
-                {PLOT_ARCHITECT: "gemini"},
+                {PLOT_ARCHITECT: "antigravity"},
             )
 
         self.assertEqual(read.call_count, reads_before_resolution)
@@ -828,7 +878,7 @@ class ConfigurationCascadeTests(unittest.TestCase):
         )
         self.assertEqual(
             (overridden.backend, overridden.language, overridden.persona),
-            ("gemini", "PT", "runtime_persona"),
+            ("antigravity", "PT", "runtime_persona"),
         )
 
     def test_complete_pair_validation_rejects_each_invalid_document(self) -> None:
@@ -964,7 +1014,44 @@ class ConfigurationCascadeTests(unittest.TestCase):
                     self.manager.load_system_defaults()
                 self.assertEqual(str(caught.exception), expected)
 
-    def test_agent_codex_fields_accept_legacy_documents_and_validate_trailing_fields(
+    def test_antigravity_defaults_validate_exact_models_and_efforts(self) -> None:
+        exact_model = " Antigravity-e\u0301 한🙂 "
+        for effort in ("low", "medium", "high"):
+            with self.subTest(valid_effort=effort):
+                value = {
+                    "language": "KO",
+                    "persona": "global_persona",
+                    "max_debate_rounds": 1,
+                    "antigravity_model": exact_model,
+                    "antigravity_effort": effort,
+                }
+                loaded = self.manager.validate_configuration(
+                    value,
+                    self.workspace.read_json("config/agent_configs.json"),
+                ).system_defaults
+                self.assertEqual(loaded.antigravity_model, exact_model)
+                self.assertEqual(loaded.antigravity_effort, effort)
+
+        unsafe_models = (False, 7, "", "-agy", "agy\x00", "agy\ud800")
+        for model in unsafe_models:
+            with self.subTest(invalid_model=repr(model)):
+                with self.assertRaises(ConfigurationError) as caught:
+                    self.manager.validate_antigravity_model(model)
+                self.assertEqual(
+                    str(caught.exception),
+                    "antigravity_model must be safe non-empty text or null",
+                )
+
+        expected = (
+            "antigravity_effort must be null or one of: low, medium, high"
+        )
+        for effort in (False, "", "minimal", "xhigh", "HIGH"):
+            with self.subTest(invalid_effort=effort):
+                with self.assertRaises(ConfigurationError) as caught:
+                    self.manager.validate_antigravity_effort(effort)
+                self.assertEqual(str(caught.exception), expected)
+
+    def test_agent_provider_fields_accept_legacy_and_validate_trailing_fields(
         self,
     ) -> None:
         legacy = self.workspace.read_json("config/agent_configs.json")
@@ -975,31 +1062,40 @@ class ConfigurationCascadeTests(unittest.TestCase):
         loaded_legacy = self.manager.load_agent_configs()
         self.assertIsNone(loaded_legacy[PLOT_ARCHITECT].codex_model)
         self.assertIsNone(loaded_legacy[PLOT_ARCHITECT].codex_reasoning_effort)
+        self.assertIsNone(loaded_legacy[PLOT_ARCHITECT].antigravity_model)
+        self.assertIsNone(loaded_legacy[PLOT_ARCHITECT].antigravity_effort)
 
         trailing = dict(legacy)
         trailing[PLOT_ARCHITECT] = {
-            "backend": "codex",
+            "backend": "antigravity",
             "language": "JA",
             "persona": "agent_persona",
             "codex_model": "agent-model",
             "codex_reasoning_effort": "xhigh",
+            "antigravity_model": "agy-agent-model",
+            "antigravity_effort": "medium",
         }
         self.workspace.write_json("config/agent_configs.json", trailing)
         loaded = self.manager.load_agent_configs()[PLOT_ARCHITECT]
         self.assertEqual(
             loaded,
             AgentConfig(
-                backend="codex",
+                backend="antigravity",
                 language="JA",
                 persona="agent_persona",
                 codex_model="agent-model",
                 codex_reasoning_effort="xhigh",
+                antigravity_model="agy-agent-model",
+                antigravity_effort="medium",
             ),
         )
 
         for field, value in (
             ("codex_model", "-unsafe"),
             ("codex_reasoning_effort", "default"),
+            ("antigravity_model", "-unsafe"),
+            ("antigravity_effort", "minimal"),
+            ("antigravity_effort", "xhigh"),
         ):
             with self.subTest(field=field):
                 invalid = dict(trailing)
@@ -1021,9 +1117,19 @@ class ConfigurationCascadeTests(unittest.TestCase):
 
         overridden_backend = self.manager.resolve(
             PLOT_ARCHITECT,
-            backend_overrides={PLOT_ARCHITECT: "gemini"},
+            backend_overrides={PLOT_ARCHITECT: "antigravity"},
         )
-        self.assertEqual(overridden_backend.backend, "gemini")
+        self.assertEqual(overridden_backend.backend, "antigravity")
+
+        with self.assertRaises(ConfigurationError) as caught:
+            self.manager.resolve(
+                PLOT_ARCHITECT,
+                backend_overrides={PLOT_ARCHITECT: "gemini"},
+            )
+        self.assertEqual(
+            str(caught.exception),
+            "backend 'gemini' is no longer supported; use 'antigravity'",
+        )
 
         runtime_language = self.manager.resolve(
             PLOT_ARCHITECT,
