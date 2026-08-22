@@ -80,6 +80,11 @@ from story_writing_agents.errors import (
 )
 from story_writing_agents.prompts import PromptAssembler
 from story_writing_agents.orchestrator import StoryRuntime
+from story_writing_agents.provider_adapter import (
+    ProviderInvocationError,
+    ProviderResult,
+)
+from story_writing_agents.provider_process import ProcessRequest, run_process
 
 from tests.helpers import all_manuscripts, core_snapshot, initialized_workspace
 
@@ -2088,6 +2093,180 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     )
                 )
 
+    async def test_structured_decode_failures_taint_existing_thread_once(
+        self,
+    ) -> None:
+        session_id = "decode_taint_session"
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        backend.create_session_with_access(session_id)
+        definition = self.definition()
+        bound = await backend.bind(definition)
+        failures: tuple[tuple[str, BaseException], ...] = (
+            (
+                "json",
+                json.JSONDecodeError("malformed provider response", "x", 0),
+            ),
+            (
+                "unicode",
+                UnicodeDecodeError(
+                    "utf-8",
+                    b"\xff",
+                    0,
+                    1,
+                    "invalid provider response",
+                ),
+            ),
+            (
+                "protocol",
+                BackendProtocolError(
+                    "Codex conversation response has an invalid schema"
+                ),
+            ),
+        )
+
+        for index, (label, failure) in enumerate(failures):
+            with self.subTest(failure=label):
+                thread_id = f"decode-thread-{index}"
+                backend._store_thread(
+                    session_id,
+                    definition,
+                    thread_id,
+                    tainted=False,
+                )
+                invoke = mock.AsyncMock(
+                    return_value=ProviderResult(
+                        thread_id=thread_id,
+                        response_text="provider response",
+                    )
+                )
+
+                def fail_decode(_text: str) -> ConversationReply:
+                    raise failure
+
+                with (
+                    mock.patch.object(backend._codex_adapter, "invoke", invoke),
+                    mock.patch.object(
+                        backend,
+                        "_taint_thread",
+                        wraps=backend._taint_thread,
+                    ) as taint,
+                    mock.patch.object(
+                        backend,
+                        "_write_manifest",
+                        wraps=backend._write_manifest,
+                    ) as write_manifest,
+                    mock.patch.object(
+                        backend,
+                        "_store_thread",
+                        wraps=backend._store_thread,
+                    ) as store_thread,
+                ):
+                    with self.assertRaises(BackendProtocolError) as caught:
+                        await backend._invoke_provider_structured(
+                            bound,
+                            session_id=session_id,
+                            schema={},
+                            payload={},
+                            decode=fail_decode,
+                        )
+
+                invoke.assert_awaited_once()
+                taint.assert_called_once_with(session_id, definition)
+                write_manifest.assert_called_once()
+                store_thread.assert_not_called()
+                self.assertIs(self.thread(session_id)["tainted"], True)
+                if type(failure) is BackendProtocolError:
+                    self.assertIs(caught.exception, failure)
+                    self.assertIsNone(caught.exception.__cause__)
+                else:
+                    self.assertIs(type(caught.exception), BackendProtocolError)
+                    self.assertEqual(
+                        str(caught.exception),
+                        "Codex CLI returned malformed structured output",
+                    )
+                    self.assertIs(caught.exception.__cause__, failure)
+
+    async def test_provider_invocation_error_preserves_adapter_cause_and_taint(
+        self,
+    ) -> None:
+        session_id = "provider_error_chain_session"
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        backend.create_session_with_access(session_id)
+        definition = self.definition()
+        bound = await backend.bind(definition)
+        unchained = ProviderInvocationError(
+            "safe unchained provider failure",
+            taint_existing_thread=False,
+        )
+        underlying = OSError("underlying provider failure")
+        chained = ProviderInvocationError(
+            "safe chained provider failure",
+            taint_existing_thread=True,
+        )
+        chained.__cause__ = underlying
+        cases = (
+            ("unchained", unchained, None, False),
+            ("chained", chained, underlying, True),
+        )
+
+        for index, (label, provider_error, expected_cause, should_taint) in enumerate(
+            cases
+        ):
+            with self.subTest(error=label):
+                thread_id = f"provider-error-thread-{index}"
+                backend._store_thread(
+                    session_id,
+                    definition,
+                    thread_id,
+                    tainted=False,
+                )
+                invoke = mock.AsyncMock(side_effect=provider_error)
+                decode = mock.Mock()
+                with (
+                    mock.patch.object(backend._codex_adapter, "invoke", invoke),
+                    mock.patch.object(
+                        backend,
+                        "_taint_thread",
+                        wraps=backend._taint_thread,
+                    ) as taint,
+                    mock.patch.object(
+                        backend,
+                        "_write_manifest",
+                        wraps=backend._write_manifest,
+                    ) as write_manifest,
+                    mock.patch.object(
+                        backend,
+                        "_store_thread",
+                        wraps=backend._store_thread,
+                    ) as store_thread,
+                ):
+                    with self.assertRaises(BackendProtocolError) as caught:
+                        await backend._invoke_provider_structured(
+                            bound,
+                            session_id=session_id,
+                            schema={},
+                            payload={},
+                            decode=decode,
+                        )
+
+                self.assertIs(type(caught.exception), BackendProtocolError)
+                self.assertEqual(str(caught.exception), provider_error.diagnostic)
+                self.assertIs(caught.exception.__cause__, expected_cause)
+                self.assertIsNot(caught.exception.__cause__, provider_error)
+                self.assertIsNone(caught.exception.__context__)
+                invoke.assert_awaited_once()
+                decode.assert_not_called()
+                store_thread.assert_not_called()
+                self.assertIs(self.thread(session_id)["tainted"], should_taint)
+                if should_taint:
+                    taint.assert_called_once_with(session_id, definition)
+                    write_manifest.assert_called_once()
+                else:
+                    taint.assert_not_called()
+                    write_manifest.assert_not_called()
+
     async def test_conversation_provider_failures_taint_without_story_mutation(
         self,
     ) -> None:
@@ -2486,6 +2665,53 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             any(item.get("terminated") is True for item in self.invocations())
         )
+
+    async def test_unexpected_communication_failure_stops_process_and_propagates(
+        self,
+    ) -> None:
+        events: list[str] = []
+        failure = BrokenPipeError("provider communication failed")
+        communication = asyncio.Future()
+        communication.set_exception(failure)
+        stopped = asyncio.Future()
+        stopped.set_result(None)
+        process = mock.Mock(returncode=None)
+        process.communicate.side_effect = (
+            lambda data: events.append("communicate") or communication
+        )
+        process.terminate.side_effect = lambda: events.append("terminate")
+        process.wait.side_effect = lambda: events.append("wait") or stopped
+        process.kill.side_effect = lambda: events.append("kill")
+
+        async def create_process(*command, **launch_options):
+            events.append("launch")
+            return process
+
+        async def wait_for(awaitable, *, timeout):
+            if awaitable is communication:
+                self.assertEqual(timeout, 5)
+            else:
+                self.assertIs(awaitable, stopped)
+                self.assertEqual(timeout, 2)
+            return await awaitable
+
+        with self.assertRaises(BrokenPipeError) as caught:
+            await run_process(
+                ProcessRequest(
+                    command=("provider",),
+                    stdin=b"payload",
+                    timeout_seconds=5,
+                ),
+                create_process=create_process,
+                wait_for=wait_for,
+            )
+
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(events, ["launch", "communicate", "terminate", "wait"])
+        process.communicate.assert_called_once_with(b"payload")
+        process.terminate.assert_called_once_with()
+        process.wait.assert_called_once_with()
+        process.kill.assert_not_called()
 
     async def test_process_stop_escalates_from_terminate_to_kill(self) -> None:
         events: list[str] = []

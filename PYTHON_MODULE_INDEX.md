@@ -16,7 +16,7 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 33.
+Importable production units indexed: 36.
 
 ## Current Dependency Direction
 
@@ -36,8 +36,10 @@ __main__ -> cli -> interactive_controller -> interactive_controller._core
                  |               |         -> workspace
                  |               -> conversations/workspace/models/agents
                  |               -> session_lifecycle
-                 -> backend -> config/conversation_retrieval/workspace/models/errors/agents
-                 |          -> session_lifecycle
+                 -> backend -> codex_adapter -> agents/config/errors/models
+                 |          |                 -> provider_adapter/provider_process
+                 |          -> config/conversation_retrieval/workspace/models/errors/agents
+                 |          -> provider_adapter/provider_process/session_lifecycle
                  -> cli_context -> workspace/errors/agents
 
 interactive_controller._core -> interactive_controller._session_policy
@@ -75,6 +77,8 @@ story_writing_agents facade -> interactive_commands
                             -> conversation_search -> conversations/errors
                             -> session_lifecycle
 models -> conversations/agents/errors
+provider_adapter -> models
+provider_process -> (standard library only)
 session_lifecycle -> (standard library only)
 workspace -> conversations -> agents/errors
 ```
@@ -190,10 +194,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.backend`
 
 - **Source:** `src/story_writing_agents/backend.py`
-- **Responsibility:** Adapt immutable agent definitions to provider invocation
-  and own provider-session durable state, process-access claims, provider
-  thread persistence, and each backend instance's persisted configuration
-  snapshot.
+- **Responsibility:** Coordinate provider adapters under the provider-neutral
+  session, lifecycle, retrieval, and reply contracts.
 - **Supported surface:** Package-supported `AgentBackend` and `BoundAgent`.
   `BoundAgent` exposes structured debate `invoke` and one-turn conversation
   `converse` operations plus additive bounded
@@ -208,17 +210,17 @@ every intermediate arrow. The current runtime graph is acyclic.
   Unexported package-internal `backend_configuration_snapshot(backend)` exposes
   the same immutable construction-time configuration to the bound runtime
   without exposing the backend's private storage.
-- **Direct internal dependencies:** `agents`, `config`,
-  `conversation_retrieval`, `errors`, `models`, `session_lifecycle`, and
-  `workspace`.
-- **State, resources, and side effects:** Owns Codex subprocesses, temporary
-  prompt/output staging, exact V2 provider-session manifests at
+- **Direct internal dependencies:** `agents`, `codex_adapter`, `config`,
+  `conversation_retrieval`, `errors`, `models`, `provider_adapter`,
+  `provider_process`, `session_lifecycle`, and `workspace`.
+- **State, resources, and side effects:** Owns exact V2 provider-session
+  manifests at
   `agent_states/orchestrator_state/provider_sessions/<session_id>.json`, exact
   V2 process-access claims at sibling `<session_id>.access.json` paths, the
   lazily created workspace-global `.access-claims.lock` OS advisory guard,
   in-memory claim tokens, persisted `provider_threads`, shared
-  debate/conversation/retrieval per-thread locks, and structured Codex process
-  and response validation. Manifests contain only `schema_version`,
+  debate/conversation/retrieval per-thread locks, adapter routing, and
+  structured domain-response validation. Manifests contain only `schema_version`,
   `session_id`, `durable_state`, `created_at`, `updated_at`, and
   `provider_threads`; claims contain only `schema_version`, `session_id`,
   `owner_hostname`, `owner_pid`, `claim_token`, and `claimed_at`. The guard
@@ -228,33 +230,85 @@ every intermediate arrow. The current runtime graph is acyclic.
   token. Version-1 manifests, access sidecars, and access guards are rejected
   with `WorkspaceVersionUnsupportedError` without migration, deletion, or
   rewriting. The backend also owns
-  timeout/cancellation taint handling, cleanup, and per-instance `atexit`
-  registration. One retrieval thread lock covers the complete repeated-call
-  action loop and synchronous
-  handler invocations. The backend owns the exact Codex action schema, initial
-  and continuation payloads, canonical observation framing handoff, provider
-  timeout/cancellation behavior, incomplete-history taint, and fixed
-  provider-value-free process/response-validation diagnostics. It drains both
-  subprocess output streams but discards and never decodes stderr after a
-  nonzero Codex exit; it receives no memory service and performs no retrieval
-  search or transcript-storage call. Debate requests add the canonical
+  timeout/cancellation taint handling, provider cleanup coordination, and
+  per-instance `atexit` registration. One retrieval thread lock covers the
+  complete repeated-call action loop and synchronous handler invocations. The
+  backend owns the exact action schemas, initial and
+  continuation payloads, canonical observation framing handoff,
+  incomplete-history taint decisions, and fixed response-validation
+  diagnostics. It receives no memory service and performs no retrieval search
+  or transcript-storage call. Debate requests add the canonical
   included-context event list to provider payloads only when present; absent
   and fresh context requests retain the exact context-free payload. At
   construction it validates and snapshots the complete workspace system and
-  per-agent configuration once and retains any non-null explicit model
-  separately. Each bound Codex invocation resolves that explicit model over
-  its agent model and then the legacy system model, while reasoning resolves
-  from the agent and then the legacy system value; provider routes use their
-  existing explicit-over-agent-over-Codex precedence. All values remain fixed
-  for the backend lifetime. Optional
-  `--model` and `--config model_reasoning_effort="LEVEL"` arguments are emitted
-  in that order immediately after `exec` and before any resume marker; neither
-  value changes provider-thread identity, bindings, fingerprints, manifests,
-  or request payloads.
+  per-agent configuration once, passes the Codex-specific subset to its
+  adapter, and preserves compatibility delegates for previously test-observed
+  private Codex helpers. Configuration values remain fixed for the backend
+  lifetime and do not change provider-thread identity, bindings, fingerprints,
+  manifests, or request payloads.
 - **Primary verification/documentation:** `tests/test_codex_backend.py`,
   `tests/test_session_lifecycle.py`, `docs/reference/backend-and-sessions.md`,
   `docs/reference/conversation-retrieval.md`,
   `docs/design/prompts-and-provider.md`, `docs/design/session-lifecycle.md`, and
+  `docs/operations/privacy-and-provider.md`.
+
+### `story_writing_agents.codex_adapter`
+
+- **Source:** `src/story_writing_agents/codex_adapter.py`
+- **Responsibility:** Adapt immutable agent bindings and structured turns to the
+  Codex CLI protocol.
+- **Supported surface:** No package-supported API. Package-internal
+  `CodexAdapter` implements the private provider-adapter contract.
+- **Direct internal dependencies:** `agents`, `config`, `errors`, `models`,
+  `provider_adapter`, and `provider_process`.
+- **State, resources, and side effects:** Owns construction-time Codex
+  executable/model/reasoning settings, isolated binding directories and their
+  generated `AGENTS.md` files, invocation-scoped schema/final-response
+  directories, exact Codex argv construction, JSONL event and thread parsing,
+  and provider-specific safe process diagnostics. Binding and invocation read
+  allowlisted definition files, create and remove temporary files, and request
+  subprocess execution through `provider_process`; `close()` removes all
+  retained binding directories idempotently. Optional `--model` and `--config
+  model_reasoning_effort="LEVEL"` arguments retain their exact order after
+  `exec` and before any resume marker. Importing performs no I/O.
+- **Primary verification/documentation:** `tests/test_codex_backend.py`,
+  `docs/reference/backend-and-sessions.md`,
+  `docs/design/prompts-and-provider.md`, and
+  `docs/operations/privacy-and-provider.md`.
+
+### `story_writing_agents.provider_adapter`
+
+- **Source:** `src/story_writing_agents/provider_adapter.py`
+- **Responsibility:** Define the private provider substitution contract.
+- **Supported surface:** No package-supported API. Package-internal frozen
+  `ProviderBinding`, `ProviderInvocation`, and `ProviderResult` values,
+  `ProviderInvocationError`, and `ProviderAdapter` protocol are consumed by the
+  coordinator and concrete adapters.
+- **Direct internal dependencies:** `models`.
+- **State, resources, and side effects:** Owns no mutable state or external
+  resource; importing and constructing its values perform no I/O.
+- **Primary verification/documentation:** `tests/test_codex_backend.py` and
+  `docs/design/overview.md`.
+
+### `story_writing_agents.provider_process`
+
+- **Source:** `src/story_writing_agents/provider_process.py`
+- **Responsibility:** Execute bounded asynchronous provider subprocesses.
+- **Supported surface:** No package-supported API. Package-internal immutable
+  process request/result values, value-free launch/timeout failures,
+  `run_process`, and `stop_process` are consumed by provider adapters; the
+  backend retains only a private compatibility delegate for process stopping.
+- **Direct internal dependencies:** None.
+- **State, resources, and side effects:** `run_process` launches one child with
+  piped stdin/stdout/stderr, drains both streams concurrently through
+  `communicate`, and enforces the supplied timeout. On timeout, cancellation,
+  or any other post-launch communication failure, it stops a still-running
+  child by requesting termination, waiting up to two seconds, then killing and
+  joining when necessary; completed children are not signaled. Optional cwd
+  and environment are explicit request values. The module owns no persistent
+  or import-time state and emits no provider-specific diagnostic.
+- **Primary verification/documentation:** `tests/test_codex_backend.py`,
+  `docs/reference/backend-and-sessions.md`, and
   `docs/operations/privacy-and-provider.md`.
 
 ### `story_writing_agents.cli`
