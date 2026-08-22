@@ -16,7 +16,7 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 36.
+Importable production units indexed: 37.
 
 ## Current Dependency Direction
 
@@ -36,7 +36,8 @@ __main__ -> cli -> interactive_controller -> interactive_controller._core
                  |               |         -> workspace
                  |               -> conversations/workspace/models/agents
                  |               -> session_lifecycle
-                 -> backend -> codex_adapter -> agents/config/errors/models
+                 -> backend -> antigravity_adapter -> models/provider_adapter/provider_process
+                 |          -> codex_adapter -> agents/config/errors/models
                  |          |                 -> provider_adapter/provider_process
                  |          -> config/conversation_retrieval/workspace/models/errors/agents
                  |          -> provider_adapter/provider_process/session_lifecycle
@@ -210,9 +211,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   Unexported package-internal `backend_configuration_snapshot(backend)` exposes
   the same immutable construction-time configuration to the bound runtime
   without exposing the backend's private storage.
-- **Direct internal dependencies:** `agents`, `codex_adapter`, `config`,
-  `conversation_retrieval`, `errors`, `models`, `provider_adapter`,
-  `provider_process`, `session_lifecycle`, and `workspace`.
+- **Direct internal dependencies:** `agents`, `antigravity_adapter`,
+  `codex_adapter`, `config`, `conversation_retrieval`, `errors`, `models`,
+  `provider_adapter`, `provider_process`, `session_lifecycle`, and `workspace`.
 - **State, resources, and side effects:** Owns exact V2 provider-session
   manifests at
   `agent_states/orchestrator_state/provider_sessions/<session_id>.json`, exact
@@ -241,16 +242,45 @@ every intermediate arrow. The current runtime graph is acyclic.
   included-context event list to provider payloads only when present; absent
   and fresh context requests retain the exact context-free payload. At
   construction it validates and snapshots the complete workspace system and
-  per-agent configuration once, passes the Codex-specific subset to its
-  adapter, and preserves compatibility delegates for previously test-observed
-  private Codex helpers. Configuration values remain fixed for the backend
-  lifetime and do not change provider-thread identity, bindings, fingerprints,
-  manifests, or request payloads.
+  per-agent configuration once, passes the Codex-specific subset and explicit
+  Antigravity executable/model/effort settings to their owning adapters, and
+  preserves compatibility delegates for previously test-observed private Codex
+  helpers. The Antigravity settings are additive keyword-only constructor
+  inputs. Configuration values remain fixed for the backend lifetime and do
+  not change provider-thread identity, bindings, fingerprints, manifests, or
+  request payloads.
 - **Primary verification/documentation:** `tests/test_codex_backend.py`,
   `tests/test_session_lifecycle.py`, `docs/reference/backend-and-sessions.md`,
   `docs/reference/conversation-retrieval.md`,
   `docs/design/prompts-and-provider.md`, `docs/design/session-lifecycle.md`, and
   `docs/operations/privacy-and-provider.md`.
+
+### `story_writing_agents.antigravity_adapter`
+
+- **Source:** `src/story_writing_agents/antigravity_adapter.py`
+- **Responsibility:** Adapt immutable agent bindings and structured turns to the
+  Antigravity CLI protocol.
+- **Supported surface:** No package-supported API. Package-internal
+  `AntigravityAdapter` implements the private provider-adapter contract.
+- **Direct internal dependencies:** `models`, `provider_adapter`, and
+  `provider_process`.
+- **State, resources, and side effects:** Owns the Antigravity executable,
+  model, effort, isolated provider state, command construction, headless
+  capability check, NDJSON stream validation, and provider conversation-ID
+  protocol. Binding writes deterministic rules beneath
+  `agent_states/orchestrator_state/provider_sessions/.antigravity/definitions/<agent>/<fingerprint>/AGENTS.md`.
+  Invocation retains provider-native state and isolated cwd beneath
+  `agent_states/orchestrator_state/provider_sessions/.antigravity/sessions/<session>/<agent>/<fingerprint>/provider`
+  and sibling `workspace`, copies only the bound rules into that workspace,
+  sends the story request as one NDJSON stdin event, and delegates bounded
+  `agy` subprocess ownership to `provider_process`. Provider preflight runs a
+  bounded, provider-free `agy --help` capability check with an isolated
+  `--gemini_dir`; `close()` intentionally retains definitions, provider state,
+  workspaces, and any capability-probe state for later backend instances.
+  Importing performs no I/O.
+- **Primary verification/documentation:** No dedicated Antigravity test or
+  documentation reference is present in this production-only slice; shared
+  adapter and subprocess contracts are verified by `tests/test_codex_backend.py`.
 
 ### `story_writing_agents.codex_adapter`
 

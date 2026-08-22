@@ -39,6 +39,7 @@ else:
     _msvcrt = None
 
 from .agents import CORE_DOCUMENTS, ROSTER
+from .antigravity_adapter import AntigravityAdapter
 from .config import ConfigurationSnapshot, ConfigManager
 from .codex_adapter import CodexAdapter
 from .conversation_retrieval import (
@@ -337,6 +338,9 @@ class AgentBackend:
         model: str | None = None,
         timeout_seconds: float = 300,
         backend_overrides: Mapping[str, str] | None = None,
+        antigravity_executable: str = "agy",
+        antigravity_model: str | None = None,
+        antigravity_effort: str | None = None,
     ) -> None:
         self.workspace = (
             workspace if isinstance(workspace, Workspace) else Workspace(workspace)
@@ -383,9 +387,25 @@ class AgentBackend:
             make_temporary_directory=lambda: tempfile.mkdtemp,
             which=lambda: shutil.which,
         )
+        self._antigravity_adapter = AntigravityAdapter(
+            executable=antigravity_executable,
+            timeout_seconds=float(timeout_seconds),
+            state_root=self.workspace.path(
+                f"{_SESSION_DIRECTORY}/.antigravity"
+            ),
+            explicit_model=antigravity_model,
+            explicit_effort=antigravity_effort,
+            create_process=lambda: asyncio.create_subprocess_exec,
+            wait_for=lambda: asyncio.wait_for,
+            which=lambda: shutil.which,
+        )
         self._adapters: dict[str, ProviderAdapter] = {
             self._codex_adapter.vendor: self._codex_adapter,
+            self._antigravity_adapter.vendor: self._antigravity_adapter,
         }
+        self.antigravity_executable = antigravity_executable
+        self.antigravity_model = self._antigravity_adapter.model
+        self.antigravity_effort = self._antigravity_adapter.effort
         self.model = self._codex_adapter.model
         self._codex_reasoning_effort = self._codex_adapter.reasoning_effort
         self.timeout_seconds = float(timeout_seconds)
@@ -682,14 +702,31 @@ class AgentBackend:
         self._adapter_for(bound_agent.vendor)
         if bound_agent.vendor == "codex":
             return await self._invoke_codex(bound_agent, request)
+        if bound_agent.vendor == "antigravity":
+            return await self._invoke_antigravity(bound_agent, request)
         raise ConfigurationError(
             f"agent backend is not implemented: {bound_agent.vendor}"
+        )
+
+    async def _invoke_antigravity(
+        self,
+        bound_agent: BoundAgent,
+        request: AgentRequest,
+    ) -> AgentReply:
+        """Invoke Antigravity through the shared structured-turn contract."""
+
+        return await self._invoke_codex(
+            bound_agent,
+            request,
+            _provider_name="Antigravity",
         )
 
     async def _invoke_codex(
         self,
         bound_agent: BoundAgent,
         request: AgentRequest,
+        *,
+        _provider_name: str = "Codex",
     ) -> AgentReply:
         """Invoke Codex with conditional context projection and safe diagnostics.
 
@@ -708,10 +745,14 @@ class AgentBackend:
             ``BackendProtocolError``.
             """
 
-            reply = self._decode_reply(request.phase, response_text)
+            reply = self._decode_reply(
+                request.phase,
+                response_text,
+                provider_name=_provider_name,
+            )
             if reply.revision_id != request.revision_id:
                 raise BackendProtocolError(
-                    "Codex reply revision_id does not match its request"
+                    f"{_provider_name} reply revision_id does not match its request"
                 )
             if (
                 request.phase
@@ -723,7 +764,7 @@ class AgentBackend:
                 and not reply.content
             ):
                 raise BackendProtocolError(
-                    "Codex candidate response must contain text"
+                    f"{_provider_name} candidate response must contain text"
                 )
             if (
                 request.phase is Phase.AUDIT
@@ -731,7 +772,7 @@ class AgentBackend:
                 and not reply.content
             ):
                 raise BackendProtocolError(
-                    "Codex conflict response must contain a critique"
+                    f"{_provider_name} conflict response must contain a critique"
                 )
             return reply
 
@@ -753,14 +794,31 @@ class AgentBackend:
         self._adapter_for(bound_agent.vendor)
         if bound_agent.vendor == "codex":
             return await self._converse_codex(bound_agent, request)
+        if bound_agent.vendor == "antigravity":
+            return await self._converse_antigravity(bound_agent, request)
         raise ConfigurationError(
             f"agent backend is not implemented: {bound_agent.vendor}"
+        )
+
+    async def _converse_antigravity(
+        self,
+        bound_agent: BoundAgent,
+        request: ConversationRequest,
+    ) -> ConversationReply:
+        """Run one Antigravity turn through the shared conversation contract."""
+
+        return await self._converse_codex(
+            bound_agent,
+            request,
+            _provider_name="Antigravity",
         )
 
     async def _converse_codex(
         self,
         bound_agent: BoundAgent,
         request: ConversationRequest,
+        *,
+        _provider_name: str = "Codex",
     ) -> ConversationReply:
         """Run one Codex turn with the exact conversation payload and schema.
 
@@ -777,6 +835,7 @@ class AgentBackend:
             decode=lambda response_text: self._decode_conversation_reply(
                 request,
                 response_text,
+                provider_name=_provider_name,
             ),
         )
 
@@ -798,8 +857,32 @@ class AgentBackend:
                 request,
                 handler_method,
             )
+        if bound_agent.vendor == "antigravity":
+            return await self._converse_with_retrieval_antigravity(
+                bound_agent,
+                request,
+                handler_method,
+            )
         raise ConfigurationError(
             f"agent backend is not implemented: {bound_agent.vendor}"
+        )
+
+    async def _converse_with_retrieval_antigravity(
+        self,
+        bound_agent: BoundAgent,
+        request: ConversationRetrievalRequest,
+        handler_method: Callable[
+            [ConversationRetrievalAction],
+            ConversationRetrievalObservation | ConversationRetrievalReply,
+        ],
+    ) -> ConversationRetrievalReply:
+        """Run the bounded retrieval loop through Antigravity."""
+
+        return await self._converse_with_retrieval_codex(
+            bound_agent,
+            request,
+            handler_method,
+            _provider_name="Antigravity",
         )
 
     async def _converse_with_retrieval_codex(
@@ -810,6 +893,8 @@ class AgentBackend:
             [ConversationRetrievalAction],
             ConversationRetrievalObservation | ConversationRetrievalReply,
         ],
+        *,
+        _provider_name: str = "Codex",
     ) -> ConversationRetrievalReply:
         """Run the fixed Codex action loop without inter-call lock changes.
 
@@ -852,7 +937,12 @@ class AgentBackend:
                     session_id=request.session_id,
                     schema=self._conversation_retrieval_action_schema(),
                     payload=payload,
-                    decode=self._decode_conversation_retrieval_action,
+                    decode=lambda response_text: (
+                        self._decode_conversation_retrieval_action(
+                            response_text,
+                            provider_name=_provider_name,
+                        )
+                    ),
                 )
                 if type(action) in {
                     ConversationRetrievalSearchAction,
@@ -1128,7 +1218,7 @@ class AgentBackend:
             diagnostic = (
                 "Codex CLI returned malformed structured output"
                 if bound_agent.vendor == "codex"
-                else "Provider returned malformed structured output"
+                else "Antigravity CLI returned malformed structured output"
             )
             raise BackendProtocolError(diagnostic) from exc
 
@@ -1435,6 +1525,8 @@ class AgentBackend:
     @staticmethod
     def _decode_conversation_retrieval_action(
         text: str,
+        *,
+        provider_name: str = "Codex",
     ) -> ConversationRetrievalAction:
         """Decode one exact action envelope while leaving semantics to the handler.
 
@@ -1453,14 +1545,15 @@ class AgentBackend:
             for key, value in pairs:
                 if key in result:
                     raise BackendProtocolError(
-                        "Codex conversation retrieval response duplicates a field"
+                        f"{provider_name} conversation retrieval response "
+                        "duplicates a field"
                     )
                 result[key] = value
             return result
 
         if type(text) is not str:
             raise BackendProtocolError(
-                "Codex conversation retrieval response must be text"
+                f"{provider_name} conversation retrieval response must be text"
             )
         try:
             value = json.loads(text, object_pairs_hook=reject_duplicate_fields)
@@ -1473,31 +1566,34 @@ class AgentBackend:
             UnicodeError,
         ) as exc:
             raise BackendProtocolError(
-                "Codex conversation retrieval response is malformed JSON"
+                f"{provider_name} conversation retrieval response is malformed JSON"
             ) from exc
         if type(value) is not dict:
             raise BackendProtocolError(
-                "Codex conversation retrieval response must be a JSON object"
+                f"{provider_name} conversation retrieval response must be a "
+                "JSON object"
             )
         if set(value) != {"action"}:
             raise BackendProtocolError(
-                "Codex conversation retrieval response has an invalid schema"
+                f"{provider_name} conversation retrieval response has an "
+                "invalid schema"
             )
         value = value["action"]
         if type(value) is not dict:
             raise BackendProtocolError(
-                "Codex conversation retrieval action must be a JSON object"
+                f"{provider_name} conversation retrieval action must be a "
+                "JSON object"
             )
         kind_value = value.get("kind")
         if type(kind_value) is not str:
             raise BackendProtocolError(
-                "Codex conversation retrieval action kind must be text"
+                f"{provider_name} conversation retrieval action kind must be text"
             )
         try:
             kind = ConversationRetrievalActionKind(kind_value)
         except ValueError as exc:
             raise BackendProtocolError(
-                "Codex conversation retrieval action kind is unknown"
+                f"{provider_name} conversation retrieval action kind is unknown"
             ) from exc
 
         common_fields = {
@@ -1521,7 +1617,8 @@ class AgentBackend:
         }[kind]
         if set(value) != common_fields | action_fields:
             raise BackendProtocolError(
-                "Codex conversation retrieval response has an invalid schema"
+                f"{provider_name} conversation retrieval response has an "
+                "invalid schema"
             )
 
         def required_text(field: str) -> str:
@@ -1530,13 +1627,15 @@ class AgentBackend:
             result = value[field]
             if type(result) is not str or not result:
                 raise BackendProtocolError(
-                    f"Codex conversation retrieval {field} must be non-empty text"
+                    f"{provider_name} conversation retrieval {field} must be "
+                    "non-empty text"
                 )
             try:
                 result.encode("utf-8", errors="strict")
             except UnicodeEncodeError as exc:
                 raise BackendProtocolError(
-                    f"Codex conversation retrieval {field} must be valid UTF-8"
+                    f"{provider_name} conversation retrieval {field} must be "
+                    "valid UTF-8"
                 ) from exc
             return result
 
@@ -1546,7 +1645,8 @@ class AgentBackend:
             result = value[field]
             if type(result) is not int or result < 1:
                 raise BackendProtocolError(
-                    f"Codex conversation retrieval {field} must be positive integer"
+                    f"{provider_name} conversation retrieval {field} must be "
+                    "positive integer"
                 )
             return result
 
@@ -1588,16 +1688,16 @@ class AgentBackend:
                 for item in raw_citation_ids
             ):
                 raise BackendProtocolError(
-                    "Codex conversation retrieval citation_ids must be an array "
-                    "of non-empty text"
+                    f"{provider_name} conversation retrieval citation_ids must "
+                    "be an array of non-empty text"
                 )
             for item in raw_citation_ids:
                 try:
                     item.encode("utf-8", errors="strict")
                 except UnicodeEncodeError as exc:
                     raise BackendProtocolError(
-                        "Codex conversation retrieval citation_ids must be valid "
-                        "UTF-8"
+                        f"{provider_name} conversation retrieval citation_ids "
+                        "must be valid UTF-8"
                     ) from exc
             if len(set(raw_citation_ids)) != len(raw_citation_ids):
                 raise ConversationRetrievalSemanticError()
@@ -1610,7 +1710,8 @@ class AgentBackend:
             raise
         except (SessionIdError, TypeError, ValueError) as exc:
             raise BackendProtocolError(
-                "Codex conversation retrieval response has invalid values"
+                f"{provider_name} conversation retrieval response has invalid "
+                "values"
             ) from exc
 
     @staticmethod
@@ -1642,6 +1743,8 @@ class AgentBackend:
     def _decode_conversation_reply(
         request: ConversationRequest,
         text: str,
+        *,
+        provider_name: str = "Codex",
     ) -> ConversationReply:
         """Decode one exact correlated reply with fixed provider-safe errors."""
 
@@ -1654,7 +1757,7 @@ class AgentBackend:
             for key, value in pairs:
                 if key in result:
                     raise BackendProtocolError(
-                        "Codex conversation response duplicates a field"
+                        f"{provider_name} conversation response duplicates a field"
                     )
                 result[key] = value
             return result
@@ -1668,16 +1771,32 @@ class AgentBackend:
         }
         if not isinstance(value, dict):
             raise BackendProtocolError(
-                "Codex conversation response must be a JSON object"
+                f"{provider_name} conversation response must be a JSON object"
             )
         if set(value) != expected_fields:
             raise BackendProtocolError(
-                "Codex conversation response has an invalid schema"
+                f"{provider_name} conversation response has an invalid schema"
             )
-        session_id = _strict_required_text(value, "session_id")
-        conversation_id = _strict_required_text(value, "conversation_id")
-        turn_id = _strict_required_text(value, "turn_id")
-        content = _strict_required_text(value, "content")
+        session_id = _strict_required_text(
+            value,
+            "session_id",
+            provider_name=provider_name,
+        )
+        conversation_id = _strict_required_text(
+            value,
+            "conversation_id",
+            provider_name=provider_name,
+        )
+        turn_id = _strict_required_text(
+            value,
+            "turn_id",
+            provider_name=provider_name,
+        )
+        content = _strict_required_text(
+            value,
+            "content",
+            provider_name=provider_name,
+        )
         for field, actual, expected in (
             ("session_id", session_id, request.session_id),
             ("conversation_id", conversation_id, request.conversation_id),
@@ -1685,7 +1804,8 @@ class AgentBackend:
         ):
             if actual != expected:
                 raise BackendProtocolError(
-                    f"Codex conversation reply {field} does not match its request"
+                    f"{provider_name} conversation reply {field} does not match "
+                    "its request"
                 )
         return ConversationReply(
             session_id=session_id,
@@ -1752,20 +1872,39 @@ class AgentBackend:
         return CodexAdapter.started_thread(events)
 
     @staticmethod
-    def _decode_reply(phase: Phase, text: str) -> AgentReply:
+    def _decode_reply(
+        phase: Phase,
+        text: str,
+        *,
+        provider_name: str = "Codex",
+    ) -> AgentReply:
         """Decode one phase reply without echoing provider values in errors."""
 
         value = json.loads(text)
         if not isinstance(value, dict):
-            raise BackendProtocolError("Codex final response must be a JSON object")
+            raise BackendProtocolError(
+                f"{provider_name} final response must be a JSON object"
+            )
         if phase is Phase.AUDIT:
             if set(value) != {"revision_id", "verdict", "content"}:
-                raise BackendProtocolError("Codex audit response has an invalid schema")
-            revision_id = _required_text(value, "revision_id")
-            content = _text(value, "content")
+                raise BackendProtocolError(
+                    f"{provider_name} audit response has an invalid schema"
+                )
+            revision_id = _required_text(
+                value,
+                "revision_id",
+                provider_name=provider_name,
+            )
+            content = _text(
+                value,
+                "content",
+                provider_name=provider_name,
+            )
             verdict_value = value.get("verdict")
             if verdict_value not in {"approve", "conflict"}:
-                raise BackendProtocolError("Codex audit verdict is invalid")
+                raise BackendProtocolError(
+                    f"{provider_name} audit verdict is invalid"
+                )
             verdict = Verdict(verdict_value)
             return AgentReply(
                 revision_id=revision_id,
@@ -1775,13 +1914,17 @@ class AgentBackend:
         if phase is Phase.FINALIZE:
             if set(value) != {"revision_id", "core_updates"}:
                 raise BackendProtocolError(
-                    "Codex finalization response has an invalid schema"
+                    f"{provider_name} finalization response has an invalid schema"
                 )
-            revision_id = _required_text(value, "revision_id")
+            revision_id = _required_text(
+                value,
+                "revision_id",
+                provider_name=provider_name,
+            )
             raw_updates = value.get("core_updates")
             if not isinstance(raw_updates, list):
                 raise BackendProtocolError(
-                    "Codex core_updates must be an array"
+                    f"{provider_name} core_updates must be an array"
                 )
             updates: dict[str, str] = {}
             for raw in raw_updates:
@@ -1790,24 +1933,42 @@ class AgentBackend:
                     "content",
                 }:
                     raise BackendProtocolError(
-                        "Codex core update has an invalid schema"
+                        f"{provider_name} core update has an invalid schema"
                     )
-                filename = _required_text(raw, "filename")
+                filename = _required_text(
+                    raw,
+                    "filename",
+                    provider_name=provider_name,
+                )
                 if filename not in CORE_DOCUMENTS:
                     raise BackendProtocolError(
-                        "Codex core update filename is not allowed"
+                        f"{provider_name} core update filename is not allowed"
                     )
                 if filename in updates:
                     raise BackendProtocolError(
-                        "Codex returned a duplicate core update filename"
+                        f"{provider_name} returned a duplicate core update filename"
                     )
-                updates[filename] = _text(raw, "content")
+                updates[filename] = _text(
+                    raw,
+                    "content",
+                    provider_name=provider_name,
+                )
             return AgentReply.finalization(revision_id, updates)
         if set(value) != {"revision_id", "content"}:
-            raise BackendProtocolError("Codex candidate response has an invalid schema")
+            raise BackendProtocolError(
+                f"{provider_name} candidate response has an invalid schema"
+            )
         return AgentReply.candidate(
-            _required_text(value, "revision_id"),
-            _text(value, "content"),
+            _required_text(
+                value,
+                "revision_id",
+                provider_name=provider_name,
+            ),
+            _text(
+                value,
+                "content",
+                provider_name=provider_name,
+            ),
         )
 
     def _preflight_session(self, session_id: str) -> None:
@@ -1833,7 +1994,14 @@ class AgentBackend:
                         f"Codex CLI executable was not found: {self.executable}"
                     )
                 raise BackendProtocolError(
-                    f"provider executable was not found: {vendor}"
+                    "Antigravity CLI executable was not found"
+                )
+            if (
+                vendor == "antigravity"
+                and not self._antigravity_adapter.headless_capabilities_available()
+            ):
+                raise BackendProtocolError(
+                    "Antigravity CLI lacks required headless capabilities"
                 )
 
     def _session_lifecycle(
@@ -2435,7 +2603,12 @@ class AgentBackend:
             not isinstance(thread_id, str)
             or _SAFE_THREAD_ID.fullmatch(thread_id) is None
         ):
-            raise BackendProtocolError("Codex thread ID is invalid")
+            provider_name = (
+                "Codex" if definition.backend == "codex" else "Antigravity"
+            )
+            raise BackendProtocolError(
+                f"{provider_name} thread ID is invalid"
+            )
         self._assert_owned_access(session_id)
         manifest = self._read_manifest(session_id, missing_ok=False)
         assert manifest is not None
@@ -2747,21 +2920,38 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def _required_text(value: Mapping[str, Any], field: str) -> str:
-    result = _text(value, field)
+def _required_text(
+    value: Mapping[str, Any],
+    field: str,
+    *,
+    provider_name: str = "Codex",
+) -> str:
+    result = _text(value, field, provider_name=provider_name)
     if not result:
-        raise BackendProtocolError(f"Codex {field} must be non-empty text")
+        raise BackendProtocolError(
+            f"{provider_name} {field} must be non-empty text"
+        )
     return result
 
 
-def _text(value: Mapping[str, Any], field: str) -> str:
+def _text(
+    value: Mapping[str, Any],
+    field: str,
+    *,
+    provider_name: str = "Codex",
+) -> str:
     result = value.get(field)
     if not isinstance(result, str):
-        raise BackendProtocolError(f"Codex {field} must be text")
+        raise BackendProtocolError(f"{provider_name} {field} must be text")
     return result
 
 
-def _strict_required_text(value: Mapping[str, Any], field: str) -> str:
+def _strict_required_text(
+    value: Mapping[str, Any],
+    field: str,
+    *,
+    provider_name: str = "Codex",
+) -> str:
     """Return one nonempty strict-UTF-8 conversation response field.
 
     Missing, non-string, empty, or unencodable values raise
@@ -2771,16 +2961,16 @@ def _strict_required_text(value: Mapping[str, Any], field: str) -> str:
     result = value.get(field)
     if not isinstance(result, str):
         raise BackendProtocolError(
-            f"Codex conversation {field} must be text"
+            f"{provider_name} conversation {field} must be text"
         )
     if not result:
         raise BackendProtocolError(
-            f"Codex conversation {field} must be non-empty text"
+            f"{provider_name} conversation {field} must be non-empty text"
         )
     try:
         result.encode("utf-8", errors="strict")
     except UnicodeEncodeError as exc:
         raise BackendProtocolError(
-            f"Codex conversation {field} must be valid UTF-8"
+            f"{provider_name} conversation {field} must be valid UTF-8"
         ) from exc
     return result
