@@ -250,7 +250,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   not change provider-thread identity, bindings, fingerprints, manifests, or
   request payloads.
 - **Primary verification/documentation:** `tests/test_codex_backend.py`,
-  `tests/test_session_lifecycle.py`, `docs/reference/backend-and-sessions.md`,
+  `tests/test_antigravity_adapter.py`, `tests/test_session_lifecycle.py`,
+  `docs/reference/backend-and-sessions.md`,
   `docs/reference/conversation-retrieval.md`,
   `docs/design/prompts-and-provider.md`, `docs/design/session-lifecycle.md`, and
   `docs/operations/privacy-and-provider.md`.
@@ -278,9 +279,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   `--gemini_dir`; `close()` intentionally retains definitions, provider state,
   workspaces, and any capability-probe state for later backend instances.
   Importing performs no I/O.
-- **Primary verification/documentation:** No dedicated Antigravity test or
-  documentation reference is present in this production-only slice; shared
-  adapter and subprocess contracts are verified by `tests/test_codex_backend.py`.
+- **Primary verification/documentation:** `tests/test_antigravity_adapter.py`;
+  shared adapter and subprocess contracts are also verified by
+  `tests/test_codex_backend.py`. No dedicated Antigravity documentation
+  reference is present yet.
 
 ### `story_writing_agents.codex_adapter`
 
