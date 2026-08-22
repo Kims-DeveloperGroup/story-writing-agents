@@ -144,9 +144,9 @@ class BoundAgent:
         """Retain this binding's resources for one already-entered call."""
 
         with self._call_state_lock:
+            if self.backend._closed:
+                raise BackendProtocolError("agent backend is closed")
             if self._retired:
-                if self.backend._closed:
-                    raise BackendProtocolError("agent backend is closed")
                 raise BackendProtocolError("bound agent is retired")
             self._active_calls += 1
         try:

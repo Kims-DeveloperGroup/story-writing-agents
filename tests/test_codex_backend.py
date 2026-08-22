@@ -3648,6 +3648,46 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(release_access.call_count, 1)
 
+    async def test_terminal_backend_rejects_call_before_binding_retirement(
+        self,
+    ) -> None:
+        """Close's terminal flag prevents entry during its retirement gap."""
+
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        bound = await backend.bind(self.definition())
+        staging = bound.staging_directory
+
+        # Model the exact synchronous close gap: close has made the backend
+        # terminal but has not yet reached this concrete binding in its loop.
+        with bound._call_state_lock:
+            backend._closed = True
+            self.assertFalse(bound._retired)
+            self.assertFalse(bound._released)
+            self.assertEqual(bound._active_calls, 0)
+
+        with mock.patch.object(backend, "_invoke_codex") as provider:
+            with self.assertRaises(BackendProtocolError) as raised:
+                await bound.invoke(self.request())
+
+        self.assertEqual(str(raised.exception), "agent backend is closed")
+        provider.assert_not_awaited()
+        self.assertEqual(bound._active_calls, 0)
+        self.assertFalse(bound._retired)
+        self.assertFalse(bound._released)
+        self.assertIn(bound, backend._bound_agents)
+        self.assertIn(staging, backend._staging_directories)
+        self.assertTrue(staging.exists())
+
+        # Complete the remainder of close. The inverse ordering—an entered
+        # call surviving close until exit—is covered by the preceding test.
+        bound._retire()
+        self.assertTrue(bound._retired)
+        self.assertTrue(bound._released)
+        self.assertNotIn(bound, backend._bound_agents)
+        self.assertNotIn(staging, backend._staging_directories)
+        self.assertFalse(staging.exists())
+        self.assertTrue(backend._close_cleanup_complete)
+
     async def test_post_staging_validation_failure_discards_provisional_bytes(
         self,
     ) -> None:
