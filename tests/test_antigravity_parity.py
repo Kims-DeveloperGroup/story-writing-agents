@@ -2097,7 +2097,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             str(caught.exception),
             "Antigravity CLI timed out after 6 seconds",
         )
-        self.assertEqual(wait_calls, 2)
+        self.assertEqual(wait_calls, 3)
         invocation = self.provider_invocations()[-1]
         pid = invocation["pid"]
         assert isinstance(pid, int)
