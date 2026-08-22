@@ -36,7 +36,12 @@ from story_writing_agents import (
 from story_writing_agents import backend as backend_module
 from story_writing_agents import cli as cli_module
 from story_writing_agents import smoke as smoke_module
-from story_writing_agents.agents import CORE_DOCUMENTS, ROSTER, SPECIALIST_IDS
+from story_writing_agents.agents import (
+    AGENT_SPECS,
+    CORE_DOCUMENTS,
+    ROSTER,
+    SPECIALIST_IDS,
+)
 from story_writing_agents.conversation_retrieval import (
     ConversationRetrievalActionKind,
     ConversationRetrievalProgressPhase,
@@ -48,6 +53,7 @@ from story_writing_agents.debug_log import (
     DEBUG_LOG_RELATIVE_PATH,
     WorkspaceDebugLog,
 )
+from story_writing_agents.workspace import WORKSPACE_DIRECTORIES
 
 from tests.helpers import ScriptedBackend, all_manuscripts
 
@@ -756,6 +762,78 @@ class SmokePersistentTests(unittest.TestCase):
         )
         self.assertEqual(inspected["status"], "consensus")
 
+    def test_legacy_workspace_without_debug_logs_remains_ready(self) -> None:
+        """Keep optional diagnostics out of borrowed-workspace readiness."""
+
+        for unavailable in ("acquisition", "submission"):
+            with self.subTest(unavailable=unavailable):
+                temporary = tempfile.TemporaryDirectory()
+                self.addCleanup(temporary.cleanup)
+                workspace = initialize_workspace(
+                    Path(temporary.name) / "workspace"
+                )
+                shutil.rmtree(workspace.path("debug_logs"))
+                if unavailable == "acquisition":
+                    with (
+                        mock.patch.object(
+                            WorkspaceDebugLog,
+                            "_record",
+                            side_effect=OSError(
+                                "runtime diagnostic submission unavailable"
+                            ),
+                        ) as runtime_submission,
+                        mock.patch.object(
+                            WorkspaceDebugLog,
+                            "_append",
+                        ) as submission,
+                        mock.patch.object(
+                            smoke_module,
+                            "WorkspaceDebugLog",
+                            side_effect=OSError(
+                                "diagnostic acquisition unavailable"
+                            ),
+                        ) as acquisition,
+                    ):
+                        report, exit_code = smoke_module.run_smoke(workspace)
+                    acquisition.assert_called_once_with(workspace)
+                    self.assertTrue(runtime_submission.called)
+                else:
+                    with mock.patch.object(
+                        WorkspaceDebugLog,
+                        "_append",
+                        side_effect=OSError(
+                            "diagnostic submission unavailable"
+                        ),
+                    ) as submission:
+                        report, exit_code = smoke_module.run_smoke(workspace)
+                inspected_status = workspace.inspect_debate(
+                    report["session_id"],
+                    report["debate_id"],
+                )["status"]
+
+                if unavailable == "acquisition":
+                    submission.assert_not_called()
+                else:
+                    self.assertGreater(submission.call_count, 0)
+
+                self.assertEqual(exit_code, 0)
+                self.assertEqual(report["status"], "passed")
+                self.assertEqual(report["checks"], EXPECTED_CHECKS)
+                self.assertEqual(
+                    report["workspace"],
+                    {
+                        "mode": "persistent",
+                        "path": str(workspace.root),
+                        "retained": True,
+                    },
+                )
+                self.assertEqual(report["debate_status"], "consensus")
+                self.assertEqual(inspected_status, "consensus")
+                self.assertFalse(workspace.path("debug_logs").exists())
+                self.assertFalse(
+                    workspace.path(DEBUG_LOG_RELATIVE_PATH).exists()
+                )
+
     def test_trace_failures_preserve_explicit_and_implicit_smoke_results(
         self,
     ) -> None:
@@ -1326,6 +1404,53 @@ class SmokePersistentTests(unittest.TestCase):
 
 
 class SmokeFailureTests(unittest.TestCase):
+    def test_every_nondiagnostic_readiness_sentinel_remains_required(self) -> None:
+        """Fail the first readiness check for each required directory or file."""
+
+        sentinels = tuple(
+            ("directory", relative)
+            for relative in WORKSPACE_DIRECTORIES
+            if relative != "debug_logs"
+        ) + tuple(
+            ("file", f"core_documents/{filename}")
+            for filename in CORE_DOCUMENTS
+        ) + tuple(
+            ("file", os.fspath(AGENT_SPECS[agent_id].system_prompt_file))
+            for agent_id in ROSTER
+        )
+        self.assertEqual(len(sentinels), 22)
+        for kind, relative in sentinels:
+            with self.subTest(kind=kind, relative=relative):
+                temporary = tempfile.TemporaryDirectory()
+                self.addCleanup(temporary.cleanup)
+                workspace = initialize_workspace(
+                    Path(temporary.name) / "workspace"
+                )
+                missing = workspace.path(relative)
+                if kind == "directory":
+                    shutil.rmtree(missing)
+                else:
+                    missing.unlink()
+                before = snapshot_directory_namespace(workspace.root)
+
+                with mock.patch.object(
+                    smoke_module,
+                    "WorkspaceDebugLog",
+                    side_effect=OSError("diagnostic acquisition unavailable"),
+                ) as diagnostic:
+                    report, exit_code = smoke_module.run_smoke(workspace)
+
+                self.assertEqual(exit_code, 1)
+                self.assertEqual(report["status"], "failed")
+                self.assertEqual(report["failed_check"], "workspace_initialized")
+                self.assertEqual(report["checks"], [])
+                diagnostic.assert_called_once_with(workspace)
+                self.assertEqual(
+                    snapshot_directory_namespace(workspace.root),
+                    before,
+                )
+                self.assertFalse(missing.exists())
+
     def test_explicit_result_survives_parked_and_replaced_workspace_root(
         self,
     ) -> None:

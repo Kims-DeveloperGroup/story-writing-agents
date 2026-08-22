@@ -1424,6 +1424,7 @@ def _verify_workspace_initialized(workspace: Workspace) -> None:
     ready = all(
         workspace.path(relative).is_dir()
         for relative in WORKSPACE_DIRECTORIES
+        if relative != "debug_logs"
     ) and all(
         workspace.path(f"core_documents/{filename}").is_file()
         for filename in CORE_DOCUMENTS
