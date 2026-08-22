@@ -1137,6 +1137,108 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             request = process.await_args.args[0]
             self.assertEqual(request.cwd, target.parent)
 
+        for installed_kind in ("symlink", "foreign hard link"):
+            with self.subTest(installed=installed_kind), tempfile.TemporaryDirectory(
+                dir=self.workspace.root.parent
+            ) as temporary:
+                label = installed_kind.replace(" ", "-")
+                adapter = self.adapter(f"rules-installed-{label}-state")
+                binding = adapter.bind(self.definition)
+                session_id = f"rules-installed-{label}"
+                target = (
+                    self.runtime_root(adapter, session_id)
+                    / "workspace"
+                    / "AGENTS.md"
+                )
+                target.parent.mkdir(parents=True)
+                target.write_bytes(b"PRIVATE_RETAINED_TARGET")
+                retained = target.parent / "retained.bin"
+                retained.write_bytes(b"PRIVATE_RETAINED_ENTRY")
+                outside = Path(temporary) / "outside"
+                outside.mkdir()
+                outside_rules = outside / "AGENTS.md"
+                outside_rules.write_bytes(b"PRIVATE_OUTSIDE_RULES")
+                outside_rules.chmod(0o640)
+                probe = outside / "link-probe"
+                if installed_kind == "symlink":
+                    self.file_symlink(probe, outside_rules)
+                else:
+                    self.hard_link(outside_rules, probe)
+                probe.unlink()
+                outside_before = _directory_snapshot(outside)
+                outside_identity = (
+                    os.lstat(outside_rules).st_dev,
+                    os.lstat(outside_rules).st_ino,
+                    _mode(outside_rules),
+                    outside_rules.read_bytes(),
+                )
+                real_replace = os.replace
+                replacements: list[tuple[Path, Path]] = []
+
+                def install_suspicious_leaf(
+                    source: Path,
+                    destination: Path,
+                ) -> None:
+                    source = Path(source)
+                    destination = Path(destination)
+                    source.unlink()
+                    if installed_kind == "symlink":
+                        source.symlink_to(outside_rules)
+                    else:
+                        os.link(outside_rules, source)
+                    replacements.append((source, destination))
+                    real_replace(source, destination)
+
+                with mock.patch(
+                    "story_writing_agents.antigravity_adapter.os.replace",
+                    side_effect=install_suspicious_leaf,
+                ):
+                    error = await self.assert_workspace_preparation_failure(
+                        adapter,
+                        binding,
+                        session_id,
+                    )
+
+                self.assertEqual(
+                    str(error.__cause__),
+                    "Antigravity installed rules are unsafe",
+                )
+                self.assertEqual(len(replacements), 1)
+                temporary_path, destination = replacements[0]
+                self.assertEqual(destination, target)
+                self.assertFalse(temporary_path.exists())
+                self.assertEqual(_directory_snapshot(outside), outside_before)
+                self.assertEqual(
+                    (
+                        os.lstat(outside_rules).st_dev,
+                        os.lstat(outside_rules).st_ino,
+                        _mode(outside_rules),
+                        outside_rules.read_bytes(),
+                    ),
+                    outside_identity,
+                )
+                if installed_kind == "symlink":
+                    self.assertTrue(target.is_symlink())
+                    self.assertEqual(target.readlink(), outside_rules)
+                else:
+                    self.assertFalse(target.is_symlink())
+                    self.assertEqual(
+                        (
+                            os.lstat(target).st_dev,
+                            os.lstat(target).st_ino,
+                        ),
+                        outside_identity[:2],
+                    )
+                    self.assertEqual(os.lstat(target).st_nlink, 2)
+                self.assertEqual(
+                    retained.read_bytes(),
+                    b"PRIVATE_RETAINED_ENTRY",
+                )
+                self.assertEqual(
+                    sorted(entry.name for entry in target.parent.iterdir()),
+                    ["AGENTS.md", "retained.bin"],
+                )
+
     async def test_rules_writes_are_complete_bounded_and_failure_safe(
         self,
     ) -> None:
