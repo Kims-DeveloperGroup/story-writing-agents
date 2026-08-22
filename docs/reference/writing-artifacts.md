@@ -2,7 +2,10 @@
 
 > **Availability:** unanimous consensus can publish the canonical files on this
 > page. The runtime uses their provenance catalog when supplying core context to
-> story agents. Standalone artifact commands and file-reference syntax/UI are
+> story agents. The `writing_artifacts` Python subpackage can now parse and
+> validate content-free reference directives, but the installed shell does not
+> make them operational. Standalone artifact commands, interactive `$`/`$$`
+> completion and selection, artifact attachment, and enforced agent reads are
 > not implemented yet.
 
 This reference uses **writing artifact** only for agent-produced story output.
@@ -46,6 +49,97 @@ For example, `part-01/scenes/opening.md` publishes
 the part grammar, so `output_path=manuscript/chapter.md` is legal and publishes
 `manuscript/manuscript/chapter.md`. The first `manuscript` is the canonical
 directory; the second is the user-selected part ID.
+
+## Reference directive parser
+
+> **Availability:** #192 supplies a pure Python parser and immutable value
+> contracts only. It does not read or authorize a file, attach artifact text to
+> provider context, prove that an agent read anything, or add shell completion,
+> a picker, or a ranged viewer. Later #163 and #164 children own those runtime
+> and interactive integrations. Do not treat a successful parse as an eligible
+> artifact read or use the syntax as an installed-shell feature yet.
+
+One directive is a content-free indicator containing either a canonical path
+or that path followed by a one-based inclusive line range:
+
+```text
+${core_documents/global_outline.md}
+${manuscript/part-01/scenes/opening.md}#L7-L12
+```
+
+The path inside `${...}` must be one of the four exact core-document paths or
+a canonical `manuscript/PART/PATH.md` path under the grammar above. A range is
+optional, immediately follows `}`, uses uppercase `L`, contains positive ASCII
+decimal bounds without leading zeroes, and must have `start <= end`. Both
+bounds are inclusive. A value larger than `sys.maxsize` is rejected.
+
+`parse_artifact_references()` accepts one exact strict-UTF-8 `str` without NUL
+and returns references in source order. One input may contain at most 16 active
+directives. For repeated directives naming the same path:
+
+- an exact duplicate is rejected;
+- a whole-file directive conflicts with every ranged directive;
+- inclusive ranges may not overlap, so `#L1-L3` conflicts with `#L3-L5`; and
+- adjacent or disjoint ranges remain valid and retain their original order, so
+  `#L1-L2` followed by `#L3-L5` is accepted.
+
+Unescaped `$$` is reserved and rejected. Every unescaped `${` begins a
+directive and must have a closing brace, a nonempty whitespace-free canonical
+path, and any range that begins with `#L` must be complete. Lowercase `#l`,
+zero or leading-zero bounds, reversed ranges, extra range markers, and a
+letter, number, underscore, or other identifier-continuation character
+immediately following a range are malformed. A single `$` that does not begin
+`${` or `$$` remains ordinary text.
+
+Backslashes immediately before `$` determine whether the dollar is active.
+The parser always preserves the exact caller input as `source_text`:
+
+| Caller source fragment | `provider_text` fragment | Parsed reference |
+| --- | --- | --- |
+| `${core_documents/global_outline.md}` | unchanged | Yes |
+| `\${core_documents/global_outline.md}` | `${core_documents/global_outline.md}` | No; the odd backslash escapes `$` and one escaping backslash is removed. |
+| `\\${core_documents/global_outline.md}` | unchanged | Yes; an even run leaves `$` active and preserves both backslashes. |
+| `\\\${core_documents/global_outline.md}` | `\\${core_documents/global_outline.md}` | No; the odd run loses one escaping backslash. |
+
+This parity rule applies to bare dollars and reserved syntax too. With no active
+directive and no escaped dollar, parsing is compatible with ordinary text:
+`source_text` and `provider_text` are identical and `references` is empty.
+
+Import the API from the subpackage, not the project-root facade:
+
+```python
+from story_writing_agents.writing_artifacts import (
+    ArtifactReferenceBatch,
+    ArtifactReferenceDirectiveError,
+    parse_artifact_references,
+)
+
+batch = parse_artifact_references(
+    "Use ${core_documents/narrative_rules.md} and "
+    "${manuscript/part-01/scenes/opening.md}#L7-L12."
+)
+assert isinstance(batch, ArtifactReferenceBatch)
+assert tuple(reference.token for reference in batch.references) == (
+    "${core_documents/narrative_rules.md}",
+    "${manuscript/part-01/scenes/opening.md}#L7-L12",
+)
+```
+
+`ArtifactReferenceBatch` is immutable and contains the exact `source_text`,
+the escaped-dollar `provider_text` projection, and an ordered tuple of
+`ArtifactReference` path/range values. Each reference exposes its canonical
+`path`, optional `line_range`, and reconstructed `token`; a range exposes its
+inclusive `start` and `end`. Neither the batch nor a reference contains
+artifact bytes. Invalid directive input raises
+`ArtifactReferenceDirectiveError`, a `ValueError` subtype whose deterministic
+messages do not echo a rejected path or artifact content. Parsing performs no
+filesystem, repository, provider, controller, terminal, or network I/O.
+
+At this stage, Python callers can validate directive grammar, preserve the
+original input, compute the provider-text escape projection, and inspect
+ordered canonical path/range indicators. They cannot use this API alone to
+establish artifact eligibility, read content, supply it to a provider, require
+an agent to read it, or activate `${...}`, `$`, or `$$` behavior in the shell.
 
 ## What a user can change
 

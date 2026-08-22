@@ -1,7 +1,8 @@
 """Stable writing-artifact reference values and resource limits.
 
-Token discovery and provider-context resolution intentionally belong to later
-runtime integration.  This module owns only immutable reference identities.
+Provider-context resolution intentionally belongs to later runtime
+integration.  This module owns only immutable reference and parse-result
+identities.
 """
 
 from __future__ import annotations
@@ -86,3 +87,76 @@ class ArtifactReference:
             f"${{{self.path}}}#L{self.line_range.start}"
             f"-L{self.line_range.end}"
         )
+
+
+class ArtifactReferenceDirectiveError(ValueError):
+    """A deterministic, content-free directive validation failure."""
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactReferenceBatch:
+    """One immutable ordered directive parse result.
+
+    ``source_text`` preserves the caller's strict-UTF-8 input exactly, while
+    ``provider_text`` differs only by the documented escaped-dollar
+    projection.  References contain identities and optional ranges, never
+    artifact bytes.
+    """
+
+    source_text: str
+    provider_text: str
+    references: tuple[ArtifactReference, ...]
+
+    def __post_init__(self) -> None:
+        for name in ("source_text", "provider_text"):
+            value = getattr(self, name)
+            if type(value) is not str:
+                raise TypeError(f"{name} must be a string")
+            if "\x00" in value:
+                raise ArtifactReferenceDirectiveError(
+                    "reference input must not contain NUL"
+                )
+            try:
+                value.encode("utf-8", errors="strict")
+            except UnicodeEncodeError:
+                raise ArtifactReferenceDirectiveError(
+                    "reference input must be strict UTF-8"
+                ) from None
+
+        if type(self.references) is not tuple:
+            raise TypeError("references must be a tuple")
+        if any(
+            type(reference) is not ArtifactReference
+            for reference in self.references
+        ):
+            raise TypeError("references must contain ArtifactReference values")
+        if len(self.references) > MAX_REFERENCE_COUNT:
+            raise ArtifactReferenceDirectiveError(
+                "reference input exceeds the directive limit"
+            )
+
+        observed: dict[str, list[ArtifactLineRange | None]] = {}
+        for reference in self.references:
+            ranges = observed.setdefault(reference.path, [])
+            if reference.line_range in ranges:
+                raise ArtifactReferenceDirectiveError(
+                    "reference input contains an exact duplicate"
+                )
+            if reference.line_range is None or any(
+                line_range is None for line_range in ranges
+            ):
+                if ranges:
+                    raise ArtifactReferenceDirectiveError(
+                        "reference input mixes whole and ranged directives"
+                    )
+            else:
+                for line_range in ranges:
+                    assert line_range is not None
+                    if (
+                        reference.line_range.start <= line_range.end
+                        and line_range.start <= reference.line_range.end
+                    ):
+                        raise ArtifactReferenceDirectiveError(
+                            "reference input contains overlapping ranges"
+                        )
+            ranges.append(reference.line_range)

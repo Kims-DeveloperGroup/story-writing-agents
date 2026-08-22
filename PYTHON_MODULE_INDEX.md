@@ -16,7 +16,7 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 38.
+Importable production units indexed: 39.
 
 ## Current Dependency Direction
 
@@ -78,7 +78,8 @@ models -> conversations/agents/errors
 session_lifecycle -> (standard library only)
 workspace -> conversations -> agents/errors
           -> models/writing_artifacts
-writing_artifacts -> writing_artifacts.catalog/references
+writing_artifacts -> writing_artifacts.catalog/directives/references
+writing_artifacts.directives -> writing_artifacts.references
 writing_artifacts.references -> writing_artifacts.catalog
 writing_artifacts.repository -> agents/errors/writing_artifacts._storage/catalog/references
 writing_artifacts._storage -> errors
@@ -1587,15 +1588,17 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Supported surface:** Exactly the names in `__all__`: canonical core and
   resource-limit constants; `ArtifactKind`, `ArtifactCatalogEntry`,
   `ArtifactCatalog`, `ArtifactContentSnapshot`, `ArtifactLineRange`, and
-  `ArtifactReference`; plus `canonical_artifact_kind` and
-  `manuscript_artifact_path`. The filesystem repository and storage adapter are
-  intentionally not re-exported.
-- **Direct internal dependencies:** `writing_artifacts.catalog` and
-  `writing_artifacts.references`.
+  `ArtifactReference`; immutable `ArtifactReferenceBatch` and its
+  `ArtifactReferenceDirectiveError`; plus `canonical_artifact_kind`,
+  `manuscript_artifact_path`, and `parse_artifact_references`. The filesystem
+  repository and storage adapter are intentionally not re-exported.
+- **Direct internal dependencies:** `writing_artifacts.catalog`,
+  `writing_artifacts.directives`, and `writing_artifacts.references`.
 - **State, resources, and side effects:** Owns no state or resource. Importing
   the facade constructs only immutable metadata and performs no filesystem,
   provider, process, environment, or application-startup operation.
 - **Primary verification/documentation:** `tests/test_writing_artifacts.py`,
+  `tests/test_artifact_reference_directives.py`,
   `tests/test_public_api_and_cli.py`, `tests/test_orchestration_workflow.py`,
   `docs/reference/writing-artifacts.md`, `docs/reference/workspace-api.md`, and
   `docs/design/persistence.md`.
@@ -1623,21 +1626,47 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.writing_artifacts.references`
 
 - **Source:** `src/story_writing_agents/writing_artifacts/references.py`
-- **Responsibility:** Define immutable artifact-reference and verified-content
-  snapshot identities plus bounded resource constants.
+- **Responsibility:** Define immutable artifact-reference, directive-batch,
+  and verified-content snapshot identities plus bounded resource constants.
 - **Supported surface:** Package-supported `ArtifactContentSnapshot`,
-  `ArtifactLineRange`, `ArtifactReference`, `MAX_ARTIFACT_PATH_BYTES`,
+  `ArtifactLineRange`, `ArtifactReference`, `ArtifactReferenceBatch`,
+  `ArtifactReferenceDirectiveError`, `MAX_ARTIFACT_PATH_BYTES`,
   `MAX_REFERENCE_COUNT`, `MAX_REFERENCE_UTF8_BYTES`,
-  `MAX_REFERENCE_TOTAL_BYTES`, and `MAX_VIEWER_UTF8_BYTES`. Token discovery,
-  parsing, runtime token resolution, and provider framing are intentionally
-  absent from this leaf.
+  `MAX_REFERENCE_TOTAL_BYTES`, and `MAX_VIEWER_UTF8_BYTES`. The batch preserves
+  exact strict-UTF-8 source and provider-projected text beside ordered,
+  content-free path/range identities, enforces the 16-reference limit, and
+  rejects duplicate, whole/range-conflicting, or overlapping identities.
+  Token discovery, runtime token resolution, and provider framing are absent
+  from this value leaf.
 - **Direct internal dependencies:** `writing_artifacts.catalog`.
 - **State, resources, and side effects:** Pure frozen values, including an
   exact hash-verified immutable byte snapshot, with no I/O or import-time
   operational side effect.
 - **Primary verification/documentation:** `tests/test_writing_artifacts.py`,
+  `tests/test_artifact_reference_directives.py`,
   `tests/test_public_api_and_cli.py`, `docs/reference/writing-artifacts.md`,
   `docs/reference/runtime-api.md`, and `docs/reference/cli.md`.
+
+### `story_writing_agents.writing_artifacts.directives`
+
+- **Source:** `src/story_writing_agents/writing_artifacts/directives.py`
+- **Responsibility:** Parse strict canonical writing-artifact reference
+  directives into immutable content-free batches.
+- **Supported surface:** Package-supported `parse_artifact_references`. It
+  recognizes ordered `${path}` and `${path}#Lx-Ly` tokens, validates complete
+  canonical artifact identities and strict positive-ASCII one-based inclusive
+  ranges, projects odd/even backslash escaping without changing retained source
+  text, and atomically rejects malformed or reserved unresolved dollar syntax,
+  range continuations, the seventeenth occurrence, and ambiguous repeated-path
+  combinations.
+- **Direct internal dependencies:** `writing_artifacts.references`.
+- **State, resources, and side effects:** Pure call-local scanning and immutable
+  value construction only; it performs no filesystem, repository, provider,
+  persistence, controller, terminal, or import-time operational work.
+- **Primary verification/documentation:**
+  `tests/test_artifact_reference_directives.py`,
+  `tests/test_writing_artifacts.py`, and
+  `docs/reference/writing-artifacts.md`.
 
 ### `story_writing_agents.writing_artifacts._storage`
 
@@ -1764,6 +1793,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   `docs/design/persistence.md`, and `docs/operations/filesystem-safety.md`.
 
 ## Consistency Notes
+
+- Writing-artifact directive parsing is a pure package-local boundary:
+  `writing_artifacts.directives` scans only one supplied current input and
+  constructs the `writing_artifacts.references`-owned frozen batch. The batch
+  retains exact source text, exposes only the one-backslash escaped-dollar
+  provider projection plus ordered canonical path/range identities, and never
+  carries artifact bytes. Parsing performs no repository read or runtime,
+  provider, controller, terminal, picker, viewer, or composer integration;
+  those workflows cannot treat a parsed directive as authorized content.
 
 - Canonical core context crosses the repository/provider boundary only as an
   `ArtifactContentSnapshot` converted to an immutable `PromptFileReference`.

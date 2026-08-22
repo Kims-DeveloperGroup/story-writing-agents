@@ -13,6 +13,7 @@ from .catalog import (
     canonical_artifact_kind,
     manuscript_artifact_path,
 )
+from .directives import parse_artifact_references
 from .references import (
     MAX_ARTIFACT_PATH_BYTES,
     MAX_REFERENCE_COUNT,
@@ -22,6 +23,8 @@ from .references import (
     ArtifactContentSnapshot,
     ArtifactLineRange,
     ArtifactReference,
+    ArtifactReferenceBatch,
+    ArtifactReferenceDirectiveError,
 )
 
 __all__ = (
@@ -37,6 +40,9 @@ __all__ = (
     "ArtifactKind",
     "ArtifactLineRange",
     "ArtifactReference",
+    "ArtifactReferenceBatch",
+    "ArtifactReferenceDirectiveError",
     "canonical_artifact_kind",
     "manuscript_artifact_path",
+    "parse_artifact_references",
 )
