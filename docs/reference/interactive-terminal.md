@@ -769,10 +769,21 @@ filesystem, storage, or network state.
 Each call accepts one exact `str`, a nonblank one-logical-line display name,
 and an optional one-based initial line. Before inspecting a stream, observing
 terminal capability, or performing I/O, it validates exact types, strict UTF-8
-for text and display metadata, the initial line against the derived document,
-and a private 8 MiB UTF-8 text limit. The terminal limit is an independent
-defensive boundary, not the writing-artifact reference limit. The later
-artifact caller must enforce its own limit before supplying verified text.
+for text and display metadata, at most 65,536 LF-derived logical lines, the
+initial line against the derived document, and a private 8 MiB UTF-8 text
+limit. The line limit is checked before line splitting or materialization.
+The terminal limit is an independent defensive boundary, not the
+writing-artifact reference limit. The later artifact caller must enforce its
+own limit before supplying verified text.
+
+Entry validation also proves that a complete sanitized ordinary-line fallback
+frame fits a private 16 MiB UTF-8 budget. That budget includes sanitized
+display metadata, every numbered source record, separators, notices, and the
+prompt. A frame exactly at the limit is accepted; a larger frame is rejected
+before capability checks, callbacks, reads, writes, or raw-terminal work.
+Because visible escapes can expand source characters, otherwise valid text can
+exceed this fallback budget. This complete-fallback invariant applies even
+when the eventual interaction would have been capable and live.
 
 Only LF separates logical lines. Empty text has zero lines; one final LF does
 not add a phantom line, while preceding empty lines remain real lines. CR,
@@ -794,14 +805,38 @@ renders one physical row per logical source line. Every row carries a
 one-based number; plain `>` and `*` cues identify the current and selected
 lines, with fixed ANSI emphasis added only when decoration is enabled. Long
 rows are clipped with a Unicode-cell-aware ellipsis instead of wrapping.
+Each live row sanitizes and scans only the bounded prefix needed for its width
+plus a fixed 256-source-code-point allowance. Therefore an unseen multi-MiB
+suffix or a long leading run of zero-width combining characters cannot add
+unbounded work to each redraw.
 The contiguous viewport is bounded by current terminal height. Width and
 height are observed before the first frame and again after each nonexit key, so
 a resize appears on the next interaction without a `SIGWINCH` handler. The
 viewer never hides or shows the cursor; cursor visibility is left unchanged.
 
+Byte-backed live input is allowed only when the public codec registry resolves
+the declared encoding to canonical `ascii`, `utf-8`, or `iso8859-1`; registry
+aliases for those codecs are accepted. Every other or unknown byte codec,
+including ISO-2022 variants, HZ, UTF-7, UTF-8-SIG, and
+`raw-unicode-escape`, selects ordinary fallback before `PC_VDISABLE`, control
+attributes, byte reads, live-terminal output, raw mode, or alternate-screen
+work. This is an allow-policy, not a deny-list of those examples.
+
+Within an allowed byte codec, configured VINTR and VEOF bytes are compared
+with `PC_VDISABLE` before decoding. Each enabled byte must decode to exactly
+one code point and round-trip to the same byte under the stream's encoding and
+error policy. Compatible UTF-8 `surrogateescape` controls work; incomplete,
+lossy, or incompatible mappings select ordinary fallback before activation.
+Text-only collaborators retain their supplied one-code-point control semantics.
+If one input character has multiple roles, configured VINTR has priority, then
+configured VEOF, then the ordinary viewer key role.
+
 When raw capability is unavailable or safe setup cannot be constructed before
 activation, ordinary-line fallback prints the complete numbered, sanitized
 document and accepts only exact ASCII positive `START-END` or exact `/cancel`.
+It never width-clips or adds an ellipsis to accepted document content: every
+sanitized source character is emitted, and long logical lines wrap naturally
+in terminal scrollback. The one-based numbering and range prompt remain exact.
 Endpoints may be reversed and are normalized; zero, leading zero, signs,
 spaces, non-ASCII digits or dash, missing endpoints, and out-of-range values
 produce a visible retry. The fallback uses no ANSI, raw mode, alternate screen,
@@ -837,7 +872,10 @@ Once those downstream integrations land, users can read—but not edit—canonic
 text, select inclusive lines, and close or cancel without submitting the
 originating message. Multiple ordered references will use repeated fresh viewer
 calls. None of that path/content/composer/agent behavior is supplied by #162
-itself.
+itself. Within this internal leaf, accepted content remains fully visible in
+fallback and safely bounded per redraw in live mode. Over-limit pathological
+documents do not open, fallback content is never silently truncated, and an
+incompatible configured control byte is never guessed into a live key role.
 
 <a id="exact-search-and-transcript-records"></a>
 

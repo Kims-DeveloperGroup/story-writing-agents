@@ -112,12 +112,24 @@ choice and ends with its focused prompt space without a final LF.
 
 Viewer validation precedes capability inspection and terminal I/O. Supplied
 text and its one-line display name must be exact strict-UTF-8 `str` values; text
-is limited by a private terminal-local 8 MiB UTF-8 capacity, and an optional
-initial line must identify a derived line. LF alone separates logical lines,
+is limited by a private terminal-local 8 MiB UTF-8 capacity and 65,536
+LF-derived logical lines, and an optional initial line must identify a derived
+line. The line count is rejected before splitting or materializing the line
+tuple. A separate complete sanitized fallback projection is limited to 16 MiB
+UTF-8, including display metadata, numbered records, separators, notices, and
+prompt; exact limits are accepted. Escape expansion can therefore reject an
+otherwise valid source. All of these checks precede callbacks, reads, writes,
+capability inspection, and raw-terminal work. LF alone separates logical lines,
 empty text has zero, and one final LF adds no extra line. CR, U+2028, and other
-controls remain content and render as visible escapes. Each logical line uses
-one physical row and is clipped with a Unicode-cell-aware ellipsis rather than
-wrapped.
+controls remain content and render as visible escapes.
+
+In live mode, each logical line uses one physical row and is clipped with a
+Unicode-cell-aware ellipsis rather than wrapped. Sanitization and measurement
+scan only the width-relevant prefix plus a fixed 256-source-code-point
+allowance, so an unseen multi-MiB suffix or a leading zero-width combining run
+cannot impose unbounded work on every redraw. In line fallback, every accepted
+sanitized character is emitted without width clipping; long records wrap
+naturally in terminal scrollback.
 
 Transcript content follows a stricter primitive boundary: it must be an exact
 nonempty string, but whitespace-only content is valid. Sanitization makes
@@ -279,6 +291,24 @@ state.
 Enter submits when no highlighted static completion is open; VEOF submits
 nonempty text or returns EOF when empty; VINTR returns interrupt.
 
+The ranged viewer admits byte-backed live input only when the public codec
+registry resolves the declared encoding to canonical `ascii`, `utf-8`, or
+`iso8859-1`; aliases for those codecs are accepted. Every other or unknown
+codec, including ISO-2022 variants, HZ, UTF-7, UTF-8-SIG, and
+`raw-unicode-escape`, selects ordinary fallback before `PC_VDISABLE`, control
+attributes, byte reads, termios activation, screen entry, or live-terminal
+output. This is a positive allow-policy, not a deny-list of those examples.
+
+Within an allowed byte codec, each configured VINTR/VEOF raw byte is first
+compared with `PC_VDISABLE`. An enabled byte must then decode to exactly one
+code point and encode back to the exact byte under the stream's encoding and
+error policy. UTF-8 `surrogateescape` controls can remain live; strict
+incomplete bytes, lossy handlers, and incompatible mappings still select
+ordinary fallback without terminal mutation. Text-only collaborators keep
+their supplied one-code-point control semantics. Within a live viewer event,
+configured VINTR has priority over VEOF, and both precede ordinary key
+meanings.
+
 A complete live frame comprises every row and terminal cell drawn for one
 capable input read: semantic context and prompt, editable buffer, suggestions or
 choices, validation, and redraws. Before any capable main, composition,
@@ -381,8 +411,9 @@ still attempted, and uncertainty about restoration remains fatal.
 
 The package-internal viewer accepts supplied text, not a path or artifact
 repository. Its adapter validates exact input types, strict UTF-8, the private
-8 MiB terminal capacity, display metadata, LF-derived line count, and optional
-one-based initial line before the terminal can be inspected. It has no
+8 MiB source capacity, the 65,536 logical-line capacity, the complete 16 MiB
+sanitized-fallback capacity, display metadata, LF-derived line count, and
+optional one-based initial line before the terminal can be inspected. It has no
 workspace, writing-artifact, repository, runtime, backend, provider,
 controller, parser, or composer dependency. The separate artifact-reference
 limit remains authoritative for later integration; that caller must apply it
@@ -414,10 +445,12 @@ reversed.
 
 Before activation, missing or uncertain capability and unavailable safe setup
 may select line fallback. That path prints the complete numbered sanitized
-document and accepts only exact ASCII positive `START-END` or `/cancel`.
-Reversed endpoints normalize. Invalid, empty, spaced, signed, leading-zero,
-non-ASCII, or out-of-range input gets a visible fixed retry. It uses no ANSI,
-raw mode, cursor movement, or alternate screen, and cannot erase printed input.
+document without width clipping and accepts only exact ASCII positive
+`START-END` or `/cancel`. Long lines wrap naturally; accepted fallback content
+is never silently truncated. Reversed endpoints normalize. Invalid, empty,
+spaced, signed, leading-zero, non-ASCII, or out-of-range input gets a visible
+fixed retry. It uses no ANSI, raw mode, cursor movement, or alternate screen,
+and cannot erase printed input.
 
 Every open receives a new caller document and optional initial line; no viewer
 state can resume. Dropping the call-local immutable values is lifecycle

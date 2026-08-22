@@ -71,10 +71,10 @@ revision; all must approve. Blackboard and owner-isolated history stay separate.
 | `interactive_terminal` | Stable package-supported facade, package-internal real-CLI factory, and unlisted internal semantic output, controller-main-input, picker, cancellable-prompt, and supplied-text viewer adapters and identities |
 | `interactive_terminal._core` | Established terminal API behavior, explicit ordinary/main/composition/confirmation routing, canonical static/dynamic main-choice adaptation, semantic input-view and lifecycle-event construction, resource-free semantic output/main/picker/prompt/viewer adapters, and terminal-leaf coordination |
 | `interactive_terminal._model`, `_controls`, `_render` | Immutable semantic/history/completion/dynamic-choice/composer/picker foundation; normalized keys including Shift+Arrow; pure line, palette, history, composer, confirmation, prompt, and picker transitions; bounded picker viewport; and pure safe responsive output/input rendering |
-| `interactive_terminal._viewer_model` | Private immutable strict-UTF-8 supplied document, active/anchor state, bounded viewport, notice, exit-kind, and content-free inclusive-range result contracts; LF-only line derivation and a terminal-local 8 MiB limit |
+| `interactive_terminal._viewer_model` | Private immutable strict-UTF-8 supplied document, active/anchor state, bounded viewport, notice, exit-kind, and content-free inclusive-range result contracts; LF-only line derivation with terminal-local 8 MiB source, 65,536-line, and complete 16 MiB fallback-projection limits |
 | `interactive_terminal._viewer_controls` | Pure fresh initialization, ordinary and anchored navigation, normalized commit and noncommit exits, exact ASCII fallback grammar, and bounded contiguous viewport projection |
-| `interactive_terminal._viewer_render` | Pure one-row-per-source-line live and complete numbered fallback projections with visible escaping, line numbers, plain/ANSI state cues, and cell-aware ellipsis clipping |
-| `interactive_terminal._driver` | Sole real-CLI raw streams, capabilities, width/height, incremental byte/key decoding, fixed Escape readiness wait, complete-live-frame cleanup, viewer alternate screen, cursor controls, writes, flushes, restoration, one bounded process-local main-history store, and dedicated history-free picker/prompt/viewer lifecycles |
+| `interactive_terminal._viewer_render` | Pure bounded-prefix one-row-per-source-line live and complete numbered fallback projections with visible escaping, line numbers, plain/ANSI state cues, cell-aware live ellipsis clipping, and no fallback clipping |
+| `interactive_terminal._driver` | Sole real-CLI raw streams, capabilities, width/height, canonical ASCII/UTF-8/ISO-8859-1 byte-codec admission, incremental byte/key decoding, configured-control validation, fixed Escape readiness wait, complete-live-frame cleanup, viewer alternate screen, cursor controls, writes, flushes, restoration, one bounded process-local main-history store, and dedicated history-free picker/prompt/viewer lifecycles |
 | `interactive_line_editor` | Standalone compatibility facade over the same supported main-command reader and one unified per-editor driver/history store |
 | `StoryRuntime`, `AgentBackend` | Orchestration/retrieval authority and provider resources |
 
@@ -126,12 +126,17 @@ None is supported public API.
 The ranged text viewer is another unlisted internal seam, but it is independent
 from the picker and composer. Its adapter accepts exact caller-supplied text,
 one display name, and an optional one-based initial line. Private pure modules
-own immutable document/range/viewport state and safe rendering; the sole driver
-owns Shift+Arrow decoding, bounded width/height observation, raw mode, one
-alternate screen, and cleanup. The result contains only `selected`,
-`cancelled`, `interrupted`, or `eof` plus an inclusive tuple for selection.
-Every call drops its source, display, anchor, selection, and viewport state on
-return or failure.
+own immutable document/range/viewport state, independent source/line/complete-
+fallback capacities, bounded-prefix live rendering, and untruncated accepted
+fallback rendering. The sole driver admits byte-backed live input only for
+registry-resolved canonical ASCII, UTF-8, and ISO-8859-1 codecs and their
+aliases, then owns Shift+Arrow decoding, exact configured-control
+classification, bounded width/height observation, raw mode, one alternate
+screen, and cleanup. Every other or unknown codec selects fallback before
+control inspection or terminal mutation. Text-only one-code-point collaborators
+remain distinct. The result contains only `selected`, `cancelled`,
+`interrupted`, or `eof` plus an inclusive tuple for selection. Every call drops
+its source, display, anchor, selection, and viewport state on return or failure.
 
 This package-internal component does not make `$`, `$${file}`, or `$$`
 available. It discovers and reads no file and constructs no artifact reference.

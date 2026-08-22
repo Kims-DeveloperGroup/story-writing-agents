@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass, field
 from enum import StrEnum
 
 
 _MAX_TEXT_UTF8_BYTES = 8 * 1024 * 1024
+_MAX_TEXT_LOGICAL_LINES = 65_536
+_MAX_FALLBACK_UTF8_BYTES = 16 * 1024 * 1024
+_FALLBACK_PROMPT = "Select START-END or /cancel: "
+_EMPTY_DOCUMENT = "<empty document>"
+_EMPTY_NOTICE = "No selectable lines; cancel to close."
+_INVALID_NOTICE = "Enter a valid one-based START-END range."
 
 
 class TextViewerExitKind(StrEnum):
@@ -45,6 +52,11 @@ class TextViewerDocument:
             raise ValueError("display_name must not be blank")
         if "\n" in self.display_name:
             raise ValueError("display_name must be one logical line")
+        logical_lines = _logical_line_count(self.text)
+        if logical_lines > _MAX_TEXT_LOGICAL_LINES:
+            raise ValueError(
+                "viewer text exceeds the 65,536 logical-line limit"
+            )
         try:
             encoded = self.text.encode("utf-8", errors="strict")
             self.display_name.encode("utf-8", errors="strict")
@@ -54,6 +66,11 @@ class TextViewerDocument:
             ) from exc
         if len(encoded) > _MAX_TEXT_UTF8_BYTES:
             raise ValueError("viewer text exceeds the 8 MiB UTF-8 limit")
+        _validate_fallback_projection(
+            self.text,
+            self.display_name,
+            logical_lines,
+        )
 
         if not self.text:
             lines: tuple[str, ...] = ()
@@ -70,6 +87,83 @@ class TextViewerDocument:
         """Return the number of selectable LF-derived logical lines."""
 
         return len(self.lines)
+
+
+def _logical_line_count(text: str) -> int:
+    """Count LF-derived logical lines without allocating their records."""
+
+    if not text:
+        return 0
+    return text.count("\n") + (0 if text.endswith("\n") else 1)
+
+
+def _validate_fallback_projection(
+    text: str,
+    display_name: str,
+    logical_lines: int,
+) -> None:
+    """Reject a maximum complete fallback projection beyond 16 MiB.
+
+    Accounting includes the longest valid header and notice for the document,
+    every numbered record, all separators, and the complete prompt. It runs
+    before logical-line materialization or any terminal collaborator access.
+    """
+
+    display_name_bytes = _sanitized_utf8_bytes(display_name)
+    notice_bytes = max(len(_EMPTY_NOTICE), len(_INVALID_NOTICE))
+    if logical_lines == 0:
+        fixed_bytes = sum(
+            (
+                len("[viewer]  | 0 lines"),
+                display_name_bytes,
+                len(_EMPTY_DOCUMENT),
+                notice_bytes,
+                len(_FALLBACK_PROMPT),
+                3,  # Newlines between the four complete fallback rows.
+            )
+        )
+    else:
+        digits = len(str(logical_lines))
+        fixed_bytes = sum(
+            (
+                len(f"[viewer]  | lines {logical_lines}-{logical_lines}"),
+                display_name_bytes,
+                logical_lines * (digits + 6),
+                notice_bytes,
+                len(_FALLBACK_PROMPT),
+                logical_lines + 2,
+            )
+        )
+    if fixed_bytes > _MAX_FALLBACK_UTF8_BYTES:
+        raise ValueError(
+            "viewer fallback projection exceeds the 16 MiB UTF-8 limit"
+        )
+
+    projected_bytes = fixed_bytes
+    for character in text:
+        if character == "\n":
+            continue
+        projected_bytes += _sanitized_character_utf8_bytes(character)
+        if projected_bytes > _MAX_FALLBACK_UTF8_BYTES:
+            raise ValueError(
+                "viewer fallback projection exceeds the 16 MiB UTF-8 limit"
+            )
+
+
+def _sanitized_utf8_bytes(text: str) -> int:
+    """Count exact UTF-8 bytes after terminal-visible sanitization."""
+
+    return sum(_sanitized_character_utf8_bytes(character) for character in text)
+
+
+def _sanitized_character_utf8_bytes(character: str) -> int:
+    """Count one source code point using the terminal sanitizer contract."""
+
+    category = unicodedata.category(character)
+    if category in {"Cc", "Cf", "Cs"} or character in {"\u2028", "\u2029"}:
+        value = ord(character)
+        return 4 if value <= 0xFF else 6 if value <= 0xFFFF else 10
+    return len(character.encode("utf-8", errors="strict"))
 
 
 @dataclass(frozen=True, slots=True)

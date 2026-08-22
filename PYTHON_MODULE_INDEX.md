@@ -1165,9 +1165,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   `TextViewerState`, `TextViewerViewport`, `TextViewerExitKind`,
   `TextViewerNotice`, and `TextViewerResult`, plus the package-private disposal
   lifecycle marker. Documents validate exact strict-UTF-8 supplied text and
-  one-line display metadata, enforce the private 8 MiB terminal capacity, and
-  derive logical lines using LF alone. Results contain only an exit kind and an
-  optional normalized one-based inclusive tuple.
+  one-line display metadata, enforce the private 8 MiB source capacity, reject
+  more than 65,536 LF-derived logical lines before splitting or tuple
+  materialization, and prove the complete sanitized fallback projection is at
+  most 16 MiB UTF-8 before capability, terminal, or callback I/O. Accepted
+  documents retain their LF-derived logical lines in an immutable tuple.
+  Results contain only an exit kind and an optional normalized one-based
+  inclusive tuple.
 - **Direct internal dependencies:** None.
 - **State, resources, and side effects:** Immutable call-local values and pure
   correlation validation only. The module owns no stream, terminal mode,
@@ -1213,16 +1217,21 @@ every intermediate arrow. The current runtime graph is acyclic.
   `render_text_viewer_fallback`. Live rendering emits one physical row per
   logical source line within the projected height, deterministic one-based line
   numbers and plain current/selected cues, fixed optional SGR, and cell-aware
-  ellipsis clipping without wrap or horizontal control. Fallback renders the
-  complete numbered sanitized text and an exact ASCII range prompt without
-  ANSI or raw controls.
+  ellipsis clipping without wrap or horizontal control. Each live row uses one
+  bounded sanitize-and-clip pass over at most its width plus 256 source code
+  points. Fallback renders every complete sanitized, un-clipped numbered
+  logical line and the exact ASCII range prompt without ANSI or raw controls;
+  long fallback lines may wrap naturally in ordinary scrollback.
 - **Direct internal dependencies:** `interactive_terminal._model` and
   `interactive_terminal._viewer_model`.
 - **State, resources, and side effects:** Pure projections only. Caller
   metadata and content are visibly sanitized before styling; CR, Unicode line
   separators, controls, surrogates, combining marks, and wide characters cannot
-  inject terminal controls or escape the bounded physical rows. The module
-  writes no stream and owns no terminal, filesystem, runtime, or storage state.
+  inject terminal controls. Live output remains one clipped physical row per
+  projected logical line with width-bounded source work. Complete plain
+  fallback output is intentionally un-clipped and may wrap in the borrowed
+  ordinary reader's scrollback. The module writes no stream and owns no
+  terminal, filesystem, runtime, or storage state.
 - **Primary verification/documentation:**
   `tests/test_interactive_terminal_viewer.py`,
   `tests/test_interactive_terminal_foundation.py`,
@@ -1254,7 +1263,18 @@ every intermediate arrow. The current runtime graph is acyclic.
   state plus pure transition/projection/render collaborators. It decodes real
   CSI Shift+Up/Down, returns a content-free `TextViewerResult`, uses exact ASCII
   range fallback when raw capability is absent, and never discovers or reads a
-  file. The
+  file. For byte-backed streams it resolves the declared encoding through the
+  public codec registry and admits live raw mode only for canonical `ascii`,
+  `utf-8`, or `iso8859-1`, including their registry aliases. Every other or
+  unknown codec selects fallback before `PC_VDISABLE`, configured-control
+  inspection, byte reads, live output, termios mutation, or screen mutation.
+  Within an admitted codec, raw VINTR/VEOF values are compared with
+  `PC_VDISABLE` before decoding; each enabled control must decode to one code
+  point and round-trip to the same byte. Disabled controls remain absent, and
+  incompatible, incomplete, or lossy mappings select fallback. Text-only
+  one-code-point collaborators retain their separate supplied-character
+  semantics. Viewer VINTR has priority over VEOF and both precede ordinary key
+  meanings. The
   driver provides one-write output, redraws on the full immutable main-command
   or picker control state, and normalizes established editing and picker keys.
   Installed stream-terminal main, composition, confirmation, picker, and
@@ -1287,10 +1307,18 @@ every intermediate arrow. The current runtime graph is acyclic.
   completion-only Enter and outcomes without an accepted line append nothing.
   The same read loop owns
   call-local one-byte
-  incremental decoding and the fixed 50-millisecond Escape readiness lookahead,
-  so available ordinary bytes are reprocessed without a second reader or sleep
-  loop. Completion, prompt-control, and palette collaborators are call-local and
-  retain no prompt mode. Composition, confirmation, and ordinary reads
+  incremental decoding and the fixed 50-millisecond Escape readiness lookahead.
+  Before viewer activation, the same driver canonicalizes byte-backed stream
+  codecs through the public registry. Only canonical ASCII, UTF-8, and
+  ISO-8859-1 plus their aliases proceed to disabled-control inspection and the
+  exact enabled VINTR/VEOF one-code-point/one-byte round-trip check; every other
+  or unknown codec falls safely into ordinary fallback before control
+  inspection, byte input, live output, or terminal/screen mutation. Text-only
+  collaborators retain their supplied one-code-point control semantics.
+  Available ordinary bytes are reprocessed without a second reader or sleep
+  loop. Completion, prompt-control, and palette
+  collaborators are call-local and retain no prompt mode. Composition,
+  confirmation, and ordinary reads
   never navigate or mutate that store. Cancellable prompt and picker input
   likewise never consult or mutate history or completion state; their live
   paths reuse the sole driver's decoding, raw-mode, cursor, write, flush, and
@@ -2029,16 +2057,20 @@ every intermediate arrow. The current runtime graph is acyclic.
   neither it nor parser or storage code owns or persists command history.
 - The ranged text viewer remains wholly inside `interactive_terminal`:
   `_viewer_model` owns immutable LF-derived document/state/viewport/result
-  values and a private terminal-local 8 MiB capacity independent from the
+  values, the private terminal-local 8 MiB source and 65,536-line capacities,
+  and a complete 16 MiB sanitized-fallback budget independent from the
   writing-artifact reference limit; `_viewer_controls` owns pure anchored and
-  fallback transitions; `_viewer_render` owns safe bounded projections; and the
-  existing `_driver` alone owns keys, geometry, streams, raw mode, alternate
-  screen, cleanup, and next-interaction resize observation. `_core` binds one
-  stateless unlisted facade adapter and drops its call-local state in `finally`.
+  fallback transitions; `_viewer_render` owns width-plus-256 bounded live-row
+  clipping and complete un-clipped plain fallback projection; and the existing
+  `_driver` alone owns keys, canonical ASCII/UTF-8/ISO-8859-1 byte-codec
+  admission, exact configured-control classification, geometry, streams, raw
+  mode, alternate screen, cleanup, and next-interaction resize observation.
+  `_core` binds one stateless unlisted facade adapter and drops its call-local
+  state in `finally`.
   No terminal unit discovers files or imports workspace, artifact repository,
   runtime, backend, controller, parser, or composer ownership. The viewer does
-  not implement `$`/`$$`, artifact eligibility, ordered references, provider
-  context, or composer restoration.
+  not implement `$`, `$${file}`, or `$$`, artifact eligibility, ordered
+  references, provider context, or composer restoration.
 - `interactive_controller` is the stable one-class import boundary and owns no
   shell state or resource. Its `_core` owns interactive shell action mapping,
   current in-memory attachment, current-focus conversation and sticky-target state,

@@ -58,6 +58,7 @@ _PROGRESS_FRAME_COUNT = 4
 _PROGRESS_INTERVAL_SECONDS = 0.08
 _DEFAULT_VIEWER_HEIGHT = 24
 _MAX_VIEWER_HEIGHT = 200
+_SAFE_BYTE_INPUT_CODECS = frozenset({"ascii", "utf-8", "iso8859-1"})
 _VIEWER_SCREEN_ENTER = "\x1b[?1049h\x1b[2J\x1b[H"
 _VIEWER_SCREEN_REDRAW = "\x1b[H\x1b[2J"
 _VIEWER_SCREEN_EXIT = "\x1b[?1049l"
@@ -1759,14 +1760,10 @@ def _single_character_reader(input_stream: TextIO) -> Callable[[], object]:
     one-code-point ``read(1)`` contract.
     """
 
-    byte_stream = getattr(input_stream, "buffer", None)
-    read_one_byte = getattr(byte_stream, "read1", None)
-    encoding = getattr(input_stream, "encoding", None)
-    if not callable(read_one_byte) or not isinstance(encoding, str) or not encoding:
+    decoder_spec = _input_byte_decoder_spec(input_stream)
+    if decoder_spec is None:
         return lambda: input_stream.read(1)
-    errors = getattr(input_stream, "errors", None)
-    if not isinstance(errors, str) or not errors:
-        errors = "strict"
+    read_one_byte, encoding, errors = decoder_spec
     decoder = codecs.getincrementaldecoder(encoding)(errors=errors)
 
     def read_character() -> object:
@@ -1782,6 +1779,27 @@ def _single_character_reader(input_stream: TextIO) -> Callable[[], object]:
                 return character
 
     return read_character
+
+
+def _input_byte_decoder_spec(
+    input_stream: TextIO,
+) -> tuple[Callable[[int], object], str, str] | None:
+    """Return one canonical safe byte-reader codec or text-only ``None``."""
+
+    byte_stream = getattr(input_stream, "buffer", None)
+    read_one_byte = getattr(byte_stream, "read1", None)
+    if not callable(read_one_byte):
+        return None
+    encoding = getattr(input_stream, "encoding", None)
+    if not isinstance(encoding, str) or not encoding:
+        raise ValueError("byte-backed input requires a declared encoding")
+    canonical_encoding = codecs.lookup(encoding).name
+    if canonical_encoding not in _SAFE_BYTE_INPUT_CODECS:
+        raise ValueError("byte-backed input codec is not safe for live decoding")
+    errors = getattr(input_stream, "errors", None)
+    if not isinstance(errors, str) or not errors:
+        errors = "strict"
+    return read_one_byte, canonical_encoding, errors
 
 
 def detect_terminal_capabilities(
@@ -1980,7 +1998,10 @@ def _terminal_configuration(
 
     input_descriptor = _stream_descriptor(input_stream)
     output_descriptor = _stream_descriptor(output_stream)
-    disabled_control_character = _disabled_control_character(
+    # Validate every byte-backed reader before inspecting controls. Disabled
+    # VINTR/VEOF cannot make a stateful codec safe for Escape/CSI decoding.
+    _input_byte_decoder_spec(input_stream)
+    disabled_control_byte = _disabled_control_byte(
         input_descriptor,
         os_module,
     )
@@ -1993,12 +2014,14 @@ def _terminal_configuration(
     eof_character = _configured_control_character(
         original_attributes[6][termios_module.VEOF],
         "VEOF",
-        disabled_control_character,
+        disabled_control_byte,
+        input_stream,
     )
     interrupt_character = _configured_control_character(
         original_attributes[6][termios_module.VINTR],
         "VINTR",
-        disabled_control_character,
+        disabled_control_byte,
+        input_stream,
     )
     if width is None:
         columns = os_module.get_terminal_size(output_descriptor).columns
@@ -2041,11 +2064,11 @@ def _stream_descriptor(stream: TextIO) -> int:
     return descriptor
 
 
-def _disabled_control_character(
+def _disabled_control_byte(
     input_descriptor: int,
     os_module: object,
-) -> str:
-    """Resolve this terminal's platform-specific disabled control value."""
+) -> int:
+    """Resolve this terminal's platform-specific raw disabled-control byte."""
 
     fpathconf = getattr(os_module, "fpathconf", None)
     if not callable(fpathconf):
@@ -2057,34 +2080,53 @@ def _disabled_control_character(
         or not 0 <= value <= 255
     ):
         raise ValueError("PC_VDISABLE must be one terminal control character")
-    return chr(value)
+    return value
 
 
 def _configured_control_character(
     value: object,
     name: str,
-    disabled_character: str,
+    disabled_byte: int,
+    input_stream: TextIO,
 ) -> str | None:
-    """Decode one termios control character for active input comparison.
+    """Normalize one termios control byte exactly like active stream input.
 
-    Enabled code points are not displayed, while the platform's disabled value
-    becomes ``None``. Unsupported termios shapes raise before mode activation
-    so fallback can proceed without cleanup.
+    Raw disabled values become ``None`` before decoding. Enabled bytes must
+    decode to exactly one code point and encode back to the same byte under the
+    stream's byte-reader codec. Text-only collaborators retain their supplied
+    one-code-point semantics. Any uncertainty raises before mode activation.
     """
 
+    if isinstance(value, str) and len(value) == 1:
+        return None if ord(value) == disabled_byte else value
     if isinstance(value, bytes) and len(value) == 1:
-        character = value.decode("latin-1")
-    elif isinstance(value, str) and len(value) == 1:
-        character = value
+        raw_byte = value[0]
     elif (
         isinstance(value, int)
         and not isinstance(value, bool)
         and 0 <= value <= 255
     ):
-        character = chr(value)
+        raw_byte = value
     else:
         raise ValueError(f"{name} must be one terminal control character")
-    return None if character == disabled_character else character
+    if raw_byte == disabled_byte:
+        return None
+
+    decoder_spec = _input_byte_decoder_spec(input_stream)
+    if decoder_spec is None:
+        return chr(raw_byte)
+    _read_one_byte, encoding, errors = decoder_spec
+    raw = bytes((raw_byte,))
+    decoder = codecs.getincrementaldecoder(encoding)(errors=errors)
+    character = decoder.decode(raw, final=False)
+    if type(character) is not str or len(character) != 1:
+        raise ValueError(
+            f"{name} is not one complete stream-decoded code point"
+        )
+    encoder = codecs.getincrementalencoder(encoding)(errors=errors)
+    if encoder.encode(character, final=True) != raw:
+        raise ValueError(f"{name} does not round-trip through the input codec")
+    return character
 
 
 def _activate_terminal(configuration: _TerminalConfiguration) -> None:
