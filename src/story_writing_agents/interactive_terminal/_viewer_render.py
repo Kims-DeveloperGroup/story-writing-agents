@@ -90,6 +90,14 @@ def _live_lines(
     """Return plain rows and fixed decoration roles for one live frame."""
 
     header = _clip_cells(_viewport_header(viewport), width)
+    if viewport.total_lines == 0 and viewport.frame_height <= 2:
+        empty_notice = _notice_text(TextViewerNotice.EMPTY_DOCUMENT)
+        assert empty_notice is not None
+        clipped_notice = _clip_cells(empty_notice, width)
+        if viewport.frame_height == 1:
+            return [clipped_notice], ["default"]
+        return [header, clipped_notice], ["default", "default"]
+
     content: list[str] = []
     roles: list[str] = []
     if viewport.total_lines == 0:

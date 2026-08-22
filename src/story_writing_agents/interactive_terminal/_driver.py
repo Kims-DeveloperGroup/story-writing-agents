@@ -1370,6 +1370,26 @@ class RawTerminalDriver:
             except EOFError:
                 return state, TextViewerResult(TextViewerExitKind.EOF)
 
+            configured_event = _viewer_configured_control_event(
+                character,
+                configuration,
+            )
+            if configured_event is not None:
+                state, outcome = _apply_viewer_event(
+                    state,
+                    configured_event,
+                    transition,
+                )
+                if outcome is not None:
+                    return state, outcome
+                self._redraw_live_text_viewer(
+                    state,
+                    capabilities,
+                    viewport_projector,
+                    viewport_renderer,
+                )
+                continue
+
             if escape_sequence is not None:
                 escape_state = _LiveEditorState(escape_sequence=escape_sequence)
                 event, reprocess = _consume_escape_character(
@@ -2160,6 +2180,19 @@ def _key_event(
     if character == "\t":
         return KeyEvent(KeyKind.TAB)
     return KeyEvent(KeyKind.TEXT, text=character)
+
+
+def _viewer_configured_control_event(
+    character: str,
+    configuration: _TerminalConfiguration,
+) -> KeyEvent | None:
+    """Prioritize viewer VINTR, then VEOF, before every ordinary key role."""
+
+    if character == configuration.interrupt_character:
+        return KeyEvent(KeyKind.INTERRUPT)
+    if character == configuration.eof_character:
+        return KeyEvent(KeyKind.EOF)
+    return None
 
 
 def _apply_control_event(

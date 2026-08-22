@@ -1647,7 +1647,10 @@ def _plain_text_viewer_reader(
         while True:
             frame = render_text_viewer_fallback(current, capabilities)
             try:
-                answer = _validated_input_line(read_line(frame.plain_text))
+                callback_value = read_line(frame.plain_text)
+                if isinstance(callback_value, str):
+                    callback_value = str.__str__(callback_value)
+                answer = _validated_input_line(callback_value)
             except KeyboardInterrupt:
                 return TextViewerResult(TextViewerExitKind.INTERRUPTED)
             except EOFError:

@@ -333,6 +333,63 @@ class PureViewerControlTests(unittest.TestCase):
 
 
 class ViewerFallbackControlTests(unittest.TestCase):
+    def test_callback_fallback_normalizes_string_subclass_before_reducer(self) -> None:
+        class RangeAnswer(str):
+            def __str__(self) -> str:
+                raise AssertionError("subclass __str__ must not run")
+
+        read_line = mock.Mock(return_value=RangeAnswer("2-1"))
+        viewer = InteractiveTextViewer(
+            build_stream_terminal(read_line, mock.Mock(), mock.Mock())
+        )
+        result = viewer.read_range("one\ntwo", display_name="fallback.md")
+        self.assertEqual(
+            result,
+            TextViewerResult(TextViewerExitKind.SELECTED, (1, 2)),
+        )
+        read_line.assert_called_once()
+        self.assertTrue(
+            read_line.call_args.args[0].endswith(
+                "Select START-END or /cancel: "
+            )
+        )
+        self.assertIs(type(read_line.return_value), RangeAnswer)
+
+    def test_callback_fallback_retains_validation_interrupt_and_eof_contracts(self) -> None:
+        state = ("one", "callback.md")
+        for value, error in (
+            (object(), TypeError),
+            ("1-1\r", ValueError),
+            ("1-1\n", ValueError),
+        ):
+            with self.subTest(value=value):
+                viewer = InteractiveTextViewer(
+                    build_stream_terminal(
+                        mock.Mock(return_value=value),
+                        mock.Mock(),
+                        mock.Mock(),
+                    )
+                )
+                with self.assertRaises(error):
+                    viewer.read_range(state[0], display_name=state[1])
+
+        for failure, expected in (
+            (KeyboardInterrupt(), TextViewerExitKind.INTERRUPTED),
+            (EOFError(), TextViewerExitKind.EOF),
+        ):
+            with self.subTest(failure=type(failure).__name__):
+                viewer = InteractiveTextViewer(
+                    build_stream_terminal(
+                        mock.Mock(side_effect=failure),
+                        mock.Mock(),
+                        mock.Mock(),
+                    )
+                )
+                self.assertEqual(
+                    viewer.read_range(state[0], display_name=state[1]),
+                    TextViewerResult(expected),
+                )
+
     def test_exact_ascii_grammar_reverse_normalizes_and_cancel_is_exact(self) -> None:
         state = initialize_text_viewer("a\nb\nc", display_name="x")
         _, result = transition_text_viewer_fallback(state, "3-1")
@@ -359,6 +416,37 @@ class ViewerFallbackControlTests(unittest.TestCase):
 
 
 class ViewerRenderingTests(unittest.TestCase):
+    def test_empty_one_and_two_row_frames_show_fixed_default_guidance(self) -> None:
+        state = initialize_text_viewer("", display_name="empty.md")
+        one_row = render_text_viewer(
+            project_text_viewer_viewport(state, 1),
+            _capabilities(width=20, ansi=True),
+        )
+        self.assertEqual(one_row.text, "No selectable lines…")
+        self.assertEqual(one_row.line_count, 1)
+        self.assertNotIn("\x1b", one_row.text)
+
+        two_rows = render_text_viewer(
+            project_text_viewer_viewport(state, 2),
+            _capabilities(width=80, ansi=True),
+        )
+        self.assertEqual(
+            two_rows.text,
+            "[viewer] empty.md | 0 lines\n"
+            "No selectable lines; cancel to close.",
+        )
+        self.assertEqual(two_rows.line_count, 2)
+        self.assertNotIn("\x1b", two_rows.text)
+
+        three_rows = render_text_viewer(
+            project_text_viewer_viewport(state, 3),
+            _capabilities(width=80),
+        )
+        self.assertEqual(three_rows.text.count("<empty document>"), 1)
+        self.assertTrue(
+            three_rows.text.endswith("No selectable lines; cancel to close.")
+        )
+
     def test_rendering_is_height_bounded_one_row_per_source_and_sanitized(self) -> None:
         state = initialize_text_viewer("one\rhidden\n界e\u0301\nlong" + "x" * 100, display_name="bad\x1b]0;owned\x07")
         viewport = project_text_viewer_viewport(state, 4)
@@ -397,6 +485,44 @@ class ViewerRenderingTests(unittest.TestCase):
 
 
 class ViewerDriverTests(unittest.TestCase):
+    def test_configured_controls_precede_escape_enter_and_ordinary_key_roles(self) -> None:
+        cases = (
+            ("vintr_escape", "\x1b", "\x1b", "\x04", TextViewerExitKind.INTERRUPTED),
+            ("veof_escape", "\x1b", "\x03", "\x1b", TextViewerExitKind.EOF),
+            ("equal_text", "q", "q", "q", TextViewerExitKind.INTERRUPTED),
+            ("vintr_cr", "\r", "\r", "\x04", TextViewerExitKind.INTERRUPTED),
+            ("vintr_lf", "\n", "\n", "\x04", TextViewerExitKind.INTERRUPTED),
+            ("veof_cr", "\r", "\x03", "\r", TextViewerExitKind.EOF),
+            ("veof_lf", "\n", "\x03", "\n", TextViewerExitKind.EOF),
+            ("vintr_tab", "\t", "\t", "\x04", TextViewerExitKind.INTERRUPTED),
+            ("veof_backspace", "\x7f", "\x03", "\x7f", TextViewerExitKind.EOF),
+        )
+        for label, character, vintr, veof, expected in cases:
+            with self.subTest(label=label):
+                driver, _input, output, fallback, termios, events = _driver(
+                    character
+                )
+                termios.original[6][termios.VINTR] = vintr.encode("utf-8")  # type: ignore[index]
+                termios.original[6][termios.VEOF] = veof.encode("utf-8")  # type: ignore[index]
+                with mock.patch(
+                    "story_writing_agents.interactive_terminal._driver._escape_input_is_ready",
+                    side_effect=AssertionError(
+                        "configured control must not begin an escape sequence"
+                    ),
+                ) as escape_ready:
+                    result = _read(
+                        driver,
+                        initialize_text_viewer("one\ntwo", display_name="x"),
+                    )
+                self.assertEqual(result, TextViewerResult(expected))
+                fallback.assert_not_called()
+                escape_ready.assert_not_called()
+                self.assertEqual(events.count("input.read"), 1)
+                rendered = "".join(output.records)
+                self.assertEqual(rendered.count("\x1b[?1049h"), 1)
+                self.assertEqual(rendered.count("\x1b[?1049l"), 1)
+                self.assertEqual(events.count("termios.restore"), 1)
+
     def test_live_shift_sequences_resize_every_nonexit_and_restore_screen_once(self) -> None:
         driver, _input, output, fallback, termios, events = _driver(
             "\x1b[1;2B\x1b[1;2B\x1b[1;2Ax\n",
