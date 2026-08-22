@@ -44,16 +44,22 @@ or payload mapping.
 `Workspace` owns canonical-root resolution, containment, no-symlink checks, its
 per-instance meaningful root identity, package-internal root open/reverification
 helpers, and the `debug_logs/` scaffold declaration. An existing directory binds
-at construction; a specifically missing root receives one binding attempt after
-initialization creates it; any other unavailable identity never silently
-rebinds on that instance. If the post-creation bind cannot produce a meaningful
-directory identity—including when a symlink appears at the missing root—
-`initialize()` raises `OSError` before creating workspace child directories or
-default files. That failed bind is terminal for the instance: every later
-`initialize()` call raises the same identity-unavailable `OSError` before child
-or default writes and never retries or rebinds. Parent or root directories
-already created by `mkdir` are not rolled back. A new `Workspace` makes its own
-construction-time identity probe.
+at construction; a specifically missing root remains pending for one valid
+`initialize()` attempt; any other unavailable identity never silently rebinds
+on that instance. Invalid `overwrite_prompts` input raises `TypeError` before
+I/O without consuming the pending attempt. The first valid attempt becomes
+terminal before capability checks or mutation, requires safe descriptor-relative
+and no-follow primitives, and creates missing canonical-root components beneath
+opened parent descriptors. Its opened final-root identity must match the final
+named identity before child or default work.
+
+The first `OSError`, `KeyboardInterrupt`, or `SystemExit` propagates unchanged,
+and safely created components or partial intended-path scaffold are not rolled
+back. Only a complete scaffold/default write records success. After any earlier
+failure, later `initialize()` calls reject with the established
+identity-unavailable `OSError` before root or child I/O and never retry; calls
+after success retain their established behavior. A new `Workspace` makes its
+own construction-time identity probe.
 
 An existing directory whose construction-time probe is unavailable or
 nonmeaningful follows the established, separate limitation: normal

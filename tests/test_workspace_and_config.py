@@ -9,6 +9,7 @@ import os
 import pickle
 import stat
 import tempfile
+import traceback
 import unittest
 from collections.abc import Callable
 from dataclasses import FrozenInstanceError, fields
@@ -193,6 +194,77 @@ class WorkspaceTests(unittest.TestCase):
         )
         return error
 
+    def assert_terminal_initialize_has_no_io(
+        self,
+        workspace: Workspace,
+    ) -> OSError:
+        """Require a failed pending bind to reject retry before every I/O seam."""
+
+        with (
+            mock.patch.object(
+                workspace_module.os,
+                "open",
+                side_effect=AssertionError("terminal retry reached os.open"),
+            ) as opened,
+            mock.patch.object(
+                workspace_module.os,
+                "mkdir",
+                side_effect=AssertionError("terminal retry reached os.mkdir"),
+            ) as created,
+            mock.patch.object(
+                workspace_module.os,
+                "fstat",
+                side_effect=AssertionError("terminal retry reached os.fstat"),
+            ) as opened_stat,
+            mock.patch.object(
+                workspace_module.os,
+                "stat",
+                side_effect=AssertionError("terminal retry reached os.stat"),
+            ) as named_stat,
+            mock.patch.object(
+                workspace,
+                "_directory",
+                side_effect=AssertionError("terminal retry reached child I/O"),
+            ) as child,
+            mock.patch.object(
+                workspace,
+                "_ensure_json",
+                side_effect=AssertionError("terminal retry reached defaults I/O"),
+            ) as ensure_json,
+            mock.patch.object(
+                workspace,
+                "_ensure_text",
+                side_effect=AssertionError("terminal retry reached scaffold I/O"),
+            ) as ensure_text,
+        ):
+            error = self.assert_identity_unavailable(workspace.initialize)
+        for seam in (
+            opened,
+            created,
+            opened_stat,
+            named_stat,
+            child,
+            ensure_json,
+            ensure_text,
+        ):
+            seam.assert_not_called()
+        return error
+
+    def assert_originating_traceback(
+        self,
+        failure: BaseException,
+        function_name: str,
+    ) -> None:
+        """Require direct propagation to retain its injection-frame traceback."""
+
+        self.assertIn(
+            function_name,
+            {
+                frame.name
+                for frame in traceback.extract_tb(failure.__traceback__)
+            },
+        )
+
     def test_root_identity_seams_preserve_public_surface_and_verify_existing_root(
         self,
     ) -> None:
@@ -375,6 +447,213 @@ class WorkspaceTests(unittest.TestCase):
             self.assertEqual(tuple(root.iterdir()), ())
             self.assertTrue((parked / "core_documents").is_dir())
 
+    def test_pending_root_creates_final_only_and_multiple_missing_ancestors(
+        self,
+    ) -> None:
+        """Create each missing component safely and bind only after scaffolding."""
+
+        for components in (
+            ("final_only",),
+            ("ancestor_one", "ancestor_two", "final_root"),
+        ):
+            with self.subTest(components=components):
+                temporary = tempfile.TemporaryDirectory()
+                self.addCleanup(temporary.cleanup)
+                parent = Path(temporary.name)
+                root = parent.joinpath(*components)
+                workspace = Workspace(root)
+                with mock.patch.object(
+                    workspace_module,
+                    "_bind_pending_workspace_root_identity",
+                    wraps=workspace_module._bind_pending_workspace_root_identity,
+                ) as bind:
+                    self.assertIs(workspace.initialize(), workspace)
+                    bind.assert_called_once_with(workspace)
+                    bound = os.stat(root, follow_symlinks=False)
+                    self.assertIs(workspace.initialize(), workspace)
+                    bind.assert_called_once_with(workspace)
+
+                self.assertTrue(
+                    all(
+                        parent.joinpath(*components[:index]).is_dir()
+                        for index in range(1, len(components) + 1)
+                    )
+                )
+                self.assertTrue(
+                    all(
+                        workspace.path(relative).is_dir()
+                        for relative in WORKSPACE_DIRECTORIES
+                    )
+                )
+                self.assertTrue(
+                    workspace.path("config/system_defaults.json").is_file()
+                )
+                repeated = os.stat(root, follow_symlinks=False)
+                self.assertEqual(
+                    (repeated.st_dev, repeated.st_ino),
+                    (bound.st_dev, bound.st_ino),
+                )
+
+    def test_each_missing_ancestor_substitution_never_enters_external_target(
+        self,
+    ) -> None:
+        """Reject deterministic no-follow races at every controlled component."""
+
+        required_dir_fd = (os.rename, os.symlink)
+        if any(
+            operation not in getattr(os, "supports_dir_fd", ())
+            for operation in required_dir_fd
+        ):
+            self.skipTest("descriptor-relative rename/symlink is unavailable")
+
+        components = ("race_ancestor_one", "race_ancestor_two", "race_final")
+        for external_kind in ("empty", "scaffolded"):
+            for substitution_index, substitution_name in enumerate(components):
+                with self.subTest(
+                    external_kind=external_kind,
+                    substitution=substitution_name,
+                ):
+                    temporary = tempfile.TemporaryDirectory()
+                    self.addCleanup(temporary.cleanup)
+                    parent = Path(temporary.name)
+                    external = parent / "external"
+                    external.mkdir()
+                    if external_kind == "scaffolded":
+                        Workspace(external).initialize()
+                    external_before = snapshot_directory_namespace(external)
+                    root = parent.joinpath(*components)
+                    workspace = Workspace(root)
+                    real_mkdir = os.mkdir
+                    substituted = False
+                    parked_name = f".parked-{substitution_name}"
+
+                    def substitute_after_create(
+                        path: object,
+                        mode: int = 0o777,
+                        *,
+                        dir_fd: int | None = None,
+                    ) -> None:
+                        nonlocal substituted
+                        real_mkdir(path, mode, dir_fd=dir_fd)
+                        if path != substitution_name or substituted:
+                            return
+                        substituted = True
+                        os.rename(
+                            substitution_name,
+                            parked_name,
+                            src_dir_fd=dir_fd,
+                            dst_dir_fd=dir_fd,
+                        )
+                        os.symlink(
+                            external,
+                            substitution_name,
+                            target_is_directory=True,
+                            dir_fd=dir_fd,
+                        )
+
+                    with (
+                        mock.patch.object(
+                            workspace_module.os,
+                            "mkdir",
+                            side_effect=substitute_after_create,
+                        ),
+                        mock.patch.object(
+                            workspace,
+                            "_directory",
+                            wraps=workspace._directory,
+                        ) as child_directory,
+                        self.assertRaises(NotADirectoryError) as raised,
+                    ):
+                        workspace.initialize()
+
+                    self.assertTrue(substituted)
+                    self.assertEqual(raised.exception.errno, errno.ENOTDIR)
+                    child_directory.assert_not_called()
+                    substitution_path = parent.joinpath(
+                        *components[: substitution_index + 1]
+                    )
+                    self.assertTrue(substitution_path.is_symlink())
+                    self.assertEqual(
+                        snapshot_directory_namespace(external),
+                        external_before,
+                    )
+                    self.assert_terminal_initialize_has_no_io(workspace)
+                    self.assertEqual(
+                        snapshot_directory_namespace(external),
+                        external_before,
+                    )
+
+    def test_final_component_directory_file_and_broken_symlink_races(
+        self,
+    ) -> None:
+        """Accept only a raced real directory and terminalize unsafe final types."""
+
+        for raced_kind in ("directory", "file", "broken_symlink"):
+            with self.subTest(raced_kind=raced_kind):
+                temporary = tempfile.TemporaryDirectory()
+                self.addCleanup(temporary.cleanup)
+                parent = Path(temporary.name)
+                root = parent / f"raced_{raced_kind}"
+                workspace = Workspace(root)
+                real_open = os.open
+                raced = False
+
+                def insert_final_before_retry(
+                    path: object,
+                    flags: int,
+                    mode: int = 0o777,
+                    *,
+                    dir_fd: int | None = None,
+                ) -> int:
+                    nonlocal raced
+                    if path == root.name and dir_fd is not None and not raced:
+                        raced = True
+                        if raced_kind == "directory":
+                            root.mkdir()
+                        elif raced_kind == "file":
+                            root.write_bytes(b"raced regular file\x00")
+                        else:
+                            try:
+                                root.symlink_to(
+                                    parent / "missing-target",
+                                    target_is_directory=True,
+                                )
+                            except (NotImplementedError, OSError) as exc:
+                                self.skipTest(
+                                    f"broken directory symlink is unavailable: {exc}"
+                                )
+                        raise FileNotFoundError(
+                            errno.ENOENT,
+                            "simulated first final lookup miss",
+                            root.name,
+                        )
+                    return real_open(path, flags, mode, dir_fd=dir_fd)
+
+                with mock.patch.object(
+                    workspace_module.os,
+                    "open",
+                    side_effect=insert_final_before_retry,
+                ):
+                    if raced_kind == "directory":
+                        self.assertIs(workspace.initialize(), workspace)
+                    else:
+                        with self.assertRaises(NotADirectoryError) as raised:
+                            workspace.initialize()
+                        self.assertEqual(raised.exception.errno, errno.ENOTDIR)
+
+                self.assertTrue(raced)
+                if raced_kind == "directory":
+                    self.assertTrue(
+                        workspace.path("config/system_defaults.json").is_file()
+                    )
+                    self.assertIs(workspace.initialize(), workspace)
+                else:
+                    self.assert_terminal_initialize_has_no_io(workspace)
+                    if raced_kind == "file":
+                        self.assertEqual(root.read_bytes(), b"raced regular file\x00")
+                    else:
+                        self.assertTrue(root.is_symlink())
+
     def test_missing_root_symlink_race_aborts_before_external_scaffold(self) -> None:
         """Reject a late root alias without changing any external target entry."""
 
@@ -413,9 +692,9 @@ class WorkspaceTests(unittest.TestCase):
                 "_directory",
                 wraps=workspace._directory,
             ) as child_directory:
-                first_error = self.assert_identity_unavailable(
-                    workspace.initialize
-                )
+                with self.assertRaises(NotADirectoryError) as raised:
+                    workspace.initialize()
+                first_error = raised.exception
                 self.assertEqual(snapshot_directory_namespace(external), before)
                 second_error = self.assert_identity_unavailable(
                     workspace.initialize
@@ -425,7 +704,8 @@ class WorkspaceTests(unittest.TestCase):
             self.assertTrue(root.is_symlink())
             self.assertEqual(os.readlink(root), link_target)
             self.assertEqual(snapshot_directory_namespace(external), before)
-            self.assertEqual(second_error.args, first_error.args)
+            self.assertEqual(first_error.errno, errno.ENOTDIR)
+            self.assertNotEqual(second_error.args, first_error.args)
 
     def test_missing_root_stat_failure_is_terminal_across_initialize_calls(
         self,
@@ -436,6 +716,7 @@ class WorkspaceTests(unittest.TestCase):
             workspace = Workspace(Path(temporary) / "workspace")
             canonical_root = workspace.root
             real_stat = os.stat
+            injected = OSError("PRIVATE_PENDING_BIND_STAT_FAILURE")
 
             def fail_root_identity(
                 path: object,
@@ -446,7 +727,7 @@ class WorkspaceTests(unittest.TestCase):
                     Path(path) == canonical_root
                     and kwargs.get("follow_symlinks") is False
                 ):
-                    raise OSError("PRIVATE_PENDING_BIND_STAT_FAILURE")
+                    raise injected
                 return real_stat(path, *args, **kwargs)
 
             with mock.patch.object(
@@ -459,9 +740,16 @@ class WorkspaceTests(unittest.TestCase):
                     "stat",
                     side_effect=fail_root_identity,
                 ):
-                    first_error = self.assert_identity_unavailable(
-                        workspace.initialize
-                    )
+                    try:
+                        workspace.initialize()
+                    except OSError as first_error:
+                        self.assertIs(first_error, injected)
+                        self.assert_originating_traceback(
+                            first_error,
+                            "fail_root_identity",
+                        )
+                    else:
+                        self.fail("pending bind stat failure did not propagate")
                 self.assertEqual(tuple(canonical_root.iterdir()), ())
                 second_error = self.assert_identity_unavailable(
                     workspace.initialize
@@ -470,7 +758,7 @@ class WorkspaceTests(unittest.TestCase):
 
             self.assertTrue(canonical_root.is_dir())
             self.assertEqual(tuple(canonical_root.iterdir()), ())
-            self.assertEqual(second_error.args, first_error.args)
+            self.assertNotEqual(second_error.args, injected.args)
 
     def test_missing_root_nonmeaningful_bind_aborts_before_scaffold(self) -> None:
         """Require a meaningful pending identity before creating child entries."""
@@ -520,6 +808,196 @@ class WorkspaceTests(unittest.TestCase):
             self.assertTrue(canonical_root.is_dir())
             self.assertEqual(tuple(canonical_root.iterdir()), ())
             self.assertEqual(second_error.args, first_error.args)
+
+    def test_pending_initialization_propagates_first_failure_and_never_retries(
+        self,
+    ) -> None:
+        """Terminalize every creation, bind, child, and defaults failure seam."""
+
+        for seam in (
+            "intermediate_creation",
+            "final_creation",
+            "bind_stat",
+            "child_scaffold",
+            "defaults_write",
+            "text_scaffold",
+        ):
+            for exception_type in (OSError, KeyboardInterrupt, SystemExit):
+                with self.subTest(seam=seam, exception=exception_type.__name__):
+                    temporary = tempfile.TemporaryDirectory()
+                    self.addCleanup(temporary.cleanup)
+                    parent = Path(temporary.name)
+                    root = parent / "failure_ancestor" / "failure_final"
+                    workspace = Workspace(root)
+                    failure = exception_type(f"{seam} first failure")
+
+                    def raise_injected(*_args: object, **_kwargs: object) -> None:
+                        raise failure
+
+                    real_mkdir = os.mkdir
+
+                    def fail_selected_creation(
+                        path: object,
+                        mode: int = 0o777,
+                        *,
+                        dir_fd: int | None = None,
+                    ) -> None:
+                        selected = (
+                            "failure_ancestor"
+                            if seam == "intermediate_creation"
+                            else "failure_final"
+                        )
+                        if path == selected:
+                            raise_injected()
+                        real_mkdir(path, mode, dir_fd=dir_fd)
+
+                    real_stat = os.stat
+
+                    def fail_bind_stat(
+                        path: object,
+                        *args: object,
+                        **kwargs: object,
+                    ):
+                        if (
+                            Path(path) == workspace.root
+                            and kwargs.get("follow_symlinks") is False
+                        ):
+                            raise_injected()
+                        return real_stat(path, *args, **kwargs)
+
+                    if seam in {"intermediate_creation", "final_creation"}:
+                        patcher = mock.patch.object(
+                            workspace_module.os,
+                            "mkdir",
+                            side_effect=fail_selected_creation,
+                        )
+                    elif seam == "bind_stat":
+                        patcher = mock.patch.object(
+                            workspace_module.os,
+                            "stat",
+                            side_effect=fail_bind_stat,
+                        )
+                    elif seam == "child_scaffold":
+                        patcher = mock.patch.object(
+                            workspace,
+                            "_directory",
+                            side_effect=raise_injected,
+                        )
+                    elif seam == "defaults_write":
+                        patcher = mock.patch.object(
+                            workspace,
+                            "_ensure_json",
+                            side_effect=raise_injected,
+                        )
+                    else:
+                        patcher = mock.patch.object(
+                            workspace,
+                            "_ensure_text",
+                            side_effect=raise_injected,
+                        )
+
+                    with patcher:
+                        try:
+                            workspace.initialize()
+                        except exception_type as caught:
+                            self.assertIs(caught, failure)
+                            self.assert_originating_traceback(
+                                caught,
+                                "raise_injected",
+                            )
+                        else:
+                            self.fail(
+                                f"{seam} {exception_type.__name__} did not propagate"
+                            )
+                    self.assert_terminal_initialize_has_no_io(workspace)
+                    if seam == "intermediate_creation":
+                        self.assertFalse(parent.joinpath("failure_ancestor").exists())
+                    else:
+                        self.assertTrue(parent.joinpath("failure_ancestor").is_dir())
+                    if seam in {
+                        "bind_stat",
+                        "child_scaffold",
+                        "defaults_write",
+                        "text_scaffold",
+                    }:
+                        self.assertTrue(root.is_dir())
+
+    def test_missing_safe_creation_primitive_fails_before_mutation(self) -> None:
+        """Reject each required capability without creating the pending root."""
+
+        capability_cases = (
+            ("open", {"open": None}),
+            ("mkdir", {"mkdir": None}),
+            ("fstat", {"fstat": None}),
+            ("stat", {"stat": None}),
+            ("close", {"close": None}),
+            ("directory_flag", {"O_DIRECTORY": 0}),
+            ("no_follow_flag", {"O_NOFOLLOW": 0}),
+            ("dir_fd", {"supports_dir_fd": frozenset()}),
+            ("no_follow_stat", {"supports_follow_symlinks": frozenset()}),
+        )
+        expected_errno = getattr(errno, "ENOTSUP", errno.ENOSYS)
+        for label, replacements in capability_cases:
+            with self.subTest(capability=label):
+                temporary = tempfile.TemporaryDirectory()
+                self.addCleanup(temporary.cleanup)
+                parent = Path(temporary.name)
+                root = parent / "pending_workspace"
+                workspace = Workspace(root)
+                before = snapshot_directory_namespace(parent)
+                name, value = next(iter(replacements.items()))
+                patcher = mock.patch.object(workspace_module.os, name, value)
+                with patcher, self.assertRaises(OSError) as raised:
+                    workspace.initialize()
+                self.assertEqual(
+                    raised.exception.args,
+                    (
+                        expected_errno,
+                        "safe pending workspace root creation is unsupported",
+                    ),
+                )
+                self.assertEqual(snapshot_directory_namespace(parent), before)
+                self.assertFalse(root.exists())
+                self.assert_terminal_initialize_has_no_io(workspace)
+
+    def test_invalid_overwrite_option_is_pre_io_and_does_not_terminalize(self) -> None:
+        """Validate the option before capability checks and permit a later success."""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "pending_workspace"
+            workspace = Workspace(root)
+            with (
+                mock.patch.object(
+                    workspace_module,
+                    "_require_pending_workspace_root_creation_operations",
+                    side_effect=AssertionError("invalid option reached capability I/O"),
+                ) as capabilities,
+                mock.patch.object(
+                    workspace_module,
+                    "_bind_pending_workspace_root_identity",
+                    side_effect=AssertionError("invalid option reached root I/O"),
+                ) as bind,
+                mock.patch.object(
+                    workspace,
+                    "_directory",
+                    side_effect=AssertionError("invalid option reached child I/O"),
+                ) as child,
+                self.assertRaises(TypeError) as raised,
+            ):
+                workspace.initialize(overwrite_prompts=1)  # type: ignore[arg-type]
+
+            self.assertEqual(
+                str(raised.exception),
+                "overwrite_prompts must be a boolean",
+            )
+            capabilities.assert_not_called()
+            bind.assert_not_called()
+            child.assert_not_called()
+            self.assertFalse(root.exists())
+            self.assertIs(workspace.initialize(), workspace)
+            self.assertTrue(
+                workspace.path("config/system_defaults.json").is_file()
+            )
 
     def test_unavailable_non_directory_and_zero_root_identity_fail_closed(
         self,
@@ -611,6 +1089,12 @@ class WorkspaceTests(unittest.TestCase):
                     all(
                         workspace.path(relative).is_dir()
                         for relative in WORKSPACE_DIRECTORIES
+                    )
+                )
+                self.assertIs(workspace.initialize(), workspace)
+                self.assert_identity_unavailable(
+                    lambda: workspace_module.open_workspace_root_directory(
+                        workspace
                     )
                 )
 

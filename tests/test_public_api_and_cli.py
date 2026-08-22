@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import io
 import inspect
 import json
@@ -19,6 +20,7 @@ from unittest import mock
 
 import story_writing_agents
 from story_writing_agents import cli as cli_module
+from story_writing_agents import workspace as workspace_module
 from story_writing_agents import (
     AGENT_SPECS,
     ConversationEventStore,
@@ -1110,6 +1112,153 @@ class CliTests(unittest.TestCase):
             )
             self.assertNotIn("debug_logs/runtime.jsonl", stderr.getvalue())
             self.assertFalse(target.exists())
+
+    def test_real_init_symlink_race_is_hint_free_and_never_touches_external(
+        self,
+    ) -> None:
+        """Exercise the real CLI/workspace boundary through a no-follow race."""
+
+        if (
+            os.rename not in getattr(os, "supports_dir_fd", ())
+            or os.symlink not in getattr(os, "supports_dir_fd", ())
+        ):
+            self.skipTest("descriptor-relative rename/symlink is unavailable")
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            root = parent / "pending_cli_workspace"
+            parked = parent / ".parked-pending-cli-workspace"
+            external = parent / "external"
+            external.mkdir()
+            (external / "sentinel.bin").write_bytes(b"external bytes\x00")
+            external_before = {
+                path.relative_to(external).as_posix(): (
+                    None if path.is_dir() else path.read_bytes()
+                )
+                for path in sorted(external.rglob("*"))
+            }
+            real_mkdir = os.mkdir
+            substituted = False
+
+            def substitute_final_root(
+                path: object,
+                mode: int = 0o777,
+                *,
+                dir_fd: int | None = None,
+            ) -> None:
+                nonlocal substituted
+                real_mkdir(path, mode, dir_fd=dir_fd)
+                if path != root.name or substituted:
+                    return
+                substituted = True
+                os.rename(
+                    root.name,
+                    parked.name,
+                    src_dir_fd=dir_fd,
+                    dst_dir_fd=dir_fd,
+                )
+                os.symlink(
+                    external,
+                    root.name,
+                    target_is_directory=True,
+                    dir_fd=dir_fd,
+                )
+
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with (
+                mock.patch.object(
+                    workspace_module.os,
+                    "mkdir",
+                    side_effect=substitute_final_root,
+                ),
+                contextlib.redirect_stdout(stdout),
+                contextlib.redirect_stderr(stderr),
+            ):
+                exit_code = main(["init", str(root)])
+
+            self.assertEqual(exit_code, 2)
+            self.assertTrue(substituted)
+            self.assertEqual(stdout.getvalue(), "")
+            self.assertTrue(stderr.getvalue().startswith("NotADirectoryError: "))
+            self.assertNotIn('"workspace"', stdout.getvalue())
+            self.assertNotIn("debug_logs/runtime.jsonl", stderr.getvalue())
+            self.assertTrue(root.is_symlink())
+            self.assertTrue(parked.is_dir())
+            self.assertEqual(
+                {
+                    path.relative_to(external).as_posix(): (
+                        None if path.is_dir() else path.read_bytes()
+                    )
+                    for path in sorted(external.rglob("*"))
+                },
+                external_before,
+            )
+            self.assertFalse(external.joinpath("debug_logs").exists())
+
+    def test_init_root_failures_keep_codes_and_process_control_semantics(
+        self,
+    ) -> None:
+        """Keep ordinary status two while propagating fatal controls unchanged."""
+
+        failures: tuple[BaseException, ...] = (
+            OSError(errno.EIO, "pending root creation failed"),
+            KeyboardInterrupt("pending root creation interrupted"),
+            SystemExit("pending root creation terminated"),
+        )
+        for failure in failures:
+            with self.subTest(failure=type(failure).__name__):
+                temporary = tempfile.TemporaryDirectory()
+                self.addCleanup(temporary.cleanup)
+                parent = Path(temporary.name)
+                root = parent / "pending_cli_workspace"
+                real_mkdir = os.mkdir
+
+                def fail_final_creation(
+                    path: object,
+                    mode: int = 0o777,
+                    *,
+                    dir_fd: int | None = None,
+                ) -> None:
+                    if path == root.name:
+                        raise failure
+                    real_mkdir(path, mode, dir_fd=dir_fd)
+
+                stdout = io.StringIO()
+                stderr = io.StringIO()
+                with (
+                    mock.patch.object(
+                        workspace_module.os,
+                        "mkdir",
+                        side_effect=fail_final_creation,
+                    ),
+                    contextlib.redirect_stdout(stdout),
+                    contextlib.redirect_stderr(stderr),
+                ):
+                    if isinstance(failure, Exception):
+                        exit_code = main(["init", str(root)])
+                    else:
+                        try:
+                            main(["init", str(root)])
+                        except type(failure) as caught:
+                            self.assertIs(caught, failure)
+                        else:
+                            self.fail(
+                                f"{type(failure).__name__} did not propagate"
+                            )
+                        exit_code = None
+
+                if isinstance(failure, Exception):
+                    self.assertEqual(exit_code, 2)
+                    self.assertEqual(
+                        stderr.getvalue(),
+                        "OSError: [Errno 5] pending root creation failed\n",
+                    )
+                else:
+                    self.assertIsNone(exit_code)
+                    self.assertEqual(stderr.getvalue(), "")
+                self.assertEqual(stdout.getvalue(), "")
+                self.assertNotIn("debug_logs/runtime.jsonl", stderr.getvalue())
+                self.assertFalse(root.exists())
 
     def test_module_non_tty_entry_is_exact_and_does_not_touch_cwd(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]

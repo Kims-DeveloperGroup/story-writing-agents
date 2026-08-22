@@ -220,14 +220,14 @@ class Workspace:
 
         if not isinstance(overwrite_prompts, bool):
             raise TypeError("overwrite_prompts must be a boolean")
-        requires_bound_root_identity = (
-            self._root_identity is _WORKSPACE_ROOT_IDENTITY_PENDING
-            or self._root_identity is _WORKSPACE_ROOT_IDENTITY_BIND_FAILED
-        )
-        self.root.mkdir(parents=True, exist_ok=True)
-        _bind_pending_workspace_root_identity(self)
-        if requires_bound_root_identity:
+        pending_root_identity: tuple[int, int] | None = None
+        if self._root_identity is _WORKSPACE_ROOT_IDENTITY_PENDING:
+            self._root_identity = _WORKSPACE_ROOT_IDENTITY_BIND_FAILED
+            pending_root_identity = _bind_pending_workspace_root_identity(self)
+        elif self._root_identity is _WORKSPACE_ROOT_IDENTITY_BIND_FAILED:
             _require_workspace_root_identity(self)
+        else:
+            self.root.mkdir(parents=True, exist_ok=True)
         for relative in WORKSPACE_DIRECTORIES:
             self._directory(relative).mkdir(parents=True, exist_ok=True)
 
@@ -266,6 +266,8 @@ class Workspace:
             "manuscript",
         ):
             self._ensure_text(f"{state_dir}/.gitkeep", "")
+        if pending_root_identity is not None:
+            self._root_identity = pending_root_identity
         return self
 
     def path(self, relative: str | os.PathLike[str]) -> Path:
@@ -2195,22 +2197,101 @@ def _probe_workspace_root_identity(root: Path) -> object:
     return identity
 
 
-def _bind_pending_workspace_root_identity(workspace: Workspace) -> None:
-    """Attempt the one permitted identity bind after root initialization."""
+def _bind_pending_workspace_root_identity(workspace: Workspace) -> tuple[int, int]:
+    """Securely create and identify the terminalized pending workspace root."""
 
-    if workspace._root_identity is not _WORKSPACE_ROOT_IDENTITY_PENDING:
-        return
-    workspace._root_identity = _WORKSPACE_ROOT_IDENTITY_BIND_FAILED
+    _require_pending_workspace_root_creation_operations()
+    flags = os.O_RDONLY
+    for name in (
+        "O_CLOEXEC",
+        "O_NOINHERIT",
+        "O_BINARY",
+        "O_DIRECTORY",
+        "O_NOFOLLOW",
+        "O_NONBLOCK",
+    ):
+        flags |= getattr(os, name, 0)
+
+    descriptor = os.open(workspace.root.anchor, flags)
     try:
-        value = os.stat(workspace.root, follow_symlinks=False)
-    except Exception:
-        return
-    try:
-        identity = _meaningful_directory_identity(value)
-    except Exception:
-        return
-    if identity is not None:
-        workspace._root_identity = identity
+        for component in workspace.root.parts[1:]:
+            try:
+                child_descriptor = os.open(
+                    component,
+                    flags,
+                    dir_fd=descriptor,
+                )
+            except FileNotFoundError:
+                try:
+                    os.mkdir(component, dir_fd=descriptor)
+                except FileExistsError:
+                    pass
+                child_descriptor = os.open(
+                    component,
+                    flags,
+                    dir_fd=descriptor,
+                )
+            try:
+                os.close(descriptor)
+            except BaseException:
+                try:
+                    os.close(child_descriptor)
+                except BaseException:
+                    pass
+                raise
+            descriptor = child_descriptor
+
+        opened_identity = _meaningful_directory_identity(os.fstat(descriptor))
+        named_identity = _meaningful_directory_identity(
+            os.stat(workspace.root, follow_symlinks=False)
+        )
+        if opened_identity is None or named_identity is None:
+            raise OSError(
+                getattr(errno, "ENOTSUP", errno.ENOSYS),
+                "workspace root identity is unavailable",
+            )
+        if named_identity != opened_identity:
+            raise WorkspaceSecurityError(
+                "workspace root directory identity changed"
+            )
+    except BaseException:
+        try:
+            os.close(descriptor)
+        except BaseException:
+            pass
+        raise
+    os.close(descriptor)
+    return opened_identity
+
+
+def _require_pending_workspace_root_creation_operations() -> None:
+    """Fail before mutation without descriptor-relative creation primitives."""
+
+    supports_dir_fd = getattr(os, "supports_dir_fd", ())
+    supports_follow_symlinks = getattr(os, "supports_follow_symlinks", ())
+    dir_fd_operations = {
+        getattr(operation, "__name__", None) for operation in supports_dir_fd
+    }
+    no_follow_operations = {
+        getattr(operation, "__name__", None)
+        for operation in supports_follow_symlinks
+    }
+    if (
+        not callable(getattr(os, "open", None))
+        or not callable(getattr(os, "mkdir", None))
+        or not callable(getattr(os, "fstat", None))
+        or not callable(getattr(os, "stat", None))
+        or not callable(getattr(os, "close", None))
+        or not getattr(os, "O_DIRECTORY", 0)
+        or not getattr(os, "O_NOFOLLOW", 0)
+        or "open" not in dir_fd_operations
+        or "mkdir" not in dir_fd_operations
+        or "stat" not in no_follow_operations
+    ):
+        raise OSError(
+            getattr(errno, "ENOTSUP", errno.ENOSYS),
+            "safe pending workspace root creation is unsupported",
+        )
 
 
 def _require_workspace_root_identity(workspace: Workspace) -> tuple[int, int]:

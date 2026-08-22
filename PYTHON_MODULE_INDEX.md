@@ -1647,13 +1647,23 @@ every intermediate arrow. The current runtime graph is acyclic.
   security, and each instance's canonical-root identity lifecycle. Construction
   makes one nonmutating no-follow identity probe and retains no descriptor: an
   existing directory binds immediately, while a specifically missing root
-  remains pending for the one permitted bind after `initialize()` creates the
-  root. If that post-creation bind cannot establish a meaningful directory
-  identity, the instance enters a private terminal failed-bind state and the
-  first and every later `initialize()` call raises the established
-  identity-unavailable `OSError` before child scaffold or default writes,
-  without retry or rebind; parent/root creation is not rolled back, and a new
-  `Workspace` performs its own construction probe. An existing root whose
+  remains pending for its first valid `initialize()` attempt. Invalid
+  `overwrite_prompts` input raises `TypeError` before I/O without consuming that
+  attempt. A first valid pending attempt becomes terminal before capability
+  checks or mutation, requires descriptor-relative creation and no-follow
+  directory primitives, and securely walks the canonical root from an opened
+  filesystem anchor, creating each missing component beneath its opened parent.
+  The opened and named final-root identities must be meaningful and equal before
+  child scaffold or default writes begin. Missing safe primitives raise
+  `OSError` before mutation. The exact first `OSError`, `KeyboardInterrupt`, or
+  `SystemExit` from root traversal, identity verification, scaffold creation, or
+  default writes propagates unchanged; safely created components and partial
+  intended-path scaffold are not rolled back. The root identity records success
+  only after complete initialization. After any earlier failure, every later
+  `initialize()` call raises the established identity-unavailable `OSError`
+  before all filesystem operations without retry or rebind; repeated calls
+  after success retain their established behavior, and a new `Workspace`
+  performs its own construction probe. An existing root whose
   initial probe is unavailable or nonmeaningful remains in the distinct
   unavailable state: diagnostic helper access fails closed without rebinding,
   while established pathname-based initialization may still scaffold it. The

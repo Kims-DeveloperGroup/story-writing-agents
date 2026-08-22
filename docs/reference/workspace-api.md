@@ -34,22 +34,39 @@ Workspace.save_session_overrides(session_id: str, overrides: Mapping[str, Any]) 
 
 Initialization creates missing scaffold and normally preserves existing files.
 With `overwrite_prompts=True`, it replaces exactly the four canonical role
-prompts and preserves all other existing content.
+prompts and preserves all other existing content. The option must be a boolean;
+invalid input raises `TypeError` before any I/O and does not consume a pending
+instance's one initialization attempt.
 
 Construction resolves the workspace root once and may make a nonmutating
 filesystem identity probe; it retains no open descriptor. An existing canonical
 directory with meaningful positive device and inode values binds immediately. A
-specifically missing root remains pending until `initialize()` creates it and
-makes the one permitted binding attempt. Any other unavailable or nonmeaningful
-identity remains unavailable for that `Workspace` instance rather than silently
-rebinding later. If the pending bind remains unavailable, `initialize()` raises
-`OSError` with `workspace root identity is unavailable` before writing canonical
-child directories or defaults. That failure is terminal for the instance:
-later `initialize()` calls raise the same identity-unavailable `OSError` before
-child/default writes and never retry or rebind. Any parent or root directory
-created before the failed bind is not removed. Constructing a new `Workspace`
-performs a new identity probe; callers should inspect and repair the root path
+specifically missing root remains pending for the first valid `initialize()`
+call. That call terminalizes the pending state before checking filesystem
+capabilities or mutating anything. It requires safe descriptor-relative and
+no-follow primitives, then walks the canonical root from an opened filesystem
+anchor. Each missing component is created relative to its opened parent and
+opened without following its name. Before child/default work, the opened final
+root must have a meaningful identity matching its final named identity. A
+substituted ancestor or final name therefore cannot redirect scaffold or later
+identity-bound diagnostic writes into an external location.
+
+The original `OSError`, `KeyboardInterrupt`, or `SystemExit` from the first valid
+attempt propagates unchanged, including failures during root creation or
+identity verification and later child/default work. Safely created root
+components and partial intended-path scaffold are not rolled back. The instance
+records success only after the complete scaffold and defaults finish. If any
+earlier step fails, every later `initialize()` call rejects with the established
+identity-unavailable `OSError` before root creation, stat or bind, child
+creation, or default writes; it does not retry or repeat the original error.
+Repeated calls after success retain their established preserve-existing and
+optional prompt-overwrite behavior. Constructing a new `Workspace` performs a
+new identity probe, so callers should inspect and repair a failed root path
 first.
+
+If safe creation primitives are unavailable, the first valid attempt raises
+`OSError` before mutation. This is a fail-closed capability requirement, not a
+promise that missing-root initialization works on every platform.
 
 An existing directory whose construction-time probe is unavailable or
 nonmeaningful is the established exception to the initialization requirement:
