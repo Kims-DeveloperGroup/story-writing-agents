@@ -1,7 +1,9 @@
 # Getting started
 
 > **Availability:** this guide uses the installed CLI. Real runs and routed
-> interactive turns use Codex; `story smoke` is provider-free. See [Story sessions](guides/story-sessions.md) for the shell.
+> interactive turns support Codex and Antigravity; Codex is the default.
+> `story smoke` is provider-free. See [Story sessions](guides/story-sessions.md)
+> for the shell.
 
 Key terms: **editable install**—an installation that points at this checkout;
 **workspace**—the local story project directory; **default session**—the saved
@@ -10,7 +12,7 @@ used for turns in this shell; **smoke test**—a provider-free deterministic che
 
 ## 1. Prepare the tools
 
-Use Python 3.11 or later. For real story work, install and authenticate the
+Use Python 3.11 or later. For the default provider, install and authenticate the
 Codex CLI:
 
 ```bash
@@ -21,6 +23,12 @@ codex login
 
 You may set `CODEX_API_KEY` instead. Keep credentials outside workspaces,
 prompts, drafts, and logs.
+
+To use Antigravity for any agent, install and authenticate `agy`, confirm it is
+on `PATH`, and choose the `antigravity` backend. The complete commands,
+configuration fields, precedence, and safety boundaries are in
+[Use Antigravity agents](guides/antigravity.md). A fresh workspace still routes
+every agent to Codex until explicitly changed.
 
 Choose one Python environment. Do not create a standard-library virtual
 environment inside active Conda.
@@ -52,7 +60,8 @@ story smoke
 The command creates and removes a temporary workspace while exercising local
 conversation, retrieval, and consensus persistence. Success includes
 `"status":"passed"` and `"provider_tested":false`; it does not validate Codex,
-credentials, network access, terminal behavior, story quality, or a model.
+Antigravity, `agy`, credentials, network access, terminal behavior, story
+quality, or a model.
 
 ## 3. Prepare a story workspace
 

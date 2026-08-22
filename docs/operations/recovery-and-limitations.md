@@ -97,9 +97,19 @@ cancellation retains its documented cancelled/recovery result. Later startup
 resumes a ready default or asks for confirmation before resuming a paused
 default; only an active default can become focus.
 
+Backend close releases recorded access claims and ephemeral Codex staging. It
+does not pause or delete the durable story session, remove saved provider-thread
+references, or erase provider-native conversations. Antigravity definitions,
+work directories, and isolated native state remain plaintext under its
+provider-state root. A transport or protocol failure can taint one
+session/backend/agent thread; its next call starts a fresh provider conversation
+and preserves the old native data. There is no user-facing session-close
+command or secure-erasure workflow.
+
 ## Current limits
 
-- Codex is the only provider; reserved `gemini` fails validation.
+- Codex and Antigravity are supported; Codex remains the default. The legacy
+  backend name `gemini` is rejected with guidance to use `antigravity`.
 - Provider calls have a timeout but no retry or rate-limit manager.
 - Owner history has no compaction, expiry, or retention policy.
 - Artifact rollback is best effort across files, not one transaction.
@@ -109,4 +119,6 @@ default; only an active default can become focus.
 
 See [Session lifecycle](../design/session-lifecycle.md),
 [Troubleshooting](../guides/troubleshooting.md), and
-[Filesystem safety](filesystem-safety.md).
+[Filesystem safety](filesystem-safety.md). Antigravity-specific state,
+preflight, and restart contracts are in the
+[Antigravity guide](../guides/antigravity.md).

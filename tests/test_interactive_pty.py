@@ -1346,7 +1346,10 @@ print(
         process.send_line("2")
         process.wait_for_text("Agent settings", after=mark)
         process.send_line("2")
-        process.wait_for_text("Model [Plot & Structure Architect] >", after=mark)
+        process.wait_for_text(
+            "Codex model [Plot & Structure Archit",
+            after=mark,
+        )
         model_mark = process.output_mark()
         process.send_line("/cancel")
         process.wait_for_text("6. [available] Cancel", after=model_mark)

@@ -17,8 +17,10 @@
   [Persistence](design/persistence.md).
 
 - **Backend and provider.** The backend manages local routing/sessions and calls
-  an external model provider. Only Codex is implemented. See
-  [Prompts and provider](design/prompts-and-provider.md).
+  an external model provider. Codex is the default; Antigravity is also
+  supported through `agy`. See
+  [Prompts and provider](design/prompts-and-provider.md) and the
+  [Antigravity guide](guides/antigravity.md).
 
 - **Blackboard.** Public append-only debate history: input, candidates, reviews,
   repairs, errors, and commit metadata. See [Persistence](design/persistence.md).
@@ -90,6 +92,12 @@
 
 - **Manifest.** Durable V2 provider-session state and thread references,
   separate from the temporary access claim. See
+  [Session storage](reference/configuration/session-storage.md).
+
+- **Provider-native state.** Plaintext files managed by the local provider CLI,
+  distinct from the runtime manifest and transcripts. Antigravity-native state
+  is isolated by story session, agent, and definition fingerprint and retained
+  when the backend closes. See
   [Session storage](reference/configuration/session-storage.md).
 
 - **Manuscript.** Immutable story output created after consensus/finalization. See

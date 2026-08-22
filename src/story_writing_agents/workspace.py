@@ -123,10 +123,20 @@ DEFAULT_SYSTEM_CONFIG: dict[str, Any] = {
     "max_debate_rounds": 1,
     "codex_model": None,
     "codex_reasoning_effort": None,
+    "antigravity_model": None,
+    "antigravity_effort": None,
 }
 
 DEFAULT_AGENT_CONFIGS: dict[str, dict[str, str | None]] = {
-    agent_id: {"backend": "codex", "language": None, "persona": None}
+    agent_id: {
+        "backend": "codex",
+        "language": None,
+        "persona": None,
+        "codex_model": None,
+        "codex_reasoning_effort": None,
+        "antigravity_model": None,
+        "antigravity_effort": None,
+    }
     for agent_id in ROSTER
 }
 

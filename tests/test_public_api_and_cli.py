@@ -233,7 +233,7 @@ class PublicApiTests(unittest.TestCase):
                     issubclass(getattr(story_writing_agents, name), base_error)
                 )
 
-    def test_agent_backend_signature_and_configuration_exports_are_unchanged(
+    def test_agent_backend_signature_and_configuration_exports_are_exact(
         self,
     ) -> None:
         signature = inspect.signature(story_writing_agents.AgentBackend)
@@ -245,6 +245,9 @@ class PublicApiTests(unittest.TestCase):
                 "model",
                 "timeout_seconds",
                 "backend_overrides",
+                "antigravity_executable",
+                "antigravity_model",
+                "antigravity_effort",
             ),
         )
         self.assertIs(
@@ -256,6 +259,9 @@ class PublicApiTests(unittest.TestCase):
             "model",
             "timeout_seconds",
             "backend_overrides",
+            "antigravity_executable",
+            "antigravity_model",
+            "antigravity_effort",
         ):
             with self.subTest(parameter=name):
                 self.assertIs(
@@ -266,6 +272,12 @@ class PublicApiTests(unittest.TestCase):
         self.assertIsNone(signature.parameters["model"].default)
         self.assertEqual(signature.parameters["timeout_seconds"].default, 300)
         self.assertIsNone(signature.parameters["backend_overrides"].default)
+        self.assertEqual(
+            signature.parameters["antigravity_executable"].default,
+            "agy",
+        )
+        self.assertIsNone(signature.parameters["antigravity_model"].default)
+        self.assertIsNone(signature.parameters["antigravity_effort"].default)
         for internal in ("ConfigManager", "SystemDefaults"):
             with self.subTest(internal=internal):
                 self.assertNotIn(internal, story_writing_agents.__all__)
@@ -920,6 +932,12 @@ class CliTests(unittest.TestCase):
                 "lead_orchestrator=codex",
                 "--codex-model",
                 "model-name",
+                "--antigravity-executable",
+                "agy-private",
+                "--antigravity-model",
+                "agy-model",
+                "--antigravity-effort",
+                "high",
                 "--codex-timeout",
                 "12.5",
             ]
@@ -932,9 +950,18 @@ class CliTests(unittest.TestCase):
                 "workspace": "/stories/example",
                 "backend": ["lead_orchestrator=codex"],
                 "codex_model": "model-name",
+                "antigravity_executable": "agy-private",
+                "antigravity_model": "agy-model",
+                "antigravity_effort": "high",
                 "codex_timeout": "12.5",
             },
         )
+        run_parsed = parser.parse_args(["run", "--draft", "draft"])
+        self.assertEqual(run_parsed.antigravity_executable, "agy")
+        self.assertIsNone(run_parsed.antigravity_model)
+        self.assertIsNone(run_parsed.antigravity_effort)
+        self.assertIsNone(run_parsed.codex_model)
+        self.assertEqual(run_parsed.codex_timeout, 300)
 
         for arguments in (
             ["chat", "--codex-reasoning-effort", "high"],
@@ -983,6 +1010,13 @@ class CliTests(unittest.TestCase):
                     "--codex-reasoning-effort",
                     completed.stdout,
                 )
+                if arguments[:1] in (["chat"], ["run"]):
+                    for option in (
+                        "--antigravity-executable",
+                        "--antigravity-model",
+                        "--antigravity-effort",
+                    ):
+                        self.assertIn(option, completed.stdout)
 
     def test_non_tty_guard_precedes_input_options_workspace_and_backend(self) -> None:
         cases = (
@@ -1406,10 +1440,45 @@ class CliTests(unittest.TestCase):
                 "model-name",
                 12.5,
                 {"lead_orchestrator": "codex"},
+                "agy",
+                None,
+                None,
             ),
-            ([], None, None, 300.0, {}),
+            (
+                [
+                    "chat",
+                    "antigravity-session",
+                    "--workspace",
+                    str(workspace.root),
+                    "--backend",
+                    "plot_architect=antigravity",
+                    "--antigravity-executable",
+                    "private-agy",
+                    "--antigravity-model",
+                    "agy-model",
+                    "--antigravity-effort",
+                    "medium",
+                ],
+                "antigravity-session",
+                None,
+                300.0,
+                {"plot_architect": "antigravity"},
+                "private-agy",
+                "agy-model",
+                "medium",
+            ),
+            ([], None, None, 300.0, {}, "agy", None, None),
         )
-        for arguments, requested, model, timeout, overrides in contexts:
+        for (
+            arguments,
+            requested,
+            model,
+            timeout,
+            overrides,
+            antigravity_executable,
+            antigravity_model,
+            antigravity_effort,
+        ) in contexts:
             with self.subTest(arguments=arguments):
                 stdin = TtyStringIO(is_terminal=True)
                 stdout = TtyStringIO(is_terminal=True)
@@ -1468,6 +1537,9 @@ class CliTests(unittest.TestCase):
                     model=model,
                     timeout_seconds=timeout,
                     backend_overrides=overrides,
+                    antigravity_executable=antigravity_executable,
+                    antigravity_model=antigravity_model,
+                    antigravity_effort=antigravity_effort,
                 )
                 terminal_factory.assert_called_once_with(input, stdin, stdout)
                 controller_args = controller_factory.call_args.args
@@ -1489,6 +1561,90 @@ class CliTests(unittest.TestCase):
                 backend_value.close.assert_not_called()
                 self.assertEqual(stdout.getvalue(), "")
                 self.assertEqual(stderr.getvalue(), "")
+
+    def test_run_passes_separate_antigravity_options_without_provider_work(
+        self,
+    ) -> None:
+        workspace = initialized_workspace(self)
+        context = CliContext(default_session_id="run-session")
+        backend = mock.Mock()
+        initial_runtime = mock.Mock()
+        provider_runtime = mock.Mock()
+        result = mock.Mock(status=DebateStatus.CONSENSUS)
+        result.to_dict.return_value = {"status": "consensus"}
+        provider_runtime.run_draft = mock.AsyncMock(return_value=result)
+        stdout = io.StringIO()
+
+        with (
+            contextlib.redirect_stdout(stdout),
+            mock.patch.object(
+                cli_module,
+                "resolve_workspace",
+                return_value=workspace,
+            ),
+            mock.patch.object(
+                cli_module,
+                "load_cli_context",
+                return_value=context,
+            ),
+            mock.patch.object(
+                cli_module,
+                "resolve_session",
+                return_value="run-session",
+            ),
+            mock.patch.object(
+                cli_module,
+                "AgentBackend",
+                return_value=backend,
+            ) as backend_factory,
+            mock.patch.object(
+                cli_module,
+                "StoryRuntime",
+                side_effect=(initial_runtime, provider_runtime),
+            ) as runtime_factory,
+        ):
+            exit_code = main(
+                [
+                    "run",
+                    "--workspace",
+                    str(workspace.root),
+                    "--session",
+                    "run-session",
+                    "--backend",
+                    "plot_architect=antigravity",
+                    "--draft",
+                    "draft",
+                    "--antigravity-executable",
+                    "private-agy",
+                    "--antigravity-model",
+                    "agy-model",
+                    "--antigravity-effort",
+                    "low",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        backend_factory.assert_called_once_with(
+            workspace,
+            model=None,
+            timeout_seconds=300,
+            backend_overrides={"plot_architect": "antigravity"},
+            antigravity_executable="private-agy",
+            antigravity_model="agy-model",
+            antigravity_effort="low",
+        )
+        self.assertEqual(
+            runtime_factory.call_args_list,
+            [mock.call(workspace), mock.call(workspace, backend)],
+        )
+        provider_runtime.run_draft.assert_awaited_once_with(
+            "run-session",
+            "draft",
+            manuscript_name=None,
+            max_debate_rounds=None,
+            debate_id=None,
+        )
+        backend.close.assert_called_once_with()
 
     def test_backend_cleanup_ownership_transfers_only_when_run_begins(self) -> None:
         workspace = initialized_workspace(self)

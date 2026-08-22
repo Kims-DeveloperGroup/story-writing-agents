@@ -91,6 +91,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     chat.add_argument("--codex-model", metavar="MODEL")
     chat.add_argument(
+        "--antigravity-executable",
+        metavar="EXECUTABLE",
+        default="agy",
+    )
+    chat.add_argument("--antigravity-model", metavar="MODEL")
+    chat.add_argument("--antigravity-effort", metavar="EFFORT")
+    chat.add_argument(
         "--codex-timeout",
         metavar="SECONDS",
         default=300,
@@ -130,6 +137,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="override one canonical agent backend for this run (repeatable)",
     )
     run.add_argument("--codex-model", metavar="MODEL")
+    run.add_argument(
+        "--antigravity-executable",
+        metavar="EXECUTABLE",
+        default="agy",
+    )
+    run.add_argument("--antigravity-model", metavar="MODEL")
+    run.add_argument("--antigravity-effort", metavar="EFFORT")
     run.add_argument(
         "--codex-timeout",
         metavar="SECONDS",
@@ -523,12 +537,18 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
         workspace_option = arguments.workspace
         backend_values = arguments.backend
         model = arguments.codex_model
+        antigravity_executable = arguments.antigravity_executable
+        antigravity_model = arguments.antigravity_model
+        antigravity_effort = arguments.antigravity_effort
         timeout_value = arguments.codex_timeout
         requested_session = arguments.session_name
     else:
         workspace_option = None
         backend_values = ()
         model = None
+        antigravity_executable = "agy"
+        antigravity_model = None
+        antigravity_effort = None
         timeout_value = 300
         requested_session = None
 
@@ -591,6 +611,9 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
             model=model,
             timeout_seconds=timeout_seconds,
             backend_overrides=backend_overrides,
+            antigravity_executable=antigravity_executable,
+            antigravity_model=antigravity_model,
+            antigravity_effort=antigravity_effort,
         )
     except Exception as exc:
         _record_cli_error(debug_log, DebugOperation.CONFIGURATION, exc)
@@ -846,6 +869,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             model=arguments.codex_model,
             timeout_seconds=arguments.codex_timeout,
             backend_overrides=backend_overrides,
+            antigravity_executable=arguments.antigravity_executable,
+            antigravity_model=arguments.antigravity_model,
+            antigravity_effort=arguments.antigravity_effort,
         )
         runtime = StoryRuntime(workspace, backend)
         options = {

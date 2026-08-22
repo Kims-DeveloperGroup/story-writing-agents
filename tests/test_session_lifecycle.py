@@ -405,9 +405,9 @@ class SessionLifecycleContractTests(unittest.TestCase):
                 if isinstance(node, ast.ImportFrom) and node.module == "session_lifecycle"
             ]
         )
-        self.assertEqual(len(list(source_root.rglob("*.py"))), 34)
+        self.assertEqual(len(list(source_root.rglob("*.py"))), 38)
         index = (source_root.parents[1] / "PYTHON_MODULE_INDEX.md").read_text(encoding="utf-8")
-        self.assertIn("Importable production units indexed: 34.", index)
+        self.assertIn("Importable production units indexed: 38.", index)
         environment = dict(os.environ, PYTHONPATH=str(source_root.parent))
         result = subprocess.run(
             [
@@ -904,19 +904,51 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         tokens = {"close_success": "PRIVATE_CLOSE_SUCCESS_TOKEN"}
         staging = self.prepare_close_state(backend, "close_success", tokens)
         attempts: list[tuple[str, str]] = []
+        close_order: list[str] = []
 
         def release(session_id: str, token: str) -> None:
             attempts.append((session_id, token))
 
+        codex_close = backend._codex_adapter.close
+        antigravity_close = backend._antigravity_adapter.close
+        trace_debug = backend._trace_debug
+
+        def close_codex() -> None:
+            close_order.append("codex")
+            codex_close()
+
+        def close_antigravity() -> None:
+            close_order.append("antigravity")
+            antigravity_close()
+
+        def trace(operation: object, phase: object, **fields: object) -> None:
+            if operation == "cleanup" and phase in {"failed", "succeeded"}:
+                close_order.append("terminal")
+            trace_debug(operation, phase, **fields)  # type: ignore[arg-type]
+
         mark = len(_debug_records(self.workspace))
-        with mock.patch.object(
-            backend,
-            "_release_access_claim",
-            side_effect=release,
+        with (
+            mock.patch.object(
+                backend,
+                "_release_access_claim",
+                side_effect=release,
+            ),
+            mock.patch.object(
+                backend._codex_adapter,
+                "close",
+                side_effect=close_codex,
+            ),
+            mock.patch.object(
+                backend._antigravity_adapter,
+                "close",
+                side_effect=close_antigravity,
+            ),
+            mock.patch.object(backend, "_trace_debug", side_effect=trace),
         ):
             self.assertIsNone(backend.close())
 
         self.assertEqual(attempts, list(tokens.items()))
+        self.assertEqual(close_order, ["codex", "antigravity", "terminal"])
         self.assert_close_resources_cleared(backend, staging)
         self.assertEqual(
             _cleanup_rows_since(self.workspace, mark),

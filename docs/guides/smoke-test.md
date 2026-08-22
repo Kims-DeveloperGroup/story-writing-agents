@@ -2,8 +2,8 @@
 
 > **Availability:** `story smoke` is implemented and uses the ordinary runtime
 > with a private deterministic backend and synthetic data. It does not read
-> credentials or invoke Codex, a terminal, subprocesses, apps, the web, or the
-> network.
+> credentials or invoke Codex, Antigravity, `agy`, a terminal, subprocesses,
+> apps, the web, or the network.
 
 Key terms: **deterministic backend**—fixed local replies with no provider;
 **temporary mode**—a check whose workspace is removed; **persistent mode**—a
@@ -113,9 +113,17 @@ are guarded independently; neither can change the report, stderr, or exit. A
 genuine smoke `KeyboardInterrupt` or `SystemExit` propagates as the same
 exception with its traceback intact.
 
-A pass does **not** validate Codex installation, credentials, provider or model
-behavior, connectivity, terminal behavior, subprocess/app/web integration, or
-story quality. Use it to isolate local orchestration and persistence from those
-systems. Abrupt process or system termination can interrupt temporary cleanup.
+A pass does **not** validate Codex or Antigravity installation, credentials,
+provider or model behavior, connectivity, terminal behavior,
+subprocess/app/web integration, or story quality. Use it to isolate local
+orchestration and persistence from those systems. Abrupt process or system
+termination can interrupt temporary cleanup.
+
+The deterministic fake-`agy` suites
+`tests.test_antigravity_adapter` and `tests.test_antigravity_parity` exercise
+the Antigravity transport and parity contracts without provider access. Running
+`agy --version` or `agy --help` is also provider-free, but live authentication,
+network, model, and story-content checks are explicitly optional and are not
+part of smoke. See [Antigravity verification](antigravity.md#verify-without-a-provider-turn).
 
 The exact report and exit contract is in the [CLI reference](../reference/cli.md).

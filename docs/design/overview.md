@@ -5,7 +5,8 @@
 > controller.
 
 Key terms: **controller**—owner of interactive transition order;
-**adapter**—provider-neutral implementation; **scope**—what a service may read;
+**adapter**—provider-specific process/protocol implementation;
+**scope**—what a service may read;
 **default**—persisted fallback; **focus**—current process-local scope.
 
 `story-writing-agents` separates workflow, provider invocation, terminal
@@ -21,7 +22,17 @@ authority, replies, and artifacts. See the
 `session_lifecycle` owns immutable provider-neutral lifecycle facts and pure
 readiness, with no resource or I/O. `AgentBackend` retains manifests, access
 claims, prompt staging, routes, processes, and threads;
-`BoundAgent` owns one binding. Codex is implemented; Gemini fails preflight.
+`BoundAgent` owns one binding. Codex and Antigravity adapters are implemented;
+Codex remains the default. The obsolete backend name `gemini` is rejected with
+guidance to use `antigravity`.
+
+Provider threads are partitioned by story session, backend, and agent.
+Antigravity adds a stable provider-native state root isolated by session, agent,
+and definition fingerprint. Closing a backend preserves thread references and
+Antigravity-native state; taint or a changed definition starts a fresh provider
+conversation without deleting prior data. See the
+[Backend/session contract](../reference/backend-and-sessions.md) and
+[Antigravity guide](../guides/antigravity.md).
 
 `Workspace` owns path-safe persistence, inspection, and atomic replacement. Its
 retained root identity is a narrower internal diagnostic-storage seam; ordinary

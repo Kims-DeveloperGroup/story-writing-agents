@@ -5,7 +5,8 @@
 > workspace files.
 
 Key terms: **default**—a persisted command or conversation fallback;
-**manifest**—durable provider state; **access claim**—temporary process ownership.
+**manifest**—durable provider state; **access claim**—temporary process ownership;
+**provider-native state**—vendor-managed conversation and execution data.
 
 ## Canonical workspace tree
 
@@ -21,6 +22,7 @@ workspace/
 │   │   ├── cli_context.json                                   [lazy default session]
 │   │   ├── conversation_defaults/<session_id>.json             [lazy default conversation]
 │   │   ├── provider_sessions/.access-claims.lock               [lazy guard]
+│   │   ├── provider_sessions/.antigravity/                      [lazy retained provider state]
 │   │   ├── provider_sessions/<session_id>.json                 [lazy manifest]
 │   │   ├── provider_sessions/<session_id>.access.json          [temporary claim]
 │   │   └── debates/<session_id>/<debate_id>.jsonl              [lazy history]
@@ -124,6 +126,28 @@ Each thread value has exactly `backend`, `agent_id`, `fingerprint`, `thread_id`,
 IDs use the documented safe pattern and `tainted` is boolean. Opening ready
 state and releasing access do not rewrite the manifest.
 
+Codex and Antigravity threads may coexist in one manifest and remain distinct
+because the backend is part of the key. A compatible thread requires the same
+backend, agent, and definition fingerprint and must not be tainted. A mismatch
+or taint starts a fresh provider conversation after the next successful call;
+it does not delete the older provider-native data.
+
+## Antigravity-native state
+
+Antigravity owns a stable root below `provider_sessions/.antigravity/` and
+partitions bound definitions by agent and definition fingerprint. Invocation
+state is separately partitioned by session, agent, and definition fingerprint.
+Each invocation uses sibling isolated provider and working directories and
+copies only the verified bound rules into the working directory. The runtime
+deliberately retains this plaintext state across switch, pause, quit, EOF, and
+`AgentBackend.close()` so a compatible provider conversation can resume later.
+
+The manifest stores only the validated provider conversation reference;
+Antigravity owns the native conversation contents beneath its isolated state.
+Neither close nor taint is deletion, secure erase, or a retention policy. Back
+up and protect this root with the rest of the workspace, and do not edit its
+provider-managed contents.
+
 ## Access claim and guard
 
 `provider_sessions/<session_id>.access.json` has exactly:
@@ -156,4 +180,5 @@ deleted. Preserve them and follow the
 [nondestructive recovery procedure](../../operations/recovery-and-limitations.md#unsupported-v1-session-data).
 
 Readers reject malformed data, invalid keys/types/IDs, and unsupported versions.
-Orphan claims fail closed. See [Persistence](../../design/persistence.md).
+Orphan claims fail closed. See [Persistence](../../design/persistence.md) and
+[Use Antigravity agents](../../guides/antigravity.md).

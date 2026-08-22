@@ -16,7 +16,7 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 34.
+Importable production units indexed: 38.
 
 ## Current Dependency Direction
 
@@ -38,8 +38,12 @@ __main__ -> cli -> interactive_controller -> interactive_controller._core
                  |               |         -> workspace
                  |               -> conversations/workspace/models/agents
                  |               -> session_lifecycle
-                 -> backend -> config/conversation_retrieval/debug_log
-                 |          -> workspace/models/errors/agents/session_lifecycle
+                 -> backend -> antigravity_adapter -> models/provider_adapter/provider_process
+                 |          -> codex_adapter -> agents/config/errors/models
+                 |          |                 -> provider_adapter/provider_process
+                 |          -> config/conversation_retrieval/debug_log
+                 |          -> workspace/models/errors/agents
+                 |          -> provider_adapter/provider_process/session_lifecycle
                  -> cli_context -> workspace/errors/agents
 
 interactive_controller._core -> interactive_controller._session_policy
@@ -79,6 +83,8 @@ story_writing_agents facade -> interactive_commands
                             -> conversation_search -> conversations/errors
                             -> session_lifecycle
 models -> conversations/agents/errors
+provider_adapter -> models
+provider_process -> (standard library only)
 session_lifecycle -> (standard library only)
 workspace -> conversations -> agents/errors
 ```
@@ -194,10 +200,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.backend`
 
 - **Source:** `src/story_writing_agents/backend.py`
-- **Responsibility:** Adapt immutable agent definitions to provider invocation
-  and own provider-session durable state, process-access claims, provider
-  thread persistence, and each backend instance's persisted configuration
-  snapshot.
+- **Responsibility:** Coordinate provider adapters under the provider-neutral
+  session, lifecycle, retrieval, and reply contracts.
 - **Supported surface:** Package-supported `AgentBackend` and `BoundAgent`.
   `BoundAgent` exposes structured debate `invoke` and one-turn conversation
   `converse` operations plus additive bounded
@@ -212,17 +216,18 @@ every intermediate arrow. The current runtime graph is acyclic.
   Unexported package-internal `backend_configuration_snapshot(backend)` exposes
   the same immutable construction-time configuration to the bound runtime
   without exposing the backend's private storage.
-- **Direct internal dependencies:** `agents`, `config`,
-  `conversation_retrieval`, `debug_log`, `errors`, `models`,
-  `session_lifecycle`, and `workspace`.
-- **State, resources, and side effects:** Owns Codex subprocesses, temporary
-  prompt/output staging, exact V2 provider-session manifests at
+- **Direct internal dependencies:** `agents`, `antigravity_adapter`,
+  `codex_adapter`, `config`, `conversation_retrieval`, `debug_log`, `errors`,
+  `models`, `provider_adapter`, `provider_process`, `session_lifecycle`, and
+  `workspace`.
+- **State, resources, and side effects:** Owns exact V2 provider-session
+  manifests at
   `agent_states/orchestrator_state/provider_sessions/<session_id>.json`, exact
   V2 process-access claims at sibling `<session_id>.access.json` paths, the
   lazily created workspace-global `.access-claims.lock` OS advisory guard,
   in-memory claim tokens, persisted `provider_threads`, shared
-  debate/conversation/retrieval per-thread locks, and structured Codex process
-  and response validation. Manifests contain only `schema_version`,
+  debate/conversation/retrieval per-thread locks, adapter routing, and
+  structured domain-response validation. Manifests contain only `schema_version`,
   `session_id`, `durable_state`, `created_at`, `updated_at`, and
   `provider_threads`; claims contain only `schema_version`, `session_id`,
   `owner_hostname`, `owner_pid`, `claim_token`, and `claimed_at`. The guard
@@ -232,29 +237,27 @@ every intermediate arrow. The current runtime graph is acyclic.
   token. Version-1 manifests, access sidecars, and access guards are rejected
   with `WorkspaceVersionUnsupportedError` without migration, deletion, or
   rewriting. The backend also owns
-  timeout/cancellation taint handling, cleanup, and per-instance `atexit`
-  registration. One retrieval thread lock covers the complete repeated-call
-  action loop and synchronous
-  handler invocations. The backend owns the exact Codex action schema, initial
-  and continuation payloads, canonical observation framing handoff, provider
-  timeout/cancellation behavior, incomplete-history taint, and fixed
-  provider-value-free process/response-validation diagnostics. It drains both
-  subprocess output streams but discards and never decodes stderr after a
-  nonzero Codex exit; it receives no memory service and performs no retrieval
-  search or transcript-storage call. Debate requests add the canonical
+  timeout/cancellation taint handling, provider cleanup coordination, and
+  per-instance `atexit` registration. One retrieval thread lock covers the
+  complete repeated-call action loop and synchronous handler invocations. The
+  backend owns the exact action schemas, initial and
+  continuation payloads, canonical observation framing handoff,
+  incomplete-history taint decisions, and fixed response-validation
+  diagnostics. It receives no memory service and performs no retrieval search
+  or transcript-storage call. Debate requests add the canonical
   included-context event list to provider payloads only when present; absent
   and fresh context requests retain the exact context-free payload. At
   construction it validates and snapshots the complete workspace system and
-  per-agent configuration once and retains any non-null explicit model
-  separately. Each bound Codex invocation resolves that explicit model over
-  its agent model and then the legacy system model, while reasoning resolves
-  from the agent and then the legacy system value; provider routes use their
-  existing explicit-over-agent-over-Codex precedence. All values remain fixed
-  for the backend lifetime. Optional
-  `--model` and `--config model_reasoning_effort="LEVEL"` arguments are emitted
-  in that order immediately after `exec` and before any resume marker; neither
-  value changes provider-thread identity, bindings, fingerprints, manifests,
-  or request payloads. Each backend retains one I/O-free workspace-bound
+  per-agent configuration once, passes that complete immutable snapshot to the
+  Codex adapter, validates explicit Antigravity model/effort inputs, and
+  projects the validated Antigravity system and roster-complete per-agent
+  values into provider-private primitives for adapter-owned immutable copying.
+  It preserves compatibility delegates for previously test-observed private
+  Codex helpers.
+  The Antigravity settings are additive keyword-only constructor inputs.
+  Configuration values remain fixed for the backend lifetime and do not change
+  provider-thread identity, bindings, fingerprints, manifests, or request
+  payloads. Each backend retains one I/O-free workspace-bound
   debug-log handle but begins emitting only after the existing complete
   configuration snapshot loads successfully. It best-effort records only fixed
   configuration, binding, provider-invocation, session-lifecycle, and cleanup
@@ -268,9 +271,129 @@ every intermediate arrow. The current runtime graph is acyclic.
   exception, or cancellation flow; `debug_log` retains ownership of its files,
   locks, schema, and rotation.
 - **Primary verification/documentation:** `tests/test_codex_backend.py`,
+  `tests/test_antigravity_adapter.py`, `tests/test_antigravity_parity.py`,
   `tests/test_session_lifecycle.py`, `docs/reference/backend-and-sessions.md`,
+  `docs/guides/antigravity.md`,
   `docs/reference/conversation-retrieval.md`,
   `docs/design/prompts-and-provider.md`, `docs/design/session-lifecycle.md`, and
+  `docs/operations/privacy-and-provider.md`.
+
+### `story_writing_agents.antigravity_adapter`
+
+- **Source:** `src/story_writing_agents/antigravity_adapter.py`
+- **Responsibility:** Adapt immutable agent bindings and structured turns to the
+  Antigravity CLI protocol.
+- **Supported surface:** No package-supported API. Package-internal
+  `AntigravityAdapter` implements the private provider-adapter contract.
+- **Direct internal dependencies:** `models`, `provider_adapter`, and
+  `provider_process`.
+- **State, resources, and side effects:** Owns the Antigravity executable,
+  defensive immutable copies of explicit/system/per-agent model and effort
+  primitives, bound-agent selection, exact explicit-over-agent-over-system-
+  over-provider-default precedence, isolated provider state, command
+  construction, headless capability check, NDJSON stream validation, and
+  provider conversation-ID protocol. Binding writes deterministic rules beneath
+  `agent_states/orchestrator_state/provider_sessions/.antigravity/definitions/<agent>/<fingerprint>/AGENTS.md`.
+  Before definition writes or provider launch, the adapter sequentially
+  prepares its owned `state_root`, definitions chain, sessions/runtime chain,
+  and provider/workspace directories. On supported systems it best-effort
+  requests owner-only directory modes and rejects detected links or
+  non-directories in those chains. It does not harden the backend-owned
+  containing parent, provider-created files, or capability-probe scratch.
+  Provider-native retention remains unchanged, and this hardening does not
+  claim application access control or descriptor-anchored, race-proof
+  containment.
+  Binding and per-turn workspace staging install canonical rules bytes through
+  an exclusively created same-directory temporary requested as `0600`, verify
+  that temporary's regular singly linked identity, and atomically replace the
+  target. Existing staged or retained-workspace `AGENTS.md` targets are
+  accepted only when missing or regular and singly linked; detected symbolic
+  links, non-regular entries, and multiply linked files are preserved and
+  rejected. Invocation also reads the staged source through a descriptor
+  verified as regular, singly linked, and identity-matched to its no-follow
+  pathname before installation. These checks prevent final-leaf redirection;
+  an unsafe invocation fails before provider launch without tainting compatible
+  history. Parent traversal remains pathname-based rather than descriptor-
+  anchored, so these rules-file protections likewise do not claim application
+  access control or race-proof containment.
+  Invocation serializes its output schema, payload, and NDJSON stdin event
+  before creating any new per-session runtime tree; encoding failure therefore
+  creates no new provider or workspace directory. After serialization, it
+  retains provider-native state and isolated cwd beneath
+  `agent_states/orchestrator_state/provider_sessions/.antigravity/sessions/<session>/<agent>/<fingerprint>/provider`
+  and sibling `workspace`, copies only the bound rules into that workspace,
+  sends the story request as one NDJSON stdin event, and delegates bounded
+  `agy` subprocess ownership to `provider_process`. Provider preflight runs a
+  bounded, provider-free `agy --help` capability check with an isolated
+  `--gemini_dir`. Its fixed `state_root/capability-probe` scratch directory is
+  best-effort removed after every capability check and is not retained
+  provider-native state. `close()` intentionally retains definitions, session
+  workspaces, and provider-native conversation state for later backend
+  instances. Importing performs no I/O.
+- **Primary verification/documentation:** `tests/test_antigravity_adapter.py`
+  and `tests/test_antigravity_parity.py`; shared adapter and subprocess
+  contracts are also verified by `tests/test_codex_backend.py`.
+  `docs/guides/antigravity.md` is the dedicated setup, transport, lifecycle,
+  retention, and provider-free verification guide.
+
+### `story_writing_agents.codex_adapter`
+
+- **Source:** `src/story_writing_agents/codex_adapter.py`
+- **Responsibility:** Adapt immutable agent bindings and structured turns to the
+  Codex CLI protocol.
+- **Supported surface:** No package-supported API. Package-internal
+  `CodexAdapter` implements the private provider-adapter contract.
+- **Direct internal dependencies:** `agents`, `config`, `errors`, `models`,
+  `provider_adapter`, and `provider_process`.
+- **State, resources, and side effects:** Owns construction-time Codex
+  executable/model/reasoning settings, isolated binding directories and their
+  generated `AGENTS.md` files, invocation-scoped schema/final-response
+  directories, exact Codex argv construction, JSONL event and thread parsing,
+  and provider-specific safe process diagnostics. Binding and invocation read
+  allowlisted definition files, create and remove temporary files, and request
+  subprocess execution through `provider_process`; `close()` removes all
+  retained binding directories idempotently. Optional `--model` and `--config
+  model_reasoning_effort="LEVEL"` arguments retain their exact order after
+  `exec` and before any resume marker. Importing performs no I/O.
+- **Primary verification/documentation:** `tests/test_codex_backend.py`,
+  `docs/reference/backend-and-sessions.md`,
+  `docs/design/prompts-and-provider.md`, and
+  `docs/operations/privacy-and-provider.md`.
+
+### `story_writing_agents.provider_adapter`
+
+- **Source:** `src/story_writing_agents/provider_adapter.py`
+- **Responsibility:** Define the private provider substitution contract.
+- **Supported surface:** No package-supported API. Package-internal frozen
+  `ProviderBinding`, `ProviderInvocation`, and `ProviderResult` values,
+  `ProviderInvocationError`, and `ProviderAdapter` protocol are consumed by the
+  coordinator and concrete adapters.
+- **Direct internal dependencies:** `models`.
+- **State, resources, and side effects:** Owns no mutable state or external
+  resource; importing and constructing its values perform no I/O.
+- **Primary verification/documentation:** `tests/test_codex_backend.py` and
+  `docs/design/overview.md`.
+
+### `story_writing_agents.provider_process`
+
+- **Source:** `src/story_writing_agents/provider_process.py`
+- **Responsibility:** Execute bounded asynchronous provider subprocesses.
+- **Supported surface:** No package-supported API. Package-internal immutable
+  process request/result values, value-free launch/timeout failures,
+  `run_process`, and `stop_process` are consumed by provider adapters; the
+  backend retains only a private compatibility delegate for process stopping.
+- **Direct internal dependencies:** None.
+- **State, resources, and side effects:** `run_process` launches one child with
+  piped stdin/stdout/stderr, drains both streams concurrently through
+  `communicate`, and enforces the supplied timeout. On timeout, cancellation,
+  or any other post-launch communication failure, it stops a still-running
+  child by requesting termination, waiting up to two seconds, then killing and
+  joining when necessary; completed children are not signaled. Optional cwd
+  and environment are explicit request values. The module owns no persistent
+  or import-time state and emits no provider-specific diagnostic.
+- **Primary verification/documentation:** `tests/test_codex_backend.py`,
+  `tests/test_antigravity_parity.py`,
+  `docs/reference/backend-and-sessions.md`, and
   `docs/operations/privacy-and-provider.md`.
 
 ### `story_writing_agents.cli`
@@ -279,7 +402,10 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Responsibility:** Parse command-line arguments and dispatch CLI commands.
 - **Supported surface:** Script entry point `story_writing_agents.cli:main` for
   both `story` and `story-writing-agents`. `build_parser` and other helpers are
-  not package-supported APIs. The lifecycle grammar is exactly
+  not package-supported APIs. Interactive `chat` and noninteractive `run`
+  accept additive `--antigravity-executable` (default `agy`),
+  `--antigravity-model`, and `--antigravity-effort` options and pass their
+  values to `AgentBackend`. The lifecycle grammar is exactly
   `story session create SESSION`, `story session reopen [SESSION]`, and
   `story session pause [SESSION]`; those actions have no lifecycle `--session`
   option. Omitted reopen/pause targets use `default_session_id`; create and
@@ -323,7 +449,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
   `tests/test_cli_context.py`, `tests/test_smoke_cli.py`, and
   `tests/test_interactive_pty.py` for primary process-level POSIX PTY
-  verification; `docs/reference/cli.md` and `docs/getting-started.md`.
+  verification; `docs/reference/cli.md`, `docs/getting-started.md`, and
+  `docs/guides/antigravity.md`.
 
 ### `story_writing_agents.cli_context`
 
@@ -359,13 +486,14 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Responsibility:** Validate and resolve cascading runtime configuration.
 - **Supported surface:** Internal `ConfigManager`, `SystemDefaults`,
   `AgentConfig`, `ResolvedAgentConfig`, immutable roster-complete
-  `ConfigurationSnapshot`, and `KNOWN_AGENT_BACKENDS`.
-  `SystemDefaults` retains its established positional fields and trailing
-  optional `codex_model` and `codex_reasoning_effort` fields. `AgentConfig`
-  likewise retains its first three positional fields and adds trailing optional
-  per-agent `codex_model` and `codex_reasoning_effort` fields. `ConfigManager`
-  owns both complete persisted schemas plus the shared safe-model and fixed
-  reasoning-effort validators. Package-internal
+  `ConfigurationSnapshot`, and exact `KNOWN_AGENT_BACKENDS` value
+  `("codex", "antigravity")`; legacy `gemini` values receive fixed migration
+  guidance. `SystemDefaults` retains its established positional fields and
+  trailing optional Codex model/reasoning plus Antigravity model/effort fields.
+  `AgentConfig` likewise retains its first three positional fields and adds the
+  four trailing optional provider-specific fields. `ConfigManager` owns both
+  complete persisted schemas plus provider-specific safe-model and fixed-effort
+  validators. Package-internal
   `validate_configuration` validates both persisted documents as one complete
   candidate, `load_configuration_snapshot` reads and publishes one immutable
   pair, and `resolve_from_snapshot` applies live runtime and explicit backend
@@ -717,7 +845,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   `write_status` or specialized dense-row call.
   The settings editor exposes the exact six-row top level Language, Persona,
   Maximum debate rounds, Providers, Save, and Cancel; Providers selects one
-  roster agent and then its Provider, Model, or Reasoning effort without
+  roster agent, enables Codex or Antigravity selection, and edits only the
+  active provider's model and effort vocabulary without discarding the inactive
+  provider's values. The summary projection names both providers' model/effort
+  rows, so changed-only confirmations can identify changes to either without
   changing the active backend or runtime snapshot. Editors contain no repeated
   Current/Pending context panel. Explicit Save and Cancel actions each use one
   selectable YES/NO confirmation whose preceding context contains only changed
@@ -777,9 +908,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   `cleanup_failed` diagnostic. A diagnostic process control participates only
   when no earlier winner exists and cannot replace a retained body or cleanup
   control.
-  `AgentBackend` retains the actual access claim, manifest, subprocess, and
-  provider-thread resources. The settings flow retains only one call-local
-  immutable baseline and pending candidate, constructs its changed-only
+  `AgentBackend` retains the actual access claim, manifest, and provider-thread
+  coordination, while provider adapters retain binding, staging, and provider-
+  native state and `provider_process` owns subprocess resources. The settings flow
+  retains only one call-local immutable baseline and pending candidate,
+  constructs its changed-only
   confirmation context, and delegates exact-byte conflict detection and guarded
   persistence to `interactive_settings`; cancellation or failed saves do not
   mutate the active backend or runtime snapshot. Through public collaborators
@@ -983,10 +1116,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   persistence.
 - **Supported surface:** Package-internal frozen/slotted `PersonaCatalogEntry`,
   `SettingsBaseline`, and `SettingsState`; fixed `SettingsErrorKind` and
-  redacted `SettingsError`; the exact ordered `SETTINGS_LANGUAGES` and
-  `SETTINGS_REASONING_EFFORTS`; `load_settings_state`, `update_language`,
-  `update_persona`, `update_max_debate_rounds`, `update_agent_backend`,
-  `update_agent_codex_model`, `update_agent_codex_reasoning_effort`, and
+  redacted `SettingsError`; the exact ordered `SETTINGS_LANGUAGES`,
+  `SETTINGS_REASONING_EFFORTS`, and `SETTINGS_ANTIGRAVITY_EFFORTS`;
+  `load_settings_state`, `update_language`, `update_persona`,
+  `update_max_debate_rounds`, `update_agent_backend`,
+  `update_agent_codex_model`, `update_agent_codex_reasoning_effort`,
+  `update_agent_antigravity_model`, `update_agent_antigravity_effort`, and
   `save_settings_state`. The module has no package-facade export.
 - **Direct internal dependencies:** `agents`, `config`, `errors`, and
   `workspace`.
@@ -994,10 +1129,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   UTF-8 bytes of both persisted configuration documents, one fully validated
   immutable configuration snapshot, and a safe lexical persona catalog with
   top-level-template precedence. Pure update operations replace only the
-  pending immutable candidate, including one agent's provider, model, or
-  reasoning value at a time. Legacy system model/reasoning values remain
+  pending immutable candidate, including one agent's provider or one
+  provider-specific model/effort value at a time while preserving every
+  inactive-provider value. System-level provider model/effort values remain
   unchanged fallback data rather than editable settings. Saving completely
-  validates that candidate,
+  validates and fully serializes that candidate,
   rereads both documents and the catalog for exact stale-state detection, and
   performs no write when the candidate is unchanged. Changed documents are
   serialized canonically and atomically replaced through `Workspace` in system-
@@ -1513,9 +1649,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   persistence and provider resources. Retrieval creates no debate, artifact,
   catalog, owner-state, or control/progress/source persistence.
 - **Primary verification/documentation:** `tests/test_conversation_runtime.py`,
-  `tests/test_conversation_retrieval.py`, `tests/test_interactive_consensus.py`,
-  `tests/test_interactive_conversation.py` for retained runtime use through the
-  controller-owned persistent Runner and its single lifecycle event loop,
+  `tests/test_conversation_retrieval.py`, `tests/test_antigravity_parity.py`,
+  `tests/test_interactive_consensus.py`, `tests/test_interactive_conversation.py`
+  for retained runtime use through the controller-owned persistent Runner and
+  its single lifecycle event loop,
   `tests/test_orchestration_workflow.py`,
   `tests/test_orchestration_safety.py`, `tests/test_lifecycle_atomicity.py`,
   `tests/test_agent_state.py`, `docs/reference/runtime-api.md`,
@@ -1695,13 +1832,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   guarded process-wide weak lock registry serializes operations per
   workspace/session/conversation. The fixed initialized topology includes
   `agent_states/orchestrator_state/conversation_defaults` and `debug_logs`;
-  existing initialized workspaces need neither directory until diagnostics
-  first append lazily. `debug_log`, not `Workspace`, owns the files, lock,
-  schema, append, and rotation inside that directory. New workspaces also
-  receive the canonical five-key system-default document with null Codex model
-  and reasoning values, while existing system-default bytes are never migrated
-  or rewritten by initialization. `cli_context` owns the schema stored in the
-  conversation-default directory. The backend-owned story-session
+  existing initialized workspaces need neither directory until the corresponding
+  owning feature first creates it lazily. `debug_log`, not `Workspace`, owns the
+  files, lock, schema, append, and rotation inside the diagnostic directory. New
+  workspaces also receive the canonical seven-key system-default document with
+  null Codex model/reasoning and Antigravity model/effort values, plus canonical
+  seven-key per-agent entries with Codex as the backend and null language,
+  persona, and both providers' model/effort values. Existing configuration
+  bytes are never migrated or rewritten by initialization. `cli_context` owns
+  the schema stored
+  in the conversation-default directory. The backend-owned story-session
   process-access claim remains the cross-process same-session write guard.
   Catalog and absent-transcript reads do not create storage. Transcript access
   validates catalog identity, and appends atomically replace the complete file.
@@ -1756,16 +1896,20 @@ every intermediate arrow. The current runtime graph is acyclic.
   construction emits no record. All five consumers use only the internal append
   surface; none assumes ownership of diagnostic files, locks, schema, or
   rotation.
-- `Workspace` initializes the canonical five-key system-default document but
-  never rewrites an existing one. `ConfigManager` owns full system and per-agent
-  schema validation and the shared Codex model/reasoning validators plus
-  immutable complete snapshots. Each `AgentBackend` validates and snapshots
-  those values once at construction and alone projects the per-bound-agent
-  invocation settings: a non-null explicit model precedes the per-agent and
-  legacy system model, while per-agent reasoning precedes the legacy system
-  value. Provider routing retains explicit-over-agent-over-Codex precedence.
-  Model and reasoning values do not enter bindings, fingerprints, thread keys,
-  lifecycle artifacts, request payloads, or active-backend refresh. A
+- `Workspace` initializes canonical seven-key system and per-agent configuration
+  shapes but never rewrites existing documents. `ConfigManager` owns full
+  system and per-agent schema validation, the exact Codex/Antigravity backend
+  vocabulary with legacy Gemini guidance, both providers' model/effort
+  validators, and immutable complete snapshots. Each `AgentBackend` validates
+  and snapshots those values once at construction, passes the complete snapshot
+  to the Codex adapter, and projects only the Antigravity values into provider-
+  specific primitives. Codex model resolution remains explicit-over-agent-
+  over-system and its reasoning remains agent-over-system;
+  Antigravity model and effort resolution is explicit-over-agent-over-system-
+  over-provider-default and is selected by the bound agent. Provider routing
+  retains explicit-over-agent-over-Codex precedence. Provider model and effort
+  values do not enter bindings, fingerprints, thread keys, lifecycle artifacts,
+  request payloads, or active-backend refresh. A
   backend-bound `StoryRuntime` and its `PromptAssembler` reuse that same
   construction-time snapshot for provider routes, language, persona, and round
   defaults while session and explicit overrides remain live; settings saves
@@ -1880,8 +2024,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   control, later stages still run, and the retained exact object and originating
   traceback propagate only afterward. It alone owns Runner-retention and final
   controller-state clearing decisions.
-  `AgentBackend` retains actual session access claims, manifests, subprocesses,
-  and provider-thread ownership; `ConversationCatalog` retains conversation
+  `AgentBackend` retains actual session access claims, manifests, and provider-
+  thread coordination; provider adapters retain binding, staging, and provider-
+  native state, while `provider_process` owns subprocess resources;
+  `ConversationCatalog` retains conversation
   metadata ownership; `cli_context` owns both session and per-session
   conversation-default persistence; and `interactive_terminal` retains
   synchronous I/O and presentation ownership. Interactive advisory content
@@ -1947,10 +2093,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   durable user append, all provider/actions/memory calls, and exactly one final
   reply or sanitized runtime-error append. Retrieval actions, observations,
   progress, and sources have no persistence schema or artifact.
-- `AgentBackend` owns the shared structured Codex subprocess, thread,
-  per-call timeout, cancellation, and taint lifecycle; it drains both subprocess
-  streams, discards nonzero-exit stderr without decoding it, and uses fixed
-  provider-value-free process/response-validation diagnostics.
+- `AgentBackend` owns provider-neutral structured request/reply schemas, thread
+  persistence, per-call timeout, cancellation, and taint coordination. Concrete
+  adapters own provider-specific binding, command, staging, protocol parsing,
+  and safe diagnostics, while `provider_process` owns bounded subprocess launch,
+  concurrent stream draining, timeout/cancellation termination, and cleanup.
   `BoundAgent` is the immutable per-definition dispatch handle for debate,
   one-step conversation, and retrieval calls. The backend owns retrieval
   provider schemas, initial/continuation payloads, repeated calls, and framing

@@ -11,10 +11,10 @@
 
 | Command | Exact syntax |
 | --- | --- |
-| Interactive | `story` or `story chat [SESSION] [--workspace PATH] [--backend AGENT=BACKEND]... [--codex-model MODEL] [--codex-timeout SECONDS]` |
+| Interactive | `story` or `story chat [SESSION] [--workspace PATH] [--backend AGENT=BACKEND]... [--codex-model MODEL] [--antigravity-executable EXECUTABLE] [--antigravity-model MODEL] [--antigravity-effort EFFORT] [--codex-timeout SECONDS]` |
 | Initialize | `story init [WORKSPACE] [--overwrite-prompts]` |
 | Directive | `story directive [--workspace PATH] [--session ID] TEXT` |
-| Run | `story run [--workspace PATH] [--session ID] [--backend AGENT=BACKEND]... [--codex-model MODEL] [--codex-timeout SECONDS] [PROMPT | --prompt TEXT | --draft TEXT | --draft-file PATH] [--output PATH] [--debate-id ID] [--max-debate-rounds N]` |
+| Run | `story run [--workspace PATH] [--session ID] [--backend AGENT=BACKEND]... [--codex-model MODEL] [--antigravity-executable EXECUTABLE] [--antigravity-model MODEL] [--antigravity-effort EFFORT] [--codex-timeout SECONDS] [PROMPT | --prompt TEXT | --draft TEXT | --draft-file PATH] [--output PATH] [--debate-id ID] [--max-debate-rounds N]` |
 | Inspect | `story inspect [--workspace PATH] [--session ID] [--debate ID]` |
 | Session create | `story session create SESSION [--workspace PATH]` |
 | Session reopen | `story session reopen [SESSION] [--workspace PATH]` |
@@ -129,28 +129,55 @@ retention limits are in
 [Privacy](../operations/privacy-and-provider.md#workspace-debug-log-privacy)
 and [Session storage](configuration/session-storage.md#runtime-debug-log-storage).
 
-## Codex defaults and model override
+## Provider routes and invocation settings
 
 Every installed command that constructs an `AgentBackend` validates and
-snapshots both the workspace system defaults and the per-agent configuration.
-For each agent, a non-null `--codex-model` on `story chat` or `story run`
-overrides all persisted model values for that backend; otherwise the agent's
-`codex_model` inherits the workspace `codex_model`, then the Codex provider
-default. Reasoning resolves from the agent's `codex_reasoning_effort`, then the
-workspace system default, then the provider default. Existing three-key
-system-default files remain valid and provide no model/reasoning fallback until
-one is configured.
+snapshots both the workspace system defaults and per-agent configuration. Codex
+is the default route. The repeatable `--backend AGENT=BACKEND` accepts canonical
+agent IDs and exactly `codex` or `antigravity`; it changes only that backend
+instance. Duplicate agents are rejected. `gemini` is rejected with fixed
+migration guidance to use `antigravity`.
+
+For Codex, a non-null `--codex-model` on `story chat` or `story run` overrides
+all persisted Codex model values; otherwise each agent inherits its
+`codex_model`, workspace `codex_model`, then the provider default. Codex
+reasoning resolves from the agent value, workspace value, then provider default.
+
+For Antigravity, `--antigravity-executable` defaults to `agy`.
+`--antigravity-model` and `--antigravity-effort` override every
+Antigravity-routed agent in that backend instance. Otherwise model and effort
+resolve per agent, then from workspace Antigravity defaults, then the provider
+default. Effort accepts `low`, `medium`, or `high`. The legacy option name
+`--codex-timeout` supplies the positive timeout for both provider adapters.
+
+One mixed-provider shell can be opened with:
+
+```bash
+story chat draft \
+  --backend plot_architect=antigravity \
+  --antigravity-effort medium
+```
+
+Other agents retain their persisted routes. Bare `story` has none of these
+options and uses the persisted configuration, `codex` fallback, and `agy`
+executable default. Standalone lifecycle commands likewise have no provider
+options, so a configured Antigravity route requires `agy` on `PATH`.
 
 There is no `--codex-reasoning-effort` option or supported public
 system-default save API. Global `/settings` provides the installed interactive
-edit/save workflow; choose `Providers`, then an agent, then `Model` or
-`Reasoning effort` to edit per-agent Codex settings. Direct edits to the
-validated JSON documents remain possible. An active backend and runtime keep
-their construction-time configuration snapshot. Exact fields, validation, and
-initialization compatibility are in
+edit/save workflow; choose `Providers`, then an agent, then Provider, Model, or
+Reasoning effort. It supports Codex and Antigravity and edits only the active
+provider's per-agent model/effort while retaining inactive-provider values.
+Direct edits to the validated JSON documents remain possible. An active backend
+and runtime keep their construction-time configuration snapshot. Existing
+three-key system-default files remain valid and provide no provider-specific
+fallback until configured. Exact fields, validation, and initialization
+compatibility are in
 [Agent configuration](configuration/agent-configuration.md#system-defaults),
 and invocation precedence is in
 [Runtime overrides](configuration/runtime-overrides.md#resolution-precedence).
+Antigravity installation, process controls, and verification are in
+[Use Antigravity agents](../guides/antigravity.md).
 
 <a id="interactive-streams"></a>
 
