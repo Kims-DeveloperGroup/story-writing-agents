@@ -7,6 +7,7 @@ import inspect
 import json
 import os
 import signal
+import sys
 import tempfile
 import unittest
 from dataclasses import replace
@@ -21,6 +22,7 @@ from story_writing_agents import (
     CHARACTER_CUSTODIAN,
     ConversationContextWindow,
     ConversationEventKind,
+    ConversationMemoryService,
     ConversationReply,
     ConversationRequest,
     ConversationRetrievalAction,
@@ -30,8 +32,11 @@ from story_writing_agents import (
     ConversationRetrievalRequest,
     ConversationRetrievalSearchAction,
     ConversationRetrievalSearchObservation,
+    ConversationRetrievalSemanticError,
+    ConversationSearchScope,
     DebateStatus,
     FilesystemConversationCatalog,
+    FilesystemConversationEventStore,
     PLOT_ARCHITECT,
     Phase,
     ROSTER,
@@ -105,6 +110,8 @@ def matches_schema(value, specification):
     if expected_type == "string":
         if not isinstance(value, str):
             return False
+        if "minLength" in specification and len(value) < specification["minLength"]:
+            return False
     elif expected_type == "integer":
         if isinstance(value, bool) or not isinstance(value, int):
             return False
@@ -134,14 +141,26 @@ payload = json.loads(user_event["message"]["content"])
 schema = json.loads(option("--json-schema"))
 provider_state = Path(next(value.split("=", 1)[1] for value in argv if value.startswith("--gemini_dir=")))
 resumed_id = option("--conversation")
+known_path = provider_state / ".fake-known-conversations.json"
+known_ids = set(json.loads(known_path.read_text(encoding="utf-8"))) if known_path.exists() else set()
 if resumed_id is None:
     counter_path = provider_state / ".fake-counter"
     counter = int(counter_path.read_text(encoding="ascii")) + 1 if counter_path.exists() else 1
     counter_path.write_text(str(counter), encoding="ascii")
     fingerprint = Path.cwd().parent.name[:8]
-    conversation_id = f"agy-{payload.get('agent_id', 'agent')}-{fingerprint}-{counter}"
+    conversation_id = (
+        f"agy-{payload.get('session_id', 'session')}-"
+        f"{payload.get('agent_id', 'agent')}-{fingerprint}-{counter}"
+    )
+    known_ids.add(conversation_id)
+    known_path.write_text(
+        json.dumps(sorted(known_ids), separators=(",", ":")),
+        encoding="utf-8",
+    )
+    resume_known = True
 else:
     conversation_id = resumed_id
+    resume_known = resumed_id in known_ids
 
 def terminated(_signum, _frame):
     append({"terminated": True, "pid": os.getpid()})
@@ -166,6 +185,7 @@ append({
     "turn_id": payload.get("turn_id"),
     "retrieval_action_index": payload.get("retrieval", {}).get("action_index"),
     "resumed_id": resumed_id,
+    "resume_known": resume_known,
     "schema": schema,
     "pid": os.getpid(),
 })
@@ -180,6 +200,9 @@ if (
 if mode == "nonzero":
     print("CONFIDENTIAL_PROVIDER_STDERR", file=sys.stderr)
     raise SystemExit(7)
+if not resume_known:
+    print("CONFIDENTIAL_UNKNOWN_CONVERSATION", file=sys.stderr)
+    raise SystemExit(84)
 if mode == "hang":
     while True:
         signal.pause()
@@ -237,6 +260,18 @@ else:
 
 if mode == "schema_result":
     output = {"CONFIDENTIAL_PROVIDER_OUTPUT": True}
+elif mode == "empty_required_string":
+    output["content"] = ""
+elif mode == "debate_revision_mismatch":
+    output["revision_id"] = "other-revision"
+elif mode.startswith("direct_"):
+    output[mode.removeprefix("direct_")] = "other-identity"
+elif mode.startswith("retrieval_"):
+    field = mode.removeprefix("retrieval_")
+    if field == "action_index":
+        output["action"][field] += 1
+    else:
+        output["action"][field] = "other-identity"
 
 if mode != "schema_result" and not matches_schema(output, schema):
     raise SystemExit(83)
@@ -333,18 +368,28 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.fake_directory = Path(temporary.name)
-        self.executable = self.fake_directory / "fake-agy"
-        self.executable.write_text(_FAKE_AGY, encoding="utf-8")
-        self.executable.chmod(0o755)
+        fake_script = self.fake_directory / "fake-agy.py"
+        fake_script.write_text(_FAKE_AGY, encoding="utf-8")
+        if os.name == "nt":
+            self.executable = self.fake_directory / "fake-agy.cmd"
+            self.executable.write_text(
+                f'@"{sys.executable}" "{fake_script}" %*\r\n',
+                encoding="utf-8",
+            )
+        else:
+            self.executable = fake_script
+            self.executable.chmod(0o755)
         self.log_path = self.fake_directory / "invocations.jsonl"
         self.environment = mock.patch.dict(
             os.environ,
             {
                 "STORY_FAKE_AGY_LOG": str(self.log_path),
+                "STORY_FAKE_AGY_MODE": "ok",
                 "STORY_PRIVATE_CREDENTIAL": "CONFIDENTIAL_CREDENTIAL",
             },
         )
         self.environment.start()
+        os.environ.pop("STORY_FAKE_AGY_FAIL_ACTION", None)
         self.addCleanup(self.environment.stop)
 
     def definition(self, agent_id: str = PLOT_ARCHITECT, *, backend: str = "antigravity"):
@@ -523,6 +568,74 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(cwd.is_relative_to(self.workspace.root))
             self.assertTrue(provider_state.is_relative_to(self.workspace.root))
 
+    async def test_only_provider_known_same_state_conversations_can_resume(
+        self,
+    ) -> None:
+        self.assertEqual(os.environ["STORY_FAKE_AGY_MODE"], "ok")
+        self.assertNotIn("STORY_FAKE_AGY_FAIL_ACTION", os.environ)
+        backend = self.backend()
+        bound = await backend.bind(self.definition())
+        sessions = (
+            "known-resume",
+            "foreign-resume",
+            "unknown-resume",
+        )
+        for session_id in sessions:
+            backend.create_session_with_access(session_id)
+            await bound.invoke(
+                self.request(
+                    session_id=session_id,
+                    debate_id="seed",
+                    phase=Phase.DRAFT,
+                )
+            )
+
+        await bound.invoke(
+            self.request(
+                session_id="known-resume",
+                debate_id="same-state",
+                phase=Phase.SYNTHESIZE,
+            )
+        )
+        same_state = self.provider_invocations()[-1]
+        self.assertIs(same_state["resume_known"], True)
+        known_thread_id = self.manifest("known-resume")["provider_threads"][
+            "antigravity:plot_architect"
+        ]["thread_id"]
+        self.assertEqual(same_state["resumed_id"], known_thread_id)
+
+        substitutions = (
+            ("foreign-resume", known_thread_id),
+            ("unknown-resume", "unknown-conversation"),
+        )
+        for session_id, substituted_thread_id in substitutions:
+            with self.subTest(session_id=session_id):
+                manifest = self.manifest(session_id)
+                manifest["provider_threads"]["antigravity:plot_architect"][
+                    "thread_id"
+                ] = substituted_thread_id
+                backend._write_manifest(session_id, manifest)
+                with self.assertRaises(BackendProtocolError) as caught:
+                    await bound.invoke(
+                        self.request(
+                            session_id=session_id,
+                            debate_id="rejected-resume",
+                            phase=Phase.DRAFT,
+                        )
+                    )
+                self.assertEqual(
+                    str(caught.exception),
+                    "Antigravity CLI exited with status 84",
+                )
+                rejected = self.provider_invocations()[-1]
+                self.assertEqual(rejected["resumed_id"], substituted_thread_id)
+                self.assertIs(rejected["resume_known"], False)
+                self.assertIs(
+                    self.manifest(session_id)["provider_threads"]
+                    ["antigravity:plot_architect"]["tainted"],
+                    True,
+                )
+
     async def test_story_runtime_runs_consensus_and_persists_conversation(self) -> None:
         loop = asyncio.get_running_loop()
         prior_slow_callback_duration = loop.slow_callback_duration
@@ -590,6 +703,147 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             all(key.startswith("antigravity:") for key in manifest["provider_threads"])
         )
+        for call in self.provider_invocations():
+            argv_text = "\0".join(call["argv"])
+            self.assertNotIn("PRIVATE_RUNTIME_PROMPT", argv_text)
+            self.assertNotIn("PRIVATE_RUNTIME_CONVERSATION", argv_text)
+
+    async def test_story_runtime_retrieval_persists_success_and_safe_failures(
+        self,
+    ) -> None:
+        loop = asyncio.get_running_loop()
+        prior_slow_callback_duration = loop.slow_callback_duration
+        loop.slow_callback_duration = 1
+        self.addCleanup(
+            setattr,
+            loop,
+            "slow_callback_duration",
+            prior_slow_callback_duration,
+        )
+        backend = AgentBackend(
+            self.workspace,
+            executable=str(self.fake_directory / "unused-codex"),
+            antigravity_executable=str(self.executable),
+            backend_overrides={agent_id: "antigravity" for agent_id in ROSTER},
+        )
+        self.addCleanup(backend.close)
+        catalog = FilesystemConversationCatalog(self.workspace)
+        store = FilesystemConversationEventStore(
+            self.workspace,
+            catalog=catalog,
+        )
+        runtime = StoryRuntime(
+            self.workspace,
+            backend,
+            conversation_event_store=store,
+        )
+
+        success_session = "runtime-retrieval-success"
+        backend.create_session_with_access(success_session)
+        selected = catalog.create(success_session, "retrieval success")
+        memory = ConversationMemoryService(
+            ConversationSearchScope(success_session),
+            catalog,
+            store,
+        )
+        result = await runtime.converse_with_retrieval(
+            success_session,
+            selected.conversation_id,
+            PLOT_ARCHITECT,
+            "PRIVATE_RUNTIME_RETRIEVAL",
+            memory_service=memory,
+        )
+        self.assertEqual(result.content, "retrieval answer")
+        self.assertEqual(result.sources, ())
+        success_events = store.read(success_session, selected.conversation_id)
+        self.assertEqual(
+            tuple(event.kind for event in success_events),
+            (
+                ConversationEventKind.USER_MESSAGE,
+                ConversationEventKind.AGENT_REPLY,
+            ),
+        )
+        self.assertEqual(
+            tuple(event.turn_id for event in success_events),
+            (result.turn_id, result.turn_id),
+        )
+        self.assertEqual(
+            [call["retrieval_action_index"] for call in self.provider_invocations()[-2:]],
+            [1, 2],
+        )
+        success_state = backend.get_session_lifecycle(success_session)
+        self.assertEqual(
+            (success_state.durable_state, success_state.access_state),
+            (SessionDurableState.READY, SessionAccessState.HELD_HERE),
+        )
+
+        mismatch_modes = (
+            "retrieval_session_id",
+            "retrieval_conversation_id",
+            "retrieval_turn_id",
+            "retrieval_action_index",
+        )
+        for index, mode in enumerate(mismatch_modes):
+            with self.subTest(mode=mode):
+                session_id = f"runtime-retrieval-failure-{index}"
+                backend.create_session_with_access(session_id)
+                failed_conversation = catalog.create(session_id, mode)
+                failed_memory = ConversationMemoryService(
+                    ConversationSearchScope(session_id),
+                    catalog,
+                    store,
+                )
+                with (
+                    mock.patch.dict(
+                        os.environ,
+                        {"STORY_FAKE_AGY_MODE": mode},
+                    ),
+                    self.assertRaises(ConversationRetrievalSemanticError) as caught,
+                ):
+                    await runtime.converse_with_retrieval(
+                        session_id,
+                        failed_conversation.conversation_id,
+                        PLOT_ARCHITECT,
+                        "PRIVATE_RUNTIME_RETRIEVAL_FAILURE",
+                        memory_service=failed_memory,
+                    )
+
+                self.assertEqual(
+                    str(caught.exception),
+                    "conversation retrieval semantic validation failed",
+                )
+                failure_events = store.read(
+                    session_id,
+                    failed_conversation.conversation_id,
+                )
+                self.assertEqual(
+                    tuple(event.kind for event in failure_events),
+                    (
+                        ConversationEventKind.USER_MESSAGE,
+                        ConversationEventKind.RUNTIME_ERROR,
+                    ),
+                )
+                self.assertEqual(
+                    failure_events[-1].content,
+                    "ConversationRetrievalSemanticError: conversation retrieval "
+                    "semantic validation failed",
+                )
+                self.assertNotIn("other-identity", failure_events[-1].content)
+                failed_state = backend.get_session_lifecycle(session_id)
+                self.assertEqual(
+                    (failed_state.durable_state, failed_state.access_state),
+                    (SessionDurableState.READY, SessionAccessState.HELD_HERE),
+                )
+                self.assertIs(
+                    self.manifest(session_id)["provider_threads"]
+                    ["antigravity:plot_architect"]["tainted"],
+                    True,
+                )
+
+        for call in self.provider_invocations():
+            argv_text = "\0".join(call["argv"])
+            self.assertNotIn("PRIVATE_RUNTIME_RETRIEVAL", argv_text)
+            self.assertNotIn("PRIVATE_RUNTIME_RETRIEVAL_FAILURE", argv_text)
 
     async def test_v2_lifecycle_partitions_threads_and_retains_exact_resume(
         self,
@@ -642,7 +896,14 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             [call["resumed_id"] is not None for call in calls],
             [False, True, False, False],
         )
-        self.assertEqual(len({call["provider_state"] for call in calls[::2]}), 2)
+        self.assertEqual(calls[0]["provider_state"], calls[1]["provider_state"])
+        self.assertEqual(
+            len({call["provider_state"] for call in calls}),
+            3,
+        )
+        self.assertNotEqual(calls[0]["provider_state"], calls[2]["provider_state"])
+        self.assertNotEqual(calls[0]["provider_state"], calls[3]["provider_state"])
+        self.assertNotEqual(calls[2]["provider_state"], calls[3]["provider_state"])
         manifest = self.manifest("story-one")
         self.assertEqual(manifest["schema_version"], 2)
         self.assertEqual(manifest["durable_state"], "ready")
@@ -781,43 +1042,57 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             ),
             mock.patch.object(backend._codex_adapter, "invoke", codex_invoke),
         ):
-            first = asyncio.create_task(
-                antigravity_bound.invoke(
-                    self.request(
-                        session_id=session_id,
-                        debate_id="agy-first",
-                        phase=Phase.DRAFT,
+            tasks: list[asyncio.Task[AgentReply]] = []
+            try:
+                first = asyncio.create_task(
+                    antigravity_bound.invoke(
+                        self.request(
+                            session_id=session_id,
+                            debate_id="agy-first",
+                            phase=Phase.DRAFT,
+                        )
                     )
                 )
-            )
-            await entered.wait()
-            second = asyncio.create_task(
-                antigravity_bound.invoke(
-                    self.request(
-                        session_id=session_id,
-                        debate_id="agy-second",
-                        phase=Phase.DRAFT,
+                tasks.append(first)
+                await asyncio.wait_for(entered.wait(), timeout=1)
+                second = asyncio.create_task(
+                    antigravity_bound.invoke(
+                        self.request(
+                            session_id=session_id,
+                            debate_id="agy-second",
+                            phase=Phase.DRAFT,
+                        )
                     )
                 )
-            )
-            codex = asyncio.create_task(
-                codex_bound.invoke(
-                    self.request(
-                        session_id=session_id,
-                        debate_id="codex-independent",
-                        phase=Phase.DRAFT,
-                        agent_id=CHARACTER_CUSTODIAN,
+                tasks.append(second)
+                codex = asyncio.create_task(
+                    codex_bound.invoke(
+                        self.request(
+                            session_id=session_id,
+                            debate_id="codex-independent",
+                            phase=Phase.DRAFT,
+                            agent_id=CHARACTER_CUSTODIAN,
+                        )
                     )
                 )
-            )
-            for _ in range(5):
-                await asyncio.sleep(0)
-            self.assertEqual(antigravity_calls, 1)
-            codex_reply = await codex
-            self.assertEqual(codex_reply.content, "codex mixed reply")
-            codex_invoke.assert_awaited_once()
-            release.set()
-            first_reply, second_reply = await asyncio.gather(first, second)
+                tasks.append(codex)
+                codex_reply = await asyncio.wait_for(codex, timeout=1)
+                self.assertEqual(codex_reply.content, "codex mixed reply")
+                codex_invoke.assert_awaited_once()
+                self.assertEqual(antigravity_calls, 1)
+            finally:
+                release.set()
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(*tasks, return_exceptions=True),
+                        timeout=1,
+                    )
+                except TimeoutError:
+                    for task in tasks:
+                        task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+            first_reply = first.result()
+            second_reply = second.result()
 
         self.assertEqual(first_reply.content, "antigravity mixed reply")
         self.assertEqual(second_reply.content, "antigravity mixed reply")
@@ -859,6 +1134,116 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             manager.validate_backend("antigravity"),
             "antigravity",
         )
+
+    async def test_schema_and_domain_identity_failures_taint_once(self) -> None:
+        session_id = "domain-identity"
+        backend = self.backend()
+        backend.create_session_with_access(session_id)
+        definition = self.definition()
+        bound = await backend.bind(definition)
+        await bound.invoke(
+            self.request(
+                session_id=session_id,
+                debate_id="seed",
+                phase=Phase.DRAFT,
+            )
+        )
+        cases = (
+            (
+                "empty minLength conversation content",
+                "empty_required_string",
+                "Antigravity CLI exited with status 83",
+                None,
+            ),
+            (
+                "debate revision",
+                "debate_revision_mismatch",
+                "Antigravity reply revision_id does not match its request",
+                Phase.DRAFT,
+            ),
+            (
+                "direct session",
+                "direct_session_id",
+                "Antigravity conversation reply session_id does not match its request",
+                None,
+            ),
+            (
+                "direct conversation",
+                "direct_conversation_id",
+                "Antigravity conversation reply conversation_id does not match its request",
+                None,
+            ),
+            (
+                "direct turn",
+                "direct_turn_id",
+                "Antigravity conversation reply turn_id does not match its request",
+                None,
+            ),
+        )
+        for index, (label, mode, diagnostic, phase) in enumerate(cases):
+            with self.subTest(label=label):
+                with (
+                    mock.patch.object(
+                        backend,
+                        "_taint_thread",
+                        wraps=backend._taint_thread,
+                    ) as taint,
+                    mock.patch.object(
+                        backend,
+                        "_write_manifest",
+                        wraps=backend._write_manifest,
+                    ) as write_manifest,
+                    mock.patch.dict(
+                        os.environ,
+                        {"STORY_FAKE_AGY_MODE": mode},
+                    ),
+                    self.assertRaises(BackendProtocolError) as caught,
+                ):
+                    if phase is None:
+                        await bound.converse(
+                            ConversationRequest(
+                                session_id=session_id,
+                                conversation_id="identity-conversation",
+                                turn_id=f"identity-turn-{index}",
+                                agent_id=PLOT_ARCHITECT,
+                                content="PRIVATE_IDENTITY_REQUEST",
+                                context=_empty_context(),
+                            )
+                        )
+                    else:
+                        await bound.invoke(
+                            self.request(
+                                session_id=session_id,
+                                debate_id=f"identity-debate-{index}",
+                                phase=phase,
+                                revision_id=f"identity-r{index}",
+                            )
+                )
+
+                self.assertEqual(str(caught.exception), diagnostic)
+                self.assertNotIn("other-", str(caught.exception))
+                if mode == "empty_required_string":
+                    failure_schema = self.provider_invocations()[-1]["schema"]
+                    self.assertEqual(
+                        failure_schema["properties"]["content"]["minLength"],
+                        1,
+                    )
+                taint.assert_called_once_with(session_id, definition)
+                write_manifest.assert_called_once()
+                self.assertIs(
+                    self.manifest(session_id)["provider_threads"]
+                    ["antigravity:plot_architect"]["tainted"],
+                    True,
+                )
+                await bound.invoke(
+                    self.request(
+                        session_id=session_id,
+                        debate_id=f"identity-recovery-{index}",
+                        phase=Phase.DRAFT,
+                        revision_id=f"recovery-r{index}",
+                    )
+                )
+                self.assertIsNone(self.provider_invocations()[-1]["resumed_id"])
 
     async def test_protocol_failures_are_fixed_taint_once_and_restart_fresh(
         self,
@@ -930,6 +1315,16 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                     "antigravity:plot_architect"
                 ]
                 with (
+                    mock.patch.object(
+                        backend,
+                        "_taint_thread",
+                        wraps=backend._taint_thread,
+                    ) as taint,
+                    mock.patch.object(
+                        backend,
+                        "_write_manifest",
+                        wraps=backend._write_manifest,
+                    ) as write_manifest,
                     mock.patch.dict(
                         os.environ,
                         {"STORY_FAKE_AGY_MODE": mode},
@@ -946,6 +1341,8 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                     )
 
                 self.assertEqual(str(caught.exception), diagnostic)
+                taint.assert_called_once_with(session_id, definition)
+                write_manifest.assert_called_once()
                 external_error = str(caught.exception)
                 for confidential in (
                     "CONFIDENTIAL_PROVIDER",
