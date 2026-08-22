@@ -892,7 +892,6 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         )
         command = adapter.command(
             provider_state_directory=self.workspace.path("provider"),
-            working_directory=self.workspace.path("working"),
             schema={"type": "object"},
             thread_id=None,
             agent_id=PLOT_ARCHITECT,
