@@ -677,6 +677,8 @@ class InterruptionTests(unittest.IsolatedAsyncioTestCase):
             {key[0] for key in runtime._bound_agents},
             {EXECUTION_SPECIALIST},
         )
+        self.assertEqual(runtime._retiring_bound_agents, {})
+        self.assertEqual(runtime._bound_agent_uses, {})
 
     async def test_external_cancellation_is_terminal_durable_and_non_reusable(
         self,

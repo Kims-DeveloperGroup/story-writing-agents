@@ -205,6 +205,7 @@ class _ConversationBackend:
         self.lifecycle_sessions: list[str] = []
         self.access_held: set[str] = set()
         self.definitions: list[AgentDefinition] = []
+        self.bindings: list[object] = []
         self.requests: list[ConversationRequest] = []
 
     @staticmethod
@@ -260,7 +261,9 @@ class _ConversationBackend:
             self.bind_hook(definition)
         if self.bind_error is not None:
             raise self.bind_error
-        return self.bound_factory(self, definition)
+        binding = self.bound_factory(self, definition)
+        self.bindings.append(binding)
+        return binding
 
 
 class _TracingStore:
@@ -736,6 +739,96 @@ class ConversationRuntimeSuccessTests(_ConversationRuntimeCase):
 
 
 class ConversationRuntimeConcurrencyTests(_ConversationRuntimeCase):
+    async def _assert_superseded_binding_spans_provider(
+        self,
+        outcome: str,
+    ) -> None:
+        workspace, catalog, memory, first_id = self.memory_fixture()
+        second_id = catalog.create("session_a", "Second subject").conversation_id
+        entered = asyncio.Event()
+        proceed = asyncio.Event()
+
+        async def respond(request: ConversationRequest) -> ConversationReply:
+            if request.content == "old binding":
+                entered.set()
+                await proceed.wait()
+                if outcome == "failure":
+                    raise RuntimeError("conversation provider failed")
+            return ConversationReply(
+                request.session_id,
+                request.conversation_id,
+                request.turn_id,
+                f"reply-{request.content}",
+            )
+
+        backend = _ConversationBackend(respond)
+        runtime = StoryRuntime(
+            workspace,
+            backend,  # type: ignore[arg-type]
+            conversation_event_store=memory,
+        )
+        released: list[object] = []
+
+        def release(binding: object) -> None:
+            self.assertFalse(runtime._binding_lock.locked())
+            released.append(binding)
+
+        with mock.patch(
+            "story_writing_agents.orchestrator.release_bound_agent",
+            side_effect=release,
+        ):
+            first = asyncio.create_task(
+                runtime.converse(
+                    "session_a",
+                    first_id,
+                    PLOT_ARCHITECT,
+                    "old binding",
+                )
+            )
+            await asyncio.wait_for(entered.wait(), timeout=1)
+            old_bound = backend.bindings[0]
+            prompt_path = AGENT_SPECS[PLOT_ARCHITECT].system_prompt_file
+            workspace.write_text(prompt_path, "conversation prompt version two")
+            await runtime.converse(
+                "session_a",
+                second_id,
+                PLOT_ARCHITECT,
+                "new binding",
+            )
+
+            self.assertEqual(len(backend.bindings), 2)
+            self.assertNotIn(old_bound, released)
+            self.assertIn(old_bound, runtime._retiring_bound_agents.values())
+            if outcome == "cancellation":
+                first.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await first
+            else:
+                proceed.set()
+                if outcome == "failure":
+                    with self.assertRaisesRegex(
+                        RuntimeError,
+                        "conversation provider failed",
+                    ):
+                        await asyncio.wait_for(first, timeout=1)
+                else:
+                    await asyncio.wait_for(first, timeout=1)
+
+        self.assertEqual(released, [old_bound])
+        self.assertEqual(runtime._retiring_bound_agents, {})
+        self.assertEqual(runtime._bound_agent_uses, {})
+
+    async def test_superseded_binding_spans_advisory_provider_success(self) -> None:
+        await self._assert_superseded_binding_spans_provider("success")
+
+    async def test_superseded_binding_spans_advisory_provider_failure(self) -> None:
+        await self._assert_superseded_binding_spans_provider("failure")
+
+    async def test_superseded_binding_spans_advisory_provider_cancellation(
+        self,
+    ) -> None:
+        await self._assert_superseded_binding_spans_provider("cancellation")
+
     async def test_same_conversation_serializes_before_id_and_context(self) -> None:
         workspace, _, memory, conversation_id = self.memory_fixture()
         trace: list[str] = []

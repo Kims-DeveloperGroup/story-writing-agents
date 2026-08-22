@@ -31,7 +31,8 @@ reserved `gemini` fails configuration validation. A bound agent exposes
 `backend`, `definition`, `vendor`, and `staging_directory`.
 Provider calls require ready access already held by the backend. Runtime owns
 transcripts and retrieval authorization; backend owns provider metadata,
-processes, access claims, and per-thread serialization.
+processes, access claims, per-thread serialization, and exact binding-staging
+retirement.
 
 Construction first validates the complete five-key
 `config/system_defaults.json` object and the complete roster in
@@ -127,8 +128,23 @@ No remote probe occurs.
 Release compares the opaque token under the guard and removes only the claim
 recorded by this backend. Failed create/access/reopen compensates only a claim
 newly acquired by that operation. A caller that already held access keeps it on
-later failure. `close()` best-effort releases its recorded claims and removes
-prompt staging; it never pauses durable state or permits backend reuse.
+later failure.
+
+Each `invoke()`, `converse()`, and `converse_with_retrieval()` call privately
+retains its exact binding resource from method entry through success, failure,
+or cancellation. Retiring a binding immediately rejects later calls through
+that handle, but its staging directory remains available until the final active
+call exits. Retirement then releases that exact staging ownership once;
+provisional staging is also discarded when binding validation does not
+complete.
+
+`close()` is terminal and idempotent. Its first call marks every binding retired
+and rejects backend reuse. If calls are active, removal of their staging and
+cleanup of backend-wide access claims and thread locks wait until the last call
+exits; otherwise cleanup proceeds immediately. Removal of owned temporary
+staging and claim release remain best-effort filesystem cleanup. Closing never
+pauses durable state, deletes provider-thread references, or adds a cleanup
+status or error contract.
 
 V1 manifests, access sidecars, and guards raise
 `WorkspaceVersionUnsupportedError` without migration, deletion, or rewriting.

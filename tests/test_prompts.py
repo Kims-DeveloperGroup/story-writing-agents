@@ -478,6 +478,23 @@ class _CancellationSuppressingBindingBackend:
         return _BoundApprovalAgent(definition.agent_id)
 
 
+class _ControlledBindingBackend:
+    """Complete selected fingerprint binds only when the test permits."""
+
+    def __init__(self) -> None:
+        self.started: dict[str, asyncio.Event] = {}
+        self.proceed: dict[str, asyncio.Event] = {}
+        self.bindings: dict[str, _BoundApprovalAgent] = {}
+
+    async def bind(self, definition: AgentDefinition) -> _BoundApprovalAgent:
+        fingerprint = definition.fingerprint
+        self.started.setdefault(fingerprint, asyncio.Event()).set()
+        await self.proceed.setdefault(fingerprint, asyncio.Event()).wait()
+        binding = _BoundApprovalAgent(definition.agent_id)
+        self.bindings[fingerprint] = binding
+        return binding
+
+
 class RuntimeBindingTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.workspace = initialized_workspace(self)
@@ -677,6 +694,54 @@ class RuntimeBindingTests(unittest.IsolatedAsyncioTestCase):
         bound = await asyncio.wait_for(surviving_waiter, timeout=1)
         self.assertEqual(backend.bind_count, 1)
         self.assertIs(await runtime._bound_agent(definition), bound)
+        self.assertEqual(
+            runtime._bound_agents,
+            {(definition.agent_id, definition.fingerprint): bound},
+        )
+        self.assertEqual(runtime._retiring_bound_agents, {})
+        self.assertEqual(runtime._bound_agent_uses, {})
+
+    async def test_same_fingerprint_operations_share_one_current_binding(
+        self,
+    ) -> None:
+        all_entered = asyncio.Event()
+        proceed = asyncio.Event()
+        arrivals = 0
+
+        async def approve(request: AgentRequest) -> AgentReply:
+            nonlocal arrivals
+            arrivals += 1
+            if arrivals == 2:
+                all_entered.set()
+            await proceed.wait()
+            return AgentReply.approval(request.revision_id)
+
+        backend = ScriptedBackend(approve)
+        runtime = StoryRuntime(self.workspace, backend)
+        request = self._audit_request(runtime)
+        tasks = (
+            asyncio.create_task(runtime._invoke(request)),
+            asyncio.create_task(runtime._invoke(request)),
+        )
+        await asyncio.wait_for(all_entered.wait(), timeout=1)
+
+        self.assertEqual(len(backend.definitions), 1)
+        self.assertEqual(len(backend.bound_invocations), 2)
+        self.assertIs(
+            backend.bound_invocations[0][0],
+            backend.bound_invocations[1][0],
+        )
+        self.assertEqual(
+            [use_count for _, use_count in runtime._bound_agent_uses.values()],
+            [2],
+        )
+        self.assertEqual(len(runtime._bound_agents), 1)
+
+        proceed.set()
+        await asyncio.wait_for(asyncio.gather(*tasks), timeout=1)
+        self.assertEqual(runtime._bound_agent_uses, {})
+        self.assertEqual(runtime._retiring_bound_agents, {})
+        self.assertEqual(len(runtime._bound_agents), 1)
 
     async def test_sole_waiter_cancellation_cancels_and_joins_binding(
         self,
@@ -701,6 +766,8 @@ class RuntimeBindingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime._binding_tasks, {})
         self.assertEqual(runtime._binding_waiters, {})
         self.assertEqual(runtime._bound_agents, {})
+        self.assertEqual(runtime._retiring_bound_agents, {})
+        self.assertEqual(runtime._bound_agent_uses, {})
 
     async def test_cancel_suppressing_abandoned_bind_cannot_cache(
         self,
@@ -712,29 +779,148 @@ class RuntimeBindingTests(unittest.IsolatedAsyncioTestCase):
             agent_id=PLOT_ARCHITECT,
         )
 
-        abandoned_waiter = asyncio.create_task(
-            runtime._bound_agent(definition)
+        released: list[object] = []
+
+        def release(binding: object) -> None:
+            self.assertFalse(runtime._binding_lock.locked())
+            released.append(binding)
+
+        with mock.patch(
+            "story_writing_agents.orchestrator.release_bound_agent",
+            side_effect=release,
+        ):
+            abandoned_waiter = asyncio.create_task(
+                runtime._bound_agent(definition)
+            )
+            await asyncio.wait_for(backend.first_entered.wait(), timeout=1)
+            abandoned_binding = next(iter(runtime._binding_tasks.values()))
+            abandoned_waiter.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await abandoned_waiter
+
+            await asyncio.wait_for(backend.first_cancelled.wait(), timeout=1)
+            self.assertTrue(abandoned_binding.done())
+            self.assertFalse(abandoned_binding.cancelled())
+            self.assertEqual(len(released), 1)
+            self.assertEqual(
+                getattr(released[0], "agent_id"),
+                f"{definition.agent_id}:abandoned",
+            )
+            self.assertEqual(runtime._binding_tasks, {})
+            self.assertEqual(runtime._binding_waiters, {})
+            self.assertEqual(runtime._bound_agents, {})
+            self.assertEqual(runtime._retiring_bound_agents, {})
+            self.assertEqual(runtime._bound_agent_uses, {})
+
+            fresh = await runtime._bound_agent(definition)
+            key = (definition.agent_id, definition.fingerprint)
+            self.assertEqual(backend.bind_count, 2)
+            self.assertEqual(fresh.agent_id, definition.agent_id)
+            self.assertIs(runtime._bound_agents[key], fresh)
+            self.assertEqual(runtime._binding_tasks, {})
+            self.assertEqual(runtime._binding_waiters, {})
+            self.assertEqual(len(released), 1)
+
+    async def test_out_of_order_fingerprints_keep_newest_current_and_old_use_safe(
+        self,
+    ) -> None:
+        backend = _ControlledBindingBackend()
+        runtime = StoryRuntime(self.workspace, backend)
+        first = runtime.prompts.build_definition(
+            session_id="out_of_order_session",
+            agent_id=PLOT_ARCHITECT,
         )
-        await asyncio.wait_for(backend.first_entered.wait(), timeout=1)
-        abandoned_binding = next(iter(runtime._binding_tasks.values()))
-        abandoned_waiter.cancel()
-        with self.assertRaises(asyncio.CancelledError):
-            await abandoned_waiter
+        first_task = asyncio.create_task(runtime._acquire_bound_agent(first))
+        await asyncio.wait_for(
+            backend.started.setdefault(first.fingerprint, asyncio.Event()).wait(),
+            timeout=1,
+        )
 
-        await asyncio.wait_for(backend.first_cancelled.wait(), timeout=1)
-        self.assertTrue(abandoned_binding.done())
-        self.assertFalse(abandoned_binding.cancelled())
-        self.assertEqual(runtime._binding_tasks, {})
-        self.assertEqual(runtime._binding_waiters, {})
-        self.assertEqual(runtime._bound_agents, {})
+        self.workspace.write_text(self.persona_path, "runtime-persona-v2")
+        second = runtime.prompts.build_definition(
+            session_id="out_of_order_session",
+            agent_id=PLOT_ARCHITECT,
+        )
+        self.assertNotEqual(first.fingerprint, second.fingerprint)
+        second_task = asyncio.create_task(runtime._acquire_bound_agent(second))
+        await asyncio.wait_for(
+            backend.started.setdefault(second.fingerprint, asyncio.Event()).wait(),
+            timeout=1,
+        )
 
-        fresh = await runtime._bound_agent(definition)
-        key = (definition.agent_id, definition.fingerprint)
-        self.assertEqual(backend.bind_count, 2)
-        self.assertEqual(fresh.agent_id, definition.agent_id)
-        self.assertIs(runtime._bound_agents[key], fresh)
-        self.assertEqual(runtime._binding_tasks, {})
-        self.assertEqual(runtime._binding_waiters, {})
+        released: list[object] = []
+
+        def release(binding: object) -> None:
+            self.assertFalse(runtime._binding_lock.locked())
+            released.append(binding)
+
+        with mock.patch(
+            "story_writing_agents.orchestrator.release_bound_agent",
+            side_effect=release,
+        ):
+            backend.proceed[second.fingerprint].set()
+            second_bound = await asyncio.wait_for(second_task, timeout=1)
+            backend.proceed[first.fingerprint].set()
+            first_bound = await asyncio.wait_for(first_task, timeout=1)
+
+            second_key = (PLOT_ARCHITECT, second.fingerprint)
+            first_key = (PLOT_ARCHITECT, first.fingerprint)
+            self.assertEqual(runtime._bound_agents, {second_key: second_bound})
+            self.assertEqual(
+                runtime._retiring_bound_agents,
+                {first_key: first_bound},
+            )
+            self.assertEqual(released, [])
+
+            await runtime._release_bound_agent_use(first_bound)
+            self.assertEqual(released, [first_bound])
+            self.assertEqual(runtime._retiring_bound_agents, {})
+            await runtime._release_bound_agent_use(second_bound)
+            self.assertEqual(released, [first_bound])
+            self.assertEqual(runtime._bound_agent_uses, {})
+
+    async def test_a_b_a_rekeys_same_backend_object_without_duplicate_ownership(
+        self,
+    ) -> None:
+        shared = _BoundApprovalAgent(PLOT_ARCHITECT)
+
+        class SameObjectBackend:
+            async def bind(self, _definition: AgentDefinition) -> object:
+                return shared
+
+        runtime = StoryRuntime(self.workspace, SameObjectBackend())
+        first = runtime.prompts.build_definition(
+            session_id="oscillation_session",
+            agent_id=PLOT_ARCHITECT,
+        )
+        self.assertIs(await runtime._bound_agent(first), shared)
+        self.workspace.write_text(self.persona_path, "runtime-persona-v2")
+        second = runtime.prompts.build_definition(
+            session_id="oscillation_session",
+            agent_id=PLOT_ARCHITECT,
+        )
+        self.assertIs(await runtime._bound_agent(second), shared)
+        self.workspace.write_text(self.persona_path, "runtime-persona-v1")
+        third = runtime.prompts.build_definition(
+            session_id="oscillation_session",
+            agent_id=PLOT_ARCHITECT,
+        )
+        self.assertEqual(third.fingerprint, first.fingerprint)
+
+        released: list[object] = []
+        with mock.patch(
+            "story_writing_agents.orchestrator.release_bound_agent",
+            side_effect=released.append,
+        ):
+            self.assertIs(await runtime._bound_agent(third), shared)
+
+        self.assertEqual(
+            runtime._bound_agents,
+            {(PLOT_ARCHITECT, first.fingerprint): shared},
+        )
+        self.assertEqual(runtime._retiring_bound_agents, {})
+        self.assertEqual(runtime._bound_agent_uses, {})
+        self.assertEqual(released, [])
 
     async def test_failed_binding_is_not_cached(self) -> None:
         backend = _RetryBindingBackend()

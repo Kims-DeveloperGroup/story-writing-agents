@@ -212,7 +212,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   `pause_session_and_release_access(session_id)`.
   Unexported package-internal `backend_configuration_snapshot(backend)` exposes
   the same immutable construction-time configuration to the bound runtime
-  without exposing the backend's private storage.
+  without exposing the backend's private storage; unexported package-internal
+  `release_bound_agent(bound_agent)` requests exact binding retirement without
+  exposing or mutating backend collections.
 - **Direct internal dependencies:** `agents`, `config`,
   `conversation_retrieval`, `errors`, `models`, `session_lifecycle`, and
   `workspace`.
@@ -235,9 +237,18 @@ every intermediate arrow. The current runtime graph is acyclic.
   with `WorkspaceVersionUnsupportedError` without migration, deletion, or
   rewriting. The backend also owns
   timeout/cancellation taint handling, cleanup, and per-instance `atexit`
-  registration. One retrieval thread lock covers the complete repeated-call
-  action loop and synchronous
-  handler invocations. The backend owns the exact Codex action schema, initial
+  registration. Each concrete `BoundAgent` privately owns synchronized
+  usable/active/retired/released state and an active-call count spanning its
+  `invoke`, `converse`, and `converse_with_retrieval` operations. Retirement
+  rejects later calls but retains its immutable prompt staging through every
+  already-entered call, and the final exit removes that exact staging once.
+  Binding validation failure removes provisional staging before propagation.
+  Backend close is terminal and idempotent: it retires all concrete bindings
+  immediately, then defers access-claim release, in-memory thread-lock cleanup,
+  and remaining staging cleanup until no active binding can use them. One
+  retrieval thread lock covers the complete repeated-call action loop and
+  synchronous handler invocations. The backend owns the exact Codex action
+  schema, initial
   and continuation payloads, canonical observation framing handoff, provider
   timeout/cancellation behavior, incomplete-history taint, and fixed
   provider-value-free process/response-validation diagnostics. It drains both
@@ -258,10 +269,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   value changes provider-thread identity, bindings, fingerprints, manifests,
   or request payloads.
 - **Primary verification/documentation:** `tests/test_codex_backend.py`,
+  `tests/test_prompts.py`, `tests/test_conversation_retrieval.py`,
   `tests/test_session_lifecycle.py`, `docs/reference/backend-and-sessions.md`,
   `docs/reference/conversation-retrieval.md`,
   `docs/design/prompts-and-provider.md`, `docs/design/session-lifecycle.md`, and
-  `docs/operations/privacy-and-provider.md`.
+  `docs/operations/privacy-and-provider.md`, plus
+  `docs/operations/recovery-and-limitations.md` for bounded ephemeral-resource
+  cleanup and process-exit limits.
 
 ### `story_writing_agents.cli`
 
@@ -1343,13 +1357,27 @@ every intermediate arrow. The current runtime graph is acyclic.
   `conversations`, `errors`, `models`, `prompts`, `session_lifecycle`, and
   `workspace`; plus `writing_artifacts` and `writing_artifacts.repository`.
 - **State, resources, and side effects:** Retains an injected or default
-  `ConversationEventStore` collaborator and owns the in-memory binding cache,
-  in-flight bind tasks, binding lock, and per-session/conversation advisory-turn
-  locks. A backend-bound runtime retains that backend's immutable persisted
-  configuration snapshot for its lifetime, shares it with prompt assembly, and
-  uses its round limit; session runtime overrides and explicit call overrides
-  remain live and higher precedence. Backend-free construction retains the
-  established on-demand configuration path. For an included consensus request
+  `ConversationEventStore` collaborator and owns each canonical agent's newest
+  desired fingerprint, at most one current binding, same-fingerprint shielded
+  bind task and waiter count, operation-use counts, retiring bindings, one
+  binding-state lock, and per-session/conversation advisory-turn locks. A
+  matching current binding is leased immediately. Missing identical bindings
+  share one flight; the newest successful desired fingerprint becomes current,
+  while an out-of-order result serves only its already-waiting retained
+  operation and never becomes idle current. Former current bindings retire
+  after their final use, cancellation joins a last-waiter flight and releases a
+  cancellation-suppressing result, and A-to-B-to-A oscillation can promote the
+  still-active A while B survives only its active uses. Backend release always
+  occurs outside the asyncio binding lock through the package-internal seam;
+  runtime code never reaches into backend collections. Debate invocation,
+  ordinary conversation, and retrieval each retain their exact binding from
+  acquisition through the provider call and release it in `finally` on success,
+  failure, or cancellation. A backend-bound runtime retains that backend's
+  immutable persisted configuration snapshot for its lifetime, shares it with
+  prompt assembly, and uses its round limit; session runtime overrides and
+  explicit call overrides remain live and higher precedence. Backend-free
+  construction retains the established on-demand configuration path. For an
+  included consensus request
   it captures one canonical immutable
   context window before reservation, reuses that exact snapshot for every agent
   phase, and delegates create-only sidecar persistence to `Workspace`; fresh
@@ -1391,10 +1419,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   controller-owned persistent Runner and its single lifecycle event loop,
   `tests/test_orchestration_workflow.py`,
   `tests/test_orchestration_safety.py`, `tests/test_lifecycle_atomicity.py`,
+  `tests/test_prompts.py`,
   `tests/test_agent_state.py`, `docs/reference/runtime-api.md`,
   `docs/reference/writing-artifacts.md`,
   `docs/reference/conversation-retrieval.md`, and
-  `docs/design/consensus-workflow.md`.
+  `docs/design/consensus-workflow.md`, plus `docs/design/overview.md` and
+  `docs/design/prompts-and-provider.md` for binding ownership and lifecycle.
 
 ### `story_writing_agents.prompts`
 
@@ -1974,6 +2004,17 @@ every intermediate arrow. The current runtime graph is acyclic.
   one-step conversation, and retrieval calls. The backend owns retrieval
   provider schemas, initial/continuation payloads, repeated calls, and framing
   handoff, while runtime owns every semantic, scope, budget, and memory decision.
+- `StoryRuntime` owns desired/current/retiring binding selection, shielded
+  same-fingerprint flights and waiters, and operation-use leases. Newest desired
+  success wins; superseded success is restricted to its waiting retained
+  operation, last-waiter cancellation joins and releases abandoned results, and
+  A-to-B-to-A reuse leaves only A current at quiescence. The runtime calls the
+  package-internal release seam only after dropping its binding lock and never
+  mutates backend collections. `AgentBackend` and each concrete `BoundAgent`
+  alone own provisional staging, active provider-call counts, retirement, and
+  exact-once cleanup. Terminal backend close rejects later work immediately but
+  defers shared access, in-memory thread-lock, and staging cleanup until all
+  entered calls exit; no reverse orchestration dependency is introduced.
 - `ConversationCatalog` exposes logical identifiers and immutable metadata only;
   `FilesystemConversationCatalog` owns the fixed metadata layout through
   `Workspace` without exposing paths through that protocol.

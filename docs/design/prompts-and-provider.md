@@ -34,8 +34,27 @@ external manual core edit made while workspace processes are stopped removes
 that document from eligibility; generic `Workspace` writes reject canonical
 artifact paths. Later agent republication can bind new provenanced bytes. Either
 effective-context change starts a fresh provider thread for that agent.
-Identical bindings are cached for one runtime; provider conversation state is
-still partitioned by story session and agent.
+Provider conversation state remains partitioned by story session and agent.
+
+## Binding resource lifecycle
+
+The runtime bounds binding and prompt-staging ownership per canonical agent.
+These internal states do not add a command, status field, or durable record:
+
+| Internal state | Transition and user-visible meaning |
+| --- | --- |
+| Desired/current | The newest requested fingerprint becomes the definition for new work. At quiescence, the runtime retains at most one current binding for that agent. |
+| Single-flight bind | Concurrent requests for the same fingerprint await one bind and share its immutable staged definition. |
+| Operation lease | Debate invocation, advisory conversation, and retrieval each retain the exact selected binding until that operation exits on success, failure, or cancellation. |
+| Superseded-active / retiring | A different fingerprint may become current while old work is still running. New work uses the newest desired definition; existing work keeps its original definition and staging until its last lease exits. More than one staging directory may therefore exist during overlap. |
+| Retired | An idle superseded or abandoned binding is retired exactly once. Its owned temporary staging is then eligible for best-effort removal and cannot be selected for later work. |
+
+If fingerprints change from A to B and back to A, the newest desired definition
+still wins; a compatible binding that remains safely retained may become current
+again, while abandoned out-of-order bind results are retired. Repeated
+agent-authored core publication therefore does not accumulate idle bindings or
+prompt-staging directories without bound. Provider calls, replies, conversation
+threads, and durable session state retain their existing contracts.
 
 Snapshot timing matters. Once a definition exists, changing, deleting, or
 replacing a source path does not change that definition or the bytes staged for

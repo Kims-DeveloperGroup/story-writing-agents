@@ -881,6 +881,8 @@ class PeerCancellationTests(unittest.IsolatedAsyncioTestCase):
             {key[0] for key in runtime._bound_agents},
             {EXECUTION_SPECIALIST},
         )
+        self.assertEqual(runtime._retiring_bound_agents, {})
+        self.assertEqual(runtime._bound_agent_uses, {})
         self.assertEqual(all_manuscripts(workspace), [])
 
     async def test_first_audit_failure_cancels_unfinished_peer_tasks(self) -> None:

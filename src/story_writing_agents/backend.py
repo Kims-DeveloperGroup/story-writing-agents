@@ -13,6 +13,7 @@ import shutil
 import socket
 import stat
 import tempfile
+import threading
 import time
 import uuid
 from collections.abc import Callable, Iterator
@@ -133,42 +134,82 @@ class BoundAgent:
         self.definition = definition
         self.vendor = definition.backend
         self.staging_directory = staging_directory
+        self._call_state_lock = threading.Lock()
+        self._active_calls = 0
+        self._retired = False
+        self._released = False
+
+    @contextmanager
+    def _call_use(self) -> Iterator[None]:
+        """Retain this binding's resources for one already-entered call."""
+
+        with self._call_state_lock:
+            if self.backend._closed:
+                raise BackendProtocolError("agent backend is closed")
+            if self._retired:
+                raise BackendProtocolError("bound agent is retired")
+            self._active_calls += 1
+        try:
+            yield
+        finally:
+            finalize = False
+            with self._call_state_lock:
+                self._active_calls -= 1
+                if self._retired and self._active_calls == 0 and not self._released:
+                    self._released = True
+                    finalize = True
+            if finalize:
+                self.backend._finalize_bound_agent(self)
+
+    def _retire(self) -> None:
+        """Reject later calls and release after every entered call exits."""
+
+        finalize = False
+        with self._call_state_lock:
+            self._retired = True
+            if self._active_calls == 0 and not self._released:
+                self._released = True
+                finalize = True
+        if finalize:
+            self.backend._finalize_bound_agent(self)
 
     async def invoke(self, request: AgentRequest) -> AgentReply:
         """Invoke the selected vendor while serializing its persistent thread."""
 
-        if request.agent_id != self.definition.agent_id:
-            raise BackendProtocolError(
-                "request was routed through the wrong bound agent: "
-                f"{request.agent_id} != {self.definition.agent_id}"
+        with self._call_use():
+            if request.agent_id != self.definition.agent_id:
+                raise BackendProtocolError(
+                    "request was routed through the wrong bound agent: "
+                    f"{request.agent_id} != {self.definition.agent_id}"
+                )
+            lock = self.backend._thread_lock(
+                request.session_id,
+                self.vendor,
+                self.definition.agent_id,
             )
-        lock = self.backend._thread_lock(
-            request.session_id,
-            self.vendor,
-            self.definition.agent_id,
-        )
-        async with lock:
-            if self.vendor == "codex":
-                return await self.backend._invoke_codex(self, request)
-            raise ConfigurationError(
-                f"agent backend is not implemented: {self.vendor}"
-            )
+            async with lock:
+                if self.vendor == "codex":
+                    return await self.backend._invoke_codex(self, request)
+                raise ConfigurationError(
+                    f"agent backend is not implemented: {self.vendor}"
+                )
 
     async def converse(self, request: ConversationRequest) -> ConversationReply:
         """Run one validated visible conversation turn on this agent thread."""
 
-        validated = self._validated_conversation_request(request)
-        lock = self.backend._thread_lock(
-            validated.session_id,
-            self.vendor,
-            self.definition.agent_id,
-        )
-        async with lock:
-            if self.vendor == "codex":
-                return await self.backend._converse_codex(self, validated)
-            raise ConfigurationError(
-                f"agent backend is not implemented: {self.vendor}"
+        with self._call_use():
+            validated = self._validated_conversation_request(request)
+            lock = self.backend._thread_lock(
+                validated.session_id,
+                self.vendor,
+                self.definition.agent_id,
             )
+            async with lock:
+                if self.vendor == "codex":
+                    return await self.backend._converse_codex(self, validated)
+                raise ConfigurationError(
+                    f"agent backend is not implemented: {self.vendor}"
+                )
 
     async def converse_with_retrieval(
         self,
@@ -184,39 +225,42 @@ class BoundAgent:
         propagate with incomplete observation state tainted when required.
         """
 
-        validated = self._validated_conversation_retrieval_request(request)
-        handler_method = getattr(
-            handler,
-            "handle_conversation_retrieval_action",
-            None,
-        )
-        if handler_method is None or not callable(handler_method):
-            raise TypeError(
-                "handler must provide handle_conversation_retrieval_action()"
+        with self._call_use():
+            validated = self._validated_conversation_retrieval_request(request)
+            handler_method = getattr(
+                handler,
+                "handle_conversation_retrieval_action",
+                None,
             )
-        handler_call = getattr(handler_method, "__call__", None)
-        if (
-            inspect.iscoroutinefunction(handler_method)
-            or inspect.isasyncgenfunction(handler_method)
-            or inspect.iscoroutinefunction(handler_call)
-            or inspect.isasyncgenfunction(handler_call)
-        ):
-            raise TypeError("conversation retrieval handler must be synchronous")
-        lock = self.backend._thread_lock(
-            validated.session_id,
-            self.vendor,
-            self.definition.agent_id,
-        )
-        async with lock:
-            if self.vendor == "codex":
-                return await self.backend._converse_with_retrieval_codex(
-                    self,
-                    validated,
-                    handler_method,
+            if handler_method is None or not callable(handler_method):
+                raise TypeError(
+                    "handler must provide handle_conversation_retrieval_action()"
                 )
-            raise ConfigurationError(
-                f"agent backend is not implemented: {self.vendor}"
+            handler_call = getattr(handler_method, "__call__", None)
+            if (
+                inspect.iscoroutinefunction(handler_method)
+                or inspect.isasyncgenfunction(handler_method)
+                or inspect.iscoroutinefunction(handler_call)
+                or inspect.isasyncgenfunction(handler_call)
+            ):
+                raise TypeError(
+                    "conversation retrieval handler must be synchronous"
+                )
+            lock = self.backend._thread_lock(
+                validated.session_id,
+                self.vendor,
+                self.definition.agent_id,
             )
+            async with lock:
+                if self.vendor == "codex":
+                    return await self.backend._converse_with_retrieval_codex(
+                        self,
+                        validated,
+                        handler_method,
+                    )
+                raise ConfigurationError(
+                    f"agent backend is not implemented: {self.vendor}"
+                )
 
     def _validated_conversation_request(
         self,
@@ -369,7 +413,9 @@ class AgentBackend:
         self._access_claim_tokens: dict[str, str] = {}
         self._thread_locks: dict[tuple[str, str, str], asyncio.Lock] = {}
         self._staging_directories: set[Path] = set()
+        self._bound_agents: set[BoundAgent] = set()
         self._closed = False
+        self._close_cleanup_complete = False
         atexit.register(self.close)
 
     async def bind(self, definition: AgentDefinition) -> BoundAgent:
@@ -383,9 +429,15 @@ class AgentBackend:
         for reference in definition.file_references():
             reference.read_text()
         staging_directory = self._stage_codex_definition(definition)
-        for reference in definition.file_references():
-            reference.read_text()
-        return BoundAgent(self, definition, staging_directory)
+        try:
+            for reference in definition.file_references():
+                reference.read_text()
+            bound_agent = BoundAgent(self, definition, staging_directory)
+        except BaseException:
+            self._discard_staging_directory(staging_directory)
+            raise
+        self._bound_agents.add(bound_agent)
+        return bound_agent
 
     def get_session_lifecycle(self, session_id: str) -> SessionLifecycleState:
         """Return validated durable and access facts without mutation.
@@ -632,11 +684,42 @@ class AgentBackend:
         return self.get_session_lifecycle(session)
 
     def close(self) -> None:
-        """Release owned access claims and remove ephemeral prompt staging."""
+        """Retire bindings and clean shared resources after active calls exit."""
 
         if self._closed:
             return
         self._closed = True
+        for bound_agent in tuple(self._bound_agents):
+            bound_agent._retire()
+        self._finalize_close_if_ready()
+
+    def _finalize_bound_agent(self, bound_agent: BoundAgent) -> None:
+        """Release one exact retired binding and finish a pending close."""
+
+        if bound_agent not in self._bound_agents:
+            return
+        self._bound_agents.remove(bound_agent)
+        self._discard_staging_directory(bound_agent.staging_directory)
+        self._finalize_close_if_ready()
+
+    def _discard_staging_directory(self, directory: Path) -> None:
+        """Remove one staging resource at most once."""
+
+        if directory not in self._staging_directories:
+            return
+        self._staging_directories.remove(directory)
+        shutil.rmtree(directory, ignore_errors=True)
+
+    def _finalize_close_if_ready(self) -> None:
+        """Clean backend-global resources once no binding can still use them."""
+
+        if (
+            not self._closed
+            or self._bound_agents
+            or self._close_cleanup_complete
+        ):
+            return
+        self._close_cleanup_complete = True
         for session, token in tuple(self._access_claim_tokens.items()):
             try:
                 self._release_access_claim(session, token)
@@ -645,8 +728,7 @@ class AgentBackend:
         self._access_claim_tokens.clear()
         self._thread_locks.clear()
         for directory in tuple(self._staging_directories):
-            shutil.rmtree(directory, ignore_errors=True)
-        self._staging_directories.clear()
+            self._discard_staging_directory(directory)
 
     async def _invoke_codex(
         self,
@@ -1179,7 +1261,7 @@ class AgentBackend:
                 "\n\n".join(sections).rstrip() + "\n",
                 encoding="utf-8",
             )
-        except Exception:
+        except BaseException:
             shutil.rmtree(directory, ignore_errors=True)
             raise
         self._staging_directories.add(directory)
@@ -2801,6 +2883,13 @@ class AgentBackend:
         """Return the access-claim path for a validated session ID."""
 
         return f"{_SESSION_DIRECTORY}/{session_id}.access.json"
+
+
+def release_bound_agent(bound_agent: object) -> None:
+    """Retire one concrete package binding without exposing backend internals."""
+
+    if isinstance(bound_agent, BoundAgent):
+        bound_agent._retire()
 
 
 def backend_configuration_snapshot(
