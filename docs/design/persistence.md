@@ -19,7 +19,7 @@ The workspace uses separate inspectable files rather than a database:
 | Conversation metadata and transcript | Catalog and event-store adapters |
 | Retrieval actions, observations, progress, sources | Process/terminal only |
 | Current conversation and agent focus | Controller memory only |
-| Approved manuscript | Workspace artifact commit |
+| Canonical writing artifacts and provenance | `WritingArtifactRepository` |
 
 <a id="debate-context-sidecar"></a>
 
@@ -94,10 +94,55 @@ its duplicated message list. Agent history remains owner-isolated and bounded,
 though provider output in visible fields may still be sensitive.
 
 Terminal result creation and lifecycle transition finish before terminal
-progress. Approved artifact commit validates the whole set, replaces core files
-in fixed order, then exclusively creates the manuscript; cross-file rollback is
-best effort. No sidecar, log, default, transcript, result, state, and artifact
-set forms one database transaction.
+progress. Approved artifact publication is a separate recoverable transaction:
+one immutable schema-v2 journal records the exact catalog-before state,
+catalog-after image, commit, and ordered manuscript/core targets. It is not
+rewritten as publication advances. The repository publishes and verifies target
+bytes, writes immutable commit history, publishes the catalog last, then
+exclusively retires the unchanged completed journal to non-authoritative
+staging. The next artifact access rolls forward only from exact catalog-before
+or verifies an exact catalog-after state; any other catalog position or missing,
+replaced, or divergent authority writes a persistent block marker and fails all
+later artifact access closed. Retained `.tmp`, `.held`, `.retired`, and
+`.completed` staging files are ignored by recovery and catalog listing and may
+accumulate.
+
+Immutable commits are also the permanent manuscript-reservation ledger, not
+just history for current catalog rows. Each access globally audits exact commit
+records against the catalog. Each immutable commit file must equal the
+repository's canonical JSON bytes, catalog paths equal the union of every
+artifact path in all non-exempt commits, and each entry exactly matches its
+referenced commit. Reformatting is divergence, not a migration input.
+
+Commit times are offset-aware instants. For a repeated core path, the catalog
+must select the unique newest normalized instant; an equal-newest tie or older
+projection fails closed. Generated timestamps are strictly later than every
+ledger instant even across wall-clock rollback, and an unrepresentable next
+instant fails before mutation. During exact catalog-before recovery, only the
+pending journal's already published byte-identical canonical commit is exempt:
+it contributes no paths or newest-core candidate, while all older established
+authority remains required. Projected and exact catalog-after audit the full
+commit set without an exemption. Catalog loss, subsets, malformed/noncanonical
+or extra commits, mismatches, and duplicate manuscript reservations fail closed
+instead of being rewritten, reconstructed, or migrated.
+
+The permanent repository readiness triple has its own durability boundary:
+primary lock, anchor, and `ready` are exact hard-link names for one regular inode
+with link count three. Initialization first takes a transient bootstrap `flock`
+on the open writing-artifact state directory and flushes its retained ancestry.
+It exclusively creates and flushes the primary, flushes the parent, links and
+flushes the anchor, verifies that `ready` is absent, then links and flushes
+`ready`. It verifies the triple, acquires the primary `flock`, reverifies, and
+releases bootstrap before work. Partial or old two-link state, aliases,
+divergent or extra links, and any failure prevent protected work and remain
+unchanged; no cleanup, reconstruction, or migration is attempted.
+
+That artifact transaction does not combine sidecars, blackboards, defaults,
+transcripts, debate lifecycle, results, provider state, and agent state into one
+database transaction. Infrastructure interruption can therefore leave a
+recoverable artifact journal alongside an incomplete non-artifact operation.
+Exact artifact paths, eligibility, recovery positions, and user responses are in
+[Canonical writing artifacts](../reference/writing-artifacts.md).
 
 One-step and retrieval turns append exactly one user event before provider work,
 then one reply or sanitized runtime error. Retrieval adds no control, source,

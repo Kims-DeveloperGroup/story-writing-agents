@@ -621,7 +621,7 @@ class RunInputTests(unittest.TestCase):
                     "--debate-id",
                     f"debate_{index}",
                     "--output",
-                    f"result_{index}.md",
+                    f"part-01/result-{index}.md",
                 ],
                 backend,
             )
@@ -683,7 +683,7 @@ class RunInputTests(unittest.TestCase):
                     "--debate-id",
                     "relative_file",
                     "--output",
-                    "relative_file.md",
+                    "part-01/relative-file.md",
                 ],
                 backend,
             )
@@ -706,13 +706,25 @@ class RunInputTests(unittest.TestCase):
                     "invalid_file",
                     "--draft-file",
                     str(invalid),
+                    "--output",
+                    "part-01/invalid.md",
                 ]
             )
         self.assertEqual((code, stdout), (2, ""))
         self.assertIn("not valid UTF-8", stderr)
         backend_class.assert_not_called()
 
-        for suffix in (["run"], ["run", "positional", "--prompt", "option"]):
+        for suffix in (
+            ["run", "--output", "part-01/missing-input.md"],
+            [
+                "run",
+                "positional",
+                "--prompt",
+                "option",
+                "--output",
+                "part-01/exclusive.md",
+            ],
+        ):
             with mock.patch.object(cli_module, "AgentBackend") as backend_class:
                 code, stdout, stderr = invoke_cli(
                     [*suffix, "--workspace", str(self.workspace.root), "--session", "invalid"]
@@ -728,7 +740,7 @@ class RunInputTests(unittest.TestCase):
         backend = successful_backend()
         with working_directory(nested), mock.patch.object(cli_module, "AgentBackend", return_value=backend):
             code, stdout, stderr = invoke_cli(
-                ["run", "inferred prompt", "--debate-id", "inferred", "--output", "inferred.md"]
+                ["run", "inferred prompt", "--debate-id", "inferred", "--output", "part-01/inferred.md"]
             )
         self.assertEqual((code, stderr), (0, ""))
         self.assertEqual(json.loads(stdout)["session_id"], "default_session")
@@ -775,7 +787,7 @@ class RunInputTests(unittest.TestCase):
                 "--debate-id",
                 "other_debate",
                 "--output",
-                "other.md",
+                "part-01/other.md",
             ],
             backend,
         )

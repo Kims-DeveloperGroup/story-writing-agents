@@ -21,6 +21,7 @@ from .backend import (
     AgentBackend,
     BoundAgent,
     backend_configuration_snapshot,
+    release_bound_agent,
 )
 from .config import ConfigManager
 from .conversation_retrieval import (
@@ -106,6 +107,8 @@ from .session_lifecycle import (
     provider_work_is_ready,
 )
 from .workspace import FilesystemConversationEventStore, Workspace
+from .writing_artifacts import manuscript_artifact_path
+from .writing_artifacts.repository import WritingArtifactRepository
 
 
 class _ProgressEmitter:
@@ -1032,6 +1035,10 @@ class _DebateContextPropagationError(Exception):
     """Mark a validated snapshot that could not enter an agent request."""
 
 
+class _SupersededBindingSelection(Exception):
+    """Retry a selection-only request whose bind completed out of order."""
+
+
 class StoryRuntime:
     """Public runtime for persistent sessions, debates, and advisory turns."""
 
@@ -1049,6 +1056,7 @@ class StoryRuntime:
             workspace if isinstance(workspace, Workspace) else Workspace(workspace)
         )
         self.backend = backend
+        self.artifacts = WritingArtifactRepository(self.workspace.root)
         self.conversation_event_store = (
             conversation_event_store
             if conversation_event_store is not None
@@ -1067,11 +1075,15 @@ class StoryRuntime:
         )
         self.prompts = PromptAssembler(
             self.workspace,
+            artifact_repository=self.artifacts,
             backend_overrides=backend_overrides,
             configuration_snapshot=self._configuration_snapshot,
         )
         self.config = ConfigManager(self.workspace)
         self._bound_agents: dict[tuple[str, str], BoundAgent] = {}
+        self._desired_binding_fingerprints: dict[str, str] = {}
+        self._retiring_bound_agents: dict[tuple[str, str], BoundAgent] = {}
+        self._bound_agent_uses: dict[int, tuple[BoundAgent, int]] = {}
         self._binding_tasks: dict[
             tuple[str, str], asyncio.Task[BoundAgent]
         ] = {}
@@ -1168,31 +1180,38 @@ class StoryRuntime:
                 session_id=session,
                 agent_id=agent,
             )
-            bound_agent = await self._bound_agent(definition)
-            bound_converse = getattr(bound_agent, "converse", None)
-            if bound_converse is None or not callable(bound_converse):
-                raise BackendProtocolError(
-                    f"{agent} binding does not provide converse()"
-                )
-            if not inspect.iscoroutinefunction(bound_converse):
-                raise BackendProtocolError(
-                    f"{agent} bound converse() must be async"
-                )
-            self._verify_definition_files(definition)
+            bound_agent = await self._acquire_bound_agent(definition)
+            try:
+                bound_converse = getattr(bound_agent, "converse", None)
+                if bound_converse is None or not callable(bound_converse):
+                    raise BackendProtocolError(
+                        f"{agent} binding does not provide converse()"
+                    )
+                if not inspect.iscoroutinefunction(bound_converse):
+                    raise BackendProtocolError(
+                        f"{agent} bound converse() must be async"
+                    )
+                self._verify_definition_files(definition)
 
-            user_event = ConversationEventAppend(
-                session_id=session,
-                conversation_id=conversation,
-                turn_id=turn_id,
-                sender="user",
-                recipient=agent,
-                kind=ConversationEventKind.USER_MESSAGE,
-                content=content,
-            )
-            self._append_conversation_event(append, user_event)
+                user_event = ConversationEventAppend(
+                    session_id=session,
+                    conversation_id=conversation,
+                    turn_id=turn_id,
+                    sender="user",
+                    recipient=agent,
+                    kind=ConversationEventKind.USER_MESSAGE,
+                    content=content,
+                )
+                self._append_conversation_event(append, user_event)
+            except BaseException:
+                await self._release_bound_agent_use(bound_agent)
+                raise
 
             try:
-                raw_reply = await bound_converse(request)
+                try:
+                    raw_reply = await bound_converse(request)
+                finally:
+                    await self._release_bound_agent_use(bound_agent)
                 reply = self._validated_conversation_reply(raw_reply, request)
                 reply_event = ConversationEventAppend(
                     session_id=session,
@@ -1320,42 +1339,50 @@ class StoryRuntime:
                 session_id=session,
                 agent_id=agent,
             )
-            bound_agent = await self._bound_agent(definition)
-            bound_converse = getattr(
-                bound_agent,
-                "converse_with_retrieval",
-                None,
-            )
-            if bound_converse is None or not callable(bound_converse):
-                raise BackendProtocolError(
-                    f"{agent} binding does not provide converse_with_retrieval()"
+            bound_agent = await self._acquire_bound_agent(definition)
+            try:
+                bound_converse = getattr(
+                    bound_agent,
+                    "converse_with_retrieval",
+                    None,
                 )
-            if not inspect.iscoroutinefunction(bound_converse):
-                raise BackendProtocolError(
-                    f"{agent} bound converse_with_retrieval() must be async"
-                )
-            self._verify_definition_files(definition)
+                if bound_converse is None or not callable(bound_converse):
+                    raise BackendProtocolError(
+                        f"{agent} binding does not provide "
+                        "converse_with_retrieval()"
+                    )
+                if not inspect.iscoroutinefunction(bound_converse):
+                    raise BackendProtocolError(
+                        f"{agent} bound converse_with_retrieval() must be async"
+                    )
+                self._verify_definition_files(definition)
 
-            diagnostic_values: set[str] = set()
-            handler = _RuntimeConversationRetrievalHandler(
-                request,
-                scoped_memory,
-                progress,
-                diagnostic_values,
-            )
-            user_event = ConversationEventAppend(
-                session_id=session,
-                conversation_id=conversation,
-                turn_id=turn_id,
-                sender="user",
-                recipient=agent,
-                kind=ConversationEventKind.USER_MESSAGE,
-                content=content,
-            )
-            self._append_conversation_event(append, user_event)
+                diagnostic_values: set[str] = set()
+                handler = _RuntimeConversationRetrievalHandler(
+                    request,
+                    scoped_memory,
+                    progress,
+                    diagnostic_values,
+                )
+                user_event = ConversationEventAppend(
+                    session_id=session,
+                    conversation_id=conversation,
+                    turn_id=turn_id,
+                    sender="user",
+                    recipient=agent,
+                    kind=ConversationEventKind.USER_MESSAGE,
+                    content=content,
+                )
+                self._append_conversation_event(append, user_event)
+            except BaseException:
+                await self._release_bound_agent_use(bound_agent)
+                raise
 
             try:
-                raw_reply = await bound_converse(request, handler)
+                try:
+                    raw_reply = await bound_converse(request, handler)
+                finally:
+                    await self._release_bound_agent_use(bound_agent)
                 reply = handler.validate_returned_reply(raw_reply)
                 reply_event = ConversationEventAppend(
                     session_id=session,
@@ -1418,7 +1445,7 @@ class StoryRuntime:
         session_id: str,
         prompt: str,
         *,
-        manuscript_name: str | None = None,
+        output_path: str,
         max_debate_rounds: int | None = None,
         debate_id: str | None = None,
         conversation_context: DebateContextRequest | None = None,
@@ -1437,7 +1464,7 @@ class StoryRuntime:
             session_id=session_id,
             payload=prompt,
             input_kind=InputKind.PROMPT,
-            manuscript_name=manuscript_name,
+            output_path=output_path,
             max_debate_rounds=max_debate_rounds,
             debate_id=debate_id,
             conversation_context=conversation_context,
@@ -1449,7 +1476,7 @@ class StoryRuntime:
         session_id: str,
         draft: str,
         *,
-        manuscript_name: str | None = None,
+        output_path: str,
         max_debate_rounds: int | None = None,
         debate_id: str | None = None,
         conversation_context: DebateContextRequest | None = None,
@@ -1457,17 +1484,18 @@ class StoryRuntime:
     ) -> DebateResult:
         """Run a supplied-draft debate with optional context and progress facts.
 
-        Validation, context capture and sidecar durability precede provider work;
-        the supplied draft produces a trusted drafted fact without a drafting
-        provider call. Terminal durability, expected failures, observer errors,
-        cancellation, and raised persistence uncertainty match ``run_prompt``.
+        Validation, context capture and sidecar durability precede provider work.
+        The execution specialist authors the first candidate from the supplied
+        draft before consensus. Terminal durability, expected failures, observer
+        errors, cancellation, and raised persistence uncertainty match
+        ``run_prompt``.
         """
 
         return await self._run(
             session_id=session_id,
             payload=draft,
             input_kind=InputKind.DRAFT,
-            manuscript_name=manuscript_name,
+            output_path=output_path,
             max_debate_rounds=max_debate_rounds,
             debate_id=debate_id,
             conversation_context=conversation_context,
@@ -1480,7 +1508,7 @@ class StoryRuntime:
         session_id: str,
         payload: str,
         input_kind: InputKind,
-        manuscript_name: str | None,
+        output_path: str,
         max_debate_rounds: int | None,
         debate_id: str | None,
         conversation_context: DebateContextRequest | None,
@@ -1501,6 +1529,9 @@ class StoryRuntime:
         session = self.workspace.validate_identifier(session_id)
         if not isinstance(payload, str) or not payload:
             raise ValueError(f"{input_kind.value} payload must be non-empty text")
+        # Validate the required part-scoped output before session acquisition or
+        # any debate-state mutation. Publication repeats this validation.
+        manuscript_artifact_path(output_path)
         debate = (
             self.workspace.validate_identifier(debate_id, label="debate ID")
             if debate_id is not None
@@ -1527,7 +1558,6 @@ class StoryRuntime:
         )
         progress = _ProgressEmitter(self._validate_progress_sink(progress_sink))
 
-        target_name = manuscript_name or f"{session}_{debate}.md"
         self._acquire_ready_session_access(session)
 
         context_snapshot: ConversationContextWindow | None = None
@@ -1594,7 +1624,7 @@ class StoryRuntime:
                 debate=debate,
                 payload=payload,
                 input_kind=input_kind,
-                target_name=target_name,
+                output_path=output_path,
                 round_limit=round_limit,
                 reservation_token=reservation_token,
                 conversation_context=context_snapshot,
@@ -1681,7 +1711,7 @@ class StoryRuntime:
         debate: str,
         payload: str,
         input_kind: InputKind,
-        target_name: str,
+        output_path: str,
         round_limit: int,
         reservation_token: str,
         conversation_context: ConversationContextWindow | None,
@@ -1751,69 +1781,39 @@ class StoryRuntime:
         current_revision = "r0"
         revision_cycles = 0
 
-        if input_kind is InputKind.PROMPT:
-            try:
-                reply = await self._invoke(
-                    self._request(
-                        session=session,
-                        debate=debate,
-                        agent_id=EXECUTION_SPECIALIST,
-                        phase=Phase.DRAFT,
-                        round_number=0,
-                        revision_id=current_revision,
-                        task=(
-                            "Create a complete revision 0 candidate from the user "
-                            "prompt. Do not audit it in this response."
-                        ),
-                        user_payload=payload,
-                        messages=tuple(messages),
-                        conversation_context=conversation_context,
-                    )
-                )
-                self._validate_candidate_reply(reply, current_revision)
-            except Exception as exc:
-                record(
-                    sender=EXECUTION_SPECIALIST,
-                    phase=Phase.DRAFT.value,
-                    round_number=0,
-                    revision=current_revision,
-                    kind="error",
-                    content=self._error_text(exc),
-                )
-                self._remember(
-                    agent_id=EXECUTION_SPECIALIST,
+        try:
+            reply = await self._invoke(
+                self._request(
                     session=session,
                     debate=debate,
+                    agent_id=EXECUTION_SPECIALIST,
                     phase=Phase.DRAFT,
                     round_number=0,
-                    revision=current_revision,
-                    kind="error",
-                    content="backend outcome failed validation or execution",
-                )
-                return self._finish(
-                    session=session,
-                    debate=debate,
-                    reservation_token=reservation_token,
-                    input_kind=input_kind,
-                    status=DebateStatus.FAILED,
                     revision_id=current_revision,
-                    rounds_completed=0,
-                    final_candidate=None,
-                    latest_candidate=None,
-                    manuscript_path=None,
-                    messages=messages,
-                    error=self._error_text(exc),
-                    failure_kind=self._classify_debate_failure(exc),
-                    progress=progress,
+                    task=(
+                        "Create a complete revision 0 candidate from the user "
+                        "prompt. Do not audit it in this response."
+                        if input_kind is InputKind.PROMPT
+                        else (
+                            "Create a complete revision 0 candidate from the supplied "
+                            "draft. Preserve sound material, apply the requested "
+                            "changes, and do not audit it in this response."
+                        )
+                    ),
+                    user_payload=payload,
+                    messages=tuple(messages),
+                    conversation_context=conversation_context,
                 )
-            candidate = reply.content
+            )
+            self._validate_candidate_reply(reply, current_revision)
+        except Exception as exc:
             record(
                 sender=EXECUTION_SPECIALIST,
                 phase=Phase.DRAFT.value,
                 round_number=0,
                 revision=current_revision,
-                kind="candidate",
-                content=candidate,
+                kind="error",
+                content=self._error_text(exc),
             )
             self._remember(
                 agent_id=EXECUTION_SPECIALIST,
@@ -1822,11 +1822,45 @@ class StoryRuntime:
                 phase=Phase.DRAFT,
                 round_number=0,
                 revision=current_revision,
-                kind="candidate_created",
-                content="revision 0 candidate created",
+                kind="error",
+                content="backend outcome failed validation or execution",
             )
-        else:
-            candidate = payload
+            return self._finish(
+                session=session,
+                debate=debate,
+                reservation_token=reservation_token,
+                input_kind=input_kind,
+                status=DebateStatus.FAILED,
+                revision_id=current_revision,
+                rounds_completed=0,
+                final_candidate=None,
+                latest_candidate=None,
+                manuscript_path=None,
+                messages=messages,
+                error=self._error_text(exc),
+                failure_kind=self._classify_debate_failure(exc),
+                progress=progress,
+            )
+        candidate = reply.content
+        candidate_author_agent_id = EXECUTION_SPECIALIST
+        record(
+            sender=EXECUTION_SPECIALIST,
+            phase=Phase.DRAFT.value,
+            round_number=0,
+            revision=current_revision,
+            kind="candidate",
+            content=candidate,
+        )
+        self._remember(
+            agent_id=EXECUTION_SPECIALIST,
+            session=session,
+            debate=debate,
+            phase=Phase.DRAFT,
+            round_number=0,
+            revision=current_revision,
+            kind="candidate_created",
+            content="revision 0 candidate created",
+        )
         progress.emit(
             DebateProgressEvent(
                 session_id=session,
@@ -2023,6 +2057,7 @@ class StoryRuntime:
                 )
 
             candidate = synthesis.content
+            candidate_author_agent_id = LEAD_ORCHESTRATOR
             current_revision = next_revision
             revision_cycles += 1
             record(
@@ -2098,10 +2133,14 @@ class StoryRuntime:
             )
             artifact_commit_started = True
             manuscript_path, applied_updates = (
-                self.workspace.commit_approved_artifacts(
-                    target_name,
-                    candidate,
-                    updates,
+                self.artifacts.commit_consensus(
+                    output_path=output_path,
+                    candidate=candidate,
+                    core_updates=updates,
+                    session_id=session,
+                    debate_id=debate,
+                    revision_id=current_revision,
+                    candidate_author_agent_id=candidate_author_agent_id,
                 )
             )
         except Exception as exc:
@@ -3016,43 +3055,121 @@ class StoryRuntime:
             session_id=request.session_id,
             agent_id=request.agent_id,
         )
-        bound_agent = await self._bound_agent(definition)
-        reply = await bound_agent.invoke(request)
-        if not isinstance(reply, AgentReply):
-            raise BackendProtocolError(
-                f"{request.agent_id} returned {type(reply).__name__}, "
-                "expected AgentReply"
-            )
-        self._validate_reply_fields(reply)
-        return reply
+        bound_agent = await self._acquire_bound_agent(definition)
+        try:
+            reply = await bound_agent.invoke(request)
+            if not isinstance(reply, AgentReply):
+                raise BackendProtocolError(
+                    f"{request.agent_id} returned {type(reply).__name__}, "
+                    "expected AgentReply"
+                )
+            self._validate_reply_fields(reply)
+            return reply
+        finally:
+            await self._release_bound_agent_use(bound_agent)
 
     async def _bound_agent(self, definition: AgentDefinition) -> BoundAgent:
-        """Reuse or single-flight one immutable provider-side binding."""
+        """Return the desired binding without retaining an operation use."""
+
+        while True:
+            try:
+                return await self._select_bound_agent(
+                    definition,
+                    retain_use=False,
+                )
+            except _SupersededBindingSelection:
+                continue
+
+    async def _acquire_bound_agent(
+        self,
+        definition: AgentDefinition,
+    ) -> BoundAgent:
+        """Select one binding and retain it for an exact runtime operation."""
+
+        return await self._select_bound_agent(definition, retain_use=True)
+
+    async def _select_bound_agent(
+        self,
+        definition: AgentDefinition,
+        *,
+        retain_use: bool,
+    ) -> BoundAgent:
+        """Select current, retiring, or single-flight binding state."""
 
         key = (definition.agent_id, definition.fingerprint)
+        releases: list[BoundAgent] = []
+        selected: BoundAgent | None = None
         async with self._binding_lock:
-            cached = self._bound_agents.get(key)
-            if cached is not None:
-                return cached
-            task = self._binding_tasks.get(key)
-            if task is None:
-                task = asyncio.create_task(
-                    self._bind_definition(definition),
-                    name=f"bind:{definition.agent_id}:{definition.fingerprint[:12]}",
+            self._desired_binding_fingerprints[key[0]] = key[1]
+            selected = self._bound_agents.get(key)
+            if selected is None:
+                selected = self._retiring_bound_agents.pop(key, None)
+                if selected is not None:
+                    releases.extend(
+                        self._install_current_binding_locked(key, selected)
+                    )
+            if selected is not None:
+                if retain_use:
+                    self._retain_bound_agent_use_locked(selected)
+                task = None
+            else:
+                task = self._binding_tasks.get(key)
+                if task is None:
+                    task = asyncio.create_task(
+                        self._bind_definition(definition),
+                        name=(
+                            f"bind:{definition.agent_id}:"
+                            f"{definition.fingerprint[:12]}"
+                        ),
+                    )
+                    self._binding_tasks[key] = task
+                self._binding_waiters[key] = (
+                    self._binding_waiters.get(key, 0) + 1
                 )
-                self._binding_tasks[key] = task
-            self._binding_waiters[key] = self._binding_waiters.get(key, 0) + 1
+
+        self._release_provider_bindings(releases)
+        if selected is not None:
+            return selected
+        assert task is not None
+        task_result_handled = False
+        superseded_selection = False
 
         try:
             # A debate or peer invocation may be cancelled without cancelling
             # a binding still awaited by another invocation.
             bound_agent = await asyncio.shield(task)
+            releases = []
             async with self._binding_lock:
                 if (
                     self._binding_tasks.get(key) is task
                     and self._binding_waiters.get(key, 0) > 0
                 ):
-                    self._bound_agents[key] = bound_agent
+                    is_desired = (
+                        self._desired_binding_fingerprints.get(key[0]) == key[1]
+                    )
+                    if retain_use:
+                        self._retain_bound_agent_use_locked(bound_agent)
+                    if is_desired:
+                        releases.extend(
+                            self._install_current_binding_locked(key, bound_agent)
+                        )
+                    elif not retain_use:
+                        releases.append(bound_agent)
+                        superseded_selection = True
+                    else:
+                        releases.extend(
+                            self._mark_binding_retiring_locked(key, bound_agent)
+                        )
+                    if not superseded_selection:
+                        selected = bound_agent
+                    task_result_handled = True
+            self._release_provider_bindings(releases)
+            if superseded_selection:
+                raise _SupersededBindingSelection
+            if selected is None:
+                raise BackendProtocolError(
+                    "completed binding lost its runtime ownership"
+                )
             return bound_agent
         finally:
             task_to_join: asyncio.Task[BoundAgent] | None = None
@@ -3068,7 +3185,114 @@ class StoryRuntime:
                             task.cancel()
                         task_to_join = task
             if task_to_join is not None:
-                await asyncio.gather(task_to_join, return_exceptions=True)
+                outcome = (
+                    await asyncio.gather(task_to_join, return_exceptions=True)
+                )[0]
+                if (
+                    not task_result_handled
+                    and not isinstance(outcome, BaseException)
+                ):
+                    async with self._binding_lock:
+                        tracked = self._binding_is_tracked_locked(outcome)
+                    if not tracked:
+                        release_bound_agent(outcome)
+
+    def _install_current_binding_locked(
+        self,
+        key: tuple[str, str],
+        bound_agent: BoundAgent,
+    ) -> list[BoundAgent]:
+        """Make one binding current and return idle predecessors to release."""
+
+        releases: list[BoundAgent] = []
+        for current_key, current in tuple(self._bound_agents.items()):
+            if current_key[0] != key[0] or current_key == key:
+                continue
+            self._bound_agents.pop(current_key)
+            if current is not bound_agent:
+                releases.extend(
+                    self._mark_binding_retiring_locked(current_key, current)
+                )
+        self._retiring_bound_agents.pop(key, None)
+        self._bound_agents[key] = bound_agent
+        return releases
+
+    def _mark_binding_retiring_locked(
+        self,
+        key: tuple[str, str],
+        bound_agent: BoundAgent,
+    ) -> list[BoundAgent]:
+        """Retain an active superseded binding or return an idle one."""
+
+        existing = self._retiring_bound_agents.get(key)
+        if existing is bound_agent:
+            return []
+        use = self._bound_agent_uses.get(id(bound_agent))
+        if use is not None and use[0] is bound_agent and use[1] > 0:
+            self._retiring_bound_agents[key] = bound_agent
+            return []
+        return [bound_agent]
+
+    def _retain_bound_agent_use_locked(self, bound_agent: BoundAgent) -> None:
+        """Increment one identity-checked runtime operation-use count."""
+
+        identity = id(bound_agent)
+        current = self._bound_agent_uses.get(identity)
+        if current is None:
+            self._bound_agent_uses[identity] = (bound_agent, 1)
+            return
+        if current[0] is not bound_agent:
+            raise BackendProtocolError("bound agent identity was reused")
+        self._bound_agent_uses[identity] = (bound_agent, current[1] + 1)
+
+    async def _release_bound_agent_use(self, bound_agent: BoundAgent) -> None:
+        """Release one operation use and retire a now-idle superseded binding."""
+
+        release: BoundAgent | None = None
+        async with self._binding_lock:
+            identity = id(bound_agent)
+            current = self._bound_agent_uses.get(identity)
+            if current is None or current[0] is not bound_agent:
+                raise BackendProtocolError("bound agent operation use is absent")
+            remaining = current[1] - 1
+            if remaining > 0:
+                self._bound_agent_uses[identity] = (bound_agent, remaining)
+            else:
+                self._bound_agent_uses.pop(identity)
+                for key, retiring in tuple(self._retiring_bound_agents.items()):
+                    if retiring is bound_agent:
+                        self._retiring_bound_agents.pop(key)
+                        release = bound_agent
+                        break
+        if release is not None:
+            release_bound_agent(release)
+
+    def _binding_is_tracked_locked(self, bound_agent: object) -> bool:
+        """Return whether current, retiring, or in-use state owns a binding."""
+
+        return (
+            any(current is bound_agent for current in self._bound_agents.values())
+            or any(
+                retiring is bound_agent
+                for retiring in self._retiring_bound_agents.values()
+            )
+            or (
+                id(bound_agent) in self._bound_agent_uses
+                and self._bound_agent_uses[id(bound_agent)][0] is bound_agent
+            )
+        )
+
+    @staticmethod
+    def _release_provider_bindings(bindings: list[BoundAgent]) -> None:
+        """Release each identity once outside the runtime binding lock."""
+
+        released: set[int] = set()
+        for bound_agent in bindings:
+            identity = id(bound_agent)
+            if identity in released:
+                continue
+            released.add(identity)
+            release_bound_agent(bound_agent)
 
     async def _bind_definition(
         self,
@@ -3085,16 +3309,20 @@ class StoryRuntime:
 
         self._verify_definition_files(definition)
         bound_agent = await bind(definition)
-        invoke = getattr(bound_agent, "invoke", None)
-        if invoke is None or not callable(invoke):
-            raise BackendProtocolError(
-                f"{definition.agent_id} binding does not provide invoke()"
-            )
-        if not inspect.iscoroutinefunction(invoke):
-            raise BackendProtocolError(
-                f"{definition.agent_id} bound invoke() must be async"
-            )
-        self._verify_definition_files(definition)
+        try:
+            invoke = getattr(bound_agent, "invoke", None)
+            if invoke is None or not callable(invoke):
+                raise BackendProtocolError(
+                    f"{definition.agent_id} binding does not provide invoke()"
+                )
+            if not inspect.iscoroutinefunction(invoke):
+                raise BackendProtocolError(
+                    f"{definition.agent_id} bound invoke() must be async"
+                )
+            self._verify_definition_files(definition)
+        except BaseException:
+            release_bound_agent(bound_agent)
+            raise
         return bound_agent
 
     @staticmethod
@@ -3474,7 +3702,7 @@ class RuntimeSession:
         self,
         prompt: str,
         *,
-        manuscript_name: str | None = None,
+        output_path: str,
         max_debate_rounds: int | None = None,
         debate_id: str | None = None,
         conversation_context: DebateContextRequest | None = None,
@@ -3489,7 +3717,7 @@ class RuntimeSession:
         return await self.runtime.run_prompt(
             self.session_id,
             prompt,
-            manuscript_name=manuscript_name,
+            output_path=output_path,
             max_debate_rounds=max_debate_rounds,
             debate_id=debate_id,
             conversation_context=conversation_context,
@@ -3500,7 +3728,7 @@ class RuntimeSession:
         self,
         draft: str,
         *,
-        manuscript_name: str | None = None,
+        output_path: str,
         max_debate_rounds: int | None = None,
         debate_id: str | None = None,
         conversation_context: DebateContextRequest | None = None,
@@ -3515,7 +3743,7 @@ class RuntimeSession:
         return await self.runtime.run_draft(
             self.session_id,
             draft,
-            manuscript_name=manuscript_name,
+            output_path=output_path,
             max_debate_rounds=max_debate_rounds,
             debate_id=debate_id,
             conversation_context=conversation_context,

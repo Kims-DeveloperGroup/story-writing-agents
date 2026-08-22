@@ -22,12 +22,13 @@ Use this index to find one canonical answer instead of searching a long manual.
 | List or target agents; send ordinary, `@AGENT`, or `/say` turns | Installed shell; an active conversation must have current focus |
 | Read durable/access facts and perform exact session transitions | Python API; used by the installed shell and runtime |
 | Parse the interactive command language and route metadata | Python API; the shell dispatches a documented subset |
-| Compose a prompt and render safe terminal records | Bare shell `/run`; module-supported terminal Python API |
+| Compose a prompt and render safe terminal records | Shell `/run --output PART/PATH.md`; module-supported terminal Python API |
 | Append/read transcripts; derive bounded complete-turn context | Shell turns append/consume context and `/transcript` reads fresh bounded pages; Python API |
 | Search one session and cite hits | Attached shell `/search` for active records; Python API can explicitly include archived records |
 | Ask an agent to retrieve cited conversation history | Focused shell conversation; additive Python runtime API; active records in the current session only |
 | Persist and send one explicitly addressed one-step turn | Existing `StoryRuntime.converse()` Python API |
 | Run consensus with included, fresh, or draft-file input | Focused active shell conversation; noninteractive CLI and Python API remain available |
+| Publish and identify canonical agent-produced writing artifacts | Every unanimous consensus run; exact paths and eligibility in the writing-artifact reference |
 | Cancel active advisory/consensus work or partial local rendering | Installed shell; process-level PTY verified on supported POSIX. [Delivery and platform scope](operations/recovery-and-limitations.md#posix-pty-boundary) |
 | Show one focused transcript snapshot and context accounting | Attached shell `/history`; active focus required |
 | Standalone artifact commands | Not implemented in the shell |
@@ -64,6 +65,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 - [Agent contracts](reference/agent-contracts.md)
 - [Runtime API](reference/runtime-api.md)
 - [Workspace API](reference/workspace-api.md)
+- [Canonical writing artifacts](reference/writing-artifacts.md)
 - Configuration: [agents](reference/configuration/agent-configuration.md),
   [runtime overrides](reference/configuration/runtime-overrides.md),
   [session storage](reference/configuration/session-storage.md), and

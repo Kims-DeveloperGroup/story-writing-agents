@@ -425,7 +425,7 @@ class PublicApiTests(unittest.TestCase):
                 "phase": DebateProgressPhase.ARTIFACTS_COMMITTED,
                 "revision_id": "r1",
                 "round_number": 1,
-                "manuscript_path": "manuscript/chapter.md",
+                "manuscript_path": "manuscript/part-01/chapter.md",
                 "core_updates": ("global_outline.md",),
             },
             {
@@ -510,7 +510,7 @@ class PublicApiTests(unittest.TestCase):
                     "self",
                     "session_id",
                     "prompt",
-                    "manuscript_name",
+                    "output_path",
                     "max_debate_rounds",
                     "debate_id",
                     "conversation_context",
@@ -524,7 +524,7 @@ class PublicApiTests(unittest.TestCase):
                     "self",
                     "session_id",
                     "draft",
-                    "manuscript_name",
+                    "output_path",
                     "max_debate_rounds",
                     "debate_id",
                     "conversation_context",
@@ -537,7 +537,7 @@ class PublicApiTests(unittest.TestCase):
                 (
                     "self",
                     "prompt",
-                    "manuscript_name",
+                    "output_path",
                     "max_debate_rounds",
                     "debate_id",
                     "conversation_context",
@@ -550,7 +550,7 @@ class PublicApiTests(unittest.TestCase):
                 (
                     "self",
                     "draft",
-                    "manuscript_name",
+                    "output_path",
                     "max_debate_rounds",
                     "debate_id",
                     "conversation_context",
@@ -571,12 +571,19 @@ class PublicApiTests(unittest.TestCase):
                         for parameter in parameters[:positional_count]
                     )
                 )
+                keyword_only = parameters[positional_count:]
                 self.assertTrue(
                     all(
                         parameter.kind is inspect.Parameter.KEYWORD_ONLY
-                        and parameter.default is None
-                        for parameter in parameters[positional_count:]
+                        for parameter in keyword_only
                     )
+                )
+                self.assertIs(
+                    keyword_only[0].default,
+                    inspect.Parameter.empty,
+                )
+                self.assertTrue(
+                    all(parameter.default is None for parameter in keyword_only[1:])
                 )
         for method, names in (
             (
@@ -901,7 +908,15 @@ class CliTests(unittest.TestCase):
 
         for arguments in (
             ["chat", "--codex-reasoning-effort", "high"],
-            ["run", "--draft", "draft", "--codex-reasoning-effort", "high"],
+            [
+                "run",
+                "--draft",
+                "draft",
+                "--output",
+                "part-01/reasoning.md",
+                "--codex-reasoning-effort",
+                "high",
+            ],
         ):
             stderr = io.StringIO()
             with (
@@ -1440,9 +1455,9 @@ class CliTests(unittest.TestCase):
         workspace = Workspace(workspace_path)
         prompt_path = AGENT_SPECS[PLOT_ARCHITECT].system_prompt_file
         workspace.write_text(prompt_path, "custom prompt\n")
-        workspace.write_text(
-            "core_documents/global_outline.md",
+        workspace.path("core_documents/global_outline.md").write_text(
             "preserved outline\n",
+            encoding="utf-8",
         )
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
@@ -1507,6 +1522,8 @@ class CliTests(unittest.TestCase):
                     "unsafe backend spec",
                     "--draft",
                     "neutral draft",
+                    "--output",
+                    "part-01/invalid-backend.md",
                 ]
             )
         self.assertEqual(exit_code, 2)

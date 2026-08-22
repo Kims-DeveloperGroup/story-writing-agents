@@ -128,6 +128,7 @@ from ..workspace import (
     FilesystemConversationEventStore,
     Workspace,
 )
+from ..writing_artifacts import manuscript_artifact_path
 from ._conversation_policy import (
     ConversationCatalogProtocolFailure,
     classify_conversation_failure,
@@ -435,8 +436,8 @@ class InteractiveController:
             if event.input_kind is InputKind.DRAFT:
                 return (
                     ("user",),
-                    tuple(SPECIALIST_IDS),
-                    "Accept supplied draft as revision 0; request specialist audits.",
+                    (EXECUTION_SPECIALIST,),
+                    "Ask Execution Specialist to author revision 0 from the supplied draft.",
                 )
             return (
                 ("user",),
@@ -445,11 +446,7 @@ class InteractiveController:
             )
         if phase is DebateProgressPhase.DRAFTED:
             return (
-                (
-                    ("user",)
-                    if event.input_kind is InputKind.DRAFT
-                    else (EXECUTION_SPECIALIST,)
-                ),
+                (EXECUTION_SPECIALIST,),
                 tuple(SPECIALIST_IDS),
                 "Draft complete; request specialist audits.",
             )
@@ -2997,6 +2994,45 @@ class InteractiveController:
         if focused is None:
             return False
 
+        output_path = action.output_path
+        while True:
+            if output_path is None:
+                outcome = self._prompt_input.read_prompt(
+                    Prompt(
+                        "Manuscript output",
+                        scope="consensus",
+                        instruction=(
+                            "Enter a create-only PART/PATH.md beneath manuscript/."
+                        ),
+                    ),
+                    transient=True,
+                )
+                if outcome.kind is ControlOutcomeKind.EOF:
+                    return True
+                if outcome.kind in {
+                    ControlOutcomeKind.CANCEL,
+                    ControlOutcomeKind.INTERRUPT,
+                }:
+                    return False
+                if outcome.kind is not ControlOutcomeKind.COMMIT:
+                    raise _ControllerAbort(
+                        InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+                    )
+                assert outcome.text is not None
+                output_path = outcome.text
+            try:
+                manuscript_artifact_path(output_path)
+            except (TypeError, ValueError):
+                self._write_notice(
+                    "Output must be a safe PART/PATH.md beneath manuscript/.",
+                    label="Invalid output",
+                    role=SemanticRole.ERROR,
+                    state=ViewState.ERROR,
+                )
+                output_path = None
+                continue
+            break
+
         if action.kind is ActionKind.RUN:
             prompt = action.text
             if prompt is None:
@@ -3077,12 +3113,14 @@ class InteractiveController:
                     return await self._runtime.run_prompt(
                         session_id,
                         payload,
+                        output_path=output_path,
                         conversation_context=request,
                         progress_sink=accept_and_render_progress,
                     )
                 return await self._runtime.run_draft(
                     session_id,
                     payload,
+                    output_path=output_path,
                     conversation_context=request,
                     progress_sink=accept_and_render_progress,
                 )

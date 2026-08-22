@@ -1,9 +1,9 @@
 # Filesystem safety
 
-> **Availability:** containment and no-symlink checks, exclusive manuscript and
-> conversation creation, serialized transcript replacement, atomic per-file
-> default/metadata replacement, guarded interactive settings persistence, and
-> best-effort rollback are implemented.
+> **Availability:** generic workspace containment, descriptor-relative
+> writing-artifact publication and recovery, exclusive conversation creation,
+> serialized transcript replacement, atomic per-file default/metadata
+> replacement, and guarded interactive settings persistence are implemented.
 
 Key terms: **containment**—keeping paths beneath the workspace root; **symlink**—
 a filesystem alias the runtime rejects; **exclusive creation**—failure instead
@@ -26,10 +26,75 @@ Workspace and template identifiers have additional validation.
 CLI discovery chooses the nearest initialized ancestor and never initializes a
 directory. Use an explicit path for automation or nested workspaces.
 
-Orchestration core-document access is limited to the four fixed filenames.
-Manuscript names may use safe relative subdirectories beneath `manuscript/`.
-A direct client of generic `Workspace.write_text()` is trusted and can modify
-any safely contained relative file; containment is not authorization.
+The writing-artifact storage adapter has a distinct construction contract. It
+captures a supplied relative root immediately as a lexical absolute path using
+the construction-time current directory. It does not use `Path.resolve()`,
+dereference symlink spelling, inspect the filesystem, or probe secure primitives
+at construction, and a later current-directory change cannot retarget it. The
+first artifact operation performs the secure no-follow root open and identity
+validation. An unsafe captured root therefore raises at that operation instead
+of being silently resolved or causing constructor I/O.
+
+Orchestration core-document access is limited to four exact filenames.
+Manuscript outputs require `PART/PATH.md` and publish beneath
+`manuscript/PART/`. Generic `Workspace.write_text()` and `write_json()` reject
+those four core paths, every canonical manuscript path, and case-folded or
+Unicode-normalized aliases of the reserved `core_documents/` and `manuscript/`
+names before creating a parent or target. Canonical application writes must go
+through the writing-artifact repository. Other safely contained workspace
+paths retain the generic helpers.
+
+Writing artifacts use a stronger domain adapter. It opens the workspace root
+and every directory by descriptor without following links, retains and
+revalidates the complete ancestor chain, requires each read target to be a
+unique regular file with one link, opens reads nonblocking, and rechecks the
+name and file after reading. Each descriptor-relative component must have its
+exact stored spelling; case-folded and NFKC-normalized aliases are rejected
+before the final component is inspected, opened, or staged instead of being
+treated as the requested canonical identity. Symlinks,
+hard-linked artifacts, nonregular files, root or ancestor replacement, and
+detected concurrent change fail closed. Required
+descriptor-relative, no-follow, listing, link, advisory-lock, and native atomic
+no-replace rename primitives are checked on the first artifact I/O operation.
+The rename is `renameatx_np(RENAME_EXCL)` on Darwin and
+`renameat2(RENAME_NOREPLACE)` on Linux. Repository, runtime, and workspace
+construction remain available on an unsupported host; the artifact operation
+itself raises `WorkspaceSecurityError`.
+
+Every child directory descriptor is registered for cleanup immediately after
+it opens. A later `fstat`, type, identity, exact-name, or retained-chain failure
+therefore closes that descriptor exactly once; repeated failed traversal does
+not leak directory handles.
+
+Artifact mutation additionally requires the workspace-local repository lease.
+The permanent `.artifacts.lock`, `.artifacts.lock.anchor`, and
+`.artifacts.lock.ready` names must be exact hard links to one regular inode with
+link count three. Alias checks run before final inspection, creation, or
+locking.
+
+An exclusive bootstrap `flock` on the already-open writing-artifact state
+directory serializes first initialization. While holding it, the repository
+flushes the retained state-directory ancestry to the workspace root. If the
+triple is wholly absent, it creates the primary with
+`O_CREAT|O_EXCL|O_NOFOLLOW`, flushes the file and parent, links the anchor,
+flushes the parent, verifies the intermediate two-link state with `ready`
+absent, links `ready`, and flushes the parent again. It verifies the triple,
+acquires the primary `flock`, reverifies the triple, then releases bootstrap and
+enters protected work. Later use opens the primary without create flags and
+requires the already complete triple.
+
+Partial one- or two-link state, an old two-link development lock, a divergent
+inode, an extra hard link, or any creation/link/flush failure never enters
+protected work and is preserved without cleanup, reconstruction, or migration.
+The triple, link count, open descriptor, directory ancestry, and workspace root
+are reverified around mutations. These hard links belong only to lock identity;
+canonical artifacts remain one-link regular files.
+
+This serializes supported repository writers. Generic `Workspace` writes to
+canonical paths are rejected. External/manual edits are supported only while
+all workspace processes are stopped. The adapter detects many identity and
+namespace changes, but does not claim safety against an actively hostile
+same-user process mutating live names during the native filesystem call.
 
 Conversation adapters and default helpers bind safe IDs to fixed paths. They
 check every component and require embedded IDs to match the owning path. This
@@ -62,23 +127,71 @@ path-mismatched record raises `WorkspaceFormatError`. Symlinks raise
 
 ## Mutation guarantees
 
-The runtime never silently overwrites a manuscript. A regular existing target
-raises `ManuscriptExistsError`; a symlink target or component is rejected with
-`WorkspaceSecurityError`. Complete core-update and manuscript preconditions are
-validated before content mutation.
+The runtime never silently overwrites a manuscript. Any existing target raises
+`ManuscriptExistsError`; unsafe path state raises `WorkspaceSecurityError`.
+Complete output grammar, core allowlist, strict-UTF-8 content, identity,
+authorship, old hashes, and new hashes are validated or recorded before target
+publication.
 
-Individual replacements are staged in the destination directory, flushed, and
-atomically replaced. New manuscripts and conversation identities use exclusive
-creation. Approved artifact commit writes allowlisted core documents first and
-the manuscript last. If a later step fails, the runtime makes a best-effort
-attempt to remove the new manuscript and restore each earlier core file;
-rollback failures are attached to the original exception.
+Writing-artifact publication is journaled, serialized by process and workspace
+artifact locks, and catalog-last. Target replacement compares the current bytes
+with the journal's expected prior hash and stages a unique regular temporary
+file with `O_EXCL` outside the authoritative transaction directory. After
+flushing it, the repository exclusively moves verified prior bytes to a unique
+`.held` staging name when replacing, then uses native no-replace rename to move
+the `.tmp` bytes into the absent target. Published bytes, retained path chain,
+root, and lease are then reverified. Directory creation flushes each newly
+created child's parent directory, and publication/retirement flushes the
+directories whose entries changed.
 
-These are per-file guarantees, not a transactional filesystem or database.
-There is no single atomic boundary across core documents, manuscript, logs,
-state, and result. Rollback may fail, and abrupt process, operating-system,
-hardware, filesystem, or power failure may leave a partially durable
-cross-file operation. Inspect after infrastructure interruption.
+Publication does not unlink or use a replacing rename. A detected failure after
+target publication exclusively retires the new bytes to `.retired` and restores
+the exact `.held` prior bytes only when identity and the original path remain
+safe. Failed `.tmp` bytes and successful `.held` prior bytes remain retained;
+name collisions are preserved while a different exclusive staging name is
+tried.
+
+The schema-v2 journal is one immutable prepared image: it contains the exact
+catalog-before state, catalog-after image, commit, and ordered targets, and is
+never replaced with a later phase. After all targets, the repository publishes
+immutable commit history and the current catalog last. Completed journal
+retirement compares its exact hash before an exclusive no-replace move to
+`.completed` staging.
+
+Outside recovery, every artifact read or commit audits the complete permanent
+commit ledger against the catalog before trusting an entry or publishing new
+bytes. The catalog path set must equal the union of every artifact path in every
+non-exempt commit, every entry must exactly match its referenced commit, and
+every immutable commit file must have the repository's exact canonical JSON
+bytes. Semantic reformatting is not repaired. Every ledger commit permanently
+reserves its one manuscript identity. For a repeated core path, the current
+entry must reference the unique newest offset-aware commit instant; an equal
+newest tie or older projection fails closed. Missing, subset, malformed, extra,
+duplicate-reservation, noncanonical, or otherwise mismatched ledger/catalog
+state also fails closed; catalog loss does not free paths and is never rewritten,
+reconstructed, or migrated. See
+[Canonical writing artifacts](../reference/writing-artifacts.md#provenance-and-work-history).
+
+At exact catalog-before recovery, an on-disk pending commit is exempt only when
+its canonical bytes exactly match the journal. It contributes no expected paths
+or newest-core candidate; paths and core authority from all older established
+commits remain required. Projected and stored catalog-after include that commit
+in the full path, exact-entry, and unique-newest audit.
+
+On the next artifact access, an exact catalog-before position rolls forward;
+an exact catalog-after position is verified without republishing. A catalog
+matching neither image, target divergence, changed or missing journal bytes,
+missing/divergent published commit, or invalid authoritative transaction state
+writes a persistent marker and blocks all later artifact access. Every `.tmp`,
+`.held`, `.retired`, and `.completed` file is retained under non-authoritative
+staging, ignored by transaction recovery and catalog listing, and may accumulate.
+Only JSON entries in `transactions/` are authoritative; any unexpected entry
+there blocks recovery. This avoids partial eligibility but is not one
+transaction with logs, debate state, results, or provider state. See
+[Canonical writing artifacts](../reference/writing-artifacts.md).
+
+Conversation identities still use exclusive creation, and their metadata and
+transcripts use the separate atomic replacement guarantees below.
 
 Conversation rename and status changes atomically replace one complete metadata
 file. Failure before replacement preserves the old record. A failure reported

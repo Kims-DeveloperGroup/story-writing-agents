@@ -55,6 +55,103 @@ Workspace failure returns safely only when the same session remains `ready` and
 `held_here`; failed proof clears scope and exits. `ProgressObserverError` marks
 preterminal debates `interrupted` when possible; later failures cannot rewrite results.
 
+## Writing-artifact recovery
+
+Every artifact catalog read, exact artifact read, or commit first checks for a
+pending publication journal under the verified readiness-triple lease. The
+schema-v2 journal is one immutable image containing the exact catalog-before
+existence/hash/image, catalog-after image, commit, and ordered targets with
+their complete new bytes and old/new hashes. It is never rewritten to record a
+later phase.
+
+Recovery compares the current catalog with those two exact positions. From
+catalog-before, every target may equal only its recorded old or new bytes;
+recovery rolls the set forward, publishes immutable commit history, and
+publishes the catalog last. If the pending commit record already exists here,
+the audit exempts it only when its byte-canonical record exactly equals this
+journal's commit. That exempt commit contributes neither paths nor a
+newest-core candidate to the expected before catalog; paths and unique newest
+core authority from every older established commit remain required. The
+projected after catalog includes the pending commit and must pass the full audit.
+An unrelated record absent from the exact before view or divergent ledger state
+still blocks. At catalog-after there is no exemption: every target and canonical
+commit must be exact, catalog paths must equal the full union, and each repeated
+core path must project the unique newest offset-aware commit, so recovery only
+verifies them. It
+then hash-checks the unchanged journal and moves it with native no-replace rename to
+a `.completed` name in staging. A catalog matching neither position, an
+untrusted target, or missing/replaced journal or final commit authority blocks
+rather than guessing. Users may see an infrastructure failure followed by
+successful recovery on the next artifact access; inspect the associated debate
+because its result and lifecycle are outside the artifact transaction.
+
+Publication temporaries live under the repository's separate `staging/`
+directory rather than `transactions/`. Failed `.tmp` bytes, prior `.held`
+bytes, failed published `.retired` bytes, and finished `.completed` journals are
+all retained there. This residue is normal internal state, is ignored and
+preserved by transaction recovery and catalog reads, and may grow. Only exact
+JSON journal names in `transactions/` are authoritative; any unexpected entry
+there is ambiguity and blocks recovery.
+
+If a journal is invalid or a target diverged, the repository writes
+`agent_states/orchestrator_state/writing_artifacts/recovery_blocked.json` and
+all later artifact access fails with `writing-artifact recovery is blocked`.
+Stop workspace processes, preserve a complete backup, and investigate the
+journal and target history. Do not delete or edit the lock, journal, catalog,
+commit records, or block marker to force recovery; no automatic repair command
+exists. Restore a verified backup when trustworthy reconstruction is not
+possible. See [Canonical writing artifacts](../reference/writing-artifacts.md).
+
+Catalog listing and selective prompt-context reads omit an individual missing,
+unsafe, hard-linked, nonregular, or hash-stale artifact. They do not hide a
+workspace-root, ancestor, lock-lease, catalog-schema, or global provenance
+integrity failure; those errors propagate because safe enumeration is no longer
+possible. A manual byte edit is therefore nondestructive but makes that entry
+ineligible. Restoring the exact cataloged bytes can make it eligible again when
+the commit and catalog evidence remain valid.
+
+A cataloged manuscript identity is never reusable. If its file is deleted, the
+permanent commit ledger retains the historical reservation while eligible
+listing omits the stale entry. A later commit to the same path raises
+`ManuscriptExistsError`; choose a new part-scoped revision path. Catalog loss
+does not free reservations: a missing, empty, or subset catalog beside existing
+commits fails closed. Malformed, unexpected, extra, mismatched, or
+duplicate-reservation commit records also fail global audit. Immutable commit
+JSON must have the repository's exact canonical bytes; merely reformatting an
+otherwise equivalent record invalidates the ledger. Historical core commits may
+remain, but the catalog must select the unique newest normalized instant for a
+repeated path. An equal newest tie or an older projection is ambiguous and fails
+closed. These records are preserved rather than rewritten or migrated.
+
+Operators should stop workspace processes, preserve a complete backup, and
+restore exact verified repository metadata. The runtime does not guess a tie or
+normalize a hand-edited commit. New repository timestamps remain strictly later
+than all ledger timestamps even when the wall clock moves backward. If the
+latest representable instant cannot advance, a new commit fails before creating
+a journal or mutating an artifact; it does not reinterpret existing history.
+
+The permanent artifact lock is similarly not repaired. Exact primary, anchor,
+and `ready` aliases fail before final inspection or locking, and the three names
+must be hard links to one regular inode with link count three. Initialization
+holds a bootstrap `flock` on the open writing-artifact state directory, flushes
+the retained ancestry, exclusively creates and flushes the primary, flushes its
+parent, links and flushes the anchor, verifies that `ready` is still absent,
+then links and flushes `ready`. Only after triple verification does it acquire
+the primary `flock`, reverify, release bootstrap, and enter protected work.
+
+Any failure avoids protected work. A partial one- or two-link state—including
+the old development pair—a divergent inode, alias, or extra link fails again on
+later artifact access and remains untouched. Stop all workspace processes,
+preserve a backup, and investigate the triple; there is no cleanup,
+reconstruction, or migration.
+
+Stop every workspace process before a manual or external filesystem edit. The
+repository lease serializes supported repository writers, but an actively
+hostile same-user process mutating live names during the native no-replace call
+is outside the supported boundary. Darwin and Linux hosts without the required
+native atomic no-replace rename fail on their first artifact operation; other
+non-artifact workspace/runtime APIs remain usable.
+
 ## Controller cancellation proof
 
 One `asyncio.Runner` serves provider work. SIGINT recovery requires
@@ -83,15 +180,31 @@ scope, and reports at most one `cleanup_failed`. Later startup resumes a ready
 default or asks for confirmation before resuming a paused default; only an
 active default can become focus.
 
+During a long-running process, a changed agent definition becomes current for
+new work without disrupting an operation already using the old immutable
+definition. The old binding and its prompt staging remain only until its final
+debate, advisory, or retrieval use exits. Success, provider failure, and
+cancellation all release that use; cleanup of a superseded active binding is
+deferred rather than deleting files underneath it. At quiescence the runtime
+retains at most one current binding and the backend one owned staging directory
+per canonical agent. Transient overlap may use more than one directory.
+
+This cleanup is internal and best-effort. It adds no status or error, and does
+not change provider conversations, operation results, transcripts, manifests,
+or durable session state. Users cannot require an obsolete definition for new
+work; the newest desired definition is selected instead.
+
 ## Current limits
 
 - Codex is the only provider; reserved `gemini` fails validation.
 - Provider calls have a timeout but no retry or rate-limit manager.
 - Owner history has no compaction, expiry, or retention policy.
-- Artifact rollback is best effort across files, not one transaction.
-- Advisory input is one line; bare `/run` owns multiline composition.
+- Artifact publication is recoverable and catalog-last, but does not share one
+  transaction with debate logs, lifecycle, results, or provider state.
+- Advisory input is one line; `/run --output PART/PATH.md` without prompt text
+  owns multiline composition. Bare `/run` first prompts for the output.
 - Conversation search is active-only; transcript reads retain no cursor.
-- Standalone compose/artifact commands are unavailable.
+- Standalone compose/artifact commands and artifact-reference UI are unavailable.
 
 See [Session lifecycle](../design/session-lifecycle.md),
 [Troubleshooting](../guides/troubleshooting.md), and

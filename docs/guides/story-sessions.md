@@ -209,13 +209,14 @@ Codex or alter defaults/focus.
 ## Turn the current focus into consensus
 
 ```text
-/run
+/run --output part-01/opening.md
 Draft the opening using the decisions above.
 Keep the viewpoint close and the final discovery concrete.
 /send
 ```
 
-Bare `/run` opens the multiline composer. There, `/send` starts the debate and
+`/run --output PART/PATH.md` without prompt text opens the multiline composer.
+There, `/send` starts the debate and
 `/cancel` or Ctrl-C discards the buffer; those commands are unavailable outside it.
 On capable POSIX live editing, typing `/` previews only `/send` then `/cancel`;
 case-sensitive whole-buffer prefixes narrow that list. The panel does not
@@ -223,8 +224,9 @@ complete or submit text. `/say /send` and `/say /cancel` still insert literal
 control lines, and ordinary fallback input shows no panel.
 
 The runtime supplies every debate phase one bounded focus snapshot.
-`/run --fresh PROMPT` records its identity without transcript; `/draft-file PATH`
-reads strict UTF-8 and includes the snapshot. Runs do not change conversations.
+`/run --fresh --output PART/PATH.md PROMPT` records its identity without
+transcript; `/draft-file PATH` reads strict UTF-8, includes the snapshot, and
+prompts for the required output path. Runs do not change conversations.
 
 ## Inspect outcomes and recover
 

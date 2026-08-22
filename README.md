@@ -49,12 +49,15 @@ At `story[lobby]>`, create a session and focus a subject conversation:
 /session create novel
 /conversation new Opening scene
 Which core-document constraint should shape the opening?
-/run Draft the opening from the current conversation focus.
+/run --output part-01/opening.md Draft the opening from the current conversation focus.
 /inspect last
 /quit
 ```
 
-Advisory input is one line; bare `/run` owns multiline composition. `/quit`
+Every consensus run publishes to a required create-only `PART/PATH.md` beneath
+`manuscript/`; omitting it in the shell opens a separate output prompt. Advisory
+input is one line; `/run --output part-01/opening.md` with no prompt owns
+multiline composition. `/quit`
 releases process access without pausing the ready session. The default session
 and default conversation remain saved, so later `story` can resume the session
 and restore its conversation.
@@ -72,12 +75,18 @@ See the complete [Glasswater journey](docs/guides/glasswater-scenario.md).
 For scripts and non-TTY automation, use `story run`; it never uses conversation
 focus. See the [single automation example](docs/guides/glasswater-scenario.md#use-one-explicit-automation-call-then-pause)
 and [CLI contract](docs/reference/cli.md#workspace-noninteractive-behavior-and-exits).
+For example:
+
+```bash
+story run --output part-01/opening.md --prompt 'Draft the opening.'
+```
 
 ## Choose the next page
 
 - [Getting started](docs/getting-started.md) explains installation and the first run.
 - [Documentation index](docs/INDEX.md) routes each task, contract, design topic, and operational concern.
 - [Workspace guide](docs/guides/workspaces.md) explains the editable project files.
+- [Writing artifacts](docs/reference/writing-artifacts.md) defines the exact produced-output paths, provenance states, and recovery behavior.
 - [Story sessions](docs/guides/story-sessions.md) shows shell management, conversation reads, retrieval, and consensus.
 - [Session lifecycle](docs/design/session-lifecycle.md) maps internal state to commands, output, errors, and next actions.
 - [Consensus-run guide](docs/guides/consensus-runs.md) covers prompts, drafts, outputs, and round limits.
@@ -101,12 +110,16 @@ For Python integrations, start with the [runtime API](docs/reference/runtime-api
 - Provider calls have a timeout but no automatic retry or rate limiter.
 - Deadlocked and interrupted debates cannot resume under the same debate ID.
 - Workspace content, logs, provider metadata, agent state, and manuscripts are plaintext.
-- Artifact replacement is atomic per file with best-effort multi-file rollback, not a power-loss-safe transaction.
+- Writing-artifact publication is journaled and catalog-last, and rolls forward
+  on the next artifact access after an interruption. It is not one transaction
+  with debate logs, lifecycle state, or result files.
 - Smoke's explicit workspace is not read-only and retains plaintext diagnostics; abrupt termination can interrupt cleanup. A pass does not validate provider/model, terminal behavior, integration, or story quality. See the [smoke guide](docs/guides/smoke-test.md).
-- The interactive shell accepts one advisory line; bare `/run` owns multiline
-  composition. Process-level PTY tests verify TTY gating and VINTR/VEOF delivery
+- The interactive shell accepts one advisory line; `/run --output PART/PATH.md`
+  without prompt text owns multiline composition. Bare `/run` first prompts for
+  that required output. Process-level PTY tests verify TTY gating and VINTR/VEOF delivery
   on supported POSIX. Retrieval is active-only and bounded; standalone artifact
-  commands remain unavailable. See [conversation retrieval](docs/reference/conversation-retrieval.md).
+  commands and artifact-reference syntax remain unavailable. See
+  [conversation retrieval](docs/reference/conversation-retrieval.md).
 
 ## Development
 

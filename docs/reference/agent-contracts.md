@@ -11,8 +11,9 @@ data for one provider call; **blackboard**—public debate messages;
 ## Bound definition
 
 ```python
-PromptFileReference(path: pathlib.Path, sha256: str)
+PromptFileReference(path: pathlib.Path, sha256: str, content: bytes)
 PromptFileReference.from_path(path: pathlib.Path) -> PromptFileReference
+PromptFileReference.from_bytes(path: pathlib.Path, content: bytes) -> PromptFileReference
 PromptFileReference.read_text() -> str
 AgentDefinition(agent_id: str, backend: str, fingerprint: str,
     system_prompt_file: PromptFileReference,
@@ -21,17 +22,31 @@ AgentDefinition(agent_id: str, backend: str, fingerprint: str,
 AgentDefinition.file_references() -> tuple[PromptFileReference, ...]
 ```
 
-References validate strict UTF-8 and hash exact bytes. A definition stores
-absolute paths and hashes, not full text; its fingerprint covers the agent,
-backend, language, component identities, and hashes. Runtime bindings are
-cached by `(agent_id, fingerprint)`.
+References are frozen content snapshots. Construction validates strict UTF-8
+and requires the SHA-256 to match the captured bytes; `content` is omitted from
+their representation. `path` is a lexical source identity, not continuing read
+authority: `read_text()` decodes the captured bytes, and provider binding does
+not reread the path. A definition's fingerprint covers the agent, backend,
+language, component identities, and hashes. Runtime bindings are cached by
+`(agent_id, fingerprint)`.
 
-| Agent | Bound core documents |
+| Agent | Bound core documents when current and provenance-backed |
 | --- | --- |
 | `lead_orchestrator` | all four |
 | `plot_architect` | global and part outlines |
 | `character_custodian` | character sheets |
 | `execution_specialist` | narrative rules |
+
+Absent, manually created, stale, and otherwise unprovenanced core documents are
+omitted. Exact eligibility is in
+[Canonical writing artifacts](writing-artifacts.md).
+
+For core context, prompt assembly asks the artifact repository to read only the
+paths allowlisted for that role. Each repository-verified
+`ArtifactContentSnapshot` is converted to a `PromptFileReference` backed by the
+same immutable bytes. Role-prompt and persona references are captured from
+their paths at definition construction; all references are content-backed by
+the time the backend receives the definition.
 
 ## Debate request
 

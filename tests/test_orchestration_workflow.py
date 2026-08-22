@@ -137,7 +137,7 @@ class InputPathTests(unittest.IsolatedAsyncioTestCase):
             "prompt_session",
             "neutral prompt request",
             debate_id="prompt_debate",
-            manuscript_name="prompt-result.md",
+            output_path="part-01/prompt-result.md",
         )
 
         self.assertEqual(result.status, DebateStatus.CONSENSUS)
@@ -146,7 +146,7 @@ class InputPathTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.rounds_completed, 0)
         self.assertEqual(result.final_candidate, "generated-r0")
         self.assertEqual(
-            workspace.read_manuscript("prompt-result.md"),
+            workspace.read_text("manuscript/part-01/prompt-result.md"),
             "generated-r0",
         )
 
@@ -175,10 +175,12 @@ class InputPathTests(unittest.IsolatedAsyncioTestCase):
             [EXECUTION_SPECIALIST],
         )
 
-    async def test_supplied_draft_is_revision_zero_without_generation(self) -> None:
+    async def test_supplied_draft_is_authored_before_revision_zero_audit(self) -> None:
         workspace = initialized_workspace(self)
 
         def respond(request):
+            if request.phase is Phase.DRAFT:
+                return AgentReply.candidate(request.revision_id, "agent-authored-r0")
             if request.phase is Phase.AUDIT:
                 return AgentReply.approval(request.revision_id)
             if request.phase is Phase.FINALIZE:
@@ -191,18 +193,21 @@ class InputPathTests(unittest.IsolatedAsyncioTestCase):
             "draft_session",
             "supplied-r0",
             debate_id="draft_debate",
-            manuscript_name="draft-result.md",
+            output_path="part-01/draft-result.md",
             progress_sink=progress.append,
         )
 
         self.assertEqual(result.status, DebateStatus.CONSENSUS)
         self.assertEqual(result.input_kind, InputKind.DRAFT)
-        self.assertEqual(result.final_candidate, "supplied-r0")
-        self.assertFalse(phase_requests(backend, Phase.DRAFT))
+        self.assertEqual(result.final_candidate, "agent-authored-r0")
+        drafts = phase_requests(backend, Phase.DRAFT)
+        self.assertEqual(len(drafts), 1)
+        self.assertEqual(drafts[0].user_payload, "supplied-r0")
+        self.assertEqual(drafts[0].agent_id, EXECUTION_SPECIALIST)
         audits = phase_requests(backend, Phase.AUDIT)
         self.assertEqual(len(audits), 3)
         self.assertTrue(
-            all(request.candidate_payload == "supplied-r0" for request in audits)
+            all(request.candidate_payload == "agent-authored-r0" for request in audits)
         )
         self.assertEqual(
             [event.phase for event in progress],
@@ -273,7 +278,9 @@ class ContextAndProgressWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(inspected["status"], "consensus")
                 self.assertTrue(inspected["terminal"])
                 self.assertIsNotNone(inspected["result"])
-                self.assertTrue(workspace.path("manuscript/context.md").exists())
+                self.assertTrue(
+                    workspace.path("manuscript/part-01/context.md").exists()
+                )
             events.append(event)
 
         backend = ScriptedBackend(respond)
@@ -285,7 +292,7 @@ class ContextAndProgressWorkflowTests(unittest.IsolatedAsyncioTestCase):
             session_id,
             "write from selected context",
             debate_id="context_debate",
-            manuscript_name="context.md",
+            output_path="part-01/context.md",
             conversation_context=DebateContextRequest(
                 conversation_id=conversation_id,
                 mode=DebateContextMode.INCLUDED,
@@ -334,7 +341,10 @@ class ContextAndProgressWorkflowTests(unittest.IsolatedAsyncioTestCase):
             (PLOT_ARCHITECT,),
         )
         self.assertEqual(events[6].conflicting_agents, ())
-        self.assertEqual(events[-2].manuscript_path, "manuscript/context.md")
+        self.assertEqual(
+            events[-2].manuscript_path,
+            "manuscript/part-01/context.md",
+        )
         self.assertEqual(events[-2].core_updates, ("global_outline.md",))
 
         sidecar = workspace.inspect_debate_context(session_id, "context_debate")
@@ -346,7 +356,7 @@ class ContextAndProgressWorkflowTests(unittest.IsolatedAsyncioTestCase):
             [event.to_dict() for event in snapshot.events],
         )
 
-    async def test_legacy_and_fresh_drafts_skip_context_read_but_emit_drafted(
+    async def test_plain_and_fresh_drafts_skip_context_read_but_are_authored(
         self,
     ) -> None:
         workspace = initialized_workspace(self)
@@ -384,7 +394,7 @@ class ContextAndProgressWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 "draft_session",
                 f"supplied {debate_id}",
                 debate_id=debate_id,
-                manuscript_name=f"{debate_id}.md",
+                output_path=f"part-01/{debate_id}.md",
                 conversation_context=request,
                 progress_sink=events.append,
             )
@@ -392,7 +402,7 @@ class ContextAndProgressWorkflowTests(unittest.IsolatedAsyncioTestCase):
             event_sets.append(events)
 
         self.assertEqual(store.read_calls, [])
-        self.assertFalse(phase_requests(backend, Phase.DRAFT))
+        self.assertEqual(len(phase_requests(backend, Phase.DRAFT)), 2)
         self.assertTrue(
             all(request.conversation_context is None for request in backend.requests)
         )
@@ -433,7 +443,7 @@ class ConcurrencyAndPersistenceTests(unittest.IsolatedAsyncioTestCase):
             "concurrent_session",
             "concurrent-candidate",
             debate_id="concurrent_debate",
-            manuscript_name="concurrent.md",
+            output_path="part-01/concurrent.md",
         )
 
         self.assertEqual(result.status, DebateStatus.CONSENSUS)
@@ -497,7 +507,7 @@ class RevisionWorkflowTests(unittest.IsolatedAsyncioTestCase):
             "revision_session",
             "candidate-r0",
             debate_id="revision_debate",
-            manuscript_name="revision.md",
+            output_path="part-01/revision.md",
         )
 
         self.assertEqual(result.status, DebateStatus.CONSENSUS)
@@ -522,13 +532,19 @@ class RevisionWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(initial_audits), 3)
         self.assertEqual(len(reaudits), 3)
 
-        initial_prefix = ("draft",)
+        initial_prefix = ("draft", "candidate")
         for request in initial_audits:
             self.assertEqual(
                 tuple(message.kind for message in request.messages),
                 initial_prefix,
             )
-        proposal_prefix = ("draft", "critique", "approval", "approval")
+        proposal_prefix = (
+            "draft",
+            "candidate",
+            "critique",
+            "approval",
+            "approval",
+        )
         self.assertEqual(
             tuple(message.kind for message in proposals[0].messages),
             proposal_prefix,
@@ -603,7 +619,7 @@ class RevisionWorkflowTests(unittest.IsolatedAsyncioTestCase):
             "deadlock_session",
             "candidate-r0",
             debate_id="deadlock_debate",
-            manuscript_name="deadlock.md",
+            output_path="part-01/deadlock.md",
             progress_sink=progress.append,
         )
 
@@ -672,7 +688,7 @@ class RevisionWorkflowTests(unittest.IsolatedAsyncioTestCase):
                     f"limit_{limit}",
                     "candidate-r0",
                     debate_id=f"limit_{limit}_debate",
-                    manuscript_name=f"limit-{limit}.md",
+                    output_path=f"part-01/limit-{limit}.md",
                     max_debate_rounds=limit,
                 )
 
@@ -685,7 +701,7 @@ class RevisionWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 if expected_status is DebateStatus.CONSENSUS:
                     self.assertEqual(result.revision_id, "r2")
                     self.assertEqual(
-                        workspace.read_manuscript("limit-2.md"),
+                        workspace.read_text("manuscript/part-01/limit-2.md"),
                         "candidate-r2",
                     )
                 else:
@@ -732,6 +748,7 @@ class RevisionWorkflowTests(unittest.IsolatedAsyncioTestCase):
         active_result = await active.run_draft(
             "active_snapshot",
             "candidate-r0",
+            output_path="part-01/active-snapshot.md",
             debate_id="active_snapshot_debate",
         )
         self.assertEqual(active_result.status, DebateStatus.DEADLOCK)
@@ -746,6 +763,7 @@ class RevisionWorkflowTests(unittest.IsolatedAsyncioTestCase):
         next_result = await next_runtime.run_draft(
             "next_snapshot",
             "candidate-r0",
+            output_path="part-01/next-snapshot.md",
             debate_id="next_snapshot_debate",
         )
         self.assertEqual(next_result.status, DebateStatus.CONSENSUS)
@@ -760,6 +778,7 @@ class RevisionWorkflowTests(unittest.IsolatedAsyncioTestCase):
         explicit = await next_runtime.run_draft(
             "explicit_snapshot",
             "candidate-r0",
+            output_path="part-01/explicit-snapshot.md",
             debate_id="explicit_snapshot_debate",
             max_debate_rounds=0,
         )

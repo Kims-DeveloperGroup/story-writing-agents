@@ -2148,8 +2148,8 @@ class HelpAndErrorTests(unittest.TestCase):
                 "  Group:\n"
                 "   Consensus\n"
                 "  Syntax:\n"
-                "   /run [PROMPT] | /run --fresh \n"
-                "   PROMPT\n"
+                "   /run [--fresh] [--output PART\n"
+                "   /PATH.md] [PROMPT]\n"
                 "  Aliases:\n"
                 "   none\n"
                 "  Calls provider:\n"
@@ -2157,7 +2157,8 @@ class HelpAndErrorTests(unittest.TestCase):
                 "  May write artifacts:\n"
                 "   yes\n"
                 "  Example:\n"
-                "   /run Outline chapter one\n"
+                "   /run --output part-01/chapter\n"
+                "   -01.md Outline chapter one\n"
                 f"{'-' * 32}\n"
             ],
         )

@@ -67,8 +67,10 @@ For `session_not_attached`, create/resume in the shell. For
 `/help [COMMAND]` shows syntax; `/status` shows scope. Management/reads need an
 attachment; advisory, `/history`, `/run`, and `/draft-file` also need focus.
 
-The main prompt rejects standalone `/compose`, `/send`, and `/cancel`. Bare
-`/run` alone opens the composer, where `/send` submits and `/cancel` discards.
+The main prompt rejects standalone `/compose`, `/send`, and `/cancel`.
+`/run --output PART/PATH.md` without prompt text opens the composer, where
+`/send` submits and `/cancel` discards. Bare `/run` first asks for that required
+output path.
 Advisory input remains one line.
 
 ## An answer did not search conversation memory
@@ -96,9 +98,10 @@ retry. For `session_ownership_unknown`, preserve the claim and guard; inspect
 ## A prompt or draft file fails
 
 Run `story init WORKSPACE` to add missing role prompts without overwriting.
-Prompt, persona, and core files must be readable, strict UTF-8, inside the
-workspace, and free of symlink components. Finish concurrent edits before a
-new-ID retry.
+Prompt and persona files must be readable, strict UTF-8, inside the workspace,
+and free of symlink components. Core documents are optional until agents publish
+them; only current provenance-backed core bytes enter prompt context. Finish
+concurrent edits before a new-ID retry.
 
 `--draft-file` must exist and decode as strict UTF-8. Its relative path starts
 at the shell's current directory even when `--workspace` points elsewhere.
@@ -112,7 +115,28 @@ text. Create a referenced persona first. Rejection preserves prior overrides.
 
 `DebateExistsError` means the ID is reserved; inspect it and choose a new one.
 `ManuscriptExistsError` means the target exists; preserve it, then use a new
-debate ID and relative output path. Deletion/same-ID resume is unsupported.
+debate ID and distinct `PART/PATH.md` output. A manuscript revision belongs at
+a new path such as `part-01/revisions/chapter-r2.md`. Deletion, overwrite, a
+single-component output path, and same-ID resume are unsupported.
+
+## A writing artifact disappeared from eligible context
+
+A manual or tool edit does not delete the file, but its SHA-256 no longer
+matches repository provenance, so catalog listing omits it and exact artifact
+reads reject it. Make external edits only after every workspace process has
+stopped. Restore the exact recorded bytes or ask the agents to republish a core
+document through a new unanimous run. Changed manuscripts use a new part-scoped
+revision path. Internal transcripts, discussion logs, agent state,
+single-component manuscript files, symlinks, hard links, and nonregular files
+are never eligible.
+
+Files ending in `.tmp`, `.held`, `.retired`, or `.completed` under the internal
+writing-artifact `staging/` directory are retained publication evidence. They
+are never eligible or authoritative recovery journals and may accumulate; do
+not move them into `transactions/` or present them as story output.
+
+If access reports `writing-artifact recovery is blocked`, stop, preserve a full
+backup, and follow [artifact recovery](../operations/recovery-and-limitations.md#writing-artifact-recovery).
 
 ## The result is deadlocked, active, or interrupted
 

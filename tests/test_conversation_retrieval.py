@@ -874,6 +874,7 @@ class _ScriptedRetrievalBackend:
         self.lifecycle_sessions: list[str] = []
         self.access_held: set[str] = set()
         self.definitions: list[AgentDefinition] = []
+        self.bindings: list[object] = []
         self.requests: list[ConversationRetrievalRequest] = []
         self.actions: list[ConversationRetrievalAction] = []
         self.outcomes: list[ConversationRetrievalObservation | ConversationRetrievalReply] = []
@@ -923,7 +924,9 @@ class _ScriptedRetrievalBackend:
         """Return one provider-free bound collaborator for the definition."""
 
         self.definitions.append(definition)
-        return self.bound_factory(self, definition)
+        binding = self.bound_factory(self, definition)
+        self.bindings.append(binding)
+        return binding
 
 
 class _FailingRetrievalBound(_ScriptedRetrievalBound):
@@ -1087,6 +1090,114 @@ class ConversationRetrievalRuntimeTestCase(unittest.IsolatedAsyncioTestCase):
 
 class ConversationRetrievalRuntimeFlowTests(ConversationRetrievalRuntimeTestCase):
     """Verify legal flows, phase transitions, filtering, and source resolution."""
+
+    async def _assert_superseded_binding_spans_retrieval_provider(
+        self,
+        outcome: str,
+    ) -> None:
+        entered = asyncio.Event()
+        proceed = asyncio.Event()
+
+        class GatedBound(_ScriptedRetrievalBound):
+            async def converse_with_retrieval(
+                self,
+                request: ConversationRetrievalRequest,
+                handler: ConversationRetrievalActionHandler,
+            ) -> ConversationRetrievalReply:
+                entered.set()
+                await proceed.wait()
+                if outcome == "failure":
+                    raise RuntimeError("retrieval provider failed")
+                return await super().converse_with_retrieval(request, handler)
+
+        def bound_factory(
+            backend: _ScriptedRetrievalBackend,
+            definition: AgentDefinition,
+        ) -> object:
+            if not backend.bindings:
+                return GatedBound(backend, definition)
+            return _ScriptedRetrievalBound(backend, definition)
+
+        backend = _ScriptedRetrievalBackend(
+            (_answer_action(1, content="new answer"),),
+            (_answer_action(1, content="old answer"),),
+            bound_factory=bound_factory,
+        )
+        runtime = self.runtime(backend)
+        released: list[object] = []
+
+        def release(binding: object) -> None:
+            self.assertFalse(runtime._binding_lock.locked())
+            released.append(binding)
+
+        with (
+            mock.patch(
+                "story_writing_agents.orchestrator.release_bound_agent",
+                side_effect=release,
+            ),
+            mock.patch.object(
+                StoryRuntime,
+                "_new_conversation_turn_id",
+                side_effect=("turn_old", "turn_new"),
+            ),
+        ):
+            first = asyncio.create_task(
+                runtime.converse_with_retrieval(
+                    _SESSION,
+                    self.selected.conversation_id,
+                    PLOT_ARCHITECT,
+                    "old binding",
+                    memory_service=self.memory,
+                )
+            )
+            await asyncio.wait_for(entered.wait(), timeout=1)
+            old_bound = backend.bindings[0]
+            prompt_path = story_writing_agents.AGENT_SPECS[
+                PLOT_ARCHITECT
+            ].system_prompt_file
+            self.workspace.write_text(prompt_path, "retrieval prompt version two")
+            await runtime.converse_with_retrieval(
+                _SESSION,
+                self.source.conversation_id,
+                PLOT_ARCHITECT,
+                "new binding",
+                memory_service=self.memory,
+            )
+
+            self.assertEqual(len(backend.bindings), 2)
+            self.assertNotIn(old_bound, released)
+            self.assertIn(old_bound, runtime._retiring_bound_agents.values())
+            if outcome == "cancellation":
+                first.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await first
+            else:
+                proceed.set()
+                if outcome == "failure":
+                    with self.assertRaisesRegex(
+                        RuntimeError,
+                        "retrieval provider failed",
+                    ):
+                        await asyncio.wait_for(first, timeout=1)
+                else:
+                    await asyncio.wait_for(first, timeout=1)
+
+        self.assertEqual(released, [old_bound])
+        self.assertEqual(runtime._retiring_bound_agents, {})
+        self.assertEqual(runtime._bound_agent_uses, {})
+
+    async def test_superseded_binding_spans_retrieval_provider_success(self) -> None:
+        await self._assert_superseded_binding_spans_retrieval_provider("success")
+
+    async def test_superseded_binding_spans_retrieval_provider_failure(self) -> None:
+        await self._assert_superseded_binding_spans_retrieval_provider("failure")
+
+    async def test_superseded_binding_spans_retrieval_provider_cancellation(
+        self,
+    ) -> None:
+        await self._assert_superseded_binding_spans_retrieval_provider(
+            "cancellation"
+        )
 
     async def test_direct_answer_uses_no_memory_and_persists_one_visible_pair(self) -> None:
         backend = _ScriptedRetrievalBackend((_answer_action(1),))

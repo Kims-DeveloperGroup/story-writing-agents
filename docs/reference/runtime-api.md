@@ -23,21 +23,46 @@ await StoryRuntime.converse(session_id: str, conversation_id: str,
                             agent_id: str, text: str) -> ConversationResult
 await StoryRuntime.converse_with_retrieval(session_id, conversation_id, agent_id, text, *, memory_service, progress_sink=None) -> ConversationRetrievalResult
 await StoryRuntime.run_prompt(session_id: str, prompt: str, *,
-    manuscript_name: str | None = None,
+    output_path: str,
     max_debate_rounds: int | None = None, debate_id: str | None = None,
     conversation_context: DebateContextRequest | None = None,
     progress_sink: DebateProgressSink | None = None) -> DebateResult
 await StoryRuntime.run_draft(session_id: str, draft: str, *,
-    manuscript_name: str | None = None,
+    output_path: str,
     max_debate_rounds: int | None = None, debate_id: str | None = None,
     conversation_context: DebateContextRequest | None = None,
     progress_sink: DebateProgressSink | None = None) -> DebateResult
 ```
 
 `RuntimeSession` binds the session ID. Its `run_prompt()` and `run_draft()` share
-options, defaults, and result type; it also exposes
+the required `output_path`, other options, and result type; it also exposes
 both conversation methods, `inspect_debate()`, and `inspect_debate_context()`.
 `Runtime` and `Session` are exact aliases.
+
+Binding resource management is internal and adds no API. For each canonical
+agent, the runtime keeps at most one current binding at quiescence. Concurrent
+operations with the same fingerprint single-flight binding creation and share
+the immutable result. When fingerprints differ, an old and new binding may
+overlap temporarily: new work selects the newest desired definition, while
+each already-entered debate, advisory, or retrieval operation leases its exact
+old binding until success, failure, or cancellation. The idle superseded
+binding is then retired. This bounding does not change result objects,
+transcripts, provider-thread keys, session manifests, or durable session state.
+
+`output_path` has no default and is the `PART/PATH.md` suffix appended beneath
+the canonical `manuscript/` directory. It is validated before session access,
+debate reservation, or provider work. Publication becomes
+`manuscript/PART/PATH.md` and refuses an existing target. `manuscript` is a
+legal `PART`, so `output_path="manuscript/chapter.md"` intentionally publishes
+`manuscript/manuscript/chapter.md`. See
+[Canonical writing artifacts](writing-artifacts.md).
+
+Consensus agents, not runtime development code, author published text. The
+execution specialist authors `r0`; a later synthesized manuscript revision is
+lead-authored; and core updates are lead-authored full replacements. The
+runtime validates the unanimous result and persists the exact returned bytes.
+An advisory conversation call cannot publish. A manuscript revision must use a
+new output path because manuscript targets are create-only.
 
 ## Debate context
 
@@ -111,7 +136,9 @@ ConversationRetrievalResult(*, session_id: str, conversation_id: str,
 
 Validation, observer errors, cancellation, and uncertain persistence raise.
 Expected debate failures normally return a terminal `failed`
-result. `DebateResult`, its JSON, context-omitted calls, and CLI exits are unchanged.
+result. `DebateResult`, its JSON, context-omitted calls, and CLI exits retain
+their documented shapes. The run signature has only the required canonical
+`output_path` contract.
 
 `converse()` remains one provider call with one user and reply/error pair.
 `converse_with_retrieval()` requires an exact same-session memory service and

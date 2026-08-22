@@ -25,26 +25,46 @@ Workspace.write_json(relative, value, *, overwrite: bool = True) -> pathlib.Path
 Workspace.read_persona(template_name: str) -> str
 Workspace.persona_path(template_name: str) -> pathlib.Path
 Workspace.persona_exists(template_name: str) -> bool
-Workspace.read_core_documents(filenames: tuple[str, ...]) -> dict[str, str]
-Workspace.read_manuscript(manuscript_name: str) -> str
-Workspace.write_manuscript(manuscript_name: str, content: str) -> pathlib.Path
 Workspace.load_session_overrides(session_id: str) -> dict[str, Any]
 Workspace.save_session_overrides(session_id: str, overrides: Mapping[str, Any]) -> pathlib.Path
 ```
 
 Initialization creates missing scaffold and normally preserves existing files.
 With `overwrite_prompts=True`, it replaces exactly the four canonical role
-prompts and preserves all other existing content.
+prompts and preserves all other existing content. Initialization creates the
+`core_documents/` directory but no core-document templates or manuscript.
 
 The workspace root is resolved once. Public path operations accept only safely
 contained workspace-relative paths with no absolute path, `..`, or symlink
 component. Text is strict UTF-8. JSON readers reject malformed structures where
 the consuming contract performs schema validation.
 
+`Workspace.read_text()` is a raw, safely contained UTF-8 read. It does not
+classify canonical paths, check artifact provenance, or make bytes eligible for
+story-agent context. Although it can physically read a canonical file, callers
+must not treat that result as trusted canonical context.
+`Workspace.read_core_documents()` has been removed with no compatibility alias;
+trusted story context is selected internally through repository-backed runtime
+prompt construction. Generic raw reads remain appropriate for noncanonical
+inputs and internal workspace files.
+
 `write_text` and `write_json` atomically replace one file when overwrite is
-allowed. `write_manuscript` never overwrites. A direct caller of generic write
-methods is a trusted workspace client and may change any safely contained
-relative file; orchestration itself restricts core updates to four names.
+allowed, except that both reject the four canonical core-document paths, every
+canonical `manuscript/PART/PATH.md`, and case-folded or NFKC-normalized aliases
+of either reserved top-level namespace. This check occurs before parent or
+target mutation. Canonical application writes must go through the artifact
+repository so bytes, authorship, commit history, and the current catalog cannot
+diverge. Generic writes remain available for other safely contained workspace
+files. An external filesystem edit can still make
+an artifact manual or stale; those bytes remain on disk but are ineligible
+unless a matching catalog and commit record exist and the current hash agrees.
+Stop all workspace processes before making such an external edit. Orchestration
+restricts core updates to four names and delegates publication to the separate
+artifact repository.
+
+Cataloged manuscript paths are permanent create-only identities. Deleting one
+externally makes it stale and ineligible but does not free the path for reuse;
+a later revision must use a distinct `PART/PATH.md`.
 
 ## Orchestration persistence primitives
 
@@ -70,8 +90,6 @@ Workspace.save_debate_context(session_id: str, debate_id: str, *,
 Workspace.inspect_debate_context(session_id: str, debate_id: str) -> dict[str, Any] | None
 Workspace.inspect_debate(session_id: str, debate_id: str) -> dict[str, Any]
 Workspace.inspect_session(session_id: str) -> dict[str, Any]
-Workspace.commit_approved_artifacts(manuscript_name: str, candidate: str,
-    core_updates: Mapping[str, str]) -> tuple[str, tuple[str, ...]]
 ```
 
 These methods are public but are low-level orchestration primitives; normal
@@ -86,11 +104,18 @@ absent context sidecar. It does not change `inspect_debate()` or
 `inspect_session()`. The schema is owned by
 [Persistence](../design/persistence.md#debate-context-sidecar).
 
-Artifact commit validates the complete update map and manuscript target before
-content writes. It stages and atomically replaces allowlisted core documents in
-fixed order, then exclusively creates the exact approved manuscript. On later
-failure it attempts to remove the manuscript and restore earlier core files.
-That rollback is best effort, not a transaction spanning files, logs, or state.
+`Workspace` no longer exposes manuscript read/write or approved-artifact commit
+helpers. `StoryRuntime` owns the supported orchestration entry and uses the
+domain-specific, module-internal `WritingArtifactRepository` for provenance,
+create-only part manuscripts, catalog-last publication, and recovery. See
+[Canonical writing artifacts](writing-artifacts.md).
+
+Constructing `Workspace`, `StoryRuntime`, or the artifact repository performs
+no artifact I/O. Platforms without the repository's secure filesystem
+primitives—including Darwin `renameatx_np(RENAME_EXCL)` or Linux
+`renameat2(RENAME_NOREPLACE)`—can continue to use non-artifact workspace and
+runtime APIs; the first catalog read, artifact read, or artifact commit raises
+`WorkspaceSecurityError`.
 
 ## Directive utility
 

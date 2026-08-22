@@ -1,7 +1,7 @@
 # Interactive terminal component
 
 > **Availability:** this package-supported component owns shell input, safe
-> records, and bare `/run` composition. Orientation, status/inspection,
+> records, and `/run --output PART/PATH.md` composition. Orientation, status/inspection,
 > central errors/recovery, and accepted management, advisory, retrieval, and
 > consensus output use its semantic renderer. Full/context help, agent roster,
 > session/conversation lists, search, transcript, and focused history now do as
@@ -610,8 +610,9 @@ contain whitespace.
 This is preview only: it does not complete, replace, select, parse, or dispatch
 the buffer and does not call a story provider, runtime, filesystem, or storage.
 Enter submits the unchanged buffer to the existing composition rules. The
-installed shell enters RUN composition through bare `/run`; CHAT composition
-remains a module-supported terminal operation. At the editor boundary,
+installed shell enters RUN composition after the controller has obtained and
+validated the required output path; bare `/run` therefore shows that prompt
+first. CHAT composition remains a module-supported terminal operation. At the editor boundary,
 unsupported, `TERM=dumb`, non-TTY, and non-POSIX reads use ordinary line input
 with the structured plain semantic prompt once and without a suggestion preview;
 the installed CLI's earlier dual-TTY guard still applies.

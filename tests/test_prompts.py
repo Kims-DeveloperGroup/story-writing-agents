@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from dataclasses import fields
 from pathlib import Path
+from unittest import mock
 
 from story_writing_agents import (
     AGENT_SPECS,
@@ -22,10 +23,12 @@ from story_writing_agents import (
     PromptFileReference,
     ROSTER,
     StoryRuntime,
+    EXECUTION_SPECIALIST,
 )
 from story_writing_agents.errors import WorkspaceFormatError
 from story_writing_agents.config import ConfigManager
 from story_writing_agents.prompts import PromptAssembler
+from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
 
 from tests.helpers import ScriptedBackend, initialized_workspace
 
@@ -46,16 +49,23 @@ class PromptAssemblerTests(unittest.TestCase):
             "persona": "prompt_persona",
         }
         self.workspace.write_json("config/agent_configs.json", configs)
-        for filename in (
-            "global_outline.md",
-            "part_outlines.md",
-            "character_sheets.md",
-            "narrative_rules.md",
-        ):
-            self.workspace.write_text(
-                f"core_documents/{filename}",
-                f"CONTEXT_TOKEN::{filename}",
-            )
+        WritingArtifactRepository(self.workspace.root).commit_consensus(
+            output_path="fixtures/prompt-context.md",
+            candidate="prompt fixture manuscript",
+            core_updates={
+                filename: f"CONTEXT_TOKEN::{filename}"
+                for filename in (
+                    "global_outline.md",
+                    "part_outlines.md",
+                    "character_sheets.md",
+                    "narrative_rules.md",
+                )
+            },
+            session_id="prompt_fixture",
+            debate_id="prompt_fixture",
+            revision_id="r0",
+            candidate_author_agent_id=EXECUTION_SPECIALIST,
+        )
         self.assembler = PromptAssembler(self.workspace)
 
     def test_request_contains_turn_payloads_but_no_system_prompt(self) -> None:
@@ -98,7 +108,12 @@ class PromptAssemblerTests(unittest.TestCase):
     ) -> None:
         self.assertEqual(
             tuple(inspect.signature(PromptAssembler).parameters),
-            ("workspace", "backend_overrides", "configuration_snapshot"),
+            (
+                "workspace",
+                "artifact_repository",
+                "backend_overrides",
+                "configuration_snapshot",
+            ),
         )
         snapshot = ConfigManager(self.workspace).load_configuration_snapshot()
         assembler = PromptAssembler(
@@ -269,25 +284,42 @@ class PromptAssemblerTests(unittest.TestCase):
     def test_each_agent_references_only_its_allowlisted_context_in_order(
         self,
     ) -> None:
-        for agent_id in ROSTER:
-            definition = self.assembler.build_definition(
-                session_id="context_session",
-                agent_id=agent_id,
-            )
-            with self.subTest(agent_id=agent_id):
-                self.assertEqual(
-                    definition.system_prompt_file.path,
-                    self.workspace.path(
-                        AGENT_SPECS[agent_id].system_prompt_file
-                    ),
+        read_current = self.assembler.artifacts.read_current
+        with mock.patch.object(
+            self.assembler.artifacts,
+            "read_current",
+            wraps=read_current,
+        ) as selective_read:
+            for agent_id in ROSTER:
+                definition = self.assembler.build_definition(
+                    session_id="context_session",
+                    agent_id=agent_id,
                 )
-                self.assertEqual(
-                    tuple(
-                        reference.path.name
-                        for reference in definition.context_document_files
-                    ),
-                    AGENT_SPECS[agent_id].context_documents,
+                with self.subTest(agent_id=agent_id):
+                    self.assertEqual(
+                        definition.system_prompt_file.path,
+                        self.workspace.path(
+                            AGENT_SPECS[agent_id].system_prompt_file
+                        ),
+                    )
+                    self.assertEqual(
+                        tuple(
+                            reference.path.name
+                            for reference in definition.context_document_files
+                        ),
+                        AGENT_SPECS[agent_id].context_documents,
+                    )
+
+        self.assertEqual(
+            [call.args[0] for call in selective_read.call_args_list],
+            [
+                tuple(
+                    f"core_documents/{filename}"
+                    for filename in AGENT_SPECS[agent_id].context_documents
                 )
+                for agent_id in ROSTER
+            ],
+        )
 
     def test_fingerprint_is_deterministic_and_tracks_effective_definition(
         self,
@@ -320,7 +352,7 @@ class PromptAssemblerTests(unittest.TestCase):
 
 
 class PromptFileReferenceTests(unittest.TestCase):
-    def test_reference_reads_strict_utf8_and_detects_content_tampering(
+    def test_reference_is_an_immutable_strict_utf8_content_snapshot(
         self,
     ) -> None:
         temporary = tempfile.TemporaryDirectory()
@@ -334,13 +366,19 @@ class PromptFileReferenceTests(unittest.TestCase):
             reference.sha256,
             hashlib.sha256(path.read_bytes()).hexdigest(),
         )
+        self.assertNotIn("valid-한글", repr(reference))
+        self.assertNotIn("content=", repr(reference))
 
         path.write_text("changed", encoding="utf-8")
-        with self.assertRaisesRegex(
-            WorkspaceFormatError,
-            "changed after reference creation",
-        ):
-            reference.read_text()
+        self.assertEqual(reference.read_text(), "valid-한글")
+        path.unlink()
+        self.assertEqual(reference.read_text(), "valid-한글")
+
+        copied = PromptFileReference.from_bytes(
+            path,
+            "copied-한글".encode("utf-8"),
+        )
+        self.assertEqual(copied.read_text(), "copied-한글")
 
     def test_reference_rejects_invalid_utf8_missing_files_and_bad_hashes(
         self,
@@ -357,7 +395,15 @@ class PromptFileReferenceTests(unittest.TestCase):
         for digest in ("0" * 63, "A" * 64, 42):
             with self.subTest(digest=digest):
                 with self.assertRaisesRegex(ValueError, "lowercase SHA-256"):
-                    PromptFileReference(invalid, digest)  # type: ignore[arg-type]
+                    PromptFileReference(  # type: ignore[arg-type]
+                        invalid,
+                        digest,
+                        b"valid",
+                    )
+        with self.assertRaisesRegex(ValueError, "match the immutable"):
+            PromptFileReference(invalid, "0" * 64, b"valid")
+        with self.assertRaisesRegex(WorkspaceFormatError, "valid UTF-8"):
+            PromptFileReference.from_bytes(invalid, b"\xff")
 
 
 class _BoundApprovalAgent:
@@ -432,6 +478,23 @@ class _CancellationSuppressingBindingBackend:
         return _BoundApprovalAgent(definition.agent_id)
 
 
+class _ControlledBindingBackend:
+    """Complete selected fingerprint binds only when the test permits."""
+
+    def __init__(self) -> None:
+        self.started: dict[str, asyncio.Event] = {}
+        self.proceed: dict[str, asyncio.Event] = {}
+        self.bindings: dict[str, _BoundApprovalAgent] = {}
+
+    async def bind(self, definition: AgentDefinition) -> _BoundApprovalAgent:
+        fingerprint = definition.fingerprint
+        self.started.setdefault(fingerprint, asyncio.Event()).set()
+        await self.proceed.setdefault(fingerprint, asyncio.Event()).wait()
+        binding = _BoundApprovalAgent(definition.agent_id)
+        self.bindings[fingerprint] = binding
+        return binding
+
+
 class RuntimeBindingTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.workspace = initialized_workspace(self)
@@ -485,9 +548,9 @@ class RuntimeBindingTests(unittest.IsolatedAsyncioTestCase):
         self.workspace.write_text(self.persona_path, "runtime-persona-v2")
         await runtime._invoke(request)
 
-        self.workspace.write_text(
-            "core_documents/global_outline.md",
+        self.workspace.path("core_documents/global_outline.md").write_text(
             "outline-v2",
+            encoding="utf-8",
         )
         await runtime._invoke(request)
 
@@ -505,20 +568,67 @@ class RuntimeBindingTests(unittest.IsolatedAsyncioTestCase):
         self.workspace.write_json("config/agent_configs.json", configs)
         await runtime._invoke(request)
 
-        self.assertEqual(len(backend.definitions), 6)
+        # The manually edited core file has no repository provenance and is
+        # therefore not part of the effective definition in this fixture.
+        self.assertEqual(len(backend.definitions), 5)
         self.assertEqual(
             len({item.fingerprint for item in backend.definitions}),
-            6,
+            5,
         )
         self.assertEqual(
             [item.language for item in backend.definitions],
-            ["EN", "EN", "EN", "EN", "FR", "FR"],
+            ["EN", "EN", "EN", "FR", "FR"],
         )
         self.assertTrue(
             all(
                 definition.agent_id == request.agent_id
                 for definition, request in backend.bound_invocations
             )
+        )
+
+    async def test_repository_snapshot_race_binds_verified_immutable_bytes(
+        self,
+    ) -> None:
+        repository = WritingArtifactRepository(self.workspace.root)
+        repository.commit_consensus(
+            output_path="part-01/prompt-race-fixture.md",
+            candidate="fixture manuscript",
+            core_updates={"global_outline.md": "verified outline"},
+            session_id="prompt_race_fixture",
+            debate_id="prompt_race_fixture",
+            revision_id="r0",
+            candidate_author_agent_id=EXECUTION_SPECIALIST,
+        )
+        backend = ScriptedBackend(
+            lambda request: AgentReply.approval(request.revision_id)
+        )
+        runtime = StoryRuntime(self.workspace, backend)
+        request = self._audit_request(runtime)
+        read_current = runtime.prompts.artifacts.read_current
+
+        def snapshot_then_change(paths):
+            snapshots = read_current(paths)
+            self.workspace.path("core_documents/global_outline.md").write_text(
+                "changed after verified catalog snapshot",
+                encoding="utf-8",
+            )
+            return snapshots
+
+        with mock.patch.object(
+            runtime.prompts.artifacts,
+            "read_current",
+            side_effect=snapshot_then_change,
+        ):
+            await runtime._invoke(request)
+
+        self.assertEqual(len(backend.definitions), 1)
+        self.assertEqual(len(backend.bound_invocations), 1)
+        self.assertEqual(len(backend.requests), 1)
+        references = backend.definitions[0].context_document_files
+        self.assertEqual(references[0].read_text(), "verified outline")
+        self.assertEqual(
+            self.workspace.read_text("core_documents/global_outline.md"),
+            "changed after verified catalog snapshot",
         )
 
     async def test_codex_defaults_do_not_change_definition_or_binding_identity(
@@ -584,6 +694,54 @@ class RuntimeBindingTests(unittest.IsolatedAsyncioTestCase):
         bound = await asyncio.wait_for(surviving_waiter, timeout=1)
         self.assertEqual(backend.bind_count, 1)
         self.assertIs(await runtime._bound_agent(definition), bound)
+        self.assertEqual(
+            runtime._bound_agents,
+            {(definition.agent_id, definition.fingerprint): bound},
+        )
+        self.assertEqual(runtime._retiring_bound_agents, {})
+        self.assertEqual(runtime._bound_agent_uses, {})
+
+    async def test_same_fingerprint_operations_share_one_current_binding(
+        self,
+    ) -> None:
+        all_entered = asyncio.Event()
+        proceed = asyncio.Event()
+        arrivals = 0
+
+        async def approve(request: AgentRequest) -> AgentReply:
+            nonlocal arrivals
+            arrivals += 1
+            if arrivals == 2:
+                all_entered.set()
+            await proceed.wait()
+            return AgentReply.approval(request.revision_id)
+
+        backend = ScriptedBackend(approve)
+        runtime = StoryRuntime(self.workspace, backend)
+        request = self._audit_request(runtime)
+        tasks = (
+            asyncio.create_task(runtime._invoke(request)),
+            asyncio.create_task(runtime._invoke(request)),
+        )
+        await asyncio.wait_for(all_entered.wait(), timeout=1)
+
+        self.assertEqual(len(backend.definitions), 1)
+        self.assertEqual(len(backend.bound_invocations), 2)
+        self.assertIs(
+            backend.bound_invocations[0][0],
+            backend.bound_invocations[1][0],
+        )
+        self.assertEqual(
+            [use_count for _, use_count in runtime._bound_agent_uses.values()],
+            [2],
+        )
+        self.assertEqual(len(runtime._bound_agents), 1)
+
+        proceed.set()
+        await asyncio.wait_for(asyncio.gather(*tasks), timeout=1)
+        self.assertEqual(runtime._bound_agent_uses, {})
+        self.assertEqual(runtime._retiring_bound_agents, {})
+        self.assertEqual(len(runtime._bound_agents), 1)
 
     async def test_sole_waiter_cancellation_cancels_and_joins_binding(
         self,
@@ -608,6 +766,8 @@ class RuntimeBindingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime._binding_tasks, {})
         self.assertEqual(runtime._binding_waiters, {})
         self.assertEqual(runtime._bound_agents, {})
+        self.assertEqual(runtime._retiring_bound_agents, {})
+        self.assertEqual(runtime._bound_agent_uses, {})
 
     async def test_cancel_suppressing_abandoned_bind_cannot_cache(
         self,
@@ -619,29 +779,148 @@ class RuntimeBindingTests(unittest.IsolatedAsyncioTestCase):
             agent_id=PLOT_ARCHITECT,
         )
 
-        abandoned_waiter = asyncio.create_task(
-            runtime._bound_agent(definition)
+        released: list[object] = []
+
+        def release(binding: object) -> None:
+            self.assertFalse(runtime._binding_lock.locked())
+            released.append(binding)
+
+        with mock.patch(
+            "story_writing_agents.orchestrator.release_bound_agent",
+            side_effect=release,
+        ):
+            abandoned_waiter = asyncio.create_task(
+                runtime._bound_agent(definition)
+            )
+            await asyncio.wait_for(backend.first_entered.wait(), timeout=1)
+            abandoned_binding = next(iter(runtime._binding_tasks.values()))
+            abandoned_waiter.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await abandoned_waiter
+
+            await asyncio.wait_for(backend.first_cancelled.wait(), timeout=1)
+            self.assertTrue(abandoned_binding.done())
+            self.assertFalse(abandoned_binding.cancelled())
+            self.assertEqual(len(released), 1)
+            self.assertEqual(
+                getattr(released[0], "agent_id"),
+                f"{definition.agent_id}:abandoned",
+            )
+            self.assertEqual(runtime._binding_tasks, {})
+            self.assertEqual(runtime._binding_waiters, {})
+            self.assertEqual(runtime._bound_agents, {})
+            self.assertEqual(runtime._retiring_bound_agents, {})
+            self.assertEqual(runtime._bound_agent_uses, {})
+
+            fresh = await runtime._bound_agent(definition)
+            key = (definition.agent_id, definition.fingerprint)
+            self.assertEqual(backend.bind_count, 2)
+            self.assertEqual(fresh.agent_id, definition.agent_id)
+            self.assertIs(runtime._bound_agents[key], fresh)
+            self.assertEqual(runtime._binding_tasks, {})
+            self.assertEqual(runtime._binding_waiters, {})
+            self.assertEqual(len(released), 1)
+
+    async def test_out_of_order_fingerprints_keep_newest_current_and_old_use_safe(
+        self,
+    ) -> None:
+        backend = _ControlledBindingBackend()
+        runtime = StoryRuntime(self.workspace, backend)
+        first = runtime.prompts.build_definition(
+            session_id="out_of_order_session",
+            agent_id=PLOT_ARCHITECT,
         )
-        await asyncio.wait_for(backend.first_entered.wait(), timeout=1)
-        abandoned_binding = next(iter(runtime._binding_tasks.values()))
-        abandoned_waiter.cancel()
-        with self.assertRaises(asyncio.CancelledError):
-            await abandoned_waiter
+        first_task = asyncio.create_task(runtime._acquire_bound_agent(first))
+        await asyncio.wait_for(
+            backend.started.setdefault(first.fingerprint, asyncio.Event()).wait(),
+            timeout=1,
+        )
 
-        await asyncio.wait_for(backend.first_cancelled.wait(), timeout=1)
-        self.assertTrue(abandoned_binding.done())
-        self.assertFalse(abandoned_binding.cancelled())
-        self.assertEqual(runtime._binding_tasks, {})
-        self.assertEqual(runtime._binding_waiters, {})
-        self.assertEqual(runtime._bound_agents, {})
+        self.workspace.write_text(self.persona_path, "runtime-persona-v2")
+        second = runtime.prompts.build_definition(
+            session_id="out_of_order_session",
+            agent_id=PLOT_ARCHITECT,
+        )
+        self.assertNotEqual(first.fingerprint, second.fingerprint)
+        second_task = asyncio.create_task(runtime._acquire_bound_agent(second))
+        await asyncio.wait_for(
+            backend.started.setdefault(second.fingerprint, asyncio.Event()).wait(),
+            timeout=1,
+        )
 
-        fresh = await runtime._bound_agent(definition)
-        key = (definition.agent_id, definition.fingerprint)
-        self.assertEqual(backend.bind_count, 2)
-        self.assertEqual(fresh.agent_id, definition.agent_id)
-        self.assertIs(runtime._bound_agents[key], fresh)
-        self.assertEqual(runtime._binding_tasks, {})
-        self.assertEqual(runtime._binding_waiters, {})
+        released: list[object] = []
+
+        def release(binding: object) -> None:
+            self.assertFalse(runtime._binding_lock.locked())
+            released.append(binding)
+
+        with mock.patch(
+            "story_writing_agents.orchestrator.release_bound_agent",
+            side_effect=release,
+        ):
+            backend.proceed[second.fingerprint].set()
+            second_bound = await asyncio.wait_for(second_task, timeout=1)
+            backend.proceed[first.fingerprint].set()
+            first_bound = await asyncio.wait_for(first_task, timeout=1)
+
+            second_key = (PLOT_ARCHITECT, second.fingerprint)
+            first_key = (PLOT_ARCHITECT, first.fingerprint)
+            self.assertEqual(runtime._bound_agents, {second_key: second_bound})
+            self.assertEqual(
+                runtime._retiring_bound_agents,
+                {first_key: first_bound},
+            )
+            self.assertEqual(released, [])
+
+            await runtime._release_bound_agent_use(first_bound)
+            self.assertEqual(released, [first_bound])
+            self.assertEqual(runtime._retiring_bound_agents, {})
+            await runtime._release_bound_agent_use(second_bound)
+            self.assertEqual(released, [first_bound])
+            self.assertEqual(runtime._bound_agent_uses, {})
+
+    async def test_a_b_a_rekeys_same_backend_object_without_duplicate_ownership(
+        self,
+    ) -> None:
+        shared = _BoundApprovalAgent(PLOT_ARCHITECT)
+
+        class SameObjectBackend:
+            async def bind(self, _definition: AgentDefinition) -> object:
+                return shared
+
+        runtime = StoryRuntime(self.workspace, SameObjectBackend())
+        first = runtime.prompts.build_definition(
+            session_id="oscillation_session",
+            agent_id=PLOT_ARCHITECT,
+        )
+        self.assertIs(await runtime._bound_agent(first), shared)
+        self.workspace.write_text(self.persona_path, "runtime-persona-v2")
+        second = runtime.prompts.build_definition(
+            session_id="oscillation_session",
+            agent_id=PLOT_ARCHITECT,
+        )
+        self.assertIs(await runtime._bound_agent(second), shared)
+        self.workspace.write_text(self.persona_path, "runtime-persona-v1")
+        third = runtime.prompts.build_definition(
+            session_id="oscillation_session",
+            agent_id=PLOT_ARCHITECT,
+        )
+        self.assertEqual(third.fingerprint, first.fingerprint)
+
+        released: list[object] = []
+        with mock.patch(
+            "story_writing_agents.orchestrator.release_bound_agent",
+            side_effect=released.append,
+        ):
+            self.assertIs(await runtime._bound_agent(third), shared)
+
+        self.assertEqual(
+            runtime._bound_agents,
+            {(PLOT_ARCHITECT, first.fingerprint): shared},
+        )
+        self.assertEqual(runtime._retiring_bound_agents, {})
+        self.assertEqual(runtime._bound_agent_uses, {})
+        self.assertEqual(released, [])
 
     async def test_failed_binding_is_not_cached(self) -> None:
         backend = _RetryBindingBackend()
