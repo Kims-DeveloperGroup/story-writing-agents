@@ -1082,6 +1082,8 @@ class AgentBackend:
         thread_id = stored["thread_id"] if stored is not None else None
 
         adapter = self._adapter_for(bound_agent.vendor)
+        provider_diagnostic: str | None = None
+        provider_cause: BaseException | None = None
         try:
             result = await adapter.invoke(
                 bound_agent._provider_binding,
@@ -1095,11 +1097,17 @@ class AgentBackend:
         except ProviderInvocationError as exc:
             if stored is not None and exc.taint_existing_thread:
                 self._taint_thread(session, bound_agent.definition)
-            raise BackendProtocolError(exc.diagnostic) from exc
+            provider_diagnostic = exc.diagnostic
+            provider_cause = exc.__cause__
         except asyncio.CancelledError:
             if stored is not None:
                 self._taint_thread(session, bound_agent.definition)
             raise
+        if provider_diagnostic is not None:
+            translated = BackendProtocolError(provider_diagnostic)
+            if provider_cause is None:
+                raise translated from None
+            raise translated from provider_cause
         try:
             try:
                 reply = decode(result.response_text)
