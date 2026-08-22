@@ -274,10 +274,14 @@ class AntigravityAdapter:
             / binding.definition.agent_id
             / binding.definition.fingerprint
         )
-        gemini_directory = runtime_root / "provider"
+        provider_state_directory = runtime_root / "provider"
         working_directory = runtime_root / "workspace"
         try:
-            gemini_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+            provider_state_directory.mkdir(
+                parents=True,
+                exist_ok=True,
+                mode=0o700,
+            )
             working_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
             staged_rules = binding.staging_directory / "AGENTS.md"
             target_rules = working_directory / "AGENTS.md"
@@ -295,7 +299,7 @@ class AntigravityAdapter:
         encoding_failed = False
         try:
             command = self.command(
-                gemini_directory=gemini_directory,
+                provider_state_directory=provider_state_directory,
                 working_directory=working_directory,
                 schema=invocation.schema,
                 thread_id=invocation.thread_id,
@@ -399,7 +403,7 @@ class AntigravityAdapter:
     def command(
         self,
         *,
-        gemini_directory: Path,
+        provider_state_directory: Path,
         working_directory: Path,
         schema: Mapping[str, Any],
         thread_id: str | None,
@@ -409,7 +413,8 @@ class AntigravityAdapter:
 
         command = [
             self.executable,
-            f"--gemini_dir={gemini_directory}",
+            # agy retains this inherited option spelling.
+            f"--gemini_dir={provider_state_directory}",
             "--input-format",
             "stream-json",
             "--output-format",

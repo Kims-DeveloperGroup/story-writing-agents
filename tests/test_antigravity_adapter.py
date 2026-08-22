@@ -449,7 +449,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             ("system-model", "low"),
         )
         command = adapter.command(
-            gemini_directory=self.workspace.path("provider"),
+            provider_state_directory=self.workspace.path("provider"),
             working_directory=self.workspace.path("working"),
             schema={"type": "object"},
             thread_id=None,
