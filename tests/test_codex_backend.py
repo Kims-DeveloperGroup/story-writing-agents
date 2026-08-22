@@ -86,6 +86,7 @@ from story_writing_agents.writing_artifacts.repository import (
     WritingArtifactRepository,
 )
 from story_writing_agents.writing_artifacts import (
+    ArtifactLineRange,
     ArtifactReference,
     ArtifactReferenceBatch,
     ReferenceAuthorizationError,
@@ -93,6 +94,7 @@ from story_writing_agents.writing_artifacts import (
     ReferenceInvocationCorrelation,
     ReferenceInvocationState,
     ReferenceOperationState,
+    ReferenceReadAction,
     ReferenceReadActionKind,
     ReferenceReadRequest,
 )
@@ -1355,6 +1357,66 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 ReferenceInvocationState.ACCEPTED,
             ),
         )
+
+    def test_reference_read_schema_uses_draft_07_ordered_tuple_and_exact_decode(
+        self,
+    ) -> None:
+        references = (
+            ArtifactReference("core_documents/global_outline.md"),
+            ArtifactReference(
+                "core_documents/character_sheets.md",
+                ArtifactLineRange(2, 4),
+            ),
+        )
+        request = ReferenceReadRequest(
+            ReferenceInvocationCorrelation(
+                operation_id="schema_operation",
+                invocation_id="schema_invocation",
+                invocation_ordinal=2,
+                agent_id=PLOT_ARCHITECT,
+                phase="draft",
+                round_number=0,
+                attempt=1,
+            ),
+            references,
+        )
+
+        schema = AgentBackend._reference_read_action_schema(request)
+        reference_schema = schema["properties"]["action"]["properties"][
+            "references"
+        ]
+        self.assertEqual(
+            set(reference_schema),
+            {"type", "items", "additionalItems", "minItems", "maxItems"},
+        )
+        self.assertIsInstance(reference_schema["items"], list)
+        self.assertEqual(
+            [
+                item["properties"]["path"]["enum"]
+                for item in reference_schema["items"]
+            ],
+            [[reference.path] for reference in references],
+        )
+        self.assertIs(reference_schema["additionalItems"], False)
+        self.assertEqual(reference_schema["minItems"], len(references))
+        self.assertEqual(reference_schema["maxItems"], len(references))
+        self.assertNotIn("prefixItems", json.dumps(schema))
+
+        expected = ReferenceReadAction(
+            ReferenceReadActionKind.READ_WRITING_ARTIFACTS,
+            request.correlation,
+            request.references,
+        )
+        decoded = AgentBackend._decode_reference_read_action(
+            _reference_action_json(request)
+        )
+        self.assertEqual(decoded, expected)
+        reversed_payload = json.loads(_reference_action_json(request))
+        reversed_payload["action"]["references"].reverse()
+        reversed_action = AgentBackend._decode_reference_read_action(
+            json.dumps(reversed_payload)
+        )
+        self.assertNotEqual(reversed_action, expected)
 
     async def wait_for_provider_invocations(self, count: int) -> None:
         for _ in range(200):

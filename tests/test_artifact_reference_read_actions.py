@@ -326,6 +326,17 @@ class ReferenceReadRepositoryTests(unittest.TestCase):
         )
         with self.assertRaises(ReferenceAuthorizationError):
             result.contents
+        history = self.repository.inspect_reference_operation("transitions")
+        assert history is not None
+        terminal = history.invocation_events[0][-1]
+        self.assertIs(
+            terminal.invocation_state,
+            ReferenceInvocationState.TERMINATED,
+        )
+        self.assertIs(
+            terminal.outcome,
+            ReferenceAuthorizationErrorCode.INVALID_TRANSITION,
+        )
         self.repository.finish_reference_operation(
             authorization,
             outcome=ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
@@ -368,9 +379,14 @@ class ReferenceReadRepositoryTests(unittest.TestCase):
                 )
                 history = self.repository.inspect_reference_operation(name)
                 assert history is not None
-                self.assertEqual(
-                    history.invocation_events[0][-1].invocation_state,
+                terminal = history.invocation_events[0][-1]
+                self.assertIs(
+                    terminal.invocation_state,
                     ReferenceInvocationState.TERMINATED,
+                )
+                self.assertIs(
+                    terminal.outcome,
+                    ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH,
                 )
                 self.repository.finish_reference_operation(
                     authorization,
