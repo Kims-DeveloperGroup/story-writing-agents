@@ -1,8 +1,10 @@
 # Privacy and provider exposure
 
 > **Availability:** these controls cover local reads, advisory turns, and
-> retrieval-enabled turns, management commands, and focused-context consensus.
-> They do not make Codex, its executable, workspace, or terminal trusted.
+> retrieval-enabled turns, management commands, focused-context consensus, and
+> the Python/internal explicit-reference authorization foundation. They do not
+> make Codex, its executable, workspace, or terminal trusted, and explicit
+> references are not yet connected to provider calls or story agents.
 
 Key terms: **plaintext**—unencrypted content; **visible context**—events sent in
 a request; **provider-private history**—vendor thread state; **diagnostic**—
@@ -13,7 +15,8 @@ stored or displayed failure text.
 There is no encryption, access control, secure erase, or retention policy.
 Documents, debate/context records, provider metadata, subjects, transcripts,
 scrollback, manuscripts, artifact catalogs, commit provenance, transaction
-journals, and recovery markers rely on OS/terminal-service protection.
+journals, reference-operation evidence, and recovery markers rely on
+OS/terminal-service protection.
 
 Blackboards can contain input, drafts, reviews, and errors. Provider output is
 not generally scrubbed; archive neither deletes nor conceals conversations;
@@ -40,6 +43,31 @@ prints the normalized workspace root; unexpected diagnostic paths do not.
 Terminal escaping is not redaction. See
 [Conversation search](../reference/conversation-search.md) and
 [Terminal safety](terminal-safety.md).
+
+## Explicit-reference data boundary
+
+Reference indicators and durable authorization history are content-free. The
+history records ordered canonical paths and ranges, catalog provenance,
+selected hashes and counts, agent/invocation correlation, lifecycle states,
+checkpoints, and fixed outcomes. It excludes artifact bytes, parser source and
+provider projections, prompts, provider results, and diagnostic values derived
+from content. Authorization errors use fixed coded messages without echoing a
+path or selected text.
+
+Selected artifact bytes exist only in closeable, nonserializable in-process
+authorization and delivery carriers whose `repr` hides content. Closing drops
+the carrier's references to its byte tuples; Python and the operating system do
+not provide a secure memory-zeroing guarantee. The durable evidence remains
+plaintext and has no encryption, access control, secure erase, or retention
+policy.
+
+The repository writes `delivered` evidence before returning selected bytes and
+can record that its caller reported a result. Neither event proves that a
+provider or story agent received, read, understood, or used the text. Baseline
+core context does not satisfy explicit-reference evidence. #189 and #190 must
+connect the repository protocol to provider actions and agent enforcement;
+#164 must connect references to the shell. Until then, `${...}`, `$`, and `$$`
+are not operational user commands.
 
 ## Provider disclosure
 

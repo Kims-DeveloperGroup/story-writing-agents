@@ -152,6 +152,40 @@ is outside the supported boundary. Darwin and Linux hosts without the required
 native atomic no-replace rename fail on their first artifact operation; other
 non-artifact workspace/runtime APIs remain usable.
 
+## Explicit-reference evidence recovery
+
+The #191 repository foundation persists content-free reference-operation and
+invocation history, but keeps authorization capabilities and selected bytes
+only in memory. After process loss, history can be inspected but an interrupted
+authorization cannot be resumed or used to reconstruct content. Start a new
+operation with a new ID after correcting any source problem.
+
+`inspect_reference_operation()` distinguishes absence from corruption. It
+returns no history only when the named operation directory is absent. If any
+part of a present operation is missing, changed, noncanonical, duplicated,
+gapped, unexpectedly named, or inconsistent with the state transitions, the
+operation fails closed with `evidence_corrupt`. Retain the directory for
+inspection, stop workspace processes, and preserve a complete backup. Do not
+edit or delete its manifest or events to force a retry.
+
+One corrupt `input_snapshots/<operation-id>/` tree does not make another
+healthy reference history, the writing-artifact catalog, exact artifact reads,
+or artifact commits unusable. Repository-root, lock, storage, catalog, or
+global provenance failures still retain their broader fail-closed effects. A
+new reference operation may use a new ID once the underlying artifact is safe
+and eligible; the corrupt evidence remains unchanged.
+
+Fixed terminal outcomes distinguish cancellation, provider/workflow failure,
+drift, invalid content/range/limits, correlation/capability failure, and corrupt
+evidence without storing content in the diagnostic. A `terminated` operation
+or invocation is final. A failed invocation retry requires a fresh one-use
+capability over the same still-open capture, while a closed or process-lost
+capture requires a new operation.
+
+This is currently a Python/internal recovery boundary. `StoryRuntime`, provider
+read actions, story agents, and installed `${...}`, `$`, and `$$` interaction
+do not yet drive or expose these states; #189, #190, and #164 own that work.
+
 ## Controller cancellation proof
 
 One `asyncio.Runner` serves provider work. SIGINT recovery requires
@@ -204,7 +238,10 @@ work; the newest desired definition is selected instead.
 - Advisory input is one line; `/run --output PART/PATH.md` without prompt text
   owns multiline composition. Bare `/run` first prompts for the output.
 - Conversation search is active-only; transcript reads retain no cursor.
-- Standalone compose/artifact commands and artifact-reference UI are unavailable.
+- The parser and repository authorization/evidence foundation exist for
+  Python/internal consumers, but standalone compose/artifact commands,
+  artifact-reference UI, provider read actions, and enforced agent reads are
+  unavailable.
 
 See [Session lifecycle](../design/session-lifecycle.md),
 [Troubleshooting](../guides/troubleshooting.md), and

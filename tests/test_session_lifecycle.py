@@ -370,9 +370,9 @@ class SessionLifecycleContractTests(unittest.TestCase):
                 if isinstance(node, ast.ImportFrom) and node.module == "session_lifecycle"
             ]
         )
-        self.assertEqual(len(list(source_root.rglob("*.py"))), 39)
+        self.assertEqual(len(list(source_root.rglob("*.py"))), 41)
         index = (source_root.parents[1] / "PYTHON_MODULE_INDEX.md").read_text(encoding="utf-8")
-        self.assertIn("Importable production units indexed: 39.", index)
+        self.assertIn("Importable production units indexed: 41.", index)
         environment = dict(os.environ, PYTHONPATH=str(source_root.parent))
         result = subprocess.run(
             [
