@@ -63,7 +63,8 @@ One `asyncio.Runner` serves provider work. SIGINT recovery requires
 
 Consensus Ctrl-C after entry also requires durable `INTERRUPTED`; retry uses a
 new debate ID. Missing proof abandons attachment bookkeeping and exits `2`.
-Cancelled local reads keep completed rows without a second read/write.
+Cancelled local reads keep completed rows without a second domain read/write;
+their command/cancellation boundary may append bounded diagnostics.
 
 ## POSIX PTY boundary
 
@@ -78,10 +79,23 @@ confirmation exits. Confirmed pause writes durable `paused`, releases access,
 retains defaults, clears current attachment/current focus/agent focus, and
 returns to the lobby. Quit and main/composer EOF release access without pausing.
 
-Cleanup attempts Runner close → access release → backend close, clears process
-scope, and reports at most one `cleanup_failed`. Later startup resumes a ready
-default or asks for confirmation before resuming a paused default; only an
-active default can become focus.
+Cleanup attempts each applicable stage once in this order: Runner close, known
+access release, backend close, then state clearing. A failure in one stage does
+not skip later stages. An uncaught body `KeyboardInterrupt` or `SystemExit`
+outranks cleanup failures; without one, the first cleanup process control wins.
+The winner propagates only after all later stages and state clearing run, with
+the same exception object and traceback. The Runner reference remains only when
+Runner close itself was interrupted by process control; successful close or an
+ordinary close failure clears it. Attachment, focus, and memory always clear,
+and the controller closes.
+
+With no retained process control, ordinary cleanup failures return `2` and
+attempt one nonduplicated `cleanup_failed`; a diagnostic process control cannot
+replace a retained body or cleanup winner. This arbitration applies only to
+controls that reach the outer lobby boundary. A command that handles Ctrl-C or
+cancellation retains its documented cancelled/recovery result. Later startup
+resumes a ready default or asks for confirmation before resuming a paused
+default; only an active default can become focus.
 
 Backend close releases recorded access claims and ephemeral Codex staging. It
 does not pause or delete the durable story session, remove saved provider-thread

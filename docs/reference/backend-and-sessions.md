@@ -73,6 +73,29 @@ values are non-null. Provider conversation resume adds `--conversation ID`.
 Those process arguments do not change definition fingerprints, lifecycle
 identity, or request payload fields.
 
+## Backend diagnostic side effect
+
+Each `AgentBackend` retains an I/O-free workspace-bound debug writer. Backend
+emission begins only after the complete configuration snapshot loads
+successfully. The initial Codex executable check and snapshot-load failures
+precede diagnostic emission; later constructor validation failures are eligible.
+Once eligible, it best-effort records fixed configuration, binding, provider
+invocation, session lifecycle, cleanup, completion, cancellation, and safe
+failure facts.
+
+Backend-private submission guards catch diagnostic `BaseException`, including
+`KeyboardInterrupt` and `SystemExit`. This adds no constructor or method
+parameter and does not change results, exceptions, cancellation, claim
+compensation, provider-thread taint, or cleanup ordering.
+
+`get_session_lifecycle()` and `list_session_lifecycles()` remain provider-free
+and read-only for provider-session state, but they may append a bounded
+operational record. The logger receives no request or response payload,
+configured model/reasoning/effort value, access owner or claim token, or
+provider stderr. Concrete adapters continue to drain provider stderr without
+exposing it to diagnostics. See
+[debug-log privacy](../operations/privacy-and-provider.md#workspace-debug-log-privacy).
+
 ## Lifecycle value contracts
 
 ```python

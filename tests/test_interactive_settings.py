@@ -192,8 +192,9 @@ class SettingsModelContractTests(SettingsTestCase):
         for value in values:
             with self.subTest(value=type(value).__name__):
                 self.assertFalse(hasattr(value, "__dict__"))
+                declared = fields(value)[0]
                 with self.assertRaises(FrozenInstanceError):
-                    value.changed = True  # type: ignore[attr-defined]
+                    setattr(value, declared.name, getattr(value, declared.name))
 
         raw = {agent_id: AgentConfig() for agent_id in ROSTER}
         snapshot = ConfigurationSnapshot(

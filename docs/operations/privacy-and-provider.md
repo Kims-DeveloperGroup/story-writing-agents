@@ -11,9 +11,11 @@ stored or displayed failure text.
 
 ## Plaintext local data
 
-There is no encryption, access control, secure erase, or retention policy.
-Documents, debate/context records, provider metadata, subjects, transcripts,
-scrollback, and manuscripts rely on OS/terminal-service protection.
+There is no encryption, application access control, or secure erase. Documents,
+debate/context records, provider metadata, subjects, transcripts, scrollback,
+and manuscripts have no application-managed retention policy and rely on
+OS/terminal-service protection. The workspace debug log is the one bounded
+retention channel described below; it is still plaintext.
 
 Blackboards can contain input, drafts, reviews, and errors. Provider output is
 not generally scrubbed; archive neither deletes nor conceals conversations;
@@ -30,14 +32,18 @@ action, but never owner hostname, PID, or claim token. `/inspect` whitelists
 lifecycle/artifact/context identity/mode/counts, never raw messages, candidates,
 errors/actions, context content, or provider fields.
 
-Help/status/history/inspection are provider-free and read-only. Directives are
-provider-free but atomically update validated overrides. Other scope, thread,
-catalog, transcript, debate, artifact, and core state is preserved.
+Help/status/history/inspection are provider-free and read-only with respect to
+story and session domain state. Workspace-aware CLI/controller activity and
+`StoryRuntime` or `AgentBackend` inspection/lifecycle reads may still append
+bounded operational debug records. Directives are provider-free but atomically
+update validated overrides. Other scope, thread, catalog, transcript, debate,
+artifact, and core state is preserved.
 
 Provider-free is not exposure-free: subjects, snippets, metadata, errors, and
 content reach callbacks/scrollback. Lobby/session orientation intentionally
-prints the normalized workspace root; unexpected diagnostic paths do not.
-Terminal escaping is not redaction. See
+prints the normalized workspace root. Post-workspace error hints expose only the
+fixed relative path `debug_logs/runtime.jsonl`, not a dynamically discovered or
+absolute diagnostic path. Terminal escaping is not redaction. See
 [Conversation search](../reference/conversation-search.md) and
 [Terminal safety](terminal-safety.md).
 
@@ -61,9 +67,58 @@ and debates. Changed visible context does not erase private history. Switch,
 pause, quit, and close preserve thread references; fresh/omitted context cannot make the
 provider forget.
 
+<a id="workspace-debug-log-privacy"></a>
+
+## Workspace debug-log privacy
+
+The internal debug writer admits only fixed operational categories, its own UTC
+timestamp, an optional fixed outcome, and exact validated session,
+conversation, debate, or canonical agent IDs. Error records add a safe
+qualified exception type and at most the nearest 32 module/function/positive
+line-number frame facts. This makes the format content-safe, not encrypted or
+anonymous; identifiers and operational timing can still be sensitive.
+
+There is no field for story prose, prompts, replies, provider payloads,
+arbitrary details, or caller-supplied messages. Exception projection does not
+read exception text or representation, filenames, source text, locals,
+arguments, notes, causes, or contexts. The concrete backend continues to drain
+and discard nonzero provider stderr without decoding it, so that stream is not
+available to this log.
+
+These files are separate from conversation transcript `runtime_error` events
+and their 4,096-character known-value sanitizer. `StoryRuntime` construction
+retains an I/O-free handle but emits and creates nothing. Each `AgentBackend`
+also retains an I/O-free workspace-bound debug writer. Backend emission begins
+only after the complete configuration snapshot loads successfully. The initial
+Codex executable check and snapshot-load failures precede diagnostic emission;
+later constructor validation failures are eligible. CLI, controller, and smoke
+emission begins only after workspace resolution or initialization.
+
+The low-level writer suppresses ordinary `Exception` failures. CLI, backend,
+runtime, controller, and smoke each add a private submission guard that catches
+diagnostic `BaseException`; diagnostic-handle acquisition by CLI and smoke paths
+is guarded separately. Even a sink `KeyboardInterrupt` or `SystemExit` therefore
+cannot replace the application's result, exception, cancellation, cleanup,
+output, or exit status. Explicit smoke retains any best-effort records
+successfully written; implicit smoke removes its temporary workspace and any log
+that was successfully written. A hint or retained explicit workspace therefore
+does not guarantee that a record exists.
+
+Interactive errors after workspace resolution add exactly
+`[debug log] If available, workspace-relative: debug_logs/runtime.jsonl`.
+A caught noninteractive exception adds the fixed path as a second stderr line
+after CLI workspace initialization or discovery succeeds, even if optional
+handle acquisition failed and no record or file is available. Initialization
+and discovery failures, implicit smoke, returned domain outcomes, argparse, and
+other pre-workspace errors add no debug-log path. See
+[Persistence](../design/persistence.md#workspace-runtime-debug-log) for the
+schema, [CLI](../reference/cli.md#runtime-debug-logs) for exact output, and
+[Filesystem safety](filesystem-safety.md#debug-log-filesystem-safety) for
+fail-open storage behavior.
+
 <a id="runtime-error-diagnostics"></a>
 
-## Diagnostic redaction
+## Transcript and backend diagnostic redaction
 
 Concrete `AgentBackend` drains nonzero provider stderr but never includes it in
 the raised or persisted diagnostic. For example, Codex nonzero exit raises
@@ -80,8 +135,9 @@ metadata and do not echo provider response values. Progress exposes fixed facts;
 sources intentionally reveal subject/citation, never
 query/event/candidate/critique/error/model prose.
 
-Separately, after a durable advisory user event, generic `StoryRuntime`
-persistence stores failure type plus sanitized detail. Its known-value sanitizer:
+Separately, after a durable advisory user event, an ordinary `Exception` from a
+`StoryRuntime` turn attempts to store failure type plus sanitized detail in the
+transcript. Its known-value sanitizer:
 
 - replaces current/context/retrieval variants with `<redacted>` and workspace
   roots with `<workspace>`;
@@ -89,9 +145,14 @@ persistence stores failure type plus sanitized detail. Its known-value sanitizer
 - falls back to `ExceptionType: unavailable diagnostic`; and
 - caps output at 4,096 characters with an in-limit truncation marker.
 
-Cancellation stores fixed `CancelledError: conversation turn was cancelled`.
-Only supplied/known variants are redacted; this is not a general secret detector.
-Replies are unchanged. Terminal summaries use a separate boundary.
+`asyncio` cancellation stores fixed
+`CancelledError: conversation turn was cancelled`. Provider
+`KeyboardInterrupt` and `SystemExit` store no transcript outcome or exception
+value. Their separate runtime debug submission admits only the fixed operational
+fields and safe exception type/frame projection described above, and its failure
+does not replace the original exception. Only supplied/known variants are
+redacted; this is not a general secret detector. Replies are unchanged. Terminal
+summaries use a separate boundary.
 
 ## Provider processes and credentials
 

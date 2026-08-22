@@ -38,16 +38,21 @@ With a session attached, no conversation focus is required:
 
 `last` is process-local and per session. Accepted `STARTED` updates it, so it
 covers any later consensus, deadlock, failure, or interruption. A trusted
-`INTERRUPTED`-first cancellation has no `last` entry. Nothing is persisted,
-restored, or guessed; switching preserves each process-local value.
+`INTERRUPTED`-first cancellation has no `last` entry. No `last` pointer is
+persisted, restored, or guessed; switching preserves each process-local value.
+Bounded operational debug records are a separate persistence channel.
 
 Shell inspection whitelists identity, lifecycle, input, revision, rounds,
 artifact path, and context conversation/mode/counts. It never emits blackboard
 messages, candidates, stored errors/actions, context event content, raw state,
 or provider-private fields. Malformed collaborator data fails closed. These
 reads are provider-free and preserve attachment, defaults, both focuses, transcript,
-catalog, artifacts, and provider state. The established `story inspect` and
-Python inspection JSON shapes remain unchanged.
+catalog, artifacts, and provider state. Shell `/inspect`, `story inspect`, and
+the `StoryRuntime.inspect_*()` wrappers may append a bounded operational debug
+record without changing their established JSON or presentation. Direct
+`Workspace.inspect_session()`, `Workspace.inspect_debate()`, and
+`Workspace.inspect_debate_context()` calls remain artifact-only reads and do not
+submit a diagnostic record.
 
 Use global `/status` for the current shell snapshot and focused `/history`
 for one visible transcript snapshot plus canonical context accounting. Their

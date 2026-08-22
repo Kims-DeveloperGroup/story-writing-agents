@@ -338,24 +338,30 @@ def expected_error_record(
     width: int,
     summary: str | None = None,
     hint: str | None = None,
+    debug_log_path: str | None = None,
 ) -> str:
     """Render the exact stabilized semantic tree for one typed error."""
 
     spec = INTERACTIVE_ERROR_SPECS[code]
+    notices = [
+        terminal_module.Notice(
+            spec.summary if summary is None else summary,
+            label=f"error {code.value}",
+            role=terminal_module.SemanticRole.ERROR,
+            state=terminal_module.ViewState.ERROR,
+        ),
+        terminal_module.Notice(
+            spec.hint if hint is None else hint,
+            label="hint",
+        ),
+    ]
+    if debug_log_path is not None:
+        notices.append(
+            terminal_module.Notice(debug_log_path, label="debug log")
+        )
     component = terminal_module.Panel(
         "Interactive error",
-        (
-            terminal_module.Notice(
-                spec.summary if summary is None else summary,
-                label=f"error {code.value}",
-                role=terminal_module.SemanticRole.ERROR,
-                state=terminal_module.ViewState.ERROR,
-            ),
-            terminal_module.Notice(
-                spec.hint if hint is None else hint,
-                label="hint",
-            ),
-        ),
+        tuple(notices),
         state=terminal_module.ViewState.ERROR,
     )
     return f"{render_plain(component, width=width).text}\n"
@@ -2178,6 +2184,52 @@ class HelpAndErrorTests(unittest.TestCase):
         terminal, _callbacks = make_terminal()
         with self.assertRaises(TypeError):
             terminal.write_error("internal_error")  # type: ignore[arg-type]
+
+    def test_error_debug_log_notice_is_additive_validated_and_byte_compatible(
+        self,
+    ) -> None:
+        parameters = inspect.signature(InteractiveTerminal.write_error).parameters
+        self.assertEqual(
+            tuple(parameters),
+            ("self", "error", "secrets", "debug_log_path"),
+        )
+        self.assertIs(
+            parameters["debug_log_path"].kind,
+            inspect.Parameter.KEYWORD_ONLY,
+        )
+        self.assertIsNone(parameters["debug_log_path"].default)
+
+        error = InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+        terminal, callbacks = make_terminal(width=1000)
+        terminal.write_error(error)
+        terminal.write_error(error, debug_log_path=None)
+        expected_default = expected_error_record(
+            InteractiveErrorCode.INTERNAL_ERROR,
+            width=1000,
+        )
+        self.assertEqual(callbacks.records, [expected_default, expected_default])
+
+        debug_notice = (
+            "If available, workspace-relative: debug_logs/runtime.jsonl"
+        )
+        terminal.write_error(error, debug_log_path=debug_notice)
+        self.assertEqual(
+            callbacks.records[-1],
+            expected_error_record(
+                InteractiveErrorCode.INTERNAL_ERROR,
+                width=1000,
+                debug_log_path=debug_notice,
+            ),
+        )
+        self.assertEqual(callbacks.records[-1].count("[debug log]"), 1)
+
+        for invalid in ("", "   ", "one\ntwo", "one\rtwo", "\ud800", 1):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises((TypeError, ValueError)):
+                    terminal.write_error(  # type: ignore[arg-type]
+                        error,
+                        debug_log_path=invalid,
+                    )
 
     def test_error_redaction_covers_raw_escaped_and_overlapping_secrets(
         self,

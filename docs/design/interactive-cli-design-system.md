@@ -155,6 +155,18 @@ stable semantic identity when that identity still exists.
 operation results. Color, symbols, or emphasis may reinforce them but their
 text and structure must remain sufficient in plain output.
 
+The controller's outer cleanup boundary is separate from these handled command
+states. It attempts Runner close, known-access release, backend close, and state
+clearing in order even after a stage fails. An uncaught body process control
+wins; otherwise the first cleanup process control propagates, unchanged with its
+traceback, after later stages finish. Runner state remains only when its close
+was interrupted by process control; attachment, focus, and memory always clear.
+With no retained process control, ordinary cleanup failure returns `2` and
+attempts one nonduplicated `cleanup_failed`. A diagnostic process control cannot
+replace an already retained body or cleanup winner. A Ctrl-C or cancellation
+already handled by a command remains a normal `cancelled` or recovery result
+rather than entering this arbitration.
+
 ## Input ownership and transition boundary
 
 Exactly one terminal driver owns raw streams, capability and width detection,
@@ -817,15 +829,27 @@ slice lands; #83 and #84 have changed their migrated output groups in that
 permitted way, and #123 adds splitter lines to every semantic `Panel`. Exact
 interactive and callback text therefore changes for those components, while
 component ordering, one-component/one-write callback cardinality, interaction,
-runtime behavior, and public Python contracts remain unchanged. The following
-contracts may not change as a side effect.
+runtime behavior, and established public Python calls remain compatible. The
+only later additive public seam is the optional `write_error()` debug-log path
+described below. The following contracts may not otherwise change as a side
+effect.
 
 ### Machine-facing CLI
 
 The noninteractive `init`, `smoke`, `session`, `directive`, `inspect`, and `run`
-commands remain unstyled. Their stdout/stderr bytes, JSON schemas, key and
-record ordering, and exit behavior must not change. Interactive capability,
-width, color, or `NO_COLOR` settings must not affect them.
+commands remain unstyled. Their success stdout, JSON schemas, key and record
+ordering, and exit behavior remain unchanged. Except for implicit temporary
+smoke, after CLI workspace initialization or discovery succeeds, a caught
+noninteractive exception preserves its established first stderr line and adds
+the fixed second line:
+`Debug log (if available, workspace-relative): debug_logs/runtime.jsonl`.
+This boundary is independent of diagnostic-handle acquisition or file
+existence. Initialization and discovery failures remain hint-free. Returned
+domain outcomes do not add the hint: smoke
+invariant exit `1` and run deadlock/failed-result exits `3`/`4` retain their
+established JSON. Argparse and other pre-workspace failures add no debug-log
+hint. Interactive capability, width, color, or `NO_COLOR` settings must not
+affect these contracts.
 
 ### `interactive_terminal` public Python surface
 
@@ -881,6 +905,14 @@ remain compatible. In particular, callback construction remains:
 InteractiveTerminal(read_line, write_text, *, width=80, main_read_line=None)
 ```
 
+`write_error()` alone adds the optional keyword-only
+`debug_log_path: str | None = None`. Omission preserves the exact established
+two-notice panel and existing callback behavior. Supplied nonblank, one-line,
+strict-UTF-8 display text adds one sanitized third notice labelled `debug log`;
+the terminal does not resolve or retain it. After workspace resolution, the
+installed CLI and controller supply the fixed workspace-relative availability
+notice. Pre-workspace errors omit the keyword and include no debug-log path.
+
 Construction validates and retains borrowed callbacks but performs no stream
 inspection, output, raw-mode change, capability query, resource acquisition,
 or history persistence. Existing constructor validation remains exact:
@@ -910,15 +942,16 @@ writes exactly one component.
 `RenderedInputFrame` contracts. Those types remain outside the package facade,
 root facade, public `__all__`, and closed `Component` union;
 `ControlOutcomeKind.REJECTED` is likewise internal. The established public
-result types, constructor, and method signatures remain exact.
+result types and constructor remain exact, and existing method calls remain
+compatible.
 
 #79 adds package-private completion candidates/projections and main palette
 state plus the unlisted facade bindings `transition_main_command_input` and
 `read_main_command_line`. The model values are not `Component` members; only
 their projected existing `SuggestionPalette` is rendered. These names remain
 outside public `__all__` and the root facade. The established parser,
-`InteractiveTerminal`, and line-editor public results and signatures remain
-exact.
+`InteractiveTerminal`, and line-editor public results and established calls
+remain compatible.
 
 #87 adds package-private `PickerControlState` and `PickerViewport` contracts
 alongside the existing semantic `Picker`, plus the unlisted facade identities
@@ -967,7 +1000,7 @@ boundary. Responsibility and dependency direction are fixed as follows:
 | Unit | Responsibility |
 | --- | --- |
 | `interactive_settings` | Package-internal immutable opening baseline and pending configuration, safe lexical persona catalog, validation, exact stale-state detection, changed-only canonical persistence, and reverse exact-byte rollback. It has no terminal, controller, runtime, backend, or parser dependency and no facade export. |
-| `interactive_terminal.__init__` | Compatibility facade with the exact existing public surface plus package-internal stream construction, semantic output, picker-adapter, and cancellable-prompt seams. It owns no import-time resource or state. |
+| `interactive_terminal.__init__` | Compatibility facade with the exact existing public surface, including the additive optional `write_error()` debug-log-path keyword, plus package-internal stream construction, semantic output, picker-adapter, and cancellable-prompt seams. It owns no import-time resource or state. |
 | `interactive_terminal._model` | Immutable semantic components, bounded main-history/control state, static and controller-owned main-choice palette state, composer and picker control state, bounded picker viewport, semantic input/render frames, key/focus values, and transition/render results. No I/O. |
 | `interactive_terminal._controls` | Pure established line-input, main-command/history, dynamic main-choice, composer-line, confirmation-answer, cancellable-prompt, and picker transitions; bounded history; completion/choice projection; picker initialization/reconciliation, disabled-skipping live navigation, exact fallback grammar, and viewport selection. |
 | `interactive_terminal._render` | Pure safe responsive output and semantic input renderers for plain and fixed ANSI profiles, including bounded live and complete-list fallback picker projections and the strict JSON agent-reply presentation projection. It sanitizes dynamic content before styling and returns render data without writing. |
@@ -1013,14 +1046,14 @@ CLI, controller, runtime orchestration, providers, or storage.
 
 ### Implemented module-index delta
 
-The current [Python module index](../../PYTHON_MODULE_INDEX.md) records 33
-importable production units after #93's settings-module addition:
+The #93-era [Python module index](../../PYTHON_MODULE_INDEX.md) recorded 33
+importable production units after that settings-module addition:
 
 ```text
 former interactive_terminal module                    -1
 interactive_terminal package and five package leaves  +6
 interactive_settings                                   +1
-current total                                          33
+#93-era total                                          33
 ```
 
 The six entries are the package plus `_model`, `_controls`, `_render`,
@@ -1044,10 +1077,11 @@ composer/confirmation controls within the existing driver/control boundary.
 boundary. #94 delivered the initial persisted Codex model/reasoning defaults
 through the existing workspace, configuration, and backend units without
 changing that graph; the current schema extends those same settings paths with
-Antigravity model/effort. #93 installs `/settings`, adds one internal settings module, and brings
-the graph to 33 units. #142 adds controller-owned dynamic resume choices and a
-universal capable-input cleanup lifecycle within the existing 33-unit graph; it
-changes no package, module, public import, or dependency direction.
+Antigravity model/effort. #93 installed `/settings`, added one internal settings
+module, and brought that graph to 33 units at that time. #142 later added
+controller-owned dynamic resume choices and a universal capable-input cleanup
+lifecycle without changing that #93-era graph's package, module, public-import,
+or dependency-direction inventory.
 
 ### View groups
 
@@ -1063,7 +1097,7 @@ changes no package, module, public import, or dependency direction.
 | Advisory turns | `Message`, `Notice`, `Field` | Operation result, cancelled/completed/error; optional capable-only indicator during advisory/consensus wait; no `[routing]`/`[waiting]` record | #83 and #111 (implemented) |
 | Retrieval progress and summaries | `Notice`, `Record`, `ListView`, `Field` | Loading, citations/context accounting, result/error/cancelled | #83 (implemented accepted views) |
 | Consensus progress and summaries | `Panel`, `Section`, `Notice`, `Record`, `Field`, `Message` | Loading, debate identity, handoff/action metadata, agent messages, result/cancelled/completed/error | #83, #119 (implemented) |
-| Interactive errors and recovery hints | `Notice`, `Field` | Trusted code, redaction, error state, next action, no raw diagnostics | #83 (implemented) |
+| Interactive errors and recovery hints | `Notice`, `Field` | Trusted code, redaction, error state, next action, no raw diagnostics; post-workspace application errors supply one fixed sanitized debug-log availability notice, while pre-workspace errors include no debug-log path | #83, #131 terminal seam, and #132 application wiring (implemented) |
 | Settings current/pending view | `Panel`, `Section`, `Field`, `Prompt`, `Picker`, `Notice` | Exact top-level order; changed-only Current/Pending confirmation context with `(Changed)` cues and explicit no-diff notice; nested Escape silent; transient cleanup and fallback honesty; disabled provider, validation, error, cancelled, and completed meaning; guarded two-file Save boundary | #93, #106, and #115 (implemented) |
 
 ### Control groups
@@ -1150,8 +1184,8 @@ public/internal action identities.
 | Parser and mutation boundary | The exact visible committed main buffer reaches the established parser once; previews, recall, replacement, highlight, rerender, cancel, Ctrl-C, empty VEOF, and physical EOF cause no parser/runtime/storage call. |
 | Composer/confirmation | Ordered semantic input facts and focused prompt; equivalent width-aware plain/ANSI rendering; fallback-once and trusted-live routing; exact `/send`, `/cancel`, `/say`, yes/no/default, invalid retry, Ctrl-C, and EOF results; semantic composer events and hint cardinality; history isolation; reserved-key no-ops; no full-screen or persistent state. |
 | Restoration | Complete-frame cleanup for every capable main/composition/confirmation/picker/prompt submit, commit, cancellation, Escape return, EOF, Ctrl-C, setup failure, read/write/flush failure, and render error; raw attributes restored whenever acquired; completion-only Enter remains inside the live read; restoration uncertainty is fatal. |
-| Public compatibility | Exact exports and order, enum values, dataclass fields/defaults/options, signatures, exceptions, object/class identity, canonical modules, facade imports, callback construction, and no constructor resource acquisition. |
-| Noninteractive regression | Golden byte/schema/order/exit checks for `init`, `smoke`, `session`, `directive`, `inspect`, and `run`, with no SGR under any environment. |
+| Public compatibility | Exact exports and order, enum values, dataclass fields/defaults/options, established-call-compatible signatures including exact validation/default behavior for the additive `write_error()` keyword, exceptions, object/class identity, canonical modules, facade imports, callback construction, and no constructor resource acquisition. |
+| Noninteractive regression | Golden byte/schema/order/exit checks for `init`, `smoke`, `session`, `directive`, `inspect`, and `run`, including the exact caught-exception hint after successful CLI workspace entry regardless of diagnostic-handle availability, no hint for argparse, initialization/discovery or other pre-workspace failures, implicit smoke, smoke invariant exit `1`, or run domain exits `3`/`4`, unchanged success output, and no SGR under any environment. |
 
 Process-level POSIX PTY coverage remains required for the real raw-mode and
 restoration boundary. Unit tests with deterministic fake drivers cover pure

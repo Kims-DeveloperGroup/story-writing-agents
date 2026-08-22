@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
+import stat
 import tempfile
 import threading
 import weakref
 from datetime import UTC, datetime
 from pathlib import Path
+from types import TracebackType
 from typing import Any, Callable, Mapping
 from uuid import uuid4
 
@@ -66,6 +69,9 @@ _CONVERSATION_METADATA_FIELDS = frozenset({
     "updated_at",
 })
 _CONVERSATION_ID_ALLOCATION_ATTEMPTS = 16
+_WORKSPACE_ROOT_IDENTITY_PENDING = object()
+_WORKSPACE_ROOT_IDENTITY_BIND_FAILED = object()
+_WORKSPACE_ROOT_IDENTITY_UNAVAILABLE = object()
 _CONVERSATION_EVENT_FIELDS = frozenset({
     "schema_version",
     "session_id",
@@ -185,6 +191,7 @@ WORKSPACE_DIRECTORIES: tuple[str, ...] = (
     "agent_states/plot_architect_state",
     "agent_states/character_custodian_state",
     "agent_states/execution_specialist_state",
+    "debug_logs",
     "discussion_logs",
     "manuscript",
 )
@@ -200,6 +207,7 @@ class Workspace:
 
     def __init__(self, root: str | os.PathLike[str]) -> None:
         self.root = Path(root).expanduser().resolve()
+        self._root_identity = _probe_workspace_root_identity(self.root)
 
     @staticmethod
     def validate_identifier(value: str, *, label: str = "session ID") -> str:
@@ -222,7 +230,17 @@ class Workspace:
 
         if not isinstance(overwrite_prompts, bool):
             raise TypeError("overwrite_prompts must be a boolean")
-        self.root.mkdir(parents=True, exist_ok=True)
+        if self._root_identity is _WORKSPACE_ROOT_IDENTITY_PENDING:
+            self._root_identity = _WORKSPACE_ROOT_IDENTITY_BIND_FAILED
+            self._root_identity = _initialize_pending_workspace(
+                self,
+                overwrite_prompts=overwrite_prompts,
+            )
+            return self
+        elif self._root_identity is _WORKSPACE_ROOT_IDENTITY_BIND_FAILED:
+            _require_workspace_root_identity(self)
+        else:
+            self.root.mkdir(parents=True, exist_ok=True)
         for relative in WORKSPACE_DIRECTORIES:
             self._directory(relative).mkdir(parents=True, exist_ok=True)
 
@@ -256,6 +274,7 @@ class Workspace:
             "agent_states/plot_architect_state",
             "agent_states/character_custodian_state",
             "agent_states/execution_specialist_state",
+            "debug_logs",
             "discussion_logs",
             "manuscript",
         ):
@@ -2107,3 +2126,685 @@ def initialize_workspace(
     """Public idempotent initializer."""
 
     return Workspace(root).initialize(overwrite_prompts=overwrite_prompts)
+
+
+def open_workspace_root_directory(workspace: Workspace) -> int:
+    """Open and verify the canonical identity-bound workspace root."""
+
+    expected = _require_workspace_root_identity(workspace)
+    _require_workspace_root_directory_operations()
+    flags = os.O_RDONLY
+    for name in (
+        "O_CLOEXEC",
+        "O_NOINHERIT",
+        "O_BINARY",
+        "O_DIRECTORY",
+        "O_NOFOLLOW",
+        "O_NONBLOCK",
+    ):
+        flags |= getattr(os, name, 0)
+    named_identity = _meaningful_directory_identity(
+        os.stat(workspace.root, follow_symlinks=False)
+    )
+    if named_identity != expected:
+        raise WorkspaceSecurityError("workspace root directory identity changed")
+    descriptor = os.open(workspace.root, flags)
+    try:
+        try:
+            os.set_inheritable(descriptor, False)
+        except (AttributeError, OSError):
+            pass
+        verify_workspace_root_directory(workspace, descriptor)
+        return descriptor
+    except BaseException as failure:
+        failure_is_control = not isinstance(failure, Exception)
+        cleanup_control: tuple[BaseException, TracebackType | None] | None = None
+        try:
+            os.close(descriptor)
+        except Exception:
+            pass
+        except BaseException as cleanup_failure:
+            cleanup_control = (
+                cleanup_failure,
+                cleanup_failure.__traceback__,
+            )
+        if not failure_is_control and cleanup_control is not None:
+            cleanup_failure, cleanup_traceback = cleanup_control
+            raise cleanup_failure.with_traceback(cleanup_traceback)
+        raise
+
+
+def verify_workspace_root_directory(
+    workspace: Workspace,
+    descriptor: int,
+) -> None:
+    """Require a descriptor and canonical name to retain the bound root."""
+
+    expected = _require_workspace_root_identity(workspace)
+    _require_workspace_root_directory_operations()
+    opened = os.fstat(descriptor)
+    named = os.stat(workspace.root, follow_symlinks=False)
+    opened_identity = _meaningful_directory_identity(opened)
+    named_identity = _meaningful_directory_identity(named)
+    if opened_identity != expected or named_identity != expected:
+        raise WorkspaceSecurityError("workspace root directory identity changed")
+
+
+def _probe_workspace_root_identity(root: Path) -> object:
+    """Return a bound, pending, or unavailable canonical root identity."""
+
+    try:
+        value = os.stat(root, follow_symlinks=False)
+    except FileNotFoundError:
+        return _WORKSPACE_ROOT_IDENTITY_PENDING
+    except Exception:
+        return _WORKSPACE_ROOT_IDENTITY_UNAVAILABLE
+    try:
+        identity = _meaningful_directory_identity(value)
+    except Exception:
+        return _WORKSPACE_ROOT_IDENTITY_UNAVAILABLE
+    if identity is None:
+        return _WORKSPACE_ROOT_IDENTITY_UNAVAILABLE
+    return identity
+
+
+def _initialize_pending_workspace(
+    workspace: Workspace,
+    *,
+    overwrite_prompts: bool,
+) -> tuple[int, int]:
+    """Initialize one terminalized pending root through its retained descriptor."""
+
+    root_descriptor, root_identity = _bind_pending_workspace_root_identity(
+        workspace
+    )
+    try:
+        _initialize_pending_workspace_entries(
+            workspace,
+            root_descriptor,
+            overwrite_prompts=overwrite_prompts,
+        )
+        _verify_pending_workspace_root_identity(
+            workspace,
+            root_descriptor,
+            root_identity,
+        )
+    except BaseException:
+        _close_pending_descriptor_after_failure(root_descriptor)
+        raise
+    os.close(root_descriptor)
+    return root_identity
+
+
+def _bind_pending_workspace_root_identity(
+    workspace: Workspace,
+) -> tuple[int, tuple[int, int]]:
+    """Securely create and retain the terminalized pending workspace root."""
+
+    _require_pending_workspace_root_creation_operations()
+    flags = _pending_workspace_directory_open_flags()
+    anchor_descriptor = _open_pending_workspace_anchor(workspace, flags)
+    descriptor = _walk_pending_workspace_directories(
+        anchor_descriptor,
+        workspace.root.parts[1:],
+        flags=flags,
+        create=True,
+        close_start=True,
+    )
+    try:
+        opened_identity = _meaningful_directory_identity(os.fstat(descriptor))
+        named_identity = _meaningful_directory_identity(
+            os.stat(workspace.root, follow_symlinks=False)
+        )
+        if opened_identity is None or named_identity is None:
+            raise OSError(
+                getattr(errno, "ENOTSUP", errno.ENOSYS),
+                "workspace root identity is unavailable",
+            )
+        if named_identity != opened_identity:
+            raise WorkspaceSecurityError(
+                "workspace root directory identity changed"
+            )
+    except BaseException:
+        _close_pending_descriptor_after_failure(descriptor)
+        raise
+    return descriptor, opened_identity
+
+
+def _initialize_pending_workspace_entries(
+    workspace: Workspace,
+    root_descriptor: int,
+    *,
+    overwrite_prompts: bool,
+) -> None:
+    """Write the pending topology without resolving its canonical pathname."""
+
+    flags = _pending_workspace_directory_open_flags()
+    for relative in WORKSPACE_DIRECTORIES:
+        descriptor = _walk_pending_workspace_directories(
+            root_descriptor,
+            Path(relative).parts,
+            flags=flags,
+            create=True,
+        )
+        os.close(descriptor)
+
+    _write_pending_workspace_json(
+        workspace,
+        root_descriptor,
+        "config/system_defaults.json",
+        DEFAULT_SYSTEM_CONFIG,
+        overwrite=False,
+    )
+    _write_pending_workspace_json(
+        workspace,
+        root_descriptor,
+        "config/agent_configs.json",
+        DEFAULT_AGENT_CONFIGS,
+        overwrite=False,
+    )
+    _write_pending_workspace_text(
+        workspace,
+        root_descriptor,
+        "config/persona_templates/default_kim_eun_hee.md",
+        DEFAULT_PERSONA,
+        overwrite=False,
+    )
+    _write_pending_workspace_text(
+        workspace,
+        root_descriptor,
+        "config/persona_templates/alternative_templates/.gitkeep",
+        "",
+        overwrite=False,
+    )
+    for agent_id in ROSTER:
+        _write_pending_workspace_text(
+            workspace,
+            root_descriptor,
+            AGENT_SPECS[agent_id].system_prompt_file,
+            DEFAULT_AGENT_PROMPTS[agent_id],
+            overwrite=overwrite_prompts,
+        )
+    for filename, content in CORE_TEMPLATES.items():
+        _write_pending_workspace_text(
+            workspace,
+            root_descriptor,
+            f"core_documents/{filename}",
+            content,
+            overwrite=False,
+        )
+    for state_dir in (
+        "agent_states/orchestrator_state",
+        "agent_states/orchestrator_state/conversation_defaults",
+        "agent_states/orchestrator_state/sessions",
+        "agent_states/plot_architect_state",
+        "agent_states/character_custodian_state",
+        "agent_states/execution_specialist_state",
+        "debug_logs",
+        "discussion_logs",
+        "manuscript",
+    ):
+        _write_pending_workspace_text(
+            workspace,
+            root_descriptor,
+            f"{state_dir}/.gitkeep",
+            "",
+            overwrite=False,
+        )
+
+
+def _write_pending_workspace_json(
+    workspace: Workspace,
+    root_descriptor: int,
+    relative: str,
+    value: Any,
+    *,
+    overwrite: bool,
+) -> None:
+    """Serialize and write one pending JSON entry beneath the held root."""
+
+    try:
+        content = json.dumps(
+            value,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+    except (TypeError, ValueError) as exc:
+        raise WorkspaceFormatError("value is not JSON serializable") from exc
+    _write_pending_workspace_text(
+        workspace,
+        root_descriptor,
+        relative,
+        content + "\n",
+        overwrite=overwrite,
+    )
+
+
+def _write_pending_workspace_text(
+    workspace: Workspace,
+    root_descriptor: int,
+    relative: str,
+    content: str,
+    *,
+    overwrite: bool,
+) -> None:
+    """Write one pending text entry through no-follow parent descriptors."""
+
+    raw = Path(relative)
+    if raw.is_absolute() or ".." in raw.parts or len(raw.parts) < 2:
+        raise WorkspaceSecurityError(f"unsafe workspace path: {relative}")
+    parent_descriptor = _walk_pending_workspace_directories(
+        root_descriptor,
+        raw.parts[:-1],
+        flags=_pending_workspace_directory_open_flags(),
+        create=False,
+    )
+    try:
+        target_name = raw.parts[-1]
+        try:
+            target = os.stat(
+                target_name,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            target = None
+        if target is not None and stat.S_ISLNK(target.st_mode):
+            raise WorkspaceSecurityError(
+                "workspace path contains a symbolic link: "
+                f"{workspace.root.joinpath(raw)}"
+            )
+        if target is None or overwrite:
+            _atomic_write_pending_workspace_bytes(
+                parent_descriptor,
+                target_name,
+                content.encode("utf-8", errors="strict"),
+                overwrite=overwrite,
+            )
+    except BaseException:
+        _close_pending_descriptor_after_failure(parent_descriptor)
+        raise
+    os.close(parent_descriptor)
+
+
+def _atomic_write_pending_workspace_bytes(
+    parent_descriptor: int,
+    target_name: str,
+    content: bytes,
+    *,
+    overwrite: bool,
+) -> None:
+    """Atomically replace or create one file beneath a held parent directory."""
+
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+    for name in ("O_CLOEXEC", "O_NOINHERIT", "O_BINARY"):
+        flags |= getattr(os, name, 0)
+    for attempt in range(16):
+        temporary_name = f".{target_name}.{uuid4().hex}.tmp"
+        try:
+            temporary_descriptor = os.open(
+                temporary_name,
+                flags,
+                0o600,
+                dir_fd=parent_descriptor,
+            )
+        except FileExistsError:
+            if attempt == 15:
+                raise
+            continue
+        break
+
+    temporary_present = True
+    try:
+        _set_pending_descriptor_non_inheritable(temporary_descriptor)
+        remaining = memoryview(content)
+        while remaining:
+            written = os.write(temporary_descriptor, remaining)
+            if written <= 0:
+                raise OSError(errno.EIO, "workspace temporary write made no progress")
+            remaining = remaining[written:]
+        os.fsync(temporary_descriptor)
+        temporary_identity = _meaningful_pending_file_identity(
+            os.fstat(temporary_descriptor)
+        )
+        if temporary_identity is None:
+            raise OSError(
+                getattr(errno, "ENOTSUP", errno.ENOSYS),
+                "workspace temporary file identity is unavailable",
+            )
+        if overwrite:
+            os.replace(
+                temporary_name,
+                target_name,
+                src_dir_fd=parent_descriptor,
+                dst_dir_fd=parent_descriptor,
+            )
+            temporary_present = False
+        else:
+            try:
+                os.link(
+                    temporary_name,
+                    target_name,
+                    src_dir_fd=parent_descriptor,
+                    dst_dir_fd=parent_descriptor,
+                    follow_symlinks=False,
+                )
+            except FileExistsError as exc:
+                raise ManuscriptExistsError(
+                    f"refusing to overwrite existing file: {target_name}"
+                ) from exc
+        target_identity = _meaningful_pending_file_identity(
+            os.stat(
+                target_name,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+        )
+        if target_identity != temporary_identity:
+            raise WorkspaceSecurityError(
+                f"workspace file identity changed: {target_name}"
+            )
+        if not overwrite:
+            os.unlink(temporary_name, dir_fd=parent_descriptor)
+            temporary_present = False
+        os.fsync(parent_descriptor)
+    except BaseException:
+        _close_pending_descriptor_after_failure(temporary_descriptor)
+        if temporary_present:
+            _unlink_pending_entry_after_failure(
+                parent_descriptor,
+                temporary_name,
+            )
+        raise
+    os.close(temporary_descriptor)
+
+
+def _meaningful_pending_file_identity(
+    value: os.stat_result,
+) -> tuple[int, int] | None:
+    """Return one meaningful regular-file identity for pending atomic writes."""
+
+    if not stat.S_ISREG(value.st_mode):
+        return None
+    device = value.st_dev
+    inode = value.st_ino
+    if (
+        isinstance(device, bool)
+        or not isinstance(device, int)
+        or device <= 0
+        or isinstance(inode, bool)
+        or not isinstance(inode, int)
+        or inode <= 0
+    ):
+        return None
+    return device, inode
+
+
+def _verify_pending_workspace_root_identity(
+    workspace: Workspace,
+    root_descriptor: int,
+    expected: tuple[int, int],
+) -> None:
+    """Rewalk the canonical root and compare it with the retained descriptor."""
+
+    flags = _pending_workspace_directory_open_flags()
+    anchor_descriptor = _open_pending_workspace_anchor(workspace, flags)
+    named_descriptor = _walk_pending_workspace_directories(
+        anchor_descriptor,
+        workspace.root.parts[1:],
+        flags=flags,
+        create=False,
+        close_start=True,
+    )
+    try:
+        retained_identity = _meaningful_directory_identity(
+            os.fstat(root_descriptor)
+        )
+        named_identity = _meaningful_directory_identity(
+            os.fstat(named_descriptor)
+        )
+        if retained_identity != expected or named_identity != expected:
+            raise WorkspaceSecurityError(
+                "workspace root directory identity changed"
+            )
+    except BaseException:
+        _close_pending_descriptor_after_failure(named_descriptor)
+        raise
+    os.close(named_descriptor)
+
+
+def _pending_workspace_directory_open_flags() -> int:
+    """Return the no-follow flags used for pending directory traversal."""
+
+    flags = os.O_RDONLY
+    for name in (
+        "O_CLOEXEC",
+        "O_NOINHERIT",
+        "O_BINARY",
+        "O_DIRECTORY",
+        "O_NOFOLLOW",
+        "O_NONBLOCK",
+    ):
+        flags |= getattr(os, name, 0)
+    return flags
+
+
+def _open_pending_workspace_anchor(workspace: Workspace, flags: int) -> int:
+    """Open the filesystem anchor as one owned non-inheritable descriptor."""
+
+    descriptor = os.open(workspace.root.anchor, flags)
+    try:
+        _set_pending_descriptor_non_inheritable(descriptor)
+    except BaseException:
+        _close_pending_descriptor_after_failure(descriptor)
+        raise
+    return descriptor
+
+
+def _walk_pending_workspace_directories(
+    start_descriptor: int,
+    components: tuple[str, ...],
+    *,
+    flags: int,
+    create: bool,
+    close_start: bool = False,
+) -> int:
+    """Walk single directory components without following or leaking aliases."""
+
+    descriptor: int | None = start_descriptor if close_start else None
+    parent_descriptor = start_descriptor
+    try:
+        for component in components:
+            child_descriptor = _open_pending_workspace_directory(
+                parent_descriptor,
+                component,
+                flags=flags,
+                create=create,
+            )
+            previous_descriptor = descriptor
+            descriptor = child_descriptor
+            parent_descriptor = child_descriptor
+            if previous_descriptor is not None:
+                os.close(previous_descriptor)
+    except BaseException:
+        if descriptor is not None:
+            _close_pending_descriptor_after_failure(descriptor)
+        raise
+    if descriptor is None:
+        raise WorkspaceSecurityError("workspace directory path is empty")
+    return descriptor
+
+
+def _open_pending_workspace_directory(
+    parent_descriptor: int,
+    component: str,
+    *,
+    flags: int,
+    create: bool,
+) -> int:
+    """Open or safely create one directory component beneath its parent."""
+
+    try:
+        descriptor = os.open(component, flags, dir_fd=parent_descriptor)
+    except FileNotFoundError:
+        if not create:
+            raise
+        try:
+            os.mkdir(component, dir_fd=parent_descriptor)
+        except FileExistsError:
+            pass
+        descriptor = os.open(component, flags, dir_fd=parent_descriptor)
+    try:
+        _set_pending_descriptor_non_inheritable(descriptor)
+    except BaseException:
+        _close_pending_descriptor_after_failure(descriptor)
+        raise
+    return descriptor
+
+
+def _set_pending_descriptor_non_inheritable(descriptor: int) -> None:
+    """Best-effort prevent a pending-initialization descriptor from inheritance."""
+
+    try:
+        os.set_inheritable(descriptor, False)
+    except (AttributeError, OSError):
+        pass
+
+
+def _close_pending_descriptor_after_failure(descriptor: int) -> None:
+    """Close one descriptor without replacing an active body failure."""
+
+    try:
+        os.close(descriptor)
+    except BaseException:
+        pass
+
+
+def _unlink_pending_entry_after_failure(
+    parent_descriptor: int,
+    name: str,
+) -> None:
+    """Remove one temporary entry without replacing an active body failure."""
+
+    try:
+        os.unlink(name, dir_fd=parent_descriptor)
+    except BaseException:
+        pass
+
+
+def _require_pending_workspace_root_creation_operations() -> None:
+    """Fail before mutation without descriptor-relative creation primitives."""
+
+    supports_dir_fd = getattr(os, "supports_dir_fd", ())
+    supports_follow_symlinks = getattr(os, "supports_follow_symlinks", ())
+    dir_fd_operations = {
+        getattr(operation, "__name__", None) for operation in supports_dir_fd
+    }
+    no_follow_operations = {
+        getattr(operation, "__name__", None)
+        for operation in supports_follow_symlinks
+    }
+    required_operations = (
+        "open",
+        "mkdir",
+        "fstat",
+        "stat",
+        "close",
+        "write",
+        "fsync",
+        "link",
+        "replace",
+        "unlink",
+    )
+    required_dir_fd_operations = {
+        "open",
+        "mkdir",
+        "stat",
+        "link",
+        "unlink",
+    }
+    required_no_follow_operations = {"stat", "link"}
+    # CPython reports replace's shared dir-fd implementation under rename.
+    replace_supports_dir_fd = (
+        "replace" in dir_fd_operations or "rename" in dir_fd_operations
+    )
+    if (
+        any(not callable(getattr(os, name, None)) for name in required_operations)
+        or not getattr(os, "O_DIRECTORY", 0)
+        or not getattr(os, "O_NOFOLLOW", 0)
+        or not getattr(os, "O_CREAT", 0)
+        or not getattr(os, "O_EXCL", 0)
+        or not hasattr(os, "O_RDONLY")
+        or not hasattr(os, "O_WRONLY")
+        or not required_dir_fd_operations.issubset(dir_fd_operations)
+        or not required_no_follow_operations.issubset(no_follow_operations)
+        or not replace_supports_dir_fd
+    ):
+        raise OSError(
+            getattr(errno, "ENOTSUP", errno.ENOSYS),
+            "safe pending workspace root creation is unsupported",
+        )
+
+
+def _require_workspace_root_identity(workspace: Workspace) -> tuple[int, int]:
+    """Return one meaningful bound identity or fail closed."""
+
+    if not isinstance(workspace, Workspace):
+        raise TypeError("workspace must be a Workspace")
+    identity = workspace._root_identity
+    if not isinstance(identity, tuple) or len(identity) != 2:
+        raise OSError(
+            getattr(errno, "ENOTSUP", errno.ENOSYS),
+            "workspace root identity is unavailable",
+        )
+    device, inode = identity
+    if (
+        isinstance(device, bool)
+        or not isinstance(device, int)
+        or device <= 0
+        or isinstance(inode, bool)
+        or not isinstance(inode, int)
+        or inode <= 0
+    ):
+        raise OSError(
+            getattr(errno, "ENOTSUP", errno.ENOSYS),
+            "workspace root identity is unavailable",
+        )
+    return device, inode
+
+
+def _require_workspace_root_directory_operations() -> None:
+    """Fail closed without no-follow root-directory primitives."""
+
+    supports_follow_symlinks = getattr(os, "supports_follow_symlinks", ())
+    if (
+        not getattr(os, "O_DIRECTORY", 0)
+        or not getattr(os, "O_NOFOLLOW", 0)
+        or os.stat not in supports_follow_symlinks
+    ):
+        raise OSError(
+            getattr(errno, "ENOTSUP", errno.ENOSYS),
+            "safe workspace root directory access is unsupported",
+        )
+
+
+def _meaningful_directory_identity(
+    value: os.stat_result,
+) -> tuple[int, int] | None:
+    """Return a nonzero directory identity or ``None`` when unavailable."""
+
+    if not stat.S_ISDIR(value.st_mode):
+        return None
+    device = value.st_dev
+    inode = value.st_ino
+    if (
+        isinstance(device, bool)
+        or not isinstance(device, int)
+        or device <= 0
+        or isinstance(inode, bool)
+        or not isinstance(inode, int)
+        or inode <= 0
+    ):
+        return None
+    return device, inode

@@ -100,12 +100,17 @@ oldest and retain at most 24 turns and 32,768 combined content bytes. Derivation
 stops at the first turn that would exceed either cap, never splits a turn, and
 restores retained events to storage order.
 
-After an advisory user append, cancellation best-effort adds `runtime_error`
-content `CancelledError: conversation turn was cancelled`; other failures use
-the safe diagnostic policy. Failed outcome storage leaves the user unmatched.
-Full reads expose it; context excludes it without retry or repair. The window
-reports total/retained/omitted complete turns, bytes, and truncation. It never
-compacts, rewrites, or deletes events.
+After an advisory user append, `asyncio` cancellation best-effort adds
+`runtime_error` content `CancelledError: conversation turn was cancelled`;
+ordinary failures attempt a `runtime_error` through the safe diagnostic policy.
+A provider `KeyboardInterrupt` or `SystemExit` appends no transcript outcome.
+The runtime attempts a separate content-safe `cancelled`/`interrupted`
+operational record and re-raises the identical exception without automatic
+retry. Failed outcome storage or that process-control path leaves the user
+unmatched. Full reads expose it; context excludes it without retry or repair.
+The window reports
+total/retained/omitted complete turns, bytes, and truncation. It never compacts,
+rewrites, or deletes events.
 
 ## Storage and validation boundary
 

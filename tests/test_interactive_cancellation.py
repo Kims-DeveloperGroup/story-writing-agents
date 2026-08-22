@@ -80,13 +80,39 @@ _MANIFEST_RELATIVE = f"{_SESSION_DIRECTORY}/session.json"
 
 
 def _file_bytes(workspace: Workspace) -> dict[str, bytes]:
-    """Return durable file bytes while excluding transient lease ownership."""
+    """Return domain bytes while excluding leases and diagnostic artifacts."""
 
     return {
         path.relative_to(workspace.root).as_posix(): path.read_bytes()
         for path in sorted(workspace.root.rglob("*"))
-        if path.is_file() and not path.name.endswith(".access.json")
+        if path.is_file()
+        and not path.name.endswith(".access.json")
+        and "debug_logs" not in path.relative_to(workspace.root).parts
     }
+
+
+def _traceback_contains(traceback: object, expected: object) -> bool:
+    """Return whether one traceback chain retains an exact injected node."""
+
+    current = traceback
+    while current is not None:
+        if current is expected:
+            return True
+        current = current.tb_next  # type: ignore[union-attr]
+    return False
+
+
+def _raise_recorded(
+    failure: BaseException,
+    tracebacks: list[object],
+) -> None:
+    """Raise one exact failure and retain its injected traceback node."""
+
+    try:
+        raise failure
+    except BaseException as raised:
+        tracebacks.append(raised.__traceback__)
+        raise
 
 
 class RecordingRunner:
@@ -100,12 +126,14 @@ class RecordingRunner:
         predicates: dict[int, Callable[[], bool]] | None = None,
         cleanup_events: list[str] | None = None,
         close_failure: BaseException | None = None,
+        close_tracebacks: list[object] | None = None,
     ) -> None:
         self._delegate = runner_type()
         self.interruptions = interruptions or {}
         self.predicates = predicates or {}
         self.cleanup_events = cleanup_events
         self.close_failure = close_failure
+        self.close_tracebacks = close_tracebacks
         self.run_calls = 0
         self.loop_ids: list[int] = []
         self.operation_tasks: list[asyncio.Task[Any]] = []
@@ -188,7 +216,9 @@ class RecordingRunner:
         self._delegate.close()
         self.closed = True
         if self.close_failure is not None:
-            raise self.close_failure
+            if self.close_tracebacks is None:
+                raise self.close_failure
+            _raise_recorded(self.close_failure, self.close_tracebacks)
 
 
 class RunnerFactory:
@@ -1098,6 +1128,43 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
             rendered,
         )
         self.assertIn("plot [completed]> after reply\n", rendered)
+        raw_debug_log = workspace.path(
+            "debug_logs/runtime.jsonl"
+        ).read_text(encoding="utf-8")
+        debug_records = [
+            json.loads(line) for line in raw_debug_log.splitlines()
+        ]
+        interrupted = [
+            record
+            for record in debug_records
+            if record["level"] == "error"
+            and record["phase"] == "cancelled"
+            and record.get("conversation_id") == selected.conversation_id
+        ]
+        self.assertTrue(interrupted)
+        self.assertIn(
+            ("backend", "provider_invocation"),
+            {
+                (record["component"], record["operation"])
+                for record in interrupted
+            },
+        )
+        for record in interrupted:
+            self.assertEqual(record["outcome"], "interrupted")
+            self.assertEqual(record["session_id"], "session")
+            self.assertEqual(record["agent_id"], PLOT_ARCHITECT)
+            self.assertEqual(
+                set(record["exception"]),
+                {"type", "frames", "frames_truncated"},
+            )
+        for prohibited in (
+            "Provider cancellation",
+            "cancel this",
+            "after cancellation",
+            "after reply",
+            str(workspace.root),
+        ):
+            self.assertNotIn(prohibited, raw_debug_log)
 
     def test_advisory_outcome_failure_leaves_unmatched_user_then_recovers(
         self,
@@ -1800,6 +1867,328 @@ class TerminalAndCleanupFailureTests(InteractiveCancellationTestCase):
             ["runner.close", "backend.detach", "backend.close"],
         )
         self.assertIs(controller._runner, runner_factory.instances[0])
+        self.assertIsNone(controller._attached_session_id)
+        self.assertIsNone(controller._focused_conversation)
+        self.assertIsNone(controller._conversation_memory_service)
+        self.assertFalse(workspace.path(_ACCESS_RELATIVE).exists())
+
+    def test_first_cleanup_process_control_wins_after_every_stage(self) -> None:
+        """Retain the first cleanup control while attempting every later stage."""
+
+        cases = (
+            ("runner", "keyboard", "system_exit", "keyboard", None),
+            ("access", "oserror", "system_exit", "keyboard", "system_exit"),
+            ("backend", "oserror", "oserror", "system_exit", "keyboard"),
+            (
+                "diagnostic",
+                "oserror",
+                "oserror",
+                "oserror",
+                "system_exit",
+            ),
+        )
+
+        def failure(kind: str | None, label: str) -> BaseException | None:
+            if kind == "keyboard":
+                return KeyboardInterrupt(label)
+            if kind == "system_exit":
+                return SystemExit(label)
+            if kind == "oserror":
+                return OSError(label)
+            return None
+
+        for winner, runner_kind, access_kind, backend_kind, diagnostic_kind in cases:
+            with self.subTest(winner=winner):
+                callbacks = ScriptedTerminalCallbacks("/quit")
+                (
+                    workspace,
+                    _catalog,
+                    _entries,
+                    controller,
+                    backend,
+                    _store,
+                ) = self.selected_controller_with_callbacks(callbacks)
+                events: list[str] = []
+                runner_tracebacks: list[object] = []
+                access_tracebacks: list[object] = []
+                backend_tracebacks: list[object] = []
+                diagnostic_tracebacks: list[object] = []
+                runner_failure = failure(runner_kind, "runner control")
+                access_failure = failure(access_kind, "access control")
+                backend_failure = failure(backend_kind, "backend control")
+                diagnostic_failure = failure(
+                    diagnostic_kind,
+                    "diagnostic control",
+                )
+                failures = {
+                    "runner": runner_failure,
+                    "access": access_failure,
+                    "backend": backend_failure,
+                    "diagnostic": diagnostic_failure,
+                }
+                expected = failures[winner]
+                assert expected is not None
+                runner_factory = RunnerFactory(
+                    asyncio.Runner,
+                    cleanup_events=events,
+                    close_failure=runner_failure,
+                    close_tracebacks=runner_tracebacks,
+                )
+                original_detach = backend.release_session_access
+                original_close = backend.close
+                original_record_error = (
+                    controller_core_module.InteractiveController._record_debug_error
+                )
+                logged_failures: list[BaseException] = []
+
+                def detach(session_id: str) -> object:
+                    events.append("backend.detach")
+                    result = original_detach(session_id)
+                    if access_failure is not None:
+                        _raise_recorded(access_failure, access_tracebacks)
+                    return result
+
+                def close() -> None:
+                    events.append("backend.close")
+                    original_close()
+                    if backend_failure is not None:
+                        _raise_recorded(backend_failure, backend_tracebacks)
+
+                def write_cleanup_diagnostic(
+                    _controller: InteractiveController,
+                    _error: InteractiveError,
+                ) -> bool:
+                    events.append("cleanup.diagnostic")
+                    if diagnostic_failure is not None:
+                        _raise_recorded(
+                            diagnostic_failure,
+                            diagnostic_tracebacks,
+                        )
+                    return True
+
+                def record_debug_error(
+                    active_controller: InteractiveController,
+                    operation: object,
+                    recorded_failure: BaseException,
+                    **keywords: object,
+                ) -> None:
+                    logged_failures.append(recorded_failure)
+                    original_record_error(
+                        active_controller,
+                        operation,  # type: ignore[arg-type]
+                        recorded_failure,
+                        **keywords,  # type: ignore[arg-type]
+                    )
+
+                with (
+                    mock.patch.object(
+                        controller_core_module.asyncio,
+                        "Runner",
+                        runner_factory,
+                    ),
+                    mock.patch.object(
+                        backend,
+                        "release_session_access",
+                        side_effect=detach,
+                    ),
+                    mock.patch.object(backend, "close", side_effect=close),
+                    mock.patch.object(
+                        controller_core_module.InteractiveController,
+                        "_write_error_best_effort",
+                        autospec=True,
+                        side_effect=write_cleanup_diagnostic,
+                    ) as diagnostic,
+                    mock.patch.object(
+                        controller_core_module.InteractiveController,
+                        "_record_debug_error",
+                        autospec=True,
+                        side_effect=record_debug_error,
+                    ),
+                ):
+                    try:
+                        controller.run_session_lobby()
+                    except BaseException as raised:
+                        self.assertIs(raised, expected)
+                        traceback_by_stage = {
+                            "runner": runner_tracebacks,
+                            "access": access_tracebacks,
+                            "backend": backend_tracebacks,
+                            "diagnostic": diagnostic_tracebacks,
+                        }[winner]
+                        self.assertEqual(len(traceback_by_stage), 1)
+                        self.assertTrue(
+                            _traceback_contains(
+                                raised.__traceback__,
+                                traceback_by_stage[0],
+                            )
+                        )
+                    else:
+                        self.fail("cleanup process control did not propagate")
+
+                expected_events = [
+                    "runner.close",
+                    "backend.detach",
+                    "backend.close",
+                ]
+                if any(
+                    isinstance(item, Exception)
+                    for item in (runner_failure, access_failure, backend_failure)
+                ):
+                    expected_events.append("cleanup.diagnostic")
+                    diagnostic.assert_called_once()
+                else:
+                    diagnostic.assert_not_called()
+                self.assertEqual(events, expected_events)
+                self.assertIn(runner_failure, logged_failures)
+                self.assertIn(access_failure, logged_failures)
+                self.assertIn(backend_failure, logged_failures)
+                runner = runner_factory.instances[0]
+                if isinstance(runner_failure, Exception):
+                    self.assertIsNone(controller._runner)
+                else:
+                    self.assertIs(controller._runner, runner)
+                self.assertTrue(controller._closed)
+                self.assertIsNone(controller._attached_session_id)
+                self.assertIsNone(controller._focused_conversation)
+                self.assertIsNone(controller._conversation_memory_service)
+                self.assertFalse(workspace.path(_ACCESS_RELATIVE).exists())
+
+    def test_body_system_exit_outranks_cleanup_controls_and_diagnostic(self) -> None:
+        """Preserve the body control while every cleanup stage is attempted."""
+
+        callbacks = ScriptedTerminalCallbacks("/quit")
+        (
+            workspace,
+            _catalog,
+            _entries,
+            controller,
+            backend,
+            _store,
+        ) = self.selected_controller_with_callbacks(callbacks)
+        events: list[str] = []
+        body_tracebacks: list[object] = []
+        runner_tracebacks: list[object] = []
+        access_tracebacks: list[object] = []
+        backend_tracebacks: list[object] = []
+        diagnostic_tracebacks: list[object] = []
+        body_failure = SystemExit("body exit")
+        runner_failure = OSError("runner cleanup failure")
+        access_failure = KeyboardInterrupt("access cleanup control")
+        backend_failure = SystemExit("backend cleanup control")
+        diagnostic_failure = KeyboardInterrupt("diagnostic cleanup control")
+        runner_factory = RunnerFactory(
+            asyncio.Runner,
+            cleanup_events=events,
+            close_failure=runner_failure,
+            close_tracebacks=runner_tracebacks,
+        )
+        original_detach = backend.release_session_access
+        original_close = backend.close
+        original_record_error = (
+            controller_core_module.InteractiveController._record_debug_error
+        )
+        logged_failures: list[BaseException] = []
+
+        def fail_body(_controller: InteractiveController) -> int:
+            _raise_recorded(body_failure, body_tracebacks)
+
+        def detach(session_id: str) -> object:
+            events.append("backend.detach")
+            result = original_detach(session_id)
+            _raise_recorded(access_failure, access_tracebacks)
+            return result
+
+        def close() -> None:
+            events.append("backend.close")
+            original_close()
+            _raise_recorded(backend_failure, backend_tracebacks)
+
+        def write_cleanup_diagnostic(
+            _controller: InteractiveController,
+            _error: InteractiveError,
+        ) -> bool:
+            events.append("cleanup.diagnostic")
+            _raise_recorded(diagnostic_failure, diagnostic_tracebacks)
+
+        def record_debug_error(
+            active_controller: InteractiveController,
+            operation: object,
+            recorded_failure: BaseException,
+            **keywords: object,
+        ) -> None:
+            logged_failures.append(recorded_failure)
+            original_record_error(
+                active_controller,
+                operation,  # type: ignore[arg-type]
+                recorded_failure,
+                **keywords,  # type: ignore[arg-type]
+            )
+
+        with (
+            mock.patch.object(
+                controller_core_module.asyncio,
+                "Runner",
+                runner_factory,
+            ),
+            mock.patch.object(
+                controller_core_module.InteractiveController,
+                "_read_session_lobby_commands",
+                autospec=True,
+                side_effect=fail_body,
+            ),
+            mock.patch.object(
+                backend,
+                "release_session_access",
+                side_effect=detach,
+            ),
+            mock.patch.object(backend, "close", side_effect=close),
+            mock.patch.object(
+                controller_core_module.InteractiveController,
+                "_write_error_best_effort",
+                autospec=True,
+                side_effect=write_cleanup_diagnostic,
+            ) as diagnostic,
+            mock.patch.object(
+                controller_core_module.InteractiveController,
+                "_record_debug_error",
+                autospec=True,
+                side_effect=record_debug_error,
+            ),
+        ):
+            try:
+                controller.run_session_lobby()
+            except BaseException as raised:
+                self.assertIs(raised, body_failure)
+                self.assertEqual(len(body_tracebacks), 1)
+                self.assertTrue(
+                    _traceback_contains(
+                        raised.__traceback__,
+                        body_tracebacks[0],
+                    )
+                )
+            else:
+                self.fail("body SystemExit did not propagate")
+
+        self.assertEqual(
+            events,
+            [
+                "runner.close",
+                "backend.detach",
+                "backend.close",
+                "cleanup.diagnostic",
+            ],
+        )
+        diagnostic.assert_called_once()
+        self.assertEqual(
+            set(logged_failures),
+            {runner_failure, access_failure, backend_failure},
+        )
+        self.assertEqual(len(runner_tracebacks), 1)
+        self.assertEqual(len(access_tracebacks), 1)
+        self.assertEqual(len(backend_tracebacks), 1)
+        self.assertEqual(len(diagnostic_tracebacks), 1)
+        self.assertIsNone(controller._runner)
+        self.assertTrue(controller._closed)
         self.assertIsNone(controller._attached_session_id)
         self.assertIsNone(controller._focused_conversation)
         self.assertIsNone(controller._conversation_memory_service)

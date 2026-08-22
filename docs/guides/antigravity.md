@@ -115,11 +115,12 @@ catalog or prove provider support.
 
 ## Capability preflight and fixed errors
 
-Before provider work, preflight resolves every configured executable. For an
-Antigravity route it also runs a bounded, provider-free `agy --help` capability
-probe in isolated state and requires the public headless flags used by the
-adapter. A successful probe does not validate authentication, network access,
-model access, account quota, response quality, or a provider turn.
+Before provider work, preflight resolves each executable required by the
+effective provider routes. For an Antigravity route it also runs a bounded,
+provider-free `agy --help` capability probe in isolated state and requires the
+public headless flags used by the adapter. A successful probe does not validate
+authentication, network access, model access, account quota, response quality,
+or a provider turn.
 
 For each turn, the runtime launches `agy` directly without shell evaluation. It:
 

@@ -16,7 +16,7 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 37.
+Importable production units indexed: 38.
 
 ## Current Dependency Direction
 
@@ -27,9 +27,11 @@ configuration, prompt, persistence, and stable contract modules:
 __main__ -> cli -> interactive_controller -> interactive_controller._core
                  -> interactive_terminal -> interactive_terminal._core
                  -> run_inputs -> errors
+                 -> debug_log -> agents/workspace
                  -> orchestrator -> conversation_retrieval -> agents/conversation_search
                  |               |                           -> conversations/errors
                  |               -> conversation_search -> conversations/errors
+                 |               -> debug_log -> agents/workspace
                  |               -> prompts -> config -> workspace
                  |               |         |         -> conversations/models/errors/agents
                  |               |         -> conversations
@@ -39,14 +41,15 @@ __main__ -> cli -> interactive_controller -> interactive_controller._core
                  -> backend -> antigravity_adapter -> models/provider_adapter/provider_process
                  |          -> codex_adapter -> agents/config/errors/models
                  |          |                 -> provider_adapter/provider_process
-                 |          -> config/conversation_retrieval/workspace/models/errors/agents
+                 |          -> config/conversation_retrieval/debug_log
+                 |          -> workspace/models/errors/agents
                  |          -> provider_adapter/provider_process/session_lifecycle
                  -> cli_context -> workspace/errors/agents
 
 interactive_controller._core -> interactive_controller._session_policy
                              -> interactive_controller._conversation_policy
                              -> interactive_controller._runtime_policy
-                             -> agents/backend/cli_context
+                             -> agents/backend/cli_context/debug_log
                              -> conversation_retrieval/conversation_search
                              -> conversations/errors/interactive_commands
                              -> interactive_settings/interactive_terminal
@@ -58,7 +61,9 @@ interactive_controller._conversation_policy -> conversation_search/conversations
 interactive_controller._runtime_policy -> conversation_retrieval/conversation_search
                                        -> errors/interactive_terminal/models/workspace
 
-smoke -> agents/conversation_retrieval/conversation_search/conversations/models/orchestrator/session_lifecycle/workspace
+smoke -> agents/conversation_retrieval/conversation_search/conversations/debug_log
+      -> models/orchestrator/session_lifecycle/workspace
+debug_log -> agents/workspace
 directives -> config/workspace/errors/agents
 interactive_commands -> agents
 interactive_line_editor -> interactive_commands/interactive_terminal
@@ -212,8 +217,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   the same immutable construction-time configuration to the bound runtime
   without exposing the backend's private storage.
 - **Direct internal dependencies:** `agents`, `antigravity_adapter`,
-  `codex_adapter`, `config`, `conversation_retrieval`, `errors`, `models`,
-  `provider_adapter`, `provider_process`, `session_lifecycle`, and `workspace`.
+  `codex_adapter`, `config`, `conversation_retrieval`, `debug_log`, `errors`,
+  `models`, `provider_adapter`, `provider_process`, `session_lifecycle`, and
+  `workspace`.
 - **State, resources, and side effects:** Owns exact V2 provider-session
   manifests at
   `agent_states/orchestrator_state/provider_sessions/<session_id>.json`, exact
@@ -251,7 +257,19 @@ every intermediate arrow. The current runtime graph is acyclic.
   The Antigravity settings are additive keyword-only constructor inputs.
   Configuration values remain fixed for the backend lifetime and do not change
   provider-thread identity, bindings, fingerprints, manifests, or request
-  payloads.
+  payloads. Each backend retains one I/O-free workspace-bound
+  debug-log handle but begins emitting only after the existing complete
+  configuration snapshot loads successfully. It best-effort records only fixed
+  configuration, binding, provider-invocation, session-lifecycle, and cleanup
+  facts or safe failures. Lifecycle diagnostics cover complete enumeration and
+  the create, reopen, and pause boundaries, including acquisition, rejection,
+  durable mutation, release, and final lifecycle reads without changing their
+  established cleanup or exception order. Backend-private trace and error
+  guards catch diagnostic `BaseException` failures. Diagnostic calls never
+  persist provider stderr, payloads, replies, configuration values, or
+  access-claim owner/token facts and never replace the established result,
+  exception, or cancellation flow; `debug_log` retains ownership of its files,
+  locks, schema, and rotation.
 - **Primary verification/documentation:** `tests/test_codex_backend.py`,
   `tests/test_antigravity_adapter.py`, `tests/test_antigravity_parity.py`,
   `tests/test_session_lifecycle.py`, `docs/reference/backend-and-sessions.md`,
@@ -369,8 +387,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   sorted, indented JSON containing only `access_state`, `durable_state`, and
   `session_id`.
 - **Direct internal dependencies:** `agents`, `backend`, `cli_context`, `config`,
-  `errors`, `interactive_controller`, `interactive_terminal`, `models`,
-  `orchestrator`, `run_inputs`,
+  `debug_log`, `errors`, `interactive_controller`, `interactive_terminal`,
+  `models`, `orchestrator`, `run_inputs`,
   `session_lifecycle`, and `workspace`; imports `smoke` lazily for the
   diagnostic command.
 - **State, resources, and side effects:** Reads terminal input and delegates
@@ -384,7 +402,23 @@ every intermediate arrow. The current runtime graph is acyclic.
   subject input remains an ordinary read, while composition and confirmation
   use history-free semantic input. The controller owns interactive backend
   cleanup after its session-lobby run begins, while the CLI closes a backend if
-  construction fails before that ownership transfer.
+  construction fails before that ownership transfer. After workspace
+  initialization or discovery succeeds, the CLI independently marks later
+  failure-hint eligibility and attempts optional workspace-bound debug-log
+  handle construction through one `BaseException`-guarded helper. Interactive,
+  `init`, explicit-smoke, and ordinary resolved-workspace entry all use that
+  helper; module-private trace and error helpers accept an absent handle and
+  guard every submission. For explicit smoke, the CLI initializes and retains
+  one identity-bearing `Workspace` and passes that exact instance to
+  `smoke.run_smoke` without resolving the path again. Initialization,
+  discovery, argparse, and other pre-workspace failures, plus implicit smoke,
+  remain hint-free. A later caught eligible noninteractive `Exception` appends
+  the fixed workspace-relative hint even when no handle, record, or file is
+  available, while returned domain outcomes remain JSON-only. Interactive
+  startup failures after workspace discovery add the corresponding fixed
+  terminal notice independently of handle availability. Existing sanitized
+  error text and exit behavior are otherwise unchanged, and `debug_log`
+  retains storage ownership.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
   `tests/test_cli_context.py`, `tests/test_smoke_cli.py`, and
   `tests/test_interactive_pty.py` for primary process-level POSIX PTY
@@ -533,6 +567,82 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_conversation_event_store.py`,
   `docs/reference/conversation-catalog.md`, and
   `docs/reference/conversation-transcripts.md`.
+
+### `story_writing_agents.debug_log`
+
+- **Source:** `src/story_writing_agents/debug_log.py`
+- **Responsibility:** Persist content-safe bounded workspace runtime diagnostics.
+- **Supported surface:** No project-root public import. Its module-supported
+  internal surface is `WorkspaceDebugLog`; the fixed `DebugLevel`,
+  `DebugComponent`, `DebugOperation`, `DebugPhase`, and `DebugOutcome` enums;
+  and the exact path, size, backup-count, frame-count, and lock-timeout
+  constants listed in its `__all__`. `WorkspaceDebugLog.path` joins the fixed
+  relative path to the already-resolved workspace root without filesystem
+  access; the borrowed workspace itself remains private. Its
+  `trace` and `error` accept only the fixed taxonomy, validated optional
+  correlation IDs, and an optional fixed outcome. No arbitrary detail mapping
+  or caller-supplied timestamp, message, path, traceback field, or serialized
+  value is accepted.
+- **Direct internal dependencies:** `agents` and `workspace`.
+- **State, resources, and side effects:** Import and construction perform no
+  filesystem I/O or application startup. Calls own schema-v1 UTC timestamps,
+  compact ASCII-safe JSONL serialization, qualified exception-type projection,
+  and at most the nearest 32 module/function/positive-line frame facts; they
+  never inspect exception prose, filenames, source lines, locals, arguments,
+  representations, causes, contexts, or notes. Exact validated session,
+  conversation, debate, and canonical agent IDs are the only variable
+  correlation strings. A guarded process-wide weak lock registry serializes
+  one resolved workspace in process. After the safe-primitive gate passes, the
+  persistent `debug_logs/.runtime.lock` independently makes a bounded
+  POSIX/Windows cross-process advisory-lock attempt within the shared
+  100-millisecond deadline. `Workspace` owns the immutable canonical-root
+  identity and supplies the package-internal no-follow open and reverification
+  seam plus the `debug_logs` scaffold declaration. For each supported storage
+  attempt, this module owns and holds both the verified root descriptor and a
+  child `debug_logs` descriptor for the complete guard, rotation, append,
+  rollback, and cleanup critical section. It creates or opens the child relative
+  to the root, verifies each opened and named directory identity, and performs
+  every guard, active-log, and five-backup leaf stat, open, create, unlink, and
+  rename relative to the child descriptor; leaf stats do not follow symlinks.
+  The module rechecks both canonical directory identities before each forward
+  leaf mutation, and root, child, and final-leaf opens request `O_NONBLOCK` where
+  the platform defines it. An unavailable root identity or a platform lacking
+  `O_DIRECTORY`, `O_NOFOLLOW`, descriptor-relative mkdir/open/stat/unlink/rename,
+  or no-follow stat support drops the record without opening a diagnostic leaf
+  or using a weaker fallback. Before opening or lazily creating the persistent
+  guard, the module validates any existing active file and each existing backup
+  through the held child directory as regular, with `st_nlink == 1`, a meaningful
+  inode identity, and no larger than 1,048,576 bytes. It then validates any
+  existing guard the same no-follow way and requires it to be regular with
+  `st_nlink == 1` and a meaningful identity. If any prevalidation fails, no guard
+  is opened or created; the size bound applies only to active and backup files.
+  The module verifies that the opened guard descriptor and held-directory name
+  identify the same regular, singly-linked file before attempting the advisory
+  lock and again after acquisition. Under that guard, it snapshots each active
+  and backup name as absent or as its exact validated meaningful inode, checks
+  the expected absence or identity of every source and destination immediately
+  before each rotation unlink or rename, and updates the expected state after
+  every successful mutation. It then verifies that the opened active descriptor
+  and held-directory name identify the same regular, singly-linked file before
+  and during append. It appends to `debug_logs/runtime.jsonl`, rotates before the
+  active file would exceed the bound, and retains `runtime.jsonl.1` through `.5`.
+  After a partial append or synchronization failure, best-effort rollback
+  truncates only if the descriptor remains the exact inode captured before the
+  append and that inode remains regular and singly linked. These validations
+  cover only the identities observed at each check; they do not make concurrent
+  external filesystem changes transactional. Invalid input, contention, unsafe
+  storage, serialization, append, synchronization, flush, fsync, rollback,
+  rotation, and cleanup failures covered by `Exception` drop only that record
+  and never recurse. Cleanup still attempts every independently acquired
+  descriptor and lock. An original body process-control `BaseException` wins;
+  otherwise the first cleanup process-control failure propagates after all later
+  cleanup attempts with its original object and traceback so each consumer can
+  apply its boundary-specific fail-safe policy.
+- **Primary verification/documentation:** `tests/test_debug_log.py`,
+  `tests/test_workspace_and_config.py`, `docs/design/overview.md`,
+  `docs/design/persistence.md`, `docs/operations/filesystem-safety.md`,
+  `docs/operations/privacy-and-provider.md`, and
+  `docs/reference/configuration/session-storage.md`.
 
 ### `story_writing_agents.directives`
 
@@ -721,7 +831,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   nested Escape returns to the settings menu, while interrupt or EOF preserves
   whole-flow cancellation.
 - **Direct internal dependencies:** `agents`, `backend`, `cli_context`,
-  `conversation_retrieval`, `conversation_search`, `conversations`, `errors`,
+  `conversation_retrieval`, `conversation_search`, `conversations`, `debug_log`,
+  `errors`,
   `interactive_commands`, `interactive_controller._conversation_policy`,
   `interactive_controller._runtime_policy`,
   `interactive_controller._session_policy`, `interactive_settings`,
@@ -739,21 +850,42 @@ every intermediate arrow. The current runtime graph is acyclic.
   controller also owns its current attached-session identifier, current-focus
   conversation metadata, sticky target, current CLI-context snapshot,
   process-local per-session latest accepted STARTED debate-ID map, and
-  one-run/closed state. Once its single-use run starts, it constructs and owns
+  one-run/closed state. It also retains a controller-private count of
+  successfully rendered typed errors. Each submitted command snapshots that
+  count before dispatch and independently records `failed`/`rejected` when a
+  normally returned path rendered a new typed error, or
+  `succeeded`/`completed` when it rendered none; an earlier command cannot
+  reclassify a later one. It retains one workspace-bound debug-log handle,
+  best-effort records fixed lobby, command, attachment, focus, cleanup, and
+  safe failure facts, and routes every post-workspace typed error through the
+  fixed debug-log-path notice without retaining or resolving that notice.
+  Controller-private trace and error guards catch diagnostic `BaseException`
+  failures. `debug_log` remains the resource owner, and diagnostic failure does
+  not alter controller results, exceptions, cancellation, or cleanup
+  sequencing. Once its single-use run starts, it constructs and owns
   one private `asyncio.Runner` for the rest of that lifecycle. Repeated
   `Runner.run` calls execute every accepted advisory and consensus coroutine on
   that Runner; controller-local entry/cancellation/join evidence and public
   Runner task inspection distinguish a quiescent pre-entry interruption, a
   completed entered cancellation, and an unjoined or otherwise uncertain
-  operation. Final cleanup closes the Runner and its residual asynchronous
-  work, releases any still-known process access, and then closes the backend.
-  Later cleanup stages remain attempted after an earlier failure; ordinary
-  cleanup failures force status 2 and one best-effort `cleanup_failed` diagnostic,
-  while a cleanup `BaseException` propagates after later stages run and an
-  unsuccessfully interrupted Runner close retains its private reference.
-  `AgentBackend` retains the actual access claim, manifest, subprocess, and
-  provider-thread resources. The settings flow retains only one call-local
-  immutable baseline and pending candidate, constructs its changed-only
+  operation. Final cleanup attempts each applicable stage once in order:
+  Runner close and its residual asynchronous work, known process-access
+  release, backend close, then controller-state clearing. An uncaught body
+  process-control failure wins; otherwise the first cleanup process-control
+  failure wins, with every later stage still attempted before the exact object
+  and its originating traceback chain propagate. The Runner reference is
+  retained only when Runner close itself is interrupted by process control;
+  ordinary Runner-close failure clears it, while attachment, focus, and memory
+  always clear and the controller closes. With no retained process control,
+  ordinary cleanup failures force status 2 and one best-effort nonduplicated
+  `cleanup_failed` diagnostic. A diagnostic process control participates only
+  when no earlier winner exists and cannot replace a retained body or cleanup
+  control.
+  `AgentBackend` retains the actual access claim, manifest, and provider-thread
+  coordination, while provider adapters retain binding, staging, and provider-
+  native state and `provider_process` owns subprocess resources. The settings flow
+  retains only one call-local immutable baseline and pending candidate,
+  constructs its changed-only
   confirmation context, and delegates exact-byte conflict detection and guarded
   persistence to `interactive_settings`; cancellation or failed saves do not
   mutate the active backend or runtime snapshot. Through public collaborators
@@ -1000,6 +1132,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   `InteractiveTerminal` in the exact established `__all__` order. The facade
   exports the defining objects without wrapper subclasses and preserves their
   canonical `story_writing_agents.interactive_terminal` identities. The
+  supported `InteractiveTerminal.write_error` accepts an additive optional
+  keyword-only `debug_log_path`; omission preserves the exact established
+  two-notice record, while supplied safe one-line strict-UTF-8 text adds
+  exactly one third notice labelled `debug log` without changing the typed
+  error value. The
   unlisted `InteractiveSemanticOutput` binds one terminal's semantic write
   capability for controller use, and the existing `Field`, `ListView`,
   `Message`, `Notice`, `Panel`, `Record`, `Section`, `SemanticRole`, and
@@ -1299,7 +1436,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   re-exported by the package facade. Constructor and public method signatures,
   validation, typed input outcomes, established plain record contents/order,
   error redaction/caps, composition behavior, callback granularity, and fixed
-  callback-width semantics remain compatible. Its package-internal stream
+  callback-width semantics remain compatible. `write_error` alone adds the
+  optional keyword-only `debug_log_path` presentation seam: `None` preserves
+  the established error record exactly, and supplied validated text becomes
+  one sanitized third notice labelled `debug log`. Its package-internal stream
   factory coordinates the driver, controls, command metadata, and current
   capability profile. Lobby, attached-session, and conversation-scope
   orientation plus specialized run, agent, typed-error, help, agent-roster,
@@ -1369,6 +1509,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   and the core itself own no history.
   The semantic adapter retains only the
   terminal's bound component capability and acquires no stream or raw resource.
+  The optional debug-log path is call-local presentation input and is not
+  retained by the terminal or semantic adapter.
   There is no runtime, filesystem, persistence, subprocess, network, or
   import-time operational I/O.
 - **Primary verification/documentation:** `tests/test_interactive_terminal.py`,
@@ -1410,14 +1552,16 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:** `src/story_writing_agents/orchestrator.py`
 - **Responsibility:** Coordinate provider-neutral runtime workflows across
   debates and advisory conversation turns.
-- **Supported surface:** Package-supported `StoryRuntime` and `RuntimeSession`,
-  including unchanged one-step `converse()`, additive bounded
-  `converse_with_retrieval()` with required scoped memory service and optional
-  synchronous progress sink, context-aware `run_prompt()` and `run_draft()`,
-  and the separate strict `inspect_debate_context()` accessor on both forms,
-  plus compatibility aliases `Runtime` and `Session`.
+- **Supported surface:** Package-supported `StoryRuntime` and `RuntimeSession`.
+  `StoryRuntime` exposes provider-free directive application, runtime-override
+  saving, and session/debate/context inspection; `RuntimeSession` supplies their
+  bound-session equivalents. Both forms retain unchanged one-step `converse()`,
+  additive bounded `converse_with_retrieval()` with required scoped memory
+  service and optional synchronous progress sink, context-aware `run_prompt()`
+  and `run_draft()`, and strict `inspect_debate_context()`, plus compatibility
+  aliases `Runtime` and `Session`.
 - **Direct internal dependencies:** `agents`, `backend`, `config`,
-  `conversation_retrieval`, `conversation_search`, `directives`,
+  `conversation_retrieval`, `conversation_search`, `debug_log`, `directives`,
   `conversations`, `errors`, `models`, `prompts`, `session_lifecycle`, and
   `workspace`.
 - **State, resources, and side effects:** Retains an injected or default
@@ -1432,13 +1576,32 @@ every intermediate arrow. The current runtime graph is acyclic.
   context window before reservation, reuses that exact snapshot for every agent
   phase, and delegates create-only sidecar persistence to `Workspace`; fresh
   mode persists identity with no snapshot and an absent request remains
-  context-free.
+  context-free. Each runtime retains one I/O-free workspace-bound debug-log
+  handle, but runtime construction emits no diagnostic record. Later operations
+  best-effort record fixed configuration, directive, inspection, advisory,
+  retrieval, consensus, and safe failure facts through runtime-private trace
+  and error guards that catch diagnostic `BaseException` failures. Diagnostic
+  calls preserve the established result, exception, cancellation, and
+  persistence behavior, while `debug_log` retains storage ownership. For
+  synchronous `apply_directive`, `set_runtime_overrides`, `inspect_session`,
+  `inspect_debate`, and `inspect_debate_context`, an underlying
+  `KeyboardInterrupt` or `SystemExit` attempts exactly one
+  `cancelled`/`interrupted` record through that safe guard before a bare
+  re-raise preserves the identical object and originating traceback. Ordinary
+  failures retain `failed`/`failed`; successful directive/configuration calls
+  retain `succeeded`/`completed`, and successful inspections retain
+  `observed`/`completed`.
   It synchronously emits typed provider-neutral debate progress in lifecycle
   order, makes result and terminal state durable before terminal debate
   progress, preserves typed observer failures, and retains external
   cancellation while best-effort recording interruption. It also sequences
-  ordinary debate persistence and unchanged one-step advisory context-read,
-  user-append, provider-call, and reply/error-append flow.
+  ordinary debate persistence and the one-step advisory context-read,
+  user-append, provider-call, and reply/error-append flow. After the user event
+  is durable, a provider-phase `KeyboardInterrupt` or `SystemExit` in either
+  one-step advisory or bounded retrieval attempts a `cancelled`/`interrupted`
+  runtime terminal diagnostic, appends no transcript outcome, performs no
+  automatic retry, and re-raises the identical exception. The unmatched user
+  transcript event remains, and consensus execution is unchanged.
   Before any provider-bound workflow, the runtime requires exact synchronous
   backend lifecycle hooks and performs provider-configuration validation,
   lifecycle pre-read, access acquisition, and lifecycle post-read in that
@@ -1542,20 +1705,36 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Responsibility:** Run the provider-free deterministic CLI diagnostic across
   subject catalog, transcript, search, retrieval, persisted conversation
   continuity, and included-context consensus behavior.
-- **Supported surface:** Internal `run_smoke`; no package-supported API.
+- **Supported surface:** Internal
+  `run_smoke(workspace: Workspace | None = None)`; no package-supported API.
+  `None` selects the implicit temporary lifecycle, while a supplied value must
+  be an initialized `Workspace`. There is no string-or-path compatibility form.
 - **Direct internal dependencies:** `agents`, `conversation_retrieval`,
-  `conversation_search`, `conversations`, `models`, `orchestrator`,
-  `session_lifecycle`, and `workspace`.
-- **State, resources, and side effects:** Creates a unique temporary or
-  explicitly retained workspace diagnostic with a session directive, two
+  `conversation_search`, `conversations`, `debug_log`, `models`,
+  `orchestrator`, `session_lifecycle`, and `workspace`.
+- **State, resources, and side effects:** Runs a unique temporary or explicitly
+  retained workspace diagnostic with a session directive, two
   conversation metadata and transcript sets, bounded search, transcript-read,
   and retrieval activity, trusted in-memory nonpersistent retrieval progress,
   an immutable included-context sidecar, debate and agent state, a result, and
   a manuscript; verifies core-document bytes. Its provider-free backend
   implements the exact lifecycle hooks and returns correlated ready/access
-  facts so runtime preparation exercises the canonical contract. Temporary
-  mode removes the workspace after normal return, while explicit mode retains
-  plaintext diagnostics.
+  facts so runtime preparation exercises the canonical contract. Implicit mode
+  owns, initializes, and removes one temporary `Workspace` and its bounded debug
+  log after return or propagation. Explicit mode borrows the caller's exact
+  initialized identity-bearing `Workspace` and leaves it retained. Every fresh
+  workspace-bound runtime, catalog, event store, memory service, and inspection
+  consumer borrows that exact instance rather than reconstructing or rebinding
+  one from its path; the provider-free backend remains a separate fresh service
+  without workspace ownership. Logger-handle acquisition is optional and
+  guarded independently from the module-private trace and error submissions;
+  diagnostic `BaseException` failures cannot replace a smoke report or
+  propagated application failure. Every diagnostic handle therefore retains
+  the original Workspace identity and either appends there or fails closed
+  instead of redirecting into a replacement root. Ordinary smoke artifact I/O
+  deliberately retains the established pathname-based, nontransactional
+  `Workspace` behavior and may observe a real-directory replacement. `debug_log`
+  retains ownership of the diagnostic schema and storage.
 - **Primary verification/documentation:** `tests/test_smoke_cli.py`,
   `docs/guides/smoke-test.md`, and `docs/reference/cli.md`.
 
@@ -1566,14 +1745,54 @@ every intermediate arrow. The current runtime graph is acyclic.
   boundary.
 - **Supported surface:** Package-supported `FilesystemConversationCatalog`,
   `FilesystemConversationEventStore`, `Workspace`, and
-  `initialize_workspace`. `Workspace.inspect_debate_context` is the strict,
-  separate context-sidecar inspection operation; topology, serialization, and
-  lock-registry details are internal.
+  `initialize_workspace`. Package-internal `open_workspace_root_directory` and
+  `verify_workspace_root_directory` provide the diagnostic storage boundary and
+  are deliberately absent from the project-root facade.
+  `Workspace.inspect_debate_context` is the strict, separate context-sidecar
+  inspection operation; topology, serialization, and lock-registry details are
+  internal.
 - **Direct internal dependencies:** `agents`, `conversations`, `errors`, and
   `models`.
 - **State, resources, and side effects:** Owns topology, path and symlink
-  security, strict UTF-8 and JSON I/O, overrides, agent and debate state, logs,
-  results, per-conversation metadata under
+  security, and each instance's canonical-root identity lifecycle. Construction
+  makes one nonmutating no-follow identity probe and retains no descriptor: an
+  existing directory binds immediately, while a specifically missing root
+  remains pending for its first valid `initialize()` attempt. Invalid
+  `overwrite_prompts` input raises `TypeError` before I/O without consuming that
+  attempt. A first valid pending attempt becomes terminal before capability
+  checks or mutation and preflights the required descriptor-relative directory
+  and atomic-file primitives. It walks or creates canonical-root components
+  without following names, verifies the opened and named root identities, and
+  retains the root descriptor throughout pending topology and default writes.
+  Directory and file-parent traversal stays beneath that descriptor. File
+  installation stages an exclusive temporary regular file, keeps create-only
+  and prompt-overwrite handling distinct, and verifies the staged and installed
+  identities. After all writes, initialization rewalks the canonical root and
+  matches it to the retained identity. Owned descriptors follow exact-once
+  cleanup, and the instance records success only after final root-descriptor
+  cleanup completes. Missing primitives raise `OSError` before mutation. The
+  exact first `OSError`, `KeyboardInterrupt`, or `SystemExit` from initialization
+  or final cleanup propagates unchanged; cleanup does not replace an active
+  failure, and created components or intended partial data are not rolled back.
+  After any earlier failure, every later `initialize()` call raises the
+  established identity-unavailable `OSError` before all filesystem operations
+  without retry or rebind. Roots existing at construction, repeated successful
+  calls, and ordinary post-initialization path operations retain their
+  established behavior; a new `Workspace` performs its own construction probe.
+  An existing root whose
+  initial probe is unavailable or nonmeaningful remains in the distinct
+  unavailable state: diagnostic helper access fails closed without rebinding,
+  while established pathname-based initialization may still scaffold it. The
+  package-internal helpers open and reverify the bound named root and descriptor;
+  once a meaningful identity is bound, a later named or opened symlink,
+  non-directory, or identity replacement raises
+  `WorkspaceSecurityError`, while an unsupported safe primitive raises an
+  ordinary `OSError`. Retained identity protects internal diagnostic storage,
+  not ordinary domain operations: public path I/O remains pathname-based and
+  nontransactional and may observe a real directory installed later at the same
+  root path. The module also owns strict UTF-8 and
+  JSON I/O, overrides, agent and debate state, logs, results, per-conversation
+  metadata under
   `discussion_logs/<session_id>/interactive/conversations/<conversation_id>/metadata.json`,
   authoritative visible events under
   `discussion_logs/<session_id>/interactive/conversations/<conversation_id>/transcript.jsonl`,
@@ -1585,12 +1804,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   colliding files, and return `None` when absent for legacy debates. A
   guarded process-wide weak lock registry serializes operations per
   workspace/session/conversation. The fixed initialized topology includes
-  `agent_states/orchestrator_state/conversation_defaults`; new workspaces also
-  receive the canonical seven-key system-default document with null Codex
-  model/reasoning and Antigravity model/effort values, plus canonical seven-key
-  per-agent entries with Codex as the backend and null language, persona, and
-  both providers' model/effort values. Existing configuration bytes are never
-  migrated or rewritten by initialization. `cli_context` owns the schema stored
+  `agent_states/orchestrator_state/conversation_defaults` and `debug_logs`;
+  existing initialized workspaces need neither directory until the corresponding
+  owning feature first creates it lazily. `debug_log`, not `Workspace`, owns the
+  files, lock, schema, append, and rotation inside the diagnostic directory. New
+  workspaces also receive the canonical seven-key system-default document with
+  null Codex model/reasoning and Antigravity model/effort values, plus canonical
+  seven-key per-agent entries with Codex as the backend and null language,
+  persona, and both providers' model/effort values. Existing configuration
+  bytes are never migrated or rewritten by initialization. `cli_context` owns
+  the schema stored
   in the conversation-default directory. The backend-owned story-session
   process-access claim remains the cross-process same-session write guard.
   Catalog and absent-transcript reads do not create storage. Transcript access
@@ -1599,7 +1822,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   catalog validation and one authoritative transcript read, then delegates the
   pure fixed-policy selection to `conversations`.
 - **Primary verification/documentation:** `tests/test_workspace_and_config.py`,
-  `tests/test_agent_state.py`, `tests/test_lifecycle_atomicity.py`,
+  `tests/test_debug_log.py`, `tests/test_agent_state.py`,
+  `tests/test_lifecycle_atomicity.py`,
   `tests/test_public_api_and_cli.py`, `tests/test_conversation_catalog.py`,
   `tests/conversation_event_store_contract.py`,
   `tests/test_conversation_event_store.py`,
@@ -1611,6 +1835,40 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 ## Consistency Notes
 
+- `Workspace` remains the sole containment and no-symlink authority, owns each
+  instance's immutable canonical-root identity and package-internal root
+  open/reverification policy, and declares the `debug_logs` scaffold.
+  `debug_log` depends one way on that non-facade seam and owns each attempt's
+  root and child descriptors, safe event schema, weak per-workspace process
+  locks, independent advisory guard, leaf mutation, regular-file and single-link
+  validation for guard/active/backup files, active/backup size validation,
+  expected rotation state, append rollback, bounded rotation, and cleanup. This
+  independent guard intentionally does not reuse the backend's private
+  access-claim lock: access claims fail closed, while ordinary diagnostic
+  `Exception` failures drop their record.
+  Process-control `BaseException` failures deliberately leave the low-level
+  surface, and `backend`, `cli`, `interactive_controller._core`, `orchestrator`,
+  and `smoke` each guard every trace and error call privately so diagnostics
+  never affect caller control flow. The five synchronous provider-free runtime
+  operations also attempt `cancelled`/`interrupted` records for application
+  `KeyboardInterrupt` or `SystemExit` before bare-reraising the identical
+  control. Explicit CLI smoke initializes and retains one identity-bearing
+  `Workspace`; smoke and every fresh workspace-bound service borrow that same
+  instance, so none can reacquire a replacement identity. Implicit smoke instead
+  owns its temporary workspace lifecycle. This diagnostic identity continuity
+  does not change ordinary pathname-based, nontransactional Workspace domain
+  I/O. CLI and smoke guard diagnostic-handle acquisition; CLI separately marks
+  hint eligibility after successful initialization or discovery, so an eligible
+  hint does not imply that a handle, record, or file exists. The diagnostics
+  module is not re-exported by the project facade, and its import and handle
+  construction perform no filesystem operation. A missing-root Workspace whose
+  one post-creation identity bind fails never retries and never writes child
+  scaffold/defaults on that instance, while an initially unavailable existing
+  root retains its distinct established behavior. Backend emission begins only
+  after its existing configuration snapshot validates, while runtime handle
+  construction emits no record. All five consumers use only the internal append
+  surface; none assumes ownership of diagnostic files, locks, schema, or
+  rotation.
 - `Workspace` initializes canonical seven-key system and per-agent configuration
   shapes but never rewrites existing documents. `ConfigManager` owns full
   system and per-agent schema validation, the exact Codex/Antigravity backend
@@ -1733,10 +1991,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   process-local per-session latest accepted STARTED debate IDs, transition and
   compensation ordering, retained runtime and memory-service wiring, one
   private lifecycle `asyncio.Runner`, controller-local interruption/progress
-  proof, and ordered Runner-close, known-access-release, and backend-close
-  coordination after its one run starts.
-  `AgentBackend` retains actual session access claims, manifests, subprocesses,
-  and provider-thread ownership; `ConversationCatalog` retains conversation
+  proof, and outer cleanup arbitration after its one run starts. That boundary
+  attempts Runner close, known-access release, backend close, and state clearing
+  in order; an uncaught body process control outranks the first cleanup process
+  control, later stages still run, and the retained exact object and originating
+  traceback propagate only afterward. It alone owns Runner-retention and final
+  controller-state clearing decisions.
+  `AgentBackend` retains actual session access claims, manifests, and provider-
+  thread coordination; provider adapters retain binding, staging, and provider-
+  native state, while `provider_process` owns subprocess resources;
+  `ConversationCatalog` retains conversation
   metadata ownership; `cli_context` owns both session and per-session
   conversation-default persistence; and `interactive_terminal` retains
   synchronous I/O and presentation ownership. Interactive advisory content
@@ -1802,10 +2066,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   durable user append, all provider/actions/memory calls, and exactly one final
   reply or sanitized runtime-error append. Retrieval actions, observations,
   progress, and sources have no persistence schema or artifact.
-- `AgentBackend` owns the shared structured Codex subprocess, thread,
-  per-call timeout, cancellation, and taint lifecycle; it drains both subprocess
-  streams, discards nonzero-exit stderr without decoding it, and uses fixed
-  provider-value-free process/response-validation diagnostics.
+- `AgentBackend` owns provider-neutral structured request/reply schemas, thread
+  persistence, per-call timeout, cancellation, and taint coordination. Concrete
+  adapters own provider-specific binding, command, staging, protocol parsing,
+  and safe diagnostics, while `provider_process` owns bounded subprocess launch,
+  concurrent stream draining, timeout/cancellation termination, and cleanup.
   `BoundAgent` is the immutable per-definition dispatch handle for debate,
   one-step conversation, and retrieval calls. The backend owns retrieval
   provider schemas, initial/continuation payloads, repeated calls, and framing

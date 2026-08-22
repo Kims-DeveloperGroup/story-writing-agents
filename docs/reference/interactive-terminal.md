@@ -54,7 +54,8 @@ write_status(kind: TerminalMessageKind, text: str) -> None
 write_run(debate_id: str, text: str) -> None
 write_agent(agent_id: str, text: str) -> None
 write_help(command: str | None = None) -> None
-write_error(error: InteractiveError, *, secrets=()) -> None
+write_error(error: InteractiveError, *, secrets=(),
+            debug_log_path: str | None = None) -> None
 sanitize_terminal_text(text: str) -> str
 ```
 
@@ -792,7 +793,9 @@ result, hint, or context record. Attached state remains unchanged.
 
 The controller classifies 36 codes; the terminal accepts no exceptions.
 `write_error()` redacts secrets, caps summary/hint at 512/256 characters, and
-writes one semantic `Panel` and one callback record:
+writes one semantic `Panel` and one callback record. Omitting
+`debug_log_path`, or passing `None`, preserves the established two-notice
+record exactly:
 
 ```text
 --- Interactive error [error] ---
@@ -800,6 +803,21 @@ writes one semantic `Panel` and one callback record:
   [hint] HINT
 ---------------------------------
 ```
+
+A supplied `debug_log_path` must be nonblank, one-line, strict-UTF-8 display
+text. It is sanitized and appended to the same panel as exactly one third
+notice:
+
+```text
+  [debug log] PATH
+```
+
+This additive keyword does not resolve, open, validate as a filesystem path,
+or retain the value. Direct callers may still omit it. After workspace
+resolution, the installed interactive CLI and controller supply the exact text
+`If available, workspace-relative: debug_logs/runtime.jsonl`, producing the
+third `[debug log]` notice. Errors before workspace resolution retain the
+two-notice shape and disclose no debug-log path.
 
 It preserves the trusted code, summary, hint, order, limits, redaction, and
 failure behavior while allowing responsive wrapping and fixed decorative ANSI.
