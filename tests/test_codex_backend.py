@@ -80,6 +80,7 @@ from story_writing_agents.errors import (
 )
 from story_writing_agents.prompts import PromptAssembler
 from story_writing_agents.orchestrator import StoryRuntime
+from story_writing_agents.provider_process import ProcessRequest, run_process
 
 from tests.helpers import all_manuscripts, core_snapshot, initialized_workspace
 
@@ -2486,6 +2487,53 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             any(item.get("terminated") is True for item in self.invocations())
         )
+
+    async def test_unexpected_communication_failure_stops_process_and_propagates(
+        self,
+    ) -> None:
+        events: list[str] = []
+        failure = BrokenPipeError("provider communication failed")
+        communication = asyncio.Future()
+        communication.set_exception(failure)
+        stopped = asyncio.Future()
+        stopped.set_result(None)
+        process = mock.Mock(returncode=None)
+        process.communicate.side_effect = (
+            lambda data: events.append("communicate") or communication
+        )
+        process.terminate.side_effect = lambda: events.append("terminate")
+        process.wait.side_effect = lambda: events.append("wait") or stopped
+        process.kill.side_effect = lambda: events.append("kill")
+
+        async def create_process(*command, **launch_options):
+            events.append("launch")
+            return process
+
+        async def wait_for(awaitable, *, timeout):
+            if awaitable is communication:
+                self.assertEqual(timeout, 5)
+            else:
+                self.assertIs(awaitable, stopped)
+                self.assertEqual(timeout, 2)
+            return await awaitable
+
+        with self.assertRaises(BrokenPipeError) as caught:
+            await run_process(
+                ProcessRequest(
+                    command=("provider",),
+                    stdin=b"payload",
+                    timeout_seconds=5,
+                ),
+                create_process=create_process,
+                wait_for=wait_for,
+            )
+
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(events, ["launch", "communicate", "terminate", "wait"])
+        process.communicate.assert_called_once_with(b"payload")
+        process.terminate.assert_called_once_with()
+        process.wait.assert_called_once_with()
+        process.kill.assert_not_called()
 
     async def test_process_stop_escalates_from_terminate_to_kill(self) -> None:
         events: list[str] = []
