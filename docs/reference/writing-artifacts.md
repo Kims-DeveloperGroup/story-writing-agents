@@ -3,11 +3,13 @@
 > **Availability:** unanimous consensus can publish the canonical files on this
 > page. The runtime uses their provenance catalog when supplying core context to
 > story agents. The `writing_artifacts` Python subpackage can parse content-free
-> reference directives and exposes the repository authorization and evidence
-> values described below for Python/internal consumers. `StoryRuntime`, provider
-> read actions, story agents, and the installed shell do not use that foundation
-> yet. Standalone artifact commands, interactive `$`/`$$` completion and
-> selection, artifact attachment, and enforced agent reads remain unavailable.
+> reference directives and exposes the repository authorization, read-action,
+> and evidence values described below. For Python/internal callers,
+> `AgentBackend` can enforce a provider read prelude when it receives a private
+> repository coordinator. `StoryRuntime` and the installed shell do not create
+> or pass that coordinator yet. Standalone artifact commands, interactive
+> `$`/`$$` completion and selection, artifact attachment, and reference-specific
+> user output remain unavailable.
 
 This reference uses **writing artifact** only for agent-produced story output.
 Transcripts, discussion logs, provider state, agent state, configuration, role
@@ -144,12 +146,13 @@ an agent to read it, or activate `${...}`, `$`, or `$$` behavior in the shell.
 
 ## Authorized reads and lifecycle evidence
 
-> **Availability:** #191 implements repository authorization, transient
-> delivery, and durable content-free evidence for Python/internal consumers.
-> It does not connect parsed references to `StoryRuntime`, a provider action, a
-> story agent, or the installed shell. #189, #190, and #164 own those later
-> integrations. A recorded `delivered` event is therefore repository evidence,
-> not proof that an agent read or used the text.
+> **Availability:** repository authorization, transient delivery, and durable
+> content-free evidence are implemented for Python/internal consumers.
+> `AgentBackend` can now require one exact provider read action before one
+> referenced reply, but `StoryRuntime` does not propagate parsed references or
+> finalize their top-level operation yet. The installed shell has no attachment,
+> `$`/`$$`, picker, viewer, or reference-specific diagnostic behavior. Those
+> runtime and interactive integrations belong to #190 and #164.
 
 The `${canonical/path.md}` and `${canonical/path.md}#Lx-Ly` values remain
 content-free indicators. A caller holding `WritingArtifactRepository` can use
@@ -168,11 +171,14 @@ error contracts: `AuthorizedArtifactReference`, `ReferenceOperationManifest`,
 `ReferenceInvocationCorrelation`, `ReferenceEvidence`,
 `ReferenceOperationHistory`, `ReferenceOperationState`,
 `ReferenceInvocationState`, `ReferenceAuthorizationError`, and
-`ReferenceAuthorizationErrorCode`. The transient authorization, capability,
-and delivery carriers remain package-internal, hide content from `repr`, and
-reject serialization. Authorization and delivery values are closeable; the
-capability is one-use. Closing releases the runtime's references to their byte
-tuples; it does not guarantee memory zeroing.
+`ReferenceAuthorizationErrorCode`; plus the provider-neutral, content-free
+`ReferenceReadActionKind`, `ReferenceReadRequest`, and `ReferenceReadAction`.
+`WritingArtifactRepository.begin_reference_invocation()` creates the private
+synchronous coordinator that owns one repository-minted capability. The
+coordinator, capability, delivery, and content-bearing `ReferenceReadResult`
+remain package-internal. Content carriers hide content from `repr`, reject
+serialization, and are closeable; the capability is one-use. Closing releases
+the runtime's references to byte tuples but does not guarantee memory zeroing.
 
 ### What the states mean
 
@@ -185,20 +191,20 @@ serialized with the lowercase values shown in the table.
 | `requested` | The create-only operation manifest and first evidence event exist before catalog or artifact reads. | A reference attempt was recorded. No bytes have been authorized. |
 | `captured` | Every ordered reference was eligible, selected, hashed, and held in one immutable in-memory capture. | The recorded provenance and selected-byte proof were valid at capture time. |
 | `revalidated` | Full catalog provenance and current file hash still match the capture at a caller-named checkpoint. | The captured identity was still current at that checkpoint; the event does not refresh the captured bytes. |
-| `accepted` | Final revalidation succeeded and all invocations are terminal, with at least one accepted invocation. | The repository-side reference operation completed successfully. This is not agent-read proof. |
+| `accepted` | Final revalidation succeeded and all invocations are terminal, with at least one accepted invocation. | The repository-side reference operation completed successfully. The #189 backend accepts an invocation but does not finalize this operation for `StoryRuntime`. |
 | `terminated` | A fixed coded cancellation, provider, workflow, authorization, drift, or evidence failure ended the operation. | The operation was not accepted; the content-free outcome identifies the failure category. |
 
 Each invocation follows `AUTHORIZED` → `DELIVERED` → `RESULT_RECEIVED` →
 `ACCEPTED`, with `TERMINATED` available from any nonterminal state. It has its
 own ordered history:
 
-| Invocation state | Internal event | What an inspecting caller can conclude |
+| Invocation state | Internal event | Current external meaning |
 | --- | --- | --- |
-| `authorized` | The repository persisted correlation and issued one private capability for the captured batch. | One exact invocation attempt was authorized; no content has been returned. |
-| `delivered` | The capability was consumed, the source was revalidated, and evidence was persisted before the transient bytes were returned. | Repository delivery occurred for that exact batch. It does not prove provider or agent use. |
-| `result_received` | The caller explicitly recorded that an invocation result was received. | A result claim exists; #191 itself did not invoke a provider. |
-| `accepted` | Another full revalidation succeeded after the recorded result. | The repository accepted that invocation's evidence chain. |
-| `terminated` | A fixed coded failure ended the invocation. | The attempt cannot continue; a retry needs a newly issued capability and keeps the original captured snapshot. |
+| `authorized` | The repository persisted correlation and issued one private capability for the captured batch. | One exact attempt is authorized. No provider content or user-visible output exists, and the capability never enters a provider payload. |
+| `delivered` | The capability was consumed, the source was revalidated, and evidence was persisted before transient bytes were returned. | On the #189 backend path, the provider first returned the complete exact action and the bytes are ready for its immediately following call. This state alone does not prove remote receipt or use. |
+| `result_received` | The caller recorded that a substantive invocation result was received. | The #189 backend records this only after structurally decoding the substantive result. Direct repository callers can make the same claim, so the event is not proof of comprehension or obedience. |
+| `accepted` | Another full revalidation succeeded after the recorded result. | The exact invocation evidence chain was accepted before the #189 backend returned its reply. There is no CLI/reference-specific display yet. |
+| `terminated` | A fixed coded failure ended the invocation. | No accepted reply exists for the attempt. A retry needs a fresh correlation, coordinator, and one-use capability; it cannot reuse this evidence. |
 
 The durable history contains ordered path and optional range, full catalog
 provenance, selected SHA-256 and byte count, source line count, agent/invocation
@@ -206,6 +212,38 @@ correlation, lifecycle state, checkpoint, and terminal outcome. It contains no
 artifact text, captured bytes, parser source/provider text, provider prompt, or
 provider result. Baseline core-context reads do not create this history and
 cannot satisfy an explicit-reference evidence requirement.
+
+### Provider-enforced invocation sequence
+
+The backend seam is separate from parsing and from the ordinary request
+models. An internal caller first captures a nonempty batch and calls
+`begin_reference_invocation()` with one complete correlation. Then:
+
+1. `BoundAgent` validates a synchronous coordinator and the addressed agent,
+   phase, and round before provider work.
+2. Under the same provider-thread lock as the substantive work, the backend
+   sends one content-free prelude containing only the operation/invocation
+   correlation, ordered canonical path/range indicators, and fixed rules.
+3. A request-specific schema and exact equality check require the provider's
+   first action to echo the complete ordered batch. Result-first, partial,
+   reordered, duplicate, broadened, foreign, and malformed actions fail.
+4. Only after that action does the coordinator consume its capability. The
+   backend decodes the selected strict-UTF-8 bytes and adds them once, in the
+   same order, under `untrusted_writing_artifact_context` on the immediately
+   following substantive payload.
+5. A structurally valid result advances through `result_received`, final
+   repository revalidation, and `accepted` before the backend returns it.
+
+The selected content is not copied into the task, user text, candidate,
+blackboard messages, conversation history, retrieval observations, durable
+evidence, or diagnostics. An accepted invocation proves the exact read request,
+delivery sequence, substantive result, and final revalidation. It does not
+prove that a model understood, followed, or correctly applied the content.
+All four canonical roles use the same structural `BoundAgent` path; role-prompt
+prose is not the enforcement mechanism. See the exact
+[backend seam](backend-and-sessions.md#referenced-invocation-boundary),
+[provider data flow](../design/prompts-and-provider.md#explicit-reference-provider-flow),
+and [privacy boundary](../operations/privacy-and-provider.md#explicit-reference-data-boundary).
 
 ### Capture, limits, and revalidation
 
@@ -255,6 +293,30 @@ For example:
 ```text
 /run --output part-01/planning/baseline.md Establish the agreed outline, character facts, and narrative rules, then produce the approved baseline.
 ```
+
+### Future explicit-reference scenarios
+
+The following are concrete integration targets for #190 and #164. They are not
+executable shell reference syntax in #189: the shell currently submits the
+text without attaching a batch, and `StoryRuntime` does not create the required
+coordinators.
+
+- Outline review: `@plot Compare ${core_documents/global_outline.md} and ${manuscript/part-01/scenes/opening.md}#L40-L65, then propose the smallest outline adjustment.`
+  The future integration must make the plot architect request both references
+  in that order before accepting its advisory reply.
+- Character-sheet review: `@character Check ${core_documents/character_sheets.md}, ${manuscript/part-01/scenes/opening.md}#L12-L24, and ${manuscript/part-01/scenes/aftermath.md}#L3-L18 for continuity.`
+  One exact three-reference batch is required; partial or reordered reads fail.
+- Narrative-rule review: `@execution Apply ${core_documents/narrative_rules.md}#L8-L20 when reviewing ${manuscript/part-01/scenes/opening.md}#L66-L90.`
+  Both selected ranges must reach the one substantive call as untrusted
+  reference context.
+- Manuscript revision: `/run --output part-01/revisions/opening-r2.md Revise ${manuscript/part-01/scenes/opening.md} using ${core_documents/part_outlines.md}#L30-L52.`
+  The future runtime must give every addressed agent, phase, round, attempt, or
+  replacement an independent correlation and read lifecycle over the same
+  captured top-level batch.
+
+The first three advisory requests can propose changes but cannot publish them.
+Only the existing unanimous consensus workflow can replace a core document or
+publish a new part-scoped manuscript path.
 
 An ordinary advisory message can help refine the request but cannot write a
 core document or manuscript. During a consensus run, the execution specialist

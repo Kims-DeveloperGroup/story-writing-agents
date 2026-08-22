@@ -154,11 +154,16 @@ non-artifact workspace/runtime APIs remain usable.
 
 ## Explicit-reference evidence recovery
 
-The #191 repository foundation persists content-free reference-operation and
-invocation history, but keeps authorization capabilities and selected bytes
-only in memory. After process loss, history can be inspected but an interrupted
-authorization cannot be resumed or used to reconstruct content. Start a new
-operation with a new ID after correcting any source problem.
+The repository persists content-free reference-operation and invocation
+history, while local authorization capabilities and selected-byte carriers
+remain transient. A provider may retain content after receipt as described in
+[Privacy and provider exposure](privacy-and-provider.md#explicit-reference-data-boundary).
+The #189 backend can drive an invocation through its exact provider action,
+delivery, result receipt, revalidation, and acceptance. It does not finalize
+the top-level `StoryRuntime` operation. After process loss, history can be
+inspected but an interrupted authorization cannot be resumed or used to
+reconstruct content. Start a new operation with a new ID after correcting any
+source problem.
 
 `inspect_reference_operation()` distinguishes absence from corruption. It
 returns no history only when the named operation directory is absent. If any
@@ -182,9 +187,20 @@ or invocation is final. A failed invocation retry requires a fresh one-use
 capability over the same still-open capture, while a closed or process-lost
 capture requires a new operation.
 
-This is currently a Python/internal recovery boundary. `StoryRuntime`, provider
-read actions, story agents, and installed `${...}`, `$`, and `$$` interaction
-do not yet drive or expose these states; #189, #190, and #164 own that work.
+The backend does not retry automatically. An explicit retry or replacement
+needs a fresh invocation ID, ordinal/attempt correlation, private coordinator,
+and one-use capability; it cannot reuse terminal evidence. Cancellation,
+provider or workflow failure, drift, malformed or nonexact provider action,
+and wrong correlation terminate the current coordinator with a fixed
+content-free outcome. Once the provider sequence advances, the backend
+best-effort taints the compatible thread where required so later work cannot
+assume a clean continuation. The original failure remains primary.
+
+This remains a Python/internal recovery boundary. `StoryRuntime` and the
+installed `${...}`, `$`, and `$$` interaction do not create, finalize, or expose
+these states. #190 owns top-level operation capture, per-invocation ordinals,
+attempts, retries, replacements, and diagnostics; #164 owns shell attachment
+and selection behavior.
 
 ## Controller cancellation proof
 
@@ -238,9 +254,10 @@ work; the newest desired definition is selected instead.
 - Advisory input is one line; `/run --output PART/PATH.md` without prompt text
   owns multiline composition. Bare `/run` first prompts for the output.
 - Conversation search is active-only; transcript reads retain no cursor.
-- The parser and repository authorization/evidence foundation exist for
-  Python/internal consumers, but standalone compose/artifact commands,
-  artifact-reference UI, provider read actions, and enforced agent reads are
+- Parsing, repository authorization/evidence, and optional provider-enforced
+  `BoundAgent` reads exist for Python/internal consumers. Standalone
+  compose/artifact commands, top-level `StoryRuntime` reference propagation,
+  artifact-reference UI, and reference-specific user diagnostics remain
   unavailable.
 
 See [Session lifecycle](../design/session-lifecycle.md),

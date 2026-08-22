@@ -2,7 +2,9 @@
 
 > **Availability:** these models are Python APIs. Debate requests can carry an
 > optional conversation snapshot; one-step and retrieval turns use separate,
-> compatible request families.
+> compatible request families. Content-free explicit-reference read contracts
+> are available to internal/Python backend callers, but `StoryRuntime` and the
+> installed shell do not construct them yet.
 
 Key terms: **definition**—stable context bound to one agent; **request**—dynamic
 data for one provider call; **blackboard**—public debate messages;
@@ -47,6 +49,45 @@ paths allowlisted for that role. Each repository-verified
 same immutable bytes. Role-prompt and persona references are captured from
 their paths at definition construction; all references are content-backed by
 the time the backend receives the definition.
+
+<a id="explicit-reference-read-contracts"></a>
+
+## Explicit-reference read contracts
+
+Import the public values from `story_writing_agents.writing_artifacts`:
+
+```python
+ReferenceInvocationCorrelation(
+    operation_id: str, invocation_id: str, invocation_ordinal: int,
+    agent_id: str, phase: str, round_number: int | None, attempt: int,
+)
+ReferenceReadRequest(
+    correlation: ReferenceInvocationCorrelation,
+    references: tuple[ArtifactReference, ...],
+)
+ReferenceReadAction(
+    kind: ReferenceReadActionKind,
+    correlation: ReferenceInvocationCorrelation,
+    references: tuple[ArtifactReference, ...],
+)
+ReferenceReadActionKind.READ_WRITING_ARTIFACTS
+```
+
+The request and action are frozen, slotted, nonempty, ordered, and
+content-free. They contain only complete invocation correlation and canonical
+path/range indicators. The action kind is fixed, and an acceptable action must
+equal its request's complete correlation and reference tuple exactly.
+
+The module-supported synchronous `ReferenceReadInvocation` protocol and its
+closeable, content-bearing `ReferenceReadResult` are backend/repository
+collaborators rather than subpackage exports. A repository-created coordinator
+owns the private one-use capability and exposes only its content-free request
+to the backend. References remain a separate keyword-only backend argument;
+they are not fields of `AgentRequest`, `ConversationRequest`, or
+`ConversationRetrievalRequest`, and are not concatenated into task, user,
+candidate, messages, agent state, conversation history, or retrieval
+observations. See the
+[backend boundary](backend-and-sessions.md#referenced-invocation-boundary).
 
 ## Debate request
 

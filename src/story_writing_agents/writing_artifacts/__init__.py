@@ -37,6 +37,11 @@ from .references import (
     ArtifactReferenceBatch,
     ArtifactReferenceDirectiveError,
 )
+from .read_actions import (
+    ReferenceReadAction,
+    ReferenceReadActionKind,
+    ReferenceReadRequest,
+)
 
 __all__ = (
     "CORE_ARTIFACT_PATHS",
@@ -62,6 +67,9 @@ __all__ = (
     "ReferenceOperationHistory",
     "ReferenceOperationManifest",
     "ReferenceOperationState",
+    "ReferenceReadAction",
+    "ReferenceReadActionKind",
+    "ReferenceReadRequest",
     "canonical_artifact_kind",
     "manuscript_artifact_path",
     "parse_artifact_references",

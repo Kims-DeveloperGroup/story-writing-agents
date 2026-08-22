@@ -45,6 +45,13 @@ from .references import (
     ArtifactReference,
     ArtifactReferenceBatch,
 )
+from .read_actions import (
+    ReferenceReadAction,
+    ReferenceReadActionKind,
+    ReferenceReadInvocation,
+    ReferenceReadRequest,
+    ReferenceReadResult,
+)
 
 
 _STATE_DIRECTORY = "agent_states/orchestrator_state/writing_artifacts"
@@ -245,6 +252,27 @@ class WritingArtifactRepository:
             authorized_references=references,
             owner=self._reference_authorization_owner,
         )
+
+    def begin_reference_invocation(
+        self,
+        authorization: ReferenceAuthorization,
+        correlation: ReferenceInvocationCorrelation,
+    ) -> ReferenceReadInvocation:
+        """Begin one provider-observed read invocation over a captured batch."""
+
+        if type(authorization) is not ReferenceAuthorization:
+            raise TypeError("authorization must be a ReferenceAuthorization")
+        if type(correlation) is not ReferenceInvocationCorrelation:
+            raise TypeError("correlation must be a ReferenceInvocationCorrelation")
+        request = ReferenceReadRequest(
+            correlation,
+            authorization.manifest.references,
+        )
+        capability = self.authorize_reference_invocation(
+            authorization,
+            correlation,
+        )
+        return _RepositoryReferenceReadInvocation(self, request, capability)
 
     def deliver_authorized_references(
         self,
@@ -1597,6 +1625,167 @@ class WritingArtifactRepository:
         if cause is not None:
             raise error from cause
         raise error
+
+
+class _RepositoryReferenceReadInvocation:
+    """Repository-local owner of one capability and its transient result."""
+
+    __slots__ = (
+        "_capability",
+        "_lock",
+        "_repository",
+        "_request",
+        "_result",
+        "_state",
+    )
+
+    def __init__(
+        self,
+        repository: WritingArtifactRepository,
+        request: ReferenceReadRequest,
+        capability: ReadCapability,
+    ) -> None:
+        self._repository = repository
+        self._request = request
+        self._capability = capability
+        self._lock = threading.Lock()
+        self._result: ReferenceReadResult | None = None
+        self._state = "authorized"
+
+    @property
+    def request(self) -> ReferenceReadRequest:
+        return self._request
+
+    def handle_reference_read_action(
+        self,
+        action: ReferenceReadAction,
+    ) -> ReferenceReadResult:
+        """Deliver bytes only for the exact first complete provider action."""
+
+        with self._lock:
+            if self._state != "authorized":
+                self._terminate_without_replacing(
+                    ReferenceAuthorizationErrorCode.INVALID_TRANSITION
+                )
+                raise ReferenceAuthorizationError(
+                    ReferenceAuthorizationErrorCode.INVALID_TRANSITION
+                )
+            expected = ReferenceReadAction(
+                ReferenceReadActionKind.READ_WRITING_ARTIFACTS,
+                self.request.correlation,
+                self.request.references,
+            )
+            if type(action) is not ReferenceReadAction or action != expected:
+                self._terminate_without_replacing(
+                    ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH
+                )
+                raise ReferenceAuthorizationError(
+                    ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH
+                )
+            try:
+                delivery = self._repository.deliver_authorized_references(
+                    self._capability,
+                    action.references,
+                )
+            except ReferenceAuthorizationError:
+                self._state = "terminated"
+                self._close_result()
+                raise
+            except BaseException:
+                self._terminate_without_replacing(
+                    ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE
+                )
+                raise
+            try:
+                try:
+                    result = ReferenceReadResult(
+                        self.request,
+                        delivery.contents,
+                    )
+                finally:
+                    delivery.close()
+            except BaseException:
+                self._terminate_without_replacing(
+                    ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE
+                )
+                raise
+            self._result = result
+            self._state = "delivered"
+            return result
+
+    def record_result_received(self) -> None:
+        """Close selected bytes and persist the provider-result transition."""
+
+        with self._lock:
+            if self._state != "delivered":
+                raise ReferenceAuthorizationError(
+                    ReferenceAuthorizationErrorCode.INVALID_TRANSITION
+                )
+            self._close_result()
+            self._repository.record_reference_result_received(self._capability)
+            self._state = "result_received"
+
+    def accept(self) -> None:
+        """Revalidate and accept this invocation exactly once."""
+
+        with self._lock:
+            if self._state != "result_received":
+                raise ReferenceAuthorizationError(
+                    ReferenceAuthorizationErrorCode.INVALID_TRANSITION
+                )
+            self._close_result()
+            try:
+                self._repository.accept_reference_invocation(self._capability)
+            except ReferenceAuthorizationError:
+                self._state = "terminated"
+                raise
+            except BaseException:
+                self._terminate_without_replacing(
+                    ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE
+                )
+                raise
+            self._state = "accepted"
+
+    def terminate(self, outcome: ReferenceAuthorizationErrorCode) -> None:
+        """Close selected bytes and durably retire this invocation."""
+
+        if type(outcome) is not ReferenceAuthorizationErrorCode:
+            raise TypeError("outcome must be a ReferenceAuthorizationErrorCode")
+        with self._lock:
+            if self._state in {"accepted", "terminated"}:
+                raise ReferenceAuthorizationError(
+                    ReferenceAuthorizationErrorCode.INVALID_TRANSITION
+                )
+            self._close_result()
+            self._repository.terminate_reference_invocation(
+                self._capability,
+                outcome,
+            )
+            self._state = "terminated"
+
+    def _close_result(self) -> None:
+        if self._result is not None:
+            self._result.close()
+            self._result = None
+
+    def _terminate_without_replacing(
+        self,
+        outcome: ReferenceAuthorizationErrorCode,
+    ) -> None:
+        """Best-effort retire while preserving the caller's primary failure."""
+
+        if self._state in {"accepted", "terminated"}:
+            self._close_result()
+            return
+        self._close_result()
+        try:
+            self._repository.terminate_reference_invocation(
+                self._capability,
+                outcome,
+            )
+        except BaseException:
+            pass
+        self._state = "terminated"
 
 
 class _RepositoryLock:

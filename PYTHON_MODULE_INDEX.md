@@ -16,7 +16,7 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 41.
+Importable production units indexed: 42.
 
 ## Current Dependency Direction
 
@@ -37,7 +37,7 @@ __main__ -> cli -> interactive_controller -> interactive_controller._core
                  |               -> errors/models/session_lifecycle/workspace
                  |               -> writing_artifacts/writing_artifacts.repository
                  -> backend -> config/conversation_retrieval/workspace/models/errors/agents
-                 |          -> session_lifecycle
+                 |          -> session_lifecycle/writing_artifacts.read_actions
                  -> cli_context -> workspace/errors/agents
 
 interactive_controller._core -> interactive_controller._session_policy
@@ -78,13 +78,14 @@ models -> conversations/agents/errors
 session_lifecycle -> (standard library only)
 workspace -> conversations -> agents/errors
           -> models/writing_artifacts
-writing_artifacts -> writing_artifacts.authorization/catalog/directives/references
+writing_artifacts -> writing_artifacts.authorization/catalog/directives/read_actions/references
 writing_artifacts.authorization -> writing_artifacts.catalog/references
 writing_artifacts.directives -> writing_artifacts.references
+writing_artifacts.read_actions -> writing_artifacts.authorization/references
 writing_artifacts.references -> writing_artifacts.catalog
 writing_artifacts._reference_evidence -> writing_artifacts._storage/authorization
 writing_artifacts.repository -> agents/errors/writing_artifacts._reference_evidence
-                             -> writing_artifacts._storage/authorization/catalog/references
+                             -> writing_artifacts._storage/authorization/catalog/read_actions/references
 writing_artifacts._storage -> errors
 ```
 
@@ -206,8 +207,11 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Supported surface:** Package-supported `AgentBackend` and `BoundAgent`.
   `BoundAgent` exposes structured debate `invoke` and one-turn conversation
   `converse` operations plus additive bounded
-  `converse_with_retrieval(request, handler)`. In addition to provider binding
-  and cleanup, `AgentBackend` exposes the exact lifecycle operations
+  `converse_with_retrieval(request, handler)`. Each operation also accepts the
+  optional keyword-only, synchronous `reference_read` coordinator; omitting it
+  preserves the exact established provider payload, schema, call count, and
+  repository-I/O-free path. In addition to provider binding and cleanup,
+  `AgentBackend` exposes the exact lifecycle operations
   `get_session_lifecycle(session_id)`, `list_session_lifecycles()`,
   `validate_provider_configuration(session_id)`,
   `acquire_session_access(session_id)`, `release_session_access(session_id)`,
@@ -221,7 +225,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   exposing or mutating backend collections.
 - **Direct internal dependencies:** `agents`, `config`,
   `conversation_retrieval`, `errors`, `models`, `session_lifecycle`, and
-  `workspace`.
+  `workspace`, plus the provider-neutral
+  `writing_artifacts.read_actions` boundary.
 - **State, resources, and side effects:** Owns Codex subprocesses, temporary
   prompt/output staging from immutable `PromptFileReference` bytes (never by
   reopening their lexical source paths), exact V2 provider-session manifests at
@@ -258,7 +263,21 @@ every intermediate arrow. The current runtime graph is acyclic.
   provider-value-free process/response-validation diagnostics. It drains both
   subprocess output streams but discards and never decodes stderr after a
   nonzero Codex exit; it receives no memory service and performs no retrieval
-  search or transcript-storage call. Debate requests add the canonical
+  search or transcript-storage call. For a referenced logical invocation, the
+  same thread lock first runs one strict content-free read-action prelude. The
+  provider must echo the exact correlation and complete ordered path/range
+  batch under a request-specific output schema before the synchronous
+  coordinator can expose bytes. The backend frames those bytes once, in order,
+  as `untrusted_writing_artifact_context` only on the next substantive provider
+  payload, closes the transient result, and returns the reply only after
+  result-received and acceptance callbacks succeed. Direct and debate work add
+  one physical prelude call; retrieval places that prelude outside its unchanged
+  one-to-five-call action budget and supplies the frame only to retrieval call
+  one. Malformed, mismatched, broadened, partial, repeated, provider, drift,
+  workflow, interruption, and cancellation failures terminate with content-free
+  outcomes; any failure after a persisted successful prelude best-effort taints
+  the provider thread without replacing the primary exception. Debate requests
+  add the canonical
   included-context event list to provider payloads only when present; absent
   and fresh context requests retain the exact context-free payload. At
   construction it validates and snapshots the complete workspace system and
@@ -1597,19 +1616,23 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ReferenceAuthorizationError`, `ReferenceOperationManifest`,
   `ReferenceOperationState`, `ReferenceInvocationCorrelation`,
   `ReferenceInvocationState`, `ReferenceEvidence`, and
-  `ReferenceOperationHistory`; plus `canonical_artifact_kind`,
-  `manuscript_artifact_path`, and `parse_artifact_references`. The filesystem
-  repository, evidence adapter, and transient content-bearing authorization,
-  capability, and delivery values are intentionally not re-exported.
+  `ReferenceOperationHistory`; content-free `ReferenceReadActionKind`,
+  `ReferenceReadRequest`, and `ReferenceReadAction`; plus
+  `canonical_artifact_kind`, `manuscript_artifact_path`, and
+  `parse_artifact_references`. The filesystem repository, evidence adapter,
+  synchronous read coordinator, and transient content-bearing authorization,
+  capability, delivery, and read-result values are intentionally not
+  re-exported.
 - **Direct internal dependencies:** `writing_artifacts.authorization`,
-  `writing_artifacts.catalog`, `writing_artifacts.directives`, and
-  `writing_artifacts.references`.
+  `writing_artifacts.catalog`, `writing_artifacts.directives`,
+  `writing_artifacts.read_actions`, and `writing_artifacts.references`.
 - **State, resources, and side effects:** Owns no state or resource. Importing
   the facade constructs only immutable metadata and performs no filesystem,
   provider, process, environment, or application-startup operation.
 - **Primary verification/documentation:** `tests/test_writing_artifacts.py`,
   `tests/test_artifact_reference_directives.py`,
   `tests/test_artifact_reference_authorization.py`,
+  `tests/test_artifact_reference_read_actions.py`,
   `tests/test_public_api_and_cli.py`, `tests/test_orchestration_workflow.py`,
   `docs/reference/writing-artifacts.md`, `docs/reference/workspace-api.md`, and
   `docs/design/persistence.md`.
@@ -1725,6 +1748,40 @@ every intermediate arrow. The current runtime graph is acyclic.
   `docs/operations/privacy-and-provider.md`, and
   `docs/operations/recovery-and-limitations.md`.
 
+### `story_writing_agents.writing_artifacts.read_actions`
+
+- **Source:** `src/story_writing_agents/writing_artifacts/read_actions.py`
+- **Responsibility:** Define provider-neutral contracts for one mandatory
+  writing-artifact read prelude.
+- **Supported surface:** Package-supported, frozen, content-free
+  `ReferenceReadActionKind`, `ReferenceReadRequest`, and
+  `ReferenceReadAction`, all re-exported by the writing-artifact facade.
+  Module-supported `ReferenceReadInvocation` is the synchronous coordinator
+  protocol consumed by the backend and implemented by the repository;
+  `ReferenceReadResult` is its closeable, content-bearing return. The same
+  module supplies its backend consumer with the exact line-range, reference,
+  correlation, and authorization-error types used by this protocol while
+  their stable package ownership remains with `references`, `authorization`,
+  and the writing-artifact facade.
+- **Direct internal dependencies:** `writing_artifacts.authorization` and
+  `writing_artifacts.references`.
+- **State, resources, and side effects:** Requests and actions contain only one
+  validated full invocation correlation and a nonempty exact ordered reference
+  tuple. Results retain only the corresponding tuple of selected bytes until
+  explicit or context-manager close, use identity equality, hide content from
+  `repr`, reject serialization, and drop their byte references on close without
+  promising memory zeroing. The protocol requires synchronous delivery,
+  result-received, acceptance, and termination methods. Construction and
+  import perform no filesystem, repository, provider, process, controller, or
+  application-startup operation.
+- **Primary verification/documentation:**
+  `tests/test_artifact_reference_read_actions.py`,
+  `tests/test_codex_backend.py`,
+  `tests/test_artifact_reference_authorization.py`,
+  `docs/reference/writing-artifacts.md`,
+  `docs/operations/privacy-and-provider.md`, and
+  `docs/operations/recovery-and-limitations.md`.
+
 ### `story_writing_agents.writing_artifacts._reference_evidence`
 
 - **Source:**
@@ -1830,12 +1887,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   unanimous `commit_consensus` operations; plus capture, invocation
   authorization, one-use delivery, result receipt, invocation acceptance or
   termination, operation revalidation or finalization, and content-free
-  evidence inspection for explicit reference reads. It is not exported by
-  either package facade.
+  evidence inspection for explicit reference reads. Its
+  `begin_reference_invocation(authorization, correlation)` factory returns the
+  package-private synchronous coordinator that alone owns one repository-minted
+  capability across provider action, delivery, result receipt, acceptance, or
+  termination. The repository is not exported by either package facade.
 - **Direct internal dependencies:** `agents`, `errors`,
   `writing_artifacts._reference_evidence`, `writing_artifacts._storage`,
-  `writing_artifacts.authorization`, `writing_artifacts.catalog`, and
-  `writing_artifacts.references`.
+  `writing_artifacts.authorization`, `writing_artifacts.catalog`,
+  `writing_artifacts.read_actions`, and `writing_artifacts.references`.
 - **State, resources, and side effects:** Owns a per-instance reentrant lock
   and the workspace-local permanent `.artifacts.lock`,
   `.artifacts.lock.anchor`, and `.artifacts.lock.ready` readiness triple.
@@ -1906,12 +1966,20 @@ every intermediate arrow. The current runtime graph is acyclic.
   correlations with the next positive ordinal and a new private capability
   identity over the same operation snapshot. Finalization disposes captured
   bytes only after a durable accepted or terminated event.
+  The private reference-read coordinator serializes its own state under one
+  call-local lock, rejects every action except the first exact request, converts
+  one repository delivery into one closeable read result, closes result bytes
+  before result-received evidence, and revalidates before acceptance. Repeated,
+  mismatched, failed, and explicitly terminated calls preserve the primary
+  failure while best-effort retiring the same capability; it performs no
+  provider call and exposes no capability identity.
   The repository owns all filesystem, recovery, and lock lifetime; the private
   evidence adapter owns only create-only schema mechanics, while authorization
   values own only transient bytes and one-use state.
 - **Primary verification/documentation:** `tests/test_writing_artifacts.py`,
   `tests/test_artifact_reference_authorization.py`,
   `tests/test_artifact_reference_evidence.py`,
+  `tests/test_artifact_reference_read_actions.py`,
   `tests/test_orchestration_workflow.py`, `tests/test_orchestration_safety.py`,
   `tests/test_smoke_cli.py`, `docs/reference/writing-artifacts.md`,
   `docs/reference/configuration/session-storage.md`,
@@ -1930,19 +1998,23 @@ every intermediate arrow. The current runtime graph is acyclic.
   provider, controller, terminal, picker, viewer, or composer integration;
   those workflows cannot treat a parsed directive as authorized content.
 
-- Explicit artifact reads remain a repository-owned authorization boundary.
-  `writing_artifacts.authorization` owns pure content-free contracts and the
-  only transient captured-byte values; `writing_artifacts._reference_evidence`
-  owns canonical create-only lifecycle records; and
-  `writing_artifacts.repository` alone owns secure reads, current-provenance
-  revalidation, the repository lease, and durable sequencing. One operation
-  snapshot never refreshes, each provider attempt receives a new one-use exact
-  batch capability, and delivery/acceptance/final workflow acceptance recheck
-  current bytes and provenance at their required boundaries. Evidence and
-  inspection never carry artifact bytes, source/provider text, prompts, or
-  diagnostics. No provider action, agent-role enforcement, runtime/controller
-  integration, `$`/`$$` UI, viewer, or composer behavior is implemented by
-  these modules.
+- Explicit artifact reads retain split, one-way ownership.
+  `writing_artifacts.authorization` owns pure content-free evidence contracts
+  and the captured authorization bytes; `writing_artifacts.read_actions` owns
+  the provider-neutral request/action/result/coordinator boundary;
+  `writing_artifacts._reference_evidence` owns canonical create-only lifecycle
+  records; and `writing_artifacts.repository` alone owns secure reads,
+  current-provenance revalidation, the repository lease, durable sequencing,
+  and each concrete one-use coordinator/capability. `backend` imports only the
+  read-action boundary: it validates the addressed agent/phase/round, requires
+  one complete exact action before bytes are delivered, frames those bytes once
+  for the next provider call, and accepts no substantive result before durable
+  result receipt and revalidation. One operation snapshot never refreshes and
+  every provider attempt retains an independent correlation and capability.
+  Evidence and inspection never carry artifact bytes, source/provider text,
+  prompts, or diagnostics. Top-level runtime/controller propagation and
+  operation finalization, `$`/`$$` UI, viewer, and composer behavior remain
+  absent from this implementation.
 
 - Canonical core context crosses the repository/provider boundary only as an
   `ArtifactContentSnapshot` converted to an immutable `PromptFileReference`.
