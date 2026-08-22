@@ -683,7 +683,7 @@ class AntigravityAdapter:
         finally:
             try:
                 shutil.rmtree(probe_directory, ignore_errors=True)
-            except BaseException:
+            except Exception:
                 pass
 
     def close(self) -> None:
