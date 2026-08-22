@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import errno
 import json
 import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -89,6 +92,39 @@ def _stream(
     ).encode("utf-8")
 
 
+def _mode(path: Path) -> int:
+    """Return only one path's no-follow permission bits."""
+
+    return stat.S_IMODE(os.lstat(path).st_mode)
+
+
+def _directory_snapshot(root: Path) -> tuple[int, tuple[tuple[object, ...], ...]]:
+    """Capture one outside directory's mode, namespace, modes, and bytes."""
+
+    entries = []
+    for path in sorted(root.rglob("*")):
+        value = os.lstat(path)
+        entries.append(
+            (
+                path.relative_to(root).as_posix(),
+                stat.S_IFMT(value.st_mode),
+                stat.S_IMODE(value.st_mode),
+                path.read_bytes() if stat.S_ISREG(value.st_mode) else None,
+            )
+        )
+    return _mode(root), tuple(entries)
+
+
+_NO_FOLLOW_DIRECTORY_HARDENING = "chmod" in {
+    getattr(operation, "__name__", None)
+    for operation in getattr(os, "supports_follow_symlinks", ())
+} or (
+    bool(getattr(os, "O_NOFOLLOW", 0))
+    and bool(getattr(os, "O_DIRECTORY", 0))
+    and hasattr(os, "fchmod")
+)
+
+
 class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
     """Verify binding, protocol, transport, and backend integration offline."""
 
@@ -160,6 +196,36 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             user_payload="PRIVATE_STORY_PAYLOAD",
         )
 
+    @staticmethod
+    def provider_invocation(session_id: str) -> ProviderInvocation:
+        """Build one minimal valid adapter invocation."""
+
+        return ProviderInvocation(
+            session_id=session_id,
+            schema={"type": "object"},
+            payload={"story": "PRIVATE_STORY_PAYLOAD"},
+            thread_id=None,
+        )
+
+    def directory_symlink(self, link: Path, target: Path) -> None:
+        """Create one directory symlink or precisely skip unsupported hosts."""
+
+        try:
+            link.symlink_to(target, target_is_directory=True)
+        except NotImplementedError as exc:
+            self.skipTest(f"directory symlinks are unsupported: {exc}")
+        except OSError as exc:
+            unsupported = {
+                errno.EACCES,
+                errno.EPERM,
+                errno.ENOSYS,
+                getattr(errno, "ENOTSUP", errno.EINVAL),
+                getattr(errno, "EOPNOTSUPP", errno.EINVAL),
+            }
+            if exc.errno in unsupported:
+                self.skipTest(f"directory symlinks are unsupported: {exc}")
+            raise
+
     def test_binding_is_stable_isolated_and_uses_private_rules(self) -> None:
         state_root = self.workspace.path("binding-state")
         adapter = self.adapter("binding-state")
@@ -220,6 +286,382 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                 "Antigravity agent definition is invalid",
             ):
                 adapter.bind(invalid)
+
+    @unittest.skipUnless(
+        os.name == "posix"
+        and hasattr(os, "umask")
+        and _NO_FOLLOW_DIRECTORY_HARDENING,
+        "requires supported POSIX no-follow directory hardening",
+    )
+    async def test_owned_directory_chains_are_private_without_changing_parent(
+        self,
+    ) -> None:
+        for label, preexisting in (("existing", True), ("new", False)):
+            with self.subTest(chain=label):
+                parent = self.workspace.path(f"mode-{label}-parent")
+                parent.mkdir()
+                parent.chmod(0o751)
+                if _mode(parent) != 0o751:
+                    self.skipTest("filesystem does not expose POSIX mode bits")
+                parent_sentinel = parent / "PARENT_SENTINEL.bin"
+                parent_sentinel.write_bytes(b"PRIVATE_PARENT_BYTES")
+                adapter = self.adapter(f"mode-{label}-parent/state")
+                definition_components = (
+                    adapter.state_root,
+                    adapter.state_root / "definitions",
+                    adapter.state_root / "definitions" / self.definition.agent_id,
+                    adapter.state_root
+                    / "definitions"
+                    / self.definition.agent_id
+                    / self.definition.fingerprint,
+                )
+                if preexisting:
+                    for directory in definition_components:
+                        directory.mkdir(exist_ok=True)
+                        directory.chmod(0o777)
+
+                process = mock.AsyncMock(
+                    return_value=ProcessResult(
+                        stdout=_stream(
+                            "mode-conversation",
+                            response="mode response",
+                        ),
+                        stderr=b"",
+                        returncode=0,
+                    )
+                )
+                previous_umask = os.umask(0)
+                try:
+                    with mock.patch(
+                        "story_writing_agents.antigravity_adapter.run_process",
+                        process,
+                    ):
+                        binding = adapter.bind(self.definition)
+                        runtime_root = (
+                            adapter.state_root
+                            / "sessions"
+                            / f"mode-{label}-session"
+                            / self.definition.agent_id
+                            / self.definition.fingerprint
+                        )
+                        runtime_components = (
+                            adapter.state_root / "sessions",
+                            adapter.state_root
+                            / "sessions"
+                            / f"mode-{label}-session",
+                            runtime_root.parent,
+                            runtime_root,
+                            runtime_root / "provider",
+                            runtime_root / "workspace",
+                        )
+                        if preexisting:
+                            adapter.state_root.chmod(0o777)
+                            for directory in runtime_components:
+                                directory.mkdir(exist_ok=True)
+                                directory.chmod(0o777)
+                            (runtime_root / "provider" / "native.bin").write_bytes(
+                                b"PRIVATE_PROVIDER_BYTES"
+                            )
+                            (runtime_root / "workspace" / "retained.bin").write_bytes(
+                                b"PRIVATE_WORKSPACE_BYTES"
+                            )
+                        result = await adapter.invoke(
+                            binding,
+                            self.provider_invocation(f"mode-{label}-session"),
+                        )
+                finally:
+                    os.umask(previous_umask)
+
+                self.assertEqual(
+                    result,
+                    ProviderResult("mode-conversation", "mode response"),
+                )
+                for directory in (*definition_components, *runtime_components):
+                    self.assertEqual(_mode(directory), 0o700, directory)
+                self.assertEqual(_mode(parent), 0o751)
+                self.assertEqual(
+                    parent_sentinel.read_bytes(),
+                    b"PRIVATE_PARENT_BYTES",
+                )
+                if preexisting:
+                    self.assertEqual(
+                        (runtime_root / "provider" / "native.bin").read_bytes(),
+                        b"PRIVATE_PROVIDER_BYTES",
+                    )
+                    self.assertEqual(
+                        (runtime_root / "workspace" / "retained.bin").read_bytes(),
+                        b"PRIVATE_WORKSPACE_BYTES",
+                    )
+                self.assertEqual(
+                    (runtime_root / "workspace" / "AGENTS.md").read_bytes(),
+                    (binding.staging_directory / "AGENTS.md").read_bytes(),
+                )
+                process.assert_awaited_once()
+
+    @unittest.skipUnless(
+        os.name == "posix"
+        and bool(getattr(os, "O_NOFOLLOW", 0))
+        and bool(getattr(os, "O_DIRECTORY", 0))
+        and hasattr(os, "fchmod"),
+        "requires POSIX no-follow chmod and fchmod seams",
+    )
+    async def test_mode_failures_are_best_effort_but_controls_propagate(
+        self,
+    ) -> None:
+        ordinary_cases = (
+            ("chmod OSError", "chmod", OSError(errno.ENOTSUP, "unsupported")),
+            ("fchmod AttributeError", "fchmod", AttributeError("unsupported")),
+            (
+                "fchmod NotImplementedError",
+                "fchmod",
+                NotImplementedError("unsupported"),
+            ),
+            ("fchmod OSError", "fchmod", OSError(errno.ENOSYS, "unsupported")),
+        )
+        real_chmod = os.chmod
+        for label, seam, failure in ordinary_cases:
+            with self.subTest(ordinary=label):
+                adapter = self.adapter(f"ordinary-mode-{seam}-{type(failure).__name__}")
+                adapter.state_root.mkdir(parents=True)
+                retained = adapter.state_root / "retained.bin"
+                retained.write_bytes(b"PRIVATE_RETAINED_BYTES")
+                process = mock.AsyncMock(
+                    return_value=ProcessResult(
+                        stdout=_stream("ordinary-mode", response="ok"),
+                        stderr=b"",
+                        returncode=0,
+                    )
+                )
+                with contextlib.ExitStack() as stack:
+                    if seam == "chmod":
+                        stack.enter_context(
+                            mock.patch.object(
+                                os,
+                                "supports_follow_symlinks",
+                                {real_chmod},
+                            )
+                        )
+                        stack.enter_context(
+                            mock.patch(
+                                "story_writing_agents.antigravity_adapter.os.chmod",
+                                side_effect=failure,
+                            )
+                        )
+                    else:
+                        stack.enter_context(
+                            mock.patch.object(os, "supports_follow_symlinks", set())
+                        )
+                        stack.enter_context(
+                            mock.patch(
+                                "story_writing_agents.antigravity_adapter.os.fchmod",
+                                side_effect=failure,
+                            )
+                        )
+                    stack.enter_context(
+                        mock.patch(
+                            "story_writing_agents.antigravity_adapter.run_process",
+                            process,
+                        )
+                    )
+                    binding = adapter.bind(self.definition)
+                    result = await adapter.invoke(
+                        binding,
+                        self.provider_invocation(f"ordinary-{seam}"),
+                    )
+
+                self.assertEqual(result, ProviderResult("ordinary-mode", "ok"))
+                self.assertEqual(retained.read_bytes(), b"PRIVATE_RETAINED_BYTES")
+                process.assert_awaited_once()
+
+        controls = (KeyboardInterrupt, SystemExit, asyncio.CancelledError)
+        for stage in ("bind", "invoke"):
+            for exception_type in controls:
+                with self.subTest(stage=stage, control=exception_type.__name__):
+                    adapter = self.adapter(
+                        f"control-mode-{stage}-{exception_type.__name__.lower()}"
+                    )
+                    if stage == "invoke":
+                        binding = adapter.bind(self.definition)
+                    failure = exception_type(f"PRIVATE_{stage.upper()}_CONTROL")
+                    forbidden_process = mock.AsyncMock(
+                        side_effect=AssertionError("provider process invoked")
+                    )
+                    with (
+                        mock.patch.object(os, "supports_follow_symlinks", set()),
+                        mock.patch(
+                            "story_writing_agents.antigravity_adapter.os.fchmod",
+                            side_effect=failure,
+                        ),
+                        mock.patch(
+                            "story_writing_agents.antigravity_adapter.run_process",
+                            forbidden_process,
+                        ),
+                        self.assertRaises(exception_type) as caught,
+                    ):
+                        if stage == "bind":
+                            adapter.bind(self.definition)
+                        else:
+                            await adapter.invoke(
+                                binding,
+                                self.provider_invocation(
+                                    f"control-{exception_type.__name__.lower()}"
+                                ),
+                            )
+
+                    self.assertIs(caught.exception, failure)
+                    forbidden_process.assert_not_awaited()
+
+    def test_definition_chain_rejects_links_and_non_directories(self) -> None:
+        for component_kind in ("state root link", "fingerprint link", "file"):
+            with self.subTest(component=component_kind), tempfile.TemporaryDirectory(
+                dir=self.workspace.root.parent
+            ) as temporary:
+                label = component_kind.replace(" ", "-")
+                parent = self.workspace.path(f"definition-{label}-parent")
+                parent.mkdir()
+                parent.chmod(0o751)
+                parent_mode_before = _mode(parent)
+                parent_sentinel = parent / "PARENT_SENTINEL.bin"
+                parent_sentinel.write_bytes(b"PRIVATE_PARENT_BYTES")
+                adapter = self.adapter(f"definition-{label}-parent/state")
+                outside = Path(temporary) / "outside"
+                outside.mkdir()
+                outside.chmod(0o751)
+                (outside / "AGENTS.md").write_bytes(b"PRIVATE_OUTSIDE_RULES")
+                (outside / "sentinel.bin").write_bytes(b"PRIVATE_OUTSIDE_BYTES")
+                outside_before = _directory_snapshot(outside)
+                unsafe = (
+                    adapter.state_root
+                    if component_kind == "state root link"
+                    else adapter.state_root
+                    / "definitions"
+                    / self.definition.agent_id
+                    / self.definition.fingerprint
+                )
+                unsafe.parent.mkdir(parents=True, exist_ok=True)
+                if component_kind == "file":
+                    unsafe.write_bytes(b"PRIVATE_UNSAFE_FILE")
+                    unsafe.chmod(0o640)
+                    unsafe_before = (_mode(unsafe), unsafe.read_bytes())
+                else:
+                    self.directory_symlink(unsafe, outside)
+                    unsafe_before = None
+                forbidden_process = mock.AsyncMock(
+                    side_effect=AssertionError("provider process invoked")
+                )
+
+                with (
+                    mock.patch(
+                        "story_writing_agents.antigravity_adapter.run_process",
+                        forbidden_process,
+                    ),
+                    self.assertRaises(NotADirectoryError) as caught,
+                ):
+                    adapter.bind(self.definition)
+
+                self.assertEqual(
+                    str(caught.exception),
+                    "Antigravity state directory is unsafe",
+                )
+                self.assertEqual(_directory_snapshot(outside), outside_before)
+                self.assertEqual(_mode(parent), parent_mode_before)
+                self.assertEqual(
+                    parent_sentinel.read_bytes(),
+                    b"PRIVATE_PARENT_BYTES",
+                )
+                if unsafe_before is not None:
+                    self.assertEqual(
+                        (_mode(unsafe), unsafe.read_bytes()),
+                        unsafe_before,
+                    )
+                forbidden_process.assert_not_awaited()
+
+    async def test_runtime_chain_rejects_links_and_files_before_launch(
+        self,
+    ) -> None:
+        for component_kind in ("session link", "provider link", "workspace link", "file"):
+            with self.subTest(component=component_kind), tempfile.TemporaryDirectory(
+                dir=self.workspace.root.parent
+            ) as temporary:
+                label = component_kind.replace(" ", "-")
+                parent = self.workspace.path(f"runtime-{label}-parent")
+                parent.mkdir()
+                parent.chmod(0o751)
+                parent_mode_before = _mode(parent)
+                parent_sentinel = parent / "PARENT_SENTINEL.bin"
+                parent_sentinel.write_bytes(b"PRIVATE_PARENT_BYTES")
+                adapter = self.adapter(f"runtime-{label}-parent/state")
+                binding = adapter.bind(self.definition)
+                session_id = f"unsafe-{label}"
+                runtime_root = (
+                    adapter.state_root
+                    / "sessions"
+                    / session_id
+                    / self.definition.agent_id
+                    / self.definition.fingerprint
+                )
+                outside = Path(temporary) / "outside"
+                outside.mkdir()
+                outside.chmod(0o751)
+                (outside / "AGENTS.md").write_bytes(b"PRIVATE_OUTSIDE_RULES")
+                (outside / "sentinel.bin").write_bytes(b"PRIVATE_OUTSIDE_BYTES")
+                outside_before = _directory_snapshot(outside)
+                if component_kind == "session link":
+                    unsafe = adapter.state_root / "sessions" / session_id
+                elif component_kind == "provider link":
+                    unsafe = runtime_root / "provider"
+                elif component_kind == "workspace link":
+                    unsafe = runtime_root / "workspace"
+                else:
+                    unsafe = runtime_root / "provider"
+                unsafe.parent.mkdir(parents=True, exist_ok=True)
+                if component_kind == "file":
+                    unsafe.write_bytes(b"PRIVATE_UNSAFE_FILE")
+                    unsafe.chmod(0o640)
+                    unsafe_before = (_mode(unsafe), unsafe.read_bytes())
+                else:
+                    self.directory_symlink(unsafe, outside)
+                    unsafe_before = None
+                forbidden_process = mock.AsyncMock(
+                    side_effect=AssertionError("provider process invoked")
+                )
+
+                with (
+                    mock.patch(
+                        "story_writing_agents.antigravity_adapter.run_process",
+                        forbidden_process,
+                    ),
+                    self.assertRaises(ProviderInvocationError) as caught,
+                ):
+                    await adapter.invoke(
+                        binding,
+                        self.provider_invocation(session_id),
+                    )
+
+                error = caught.exception
+                self.assertEqual(
+                    str(error),
+                    "Antigravity provider workspace could not be prepared",
+                )
+                self.assertIs(error.taint_existing_thread, False)
+                self.assertNotIn("PRIVATE", str(error))
+                self.assertIsInstance(error.__cause__, NotADirectoryError)
+                self.assertEqual(
+                    str(error.__cause__),
+                    "Antigravity state directory is unsafe",
+                )
+                self.assertEqual(_directory_snapshot(outside), outside_before)
+                self.assertEqual(_mode(parent), parent_mode_before)
+                self.assertEqual(
+                    parent_sentinel.read_bytes(),
+                    b"PRIVATE_PARENT_BYTES",
+                )
+                if unsafe_before is not None:
+                    self.assertEqual(
+                        (_mode(unsafe), unsafe.read_bytes()),
+                        unsafe_before,
+                    )
+                forbidden_process.assert_not_awaited()
 
     def test_private_import_has_no_filesystem_or_public_surface_effect(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]

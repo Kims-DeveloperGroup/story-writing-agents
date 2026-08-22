@@ -184,9 +184,16 @@ to store secrets.
 
 Antigravity's isolated provider-native state is also plaintext and is retained
 when a backend closes. Taint or definition-fingerprint mismatch starts a fresh
-provider conversation without deleting prior provider data. Protect the
-workspace and provider-state paths with OS-level controls; the runtime provides
-neither encryption nor secure erase.
+provider conversation without deleting prior provider data. On supported POSIX
+systems, the adapter best-effort requests owner-only (`0700`) modes for its
+Antigravity state root and adapter-owned definition and session directory
+chains, and it rejects a detected link or non-directory in those components
+before a provider launch. It does not recursively change the backend-owned
+containing directory or provider-created files. Unsupported platforms,
+including Windows, and ordinary mode-setting failures retain platform behavior,
+so this is neither application access control nor race-proof containment.
+Protect the complete workspace and provider-state paths with OS-level controls;
+the runtime provides neither encryption nor secure erase.
 
 Use `codex login` or process-environment `CODEX_API_KEY`. Never put credentials
 in story content, configuration, filenames, prompts, replies, transcripts, or
