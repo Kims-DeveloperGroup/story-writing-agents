@@ -63,6 +63,9 @@ from tests.helpers import initialized_workspace
 
 
 _CONTEXT_TIMESTAMP = "2026-08-15T01:02:03+00:00"
+_SAFE_SYMLINK_REFUSAL_ERRNOS = frozenset(
+    {errno.ENOTDIR, getattr(errno, "ELOOP", errno.ENOTDIR)}
+)
 
 
 def snapshot_directory_namespace(directory: Path) -> dict[str, bytes | None]:
@@ -263,6 +266,19 @@ class AgentRosterTests(unittest.TestCase):
 
 
 class WorkspaceTests(unittest.TestCase):
+    def assert_safe_symlink_refusal(
+        self,
+        action: Callable[[], object],
+    ) -> OSError:
+        """Accept only the platform-safe no-follow directory refusal errors."""
+
+        try:
+            action()
+        except OSError as error:
+            self.assertIn(error.errno, _SAFE_SYMLINK_REFUSAL_ERRNOS)
+            return error
+        self.fail("safe no-follow directory refusal did not raise OSError")
+
     def assert_identity_unavailable(
         self,
         action: Callable[[], object],
@@ -661,12 +677,10 @@ class WorkspaceTests(unittest.TestCase):
                             "_directory",
                             wraps=workspace._directory,
                         ) as child_directory,
-                        self.assertRaises(NotADirectoryError) as raised,
                     ):
-                        workspace.initialize()
+                        self.assert_safe_symlink_refusal(workspace.initialize)
 
                     self.assertTrue(substituted)
-                    self.assertEqual(raised.exception.errno, errno.ENOTDIR)
                     child_directory.assert_not_called()
                     substitution_path = parent.joinpath(
                         *components[: substitution_index + 1]
@@ -736,9 +750,12 @@ class WorkspaceTests(unittest.TestCase):
                     if raced_kind == "directory":
                         self.assertIs(workspace.initialize(), workspace)
                     else:
-                        with self.assertRaises(NotADirectoryError) as raised:
-                            workspace.initialize()
-                        self.assertEqual(raised.exception.errno, errno.ENOTDIR)
+                        if raced_kind == "file":
+                            with self.assertRaises(NotADirectoryError) as raised:
+                                workspace.initialize()
+                            self.assertEqual(raised.exception.errno, errno.ENOTDIR)
+                        else:
+                            self.assert_safe_symlink_refusal(workspace.initialize)
 
                 self.assertTrue(raced)
                 if raced_kind == "directory":
@@ -752,6 +769,73 @@ class WorkspaceTests(unittest.TestCase):
                         self.assertEqual(root.read_bytes(), b"raced regular file\x00")
                     else:
                         self.assertTrue(root.is_symlink())
+
+    def test_platform_symlink_refusal_errors_propagate_and_terminalize(
+        self,
+    ) -> None:
+        """Model both safe kernel refusals without relying on the host errno."""
+
+        for refusal_errno in _SAFE_SYMLINK_REFUSAL_ERRNOS:
+            with self.subTest(errno=refusal_errno):
+                temporary = tempfile.TemporaryDirectory()
+                self.addCleanup(temporary.cleanup)
+                parent = Path(temporary.name)
+                root = parent / "simulated_symlink_refusal"
+                external = parent / "external"
+                external.mkdir()
+                (external / "sentinel.bin").write_bytes(b"external sentinel\x00")
+                external_before = snapshot_directory_namespace(external)
+                workspace = Workspace(root)
+                real_open = os.open
+                final_attempts = 0
+                refusal = OSError(refusal_errno, "safe no-follow refusal")
+
+                def fail_final_retry(
+                    path: object,
+                    flags: int,
+                    mode: int = 0o777,
+                    *,
+                    dir_fd: int | None = None,
+                ) -> int:
+                    nonlocal final_attempts
+                    if path == root.name and dir_fd is not None:
+                        final_attempts += 1
+                        if final_attempts == 1:
+                            raise FileNotFoundError(
+                                errno.ENOENT,
+                                "simulated first final lookup miss",
+                                root.name,
+                            )
+                        raise refusal
+                    return real_open(path, flags, mode, dir_fd=dir_fd)
+
+                with (
+                    mock.patch.object(
+                        workspace_module.os,
+                        "open",
+                        side_effect=fail_final_retry,
+                    ),
+                    mock.patch.object(
+                        workspace,
+                        "_directory",
+                        wraps=workspace._directory,
+                    ) as child_directory,
+                ):
+                    caught = self.assert_safe_symlink_refusal(
+                        workspace.initialize
+                    )
+
+                self.assertIs(caught, refusal)
+                self.assert_originating_traceback(caught, "fail_final_retry")
+                self.assertEqual(final_attempts, 2)
+                child_directory.assert_not_called()
+                self.assertTrue(root.is_dir())
+                self.assertEqual(tuple(root.iterdir()), ())
+                self.assertEqual(
+                    snapshot_directory_namespace(external),
+                    external_before,
+                )
+                self.assert_terminal_initialize_has_no_io(workspace)
 
     def test_missing_root_symlink_race_aborts_before_external_scaffold(self) -> None:
         """Reject a late root alias without changing any external target entry."""
@@ -791,9 +875,9 @@ class WorkspaceTests(unittest.TestCase):
                 "_directory",
                 wraps=workspace._directory,
             ) as child_directory:
-                with self.assertRaises(NotADirectoryError) as raised:
-                    workspace.initialize()
-                first_error = raised.exception
+                first_error = self.assert_safe_symlink_refusal(
+                    workspace.initialize
+                )
                 self.assertEqual(snapshot_directory_namespace(external), before)
                 second_error = self.assert_identity_unavailable(
                     workspace.initialize
@@ -803,7 +887,6 @@ class WorkspaceTests(unittest.TestCase):
             self.assertTrue(root.is_symlink())
             self.assertEqual(os.readlink(root), link_target)
             self.assertEqual(snapshot_directory_namespace(external), before)
-            self.assertEqual(first_error.errno, errno.ENOTDIR)
             self.assertNotEqual(second_error.args, first_error.args)
 
     def test_missing_root_stat_failure_is_terminal_across_initialize_calls(

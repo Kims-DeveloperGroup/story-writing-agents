@@ -1179,7 +1179,11 @@ class CliTests(unittest.TestCase):
             self.assertEqual(exit_code, 2)
             self.assertTrue(substituted)
             self.assertEqual(stdout.getvalue(), "")
-            self.assertTrue(stderr.getvalue().startswith("NotADirectoryError: "))
+            self.assertTrue(
+                stderr.getvalue().startswith(
+                    ("NotADirectoryError: ", "OSError: ")
+                )
+            )
             self.assertNotIn('"workspace"', stdout.getvalue())
             self.assertNotIn("debug_logs/runtime.jsonl", stderr.getvalue())
             self.assertTrue(root.is_symlink())
