@@ -83,6 +83,9 @@ async def run_process(
     except asyncio.CancelledError:
         await stop_process(process, wait_for=wait_for)
         raise
+    except BaseException:
+        await stop_process(process, wait_for=wait_for)
+        raise
 
     stdout, stderr = communicated
     assert isinstance(stdout, bytes)
