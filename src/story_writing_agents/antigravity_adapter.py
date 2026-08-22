@@ -575,6 +575,15 @@ class AntigravityAdapter:
             if replace_failed:
                 raise OSError("Antigravity rules replacement failed") from None
             temporary_present = False
+            installed_diagnostic = "Antigravity installed rules are unsafe"
+            if (
+                cls._rules_path_identity(
+                    target,
+                    diagnostic=installed_diagnostic,
+                )
+                != temporary_identity
+            ):
+                raise OSError(installed_diagnostic)
         except BaseException as failure:
             body_failure = (failure, failure.__traceback__)
         if descriptor is not None:
