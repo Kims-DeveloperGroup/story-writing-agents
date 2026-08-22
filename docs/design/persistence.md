@@ -107,6 +107,21 @@ later artifact access closed. Retained `.tmp`, `.held`, `.retired`, and
 `.completed` staging files are ignored by recovery and catalog listing and may
 accumulate.
 
+Immutable commits are also the permanent manuscript-reservation ledger, not
+just history for current catalog rows. Each access globally audits exact commit
+records against the catalog: all ledger manuscripts must remain represented,
+while historical core records may be superseded by a newer exact current core
+entry. Catalog loss, subsets, malformed or extra commits, mismatches, and
+duplicate manuscript reservations fail closed instead of being reconstructed.
+During recovery at exact catalog-before, only the pending journal's already
+published exact commit may be temporarily absent from that catalog view.
+
+The permanent repository lock pair has its own durability boundary. Initial
+creation exclusively creates and flushes the lock, flushes its parent, links the
+anchor, flushes the parent again, verifies the pair, acquires `flock`, and
+reverifies before work. Exact-name aliases, incomplete pairs, or any failure in
+that sequence prevent protected work; no lock reconstruction is attempted.
+
 That artifact transaction does not combine sidecars, blackboards, defaults,
 transcripts, debate lifecycle, results, provider state, and agent state into one
 database transaction. Infrastructure interruption can therefore leave a

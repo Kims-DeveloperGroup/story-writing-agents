@@ -18,7 +18,6 @@ from .agents import (
     AGENT_SPECS,
     AGENT_STATE_DIRECTORIES,
     CHARACTER_CUSTODIAN,
-    CORE_DOCUMENTS,
     EXECUTION_SPECIALIST,
     LEAD_ORCHESTRATOR,
     PLOT_ARCHITECT,
@@ -362,17 +361,6 @@ class Workspace:
         except (WorkspaceFormatError, WorkspaceSecurityError):
             return False
         return True
-
-    def read_core_documents(self, filenames: tuple[str, ...]) -> dict[str, str]:
-        unknown = set(filenames).difference(CORE_DOCUMENTS)
-        if unknown:
-            raise WorkspaceSecurityError(
-                f"core document is not allowlisted: {sorted(unknown)[0]}"
-            )
-        return {
-            filename: self.read_text(f"core_documents/{filename}")
-            for filename in filenames
-        }
 
     def load_session_overrides(self, session_id: str) -> dict[str, Any]:
         session = self.validate_identifier(session_id)

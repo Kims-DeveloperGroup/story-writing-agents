@@ -523,7 +523,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   omitted value is collected by the controller before composition. Run-option
   fields split only on ASCII space and tab: Unicode whitespace cannot introduce
   or separate `--output`, and malformed fresh-output flag spellings return a
-  typed parse error. The package facade does not re-export the route metadata.
+  typed parse error. After exact `--fresh`, every second leading double-hyphen
+  token except exact `--output` is rejected as an unknown flag instead of
+  becoming prompt text. The package facade does not re-export the route
+  metadata.
 - **Direct internal dependencies:** `agents`.
 - **State, resources, and side effects:** Immutable command and agent-route
   metadata only. Completion projection is pure and call-local; the module owns
@@ -1514,8 +1517,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   text/JSON replacement, except that its supported generic text/JSON writers
   reject canonical writing-artifact identities plus every case-folded or
   NFKC-normalized alias of the repository-owned `core_documents` and
-  `manuscript` namespaces before mutation. It no longer creates core-document
-  templates or owns manuscript/core-document reads, writes, commits, or
+  `manuscript` namespaces before mutation. It exposes no artifact-specific
+  core-document reader, no longer creates core-document templates, and owns no
+  repository-mediated manuscript/core-document reads, writes, commits, or
   rollback. Context
   sidecars use an exact identity-bound version-1 schema, require a non-null
   canonical snapshot for included mode and a null snapshot for fresh mode,
@@ -1619,16 +1623,23 @@ every intermediate arrow. The current runtime graph is acyclic.
   later operation reopens and verifies that identity. Each traversal uses
   retained and revalidated ancestor descriptors, `O_NOFOLLOW`, nonblocking
   pre-stat/name/descriptor checks, unique-regular-file checks, and exact stored
-  entry spelling. Descriptor-relative directory listings reject case-folded or
-  NFKC-normalized aliases before access; traversal fsyncs each parent directory
-  entry after successful child creation and before descending. Publication also
-  fsyncs its target/staging directories and uses a lazily required Darwin/Linux
-  native atomic no-replace rename. Publication, replacement holding, rollback,
-  temporary cleanup, and completed-journal removal never overwrite or unlink a
-  name: prior, failed, and completed bytes move exclusively into ignored
-  non-authoritative staging and remain retained.
-  The adapter owns a permanent paired-hard-link lock identity, while each
-  context owns its descriptor/flock and mutation lease only for that lifetime.
+  entry spelling. Final file names are alias-checked before their first stat and
+  reverified around descriptor reads. Descriptor-relative directory listings
+  reject case-folded or NFKC-normalized aliases before access; traversal fsyncs
+  each parent directory entry after successful child creation and before
+  descending. Publication also fsyncs its target/staging directories and uses a
+  lazily required Darwin/Linux native atomic no-replace rename. Publication,
+  replacement holding, rollback, temporary cleanup, and completed-journal
+  removal never overwrite or unlink a name: prior, failed, and completed bytes
+  move exclusively into ignored non-authoritative staging and remain retained.
+  The adapter owns a permanent paired-hard-link lock identity. An absent pair is
+  created as an exclusive primary name, followed in order by file and parent
+  fsync, anchor link, parent fsync, identity verification, and only then flock
+  and body entry; an existing pair must already be complete. Lock and anchor
+  spelling is checked before inspection and during identity verification, and
+  any spelling, durability, link, or identity failure is a lease failure that
+  cannot enter the body. Each context owns its descriptor/flock and mutation
+  lease only for that lifetime.
   It fails closed on unsupported primitives, special files, symlinks,
   hardlinks, identity changes, lock replacement, destination collision, or
   ambiguous traversal. The lease serializes supported repository writers;
@@ -1659,33 +1670,43 @@ every intermediate arrow. The current runtime graph is acyclic.
   `transactions/`, reserved `input_snapshots/`, and non-journal `staging/`
   topology. Staging retains exclusively named prior versions, failed
   publications, and completed journals; recovery enumerates only authoritative
-  transaction JSON and ignores all such residue. Every read and commit performs
-  locked recovery first. One create-only immutable schema-v2 transaction
-  journal records the exact catalog-before existence/hash/image, complete
-  catalog-after image, immutable commit, ordered targets, old/new hashes, and
-  complete new bytes before any target mutation; it has no replaceable phase
-  field. JSON decoding rejects duplicate object keys recursively for journals,
-  catalogs, and commits. At exact catalog-before, recovery accepts each target
-  only at its recorded old or new bytes, completes remaining target and commit
-  publication, rechecks journal authority and catalog-before, then publishes
-  the catalog last. At exact catalog-after, recovery is verification-only and
-  requires every target and the commit to be final. Any other catalog position,
-  unrelated catalog-entry change, target/commit divergence, or missing/changed
-  journal creates a durable recovery-block marker and fails closed. The exact
-  immutable journal is strictly retired only after final target, commit, and
-  catalog-after verification; a missing retirement source is never success.
+  transaction JSON and ignores all such residue. Immutable exact-name commit
+  records form the permanent audit ledger: manuscript paths must be unique
+  across the ledger and exactly equal the catalog manuscript set, while every
+  catalog entry must project an exact artifact and metadata record from its
+  named commit. Historical core records may be superseded, but each current
+  core entry must match one validated commit. Outside one exact pending phase, a
+  missing catalog is valid only with an empty ledger; divergence fails closed
+  and is never reconstructed. Every read and commit performs locked recovery
+  first. One create-only immutable schema-v2 transaction journal records the
+  exact catalog-before existence/hash/image, complete catalog-after image,
+  immutable commit, ordered targets, old/new hashes, and complete new bytes
+  before any target mutation; it has no replaceable phase field. JSON decoding
+  rejects duplicate object keys recursively for journals, catalogs, and commits.
+  At exact catalog-before, recovery accepts each target only at its recorded old
+  or new bytes and may exempt only this journal's exact already-published commit
+  from manuscript equality; the projected catalog-after is audited without an
+  exemption. Recovery completes remaining target and commit publication,
+  rechecks journal authority and catalog-before, then publishes the catalog
+  last. At exact catalog-after, recovery is verification-only with no exemption
+  and requires every target, commit, and ledger projection to be final. Any
+  other catalog position, unrelated catalog or commit entry, target/commit
+  divergence, or missing/changed journal creates a durable recovery-block
+  marker and fails closed. The exact immutable journal is strictly retired only
+  after final target, commit, catalog-after, and ledger verification; a missing
+  retirement source is never success.
   Listings expose only cataloged
   canonical paths whose current unique regular-file bytes match repository
   hashes. Selective reads return only requested current entries as immutable
   content snapshots. Consensus commits require the execution specialist for
   revision-zero manuscripts and the lead for later manuscripts, publish them
-  create-only beneath a part directory, permanently reserve every cataloged
-  manuscript identity even when its file is later deleted, and allow only
-  lead-authored core updates. Transaction/commit/catalog-before/catalog-after
-  sets, unrelated-entry preservation, authorship, ordering, and scalar schemas
-  are correlated exactly. Manual, initialization, internal, unsupported,
-  unsafe, root-manuscript, symlink, hardlink, absent, and hash-divergent files
-  cannot become eligible.
+  create-only beneath a part directory, reject every identity already reserved
+  by immutable commit history even when its file or catalog entry was externally
+  deleted, and allow only lead-authored core updates. Transaction/commit/
+  catalog-before/catalog-after sets, unrelated-entry preservation, authorship,
+  ordering, and scalar schemas are correlated exactly. Manual, initialization,
+  internal, unsupported, unsafe, root-manuscript, symlink, hardlink, absent, and
+  hash-divergent files cannot become eligible.
 - **Primary verification/documentation:** `tests/test_writing_artifacts.py`,
   `tests/test_orchestration_workflow.py`, `tests/test_orchestration_safety.py`,
   `tests/test_smoke_cli.py`, `docs/reference/writing-artifacts.md`,
@@ -1699,19 +1720,27 @@ every intermediate arrow. The current runtime graph is acyclic.
   provider binding and staging decode the captured bytes and never reopen the
   lexical workspace path. `Workspace` generic writers reject canonical
   artifact identities and case-folded or NFKC-normalized aliases of both
-  repository-owned namespaces before mutation, while repository mutation
-  remains protected by its permanent paired lock and call-scoped lease.
+  repository-owned namespaces before mutation and expose no artifact-specific
+  core reader. Repository mutation remains protected by a permanent exact-name
+  paired lock created durably before its first body entry and by a call-scoped
+  lease.
 
 - `WritingArtifactRepository` creates one immutable authoritative schema-v2
   journal before target publication and never replaces it with a phase update.
   Exact catalog-before recovery rolls forward; exact catalog-after recovery
   verifies without republishing; divergent catalog, commit, target, or journal
   authority durably blocks. Non-target catalog entries remain identical across
-  the recorded before/after images, cataloged manuscript paths remain reserved
-  after file deletion, and strict final journal retirement occurs only after
-  target, commit, and catalog-after verification. `_storage` independently
-  requires exact descriptor-relative entry spelling, rejects normalized/case
-  aliases, and fsyncs created child entries through their parent descriptors.
+  the recorded before/after images. Immutable commits are the permanent
+  reservation ledger: the catalog manuscript set equals all non-exempt commit
+  manuscripts, each current catalog entry exactly projects its commit, and
+  superseded core history remains valid. Only the active journal's exact commit
+  may be exempted while the catalog is at its exact before image; catalog-after
+  and ordinary access have no exemption or reconstruction. Strict final journal
+  retirement occurs only after target, commit, catalog-after, and ledger
+  verification. `_storage` independently prechecks final names and the paired
+  lock spelling, rejects normalized/case aliases, fsyncs created child entries
+  through their parent descriptors, and completes lock file/link durability
+  before flock or body entry.
 
 - `Workspace` initializes the canonical five-key system-default document but
   never rewrites an existing one. `ConfigManager` owns full system and per-agent

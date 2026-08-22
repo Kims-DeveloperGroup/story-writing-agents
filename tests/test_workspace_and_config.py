@@ -51,7 +51,7 @@ from story_writing_agents.workspace import (
     WORKSPACE_DIRECTORIES,
 )
 
-from tests.helpers import initialized_workspace
+from tests.helpers import core_snapshot, initialized_workspace
 
 
 _CONTEXT_TIMESTAMP = "2026-08-15T01:02:03+00:00"
@@ -153,6 +153,20 @@ class AgentRosterTests(unittest.TestCase):
 
 
 class WorkspaceTests(unittest.TestCase):
+    def test_core_fixture_snapshot_is_explicitly_raw_and_runtime_reader_is_absent(
+        self,
+    ) -> None:
+        workspace = initialized_workspace(self)
+        self.assertFalse(hasattr(Workspace, "read_core_documents"))
+        self.assertFalse(hasattr(workspace, "read_core_documents"))
+        self.assertEqual(
+            core_snapshot(workspace),
+            {
+                filename: f"test input for {filename}\n"
+                for filename in CORE_DOCUMENTS
+            },
+        )
+
     def test_generic_writes_reject_canonical_artifacts_but_keep_other_helpers(self) -> None:
         workspace = initialized_workspace(self)
         canonical_paths = (

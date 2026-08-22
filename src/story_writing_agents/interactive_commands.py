@@ -974,6 +974,10 @@ def _parse_run(tail: str | None) -> InteractiveAction:
         return _parse_error(
             "/run --fresh --output requires ASCII space/tab delimiters"
         )
+    if fresh_fields and fresh_fields[0].startswith("--") and (
+        fresh_fields[0] != _RUN_OUTPUT_FLAG
+    ):
+        return _parse_error(f"unknown /run flag: {fresh_fields[0]}")
     if fresh_fields and fresh_fields[0] == _RUN_OUTPUT_FLAG:
         fields = fresh_fields
         if len(fields) < 3 or fields[1].startswith("--"):

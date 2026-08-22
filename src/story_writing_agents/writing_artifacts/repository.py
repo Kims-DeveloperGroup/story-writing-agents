@@ -164,8 +164,9 @@ class WritingArtifactRepository:
             )
 
         with self._locked_repository():
-            catalog, catalog_raw = self._load_catalog_image()
-            if manuscript_path in catalog.entries:
+            catalog, catalog_raw, ledger = self._load_catalog_audited()
+            manuscript_ledger = self._ledger_manuscript_paths(ledger)
+            if manuscript_path in manuscript_ledger:
                 raise ManuscriptExistsError(
                     f"refusing to overwrite cataloged path {manuscript_path}"
                 )
@@ -174,6 +175,10 @@ class WritingArtifactRepository:
                     f"refusing to overwrite {manuscript_path}"
                 )
             commit_id = uuid4().hex
+            if commit_id in ledger:
+                raise WorkspaceFormatError(
+                    "artifact commit identity is already reserved"
+                )
             committed_at = datetime.now(UTC).isoformat()
             target_specs: list[dict[str, object]] = []
             new_entries = dict(catalog.entries)
@@ -266,6 +271,17 @@ class WritingArtifactRepository:
                 "targets": target_specs,
                 "transaction_id": commit_id,
             }
+            self._validate_transaction(transaction, expected_id=commit_id)
+            virtual_ledger = dict(ledger)
+            virtual_ledger[commit_id] = (
+                commit_record,
+                self._json_bytes(commit_record),
+            )
+            self._audit_catalog(
+                ArtifactCatalog(new_entries),
+                virtual_ledger,
+                catalog_present=True,
+            )
             transaction_path = f"{_TRANSACTIONS_DIRECTORY}/{commit_id}.json"
             self._write_new_json(transaction_path, transaction)
             self._complete_transaction(transaction_path, transaction)
@@ -336,6 +352,7 @@ class WritingArtifactRepository:
             self._block_recovery(
                 "artifact catalog does not match transaction authority"
             )
+        self._require_transaction_ledger(transaction, catalog_position)
         commit = transaction["commit"]
         assert isinstance(commit, dict)
         commit_id = commit["commit_id"]
@@ -397,6 +414,7 @@ class WritingArtifactRepository:
                 self._block_recovery(
                     "artifact catalog changed before final publication"
                 )
+            self._require_transaction_ledger(transaction, "before")
             catalog_before = transaction["catalog_before"]
             assert isinstance(catalog_before, dict)
             catalog_after = transaction["catalog_after"]
@@ -419,6 +437,7 @@ class WritingArtifactRepository:
                 self._block_recovery(
                     "artifact catalog publication could not be verified"
                 )
+            self._require_transaction_ledger(transaction, "after")
         elif catalog_position == "after":
             self._verify_target_states(targets, allow_old=False)
             if current_commit != commit_bytes:
@@ -435,6 +454,7 @@ class WritingArtifactRepository:
         assert isinstance(catalog_after, dict)
         if self._catalog_position(transaction) != "after":
             self._block_recovery("artifact catalog is not durably complete")
+        self._require_transaction_ledger(transaction, "after")
         self._require_journal_authority(transaction_path, journal_bytes)
         try:
             self._storage.unlink(
@@ -829,52 +849,218 @@ class WritingArtifactRepository:
         if manuscript_count != 1:
             raise WorkspaceFormatError("artifact commit must contain one manuscript")
 
-    def _load_catalog(self) -> ArtifactCatalog:
-        catalog, _ = self._load_catalog_image()
-        verified: dict[str, ArtifactCatalogEntry] = {}
-        commits: dict[str, dict[str, object] | None] = {}
-        for path, entry in catalog.entries.items():
-            if entry.commit_id not in commits:
-                commit_path = f"{_COMMITS_DIRECTORY}/{entry.commit_id}.json"
-                raw_commit = self._storage.read_bytes_if_exists(commit_path)
-                if raw_commit is None:
-                    commits[entry.commit_id] = None
-                else:
-                    try:
-                        parsed_commit = self._decode_json(raw_commit)
-                        self._validate_commit(
-                            parsed_commit,
-                            transaction_id=entry.commit_id,
-                        )
-                    except (
-                        TypeError,
-                        ValueError,
-                    ) as exc:
-                        raise WorkspaceFormatError(
-                            "artifact commit provenance is invalid"
-                        ) from exc
-                    commits[entry.commit_id] = parsed_commit
-            commit = commits[entry.commit_id]
-            if commit is None:
-                continue
-            if (
-                commit["committed_at"] != entry.committed_at
-                or commit["session_id"] != entry.session_id
-                or commit["debate_id"] != entry.debate_id
-                or commit["revision_id"] != entry.revision_id
-            ):
-                continue
+    def _load_commit_ledger(
+        self,
+    ) -> dict[str, tuple[dict[str, object], bytes]]:
+        """Load every permanent immutable commit under its exact filename."""
+
+        ledger: dict[str, tuple[dict[str, object], bytes]] = {}
+        for name in self._storage.list_names(_COMMITS_DIRECTORY):
+            if re.fullmatch(r"[0-9a-f]{32}\.json", name) is None:
+                raise WorkspaceFormatError(
+                    "artifact commit ledger contains an unexpected entry"
+                )
+            commit_id = name[:-5]
+            raw = self._storage.read_bytes(f"{_COMMITS_DIRECTORY}/{name}")
+            parsed = self._decode_json(raw)
+            self._validate_commit(parsed, transaction_id=commit_id)
+            assert isinstance(parsed, dict)
+            ledger[commit_id] = (parsed, raw)
+        return ledger
+
+    @staticmethod
+    def _ledger_manuscript_paths(
+        ledger: Mapping[str, tuple[dict[str, object], bytes]],
+    ) -> dict[str, str]:
+        """Return the unique permanent manuscript reservation ledger."""
+
+        reservations: dict[str, str] = {}
+        for commit_id, (commit, _) in ledger.items():
             artifacts = commit["artifacts"]
             assert isinstance(artifacts, list)
-            if any(
-                artifact["path"] == path
-                and artifact["kind"] == entry.kind.value
-                and artifact["sha256"] == entry.sha256
-                and artifact["author_agent_id"] == entry.author_agent_id
+            manuscript = next(
+                artifact
                 for artifact in artifacts
+                if artifact["kind"] == ArtifactKind.MANUSCRIPT.value
+            )
+            path = manuscript["path"]
+            assert isinstance(path, str)
+            if path in reservations:
+                raise WorkspaceFormatError(
+                    "artifact commit ledger reuses a manuscript path"
+                )
+            reservations[path] = commit_id
+        return reservations
+
+    @staticmethod
+    def _catalog_entry_matches_commit(
+        entry: ArtifactCatalogEntry,
+        commit: dict[str, object],
+    ) -> bool:
+        """Return whether one catalog entry exactly projects one commit artifact."""
+
+        if (
+            entry.commit_id != commit["commit_id"]
+            or entry.committed_at != commit["committed_at"]
+            or entry.session_id != commit["session_id"]
+            or entry.debate_id != commit["debate_id"]
+            or entry.revision_id != commit["revision_id"]
+        ):
+            return False
+        artifacts = commit["artifacts"]
+        assert isinstance(artifacts, list)
+        return any(
+            artifact["path"] == entry.path
+            and artifact["kind"] == entry.kind.value
+            and artifact["sha256"] == entry.sha256
+            and artifact["author_agent_id"] == entry.author_agent_id
+            for artifact in artifacts
+        )
+
+    def _audit_catalog(
+        self,
+        catalog: ArtifactCatalog,
+        ledger: Mapping[str, tuple[dict[str, object], bytes]],
+        *,
+        catalog_present: bool,
+        exempt_commit_id: str | None = None,
+    ) -> None:
+        """Require the catalog to be the exact current view of the commit ledger."""
+
+        if exempt_commit_id is not None and exempt_commit_id not in ledger:
+            raise WorkspaceFormatError("pending artifact commit exemption is absent")
+        reservations = self._ledger_manuscript_paths(ledger)
+        expected_manuscripts = set(reservations)
+        if exempt_commit_id is not None:
+            exempt_paths = {
+                path
+                for path, commit_id in reservations.items()
+                if commit_id == exempt_commit_id
+            }
+            if len(exempt_paths) != 1:
+                raise WorkspaceFormatError(
+                    "pending artifact commit exemption is ambiguous"
+                )
+            expected_manuscripts.difference_update(exempt_paths)
+            if any(
+                entry.commit_id == exempt_commit_id
+                for entry in catalog.entries.values()
             ):
-                verified[path] = entry
-        return ArtifactCatalog(verified)
+                raise WorkspaceFormatError(
+                    "catalog contains pending artifact commit metadata"
+                )
+        nonexempt_commits = set(ledger)
+        if exempt_commit_id is not None:
+            nonexempt_commits.remove(exempt_commit_id)
+        if not catalog_present and nonexempt_commits:
+            raise WorkspaceFormatError(
+                "artifact catalog is missing for the permanent commit ledger"
+            )
+        catalog_manuscripts = {
+            path
+            for path, entry in catalog.entries.items()
+            if entry.kind is ArtifactKind.MANUSCRIPT
+        }
+        if catalog_manuscripts != expected_manuscripts:
+            raise WorkspaceFormatError(
+                "artifact catalog manuscript set does not match commit ledger"
+            )
+        for entry in catalog.entries.values():
+            record = ledger.get(entry.commit_id)
+            if record is None or not self._catalog_entry_matches_commit(
+                entry,
+                record[0],
+            ):
+                raise WorkspaceFormatError(
+                    "artifact catalog entry does not match its immutable commit"
+                )
+
+    def _audit_transaction_ledger(
+        self,
+        transaction: dict[str, object],
+        catalog_position: str,
+    ) -> None:
+        """Audit actual and projected catalogs around one active transaction."""
+
+        before_record = transaction["catalog_before"]
+        assert isinstance(before_record, dict)
+        before = ArtifactCatalog.from_dict(before_record["image"])
+        after = ArtifactCatalog.from_dict(transaction["catalog_after"])
+        commit = transaction["commit"]
+        assert isinstance(commit, dict)
+        commit_id = commit["commit_id"]
+        assert isinstance(commit_id, str)
+        commit_bytes = self._json_bytes(commit)
+        ledger = self._load_commit_ledger()
+        on_disk = ledger.get(commit_id)
+
+        if catalog_position == "before":
+            exempt_commit_id: str | None = None
+            if on_disk is not None:
+                if on_disk[1] != commit_bytes:
+                    raise WorkspaceFormatError(
+                        "pending artifact commit differs from journal authority"
+                    )
+                exempt_commit_id = commit_id
+            self._audit_catalog(
+                before,
+                ledger,
+                catalog_present=before_record["exists"],
+                exempt_commit_id=exempt_commit_id,
+            )
+            virtual_ledger = dict(ledger)
+            virtual_ledger[commit_id] = (commit, commit_bytes)
+            self._audit_catalog(
+                after,
+                virtual_ledger,
+                catalog_present=True,
+            )
+            return
+
+        if catalog_position != "after":
+            raise WorkspaceFormatError("artifact catalog position is invalid")
+        if on_disk is None or on_disk[1] != commit_bytes:
+            raise WorkspaceFormatError(
+                "completed artifact catalog lacks its exact immutable commit"
+            )
+        self._audit_catalog(after, ledger, catalog_present=True)
+
+    def _require_transaction_ledger(
+        self,
+        transaction: dict[str, object],
+        catalog_position: str,
+    ) -> None:
+        """Create a durable recovery block when transaction ledger audit fails."""
+
+        try:
+            self._audit_transaction_ledger(transaction, catalog_position)
+        except (WorkspaceFormatError, WorkspaceSecurityError) as exc:
+            self._block_recovery(
+                "artifact commit ledger does not match transaction",
+                cause=exc,
+            )
+
+    def _load_catalog_audited(
+        self,
+    ) -> tuple[
+        ArtifactCatalog,
+        bytes | None,
+        dict[str, tuple[dict[str, object], bytes]],
+    ]:
+        """Return one globally audited catalog and permanent commit ledger."""
+
+        catalog, raw = self._load_catalog_image()
+        ledger = self._load_commit_ledger()
+        self._audit_catalog(
+            catalog,
+            ledger,
+            catalog_present=raw is not None,
+        )
+        return catalog, raw, ledger
+
+    def _load_catalog(self) -> ArtifactCatalog:
+        catalog, _, _ = self._load_catalog_audited()
+        return catalog
 
     def _load_catalog_image(self) -> tuple[ArtifactCatalog, bytes | None]:
         """Return the exact authoritative catalog image and its stored bytes."""

@@ -43,6 +43,7 @@ from story_writing_agents.writing_artifacts import (
 from story_writing_agents.writing_artifacts import _storage as storage_module
 from story_writing_agents.writing_artifacts._storage import (
     ArtifactEntrySecurityError,
+    ArtifactLeaseSecurityError,
     ArtifactRootSecurityError,
     SecureWorkspaceStorage,
 )
@@ -271,7 +272,7 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
                 LEAD_ORCHESTRATOR,
             )
 
-    def test_hash_drift_and_missing_commit_provenance_remove_eligibility(self) -> None:
+    def test_hash_drift_is_omitted_but_missing_commit_provenance_fails_closed(self) -> None:
         manuscript_path, _ = self.commit()
         (self.root / manuscript_path).write_text("manual drift", encoding="utf-8")
         self.assertEqual(self.repository.list_paths(), ())
@@ -296,7 +297,11 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
             / "agent_states/orchestrator_state/writing_artifacts/commits"
             / f"{commit_id}.json"
         ).unlink()
-        self.assertEqual(other.list_paths(), ())
+        with self.assertRaisesRegex(
+            WorkspaceFormatError,
+            "manuscript set does not match commit ledger",
+        ):
+            other.list_paths()
 
     def test_read_rejects_oversize_and_non_utf8_current_bytes(self) -> None:
         manuscript_path, _ = self.commit(candidate="é")
@@ -558,6 +563,274 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
 
 @unittest.skipUnless(os.name == "posix", "secure descriptor tests require POSIX")
 class SecureStorageTests(WritingArtifactTestCase):
+    def test_final_name_aliases_reject_before_stat_staging_or_mutation(self) -> None:
+        parent = self.root / "manuscript/part-alias"
+        parent.mkdir(parents=True)
+        parent_identity = (parent.stat().st_dev, parent.stat().st_ino)
+        real_listdir = storage_module.os.listdir
+        real_stat = storage_module.os.stat
+
+        for alias in ("Chapter.md", "ｃｈａｐｔｅｒ.md"):
+            with self.subTest(alias=alias):
+                def aliased_listdir(directory):
+                    names = list(real_listdir(directory))
+                    metadata = os.fstat(directory)
+                    if (metadata.st_dev, metadata.st_ino) == parent_identity:
+                        names.append(alias)
+                    return names
+
+                def reject_final_stat(path, *args, **kwargs):
+                    if path == "chapter.md" and kwargs.get("dir_fd") is not None:
+                        directory = os.fstat(kwargs["dir_fd"])
+                        if (directory.st_dev, directory.st_ino) == parent_identity:
+                            raise AssertionError("final alias reached stat")
+                    return real_stat(path, *args, **kwargs)
+
+                with (
+                    mock.patch.object(
+                        SecureWorkspaceStorage,
+                        "_require_primitives",
+                    ),
+                    mock.patch.object(
+                        storage_module.os,
+                        "listdir",
+                        side_effect=aliased_listdir,
+                    ),
+                    mock.patch.object(
+                        storage_module.os,
+                        "stat",
+                        side_effect=reject_final_stat,
+                    ),
+                    mock.patch.object(
+                        self.repository._storage,
+                        "publish_bytes",
+                        side_effect=AssertionError("alias reached staging"),
+                    ) as publish,
+                    self.assertRaisesRegex(
+                        ArtifactEntrySecurityError,
+                        "spelling is not exact",
+                    ),
+                ):
+                    self.commit(output_path="part-alias/chapter.md")
+
+                publish.assert_not_called()
+                self.assertFalse(parent.joinpath("chapter.md").exists())
+
+    def test_lock_aliases_fail_as_lease_errors_before_creation_or_flock(self) -> None:
+        relative = "agent_states/orchestrator_state/writing_artifacts/.artifacts.lock"
+        parent = self.root / "agent_states/orchestrator_state/writing_artifacts"
+        storage = SecureWorkspaceStorage(self.root)
+        storage.ensure_directory(parent.relative_to(self.root).as_posix())
+        parent_identity = (parent.stat().st_dev, parent.stat().st_ino)
+        real_listdir = storage_module.os.listdir
+        real_open = storage_module.os.open
+
+        for alias in (".Artifacts.lock", ".artifacts.lock.ａｎｃｈｏｒ"):
+            with self.subTest(alias=alias):
+                body_entered = False
+
+                def aliased_listdir(directory):
+                    names = list(real_listdir(directory))
+                    metadata = os.fstat(directory)
+                    if (metadata.st_dev, metadata.st_ino) == parent_identity:
+                        names.append(alias)
+                    return names
+
+                def reject_lock_creation(path, *args, **kwargs):
+                    if path == ".artifacts.lock":
+                        raise AssertionError("alias reached lock creation")
+                    return real_open(path, *args, **kwargs)
+
+                with (
+                    mock.patch.object(
+                        SecureWorkspaceStorage,
+                        "_require_primitives",
+                    ),
+                    mock.patch.object(
+                        storage_module.os,
+                        "listdir",
+                        side_effect=aliased_listdir,
+                    ),
+                    mock.patch.object(
+                        storage_module.os,
+                        "open",
+                        side_effect=reject_lock_creation,
+                    ),
+                    mock.patch.object(
+                        storage_module.fcntl,
+                        "flock",
+                        side_effect=AssertionError("alias reached flock"),
+                    ) as flock,
+                    self.assertRaisesRegex(
+                        ArtifactLeaseSecurityError,
+                        "spelling changed",
+                    ),
+                ):
+                    with storage.exclusive_lock(relative):
+                        body_entered = True
+
+                self.assertFalse(body_entered)
+                flock.assert_not_called()
+                self.assertIsNone(storage._active_lease)
+                self.assertFalse(parent.joinpath(".artifacts.lock").exists())
+                self.assertFalse(parent.joinpath(".artifacts.lock.anchor").exists())
+
+    def test_new_lock_creation_order_and_existing_pair_open_flags_are_exact(self) -> None:
+        relative = "agent_states/orchestrator_state/writing_artifacts/.artifacts.lock"
+        parent = self.root / "agent_states/orchestrator_state/writing_artifacts"
+        storage = SecureWorkspaceStorage(self.root)
+        storage.ensure_directory(parent.relative_to(self.root).as_posix())
+        parent_identity = (parent.stat().st_dev, parent.stat().st_ino)
+        events: list[str] = []
+        real_open = storage_module.os.open
+        real_fsync = storage_module.os.fsync
+        real_link = storage_module.os.link
+        real_verify = SecureWorkspaceStorage._verify_lock_identity
+        real_flock = storage_module.fcntl.flock
+
+        def record_open(path, flags, *args, **kwargs):
+            if path == ".artifacts.lock":
+                self.assertTrue(flags & os.O_EXCL)
+                self.assertTrue(flags & os.O_CREAT)
+                events.append("open_exclusive")
+            return real_open(path, flags, *args, **kwargs)
+
+        def record_fsync(descriptor):
+            metadata = os.fstat(descriptor)
+            if stat.S_ISDIR(metadata.st_mode):
+                if (metadata.st_dev, metadata.st_ino) == parent_identity:
+                    events.append("fsync_parent")
+            else:
+                events.append("fsync_lock")
+            return real_fsync(descriptor)
+
+        def record_link(*args, **kwargs):
+            events.append("link_anchor")
+            return real_link(*args, **kwargs)
+
+        def record_verify(*args, **kwargs):
+            events.append("verify")
+            return real_verify(*args, **kwargs)
+
+        def record_flock(descriptor, operation):
+            if operation == storage_module.fcntl.LOCK_EX:
+                events.append("flock")
+            return real_flock(descriptor, operation)
+
+        with (
+            mock.patch.object(SecureWorkspaceStorage, "_require_primitives"),
+            mock.patch.object(storage_module.os, "open", side_effect=record_open),
+            mock.patch.object(storage_module.os, "fsync", side_effect=record_fsync),
+            mock.patch.object(storage_module.os, "link", side_effect=record_link),
+            mock.patch.object(
+                SecureWorkspaceStorage,
+                "_verify_lock_identity",
+                side_effect=record_verify,
+            ),
+            mock.patch.object(storage_module.fcntl, "flock", side_effect=record_flock),
+        ):
+            with storage.exclusive_lock(relative):
+                events.append("body")
+
+        self.assertEqual(
+            tuple(events[:9]),
+            (
+                "open_exclusive",
+                "fsync_lock",
+                "fsync_parent",
+                "link_anchor",
+                "fsync_parent",
+                "verify",
+                "flock",
+                "verify",
+                "body",
+            ),
+        )
+
+        existing_flags: list[int] = []
+
+        def record_existing_open(path, flags, *args, **kwargs):
+            if path == ".artifacts.lock":
+                existing_flags.append(flags)
+            return real_open(path, flags, *args, **kwargs)
+
+        with (
+            mock.patch.object(SecureWorkspaceStorage, "_require_primitives"),
+            mock.patch.object(
+                storage_module.os,
+                "open",
+                side_effect=record_existing_open,
+            ),
+        ):
+            with storage.exclusive_lock(relative):
+                pass
+        self.assertEqual(len(existing_flags), 1)
+        self.assertFalse(existing_flags[0] & os.O_CREAT)
+        self.assertFalse(existing_flags[0] & os.O_EXCL)
+
+    def test_lock_creation_fsync_and_link_failures_never_enter_and_retry_blocks(
+        self,
+    ) -> None:
+        relative = "agent_states/orchestrator_state/writing_artifacts/.artifacts.lock"
+        for failure in ("file fsync", "parent fsync", "link"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                Workspace(root).initialize()
+                storage = SecureWorkspaceStorage(root)
+                parent = root / "agent_states/orchestrator_state/writing_artifacts"
+                storage.ensure_directory(parent.relative_to(root).as_posix())
+                real_fsync = storage_module.os.fsync
+                real_link = storage_module.os.link
+                body_entered = False
+
+                def fail_selected_fsync(descriptor):
+                    metadata = os.fstat(descriptor)
+                    selected = (
+                        failure == "parent fsync" and stat.S_ISDIR(metadata.st_mode)
+                    ) or (
+                        failure == "file fsync" and not stat.S_ISDIR(metadata.st_mode)
+                    )
+                    if selected:
+                        raise OSError(failure)
+                    return real_fsync(descriptor)
+
+                def fail_link(*args, **kwargs):
+                    if failure == "link":
+                        raise OSError(failure)
+                    return real_link(*args, **kwargs)
+
+                with (
+                    mock.patch.object(
+                        SecureWorkspaceStorage,
+                        "_require_primitives",
+                    ),
+                    mock.patch.object(
+                        storage_module.os,
+                        "fsync",
+                        side_effect=fail_selected_fsync,
+                    ),
+                    mock.patch.object(
+                        storage_module.os,
+                        "link",
+                        side_effect=fail_link,
+                    ),
+                    self.assertRaisesRegex(
+                        ArtifactLeaseSecurityError,
+                        "cannot securely acquire",
+                    ),
+                ):
+                    with storage.exclusive_lock(relative):
+                        body_entered = True
+
+                self.assertFalse(body_entered)
+                self.assertIsNone(storage._active_lease)
+                with self.assertRaisesRegex(
+                    ArtifactLeaseSecurityError,
+                    "pair is incomplete",
+                ):
+                    with storage.exclusive_lock(relative):
+                        self.fail("incomplete lock pair entered protected body")
+
     def test_read_traversal_does_not_fsync_but_child_creation_fsyncs_parent_once(
         self,
     ) -> None:
@@ -1141,6 +1414,214 @@ class RepositoryRecoveryTests(WritingArtifactTestCase):
             transaction_path.read_text(encoding="utf-8")
         )
 
+    def test_empty_ledger_allows_first_commit_and_valid_history_reserves_paths(
+        self,
+    ) -> None:
+        state = self.root / "agent_states/orchestrator_state/writing_artifacts"
+        self.assertFalse(state.joinpath("catalog.json").exists())
+        self.assertFalse(state.joinpath("commits").exists())
+
+        first, _ = self.commit(
+            output_path="part-01/first.md",
+            core_updates={"global_outline.md": "outline one"},
+        )
+        second, _ = self.commit(
+            output_path="part-02/second.md",
+            candidate="second manuscript",
+            core_updates={"global_outline.md": "outline two"},
+            debate_id="debate_02",
+        )
+
+        self.assertEqual(
+            self.repository.list_paths(),
+            tuple(
+                sorted(
+                    (
+                        "core_documents/global_outline.md",
+                        first,
+                        second,
+                    )
+                )
+            ),
+        )
+        self.assertEqual(
+            self.repository.read_text("core_documents/global_outline.md"),
+            "outline two",
+        )
+        self.assertEqual(len(tuple(state.joinpath("commits").glob("*.json"))), 2)
+
+    def test_missing_empty_or_subset_catalog_with_commits_blocks_before_mutation(
+        self,
+    ) -> None:
+        for catalog_state in ("missing", "empty", "subset"):
+            with (
+                self.subTest(catalog_state=catalog_state),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = Path(directory)
+                Workspace(root).initialize()
+                repository = WritingArtifactRepository(root)
+                first, _ = self.commit_repository(
+                    repository,
+                    output_path="part-01/first.md",
+                )
+                second, _ = self.commit_repository(
+                    repository,
+                    output_path="part-02/second.md",
+                )
+                state = root / "agent_states/orchestrator_state/writing_artifacts"
+                catalog_path = state / "catalog.json"
+                if catalog_state == "missing":
+                    catalog_path.unlink()
+                elif catalog_state == "empty":
+                    catalog_path.write_bytes(
+                        repository._json_bytes(ArtifactCatalog.empty().to_dict())
+                    )
+                else:
+                    catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+                    catalog["entries"] = [
+                        entry
+                        for entry in catalog["entries"]
+                        if entry["path"] != second
+                    ]
+                    catalog_path.write_bytes(repository._json_bytes(catalog))
+
+                with self.assertRaises(WorkspaceFormatError):
+                    self.commit_repository(
+                        repository,
+                        output_path="part-03/new.md",
+                    )
+                self.assertFalse(root.joinpath("manuscript/part-03/new.md").exists())
+                self.assertFalse(tuple(state.joinpath("transactions").glob("*.json")))
+                self.assertTrue(root.joinpath(first).is_file())
+                self.assertTrue(root.joinpath(second).is_file())
+
+    def test_malformed_unexpected_mismatched_and_extra_commit_records_block(
+        self,
+    ) -> None:
+        for corruption in ("malformed", "unexpected", "mismatched", "extra"):
+            with (
+                self.subTest(corruption=corruption),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = Path(directory)
+                Workspace(root).initialize()
+                repository = WritingArtifactRepository(root)
+                self.commit_repository(repository)
+                state = root / "agent_states/orchestrator_state/writing_artifacts"
+                commit_path = next(state.joinpath("commits").glob("*.json"))
+                commit = json.loads(commit_path.read_text(encoding="utf-8"))
+                replacement_id = "f" * 32
+                if commit["commit_id"] == replacement_id:
+                    replacement_id = "e" * 32
+
+                if corruption == "malformed":
+                    commit_path.write_bytes(b"{not json")
+                elif corruption == "unexpected":
+                    state.joinpath("commits/unexpected.txt").write_bytes(b"unexpected")
+                elif corruption == "mismatched":
+                    commit_path.rename(state.joinpath("commits", f"{replacement_id}.json"))
+                else:
+                    commit["commit_id"] = replacement_id
+                    for artifact in commit["artifacts"]:
+                        if artifact["kind"] == ArtifactKind.MANUSCRIPT.value:
+                            artifact["path"] = "manuscript/part-extra/extra.md"
+                    state.joinpath("commits", f"{replacement_id}.json").write_bytes(
+                        repository._json_bytes(commit)
+                    )
+
+                with self.assertRaises(WorkspaceFormatError):
+                    repository.catalog()
+                self.assertFalse(root.joinpath("manuscript/part-new/new.md").exists())
+
+    def test_duplicate_historical_manuscript_reservation_blocks_path_reuse(self) -> None:
+        manuscript_path, _ = self.commit()
+        state = self.root / "agent_states/orchestrator_state/writing_artifacts"
+        commit_path = next(state.joinpath("commits").glob("*.json"))
+        duplicate = json.loads(commit_path.read_text(encoding="utf-8"))
+        duplicate_id = "f" * 32
+        if duplicate["commit_id"] == duplicate_id:
+            duplicate_id = "e" * 32
+        duplicate["commit_id"] = duplicate_id
+        state.joinpath("commits", f"{duplicate_id}.json").write_bytes(
+            self.repository._json_bytes(duplicate)
+        )
+
+        with self.assertRaisesRegex(
+            WorkspaceFormatError,
+            "reuses a manuscript path",
+        ):
+            self.commit(output_path="part-02/new.md")
+        self.assertTrue(self.root.joinpath(manuscript_path).is_file())
+        self.assertFalse(self.root.joinpath("manuscript/part-02/new.md").exists())
+        self.assertFalse(tuple(state.joinpath("transactions").glob("*.json")))
+
+    def test_exact_pending_commit_is_exempt_but_unrelated_commit_is_not(self) -> None:
+        for unrelated in (False, True):
+            with self.subTest(unrelated=unrelated), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                Workspace(root).initialize()
+                repository = WritingArtifactRepository(root)
+                with (
+                    mock.patch.object(
+                        repository,
+                        "_complete_transaction",
+                        side_effect=OSError("prepared"),
+                    ),
+                    self.assertRaisesRegex(OSError, "prepared"),
+                ):
+                    self.commit_repository(repository)
+                state = root / "agent_states/orchestrator_state/writing_artifacts"
+                journal = next(state.joinpath("transactions").glob("*.json"))
+                transaction = json.loads(journal.read_text(encoding="utf-8"))
+                commit = transaction["commit"]
+                state.joinpath("commits", f"{commit['commit_id']}.json").write_bytes(
+                    repository._json_bytes(commit)
+                )
+                if unrelated:
+                    unrelated_commit = deepcopy(commit)
+                    unrelated_id = "f" * 32
+                    if unrelated_id == commit["commit_id"]:
+                        unrelated_id = "e" * 32
+                    unrelated_commit["commit_id"] = unrelated_id
+                    for artifact in unrelated_commit["artifacts"]:
+                        if artifact["kind"] == ArtifactKind.MANUSCRIPT.value:
+                            artifact["path"] = "manuscript/unrelated/other.md"
+                    state.joinpath("commits", f"{unrelated_id}.json").write_bytes(
+                        repository._json_bytes(unrelated_commit)
+                    )
+
+                recovered = WritingArtifactRepository(root)
+                if unrelated:
+                    with self.assertRaisesRegex(
+                        WorkspaceFormatError,
+                        "recovery is blocked",
+                    ):
+                        recovered.list_paths()
+                    self.assertFalse(
+                        root.joinpath("manuscript/part-01/chapter-01.md").exists()
+                    )
+                    self.assertTrue(state.joinpath("recovery_blocked.json").is_file())
+                else:
+                    self.assertEqual(
+                        recovered.list_paths(),
+                        ("manuscript/part-01/chapter-01.md",),
+                    )
+
+    def test_catalog_after_requires_exact_commit_and_target_state(self) -> None:
+        _, transaction = self.prepared_transaction()
+        state = self.root / "agent_states/orchestrator_state/writing_artifacts"
+        state.joinpath("catalog.json").write_bytes(
+            self.repository._json_bytes(transaction["catalog_after"])
+        )
+
+        with self.assertRaisesRegex(WorkspaceFormatError, "recovery is blocked"):
+            WritingArtifactRepository(self.root).list_paths()
+        self.assertFalse(
+            self.root.joinpath("manuscript/part-01/chapter-01.md").exists()
+        )
+        self.assertTrue(state.joinpath("recovery_blocked.json").is_file())
+
     def test_publication_is_catalog_last(self) -> None:
         observed: list[str] = []
         publish = self.repository._storage.publish_bytes
@@ -1547,8 +2028,8 @@ class RepositoryRecoveryTests(WritingArtifactTestCase):
         self.assertTrue(state.joinpath("recovery_blocked.json").is_file())
         self.assertTrue(transaction.is_file())
         self.assertFalse(state.joinpath("catalog.json").exists())
-        self.assertTrue(
-            self.root.joinpath("manuscript/part-01/chapter-01.md").is_file()
+        self.assertFalse(
+            self.root.joinpath("manuscript/part-01/chapter-01.md").exists()
         )
         with self.assertRaisesRegex(WorkspaceFormatError, "recovery is blocked"):
             WritingArtifactRepository(self.root).catalog()

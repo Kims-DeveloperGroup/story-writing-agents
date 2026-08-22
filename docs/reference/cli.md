@@ -320,6 +320,11 @@ its path or the path from its prompt. Attached to the flag it causes a parse
 error; captured in the path token it is not silently normalized and fails path
 validation. Both fail before provider or artifact work.
 
+After leading `--fresh`, the only accepted second leading long option is exact
+`--output`. Another `--...` token fails parsing; a single-hyphen word or
+ordinary text begins the prompt, and later `--...` text remains literal prompt
+content.
+
 When interactive `--output` is omitted, the controller first prompts for a safe
 create-only `PART/PATH.md` beneath `manuscript/`; invalid input retries, cancel
 returns to the main prompt, and EOF exits normally. The noninteractive

@@ -25,7 +25,6 @@ Workspace.write_json(relative, value, *, overwrite: bool = True) -> pathlib.Path
 Workspace.read_persona(template_name: str) -> str
 Workspace.persona_path(template_name: str) -> pathlib.Path
 Workspace.persona_exists(template_name: str) -> bool
-Workspace.read_core_documents(filenames: tuple[str, ...]) -> dict[str, str]
 Workspace.load_session_overrides(session_id: str) -> dict[str, Any]
 Workspace.save_session_overrides(session_id: str, overrides: Mapping[str, Any]) -> pathlib.Path
 ```
@@ -39,6 +38,15 @@ The workspace root is resolved once. Public path operations accept only safely
 contained workspace-relative paths with no absolute path, `..`, or symlink
 component. Text is strict UTF-8. JSON readers reject malformed structures where
 the consuming contract performs schema validation.
+
+`Workspace.read_text()` is a raw, safely contained UTF-8 read. It does not
+classify canonical paths, check artifact provenance, or make bytes eligible for
+story-agent context. Although it can physically read a canonical file, callers
+must not treat that result as trusted canonical context.
+`Workspace.read_core_documents()` has been removed with no compatibility alias;
+trusted story context is selected internally through repository-backed runtime
+prompt construction. Generic raw reads remain appropriate for noncanonical
+inputs and internal workspace files.
 
 `write_text` and `write_json` atomically replace one file when overwrite is
 allowed, except that both reject the four canonical core-document paths, every

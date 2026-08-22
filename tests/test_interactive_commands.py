@@ -938,6 +938,41 @@ class SuccessfulParsingTests(unittest.TestCase):
                     ),
                 )
 
+    def test_fresh_run_accepts_only_exact_leading_output_flag_and_literal_tail(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "/run --fresh --output part-01/chapter.md exact prompt",
+                InteractiveAction(
+                    ActionKind.RUN_FRESH,
+                    text="exact prompt",
+                    output_path="part-01/chapter.md",
+                ),
+            ),
+            (
+                "/run --fresh ordinary prose",
+                InteractiveAction(ActionKind.RUN_FRESH, text="ordinary prose"),
+            ),
+            (
+                "/run --fresh -single-hyphen prose",
+                InteractiveAction(
+                    ActionKind.RUN_FRESH,
+                    text="-single-hyphen prose",
+                ),
+            ),
+            (
+                "/run --fresh prompt --unknown remains literal",
+                InteractiveAction(
+                    ActionKind.RUN_FRESH,
+                    text="prompt --unknown remains literal",
+                ),
+            ),
+        )
+        for line, expected in cases:
+            with self.subTest(line=line):
+                self.assertEqual(parse_interactive_line(line), expected)
+
     def test_token_arguments_accept_printable_non_whitespace_values(self) -> None:
         cases = (
             (
@@ -1236,6 +1271,10 @@ class InvalidInputTests(ParserAssertions, unittest.TestCase):
         ):
             with self.subTest(line=line):
                 self.assert_parse_error(line)
+
+        for flag in ("--unknown", "--", "--fresh", "--outputish"):
+            with self.subTest(fresh_second_flag=flag):
+                self.assert_parse_error(f"/run --fresh {flag} prompt")
 
     def test_unicode_whitespace_does_not_become_a_run_output_delimiter(self) -> None:
         for whitespace in ("\u00a0", "\u2003", "\u3000"):

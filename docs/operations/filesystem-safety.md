@@ -41,7 +41,8 @@ revalidates the complete ancestor chain, requires each read target to be a
 unique regular file with one link, opens reads nonblocking, and rechecks the
 name and file after reading. Each descriptor-relative component must have its
 exact stored spelling; case-folded and NFKC-normalized aliases are rejected
-instead of being treated as the requested canonical identity. Symlinks,
+before the final component is inspected, opened, or staged instead of being
+treated as the requested canonical identity. Symlinks,
 hard-linked artifacts, nonregular files, root or ancestor replacement, and
 detected concurrent change fail closed. Required
 descriptor-relative, no-follow, listing, link, advisory-lock, and native atomic
@@ -52,11 +53,17 @@ construction remain available on an unsupported host; the artifact operation
 itself raises `WorkspaceSecurityError`.
 
 Artifact mutation additionally requires the workspace-local repository lease.
-The permanent lock and anchor are two names for the same regular inode; both
-names, link count, open descriptor, directory ancestry, and workspace root are
-verified before and after lock acquisition and around mutations. This paired
-hard link belongs only to lock identity. Canonical artifacts remain one-link
-regular files.
+The permanent lock and anchor are two exact names for the same regular inode.
+Alias checks run before final lock/anchor `stat`, creation, or `flock`. When both
+are absent, first use creates the lock with `O_CREAT|O_EXCL|O_NOFOLLOW`, flushes
+the file, flushes its parent, creates the hard-link anchor, flushes the parent
+again, verifies the stable two-link identity, acquires `flock`, and verifies it
+again before protected work. Later use requires the complete existing pair and
+opens without create flags. A partial pair or any creation/link/flush failure
+never enters protected work and is not automatically reconstructed. Both names,
+link count, open descriptor, directory ancestry, and workspace root are also
+verified around mutations. This paired hard link belongs only to lock identity.
+Canonical artifacts remain one-link regular files.
 
 This serializes supported repository writers. Generic `Workspace` writes to
 canonical paths are rejected. External/manual edits are supported only while
@@ -125,6 +132,14 @@ never replaced with a later phase. After all targets, the repository publishes
 immutable commit history and the current catalog last. Completed journal
 retirement compares its exact hash before an exclusive no-replace move to
 `.completed` staging.
+
+Outside recovery, every artifact read or commit audits the complete permanent
+commit ledger against the catalog before trusting an entry or publishing new
+bytes. Every ledger commit permanently reserves its one manuscript identity.
+Historical core updates may be superseded, but each current core catalog entry
+must exactly match its referenced immutable commit. Missing, subset, malformed,
+extra, duplicate-reservation, or otherwise mismatched ledger/catalog state fails
+closed; catalog loss does not free manuscript paths and is never reconstructed.
 
 On the next artifact access, an exact catalog-before position rolls forward;
 an exact catalog-after position is verified without republishing. A catalog

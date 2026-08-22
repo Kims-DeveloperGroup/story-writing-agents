@@ -95,19 +95,22 @@ agent-authored bytes whose publication history still validates.
 | --- | --- | --- |
 | Absent | No file and no current catalog entry. | The file is not supplied as agent context. A later unanimous run may create it. |
 | Manual or unprovenanced | Bytes exist, but no matching repository-owned catalog and commit record exists. Generic `Workspace` writes cannot create this state because they reject canonical paths; it can result from an external filesystem edit. | The bytes remain on disk but are excluded from the eligible catalog and core prompt context. A manuscript at that path also blocks create-only publication. |
-| Current and eligible | The path is canonical, its catalog entry and immutable commit record agree exactly, and its current SHA-256 matches. | The runtime may list/read it through the artifact repository. Eligible core documents are supplied only to their allowed agents. |
-| Stale and ineligible | A catalog entry exists, but the file is missing, unsafe, nonregular, or its bytes no longer match the recorded hash. | Catalog listing and selective context reads omit that entry; an exact artifact read fails. The runtime does not delete or silently repair the bytes. A deleted cataloged manuscript identity remains reserved and cannot be reused. |
+| Current and eligible | The path is canonical, its catalog entry and immutable commit record agree exactly, its current SHA-256 matches, and the complete catalog/commit ledger passes global audit. | The runtime may list/read it through the artifact repository. Eligible core documents are supplied only to their allowed agents. |
+| Stale and ineligible | A catalog entry exists, but the file is missing, unsafe, nonregular, or its bytes no longer match the recorded hash. | Catalog listing and selective context reads omit that entry; an exact artifact read fails. The runtime does not delete or silently repair the bytes. The permanent commit ledger continues to reserve a deleted manuscript identity. |
 | Recovery pending | One immutable schema-v2 JSON transaction journal remains in authoritative `transactions/`. It records the exact catalog-before position, catalog-after image, commit, ordered targets, old/new hashes, and complete new bytes. | The next catalog read, artifact read, or commit first attempts deterministic recovery under the artifact lock. No partially published set becomes eligible. |
 | Recovered | Roll-forward completed, the commit record and catalog were published, and the journal was exclusively retired into non-authoritative staging with a `.completed` suffix. This is an observed outcome, not a stored state name. | The newly current entries become eligible on that same access. The retained journal bytes are internal evidence, not a listed artifact or pending transaction. |
 | Recovery blocked | A pending journal, target, or recovery invariant could not be trusted, and a persistent block marker was written. | Every later artifact-repository read or commit fails closed. Preserve the workspace and investigate or restore a verified backup; there is no automatic repair command. |
+| Ledger or catalog invalid | A permanent commit is missing, malformed, duplicated, unexpected, or inconsistent with the catalog, or the catalog is missing/incomplete while commits exist. | Artifact access fails closed without changing story bytes. Preserve the workspace and restore verified repository metadata from backup; the runtime does not reconstruct or migrate it. |
+| Lock unsafe | The permanent lock/anchor names are aliased, incomplete, divergent, or cannot be created and flushed safely. | The current artifact operation fails before entering the protected repository body. Stop workspace processes and investigate the pair; the runtime does not reconstruct it. |
 | Retained staging residue | A `.tmp`, `.held`, `.retired`, or `.completed` file remains under the repository's non-authoritative `staging/` directory. | This is normal internal state and never appears in the canonical catalog or agent context. It may grow over time; do not treat it as a writing artifact or move it into `transactions/`. |
 
 A manual edit invalidates eligibility without deleting the file. Restoring the
-exact recorded bytes also restores hash eligibility when the catalog and commit
-record are still intact. Otherwise, let a later unanimous run republish a core
-document. For a changed manuscript, use a new part-scoped revision path. Stop
-all workspace processes before any external/manual filesystem edit; live manual
-namespace mutation is outside the supported writer boundary.
+exact recorded bytes also restores hash eligibility when the complete catalog
+and permanent commit ledger still audit successfully. Otherwise, let a later
+unanimous run republish a core document. For a changed manuscript, use a new
+part-scoped revision path. Stop all workspace processes before any
+external/manual filesystem edit; live manual namespace mutation is outside the
+supported writer boundary.
 
 Do not edit the catalog, commit records, transaction journals, lock, or recovery
 marker to force a state. They are consistency evidence, not user-authored
@@ -127,9 +130,17 @@ recovery before continuing. Other workspace and runtime APIs remain usable on a
 host that cannot perform artifact I/O.
 
 The lease is a permanent paired hard-link identity for the repository lock, not
-an artifact. Both names, the open descriptor, the retained directory chain, and
-the workspace root are revalidated around mutation. Canonical artifact files
-themselves must still be unique regular files with one link.
+an artifact. Lock and anchor aliases are rejected by exact-spelling checks
+before their final `stat`, creation, or `flock`. On first use, both names must be
+absent: the repository creates the lock with `O_EXCL`, flushes the lock and its
+parent, links the anchor, flushes the parent again, verifies the two-name inode,
+acquires `flock`, and verifies again before entering the protected body. On
+later use, both names must already form that exact pair and the lock is opened
+without create flags. A failed creation may leave an incomplete pair; it is
+rejected on retry rather than reconstructed. Both names, the open descriptor,
+the retained directory chain, and the workspace root are revalidated around
+mutation. Canonical artifact files themselves must still be unique regular
+files with one link.
 
 One successful commit follows this order:
 
@@ -137,7 +148,9 @@ One successful commit follows this order:
    allowlist, story-agent authorship, session/debate/revision identities, and
    exact repository JSON schemas. Duplicate object keys are rejected at every
    nesting level.
-2. Reject any existing manuscript target before publication.
+2. Globally audit the complete immutable commit ledger against the current
+   catalog, then reject a manuscript path already reserved by any historical
+   commit or occupied by existing bytes.
 3. Create one immutable schema-v2 transaction journal containing the exact
    catalog-before existence/hash/image, catalog-after image, commit, and ordered
    targets with old/new hashes, complete new bytes, and authors. The journal is
@@ -166,12 +179,15 @@ and can grow across successful and failed operations.
 If the process stops after step 3, recovery first compares the current catalog
 bytes with the journal's two exact positions. At catalog-before, every target
 must equal its recorded old or new bytes; recovery rolls the transaction
-forward and publishes the catalog last. At catalog-after, every target and the
-immutable commit must already equal the recorded new state; recovery only
-verifies them and retires the journal. A catalog matching neither position, an
-untrusted target, a missing/replaced journal, or a missing/divergent commit in
-catalog-after state blocks recovery durably rather than guessing. Catalog-last
-ordering means an
+forward and publishes the catalog last. If that pending commit already exists,
+only bytes exactly matching the journal's commit are temporarily exempt from
+the catalog-before audit; an unrelated record absent from the exact
+catalog-before view or a divergent record blocks. At
+catalog-after, every target, commit, and catalog projection must already equal
+the recorded new state; recovery only verifies them and retires the journal. A
+catalog matching neither position, an untrusted target, a missing/replaced
+journal, or a missing/divergent commit in catalog-after state blocks recovery
+durably rather than guessing. Catalog-last ordering means an
 interrupted target set is never advertised as partly eligible.
 
 This transaction covers its manuscript, changed core documents, commit record,
@@ -184,11 +200,22 @@ succeeds.
 
 Each current catalog entry records the exact workspace-relative path, artifact
 kind, SHA-256, commit ID and timestamp, author agent, session ID, debate ID, and
-revision ID. The matching immutable commit record groups exactly one manuscript
-and any core updates from that publication. Transaction targets, commit
-artifacts, and all catalog entries for that commit must contain the same exact
-path/kind/author/hash set; their commit and correlation metadata must agree.
-Schema fields and scalar types are exact rather than extensible.
+revision ID. Every immutable commit record permanently remains in the ledger and
+groups exactly one manuscript with any core updates from that publication. At
+publication, ordered transaction targets, commit artifacts, and the
+catalog-after entries introduced by that commit contain the same exact
+path/kind/author/hash set and correlation metadata.
+
+Every access globally audits the ledger and catalog. Commit filenames and
+schemas must be exact; duplicate historical manuscript paths are invalid. The
+catalog's manuscript set must equal the complete permanent ledger reservation
+set, and every catalog entry must exactly project an artifact from its named
+commit. A later commit may supersede a core-document catalog entry while the
+older commit remains as history; whichever core entry is current must exactly
+match its referenced commit. Missing, subset, extra, malformed, or mismatched
+ledger/catalog state fails closed. Catalog loss cannot erase a manuscript
+reservation, and the runtime neither reconstructs nor migrates repository
+metadata. Schema fields and scalar types are exact rather than extensible.
 
 The execution specialist authors manuscript revision `r0`. Any later approved
 revision is a lead-authored synthesis, and every core-document update is

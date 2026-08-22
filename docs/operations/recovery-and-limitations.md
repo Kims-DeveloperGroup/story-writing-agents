@@ -67,8 +67,12 @@ later phase.
 Recovery compares the current catalog with those two exact positions. From
 catalog-before, every target may equal only its recorded old or new bytes;
 recovery rolls the set forward, publishes immutable commit history, and
-publishes the catalog last. At catalog-after, every target and commit must
-already be the exact new state, so recovery only verifies them. It then
+publishes the catalog last. If the pending commit record already exists here,
+the audit exempts it only when its bytes exactly equal this journal's commit;
+an unrelated record absent from the exact catalog-before view or divergent
+ledger state still blocks. At catalog-after, every target, commit, and catalog
+projection must already be the exact new state, so recovery only verifies them.
+It then
 hash-checks the unchanged journal and moves it with native no-replace rename to
 a `.completed` name in staging. A catalog matching neither position, an
 untrusted target, or missing/replaced journal or final commit authority blocks
@@ -102,9 +106,23 @@ ineligible. Restoring the exact cataloged bytes can make it eligible again when
 the commit and catalog evidence remain valid.
 
 A cataloged manuscript identity is never reusable. If its file is deleted, the
-catalog retains the historical identity while eligible listing omits the stale
-entry. A later commit to the same path raises `ManuscriptExistsError`; choose a
-new part-scoped revision path.
+permanent commit ledger retains the historical reservation while eligible
+listing omits the stale entry. A later commit to the same path raises
+`ManuscriptExistsError`; choose a new part-scoped revision path. Catalog loss
+does not free reservations: a missing, empty, or subset catalog beside existing
+commits fails closed. Malformed, unexpected, extra, mismatched, or
+duplicate-reservation commit records also fail global audit. Historical core
+commits may remain after their catalog entries are superseded, but every current
+core entry must exactly match its referenced commit. There is no automatic
+ledger/catalog reconstruction or migration.
+
+The permanent artifact lock is similarly not repaired. Exact lock and anchor
+aliases fail before final inspection or locking. First creation must durably
+complete exclusive lock creation, file flush, parent flush, anchor link, second
+parent flush, pair verification, `flock`, and post-lock verification. Any
+failure avoids protected work; an incomplete pair causes later artifact access
+to fail again rather than reconstructing it. Stop all workspace processes,
+preserve a backup, and investigate the pair.
 
 Stop every workspace process before a manual or external filesystem edit. The
 repository lease serializes supported repository writers, but an actively

@@ -79,8 +79,14 @@ the optional prompt. Unicode whitespace attached to `--output` returns a typed
 `parse_error`; when attached to the path, it remains part of that token and is
 later rejected by the artifact path validator. The parser preserves the token
 in `output_path`; the controller validates the artifact grammar and prompts
-when it is absent. Registry membership is not main-prompt availability: the
-installed shell rejects standalone `/compose`,
+when it is absent.
+
+After exact leading `--fresh`, a second leading token beginning with `--` is
+accepted only when it is exactly `--output`; `--fresh`, `--outputish`, `--`, and
+other unknown flags return `parse_error`. Ordinary prose and a single-hyphen
+word can start the fresh prompt. Once prompt text has started, later `--...`
+text is literal prompt content rather than another option. Registry membership
+is not main-prompt availability: the installed shell rejects standalone `/compose`,
 `/send`, and `/cancel`. Run composition recognizes `/send` and `/cancel`;
 `/say /send` and `/say /cancel` are exact
 aliases.

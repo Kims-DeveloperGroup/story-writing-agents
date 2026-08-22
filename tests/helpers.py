@@ -51,9 +51,14 @@ def initialized_workspace(test_case: TestCase) -> Workspace:
 
 
 def core_snapshot(workspace: Workspace) -> dict[str, str]:
-    """Return the full allowlisted core-document state."""
+    """Return raw fixture-only bytes for the full allowlisted core state."""
 
-    return workspace.read_core_documents(CORE_DOCUMENTS)
+    return {
+        filename: workspace.path(f"core_documents/{filename}").read_text(
+            encoding="utf-8"
+        )
+        for filename in CORE_DOCUMENTS
+    }
 
 
 class _DelegatingBoundAgent:
