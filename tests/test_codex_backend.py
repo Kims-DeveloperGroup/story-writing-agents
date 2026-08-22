@@ -158,12 +158,14 @@ if mode == "nonzero" or (
     if "conversation_id" in payload:
         sensitive = [payload["content"]]
         sensitive.extend(item["content"] for item in payload["context"])
-    else:
+    elif "user_payload" in payload:
         sensitive = [payload["user_payload"]]
         sensitive.extend(
             item["content"]
             for item in payload.get("conversation_context", [])
         )
+    else:
+        sensitive = []
     prefix = "X" * 5000 if os.environ.get("STORY_FAKE_CODEX_LONG_DIAGNOSTIC") else ""
     print(
         prefix
@@ -4330,7 +4332,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
     async def test_reference_read_failures_stop_before_substantive_call_and_taint(
         self,
     ) -> None:
-        cases = ("malformed", "result_first", "wrong_batch", "drift")
+        cases = ("nonzero", "malformed", "result_first", "wrong_batch", "drift")
         for case in cases:
             with self.subTest(case=case):
                 self.log_path.unlink(missing_ok=True)
@@ -4351,7 +4353,11 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 expected_error: type[BaseException]
                 expected_outcome: ReferenceAuthorizationErrorCode
                 persisted_thread = False
-                if case == "malformed":
+                if case == "nonzero":
+                    environment["STORY_FAKE_CODEX_MODE"] = "nonzero"
+                    expected_error = BackendProtocolError
+                    expected_outcome = ReferenceAuthorizationErrorCode.PROVIDER_FAILURE
+                elif case == "malformed":
                     environment["STORY_FAKE_CODEX_REFERENCE_ACTION"] = "{}"
                     expected_error = BackendProtocolError
                     expected_outcome = ReferenceAuthorizationErrorCode.PROVIDER_FAILURE
@@ -4387,11 +4393,20 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     expected_outcome = ReferenceAuthorizationErrorCode.DRIFT
                 with (
                     mock.patch.dict(os.environ, environment),
-                    self.assertRaises(expected_error),
+                    self.assertRaises(expected_error) as raised,
                 ):
                     await bound.invoke(
                         self.request(session_id=session_id),
                         reference_read=invocation,
+                    )
+                if case == "nonzero":
+                    self.assertEqual(
+                        str(raised.exception),
+                        "Codex CLI exited with status 7",
+                    )
+                    self.assertNotIn(
+                        "REFERENCE-PROVIDER-MARKER",
+                        str(raised.exception),
                     )
                 self.assertEqual(len(self.provider_invocations()), 1)
                 history = repository.inspect_reference_operation(operation_id)
