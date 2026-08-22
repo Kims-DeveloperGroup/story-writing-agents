@@ -303,6 +303,19 @@ every intermediate arrow. The current runtime graph is acyclic.
   Provider-native retention remains unchanged, and this hardening does not
   claim application access control or descriptor-anchored, race-proof
   containment.
+  Binding and per-turn workspace staging install canonical rules bytes through
+  an exclusively created same-directory temporary requested as `0600`, verify
+  that temporary's regular singly linked identity, and atomically replace the
+  target. Existing staged or retained-workspace `AGENTS.md` targets are
+  accepted only when missing or regular and singly linked; detected symbolic
+  links, non-regular entries, and multiply linked files are preserved and
+  rejected. Invocation also reads the staged source through a descriptor
+  verified as regular, singly linked, and identity-matched to its no-follow
+  pathname before installation. These checks prevent final-leaf redirection;
+  an unsafe invocation fails before provider launch without tainting compatible
+  history. Parent traversal remains pathname-based rather than descriptor-
+  anchored, so these rules-file protections likewise do not claim application
+  access control or race-proof containment.
   Invocation serializes its output schema, payload, and NDJSON stdin event
   before creating any new per-session runtime tree; encoding failure therefore
   creates no new provider or workspace directory. After serialization, it
