@@ -59,6 +59,8 @@ class KeyKind(StrEnum):
     END = "end"
     UP = "up"
     DOWN = "down"
+    SHIFT_UP = "shift_up"
+    SHIFT_DOWN = "shift_down"
     TAB = "tab"
     SHIFT_TAB = "shift_tab"
     ESCAPE = "escape"

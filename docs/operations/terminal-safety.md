@@ -1,8 +1,10 @@
 # Terminal display safety
 
 > **Availability:** these rules protect shell live editing, migrated semantic
-> output, and established package-supported terminal records. They do not make
-> scrollback private.
+> output, established package-supported terminal records, and the unlisted
+> supplied-text ranged viewer. The viewer has no installed-shell command or
+> supported public API. These rules do not make scrollback or process memory
+> private.
 
 Key terms: **TTY guard**—check for interactive streams; **typed error**—trusted
 public code instead of exception prose; **display escaping**—showing a control
@@ -66,6 +68,13 @@ The internal profiles are fixed ANSI, capable plain, and line fallback. Presence
 of `NO_COLOR` disables decorative SGR only; it does not disable safe functional
 cursor controls on an otherwise capable terminal. There is no public theme API.
 
+The internal viewer uses those same capability facts but has a distinct
+interaction. A capable stream uses raw input and one alternate screen; an
+incapable or safely unavailable pre-activation setup uses the complete numbered
+line fallback. The driver observes bounded output width and height before the
+first viewer frame and after every nonexit key. It installs no `SIGWINCH`
+handler or background resize loop, and it never hides or shows the cursor.
+
 For one advisory turn, the same capability result also gates the narrow
 terminal-owned progress indicator. A capable raw stream may show the fixed
 four-glyph `◐`/`◓`/`◑`/`◒` cycle; `NO_COLOR` leaves those plain glyphs enabled.
@@ -100,6 +109,15 @@ and notices before measurement or styling. Opaque choice identities never
 enter rendered text. A selected choice outside the live viewport is summarized
 only by its ordinal and sanitized label; line fallback renders every numbered
 choice and ends with its focused prompt space without a final LF.
+
+Viewer validation precedes capability inspection and terminal I/O. Supplied
+text and its one-line display name must be exact strict-UTF-8 `str` values; text
+is limited by a private terminal-local 8 MiB UTF-8 capacity, and an optional
+initial line must identify a derived line. LF alone separates logical lines,
+empty text has zero, and one final LF adds no extra line. CR, U+2028, and other
+controls remain content and render as visible escapes. Each logical line uses
+one physical row and is clipped with a Unicode-cell-aware ellipsis rather than
+wrapped.
 
 Transcript content follows a stricter primitive boundary: it must be an exact
 nonempty string, but whitespace-only content is valid. Sanitization makes
@@ -138,6 +156,11 @@ emits no background, dim, blink, OSC, query, or cursor sequence. Removing those
 allowed decorative sequences yields the exact
 plain structure.
 
+The separate viewer renderer keeps the same safety order and may additionally
+use fixed inverse SGR 7 for selected rows, including a fixed bold/inverse/cyan
+combination for the active selected row. Its plain `>` and `*` markers retain
+the same current/selection meaning when all viewer decoration is removed.
+
 The controller constructs semantic components only from trusted roles/states
 and validated facts. Its unlisted `InteractiveSemanticOutput` adapter acquires
 no resource when constructed and performs exactly one render and one callback
@@ -150,8 +173,9 @@ is interrupted after completed rows, those callbacks remain visible, one
 cancellation record follows, and no unrendered row or trailing result, hint, or
 context component is written.
 
-The live driver separately emits only fixed carriage-return, cursor-up/right,
-and clear-to-end controls for functional editing. During the one advisory
+For ordinary live editors, pickers, prompts, and the advisory indicator, the
+driver emits only fixed carriage-return, cursor-up/right, and clear-to-end
+controls for functional editing. During the one advisory
 indicator lifecycle it may also emit the fixed-cell carriage-return and
 clear-to-end sequence, clearing before persistent output and redrawing while
 the joined operation is pending. Semantic input context and its focused prompt
@@ -159,6 +183,11 @@ arrive as one trusted fixed-theme projection; the dynamic buffer and suggestion
 text are sanitized separately before redraw, with embedded LF visible. No
 untrusted text becomes ANSI. Emulators, multiplexers, remote sessions, and
 scrollback may still retain or transform display.
+
+The ranged viewer is the sole separate control vocabulary: fixed
+alternate-screen enter, home-and-clear redraw, and alternate-screen exit
+sequences surround only sanitized, bounded renderer output. Caller text and
+display metadata can never supply these functional sequences.
 
 ## Advisory progress boundary
 
@@ -346,6 +375,57 @@ If the output channel itself fails, the driver can only attempt the erase; it
 does not claim terminal bytes it could not write. Attribute restoration is
 still attempted, and uncertainty about restoration remains fatal.
 
+<a id="ranged-text-viewer-boundary"></a>
+
+## Ranged-text viewer boundary
+
+The package-internal viewer accepts supplied text, not a path or artifact
+repository. Its adapter validates exact input types, strict UTF-8, the private
+8 MiB terminal capacity, display metadata, LF-derived line count, and optional
+one-based initial line before the terminal can be inspected. It has no
+workspace, writing-artifact, repository, runtime, backend, provider,
+controller, parser, or composer dependency. The separate artifact-reference
+limit remains authoritative for later integration; that caller must apply it
+before handing verified text to this viewer.
+
+Up/Down and Shift+Up/Down are pure operations over immutable active/anchor
+state. Enter returns only normalized inclusive line numbers. Escape, Ctrl-C,
+and EOF return separate content-free noncommit kinds. No result contains the
+source, display name, path, reference, viewport, terminal, or composer state.
+An empty document cannot commit.
+
+The capable lifecycle has one resource owner and one cleanup order:
+
+1. The driver activates raw mode.
+2. It enters the alternate screen once and draws only fixed controls plus safe
+   bounded renderer output.
+3. A typed outcome or operational failure ends the interaction.
+4. It attempts alternate-screen exit once, then termios restoration once.
+5. The adapter drops every viewer-local value in `finally`.
+
+Once raw activation starts, setup, read, render, write, flush, decode, or
+collaborator failure never opens a second line-fallback interaction. A termios
+restoration failure takes precedence over screen-exit failure; screen-exit
+failure takes precedence over the active failure. Cursor visibility is
+untouched, so cleanup neither emits cursor-hide nor cursor-show controls. If an
+output failure prevents an exit sequence from reaching the terminal, cleanup
+can only report the failure; it cannot claim that the earlier screen bytes were
+reversed.
+
+Before activation, missing or uncertain capability and unavailable safe setup
+may select line fallback. That path prints the complete numbered sanitized
+document and accepts only exact ASCII positive `START-END` or `/cancel`.
+Reversed endpoints normalize. Invalid, empty, spaced, signed, leading-zero,
+non-ASCII, or out-of-range input gets a visible fixed retry. It uses no ANSI,
+raw mode, cursor movement, or alternate screen, and cannot erase printed input.
+
+Every open receives a new caller document and optional initial line; no viewer
+state can resume. Dropping the call-local immutable values is lifecycle
+disposal only. Python objects, streams, emulators, multiplexers, scrollback,
+and process memory may retain copies, so this is not secure erasure. See the
+[exact viewer contract](../reference/interactive-terminal.md#independent-ranged-text-viewer)
+and [viewer recovery guidance](recovery-and-limitations.md#ranged-text-viewer-exits-and-recovery).
+
 ## Other input and process-local state
 
 Escaping does not change a returned `TerminalAction`. Composition keeps exact
@@ -369,8 +449,10 @@ mutate the store.
 The store
 has no filesystem, environment, transcript, configuration, provider-session,
 or user-history-file representation and ends with its driver instance. The
-component stores no search index or story transcript. Command-looking content
-and replies are never reparsed or executed.
+component stores no search index or story transcript. Viewer text, display
+metadata, selection, viewport, and geometry are likewise never added to this
+store and are dropped after each viewer call. Command-looking content and
+replies are never reparsed or executed.
 
 Terminal errors are presentation-only, not transcript `runtime_error` events.
 Stored runtime diagnostics use separate redaction and a 4096-character cap;

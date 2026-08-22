@@ -346,17 +346,19 @@ class PtyCliProcess:
 
         os.write(self.master_fd, self.veof)
 
-    def resize(self, columns: int) -> None:
-        """Change this PTY's reported width for the next explicit redraw."""
+    def resize(self, columns: int, rows: int = 24) -> None:
+        """Change this PTY's geometry for the next explicit redraw."""
 
         if type(columns) is not int or columns <= 0:
             raise ValueError("columns must be a positive integer")
+        if type(rows) is not int or rows <= 0:
+            raise ValueError("rows must be a positive integer")
         assert fcntl is not None
         assert termios is not None
         fcntl.ioctl(
             self.master_fd,
             termios.TIOCSWINSZ,
-            struct.pack("HHHH", 24, columns, 0, 0),
+            struct.pack("HHHH", rows, columns, 0, 0),
         )
 
     def wait_for_text(
@@ -747,6 +749,184 @@ class InteractiveCliPtyTests(unittest.TestCase):
         )
         self._processes.append(harness)
         return harness
+
+    def test_internal_text_viewer_reverse_shift_resize_commit_and_repeat_restore(
+        self,
+    ) -> None:
+        """Exercise real Shift+Arrow bytes and independent repeated screens."""
+
+        source = r'''
+import sys
+
+from story_writing_agents.interactive_terminal import (
+    InteractiveTextViewer,
+    build_stream_terminal,
+)
+
+terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
+viewer = InteractiveTextViewer(terminal)
+for attempt in range(2):
+    outcome = viewer.read_range(
+        "one\ntwo\nthree\nfour\nfive\nsix",
+        display_name=f"part-{attempt}.md",
+        initial_line=3,
+    )
+    print(f"RESULT={attempt}:{outcome.kind.value}:{outcome.line_range}")
+'''
+        before = _durable_tree(self.workspace.root)
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=50,
+            decorative_color=True,
+        )
+        process.wait_for_text("[viewer] part-0.md | line 3/6")
+        assert termios is not None
+        active = termios.tcgetattr(process.master_fd)
+        self.assertFalse(active[3] & termios.ICANON)
+        self.assertFalse(active[3] & termios.ECHO)
+
+        process.send_text("\x1b[1;2A" * 2)
+        process.wait_for_text("lines 1-3")
+        process.resize(24, 4)
+        resize_mark = process.output_mark()
+        process.send_text("\x1b[1;2B")
+        resized = process.wait_for_text(">* 2 | two", after=resize_mark)
+        visible_rows = resized.split("\x1b[H\x1b[2J")[-1].split("\x1b[?1049l")[0]
+        self.assertLessEqual(visible_rows.count("\n") + 1, 4)
+        process.send_text("\n")
+        process.wait_for_text("RESULT=0:selected:(2, 3)")
+        process.wait_for_text("[viewer] part-1.md")
+        process.send_text("\n")
+        result = process.wait_for_text("RESULT=1:selected:(3, 3)")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 2)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 2)
+        self.assertNotIn(b"\x1b[?25", process.raw_bytes)
+        self.assertIn("RESULT=1:selected", result)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+        self.assertEqual(_durable_tree(self.workspace.root), before)
+        self.assertFalse(self.provider_log.exists())
+
+    def test_internal_text_viewer_escape_vintr_and_veof_are_typed_and_restore(
+        self,
+    ) -> None:
+        """Return each observable live noncommit result after exact cleanup."""
+
+        source = r'''
+import sys
+from story_writing_agents.interactive_terminal import InteractiveTextViewer, build_stream_terminal
+
+viewer = InteractiveTextViewer(build_stream_terminal(input, sys.stdin, sys.stdout))
+outcome = viewer.read_range("one\ntwo", display_name="events.md")
+print("RESULT=" + outcome.kind.value)
+'''
+        for event_name in ("cancelled", "interrupted", "eof"):
+            with self.subTest(event=event_name):
+                process = self._spawn_python(
+                    source,
+                    environment_overrides={"TERM": "xterm-256color"},
+                    terminal_columns=36,
+                )
+                process.wait_for_text("[viewer] events.md")
+                if event_name == "cancelled":
+                    process.send_text("\x1b")
+                elif event_name == "interrupted":
+                    process.send_interrupt()
+                else:
+                    process.send_eof()
+                process.wait_for_text("RESULT=" + event_name)
+                self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+                self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 1)
+                self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 1)
+                self.assertEqual(
+                    process.final_terminal_attributes,
+                    process.original_terminal_attributes,
+                )
+
+    def test_internal_text_viewer_dumb_fallback_retries_and_normalizes_reverse(
+        self,
+    ) -> None:
+        """Keep line-mode grammar exact and its retry visible on a real PTY."""
+
+        source = r'''
+import sys
+from story_writing_agents.interactive_terminal import InteractiveTextViewer, build_stream_terminal
+
+viewer = InteractiveTextViewer(build_stream_terminal(input, sys.stdin, sys.stdout))
+outcome = viewer.read_range("one\ntwo\nthree", display_name="fallback.md")
+print(f"RESULT={outcome.kind.value}:{outcome.line_range}")
+'''
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "dumb"},
+            terminal_columns=40,
+        )
+        initial = process.wait_for_text("Select START-END or /cancel: ")
+        self.assertIn("  3 | three", initial)
+        process.send_line("01-2")
+        retry = process.wait_for_text("Enter a valid one-based START-END range.")
+        self.assertNotIn("\x1b[?1049", retry)
+        process.send_line("3-1")
+        process.wait_for_text("RESULT=selected:(1, 3)")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertNotIn(b"\x1b[?1049", process.raw_bytes)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
+    def test_internal_text_viewer_narrow_unicode_controls_empty_and_next_key_resize(
+        self,
+    ) -> None:
+        """Render hostile supplied text safely and observe resize only on input."""
+
+        source = r'''
+import sys
+from story_writing_agents.interactive_terminal import InteractiveTextViewer, build_stream_terminal
+
+viewer = InteractiveTextViewer(build_stream_terminal(input, sys.stdin, sys.stdout))
+first = viewer.read_range(
+    "\u2028\r界e\u0301tail\n" + "x" * 200,
+    display_name="bad\x1b]0;owned\x07.md",
+)
+print("FIRST=" + first.kind.value)
+second = viewer.read_range("", display_name="empty.md")
+print("SECOND=" + second.kind.value)
+'''
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=24,
+        )
+        opened = process.wait_for_text(r"\x0d")
+        self.assertIn(r"\u2028", opened)
+        self.assertNotIn("\x07", opened.replace(r"\x07", ""))
+        process.resize(12, 3)
+        mark = process.output_mark()
+        self.assertEqual(process.text_after(mark), "")
+        process.send_text("x")
+        redraw = process.wait_for_text("[viewer]", after=mark)
+        latest = redraw.split("\x1b[H\x1b[2J")[-1]
+        self.assertLessEqual(latest.count("\n") + 1, 3)
+        process.send_text("\x1b")
+        process.wait_for_text("FIRST=cancelled")
+        process.wait_for_text("<empty doc")
+        empty_mark = process.output_mark()
+        process.send_text("\n")
+        process.wait_for_text("No selecta", after=empty_mark)
+        process.send_text("\x1b")
+        process.wait_for_text("SECOND=cancelled")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 2)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 2)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
 
     def test_internal_picker_ansi_resizes_navigates_commits_and_restores_repeatedly(
         self,

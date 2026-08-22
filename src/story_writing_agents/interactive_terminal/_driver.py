@@ -32,6 +32,12 @@ from ._model import (
     display_character_width,
     sanitize_terminal_text,
 )
+from ._viewer_model import (
+    TextViewerExitKind,
+    TextViewerResult,
+    TextViewerState,
+    TextViewerViewport,
+)
 
 try:
     import termios as _termios
@@ -50,6 +56,11 @@ _ESCAPE_LOOKAHEAD_SECONDS = 0.05
 _DEFAULT_TERMIOS = object()
 _PROGRESS_FRAME_COUNT = 4
 _PROGRESS_INTERVAL_SECONDS = 0.08
+_DEFAULT_VIEWER_HEIGHT = 24
+_MAX_VIEWER_HEIGHT = 200
+_VIEWER_SCREEN_ENTER = "\x1b[?1049h\x1b[2J\x1b[H"
+_VIEWER_SCREEN_REDRAW = "\x1b[H\x1b[2J"
+_VIEWER_SCREEN_EXIT = "\x1b[?1049l"
 _T = TypeVar("_T")
 
 
@@ -134,6 +145,23 @@ _PickerViewportRenderer: TypeAlias = Callable[
 ]
 _PickerFallbackRenderer: TypeAlias = Callable[
     [PickerControlState, TerminalCapabilities], RenderedInputFrame
+]
+_ViewerTransition: TypeAlias = Callable[
+    [TextViewerState, KeyEvent],
+    tuple[TextViewerState, TextViewerResult | None],
+]
+_ViewerFallbackTransition: TypeAlias = Callable[
+    [TextViewerState, str],
+    tuple[TextViewerState, TextViewerResult | None],
+]
+_ViewerViewportProjector: TypeAlias = Callable[
+    [TextViewerState, int], TextViewerViewport
+]
+_ViewerViewportRenderer: TypeAlias = Callable[
+    [TextViewerViewport, TerminalCapabilities], RenderedFrame
+]
+_ViewerFallbackRenderer: TypeAlias = Callable[
+    [TextViewerState, TerminalCapabilities], RenderedInputFrame
 ]
 
 
@@ -732,6 +760,144 @@ class RawTerminalDriver:
         assert outcome is not None
         return outcome
 
+    def read_text_viewer(
+        self,
+        state: TextViewerState,
+        transition: _ViewerTransition,
+        fallback_transition: _ViewerFallbackTransition,
+        viewport_projector: _ViewerViewportProjector,
+        viewport_renderer: _ViewerViewportRenderer,
+        fallback_renderer: _ViewerFallbackRenderer,
+    ) -> TextViewerResult:
+        """Run one storage-free viewer through the sole terminal lifecycle."""
+
+        if type(state) is not TextViewerState:
+            raise TypeError("state must be a TextViewerState")
+        for name, collaborator in (
+            ("transition", transition),
+            ("fallback_transition", fallback_transition),
+            ("viewport_projector", viewport_projector),
+            ("viewport_renderer", viewport_renderer),
+            ("fallback_renderer", fallback_renderer),
+        ):
+            if not callable(collaborator):
+                raise TypeError(f"{name} must be callable")
+
+        capabilities = self.capabilities()
+        if not capabilities.raw_mode:
+            return self._read_text_viewer_fallback(
+                state,
+                capabilities,
+                fallback_transition,
+                fallback_renderer,
+            )
+        try:
+            configuration = _terminal_configuration(
+                self._input_stream,
+                self._output_stream,
+                termios_module=self._termios_provider(),
+                os_module=self._os_provider(),
+                width=capabilities.width,
+            )
+        except Exception:
+            return self._read_text_viewer_fallback(
+                state,
+                capabilities,
+                fallback_transition,
+                fallback_renderer,
+            )
+        if configuration is None:
+            return self._read_text_viewer_fallback(
+                state,
+                capabilities,
+                fallback_transition,
+                fallback_renderer,
+            )
+
+        try:
+            _activate_terminal(configuration)
+        except BaseException as setup_failure:
+            _restore_terminal_or_raise(configuration, setup_failure)
+            raise
+
+        outcome: TextViewerResult | None = None
+        active_failure: BaseException | None = None
+        screen_entered = True
+        try:
+            self._write_live_text(_VIEWER_SCREEN_ENTER)
+            _state, outcome = self._read_live_text_viewer(
+                state,
+                configuration,
+                capabilities,
+                transition,
+                viewport_projector,
+                viewport_renderer,
+            )
+        except BaseException as failure:
+            active_failure = failure
+
+        screen_failure: BaseException | None = None
+        if screen_entered:
+            screen_entered = False
+            try:
+                self._write_live_text(_VIEWER_SCREEN_EXIT)
+            except BaseException as failure:
+                screen_failure = failure
+
+        restoration_context = screen_failure or active_failure
+        _restore_terminal_or_raise(configuration, restoration_context)
+        if screen_failure is not None:
+            raise screen_failure
+        if active_failure is not None:
+            raise active_failure
+        assert outcome is not None
+        return outcome
+
+    def _read_text_viewer_fallback(
+        self,
+        state: TextViewerState,
+        capabilities: TerminalCapabilities,
+        transition: _ViewerFallbackTransition,
+        renderer: _ViewerFallbackRenderer,
+    ) -> TextViewerResult:
+        """Read strict one-line range attempts without raw or ANSI controls."""
+
+        while True:
+            frame = renderer(state, capabilities)
+            if type(frame) is not RenderedInputFrame:
+                raise TypeError(
+                    "viewer fallback renderer must return a RenderedInputFrame"
+                )
+            if frame.width != capabilities.width:
+                raise ValueError(
+                    "rendered viewer fallback width must match capabilities"
+                )
+            try:
+                answer = self._fallback_read_line(frame.plain_text)
+            except KeyboardInterrupt:
+                return TextViewerResult(
+                    TextViewerExitKind.INTERRUPTED,
+                )
+            except EOFError:
+                return TextViewerResult(TextViewerExitKind.EOF)
+            if not isinstance(answer, str):
+                raise TypeError("read_line must return a string")
+            answer = str.__str__(answer)
+            if "\r" in answer or "\n" in answer:
+                raise ValueError("read_line must return one line without CR or LF")
+            updated, outcome = transition(state, answer)
+            if type(updated) is not TextViewerState:
+                raise TypeError(
+                    "viewer fallback transition must return a TextViewerState"
+                )
+            if outcome is not None and type(outcome) is not TextViewerResult:
+                raise TypeError(
+                    "viewer fallback transition must return a TextViewerResult or None"
+                )
+            state = updated
+            if outcome is not None:
+                return outcome
+
     def _read_picker_fallback(
         self,
         state: PickerControlState,
@@ -1176,6 +1342,137 @@ class RawTerminalDriver:
                     viewport_projector,
                     viewport_renderer,
                 )
+
+    def _read_live_text_viewer(
+        self,
+        state: TextViewerState,
+        configuration: _TerminalConfiguration,
+        capabilities: TerminalCapabilities,
+        transition: _ViewerTransition,
+        viewport_projector: _ViewerViewportProjector,
+        viewport_renderer: _ViewerViewportRenderer,
+    ) -> tuple[TextViewerState, TextViewerResult]:
+        """Drive one viewer whose immutable state never enters another control."""
+
+        character_reader = _single_character_reader(self._input_stream)
+        self._redraw_live_text_viewer(
+            state,
+            capabilities,
+            viewport_projector,
+            viewport_renderer,
+        )
+        escape_sequence: str | None = None
+        while True:
+            try:
+                character = self._read_character(character_reader)
+            except KeyboardInterrupt:
+                return state, TextViewerResult(TextViewerExitKind.INTERRUPTED)
+            except EOFError:
+                return state, TextViewerResult(TextViewerExitKind.EOF)
+
+            if escape_sequence is not None:
+                escape_state = _LiveEditorState(escape_sequence=escape_sequence)
+                event, reprocess = _consume_escape_character(
+                    escape_state,
+                    character,
+                )
+                escape_sequence = escape_state.escape_sequence
+                if event is not None:
+                    state, outcome = _apply_viewer_event(state, event, transition)
+                    if outcome is not None:
+                        return state, outcome
+                    self._redraw_live_text_viewer(
+                        state,
+                        capabilities,
+                        viewport_projector,
+                        viewport_renderer,
+                    )
+                elif escape_sequence is None and not reprocess:
+                    # A complete unsupported escape key is a deterministic
+                    # no-op, but still forms one viewer interaction for resize
+                    # observation and repaint.
+                    self._redraw_live_text_viewer(
+                        state,
+                        capabilities,
+                        viewport_projector,
+                        viewport_renderer,
+                    )
+                if not reprocess:
+                    continue
+
+            if character == "\x1b":
+                if not _escape_input_is_ready(configuration.input_descriptor):
+                    state, outcome = _apply_viewer_event(
+                        state,
+                        KeyEvent(KeyKind.ESCAPE),
+                        transition,
+                    )
+                    assert outcome is not None
+                    return state, outcome
+                escape_sequence = character
+                continue
+
+            event = _key_event(character, configuration)
+            state, outcome = _apply_viewer_event(state, event, transition)
+            if outcome is not None:
+                return state, outcome
+            # Re-observe both dimensions after every non-exit key, including
+            # clamped navigation and unrelated no-ops, so resize appears on the
+            # next viewer interaction without installing a signal handler.
+            self._redraw_live_text_viewer(
+                state,
+                capabilities,
+                viewport_projector,
+                viewport_renderer,
+            )
+
+    def _redraw_live_text_viewer(
+        self,
+        state: TextViewerState,
+        capabilities: TerminalCapabilities,
+        viewport_projector: _ViewerViewportProjector,
+        viewport_renderer: _ViewerViewportRenderer,
+    ) -> None:
+        """Replace the alternate-screen frame using freshly observed geometry."""
+
+        width, height = self._text_viewer_geometry(capabilities.width)
+        render_width = max(1, width - 1)
+        render_capabilities = _capabilities_with_width(
+            capabilities,
+            render_width,
+        )
+        viewport = viewport_projector(state, height)
+        if type(viewport) is not TextViewerViewport:
+            raise TypeError(
+                "viewer viewport projector must return a TextViewerViewport"
+            )
+        frame = viewport_renderer(viewport, render_capabilities)
+        if type(frame) is not RenderedFrame:
+            raise TypeError("viewer renderer must return a RenderedFrame")
+        if frame.width != render_width:
+            raise ValueError("rendered viewer width must match the live width")
+        if frame.line_count > height:
+            raise ValueError("rendered viewer height exceeds the live height")
+        self._write_live_text(f"{_VIEWER_SCREEN_REDRAW}{frame.text}")
+
+    def _text_viewer_geometry(self, fallback_width: int) -> tuple[int, int]:
+        """Observe bounded live columns and rows without retaining resize state."""
+
+        width = fallback_width
+        height = _DEFAULT_VIEWER_HEIGHT
+        try:
+            os_module = self._os_provider()
+            descriptor = _stream_descriptor(self._output_stream)
+            terminal_size = os_module.get_terminal_size(descriptor)
+            columns = terminal_size.columns
+            lines = terminal_size.lines
+            if type(columns) is int and columns > 0:
+                width = min(columns, 120)
+            if type(lines) is int and lines > 0:
+                height = min(lines, _MAX_VIEWER_HEIGHT)
+        except Exception:
+            pass
+        return width, height
 
     def _redraw_live_picker(
         self,
@@ -1831,6 +2128,8 @@ def _escape_event(sequence: str) -> KeyEvent | None:
         "\x1b[8~": KeyKind.END,
         "\x1b[3~": KeyKind.DELETE,
         "\x1b[Z": KeyKind.SHIFT_TAB,
+        "\x1b[1;2A": KeyKind.SHIFT_UP,
+        "\x1b[1;2B": KeyKind.SHIFT_DOWN,
         "\x1bOA": KeyKind.UP,
         "\x1bOB": KeyKind.DOWN,
         "\x1bOC": KeyKind.RIGHT,
@@ -1891,6 +2190,21 @@ def _apply_picker_event(
     if outcome is not None and type(outcome) is not ControlOutcome:
         raise TypeError("transition outcome must be a ControlOutcome or None")
     return updated, outcome, updated != state
+
+
+def _apply_viewer_event(
+    state: TextViewerState,
+    event: KeyEvent,
+    transition: _ViewerTransition,
+) -> tuple[TextViewerState, TextViewerResult | None]:
+    """Apply one pure viewer transition and validate its exact result shape."""
+
+    updated, outcome = transition(state, event)
+    if type(updated) is not TextViewerState:
+        raise TypeError("transition must return a TextViewerState")
+    if outcome is not None and type(outcome) is not TextViewerResult:
+        raise TypeError("transition outcome must be a TextViewerResult or None")
+    return updated, outcome
 
 
 def _control_line_state(state: _ControlState) -> LineInputState:

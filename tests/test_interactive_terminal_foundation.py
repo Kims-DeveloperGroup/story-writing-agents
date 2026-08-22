@@ -702,6 +702,8 @@ class PureControlFoundationTests(unittest.TestCase):
         for kind in (
             KeyKind.UP,
             KeyKind.DOWN,
+            KeyKind.SHIFT_UP,
+            KeyKind.SHIFT_DOWN,
             KeyKind.TAB,
             KeyKind.SHIFT_TAB,
             KeyKind.ESCAPE,
@@ -1749,7 +1751,10 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
             "_model.py": set(),
             "_controls.py": {"._model"},
             "_render.py": {"._model"},
-            "_driver.py": {"._model"},
+            "_viewer_model.py": set(),
+            "_viewer_controls.py": {"._model", "._viewer_model"},
+            "_viewer_render.py": {"._model", "._viewer_model"},
+            "_driver.py": {"._model", "._viewer_model"},
             "_core.py": {
                 "..agents",
                 "..interactive_commands",
@@ -1757,6 +1762,9 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
                 "._driver",
                 "._model",
                 "._render",
+                "._viewer_controls",
+                "._viewer_model",
+                "._viewer_render",
             },
         }
         self.assertEqual(
@@ -1782,6 +1790,9 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
             "story_writing_agents.interactive_terminal._model",
             "story_writing_agents.interactive_terminal._controls",
             "story_writing_agents.interactive_terminal._render",
+            "story_writing_agents.interactive_terminal._viewer_model",
+            "story_writing_agents.interactive_terminal._viewer_controls",
+            "story_writing_agents.interactive_terminal._viewer_render",
             "story_writing_agents.interactive_terminal._driver",
             "story_writing_agents.interactive_terminal._core",
             "story_writing_agents.interactive_terminal",

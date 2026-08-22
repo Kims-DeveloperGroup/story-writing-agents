@@ -1,8 +1,9 @@
 # Recovery and limitations
 
 > **Available:** guarded access recovery, shell workflows, and process-level
-> POSIX PTY verification. Automatic retry, destructive cleanup, event repair,
-> and Windows console emulation are not available.
+> POSIX PTY verification, including the package-internal ranged viewer.
+> Automatic retry, destructive cleanup, event repair, installed-shell artifact
+> reference syntax, and Windows console emulation are not available.
 
 Key terms: **fail closed** means preserve uncertain state; **taint** means stop
 continuing incomplete provider history; **external backup** is outside the workspace.
@@ -166,7 +167,48 @@ Cancelled local reads keep completed rows without a second read/write.
 
 POSIX tests use a controlling PTY and VINTR/VEOF. They prove line fallback,
 static and live-resume suggestion editing, complete capable-frame clearing, and
-restoration across terminal outcomes. Windows consoles remain unverified.
+restoration across terminal outcomes. Viewer coverage additionally proves real
+Shift+Arrow decoding, next-key resize, repeated alternate-screen pairing,
+VINTR/VEOF outcomes, and termios restoration. Physical viewer EOF remains
+deterministic driver coverage because hanging up the only PTY also closes the
+test's observation channel. Windows consoles remain unverified.
+
+<a id="ranged-text-viewer-exits-and-recovery"></a>
+
+## Ranged-text viewer exits and recovery
+
+The viewer is an unlisted package-internal supplied-text component. Users
+cannot invoke it from the shell in this delivery. `$`, `$${file}`, `$$`,
+artifact listing and secure reads, path/range reference construction, exact
+origin-composer restoration, ordered multi-reference composition, and
+mandatory per-agent reads remain unavailable until #163 and #164.
+
+Invalid source type, display metadata, strict UTF-8, private 8 MiB capacity, or
+initial line fails before terminal inspection or I/O. Correct the caller input
+and open a new viewer call; there is no partially opened viewer to recover.
+This terminal limit is independent from the writing-artifact reference limit,
+which a later caller must enforce before supplying verified text.
+
+`selected` returns only a normalized one-based inclusive range. `cancelled`,
+`interrupted`, and `eof` return no range and do not submit or mutate anything.
+Operational read, render, write, flush, decode, setup, or collaborator failures
+are raised after cleanup rather than converted to one of those results. Once
+raw activation starts, the viewer does not attempt a second fallback read.
+Termios-restoration failure takes precedence over alternate-screen-exit
+failure, which takes precedence over the active failure. Cursor visibility is
+never changed.
+
+Every return or raise drops the call-local source, display name, active line,
+anchor, selection, and viewport. Reopening starts from caller-supplied text and
+an optional initial line; there is no resume token or saved viewer state. This
+is lifecycle disposal, not secure erasure from process or terminal memory.
+When downstream integration lands, cancelling or closing can leave the
+originating message unsubmitted only because #164 owns and restores that
+composer; the viewer itself never receives or preserves it. Multiple ordered
+references likewise require repeated fresh viewer calls owned by that caller.
+
+See the [exact viewer contract](../reference/interactive-terminal.md#independent-ranged-text-viewer)
+and [terminal safety boundary](terminal-safety.md#ranged-text-viewer-boundary).
 
 ## Pause, quit, and cleanup
 
@@ -204,7 +246,9 @@ work; the newest desired definition is selected instead.
 - Advisory input is one line; `/run --output PART/PATH.md` without prompt text
   owns multiline composition. Bare `/run` first prompts for the output.
 - Conversation search is active-only; transcript reads retain no cursor.
-- Standalone compose/artifact commands and artifact-reference UI are unavailable.
+- The supplied-text viewer exists only as a package-internal terminal
+  component. Standalone compose/artifact commands and `$`/`$$`
+  artifact-reference UI remain unavailable.
 
 See [Session lifecycle](../design/session-lifecycle.md),
 [Troubleshooting](../guides/troubleshooting.md), and

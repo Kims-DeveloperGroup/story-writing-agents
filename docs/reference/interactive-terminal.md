@@ -22,7 +22,12 @@
 > consensus turns additionally use
 > one unlisted terminal-owned rolling indicator on capable raw streams;
 > callback and incapable paths remain silent, and these waits emit no
-> `[routing]` or `[waiting]` record.
+> `[routing]` or `[waiting]` record. An independent package-internal ranged
+> text viewer can display caller-supplied text and return inclusive line
+> numbers. It is not a supported public API or installed-shell command: `$`,
+> `$${file}`, `$$`, artifact discovery, reference construction, composer
+> restoration, ordered multi-reference composition, and agent-read enforcement
+> remain unavailable until their owning integration slices land.
 
 ## Public API
 
@@ -102,6 +107,11 @@ The facade also binds unlisted `InteractiveAdvisoryProgress` and
 They are package-internal and do not expose the driver, renderer, glyphs,
 cursor controls, or a public animation API.
 
+The facade additionally binds the unlisted `InteractiveTextViewer`,
+`TextViewerExitKind`, and `TextViewerResult` identities. They expose one
+package-internal, storage-free supplied-text capability without changing the
+exact public `__all__` or root facade.
+
 The narrow internal adapters have these signatures:
 
 ```python
@@ -131,7 +141,15 @@ run(operation: Awaitable[object]) -> object  # async, package-internal
 
 InteractiveDebateProgress(terminal: InteractiveTerminal) -> None
 run(operation: Awaitable[object]) -> object  # async, package-internal
+
+InteractiveTextViewer(terminal: InteractiveTerminal) -> None
+read_range(text: str, *, display_name: str,
+           initial_line: int | None = None) -> TextViewerResult
 ```
+
+The viewer result contains only an exit kind and, for `selected`, a one-based
+inclusive `(start_line, end_line)` tuple. It never carries supplied text,
+display metadata, a path, a reference, a viewport, or terminal state.
 
 Construction validates and retains the terminal's bound component writer but
 does not render, read, write, observe a stream, or acquire a resource. Each
@@ -737,6 +755,89 @@ recovered activation paths use the numbered fallback without acquiring raw
 input. The unified driver remains the only raw resource owner and picker reads
 do not inspect or mutate main history, completion, parser, provider, runtime,
 filesystem, storage, or network state.
+
+<a id="independent-ranged-text-viewer"></a>
+
+## Independent ranged text viewer
+
+> **Availability:** #162 implements only an unlisted package-internal viewer
+> for exact caller-supplied text. Users cannot invoke it from the installed
+> shell yet. It does not discover or securely read artifacts, recognize `$` or
+> `$$` syntax, construct references, preserve a composer, or send anything to
+> an agent. Those responsibilities remain with #163 and #164.
+
+Each call accepts one exact `str`, a nonblank one-logical-line display name,
+and an optional one-based initial line. Before inspecting a stream, observing
+terminal capability, or performing I/O, it validates exact types, strict UTF-8
+for text and display metadata, the initial line against the derived document,
+and a private 8 MiB UTF-8 text limit. The terminal limit is an independent
+defensive boundary, not the writing-artifact reference limit. The later
+artifact caller must enforce its own limit before supplying verified text.
+
+Only LF separates logical lines. Empty text has zero lines; one final LF does
+not add a phantom line, while preceding empty lines remain real lines. CR,
+U+2028, and other terminal controls are content, not separators, and render as
+visible escapes. The display name is likewise sanitized before presentation.
+
+| Live key | Exact effect |
+| --- | --- |
+| Up / Down | Clear any anchor, move the active line by one, and clamp at the document boundary. |
+| Shift+Up / Shift+Down | Fix the first active line as the anchor, then move the active end. Repeated keys extend, contract, reverse, and clamp the range deterministically. |
+| Enter | Commit the active singleton or normalized anchored inclusive range. Empty text cannot commit and remains open with a visible notice. |
+| Escape | Return `cancelled` without a range. |
+| Ctrl-C / configured VINTR | Return `interrupted` without a range. |
+| Configured VEOF or stream EOF | Return `eof` without a range. |
+| Other keys | Make no state change. A nonexit key still triggers the next geometry observation and redraw. |
+
+On a capable raw terminal, the sole driver enters one alternate screen and
+renders one physical row per logical source line. Every row carries a
+one-based number; plain `>` and `*` cues identify the current and selected
+lines, with fixed ANSI emphasis added only when decoration is enabled. Long
+rows are clipped with a Unicode-cell-aware ellipsis instead of wrapping.
+The contiguous viewport is bounded by current terminal height. Width and
+height are observed before the first frame and again after each nonexit key, so
+a resize appears on the next interaction without a `SIGWINCH` handler. The
+viewer never hides or shows the cursor; cursor visibility is left unchanged.
+
+When raw capability is unavailable or safe setup cannot be constructed before
+activation, ordinary-line fallback prints the complete numbered, sanitized
+document and accepts only exact ASCII positive `START-END` or exact `/cancel`.
+Endpoints may be reversed and are normalized; zero, leading zero, signs,
+spaces, non-ASCII digits or dash, missing endpoints, and out-of-range values
+produce a visible retry. The fallback uses no ANSI, raw mode, alternate screen,
+or synthetic final control frame, and its printed attempts remain visible.
+
+| `TextViewerExitKind` | `line_range` |
+| --- | --- |
+| `selected` | Required normalized one-based inclusive tuple. |
+| `cancelled` | `None`. |
+| `interrupted` | `None`. |
+| `eof` | `None`. |
+
+The raw lifecycle is validation, capability choice, raw activation,
+alternate-screen entry, navigation/selection, typed outcome or operational
+failure, alternate-screen exit once, termios restoration once, and disposal.
+After activation begins, a failure never starts a second fallback interaction.
+Operational read, render, write, flush, or collaborator failures propagate
+after cleanup rather than becoming a viewer result. Restoration failure takes
+precedence over screen-exit failure, which takes precedence over the active
+failure. See the [terminal safety boundary](../operations/terminal-safety.md#ranged-text-viewer-boundary)
+and [recovery behavior](../operations/recovery-and-limitations.md#ranged-text-viewer-exits-and-recovery).
+
+Source text, display metadata, active line, anchor, viewport, and result
+correlation are immutable and call-local, then dropped on every return or
+raise. This is lifecycle disposal, not secure erasure from Python, terminal,
+or emulator memory. Reopening always starts from caller-supplied text and
+optional initial line. A later integration may invoke this stateless component
+repeatedly to collect multiple ordered references, but only that caller can
+read canonical files, retain and restore an originating composer, attach paths
+to the returned ranges, or require agents to read them.
+
+Once those downstream integrations land, users can read—but not edit—canonical
+text, select inclusive lines, and close or cancel without submitting the
+originating message. Multiple ordered references will use repeated fresh viewer
+calls. None of that path/content/composer/agent behavior is supplied by #162
+itself.
 
 <a id="exact-search-and-transcript-records"></a>
 
