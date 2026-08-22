@@ -39,6 +39,16 @@ the required `output_path`, other options, and result type; it also exposes
 both conversation methods, `inspect_debate()`, and `inspect_debate_context()`.
 `Runtime` and `Session` are exact aliases.
 
+Binding resource management is internal and adds no API. For each canonical
+agent, the runtime keeps at most one current binding at quiescence. Concurrent
+operations with the same fingerprint single-flight binding creation and share
+the immutable result. When fingerprints differ, an old and new binding may
+overlap temporarily: new work selects the newest desired definition, while
+each already-entered debate, advisory, or retrieval operation leases its exact
+old binding until success, failure, or cancellation. The idle superseded
+binding is then retired. This bounding does not change result objects,
+transcripts, provider-thread keys, session manifests, or durable session state.
+
 `output_path` has no default and is the `PART/PATH.md` suffix appended beneath
 the canonical `manuscript/` directory. It is validated before session access,
 debate reservation, or provider work. Publication becomes

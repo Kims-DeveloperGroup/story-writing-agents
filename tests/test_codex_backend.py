@@ -3423,6 +3423,334 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn("resume", self.provider_invocations()[-1]["argv"])
                 self.assertIs(self.thread(session_id)["tainted"], False)
 
+    async def test_retirement_defers_exact_cleanup_for_each_bound_operation(
+        self,
+    ) -> None:
+        """Every provider operation retains staging through its final await."""
+
+        cases = ("invoke", "converse", "retrieval")
+        for label in cases:
+            with self.subTest(operation=label):
+                session_id = f"retire_{label}"
+                backend = AgentBackend(
+                    self.workspace,
+                    executable=str(self.executable),
+                )
+                self.addCleanup(backend.close)
+                backend.create_session_with_access(session_id)
+                bound = await backend.bind(self.definition())
+                staging = bound.staging_directory
+                entered = asyncio.Event()
+                proceed = asyncio.Event()
+
+                async def provider(*args: object) -> object:
+                    entered.set()
+                    await proceed.wait()
+                    if label == "invoke":
+                        return AgentReply.candidate("r0", "candidate")
+                    request = args[1]
+                    if label == "converse":
+                        assert isinstance(request, ConversationRequest)
+                        return ConversationReply(
+                            request.session_id,
+                            request.conversation_id,
+                            request.turn_id,
+                            "conversation",
+                        )
+                    assert isinstance(request, ConversationRetrievalRequest)
+                    return ConversationRetrievalReply(
+                        session_id=request.session_id,
+                        conversation_id=request.conversation_id,
+                        turn_id=request.turn_id,
+                        content="retrieval",
+                        sources=(),
+                    )
+
+                if label == "invoke":
+                    provider_name = "_invoke_codex"
+                    call = lambda: bound.invoke(
+                        self.request(session_id=session_id)
+                    )
+                elif label == "converse":
+                    provider_name = "_converse_codex"
+                    call = lambda: bound.converse(
+                        self.conversation_request(session_id=session_id)
+                    )
+                else:
+                    provider_name = "_converse_with_retrieval_codex"
+                    call = lambda: bound.converse_with_retrieval(
+                        self.retrieval_request(session_id=session_id),
+                        _RecordingRetrievalHandler(),
+                    )
+
+                with (
+                    mock.patch.object(backend, provider_name, side_effect=provider),
+                    mock.patch.object(
+                        backend,
+                        "_finalize_bound_agent",
+                        wraps=backend._finalize_bound_agent,
+                    ) as finalize,
+                ):
+                    active = asyncio.create_task(call())
+                    await asyncio.wait_for(entered.wait(), timeout=1)
+                    bound._retire()
+                    self.assertTrue(staging.exists())
+                    self.assertIn(bound, backend._bound_agents)
+                    with self.assertRaisesRegex(
+                        BackendProtocolError,
+                        "retired",
+                    ):
+                        await call()
+                    proceed.set()
+                    await asyncio.wait_for(active, timeout=1)
+
+                self.assertFalse(staging.exists())
+                self.assertNotIn(bound, backend._bound_agents)
+                self.assertNotIn(staging, backend._staging_directories)
+                self.assertEqual(finalize.call_count, 1)
+
+    async def test_failure_and_cancellation_release_retired_staging_once(
+        self,
+    ) -> None:
+        for operation in ("invoke", "converse", "retrieval"):
+            for outcome in ("failure", "cancellation"):
+                with self.subTest(operation=operation, outcome=outcome):
+                    session_id = f"retire_{operation}_{outcome}"
+                    backend = AgentBackend(
+                        self.workspace,
+                        executable=str(self.executable),
+                    )
+                    self.addCleanup(backend.close)
+                    backend.create_session_with_access(session_id)
+                    bound = await backend.bind(self.definition())
+                    staging = bound.staging_directory
+                    entered = asyncio.Event()
+                    proceed = asyncio.Event()
+
+                    async def provider(*_args: object) -> object:
+                        entered.set()
+                        await proceed.wait()
+                        raise RuntimeError("provider failed")
+
+                    if operation == "invoke":
+                        provider_name = "_invoke_codex"
+                        call = lambda: bound.invoke(
+                            self.request(session_id=session_id)
+                        )
+                    elif operation == "converse":
+                        provider_name = "_converse_codex"
+                        call = lambda: bound.converse(
+                            self.conversation_request(session_id=session_id)
+                        )
+                    else:
+                        provider_name = "_converse_with_retrieval_codex"
+                        call = lambda: bound.converse_with_retrieval(
+                            self.retrieval_request(session_id=session_id),
+                            _RecordingRetrievalHandler(),
+                        )
+
+                    with (
+                        mock.patch.object(
+                            backend,
+                            provider_name,
+                            side_effect=provider,
+                        ),
+                        mock.patch.object(
+                            backend,
+                            "_finalize_bound_agent",
+                            wraps=backend._finalize_bound_agent,
+                        ) as finalize,
+                    ):
+                        active = asyncio.create_task(call())
+                        await asyncio.wait_for(entered.wait(), timeout=1)
+                        bound._retire()
+                        self.assertTrue(staging.exists())
+                        if outcome == "cancellation":
+                            active.cancel()
+                            with self.assertRaises(asyncio.CancelledError):
+                                await active
+                        else:
+                            proceed.set()
+                            with self.assertRaisesRegex(
+                                RuntimeError,
+                                "provider failed",
+                            ):
+                                await asyncio.wait_for(active, timeout=1)
+                        bound._retire()
+
+                    self.assertFalse(staging.exists())
+                    self.assertEqual(finalize.call_count, 1)
+
+    async def test_close_waits_for_active_binding_then_cleans_every_resource_once(
+        self,
+    ) -> None:
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        session_id = "close_active_binding"
+        backend.create_session_with_access(session_id)
+        active_bound = await backend.bind(self.definition())
+        idle_bound = await backend.bind(self.definition(CHARACTER_CUSTODIAN))
+        active_staging = active_bound.staging_directory
+        idle_staging = idle_bound.staging_directory
+        entered = asyncio.Event()
+        proceed = asyncio.Event()
+
+        async def provider(*_args: object) -> AgentReply:
+            entered.set()
+            await proceed.wait()
+            return AgentReply.candidate("r0", "candidate")
+
+        with (
+            mock.patch.object(backend, "_invoke_codex", side_effect=provider),
+            mock.patch.object(
+                backend,
+                "_discard_staging_directory",
+                wraps=backend._discard_staging_directory,
+            ) as discard,
+            mock.patch.object(
+                backend,
+                "_release_access_claim",
+                wraps=backend._release_access_claim,
+            ) as release_access,
+        ):
+            task = asyncio.create_task(
+                active_bound.invoke(self.request(session_id=session_id))
+            )
+            await asyncio.wait_for(entered.wait(), timeout=1)
+            backend.close()
+            backend.close()
+
+            self.assertTrue(backend._closed)
+            self.assertFalse(backend._close_cleanup_complete)
+            self.assertTrue(active_staging.exists())
+            self.assertFalse(idle_staging.exists())
+            self.assertIn(session_id, backend._access_claim_tokens)
+            self.assertTrue(backend._thread_locks)
+            with self.assertRaisesRegex(BackendProtocolError, "closed"):
+                await active_bound.invoke(self.request(session_id=session_id))
+
+            proceed.set()
+            await asyncio.wait_for(task, timeout=1)
+            backend.close()
+
+        self.assertTrue(backend._close_cleanup_complete)
+        self.assertEqual(backend._bound_agents, set())
+        self.assertEqual(backend._staging_directories, set())
+        self.assertEqual(backend._thread_locks, {})
+        self.assertEqual(backend._access_claim_tokens, {})
+        self.assertFalse(active_staging.exists())
+        self.assertEqual(
+            [call.args[0] for call in discard.call_args_list].count(active_staging),
+            1,
+        )
+        self.assertEqual(
+            [call.args[0] for call in discard.call_args_list].count(idle_staging),
+            1,
+        )
+        self.assertEqual(release_access.call_count, 1)
+
+    async def test_post_staging_validation_failure_discards_provisional_bytes(
+        self,
+    ) -> None:
+        for failure in (RuntimeError("validation failed"), asyncio.CancelledError()):
+            with self.subTest(failure=type(failure).__name__):
+                backend = AgentBackend(
+                    self.workspace,
+                    executable=str(self.executable),
+                )
+                self.addCleanup(backend.close)
+                definition = self.definition()
+                reference_count = len(definition.file_references())
+                original_read = PromptFileReference.read_text
+                read_count = 0
+
+                def read(reference: PromptFileReference) -> str:
+                    nonlocal read_count
+                    read_count += 1
+                    if read_count == (2 * reference_count) + 1:
+                        raise failure
+                    return original_read(reference)
+
+                staged: list[Path] = []
+                original_stage = backend._stage_codex_definition
+
+                def stage(value: object) -> Path:
+                    directory = original_stage(value)  # type: ignore[arg-type]
+                    staged.append(directory)
+                    return directory
+
+                with (
+                    mock.patch.object(
+                        PromptFileReference,
+                        "read_text",
+                        autospec=True,
+                        side_effect=read,
+                    ),
+                    mock.patch.object(
+                        backend,
+                        "_stage_codex_definition",
+                        side_effect=stage,
+                    ),
+                    self.assertRaises(type(failure)),
+                ):
+                    await backend.bind(definition)
+
+                self.assertEqual(len(staged), 1)
+                self.assertFalse(staged[0].exists())
+                self.assertEqual(backend._staging_directories, set())
+                self.assertEqual(backend._bound_agents, set())
+
+    async def test_repeated_core_publications_bound_idle_resources_per_agent(
+        self,
+    ) -> None:
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        runtime = StoryRuntime(self.workspace, backend)
+        repository = WritingArtifactRepository(self.workspace.root)
+        core_filenames = tuple(core_snapshot(self.workspace))
+
+        async def approve(
+            _bound: BoundAgent,
+            request: AgentRequest,
+        ) -> AgentReply:
+            return AgentReply.approval(request.revision_id)
+
+        with mock.patch.object(backend, "_invoke_codex", side_effect=approve):
+            for generation in range(3):
+                repository.commit_consensus(
+                    output_path=f"part-01/resources-{generation}.md",
+                    candidate=f"manuscript generation {generation}",
+                    core_updates={
+                        filename: f"{filename} generation {generation}"
+                        for filename in core_filenames
+                    },
+                    session_id=f"resource_session_{generation}",
+                    debate_id=f"resource_debate_{generation}",
+                    revision_id="r0",
+                    candidate_author_agent_id=EXECUTION_SPECIALIST,
+                )
+                for agent_id in ROSTER:
+                    await runtime._invoke(
+                        self.request(
+                            session_id="resource_provider_session",
+                            debate_id=f"resource_debate_{generation}_{agent_id}",
+                            agent_id=agent_id,
+                            phase=Phase.AUDIT,
+                        )
+                    )
+
+                self.assertEqual(len(runtime._bound_agents), len(ROSTER))
+                self.assertEqual(
+                    {key[0] for key in runtime._bound_agents},
+                    set(ROSTER),
+                )
+                self.assertEqual(runtime._retiring_bound_agents, {})
+                self.assertEqual(runtime._bound_agent_uses, {})
+                self.assertEqual(len(backend._bound_agents), len(ROSTER))
+                self.assertEqual(
+                    len(backend._staging_directories),
+                    len(ROSTER),
+                )
+
     async def test_reply_append_failure_leaves_completed_provider_thread_untainted(self) -> None:
         session_id = "retrieval_reply_append"
         catalog = FilesystemConversationCatalog(self.workspace)

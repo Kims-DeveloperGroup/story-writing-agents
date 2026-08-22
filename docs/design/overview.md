@@ -15,13 +15,17 @@ writing approved story text; the runtime never invokes Git.
 ## Runtime and provider ownership
 
 `StoryRuntime` owns validated debate/advisory sequencing, consensus, retrieval
-authority, replies, and artifacts. See the
+authority, replies, artifacts, and per-agent desired/current/retiring binding
+selection. It leases the exact selected binding across each provider-bound
+operation. See the
 [Runtime API](../reference/runtime-api.md#one-conversation-turn).
 
 `session_lifecycle` owns immutable provider-neutral lifecycle facts and pure
 readiness, with no resource or I/O. `AgentBackend` retains manifests, access
-claims, prompt staging, routes, processes, and threads;
-`BoundAgent` owns one binding. Codex is implemented; Gemini fails preflight.
+claims, prompt staging, routes, processes, and threads. It owns private
+active-call retention and exact staging retirement; a `BoundAgent` is the
+immutable handle for one definition and is not the runtime selection owner.
+Codex is implemented; Gemini fails preflight.
 
 `Workspace` owns generic path-safe persistence, inspection, and atomic
 replacement. The `writing_artifacts` package owns the stricter canonical-output

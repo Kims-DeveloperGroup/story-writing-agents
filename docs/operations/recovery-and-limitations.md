@@ -180,6 +180,20 @@ scope, and reports at most one `cleanup_failed`. Later startup resumes a ready
 default or asks for confirmation before resuming a paused default; only an
 active default can become focus.
 
+During a long-running process, a changed agent definition becomes current for
+new work without disrupting an operation already using the old immutable
+definition. The old binding and its prompt staging remain only until its final
+debate, advisory, or retrieval use exits. Success, provider failure, and
+cancellation all release that use; cleanup of a superseded active binding is
+deferred rather than deleting files underneath it. At quiescence the runtime
+retains at most one current binding and the backend one owned staging directory
+per canonical agent. Transient overlap may use more than one directory.
+
+This cleanup is internal and best-effort. It adds no status or error, and does
+not change provider conversations, operation results, transcripts, manifests,
+or durable session state. Users cannot require an obsolete definition for new
+work; the newest desired definition is selected instead.
+
 ## Current limits
 
 - Codex is the only provider; reserved `gemini` fails validation.
