@@ -27,6 +27,7 @@ from story_writing_agents.errors import (
 )
 from story_writing_agents import interactive_settings as settings_module
 from story_writing_agents.interactive_settings import (
+    SETTINGS_ANTIGRAVITY_EFFORTS,
     SETTINGS_LANGUAGES,
     SETTINGS_REASONING_EFFORTS,
     PersonaCatalogEntry,
@@ -36,6 +37,8 @@ from story_writing_agents.interactive_settings import (
     SettingsState,
     load_settings_state,
     save_settings_state,
+    update_agent_antigravity_effort,
+    update_agent_antigravity_model,
     update_agent_backend,
     update_agent_codex_model,
     update_agent_codex_reasoning_effort,
@@ -98,6 +101,10 @@ class SettingsModelContractTests(SettingsTestCase):
             ("minimal", "low", "medium", "high", "xhigh"),
         )
         self.assertEqual(
+            SETTINGS_ANTIGRAVITY_EFFORTS,
+            ("low", "medium", "high"),
+        )
+        self.assertEqual(
             tuple((member.name, member.value) for member in SettingsErrorKind),
             (
                 ("VALIDATION", "validation"),
@@ -134,6 +141,16 @@ class SettingsModelContractTests(SettingsTestCase):
                 "state",
                 "agent_id",
                 "codex_reasoning_effort",
+            ),
+            update_agent_antigravity_model: (
+                "state",
+                "agent_id",
+                "antigravity_model",
+            ),
+            update_agent_antigravity_effort: (
+                "state",
+                "agent_id",
+                "antigravity_effort",
             ),
             save_settings_state: ("workspace", "state"),
         }
@@ -183,7 +200,7 @@ class SettingsModelContractTests(SettingsTestCase):
             state.pending.system_defaults,
             raw,
         )
-        raw[PLOT_ARCHITECT] = AgentConfig(backend="gemini")
+        raw[PLOT_ARCHITECT] = AgentConfig(backend="antigravity")
         self.assertEqual(tuple(snapshot.agent_configs), ROSTER)
         self.assertIsInstance(snapshot.agent_configs, MappingProxyType)
         self.assertIsNone(snapshot.agent_configs[PLOT_ARCHITECT].backend)
@@ -361,9 +378,9 @@ class SettingsLoadingAndUpdateTests(SettingsTestCase):
                 0,
             ),
             (
-                update_agent_backend(state, PLOT_ARCHITECT, "gemini"),
+                update_agent_backend(state, PLOT_ARCHITECT, "antigravity"),
                 lambda value: value.agent_configs[PLOT_ARCHITECT].backend,
-                "gemini",
+                "antigravity",
             ),
             (
                 update_agent_codex_model(state, PLOT_ARCHITECT, " GPT-e\u0301 한🙂 "),
@@ -374,6 +391,28 @@ class SettingsLoadingAndUpdateTests(SettingsTestCase):
                 update_agent_codex_reasoning_effort(state, PLOT_ARCHITECT, "xhigh"),
                 lambda value: value.agent_configs[PLOT_ARCHITECT].codex_reasoning_effort,
                 "xhigh",
+            ),
+            (
+                update_agent_antigravity_model(
+                    state,
+                    PLOT_ARCHITECT,
+                    " agy-e\u0301 한🙂 ",
+                ),
+                lambda value: value.agent_configs[
+                    PLOT_ARCHITECT
+                ].antigravity_model,
+                " agy-e\u0301 한🙂 ",
+            ),
+            (
+                update_agent_antigravity_effort(
+                    state,
+                    PLOT_ARCHITECT,
+                    "high",
+                ),
+                lambda value: value.agent_configs[
+                    PLOT_ARCHITECT
+                ].antigravity_effort,
+                "high",
             ),
         )
         for updated, project, expected in cases:
@@ -387,6 +426,20 @@ class SettingsLoadingAndUpdateTests(SettingsTestCase):
         self.assertIsNone(cleared_model.pending.agent_configs[PLOT_ARCHITECT].codex_model)
         self.assertIsNone(
             cleared_effort.pending.agent_configs[PLOT_ARCHITECT].codex_reasoning_effort
+        )
+        self.assertIsNone(
+            update_agent_antigravity_model(
+                cases[6][0],
+                PLOT_ARCHITECT,
+                None,
+            ).pending.agent_configs[PLOT_ARCHITECT].antigravity_model
+        )
+        self.assertIsNone(
+            update_agent_antigravity_effort(
+                cases[7][0],
+                PLOT_ARCHITECT,
+                None,
+            ).pending.agent_configs[PLOT_ARCHITECT].antigravity_effort
         )
         agent_before = state.pending.agent_configs[PLOT_ARCHITECT]
         agent_after = cases[3][0].pending.agent_configs[PLOT_ARCHITECT]
@@ -413,6 +466,38 @@ class SettingsLoadingAndUpdateTests(SettingsTestCase):
             (lambda: update_agent_codex_model(state, PLOT_ARCHITECT, "bad\x1b"), ConfigurationError),
             (
                 lambda: update_agent_codex_reasoning_effort(state, PLOT_ARCHITECT, "default"),
+                ConfigurationError,
+            ),
+            (
+                lambda: update_agent_antigravity_model(
+                    state,
+                    PLOT_ARCHITECT,
+                    "-unsafe",
+                ),
+                ConfigurationError,
+            ),
+            (
+                lambda: update_agent_antigravity_model(
+                    state,
+                    "unknown",
+                    "agy-model",
+                ),
+                ConfigurationError,
+            ),
+            (
+                lambda: update_agent_antigravity_effort(
+                    state,
+                    PLOT_ARCHITECT,
+                    "minimal",
+                ),
+                ConfigurationError,
+            ),
+            (
+                lambda: update_agent_antigravity_effort(
+                    state,
+                    PLOT_ARCHITECT,
+                    "xhigh",
+                ),
                 ConfigurationError,
             ),
             (lambda: update_language(object(), "EN"), TypeError),
@@ -459,13 +544,19 @@ class SettingsPersistenceTests(SettingsTestCase):
                     "max_debate_rounds": 1,
                     "codex_model": None,
                     "codex_reasoning_effort": None,
+                    "antigravity_model": None,
+                    "antigravity_effort": None,
                 }
             ),
         )
 
         state = self.load()
         system_before = self.workspace.path(_SYSTEM_PATH).read_bytes()
-        agent_state = update_agent_backend(state, PLOT_ARCHITECT, "gemini")
+        agent_state = update_agent_backend(
+            state,
+            PLOT_ARCHITECT,
+            "antigravity",
+        )
         with mock.patch.object(
             self.workspace,
             "write_text",
@@ -476,7 +567,10 @@ class SettingsPersistenceTests(SettingsTestCase):
         self.assertEqual(self.workspace.path(_SYSTEM_PATH).read_bytes(), system_before)
         persisted_agents = self.workspace.read_json(_AGENT_PATH)
         self.assertEqual(tuple(persisted_agents), tuple(sorted(ROSTER)))
-        self.assertEqual(persisted_agents[PLOT_ARCHITECT]["backend"], "gemini")
+        self.assertEqual(
+            persisted_agents[PLOT_ARCHITECT]["backend"],
+            "antigravity",
+        )
         for agent_id in ROSTER:
             self.assertEqual(
                 set(persisted_agents[agent_id]),
@@ -486,8 +580,60 @@ class SettingsPersistenceTests(SettingsTestCase):
                     "persona",
                     "codex_model",
                     "codex_reasoning_effort",
+                    "antigravity_model",
+                    "antigravity_effort",
                 },
             )
+
+    def test_antigravity_system_and_agent_values_round_trip_canonically(
+        self,
+    ) -> None:
+        state = self.load()
+        pending_defaults = replace(
+            state.pending.system_defaults,
+            antigravity_model="system-agy-model",
+            antigravity_effort="low",
+        )
+        pending_agents = dict(state.pending.agent_configs)
+        pending_agents[PLOT_ARCHITECT] = replace(
+            pending_agents[PLOT_ARCHITECT],
+            backend="antigravity",
+            codex_model="inactive-codex-model",
+            codex_reasoning_effort="xhigh",
+            antigravity_model="agent-agy-model",
+            antigravity_effort="high",
+        )
+        candidate = SettingsState(
+            state.baseline,
+            ConfigurationSnapshot(pending_defaults, pending_agents),
+        )
+
+        save_settings_state(self.workspace, candidate)
+        loaded = self.load().pending
+        self.assertEqual(
+            (
+                loaded.system_defaults.antigravity_model,
+                loaded.system_defaults.antigravity_effort,
+            ),
+            ("system-agy-model", "low"),
+        )
+        agent = loaded.agent_configs[PLOT_ARCHITECT]
+        self.assertEqual(
+            (
+                agent.backend,
+                agent.codex_model,
+                agent.codex_reasoning_effort,
+                agent.antigravity_model,
+                agent.antigravity_effort,
+            ),
+            (
+                "antigravity",
+                "inactive-codex-model",
+                "xhigh",
+                "agent-agy-model",
+                "high",
+            ),
+        )
 
     def test_two_file_save_is_canonical_system_then_agent(self) -> None:
         state = update_agent_backend(
@@ -497,7 +643,7 @@ class SettingsPersistenceTests(SettingsTestCase):
                 "high",
             ),
             PLOT_ARCHITECT,
-            "gemini",
+            "antigravity",
         )
         with mock.patch.object(
             self.workspace,
@@ -518,12 +664,16 @@ class SettingsPersistenceTests(SettingsTestCase):
                     "max_debate_rounds": 1,
                     "codex_model": None,
                     "codex_reasoning_effort": None,
+                    "antigravity_model": None,
+                    "antigravity_effort": None,
                 }
             ),
         )
         persisted_agent = self.workspace.read_json(_AGENT_PATH)[PLOT_ARCHITECT]
         self.assertEqual(persisted_agent["codex_model"], "gpt-5")
         self.assertEqual(persisted_agent["codex_reasoning_effort"], "high")
+        self.assertIsNone(persisted_agent["antigravity_model"])
+        self.assertIsNone(persisted_agent["antigravity_effort"])
         self.assertFalse(tuple(self.workspace.root.rglob("*.tmp")))
 
     def test_candidate_validation_precedes_reads_and_exact_conflicts_precede_writes(
@@ -583,7 +733,7 @@ class SettingsPersistenceTests(SettingsTestCase):
                 "high",
             ),
             PLOT_ARCHITECT,
-            "gemini",
+            "antigravity",
         )
         original_system = state.baseline.system_defaults_bytes
         original_agents = state.baseline.agent_configs_bytes
@@ -640,7 +790,7 @@ class SettingsPersistenceTests(SettingsTestCase):
         state = update_agent_backend(
             update_language(self.load(), "PT"),
             PLOT_ARCHITECT,
-            "gemini",
+            "antigravity",
         )
         actual_write = self.workspace.write_text
         calls: list[str] = []

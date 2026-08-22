@@ -10,6 +10,7 @@ import subprocess
 import unicodedata
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 from .models import AgentDefinition
@@ -65,6 +66,12 @@ class AntigravityAdapter:
         state_root: Path,
         explicit_model: str | None,
         explicit_effort: str | None,
+        system_model: str | None = None,
+        system_effort: str | None = None,
+        agent_settings: Mapping[
+            str,
+            tuple[str | None, str | None],
+        ] | None = None,
         create_process: Callable[[], CreateProcess] = (
             lambda: asyncio.create_subprocess_exec
         ),
@@ -77,22 +84,37 @@ class AntigravityAdapter:
         self.executable = executable
         self.timeout_seconds = timeout_seconds
         self.state_root = state_root
-        self.model = self._optional_setting(
+        self._explicit_model = self._optional_setting(
             explicit_model,
             label="Antigravity model",
         )
-        if explicit_effort is not None and (
-            not isinstance(explicit_effort, str)
-            or explicit_effort not in _EFFORTS
-        ):
-            raise ValueError(
-                "Antigravity effort must be None or one of: low, medium, high"
-            )
-        self.effort = explicit_effort
+        self._explicit_effort = self._optional_effort(explicit_effort)
+        self._system_model = self._optional_setting(
+            system_model,
+            label="Antigravity system model",
+        )
+        self._system_effort = self._optional_effort(system_effort)
+        self._agent_settings = self._copy_agent_settings(agent_settings)
         self._create_process = create_process
         self._wait_for = wait_for
         self._which = which
         self._capability_run = capability_run
+
+    @property
+    def model(self) -> str | None:
+        """Return the construction-time effective system Antigravity model."""
+
+        if self._explicit_model is not None:
+            return self._explicit_model
+        return self._system_model
+
+    @property
+    def effort(self) -> str | None:
+        """Return the construction-time effective system Antigravity effort."""
+
+        if self._explicit_effort is not None:
+            return self._explicit_effort
+        return self._system_effort
 
     @staticmethod
     def _optional_setting(value: str | None, *, label: str) -> str | None:
@@ -112,6 +134,49 @@ class AntigravityAdapter:
             raise ValueError(f"{label} must be safe non-empty text or None")
         return value
 
+    @staticmethod
+    def _optional_effort(value: str | None) -> str | None:
+        """Return one validated optional Antigravity effort."""
+
+        if value is not None and (
+            not isinstance(value, str) or value not in _EFFORTS
+        ):
+            raise ValueError(
+                "Antigravity effort must be None or one of: low, medium, high"
+            )
+        return value
+
+    @classmethod
+    def _copy_agent_settings(
+        cls,
+        value: Mapping[
+            str,
+            tuple[str | None, str | None],
+        ] | None,
+    ) -> Mapping[str, tuple[str | None, str | None]] | None:
+        """Validate and defensively copy provider-specific agent primitives."""
+
+        if value is None:
+            return None
+        if not isinstance(value, Mapping):
+            raise ValueError("Antigravity agent settings must be a mapping")
+        copied: dict[str, tuple[str | None, str | None]] = {}
+        for agent_id, setting in value.items():
+            if (
+                not isinstance(agent_id, str)
+                or _SAFE_CONVERSATION_ID.fullmatch(agent_id) is None
+                or type(setting) is not tuple
+                or len(setting) != 2
+            ):
+                raise ValueError("Antigravity agent setting is invalid")
+            model = cls._optional_setting(
+                setting[0],
+                label="Antigravity agent model",
+            )
+            effort = cls._optional_effort(setting[1])
+            copied[agent_id] = (model, effort)
+        return MappingProxyType(copied)
+
     def bind(self, definition: AgentDefinition) -> ProviderBinding:
         """Stage one stable, isolated Antigravity agent definition."""
 
@@ -120,6 +185,10 @@ class AntigravityAdapter:
             or definition.backend != self.vendor
             or not isinstance(definition.agent_id, str)
             or _SAFE_CONVERSATION_ID.fullmatch(definition.agent_id) is None
+            or (
+                self._agent_settings is not None
+                and definition.agent_id not in self._agent_settings
+            )
             or not isinstance(definition.fingerprint, str)
             or _SAFE_FINGERPRINT.fullmatch(definition.fingerprint) is None
         ):
@@ -205,10 +274,14 @@ class AntigravityAdapter:
             / binding.definition.agent_id
             / binding.definition.fingerprint
         )
-        gemini_directory = runtime_root / "provider"
+        provider_state_directory = runtime_root / "provider"
         working_directory = runtime_root / "workspace"
         try:
-            gemini_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+            provider_state_directory.mkdir(
+                parents=True,
+                exist_ok=True,
+                mode=0o700,
+            )
             working_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
             staged_rules = binding.staging_directory / "AGENTS.md"
             target_rules = working_directory / "AGENTS.md"
@@ -226,10 +299,11 @@ class AntigravityAdapter:
         encoding_failed = False
         try:
             command = self.command(
-                gemini_directory=gemini_directory,
+                provider_state_directory=provider_state_directory,
                 working_directory=working_directory,
                 schema=invocation.schema,
                 thread_id=invocation.thread_id,
+                agent_id=binding.definition.agent_id,
             )
             prompt = json.dumps(
                 dict(invocation.payload),
@@ -329,16 +403,18 @@ class AntigravityAdapter:
     def command(
         self,
         *,
-        gemini_directory: Path,
+        provider_state_directory: Path,
         working_directory: Path,
         schema: Mapping[str, Any],
         thread_id: str | None,
+        agent_id: str | None = None,
     ) -> list[str]:
         """Build a story-free Antigravity command line for one turn."""
 
         command = [
             self.executable,
-            f"--gemini_dir={gemini_directory}",
+            # agy retains this inherited option spelling.
+            f"--gemini_dir={provider_state_directory}",
             "--input-format",
             "stream-json",
             "--output-format",
@@ -359,13 +435,37 @@ class AntigravityAdapter:
             "--print-timeout",
             f"{self.timeout_seconds:g}s",
         ]
-        if self.model is not None:
-            command.extend(["--model", self.model])
-        if self.effort is not None:
-            command.extend(["--effort", self.effort])
+        model, effort = self.invocation_settings(agent_id)
+        if model is not None:
+            command.extend(["--model", model])
+        if effort is not None:
+            command.extend(["--effort", effort])
         if thread_id is not None:
             command.extend(["--conversation", thread_id])
         return command
+
+    def invocation_settings(
+        self,
+        agent_id: str | None,
+    ) -> tuple[str | None, str | None]:
+        """Resolve Antigravity flags from immutable settings for one agent."""
+
+        if agent_id is None or self._agent_settings is None:
+            return self.model, self.effort
+        if agent_id not in self._agent_settings:
+            raise ValueError("Antigravity agent setting is unavailable")
+        agent_model, agent_effort = self._agent_settings[agent_id]
+        model = (
+            self._explicit_model
+            if self._explicit_model is not None
+            else agent_model or self._system_model
+        )
+        effort = (
+            self._explicit_effort
+            if self._explicit_effort is not None
+            else agent_effort or self._system_effort
+        )
+        return model, effort
 
     @classmethod
     def _provider_result(

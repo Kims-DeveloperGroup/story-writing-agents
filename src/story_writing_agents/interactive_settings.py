@@ -40,6 +40,11 @@ SETTINGS_REASONING_EFFORTS: tuple[str, ...] = (
     "high",
     "xhigh",
 )
+SETTINGS_ANTIGRAVITY_EFFORTS: tuple[str, ...] = (
+    "low",
+    "medium",
+    "high",
+)
 _SYSTEM_DEFAULTS_PATH = "config/system_defaults.json"
 _AGENT_CONFIGS_PATH = "config/agent_configs.json"
 
@@ -270,6 +275,52 @@ def update_agent_codex_reasoning_effort(
     )
 
 
+def update_agent_antigravity_model(
+    state: SettingsState,
+    agent_id: str,
+    antigravity_model: str | None,
+) -> SettingsState:
+    """Return pending state with one validated per-agent Antigravity model."""
+
+    _require_state(state)
+    if agent_id not in ROSTER:
+        raise ConfigurationError(f"unknown agent: {agent_id}")
+    validated = ConfigManager.validate_antigravity_model(antigravity_model)
+    configs = dict(state.pending.agent_configs)
+    configs[agent_id] = replace(
+        configs[agent_id],
+        antigravity_model=validated,
+    )
+    return SettingsState(
+        state.baseline,
+        ConfigurationSnapshot(state.pending.system_defaults, configs),
+    )
+
+
+def update_agent_antigravity_effort(
+    state: SettingsState,
+    agent_id: str,
+    antigravity_effort: str | None,
+) -> SettingsState:
+    """Return pending state with one validated per-agent Antigravity effort."""
+
+    _require_state(state)
+    if agent_id not in ROSTER:
+        raise ConfigurationError(f"unknown agent: {agent_id}")
+    validated = ConfigManager.validate_antigravity_effort(
+        antigravity_effort
+    )
+    configs = dict(state.pending.agent_configs)
+    configs[agent_id] = replace(
+        configs[agent_id],
+        antigravity_effort=validated,
+    )
+    return SettingsState(
+        state.baseline,
+        ConfigurationSnapshot(state.pending.system_defaults, configs),
+    )
+
+
 def save_settings_state(workspace: Workspace, state: SettingsState) -> None:
     """Validate, conflict-check, and atomically replace changed documents."""
 
@@ -435,6 +486,8 @@ def _system_value(defaults: SystemDefaults) -> dict[str, Any]:
         "max_debate_rounds": defaults.max_debate_rounds,
         "codex_model": defaults.codex_model,
         "codex_reasoning_effort": defaults.codex_reasoning_effort,
+        "antigravity_model": defaults.antigravity_model,
+        "antigravity_effort": defaults.antigravity_effort,
     }
 
 
@@ -448,6 +501,8 @@ def _agent_value(snapshot: ConfigurationSnapshot) -> dict[str, dict[str, Any]]:
             "persona": snapshot.agent_configs[agent_id].persona,
             "codex_model": snapshot.agent_configs[agent_id].codex_model,
             "codex_reasoning_effort": snapshot.agent_configs[agent_id].codex_reasoning_effort,
+            "antigravity_model": snapshot.agent_configs[agent_id].antigravity_model,
+            "antigravity_effort": snapshot.agent_configs[agent_id].antigravity_effort,
         }
         for agent_id in ROSTER
     }

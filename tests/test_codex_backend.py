@@ -853,7 +853,7 @@ class CodexBackendDefaultsTests(unittest.TestCase):
             AgentBackend(self.workspace, model="-invalid-explicit")
         self.assertEqual(
             str(caught.exception),
-            "backend must be one of: codex, gemini",
+            "backend must be one of: codex, antigravity",
         )
 
     def test_backend_runtime_and_prompts_share_one_snapshot_until_next_lifecycle(
@@ -894,15 +894,19 @@ class CodexBackendDefaultsTests(unittest.TestCase):
                 "max_debate_rounds": 0,
                 "codex_model": "next-model",
                 "codex_reasoning_effort": "high",
+                "antigravity_model": "next-antigravity-model",
+                "antigravity_effort": "medium",
             }
         )
         self.workspace.write_json("config/system_defaults.json", defaults)
         agents = self.workspace.read_json("config/agent_configs.json")
         agents[PLOT_ARCHITECT].update(
             {
-                "backend": "gemini",
+                "backend": "antigravity",
                 "language": "FR",
                 "persona": replacement_persona,
+                "antigravity_model": "agent-antigravity-model",
+                "antigravity_effort": "high",
             }
         )
         self.workspace.write_json("config/agent_configs.json", agents)
@@ -935,12 +939,31 @@ class CodexBackendDefaultsTests(unittest.TestCase):
         self.addCleanup(next_backend.close)
         self.assertEqual(next_backend.model, "next-model")
         self.assertEqual(next_backend._codex_reasoning_effort, "high")
-        with self.assertRaises(ConfigurationError) as caught:
-            next_backend.validate_provider_configuration("snapshot_session")
         self.assertEqual(
-            str(caught.exception),
-            "agent backend is not implemented: gemini",
+            next_backend._antigravity_adapter.invocation_settings(
+                PLOT_ARCHITECT
+            ),
+            ("agent-antigravity-model", "high"),
         )
+        with (
+            mock.patch.object(
+                next_backend._antigravity_adapter,
+                "executable_available",
+                return_value=True,
+            ) as executable_available,
+            mock.patch.object(
+                next_backend._antigravity_adapter,
+                "headless_capabilities_available",
+                return_value=True,
+            ) as headless_capabilities_available,
+        ):
+            self.assertTrue(
+                next_backend.validate_provider_configuration(
+                    "snapshot_session"
+                )
+            )
+        executable_available.assert_called_once_with()
+        headless_capabilities_available.assert_called_once_with()
 
     def test_optional_model_and_reasoning_argv_are_exact_for_fresh_and_resume(
         self,
@@ -2745,8 +2768,14 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
     async def test_unsupported_vendor_fails_during_binding(self) -> None:
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        with self.assertRaisesRegex(ConfigurationError, "not implemented"):
-            await backend.bind(replace(self.definition(), backend="gemini"))
+        with self.assertRaises(ConfigurationError) as caught:
+            await backend.bind(
+                replace(self.definition(), backend="unsupported-provider")
+            )
+        self.assertEqual(
+            str(caught.exception),
+            "agent backend is not implemented: unsupported-provider",
+        )
 
     async def test_unsafe_persisted_thread_id_is_never_used_as_an_option(
         self,
@@ -3674,7 +3703,7 @@ class ConcreteBackendCliTests(unittest.TestCase):
                 "--backend",
                 "plot_architect=codex",
                 "--backend",
-                "character_custodian=gemini",
+                "character_custodian=antigravity",
                 "--draft",
                 "draft",
             ]
@@ -3683,11 +3712,20 @@ class ConcreteBackendCliTests(unittest.TestCase):
             _parse_backend_overrides(arguments.backend),
             {
                 PLOT_ARCHITECT: "codex",
-                CHARACTER_CUSTODIAN: "gemini",
+                CHARACTER_CUSTODIAN: "antigravity",
             },
         )
         self.assertIsNone(arguments.codex_model)
+        self.assertEqual(arguments.antigravity_executable, "agy")
+        self.assertIsNone(arguments.antigravity_model)
+        self.assertIsNone(arguments.antigravity_effort)
         self.assertEqual(arguments.codex_timeout, 300)
+        with self.assertRaises(ConfigurationError) as caught:
+            _parse_backend_overrides(["plot_architect=gemini"])
+        self.assertEqual(
+            str(caught.exception),
+            "backend 'gemini' is no longer supported; use 'antigravity'",
+        )
         with self.assertRaisesRegex(ConfigurationError, "duplicate"):
             _parse_backend_overrides(
                 ["plot_architect=codex", "plot_architect=codex"]

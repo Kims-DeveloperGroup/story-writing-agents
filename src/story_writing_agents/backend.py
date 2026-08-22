@@ -355,6 +355,22 @@ class AgentBackend:
             raise ValueError(
                 "Codex model must be safe non-empty text or None"
             ) from exc
+        try:
+            explicit_antigravity_model = manager.validate_antigravity_model(
+                antigravity_model
+            )
+        except ConfigurationError as exc:
+            raise ValueError(
+                "Antigravity model must be safe non-empty text or None"
+            ) from exc
+        try:
+            explicit_antigravity_effort = manager.validate_antigravity_effort(
+                antigravity_effort
+            )
+        except ConfigurationError as exc:
+            raise ValueError(
+                "Antigravity effort must be None or one of: low, medium, high"
+            ) from exc
         if (
             isinstance(timeout_seconds, bool)
             or not isinstance(timeout_seconds, (int, float))
@@ -393,8 +409,17 @@ class AgentBackend:
             state_root=self.workspace.path(
                 f"{_SESSION_DIRECTORY}/.antigravity"
             ),
-            explicit_model=antigravity_model,
-            explicit_effort=antigravity_effort,
+            explicit_model=explicit_antigravity_model,
+            explicit_effort=explicit_antigravity_effort,
+            system_model=configuration.system_defaults.antigravity_model,
+            system_effort=configuration.system_defaults.antigravity_effort,
+            agent_settings={
+                agent_id: (
+                    configuration.agent_configs[agent_id].antigravity_model,
+                    configuration.agent_configs[agent_id].antigravity_effort,
+                )
+                for agent_id in ROSTER
+            },
             create_process=lambda: asyncio.create_subprocess_exec,
             wait_for=lambda: asyncio.wait_for,
             which=lambda: shutil.which,

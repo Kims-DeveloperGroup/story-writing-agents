@@ -19,6 +19,7 @@ from story_writing_agents import (
     AgentReply,
     AgentRequest,
     BackendProtocolError,
+    CHARACTER_CUSTODIAN,
     PLOT_ARCHITECT,
     Phase,
 )
@@ -110,6 +111,9 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         timeout_seconds: float = 7,
         model: str | None = None,
         effort: str | None = None,
+        system_model: str | None = None,
+        system_effort: str | None = None,
+        agent_settings=None,
         create_process=None,
         wait_for=None,
         which=None,
@@ -123,6 +127,9 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             "state_root": self.workspace.path(state_name),
             "explicit_model": model,
             "explicit_effort": effort,
+            "system_model": system_model,
+            "system_effort": system_effort,
+            "agent_settings": agent_settings,
         }
         if create_process is not None:
             arguments["create_process"] = lambda: create_process
@@ -417,6 +424,112 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [path.name for path in working_directory.iterdir()],
             ["AGENTS.md"],
+        )
+
+    def test_model_effort_precedence_and_backend_projection_are_immutable(
+        self,
+    ) -> None:
+        agent_settings = {
+            PLOT_ARCHITECT: ("agent-model", "medium"),
+            CHARACTER_CUSTODIAN: (None, None),
+        }
+        adapter = self.adapter(
+            "precedence-state",
+            system_model="system-model",
+            system_effort="low",
+            agent_settings=agent_settings,
+        )
+        agent_settings[PLOT_ARCHITECT] = ("mutated-model", "high")
+        self.assertEqual(
+            adapter.invocation_settings(PLOT_ARCHITECT),
+            ("agent-model", "medium"),
+        )
+        self.assertEqual(
+            adapter.invocation_settings(CHARACTER_CUSTODIAN),
+            ("system-model", "low"),
+        )
+        command = adapter.command(
+            provider_state_directory=self.workspace.path("provider"),
+            working_directory=self.workspace.path("working"),
+            schema={"type": "object"},
+            thread_id=None,
+            agent_id=PLOT_ARCHITECT,
+        )
+        self.assertEqual(
+            command[command.index("--model") :],
+            ["--model", "agent-model", "--effort", "medium"],
+        )
+
+        explicit = self.adapter(
+            "explicit-state",
+            model="explicit-model",
+            effort="high",
+            system_model="system-model",
+            system_effort="low",
+            agent_settings={PLOT_ARCHITECT: ("agent-model", "medium")},
+        )
+        self.assertEqual(
+            explicit.invocation_settings(PLOT_ARCHITECT),
+            ("explicit-model", "high"),
+        )
+        self.assertEqual(
+            self.adapter("default-state").invocation_settings(None),
+            (None, None),
+        )
+        with self.assertRaisesRegex(
+            ValueError,
+            "Antigravity agent setting is unavailable",
+        ):
+            adapter.invocation_settings("unknown_agent")
+        with self.assertRaisesRegex(
+            ValueError,
+            "Antigravity agent definition is invalid",
+        ):
+            self.adapter(
+                "missing-agent-state",
+                agent_settings={CHARACTER_CUSTODIAN: (None, None)},
+            ).bind(self.definition)
+
+        defaults = self.workspace.read_json("config/system_defaults.json")
+        defaults.update(
+            {
+                "antigravity_model": "persisted-system-model",
+                "antigravity_effort": "low",
+            }
+        )
+        self.workspace.write_json("config/system_defaults.json", defaults)
+        agents = self.workspace.read_json("config/agent_configs.json")
+        agents[PLOT_ARCHITECT].update(
+            {
+                "backend": "antigravity",
+                "antigravity_model": "persisted-agent-model",
+                "antigravity_effort": "medium",
+            }
+        )
+        self.workspace.write_json("config/agent_configs.json", agents)
+        backend = AgentBackend(
+            self.workspace,
+            executable=sys.executable,
+            antigravity_executable="private-agy",
+        )
+        self.addCleanup(backend.close)
+        self.assertEqual(
+            (backend.antigravity_model, backend.antigravity_effort),
+            ("persisted-system-model", "low"),
+        )
+        self.assertEqual(
+            backend._antigravity_adapter.invocation_settings(
+                PLOT_ARCHITECT
+            ),
+            ("persisted-agent-model", "medium"),
+        )
+        agents[PLOT_ARCHITECT]["antigravity_model"] = "mutated-after-init"
+        self.workspace.write_json("config/agent_configs.json", agents)
+        self.assertEqual(
+            backend._antigravity_adapter.invocation_settings(
+                PLOT_ARCHITECT
+            ),
+            ("persisted-agent-model", "medium"),
         )
 
     async def test_request_encoding_failures_are_fixed_private_and_prelaunch(

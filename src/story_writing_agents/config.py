@@ -21,7 +21,8 @@ _CODEX_REASONING_EFFORTS: tuple[str, ...] = (
     "high",
     "xhigh",
 )
-KNOWN_AGENT_BACKENDS: tuple[str, ...] = ("codex", "gemini")
+_ANTIGRAVITY_EFFORTS: tuple[str, ...] = ("low", "medium", "high")
+KNOWN_AGENT_BACKENDS: tuple[str, ...] = ("codex", "antigravity")
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +32,8 @@ class SystemDefaults:
     max_debate_rounds: int
     codex_model: str | None = None
     codex_reasoning_effort: str | None = None
+    antigravity_model: str | None = None
+    antigravity_effort: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +43,8 @@ class AgentConfig:
     persona: str | None = None
     codex_model: str | None = None
     codex_reasoning_effort: str | None = None
+    antigravity_model: str | None = None
+    antigravity_effort: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +106,10 @@ class ConfigManager:
     def validate_backend(value: Any, *, allow_none: bool = False) -> str | None:
         if value is None and allow_none:
             return None
+        if value == "gemini":
+            raise ConfigurationError(
+                "backend 'gemini' is no longer supported; use 'antigravity'"
+            )
         if not isinstance(value, str) or value not in KNOWN_AGENT_BACKENDS:
             expected = ", ".join(KNOWN_AGENT_BACKENDS)
             raise ConfigurationError(f"backend must be one of: {expected}")
@@ -136,6 +145,36 @@ class ConfigManager:
             )
         return value
 
+    @staticmethod
+    def validate_antigravity_model(value: Any) -> str | None:
+        if value is None:
+            return None
+        if (
+            not isinstance(value, str)
+            or not value
+            or value.startswith("-")
+            or any(
+                unicodedata.category(character) in {"Cc", "Cf", "Cs"}
+                for character in value
+            )
+        ):
+            raise ConfigurationError(
+                "antigravity_model must be safe non-empty text or null"
+            )
+        return value
+
+    @staticmethod
+    def validate_antigravity_effort(value: Any) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str) or value not in _ANTIGRAVITY_EFFORTS:
+            expected = ", ".join(_ANTIGRAVITY_EFFORTS)
+            raise ConfigurationError(
+                "antigravity_effort must be null or one of: "
+                f"{expected}"
+            )
+        return value
+
     def load_system_defaults(self) -> SystemDefaults:
         return self._validate_system_defaults(
             self.workspace.read_json("config/system_defaults.json")
@@ -153,6 +192,8 @@ class ConfigManager:
                 "max_debate_rounds",
                 "codex_model",
                 "codex_reasoning_effort",
+                "antigravity_model",
+                "antigravity_effort",
             }
         )
         if unknown:
@@ -168,12 +209,20 @@ class ConfigManager:
         codex_reasoning_effort = self.validate_codex_reasoning_effort(
             value.get("codex_reasoning_effort")
         )
+        antigravity_model = self.validate_antigravity_model(
+            value.get("antigravity_model")
+        )
+        antigravity_effort = self.validate_antigravity_effort(
+            value.get("antigravity_effort")
+        )
         return SystemDefaults(
             language=language,
             persona=persona,
             max_debate_rounds=rounds,
             codex_model=codex_model,
             codex_reasoning_effort=codex_reasoning_effort,
+            antigravity_model=antigravity_model,
+            antigravity_effort=antigravity_effort,
         )
 
     def load_agent_configs(self) -> dict[str, AgentConfig]:
@@ -207,6 +256,8 @@ class ConfigManager:
                     "persona",
                     "codex_model",
                     "codex_reasoning_effort",
+                    "antigravity_model",
+                    "antigravity_effort",
                 }
             )
             if unknown_fields:
@@ -229,12 +280,20 @@ class ConfigManager:
             codex_reasoning_effort = self.validate_codex_reasoning_effort(
                 raw.get("codex_reasoning_effort")
             )
+            antigravity_model = self.validate_antigravity_model(
+                raw.get("antigravity_model")
+            )
+            antigravity_effort = self.validate_antigravity_effort(
+                raw.get("antigravity_effort")
+            )
             configs[agent_id] = AgentConfig(
                 backend=backend,
                 language=language,
                 persona=persona,
                 codex_model=codex_model,
                 codex_reasoning_effort=codex_reasoning_effort,
+                antigravity_model=antigravity_model,
+                antigravity_effort=antigravity_effort,
             )
         return MappingProxyType(configs)
 

@@ -242,13 +242,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   included-context event list to provider payloads only when present; absent
   and fresh context requests retain the exact context-free payload. At
   construction it validates and snapshots the complete workspace system and
-  per-agent configuration once, passes the Codex-specific subset and explicit
-  Antigravity executable/model/effort settings to their owning adapters, and
-  preserves compatibility delegates for previously test-observed private Codex
-  helpers. The Antigravity settings are additive keyword-only constructor
-  inputs. Configuration values remain fixed for the backend lifetime and do
-  not change provider-thread identity, bindings, fingerprints, manifests, or
-  request payloads.
+  per-agent configuration once, passes that complete immutable snapshot to the
+  Codex adapter, validates explicit Antigravity model/effort inputs, and
+  projects the validated Antigravity system and roster-complete per-agent
+  values into provider-private primitives for adapter-owned immutable copying.
+  It preserves compatibility delegates for previously test-observed private
+  Codex helpers.
+  The Antigravity settings are additive keyword-only constructor inputs.
+  Configuration values remain fixed for the backend lifetime and do not change
+  provider-thread identity, bindings, fingerprints, manifests, or request
+  payloads.
 - **Primary verification/documentation:** `tests/test_codex_backend.py`,
   `tests/test_antigravity_adapter.py`, `tests/test_session_lifecycle.py`,
   `docs/reference/backend-and-sessions.md`,
@@ -266,9 +269,11 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Direct internal dependencies:** `models`, `provider_adapter`, and
   `provider_process`.
 - **State, resources, and side effects:** Owns the Antigravity executable,
-  model, effort, isolated provider state, command construction, headless
-  capability check, NDJSON stream validation, and provider conversation-ID
-  protocol. Binding writes deterministic rules beneath
+  defensive immutable copies of explicit/system/per-agent model and effort
+  primitives, bound-agent selection, exact explicit-over-agent-over-system-
+  over-provider-default precedence, isolated provider state, command
+  construction, headless capability check, NDJSON stream validation, and
+  provider conversation-ID protocol. Binding writes deterministic rules beneath
   `agent_states/orchestrator_state/provider_sessions/.antigravity/definitions/<agent>/<fingerprint>/AGENTS.md`.
   Invocation retains provider-native state and isolated cwd beneath
   `agent_states/orchestrator_state/provider_sessions/.antigravity/sessions/<session>/<agent>/<fingerprint>/provider`
@@ -349,7 +354,10 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Responsibility:** Parse command-line arguments and dispatch CLI commands.
 - **Supported surface:** Script entry point `story_writing_agents.cli:main` for
   both `story` and `story-writing-agents`. `build_parser` and other helpers are
-  not package-supported APIs. The lifecycle grammar is exactly
+  not package-supported APIs. Interactive `chat` and noninteractive `run`
+  accept additive `--antigravity-executable` (default `agy`),
+  `--antigravity-model`, and `--antigravity-effort` options and pass their
+  values to `AgentBackend`. The lifecycle grammar is exactly
   `story session create SESSION`, `story session reopen [SESSION]`, and
   `story session pause [SESSION]`; those actions have no lifecycle `--session`
   option. Omitted reopen/pause targets use `default_session_id`; create and
@@ -413,13 +421,14 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Responsibility:** Validate and resolve cascading runtime configuration.
 - **Supported surface:** Internal `ConfigManager`, `SystemDefaults`,
   `AgentConfig`, `ResolvedAgentConfig`, immutable roster-complete
-  `ConfigurationSnapshot`, and `KNOWN_AGENT_BACKENDS`.
-  `SystemDefaults` retains its established positional fields and trailing
-  optional `codex_model` and `codex_reasoning_effort` fields. `AgentConfig`
-  likewise retains its first three positional fields and adds trailing optional
-  per-agent `codex_model` and `codex_reasoning_effort` fields. `ConfigManager`
-  owns both complete persisted schemas plus the shared safe-model and fixed
-  reasoning-effort validators. Package-internal
+  `ConfigurationSnapshot`, and exact `KNOWN_AGENT_BACKENDS` value
+  `("codex", "antigravity")`; legacy `gemini` values receive fixed migration
+  guidance. `SystemDefaults` retains its established positional fields and
+  trailing optional Codex model/reasoning plus Antigravity model/effort fields.
+  `AgentConfig` likewise retains its first three positional fields and adds the
+  four trailing optional provider-specific fields. `ConfigManager` owns both
+  complete persisted schemas plus provider-specific safe-model and fixed-effort
+  validators. Package-internal
   `validate_configuration` validates both persisted documents as one complete
   candidate, `load_configuration_snapshot` reads and publishes one immutable
   pair, and `resolve_from_snapshot` applies live runtime and explicit backend
@@ -695,7 +704,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   `write_status` or specialized dense-row call.
   The settings editor exposes the exact six-row top level Language, Persona,
   Maximum debate rounds, Providers, Save, and Cancel; Providers selects one
-  roster agent and then its Provider, Model, or Reasoning effort without
+  roster agent, enables Codex or Antigravity selection, and edits only the
+  active provider's model and effort vocabulary without discarding the inactive
+  provider's values. The summary projection names both providers' model/effort
+  rows, so changed-only confirmations can identify changes to either without
   changing the active backend or runtime snapshot. Editors contain no repeated
   Current/Pending context panel. Explicit Save and Cancel actions each use one
   selectable YES/NO confirmation whose preceding context contains only changed
@@ -941,10 +953,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   persistence.
 - **Supported surface:** Package-internal frozen/slotted `PersonaCatalogEntry`,
   `SettingsBaseline`, and `SettingsState`; fixed `SettingsErrorKind` and
-  redacted `SettingsError`; the exact ordered `SETTINGS_LANGUAGES` and
-  `SETTINGS_REASONING_EFFORTS`; `load_settings_state`, `update_language`,
-  `update_persona`, `update_max_debate_rounds`, `update_agent_backend`,
-  `update_agent_codex_model`, `update_agent_codex_reasoning_effort`, and
+  redacted `SettingsError`; the exact ordered `SETTINGS_LANGUAGES`,
+  `SETTINGS_REASONING_EFFORTS`, and `SETTINGS_ANTIGRAVITY_EFFORTS`;
+  `load_settings_state`, `update_language`, `update_persona`,
+  `update_max_debate_rounds`, `update_agent_backend`,
+  `update_agent_codex_model`, `update_agent_codex_reasoning_effort`,
+  `update_agent_antigravity_model`, `update_agent_antigravity_effort`, and
   `save_settings_state`. The module has no package-facade export.
 - **Direct internal dependencies:** `agents`, `config`, `errors`, and
   `workspace`.
@@ -952,10 +966,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   UTF-8 bytes of both persisted configuration documents, one fully validated
   immutable configuration snapshot, and a safe lexical persona catalog with
   top-level-template precedence. Pure update operations replace only the
-  pending immutable candidate, including one agent's provider, model, or
-  reasoning value at a time. Legacy system model/reasoning values remain
+  pending immutable candidate, including one agent's provider or one
+  provider-specific model/effort value at a time while preserving every
+  inactive-provider value. System-level provider model/effort values remain
   unchanged fallback data rather than editable settings. Saving completely
-  validates that candidate,
+  validates and fully serializes that candidate,
   rereads both documents and the catalog for exact stale-state detection, and
   performs no write when the candidate is unchanged. Changed documents are
   serialized canonically and atomically replaced through `Workspace` in system-
@@ -1566,10 +1581,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   guarded process-wide weak lock registry serializes operations per
   workspace/session/conversation. The fixed initialized topology includes
   `agent_states/orchestrator_state/conversation_defaults`; new workspaces also
-  receive the canonical five-key system-default document with null Codex model
-  and reasoning values, while existing system-default bytes are never migrated
-  or rewritten by initialization. `cli_context` owns the schema stored in the
-  conversation-default directory. The backend-owned story-session
+  receive the canonical seven-key system-default document with null Codex
+  model/reasoning and Antigravity model/effort values, plus canonical seven-key
+  per-agent entries with Codex as the backend and null language, persona, and
+  both providers' model/effort values. Existing configuration bytes are never
+  migrated or rewritten by initialization. `cli_context` owns the schema stored
+  in the conversation-default directory. The backend-owned story-session
   process-access claim remains the cross-process same-session write guard.
   Catalog and absent-transcript reads do not create storage. Transcript access
   validates catalog identity, and appends atomically replace the complete file.
@@ -1589,16 +1606,20 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 ## Consistency Notes
 
-- `Workspace` initializes the canonical five-key system-default document but
-  never rewrites an existing one. `ConfigManager` owns full system and per-agent
-  schema validation and the shared Codex model/reasoning validators plus
-  immutable complete snapshots. Each `AgentBackend` validates and snapshots
-  those values once at construction and alone projects the per-bound-agent
-  invocation settings: a non-null explicit model precedes the per-agent and
-  legacy system model, while per-agent reasoning precedes the legacy system
-  value. Provider routing retains explicit-over-agent-over-Codex precedence.
-  Model and reasoning values do not enter bindings, fingerprints, thread keys,
-  lifecycle artifacts, request payloads, or active-backend refresh. A
+- `Workspace` initializes canonical seven-key system and per-agent configuration
+  shapes but never rewrites existing documents. `ConfigManager` owns full
+  system and per-agent schema validation, the exact Codex/Antigravity backend
+  vocabulary with legacy Gemini guidance, both providers' model/effort
+  validators, and immutable complete snapshots. Each `AgentBackend` validates
+  and snapshots those values once at construction, passes the complete snapshot
+  to the Codex adapter, and projects only the Antigravity values into provider-
+  specific primitives. Codex model resolution remains explicit-over-agent-
+  over-system and its reasoning remains agent-over-system;
+  Antigravity model and effort resolution is explicit-over-agent-over-system-
+  over-provider-default and is selected by the bound agent. Provider routing
+  retains explicit-over-agent-over-Codex precedence. Provider model and effort
+  values do not enter bindings, fingerprints, thread keys, lifecycle artifacts,
+  request payloads, or active-backend refresh. A
   backend-bound `StoryRuntime` and its `PromptAssembler` reuse that same
   construction-time snapshot for provider routes, language, persona, and round
   defaults while session and explicit overrides remain live; settings saves

@@ -61,6 +61,7 @@ from ..interactive_commands import (
     parse_interactive_line,
 )
 from ..interactive_settings import (
+    SETTINGS_ANTIGRAVITY_EFFORTS,
     SETTINGS_LANGUAGES,
     SETTINGS_REASONING_EFFORTS,
     SettingsError,
@@ -68,6 +69,8 @@ from ..interactive_settings import (
     SettingsState,
     load_settings_state,
     save_settings_state,
+    update_agent_antigravity_effort,
+    update_agent_antigravity_model,
     update_agent_backend,
     update_agent_codex_model,
     update_agent_codex_reasoning_effort,
@@ -1726,16 +1729,22 @@ class InteractiveController:
             if agent_id is None:
                 return state, False
             agent_highlight = agent_id
+            provider = (
+                state.pending.agent_configs[agent_id].backend or "codex"
+            )
+            provider_name = (
+                "Antigravity" if provider == "antigravity" else "Codex"
+            )
             field_outcome = self._picker_input.read_picker(
                 Prompt(
                     "Agent settings",
                     scope=AGENT_SPECS[agent_id].display_name,
-                    instruction="Choose a provider, model, or reasoning setting.",
+                    instruction="Choose a provider, model, or effort setting.",
                 ),
                 (
                     Choice("provider", "Provider"),
-                    Choice("model", "Model"),
-                    Choice("reasoning", "Reasoning effort"),
+                    Choice("model", f"{provider_name} model"),
+                    Choice("reasoning", f"{provider_name} effort"),
                 ),
                 highlighted_id="provider",
                 transient=True,
@@ -1769,14 +1778,14 @@ class InteractiveController:
         state: SettingsState,
         agent_id: str,
     ) -> tuple[SettingsState, bool]:
-        """Edit one agent's provider while preserving Gemini values on cancel."""
+        """Edit one agent's provider without changing either provider's settings."""
 
-        current = state.pending.agent_configs[agent_id].backend
+        current = state.pending.agent_configs[agent_id].backend or "codex"
         outcome = self._picker_input.read_picker(
             Prompt(
                 "Provider",
                 scope=AGENT_SPECS[agent_id].display_name,
-                instruction="Choose Codex or return without changing.",
+                instruction="Choose Codex or Antigravity.",
             ),
             (
                 Choice(
@@ -1789,19 +1798,17 @@ class InteractiveController:
                     ),
                 ),
                 Choice(
-                    "gemini",
-                    "Gemini",
+                    "antigravity",
+                    "Antigravity",
                     description=(
-                        "Current saved provider; choose Codex to remediate."
-                        if current == "gemini"
-                        else "Reserved provider."
+                        "Current saved provider."
+                        if current == "antigravity"
+                        else "Available provider."
                     ),
-                    enabled=False,
-                    disabled_reason="Provider is not implemented.",
                 ),
             ),
-            highlighted_id="codex",
-            selected_id=(None if current == "gemini" else "codex"),
+            highlighted_id=current,
+            selected_id=current,
             transient=True,
         )
         provider, whole_cancel = self._nested_settings_value(outcome)
@@ -1814,16 +1821,23 @@ class InteractiveController:
         state: SettingsState,
         agent_id: str,
     ) -> tuple[SettingsState, bool]:
-        """Read one agent's exact Codex model or clear it with blank input."""
+        """Read one agent's exact active-provider model or clear it."""
 
         while True:
-            current = state.pending.agent_configs[agent_id].codex_model
+            agent = state.pending.agent_configs[agent_id]
+            provider = agent.backend or "codex"
+            antigravity = provider == "antigravity"
+            provider_name = "Antigravity" if antigravity else "Codex"
+            current = (
+                agent.antigravity_model if antigravity else agent.codex_model
+            )
             outcome = self._prompt_input.read_prompt(
                 Prompt(
-                    "Model",
+                    f"{provider_name} model",
                     scope=AGENT_SPECS[agent_id].display_name,
                     instruction=(
-                        "Enter an exact model or leave blank to inherit the system setting."
+                        f"Enter an exact {provider_name} model or leave blank "
+                        "to inherit the system setting."
                     ),
                     default=current or "inherit",
                 ),
@@ -1835,14 +1849,18 @@ class InteractiveController:
             if value is None:
                 return state, False
             try:
-                return update_agent_codex_model(
-                    state,
-                    agent_id,
-                    None if value == "" else value,
+                updater = (
+                    update_agent_antigravity_model
+                    if antigravity
+                    else update_agent_codex_model
+                )
+                return updater(
+                    state, agent_id, None if value == "" else value
                 ), False
             except ConfigurationError:
                 self._write_settings_validation(
-                    "Codex model must be safe nonempty text, or blank to inherit."
+                    f"{provider_name} model must be safe nonempty text, "
+                    "or blank to inherit."
                 )
 
     def _edit_settings_agent_reasoning(
@@ -1850,13 +1868,26 @@ class InteractiveController:
         state: SettingsState,
         agent_id: str,
     ) -> tuple[SettingsState, bool]:
-        """Select one agent's fixed reasoning level or inherited system value."""
+        """Select one active-provider effort or inherited system value."""
 
-        pending = state.pending.agent_configs[agent_id].codex_reasoning_effort
+        agent = state.pending.agent_configs[agent_id]
+        provider = agent.backend or "codex"
+        antigravity = provider == "antigravity"
+        provider_name = "Antigravity" if antigravity else "Codex"
+        pending = (
+            agent.antigravity_effort
+            if antigravity
+            else agent.codex_reasoning_effort
+        )
+        efforts = (
+            SETTINGS_ANTIGRAVITY_EFFORTS
+            if antigravity
+            else SETTINGS_REASONING_EFFORTS
+        )
         selected = "default" if pending is None else pending
         outcome = self._picker_input.read_picker(
             Prompt(
-                "Reasoning effort",
+                f"{provider_name} effort",
                 scope=AGENT_SPECS[agent_id].display_name,
                 instruction="Choose inheritance or one fixed effort level.",
             ),
@@ -1864,7 +1895,7 @@ class InteractiveController:
                 Choice("default", "Inherit"),
                 *tuple(
                     Choice(effort, effort)
-                    for effort in SETTINGS_REASONING_EFFORTS
+                    for effort in efforts
                 ),
             ),
             highlighted_id=selected,
@@ -1876,10 +1907,13 @@ class InteractiveController:
             return state, True
         if value is None:
             return state, False
-        return update_agent_codex_reasoning_effort(
-            state,
-            agent_id,
-            None if value == "default" else value,
+        updater = (
+            update_agent_antigravity_effort
+            if antigravity
+            else update_agent_codex_reasoning_effort
+        )
+        return updater(
+            state, agent_id, None if value == "default" else value
         ), False
 
     @staticmethod
@@ -1939,10 +1973,21 @@ class InteractiveController:
                 rows.extend(
                     (
                         (f"{display_name} Provider", agent.backend or "codex (default)"),
-                        (f"{display_name} Model", agent.codex_model or "inherit"),
                         (
-                            f"{display_name} Reasoning",
+                            f"{display_name} Codex model",
+                            agent.codex_model or "inherit",
+                        ),
+                        (
+                            f"{display_name} Codex reasoning",
                             agent.codex_reasoning_effort or "inherit",
+                        ),
+                        (
+                            f"{display_name} Antigravity model",
+                            agent.antigravity_model or "inherit",
+                        ),
+                        (
+                            f"{display_name} Antigravity effort",
+                            agent.antigravity_effort or "inherit",
                         ),
                     )
                 )
