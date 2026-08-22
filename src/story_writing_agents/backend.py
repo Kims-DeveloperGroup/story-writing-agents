@@ -136,16 +136,30 @@ class BoundAgent:
         owner: AgentBackend,
         definition: AgentDefinition,
         staging_directory: Path,
+        *,
+        _provider_binding: ProviderBinding | None = None,
     ) -> None:
         self.backend = owner
         self.definition = definition
         self.vendor = definition.backend
         self.staging_directory = staging_directory
-        self._provider_binding = ProviderBinding(
-            vendor=self.vendor,
-            definition=definition,
-            staging_directory=staging_directory,
-        )
+        if _provider_binding is None:
+            self._provider_binding = ProviderBinding(
+                vendor=self.vendor,
+                definition=definition,
+                staging_directory=staging_directory,
+            )
+        elif (
+            type(_provider_binding) is not ProviderBinding
+            or _provider_binding.vendor != self.vendor
+            or _provider_binding.definition is not definition
+            or _provider_binding.staging_directory != staging_directory
+        ):
+            raise BackendProtocolError(
+                "provider adapter returned an inconsistent binding"
+            )
+        else:
+            self._provider_binding = _provider_binding
 
     async def invoke(self, request: AgentRequest) -> AgentReply:
         """Invoke the selected vendor while serializing its persistent thread."""
@@ -387,7 +401,16 @@ class AgentBackend:
         self._ensure_open()
         adapter = self._adapter_for(definition.backend)
         binding = adapter.bind(definition)
-        return BoundAgent(self, definition, binding.staging_directory)
+        if type(binding) is not ProviderBinding:
+            raise BackendProtocolError(
+                "provider adapter returned an inconsistent binding"
+            )
+        return BoundAgent(
+            self,
+            definition,
+            binding.staging_directory,
+            _provider_binding=binding,
+        )
 
     def get_session_lifecycle(self, session_id: str) -> SessionLifecycleState:
         """Return validated durable and access facts without mutation.
@@ -1044,11 +1067,12 @@ class AgentBackend:
         payload: Mapping[str, Any],
         decode: Callable[[str], _StructuredReply],
     ) -> _StructuredReply:
-        """Run one structured Codex call with fixed, stderr-free exit errors.
+        """Coordinate one structured call through the selected provider adapter.
 
-        Both output streams are drained. Standard output and the final response
-        retain their existing validation, while nonzero stderr is never decoded
-        or reproduced in the raised ``BackendProtocolError``.
+        Transport and diagnostic construction remain adapter-owned; this method
+        does not inspect or reproduce transport streams. It applies the
+        adapter's thread-taint decision, decodes the domain response, and
+        persists the validated thread only after successful decoding.
         """
 
         self._ensure_open()
