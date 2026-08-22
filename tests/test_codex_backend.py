@@ -84,7 +84,11 @@ from story_writing_agents.provider_adapter import (
     ProviderInvocationError,
     ProviderResult,
 )
-from story_writing_agents.provider_process import ProcessRequest, run_process
+from story_writing_agents.provider_process import (
+    ProcessRequest,
+    run_process,
+    stop_process,
+)
 
 from tests.helpers import all_manuscripts, core_snapshot, initialized_workspace
 
@@ -2696,27 +2700,41 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         failure = BrokenPipeError("provider communication failed")
         communication = asyncio.Future()
         communication.set_exception(failure)
-        stopped = asyncio.Future()
-        stopped.set_result(None)
+        first_wait = asyncio.Future()
+        final_wait = asyncio.Future()
+        final_wait.set_result(None)
+        cleanup_waits: list[asyncio.Future[object]] = []
+        timeouts: list[float] = []
         process = mock.Mock(returncode=None)
         process.communicate.side_effect = (
             lambda data: events.append("communicate") or communication
         )
         process.terminate.side_effect = lambda: events.append("terminate")
-        process.wait.side_effect = lambda: events.append("wait") or stopped
         process.kill.side_effect = lambda: events.append("kill")
+        waits = iter((first_wait, final_wait))
+
+        def wait():
+            events.append("wait")
+            return next(waits)
+
+        process.wait.side_effect = wait
 
         async def create_process(*command, **launch_options):
             events.append("launch")
             return process
 
         async def wait_for(awaitable, *, timeout):
+            timeouts.append(timeout)
             if awaitable is communication:
                 self.assertEqual(timeout, 5)
-            else:
-                self.assertIs(awaitable, stopped)
-                self.assertEqual(timeout, 2)
-            return await awaitable
+                return await awaitable
+            cleanup_waits.append(awaitable)
+            self.assertEqual(timeout, 2)
+            if awaitable is first_wait:
+                awaitable.cancel()
+                raise TimeoutError
+            self.assertIs(awaitable, final_wait)
+            raise TimeoutError
 
         with self.assertRaises(BrokenPipeError) as caught:
             await run_process(
@@ -2730,11 +2748,16 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertIs(caught.exception, failure)
-        self.assertEqual(events, ["launch", "communicate", "terminate", "wait"])
+        self.assertEqual(
+            events,
+            ["launch", "communicate", "terminate", "wait", "kill", "wait"],
+        )
+        self.assertEqual(cleanup_waits, [first_wait, final_wait])
+        self.assertEqual(timeouts, [5, 2, 2])
         process.communicate.assert_called_once_with(b"payload")
         process.terminate.assert_called_once_with()
-        process.wait.assert_called_once_with()
-        process.kill.assert_not_called()
+        process.kill.assert_called_once_with()
+        self.assertEqual(process.wait.call_count, 2)
 
     async def test_process_stop_escalates_from_terminate_to_kill(self) -> None:
         events: list[str] = []
@@ -2752,18 +2775,64 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
 
         process.wait.side_effect = wait
 
-        async def time_out(awaitable, *, timeout):
-            self.assertEqual(timeout, 2)
-            awaitable.cancel()
-            raise TimeoutError
+        bounded_waits: list[asyncio.Future[object]] = []
+        timeouts: list[float] = []
 
-        with mock.patch(
-            "story_writing_agents.backend.asyncio.wait_for",
-            new=time_out,
-        ):
-            await AgentBackend._stop_process(process)
+        async def timeout_then_reap(awaitable, *, timeout):
+            bounded_waits.append(awaitable)
+            timeouts.append(timeout)
+            self.assertEqual(timeout, 2)
+            if awaitable is first_wait:
+                awaitable.cancel()
+                raise TimeoutError
+            self.assertIs(awaitable, final_wait)
+            return await awaitable
+
+        await stop_process(process, wait_for=timeout_then_reap)
 
         self.assertEqual(events, ["terminate", "wait", "kill", "wait"])
+        self.assertEqual(bounded_waits, [first_wait, final_wait])
+        self.assertEqual(timeouts, [2, 2])
+        process.terminate.assert_called_once_with()
+        process.kill.assert_called_once_with()
+        self.assertEqual(process.wait.call_count, 2)
+
+    async def test_process_stop_returns_after_bounded_post_kill_timeout(
+        self,
+    ) -> None:
+        events: list[str] = []
+        first_wait = asyncio.Future()
+        final_wait = asyncio.Future()
+        final_wait.set_result(None)
+        process = mock.Mock(returncode=None)
+        process.terminate.side_effect = lambda: events.append("terminate")
+        process.kill.side_effect = lambda: events.append("kill")
+        waits = iter((first_wait, final_wait))
+
+        def wait():
+            events.append("wait")
+            return next(waits)
+
+        process.wait.side_effect = wait
+        bounded_waits: list[asyncio.Future[object]] = []
+        timeouts: list[float] = []
+
+        async def time_out(awaitable, *, timeout):
+            bounded_waits.append(awaitable)
+            timeouts.append(timeout)
+            self.assertEqual(timeout, 2)
+            if awaitable is first_wait:
+                awaitable.cancel()
+            raise TimeoutError
+
+        await stop_process(process, wait_for=time_out)
+
+        self.assertEqual(events, ["terminate", "wait", "kill", "wait"])
+        self.assertEqual(bounded_waits, [first_wait, final_wait])
+        self.assertEqual(timeouts, [2, 2])
+        process.terminate.assert_called_once_with()
+        process.kill.assert_called_once_with()
+        self.assertEqual(process.wait.call_count, 2)
 
     async def test_unsupported_vendor_fails_during_binding(self) -> None:
         backend = AgentBackend(self.workspace, executable=str(self.executable))

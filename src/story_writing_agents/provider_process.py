@@ -118,4 +118,7 @@ async def stop_process(
             process.kill()
         except ProcessLookupError:
             return
-        await process.wait()
+        try:
+            await wait_for(process.wait(), timeout=2)
+        except TimeoutError:
+            return
