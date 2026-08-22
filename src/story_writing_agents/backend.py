@@ -1117,9 +1117,12 @@ class AgentBackend:
         except (json.JSONDecodeError, UnicodeError) as exc:
             if stored is not None:
                 self._taint_thread(session, bound_agent.definition)
-            raise BackendProtocolError(
+            diagnostic = (
                 "Codex CLI returned malformed structured output"
-            ) from exc
+                if bound_agent.vendor == "codex"
+                else "Provider returned malformed structured output"
+            )
+            raise BackendProtocolError(diagnostic) from exc
 
     def _thread_lock(
         self,
