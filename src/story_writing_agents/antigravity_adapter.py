@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import shutil
+import stat
 import subprocess
 import unicodedata
 from collections.abc import Callable, Mapping
@@ -177,6 +179,97 @@ class AntigravityAdapter:
             copied[agent_id] = (model, effort)
         return MappingProxyType(copied)
 
+    def _prepare_owned_directory_chain(self, *components: str) -> Path:
+        """Create and best-effort harden one adapter-owned directory chain."""
+
+        directory = self.state_root
+        self._prepare_owned_directory(directory)
+        for component in components:
+            directory = directory / component
+            self._prepare_owned_directory(directory)
+        return directory
+
+    @classmethod
+    def _prepare_owned_directory(cls, directory: Path) -> None:
+        """Require one no-follow directory and request owner-only access."""
+
+        try:
+            os.mkdir(directory, mode=0o700)
+        except FileExistsError:
+            pass
+        value = os.lstat(directory)
+        if not stat.S_ISDIR(value.st_mode):
+            raise NotADirectoryError("Antigravity state directory is unsafe")
+        cls._harden_owned_directory(directory)
+
+    @staticmethod
+    def _harden_owned_directory(directory: Path) -> None:
+        """Best-effort tighten a verified directory without following links."""
+
+        supports_follow_symlinks = getattr(
+            os,
+            "supports_follow_symlinks",
+            (),
+        )
+        no_follow_operations = {
+            getattr(operation, "__name__", None)
+            for operation in supports_follow_symlinks
+        }
+        if "chmod" in no_follow_operations:
+            try:
+                os.chmod(directory, 0o700, follow_symlinks=False)
+            except (NotImplementedError, OSError):
+                pass
+            return
+
+        no_follow = getattr(os, "O_NOFOLLOW", 0)
+        directory_only = getattr(os, "O_DIRECTORY", 0)
+        if not no_follow or not directory_only or not hasattr(os, "fchmod"):
+            return
+        flags = os.O_RDONLY | no_follow | directory_only
+        for name in (
+            "O_CLOEXEC",
+            "O_NOINHERIT",
+            "O_BINARY",
+            "O_NONBLOCK",
+        ):
+            flags |= getattr(os, name, 0)
+        try:
+            descriptor = os.open(directory, flags)
+        except OSError:
+            try:
+                value = os.lstat(directory)
+            except OSError:
+                return
+            if not stat.S_ISDIR(value.st_mode):
+                raise NotADirectoryError(
+                    "Antigravity state directory is unsafe"
+                )
+            return
+
+        active_control: tuple[BaseException, Any] | None = None
+        try:
+            try:
+                os.set_inheritable(descriptor, False)
+            except (AttributeError, NotImplementedError, OSError):
+                pass
+            try:
+                os.fchmod(descriptor, 0o700)
+            except (AttributeError, NotImplementedError, OSError):
+                pass
+        except BaseException as failure:
+            active_control = (failure, failure.__traceback__)
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        except BaseException:
+            if active_control is None:
+                raise
+        if active_control is not None:
+            failure, traceback = active_control
+            raise failure.with_traceback(traceback)
+
     def bind(self, definition: AgentDefinition) -> ProviderBinding:
         """Stage one stable, isolated Antigravity agent definition."""
 
@@ -195,11 +288,10 @@ class AntigravityAdapter:
             raise ValueError("Antigravity agent definition is invalid")
         for reference in definition.file_references():
             reference.read_text()
-        staging_directory = (
-            self.state_root
-            / "definitions"
-            / definition.agent_id
-            / definition.fingerprint
+        staging_directory = self._prepare_owned_directory_chain(
+            "definitions",
+            definition.agent_id,
+            definition.fingerprint,
         )
         self._write_definition(staging_directory, definition)
         for reference in definition.file_references():
@@ -217,7 +309,6 @@ class AntigravityAdapter:
     ) -> None:
         """Write one deterministic workspace-rules file for Antigravity."""
 
-        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         role = definition.system_prompt_file.read_text()
         persona = definition.persona_file.read_text()
         contexts = [
@@ -310,12 +401,14 @@ class AntigravityAdapter:
                 taint_existing_thread=False,
             ) from None
         try:
-            provider_state_directory.mkdir(
-                parents=True,
-                exist_ok=True,
-                mode=0o700,
+            self._prepare_owned_directory_chain(
+                "sessions",
+                invocation.session_id,
+                binding.definition.agent_id,
+                binding.definition.fingerprint,
             )
-            working_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+            self._prepare_owned_directory(provider_state_directory)
+            self._prepare_owned_directory(working_directory)
             staged_rules = binding.staging_directory / "AGENTS.md"
             target_rules = working_directory / "AGENTS.md"
             target_rules.write_bytes(staged_rules.read_bytes())
