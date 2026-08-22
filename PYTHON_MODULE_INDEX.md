@@ -1632,14 +1632,19 @@ every intermediate arrow. The current runtime graph is acyclic.
   replacement holding, rollback, temporary cleanup, and completed-journal
   removal never overwrite or unlink a name: prior, failed, and completed bytes
   move exclusively into ignored non-authoritative staging and remain retained.
-  The adapter owns a permanent paired-hard-link lock identity. An absent pair is
-  created as an exclusive primary name, followed in order by file and parent
-  fsync, anchor link, parent fsync, identity verification, and only then flock
-  and body entry; an existing pair must already be complete. Lock and anchor
-  spelling is checked before inspection and during identity verification, and
-  any spelling, durability, link, or identity failure is a lease failure that
-  cannot enter the body. Each context owns its descriptor/flock and mutation
-  lease only for that lifetime.
+  The adapter owns a permanent readiness triple: exact primary, anchor, and
+  ready hard-link names for one meaningful regular inode with link count three.
+  Each acquisition first takes a transient exclusive bootstrap flock on the
+  already-open artifact-state directory descriptor. When all three names are
+  absent, bootstrap owns retained-ancestry fsync, exclusive primary creation and
+  file/parent fsync, anchor link/parent fsync, verified two-link state with the
+  ready name absent, ready link/parent fsync, and final triple verification. It
+  then acquires the primary flock, reverifies ancestry and the triple, and
+  releases bootstrap before body entry; an existing triple opens without create
+  flags. Partial, legacy two-link, aliased, divergent, or extra-link states are
+  retained and fail closed without cleanup, reconstruction, or migration. Each
+  context owns its directory and primary descriptors/flocks, and its active
+  mutation lease includes and reverifies the ready link for that lifetime.
   It fails closed on unsupported primitives, special files, symlinks,
   hardlinks, identity changes, lock replacement, destination collision, or
   ambiguous traversal. The lease serializes supported repository writers;
@@ -1664,29 +1669,33 @@ every intermediate arrow. The current runtime graph is acyclic.
   `writing_artifacts._storage`, `writing_artifacts.catalog`, and
   `writing_artifacts.references`.
 - **State, resources, and side effects:** Owns a per-instance reentrant lock
-  and the workspace-local
-  `agent_states/orchestrator_state/writing_artifacts/.artifacts.lock`.
+  and the workspace-local permanent `.artifacts.lock`,
+  `.artifacts.lock.anchor`, and `.artifacts.lock.ready` readiness triple.
   Provenance state is the exact sibling `catalog.json`, `commits/`,
   `transactions/`, reserved `input_snapshots/`, and non-journal `staging/`
   topology. Staging retains exclusively named prior versions, failed
   publications, and completed journals; recovery enumerates only authoritative
   transaction JSON and ignores all such residue. Immutable exact-name commit
   records form the permanent audit ledger: manuscript paths must be unique
-  across the ledger and exactly equal the catalog manuscript set, while every
-  catalog entry must project an exact artifact and metadata record from its
-  named commit. Historical core records may be superseded, but each current
-  core entry must match one validated commit. Outside one exact pending phase, a
-  missing catalog is valid only with an empty ledger; divergence fails closed
-  and is never reconstructed. Every read and commit performs locked recovery
-  first. One create-only immutable schema-v2 transaction journal records the
+  across the ledger, and the catalog path set must equal the union of every
+  artifact path across every non-exempt commit, with repeated core paths
+  collapsed. Every catalog entry must project an exact artifact and metadata
+  record from its named commit. Historical core records may be superseded, but
+  their paths remain required and each current core entry must match one
+  validated commit. Outside one exact pending phase, a missing catalog is valid
+  only with an empty non-exempt ledger; divergence fails closed and is never
+  reconstructed. Every read and commit performs locked recovery first. One
+  create-only immutable schema-v2 transaction journal records the
   exact catalog-before existence/hash/image, complete catalog-after image,
   immutable commit, ordered targets, old/new hashes, and complete new bytes
   before any target mutation; it has no replaceable phase field. JSON decoding
   rejects duplicate object keys recursively for journals, catalogs, and commits.
   At exact catalog-before, recovery accepts each target only at its recorded old
   or new bytes and may exempt only this journal's exact already-published commit
-  from manuscript equality; the projected catalog-after is audited without an
-  exemption. Recovery completes remaining target and commit publication,
+  from the expected path union, so that commit contributes no paths while all
+  older established manuscript and core paths remain required; the projected
+  catalog-after is audited without an exemption. Recovery completes remaining
+  target and commit publication,
   rechecks journal authority and catalog-before, then publishes the catalog
   last. At exact catalog-after, recovery is verification-only with no exemption
   and requires every target, commit, and ledger projection to be final. Any
@@ -1710,6 +1719,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Primary verification/documentation:** `tests/test_writing_artifacts.py`,
   `tests/test_orchestration_workflow.py`, `tests/test_orchestration_safety.py`,
   `tests/test_smoke_cli.py`, `docs/reference/writing-artifacts.md`,
+  `docs/reference/configuration/session-storage.md`,
   `docs/design/persistence.md`, and `docs/operations/filesystem-safety.md`.
 
 ## Consistency Notes
@@ -1722,8 +1732,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   artifact identities and case-folded or NFKC-normalized aliases of both
   repository-owned namespaces before mutation and expose no artifact-specific
   core reader. Repository mutation remains protected by a permanent exact-name
-  paired lock created durably before its first body entry and by a call-scoped
-  lease.
+  readiness triple initialized under a transient artifact-state-directory
+  bootstrap flock, created durably before its first body entry, and reverified
+  by a call-scoped primary-lock lease. Legacy pairs and partial triples fail
+  closed without reconstruction or migration.
 
 - `WritingArtifactRepository` creates one immutable authoritative schema-v2
   journal before target publication and never replaces it with a phase update.
@@ -1731,16 +1743,18 @@ every intermediate arrow. The current runtime graph is acyclic.
   verifies without republishing; divergent catalog, commit, target, or journal
   authority durably blocks. Non-target catalog entries remain identical across
   the recorded before/after images. Immutable commits are the permanent
-  reservation ledger: the catalog manuscript set equals all non-exempt commit
-  manuscripts, each current catalog entry exactly projects its commit, and
-  superseded core history remains valid. Only the active journal's exact commit
-  may be exempted while the catalog is at its exact before image; catalog-after
-  and ordinary access have no exemption or reconstruction. Strict final journal
-  retirement occurs only after target, commit, catalog-after, and ledger
-  verification. `_storage` independently prechecks final names and the paired
-  lock spelling, rejects normalized/case aliases, fsyncs created child entries
-  through their parent descriptors, and completes lock file/link durability
-  before flock or body entry.
+  reservation ledger: the catalog path set equals the full artifact-path union
+  of all non-exempt commits, each current catalog entry exactly projects its
+  commit, and superseded core history remains valid and represented. Only the
+  active journal's exact commit may be exempted while the catalog is at its
+  exact before image; it then contributes no expected paths, while every older
+  established path remains required. Catalog-after and ordinary access have no
+  exemption or reconstruction. Strict final journal retirement occurs only
+  after target, commit, catalog-after, and ledger verification. `_storage`
+  independently prechecks final names and all readiness-triple spelling, rejects
+  normalized/case aliases, fsyncs created child entries through retained parent
+  descriptors, and completes triple durability under bootstrap before the
+  primary flock can guard body entry.
 
 - `Workspace` initializes the canonical five-key system-default document but
   never rewrites an existing one. `ConfigManager` owns full system and per-agent

@@ -32,8 +32,9 @@ workspace/
 │   │       ├── staging/.artifacts-*.held                       [retained prior bytes]
 │   │       ├── staging/.artifacts-*.retired                    [retained failed publication]
 │   │       ├── staging/.artifacts-*.completed                  [retained completed journal]
-│   │       ├── .artifacts.lock                                 [persistent advisory lock]
-│   │       ├── .artifacts.lock.anchor                          [paired lock identity]
+│   │       ├── .artifacts.lock                                 [permanent readiness triple]
+│   │       ├── .artifacts.lock.anchor                          [same lock inode]
+│   │       ├── .artifacts.lock.ready                           [same lock inode; ready marker]
 │   │       └── recovery_blocked.json                           [exceptional fail-closed marker]
 │   └── {plot_architect,character_custodian,execution_specialist}_state/
 │       └── debates/<session_id>/<debate_id>.jsonl
@@ -52,7 +53,9 @@ appears only when the artifact repository is accessed or a unanimous run
 publishes output; `recovery_blocked.json` appears only after recovery cannot be
 trusted. Staging residue is non-authoritative, never catalog-listed, retained
 after successful and failed publication, and may grow. Only exact JSON entries
-under `transactions/` are recovery journals. See
+under `transactions/` are recovery journals. The three permanent lock names are
+hard links to one regular inode with link count three; partial or old two-link
+state is invalid and is not migrated or reconstructed. See
 [Canonical writing artifacts](../writing-artifacts.md).
 
 ## Default records

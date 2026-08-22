@@ -929,19 +929,15 @@ class WritingArtifactRepository:
 
         if exempt_commit_id is not None and exempt_commit_id not in ledger:
             raise WorkspaceFormatError("pending artifact commit exemption is absent")
-        reservations = self._ledger_manuscript_paths(ledger)
-        expected_manuscripts = set(reservations)
+        self._ledger_manuscript_paths(ledger)
+        expected_paths: set[str] = set()
+        for commit_id, (commit, _) in ledger.items():
+            if commit_id == exempt_commit_id:
+                continue
+            artifacts = commit["artifacts"]
+            assert isinstance(artifacts, list)
+            expected_paths.update(artifact["path"] for artifact in artifacts)
         if exempt_commit_id is not None:
-            exempt_paths = {
-                path
-                for path, commit_id in reservations.items()
-                if commit_id == exempt_commit_id
-            }
-            if len(exempt_paths) != 1:
-                raise WorkspaceFormatError(
-                    "pending artifact commit exemption is ambiguous"
-                )
-            expected_manuscripts.difference_update(exempt_paths)
             if any(
                 entry.commit_id == exempt_commit_id
                 for entry in catalog.entries.values()
@@ -956,14 +952,9 @@ class WritingArtifactRepository:
             raise WorkspaceFormatError(
                 "artifact catalog is missing for the permanent commit ledger"
             )
-        catalog_manuscripts = {
-            path
-            for path, entry in catalog.entries.items()
-            if entry.kind is ArtifactKind.MANUSCRIPT
-        }
-        if catalog_manuscripts != expected_manuscripts:
+        if set(catalog.entries) != expected_paths:
             raise WorkspaceFormatError(
-                "artifact catalog manuscript set does not match commit ledger"
+                "artifact catalog path set does not match commit ledger"
             )
         for entry in catalog.entries.values():
             record = ledger.get(entry.commit_id)

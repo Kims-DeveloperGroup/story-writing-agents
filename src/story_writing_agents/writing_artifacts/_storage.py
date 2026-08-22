@@ -46,6 +46,7 @@ class SecureWorkspaceStorage:
             int,
             str,
             str,
+            str,
             int,
             tuple[tuple[int, str, int, tuple[int, int]], ...],
         ] | None = None
@@ -481,9 +482,9 @@ class SecureWorkspaceStorage:
             raise ArtifactLeaseSecurityError(
                 "artifact mutation requires the repository lease"
             )
-        directory, name, anchor, descriptor, chain = lease
+        directory, name, anchor, ready, descriptor, chain = lease
         self._verify_directory_chain(chain)
-        self._verify_lock_identity(directory, name, anchor, descriptor)
+        self._verify_lock_identity(directory, name, anchor, ready, descriptor)
 
     def publish_bytes(
         self,
@@ -931,27 +932,53 @@ class SecureWorkspaceStorage:
         parts = self._parts(relative)
         name = parts[-1]
         anchor = f"{name}.anchor"
+        ready = f"{name}.ready"
         with self._open_root() as root:
             with self._open_directory(root, parts[:-1], create=True) as opened:
                 directory, chain = opened
                 descriptor = -1
+                bootstrap_locked = False
                 locked = False
                 body_ready = False
                 try:
+                    assert fcntl is not None
+                    fcntl.flock(directory, fcntl.LOCK_EX)
+                    bootstrap_locked = True
+                    self._verify_directory_chain(chain)
+                    for entry in (name, anchor, ready):
+                        self._require_exact_lease_name(
+                            directory,
+                            entry,
+                            missing_ok=True,
+                        )
                     named = self._lease_stat_if_exists(directory, name)
                     anchored = self._lease_stat_if_exists(directory, anchor)
-                    if (named is None) != (anchored is None):
+                    readied = self._lease_stat_if_exists(directory, ready)
+                    if not (
+                        named is None and anchored is None and readied is None
+                    ) and not (
+                        named is not None
+                        and anchored is not None
+                        and readied is not None
+                    ):
                         raise ArtifactLeaseSecurityError(
-                            "artifact lock pair is incomplete"
+                            "artifact lock triple is incomplete"
                         )
                     if named is None:
-                        if self._lease_stat_if_exists(directory, name) is not None:
+                        self._fsync_directory_ancestry(directory, chain)
+                        for entry in (name, anchor, ready):
+                            self._require_exact_lease_name(
+                                directory,
+                                entry,
+                                missing_ok=True,
+                            )
+                        if any(
+                            self._lease_stat_if_exists(directory, entry)
+                            is not None
+                            for entry in (name, anchor, ready)
+                        ):
                             raise ArtifactLeaseSecurityError(
                                 "artifact lock appeared before creation"
-                            )
-                        if self._lease_stat_if_exists(directory, anchor) is not None:
-                            raise ArtifactLeaseSecurityError(
-                                "artifact lock anchor appeared before creation"
                             )
                         descriptor = os.open(
                             name,
@@ -965,11 +992,12 @@ class SecureWorkspaceStorage:
                         )
                         os.fsync(descriptor)
                         os.fsync(directory)
-                        self._require_exact_lease_name(directory, name)
-                        if self._lease_stat_if_exists(directory, anchor) is not None:
-                            raise ArtifactLeaseSecurityError(
-                                "artifact lock anchor appeared before link"
-                            )
+                        self._verify_lock_link_state(
+                            directory,
+                            (name,),
+                            (anchor, ready),
+                            descriptor,
+                        )
                         os.link(
                             name,
                             anchor,
@@ -978,9 +1006,23 @@ class SecureWorkspaceStorage:
                             follow_symlinks=False,
                         )
                         os.fsync(directory)
+                        self._verify_lock_link_state(
+                            directory,
+                            (name, anchor),
+                            (ready,),
+                            descriptor,
+                        )
+                        os.link(
+                            name,
+                            ready,
+                            src_dir_fd=directory,
+                            dst_dir_fd=directory,
+                            follow_symlinks=False,
+                        )
+                        os.fsync(directory)
                     else:
-                        self._require_exact_lease_name(directory, name)
-                        self._require_exact_lease_name(directory, anchor)
+                        for entry in (name, anchor, ready):
+                            self._require_exact_lease_name(directory, entry)
                         descriptor = os.open(
                             name,
                             os.O_RDWR | os.O_NONBLOCK | os.O_NOFOLLOW,
@@ -990,9 +1032,9 @@ class SecureWorkspaceStorage:
                         directory,
                         name,
                         anchor,
+                        ready,
                         descriptor,
                     )
-                    assert fcntl is not None
                     fcntl.flock(descriptor, fcntl.LOCK_EX)
                     locked = True
                     self._verify_directory_chain(chain)
@@ -1000,8 +1042,11 @@ class SecureWorkspaceStorage:
                         directory,
                         name,
                         anchor,
+                        ready,
                         descriptor,
                     )
+                    fcntl.flock(directory, fcntl.LOCK_UN)
+                    bootstrap_locked = False
                     if self._active_lease is not None:
                         raise ArtifactLeaseSecurityError(
                             "artifact repository lease is already active"
@@ -1010,6 +1055,7 @@ class SecureWorkspaceStorage:
                         directory,
                         name,
                         anchor,
+                        ready,
                         descriptor,
                         chain,
                     )
@@ -1033,9 +1079,92 @@ class SecureWorkspaceStorage:
                         if locked:
                             assert fcntl is not None
                             fcntl.flock(descriptor, fcntl.LOCK_UN)
+                        if bootstrap_locked:
+                            assert fcntl is not None
+                            fcntl.flock(directory, fcntl.LOCK_UN)
                     finally:
                         if descriptor >= 0:
                             os.close(descriptor)
+
+    @staticmethod
+    def _fsync_directory_ancestry(
+        directory: int,
+        chain: tuple[tuple[int, str, int, tuple[int, int]], ...],
+    ) -> None:
+        """Flush the retained state directory and each parent to the root."""
+
+        os.fsync(directory)
+        for parent, _, _, _ in reversed(chain):
+            os.fsync(parent)
+
+    @classmethod
+    def _verify_lock_link_state(
+        cls,
+        directory: int,
+        names: tuple[str, ...],
+        absent_names: tuple[str, ...],
+        descriptor: int,
+    ) -> None:
+        """Require an exact hard-link state around one opened regular inode."""
+
+        for entry in names:
+            cls._require_exact_lease_name(directory, entry)
+        for entry in absent_names:
+            cls._require_exact_lease_name(directory, entry, missing_ok=True)
+        try:
+            initial_named = tuple(
+                os.stat(entry, dir_fd=directory, follow_symlinks=False)
+                for entry in names
+            )
+            for entry in absent_names:
+                try:
+                    os.stat(entry, dir_fd=directory, follow_symlinks=False)
+                except FileNotFoundError:
+                    continue
+                raise ArtifactLeaseSecurityError(
+                    "artifact lock link appeared unexpectedly"
+                )
+            initial_opened = os.fstat(descriptor)
+        except OSError as exc:
+            raise ArtifactLeaseSecurityError(
+                "artifact lock identity changed"
+            ) from exc
+        for entry in names:
+            cls._require_exact_lease_name(directory, entry)
+        for entry in absent_names:
+            if cls._lease_stat_if_exists(directory, entry) is not None:
+                raise ArtifactLeaseSecurityError(
+                    "artifact lock link appeared unexpectedly"
+                )
+        try:
+            final_named = tuple(
+                os.stat(entry, dir_fd=directory, follow_symlinks=False)
+                for entry in names
+            )
+            final_opened = os.fstat(descriptor)
+        except OSError as exc:
+            raise ArtifactLeaseSecurityError(
+                "artifact lock identity changed"
+            ) from exc
+        opened_identity = (initial_opened.st_dev, initial_opened.st_ino)
+        expected_links = len(names)
+        if (
+            not stat.S_ISREG(initial_opened.st_mode)
+            or not stat.S_ISREG(final_opened.st_mode)
+            or initial_opened.st_nlink != expected_links
+            or final_opened.st_nlink != expected_links
+            or any(value <= 0 for value in opened_identity)
+            or (final_opened.st_dev, final_opened.st_ino) != opened_identity
+            or any(
+                not stat.S_ISREG(entry.st_mode)
+                or entry.st_nlink != expected_links
+                or (entry.st_dev, entry.st_ino) != opened_identity
+                for entry in (*initial_named, *final_named)
+            )
+        ):
+            raise ArtifactLeaseSecurityError(
+                "artifact lock is not a stable linked regular file"
+            )
 
     @classmethod
     def _verify_lock_identity(
@@ -1043,37 +1172,14 @@ class SecureWorkspaceStorage:
         directory: int,
         name: str,
         anchor: str,
+        ready: str,
         descriptor: int,
     ) -> None:
-        """Require two stable names for one permanent regular lock inode."""
+        """Require the permanent ready triple for one regular lock inode."""
 
-        try:
-            cls._require_exact_lease_name(directory, name)
-            cls._require_exact_lease_name(directory, anchor)
-            named = os.stat(name, dir_fd=directory, follow_symlinks=False)
-            anchored = os.stat(anchor, dir_fd=directory, follow_symlinks=False)
-            opened = os.fstat(descriptor)
-        except OSError as exc:
-            raise ArtifactLeaseSecurityError(
-                "artifact lock identity changed"
-            ) from exc
-        cls._require_exact_lease_name(directory, name)
-        cls._require_exact_lease_name(directory, anchor)
-        named_identity = (named.st_dev, named.st_ino)
-        anchor_identity = (anchored.st_dev, anchored.st_ino)
-        opened_identity = (opened.st_dev, opened.st_ino)
-        if (
-            not stat.S_ISREG(named.st_mode)
-            or not stat.S_ISREG(anchored.st_mode)
-            or not stat.S_ISREG(opened.st_mode)
-            or named.st_nlink != 2
-            or anchored.st_nlink != 2
-            or opened.st_nlink != 2
-            or any(value <= 0 for value in named_identity)
-            or any(value <= 0 for value in opened_identity)
-            or named_identity != anchor_identity
-            or named_identity != opened_identity
-        ):
-            raise ArtifactLeaseSecurityError(
-                "artifact lock is not a stable paired regular file"
-            )
+        cls._verify_lock_link_state(
+            directory,
+            (name, anchor, ready),
+            (),
+            descriptor,
+        )

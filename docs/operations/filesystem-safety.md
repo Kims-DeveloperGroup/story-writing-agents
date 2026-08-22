@@ -53,17 +53,28 @@ construction remain available on an unsupported host; the artifact operation
 itself raises `WorkspaceSecurityError`.
 
 Artifact mutation additionally requires the workspace-local repository lease.
-The permanent lock and anchor are two exact names for the same regular inode.
-Alias checks run before final lock/anchor `stat`, creation, or `flock`. When both
-are absent, first use creates the lock with `O_CREAT|O_EXCL|O_NOFOLLOW`, flushes
-the file, flushes its parent, creates the hard-link anchor, flushes the parent
-again, verifies the stable two-link identity, acquires `flock`, and verifies it
-again before protected work. Later use requires the complete existing pair and
-opens without create flags. A partial pair or any creation/link/flush failure
-never enters protected work and is not automatically reconstructed. Both names,
-link count, open descriptor, directory ancestry, and workspace root are also
-verified around mutations. This paired hard link belongs only to lock identity.
-Canonical artifacts remain one-link regular files.
+The permanent `.artifacts.lock`, `.artifacts.lock.anchor`, and
+`.artifacts.lock.ready` names must be exact hard links to one regular inode with
+link count three. Alias checks run before final inspection, creation, or
+locking.
+
+An exclusive bootstrap `flock` on the already-open writing-artifact state
+directory serializes first initialization. While holding it, the repository
+flushes the retained state-directory ancestry to the workspace root. If the
+triple is wholly absent, it creates the primary with
+`O_CREAT|O_EXCL|O_NOFOLLOW`, flushes the file and parent, links the anchor,
+flushes the parent, verifies the intermediate two-link state with `ready`
+absent, links `ready`, and flushes the parent again. It verifies the triple,
+acquires the primary `flock`, reverifies the triple, then releases bootstrap and
+enters protected work. Later use opens the primary without create flags and
+requires the already complete triple.
+
+Partial one- or two-link state, an old two-link development lock, a divergent
+inode, an extra hard link, or any creation/link/flush failure never enters
+protected work and is preserved without cleanup, reconstruction, or migration.
+The triple, link count, open descriptor, directory ancestry, and workspace root
+are reverified around mutations. These hard links belong only to lock identity;
+canonical artifacts remain one-link regular files.
 
 This serializes supported repository writers. Generic `Workspace` writes to
 canonical paths are rejected. External/manual edits are supported only while
@@ -135,11 +146,19 @@ retirement compares its exact hash before an exclusive no-replace move to
 
 Outside recovery, every artifact read or commit audits the complete permanent
 commit ledger against the catalog before trusting an entry or publishing new
-bytes. Every ledger commit permanently reserves its one manuscript identity.
-Historical core updates may be superseded, but each current core catalog entry
-must exactly match its referenced immutable commit. Missing, subset, malformed,
-extra, duplicate-reservation, or otherwise mismatched ledger/catalog state fails
-closed; catalog loss does not free manuscript paths and is never reconstructed.
+bytes. The catalog path set must equal the union of every artifact path in every
+non-exempt commit, and every entry must exactly match its referenced commit.
+Every ledger commit permanently reserves its one manuscript identity.
+Historical core updates may be superseded, but their shared core paths remain
+required by the union and each current entry must match the selected newer
+commit. Missing, subset, malformed, extra, duplicate-reservation, or otherwise
+mismatched ledger/catalog state fails closed; catalog loss does not free paths
+and is never reconstructed.
+
+At exact catalog-before recovery, an on-disk pending commit is exempt only when
+it exactly matches the journal and contributes no expected paths; paths from
+all older established commits remain required. Catalog-after includes that
+commit in the full union and exact-entry audit.
 
 On the next artifact access, an exact catalog-before position rolls forward;
 an exact catalog-after position is verified without republishing. A catalog

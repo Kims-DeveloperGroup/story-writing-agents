@@ -101,7 +101,7 @@ agent-authored bytes whose publication history still validates.
 | Recovered | Roll-forward completed, the commit record and catalog were published, and the journal was exclusively retired into non-authoritative staging with a `.completed` suffix. This is an observed outcome, not a stored state name. | The newly current entries become eligible on that same access. The retained journal bytes are internal evidence, not a listed artifact or pending transaction. |
 | Recovery blocked | A pending journal, target, or recovery invariant could not be trusted, and a persistent block marker was written. | Every later artifact-repository read or commit fails closed. Preserve the workspace and investigate or restore a verified backup; there is no automatic repair command. |
 | Ledger or catalog invalid | A permanent commit is missing, malformed, duplicated, unexpected, or inconsistent with the catalog, or the catalog is missing/incomplete while commits exist. | Artifact access fails closed without changing story bytes. Preserve the workspace and restore verified repository metadata from backup; the runtime does not reconstruct or migrate it. |
-| Lock unsafe | The permanent lock/anchor names are aliased, incomplete, divergent, or cannot be created and flushed safely. | The current artifact operation fails before entering the protected repository body. Stop workspace processes and investigate the pair; the runtime does not reconstruct it. |
+| Lock unsafe | The permanent `.artifacts.lock`, `.artifacts.lock.anchor`, and `.artifacts.lock.ready` names are aliased, partial, divergent, have an extra hard link, or cannot be created and flushed safely. | The current artifact operation fails before entering the protected repository body. Stop workspace processes and investigate the triple; the runtime does not clean up, reconstruct, or migrate it. |
 | Retained staging residue | A `.tmp`, `.held`, `.retired`, or `.completed` file remains under the repository's non-authoritative `staging/` directory. | This is normal internal state and never appears in the canonical catalog or agent context. It may grow over time; do not treat it as a writing artifact or move it into `transactions/`. |
 
 A manual edit invalidates eligibility without deleting the file. Restoring the
@@ -129,16 +129,26 @@ takes an in-process lock and a workspace-local lease, then resolves pending
 recovery before continuing. Other workspace and runtime APIs remain usable on a
 host that cannot perform artifact I/O.
 
-The lease is a permanent paired hard-link identity for the repository lock, not
-an artifact. Lock and anchor aliases are rejected by exact-spelling checks
-before their final `stat`, creation, or `flock`. On first use, both names must be
-absent: the repository creates the lock with `O_EXCL`, flushes the lock and its
-parent, links the anchor, flushes the parent again, verifies the two-name inode,
-acquires `flock`, and verifies again before entering the protected body. On
-later use, both names must already form that exact pair and the lock is opened
-without create flags. A failed creation may leave an incomplete pair; it is
-rejected on retry rather than reconstructed. Both names, the open descriptor,
-the retained directory chain, and the workspace root are revalidated around
+The lease is a permanent three-name hard-link identity for the repository lock,
+not an artifact. The exact names are `.artifacts.lock`,
+`.artifacts.lock.anchor`, and `.artifacts.lock.ready`; all three must name one
+regular inode with link count three. Their aliases are rejected by
+exact-spelling checks before final inspection, creation, or locking.
+
+Initialization first takes an exclusive bootstrap `flock` on the already-open
+writing-artifact state directory and flushes that directory's retained ancestry
+to the workspace root. When all three names are absent, it creates the primary
+lock with `O_EXCL`, flushes the file and parent, links the anchor and flushes the
+parent, verifies the two-link intermediate state with `ready` still absent, then
+links `ready` and flushes the parent again. It verifies the complete triple,
+acquires `flock` on the primary lock, reverifies the triple, and only then
+releases the bootstrap lock and enters the protected body. Later use requires
+the already complete triple and opens the primary without create flags.
+
+Partial one- or two-link state, an old two-name development lock, divergent
+inodes, an extra hard link, or a failed creation is rejected unchanged on retry;
+there is no cleanup, reconstruction, or migration. The three names, open
+descriptor, retained directory chain, and workspace root are revalidated around
 mutation. Canonical artifact files themselves must still be unique regular
 files with one link.
 
@@ -208,14 +218,22 @@ path/kind/author/hash set and correlation metadata.
 
 Every access globally audits the ledger and catalog. Commit filenames and
 schemas must be exact; duplicate historical manuscript paths are invalid. The
-catalog's manuscript set must equal the complete permanent ledger reservation
-set, and every catalog entry must exactly project an artifact from its named
-commit. A later commit may supersede a core-document catalog entry while the
-older commit remains as history; whichever core entry is current must exactly
-match its referenced commit. Missing, subset, extra, malformed, or mismatched
-ledger/catalog state fails closed. Catalog loss cannot erase a manuscript
-reservation, and the runtime neither reconstructs nor migrates repository
-metadata. Schema fields and scalar types are exact rather than extensible.
+catalog path set must equal the union of every manuscript and core-artifact path
+named by every non-exempt immutable commit, and every catalog entry must exactly
+project an artifact from its named commit. A later commit may supersede a
+core-document catalog entry while the older commit remains as history; the
+shared core path remains required by the ledger union and its current entry must
+exactly match the selected newer commit. Missing, subset, extra, malformed, or
+mismatched ledger/catalog state fails closed.
+
+At catalog-before recovery, an already-published pending commit is exempt only
+when its bytes exactly match the journal. That pending commit contributes no
+paths to the expected before-catalog set; every path contributed by older
+established commits remains required, including a core path the pending commit
+will update. Catalog loss therefore cannot erase manuscript reservations or
+other established artifact identities, and the runtime neither reconstructs
+nor migrates repository metadata. Schema fields and scalar types are exact
+rather than extensible.
 
 The execution specialist authors manuscript revision `r0`. Any later approved
 revision is a lead-authored synthesis, and every core-document update is

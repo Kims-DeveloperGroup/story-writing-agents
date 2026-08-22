@@ -1927,6 +1927,10 @@ class ConversationRuntimeArtifactTests(_ConversationRuntimeCase):
                     "agent_states/orchestrator_state/writing_artifacts/"
                     ".artifacts.lock.anchor"
                 ),
+                (
+                    "agent_states/orchestrator_state/writing_artifacts/"
+                    ".artifacts.lock.ready"
+                ),
             },
         )
         self.assertEqual(

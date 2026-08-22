@@ -58,7 +58,7 @@ preterminal debates `interrupted` when possible; later failures cannot rewrite r
 ## Writing-artifact recovery
 
 Every artifact catalog read, exact artifact read, or commit first checks for a
-pending publication journal under the verified paired-lock lease. The
+pending publication journal under the verified readiness-triple lease. The
 schema-v2 journal is one immutable image containing the exact catalog-before
 existence/hash/image, catalog-after image, commit, and ordered targets with
 their complete new bytes and old/new hashes. It is never rewritten to record a
@@ -69,11 +69,12 @@ catalog-before, every target may equal only its recorded old or new bytes;
 recovery rolls the set forward, publishes immutable commit history, and
 publishes the catalog last. If the pending commit record already exists here,
 the audit exempts it only when its bytes exactly equal this journal's commit;
-an unrelated record absent from the exact catalog-before view or divergent
-ledger state still blocks. At catalog-after, every target, commit, and catalog
-projection must already be the exact new state, so recovery only verifies them.
-It then
-hash-checks the unchanged journal and moves it with native no-replace rename to
+that exempt commit contributes no paths to the expected before-catalog union,
+while paths from every older established commit remain required. An unrelated
+record absent from the exact catalog-before view or divergent ledger state still
+blocks. At catalog-after, every target and commit must be exact, and catalog
+paths must equal the union from all commits, so recovery only verifies them. It
+then hash-checks the unchanged journal and moves it with native no-replace rename to
 a `.completed` name in staging. A catalog matching neither position, an
 untrusted target, or missing/replaced journal or final commit authority blocks
 rather than guessing. Users may see an infrastructure failure followed by
@@ -112,17 +113,25 @@ listing omits the stale entry. A later commit to the same path raises
 does not free reservations: a missing, empty, or subset catalog beside existing
 commits fails closed. Malformed, unexpected, extra, mismatched, or
 duplicate-reservation commit records also fail global audit. Historical core
-commits may remain after their catalog entries are superseded, but every current
-core entry must exactly match its referenced commit. There is no automatic
-ledger/catalog reconstruction or migration.
+commits may remain after their catalog entries are superseded: their shared core
+paths remain required by the full ledger union, while every current entry must
+exactly match its referenced commit. There is no automatic ledger/catalog
+reconstruction or migration.
 
-The permanent artifact lock is similarly not repaired. Exact lock and anchor
-aliases fail before final inspection or locking. First creation must durably
-complete exclusive lock creation, file flush, parent flush, anchor link, second
-parent flush, pair verification, `flock`, and post-lock verification. Any
-failure avoids protected work; an incomplete pair causes later artifact access
-to fail again rather than reconstructing it. Stop all workspace processes,
-preserve a backup, and investigate the pair.
+The permanent artifact lock is similarly not repaired. Exact primary, anchor,
+and `ready` aliases fail before final inspection or locking, and the three names
+must be hard links to one regular inode with link count three. Initialization
+holds a bootstrap `flock` on the open writing-artifact state directory, flushes
+the retained ancestry, exclusively creates and flushes the primary, flushes its
+parent, links and flushes the anchor, verifies that `ready` is still absent,
+then links and flushes `ready`. Only after triple verification does it acquire
+the primary `flock`, reverify, release bootstrap, and enter protected work.
+
+Any failure avoids protected work. A partial one- or two-link state—including
+the old development pair—a divergent inode, alias, or extra link fails again on
+later artifact access and remains untouched. Stop all workspace processes,
+preserve a backup, and investigate the triple; there is no cleanup,
+reconstruction, or migration.
 
 Stop every workspace process before a manual or external filesystem edit. The
 repository lease serializes supported repository writers, but an actively

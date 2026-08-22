@@ -109,18 +109,25 @@ accumulate.
 
 Immutable commits are also the permanent manuscript-reservation ledger, not
 just history for current catalog rows. Each access globally audits exact commit
-records against the catalog: all ledger manuscripts must remain represented,
-while historical core records may be superseded by a newer exact current core
-entry. Catalog loss, subsets, malformed or extra commits, mismatches, and
-duplicate manuscript reservations fail closed instead of being reconstructed.
-During recovery at exact catalog-before, only the pending journal's already
-published exact commit may be temporarily absent from that catalog view.
+records against the catalog: catalog paths equal the union of every artifact
+path in all non-exempt commits, and each entry exactly matches its referenced
+commit. Historical core records may be superseded by a newer current entry, but
+their shared core paths remain required by the union. Catalog loss, subsets,
+malformed or extra commits, mismatches, and duplicate manuscript reservations
+fail closed instead of being reconstructed. During recovery at exact
+catalog-before, only the pending journal's already published exact commit is
+exempt and contributes no paths; all older established paths remain required.
 
-The permanent repository lock pair has its own durability boundary. Initial
-creation exclusively creates and flushes the lock, flushes its parent, links the
-anchor, flushes the parent again, verifies the pair, acquires `flock`, and
-reverifies before work. Exact-name aliases, incomplete pairs, or any failure in
-that sequence prevent protected work; no lock reconstruction is attempted.
+The permanent repository readiness triple has its own durability boundary:
+primary lock, anchor, and `ready` are exact hard-link names for one regular inode
+with link count three. Initialization first takes a transient bootstrap `flock`
+on the open writing-artifact state directory and flushes its retained ancestry.
+It exclusively creates and flushes the primary, flushes the parent, links and
+flushes the anchor, verifies that `ready` is absent, then links and flushes
+`ready`. It verifies the triple, acquires the primary `flock`, reverifies, and
+releases bootstrap before work. Partial or old two-link state, aliases,
+divergent or extra links, and any failure prevent protected work and remain
+unchanged; no cleanup, reconstruction, or migration is attempted.
 
 That artifact transaction does not combine sidecars, blackboards, defaults,
 transcripts, debate lifecycle, results, provider state, and agent state into one

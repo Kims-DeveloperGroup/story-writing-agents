@@ -299,7 +299,7 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
         ).unlink()
         with self.assertRaisesRegex(
             WorkspaceFormatError,
-            "manuscript set does not match commit ledger",
+            "path set does not match commit ledger",
         ):
             other.list_paths()
 
@@ -624,10 +624,16 @@ class SecureStorageTests(WritingArtifactTestCase):
         parent_identity = (parent.stat().st_dev, parent.stat().st_ino)
         real_listdir = storage_module.os.listdir
         real_open = storage_module.os.open
+        real_flock = storage_module.fcntl.flock
 
-        for alias in (".Artifacts.lock", ".artifacts.lock.ａｎｃｈｏｒ"):
+        for alias in (
+            ".Artifacts.lock",
+            ".artifacts.lock.ａｎｃｈｏｒ",
+            ".artifacts.lock.ＲＥＡＤＹ",
+        ):
             with self.subTest(alias=alias):
                 body_entered = False
+                flock_targets: list[str] = []
 
                 def aliased_listdir(directory):
                     names = list(real_listdir(directory))
@@ -640,6 +646,14 @@ class SecureStorageTests(WritingArtifactTestCase):
                     if path == ".artifacts.lock":
                         raise AssertionError("alias reached lock creation")
                     return real_open(path, *args, **kwargs)
+
+                def record_flock(descriptor, operation):
+                    flock_targets.append(
+                        "directory"
+                        if stat.S_ISDIR(os.fstat(descriptor).st_mode)
+                        else "primary"
+                    )
+                    return real_flock(descriptor, operation)
 
                 with (
                     mock.patch.object(
@@ -659,8 +673,8 @@ class SecureStorageTests(WritingArtifactTestCase):
                     mock.patch.object(
                         storage_module.fcntl,
                         "flock",
-                        side_effect=AssertionError("alias reached flock"),
-                    ) as flock,
+                        side_effect=record_flock,
+                    ),
                     self.assertRaisesRegex(
                         ArtifactLeaseSecurityError,
                         "spelling changed",
@@ -670,12 +684,13 @@ class SecureStorageTests(WritingArtifactTestCase):
                         body_entered = True
 
                 self.assertFalse(body_entered)
-                flock.assert_not_called()
+                self.assertEqual(flock_targets, ["directory", "directory"])
                 self.assertIsNone(storage._active_lease)
                 self.assertFalse(parent.joinpath(".artifacts.lock").exists())
                 self.assertFalse(parent.joinpath(".artifacts.lock.anchor").exists())
+                self.assertFalse(parent.joinpath(".artifacts.lock.ready").exists())
 
-    def test_new_lock_creation_order_and_existing_pair_open_flags_are_exact(self) -> None:
+    def test_new_lock_creation_order_and_existing_triple_open_flags_are_exact(self) -> None:
         relative = "agent_states/orchestrator_state/writing_artifacts/.artifacts.lock"
         parent = self.root / "agent_states/orchestrator_state/writing_artifacts"
         storage = SecureWorkspaceStorage(self.root)
@@ -704,17 +719,28 @@ class SecureStorageTests(WritingArtifactTestCase):
                 events.append("fsync_lock")
             return real_fsync(descriptor)
 
-        def record_link(*args, **kwargs):
-            events.append("link_anchor")
-            return real_link(*args, **kwargs)
+        def record_link(source, destination, *args, **kwargs):
+            events.append(
+                "link_anchor"
+                if destination.endswith(".anchor")
+                else "link_ready"
+            )
+            return real_link(source, destination, *args, **kwargs)
 
         def record_verify(*args, **kwargs):
             events.append("verify")
             return real_verify(*args, **kwargs)
 
         def record_flock(descriptor, operation):
-            if operation == storage_module.fcntl.LOCK_EX:
-                events.append("flock")
+            metadata = os.fstat(descriptor)
+            if stat.S_ISDIR(metadata.st_mode):
+                events.append(
+                    "bootstrap_lock"
+                    if operation == storage_module.fcntl.LOCK_EX
+                    else "bootstrap_unlock"
+                )
+            elif operation == storage_module.fcntl.LOCK_EX:
+                events.append("primary_flock")
             return real_flock(descriptor, operation)
 
         with (
@@ -733,16 +759,21 @@ class SecureStorageTests(WritingArtifactTestCase):
                 events.append("body")
 
         self.assertEqual(
-            tuple(events[:9]),
+            tuple(events[:14]),
             (
+                "bootstrap_lock",
+                "fsync_parent",
                 "open_exclusive",
                 "fsync_lock",
                 "fsync_parent",
                 "link_anchor",
                 "fsync_parent",
+                "link_ready",
+                "fsync_parent",
                 "verify",
-                "flock",
+                "primary_flock",
                 "verify",
+                "bootstrap_unlock",
                 "body",
             ),
         )
@@ -768,11 +799,16 @@ class SecureStorageTests(WritingArtifactTestCase):
         self.assertFalse(existing_flags[0] & os.O_CREAT)
         self.assertFalse(existing_flags[0] & os.O_EXCL)
 
-    def test_lock_creation_fsync_and_link_failures_never_enter_and_retry_blocks(
+    def test_lock_creation_durability_failures_never_enter_and_retry_exactly(
         self,
     ) -> None:
         relative = "agent_states/orchestrator_state/writing_artifacts/.artifacts.lock"
-        for failure in ("file fsync", "parent fsync", "link"):
+        for failure in (
+            "file fsync",
+            "anchor flush",
+            "ready link",
+            "ready flush",
+        ):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 Workspace(root).initialize()
@@ -782,20 +818,27 @@ class SecureStorageTests(WritingArtifactTestCase):
                 real_fsync = storage_module.os.fsync
                 real_link = storage_module.os.link
                 body_entered = False
+                parent_fsyncs = 0
 
                 def fail_selected_fsync(descriptor):
+                    nonlocal parent_fsyncs
                     metadata = os.fstat(descriptor)
-                    selected = (
-                        failure == "parent fsync" and stat.S_ISDIR(metadata.st_mode)
+                    if stat.S_ISDIR(metadata.st_mode) and (
+                        metadata.st_dev,
+                        metadata.st_ino,
+                    ) == (parent.stat().st_dev, parent.stat().st_ino):
+                        parent_fsyncs += 1
+                    selected = (failure == "file fsync" and not stat.S_ISDIR(metadata.st_mode)) or (
+                        failure == "anchor flush" and parent_fsyncs == 3
                     ) or (
-                        failure == "file fsync" and not stat.S_ISDIR(metadata.st_mode)
+                        failure == "ready flush" and parent_fsyncs == 4
                     )
                     if selected:
                         raise OSError(failure)
                     return real_fsync(descriptor)
 
                 def fail_link(*args, **kwargs):
-                    if failure == "link":
+                    if failure == "ready link" and args[1].endswith(".ready"):
                         raise OSError(failure)
                     return real_link(*args, **kwargs)
 
@@ -824,12 +867,223 @@ class SecureStorageTests(WritingArtifactTestCase):
 
                 self.assertFalse(body_entered)
                 self.assertIsNone(storage._active_lease)
+                lock_path = parent / ".artifacts.lock"
+                anchor_path = parent / ".artifacts.lock.anchor"
+                ready_path = parent / ".artifacts.lock.ready"
+                if failure == "file fsync":
+                    self.assertTrue(lock_path.is_file())
+                    self.assertFalse(anchor_path.exists())
+                    self.assertFalse(ready_path.exists())
+                elif failure in {"anchor flush", "ready link"}:
+                    self.assertTrue(lock_path.is_file())
+                    self.assertTrue(anchor_path.is_file())
+                    self.assertFalse(ready_path.exists())
+                else:
+                    self.assertTrue(lock_path.is_file())
+                    self.assertTrue(anchor_path.is_file())
+                    self.assertTrue(ready_path.is_file())
+                if failure == "ready flush":
+                    with storage.exclusive_lock(relative):
+                        pass
+                else:
+                    with self.assertRaisesRegex(
+                        ArtifactLeaseSecurityError,
+                        "triple is incomplete",
+                    ):
+                        with storage.exclusive_lock(relative):
+                            self.fail("incomplete lock triple entered protected body")
+
+    def test_every_partial_lock_triple_rejects_without_reconstruction(self) -> None:
+        relative = "agent_states/orchestrator_state/writing_artifacts/.artifacts.lock"
+        names = (
+            ".artifacts.lock",
+            ".artifacts.lock.anchor",
+            ".artifacts.lock.ready",
+        )
+        subsets = (
+            (names[0],),
+            (names[1],),
+            (names[2],),
+            (names[0], names[1]),
+            (names[0], names[2]),
+            (names[1], names[2]),
+        )
+        for present in subsets:
+            with self.subTest(present=present), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                Workspace(root).initialize()
+                parent = root / "agent_states/orchestrator_state/writing_artifacts"
+                parent.mkdir(parents=True)
+                first = parent / present[0]
+                first.write_bytes(b"partial lock")
+                for name in present[1:]:
+                    os.link(first, parent / name)
+                storage = SecureWorkspaceStorage(root)
+                body_entered = False
+
                 with self.assertRaisesRegex(
                     ArtifactLeaseSecurityError,
-                    "pair is incomplete",
+                    "triple is incomplete",
                 ):
                     with storage.exclusive_lock(relative):
-                        self.fail("incomplete lock pair entered protected body")
+                        body_entered = True
+
+                self.assertFalse(body_entered)
+                self.assertEqual(
+                    {name for name in names if parent.joinpath(name).exists()},
+                    set(present),
+                )
+                self.assertEqual(first.stat().st_nlink, len(present))
+
+    def test_complete_lock_triple_rejects_wrong_inode_and_link_count(self) -> None:
+        relative = "agent_states/orchestrator_state/writing_artifacts/.artifacts.lock"
+        for corruption in ("wrong ready inode", "extra hardlink"):
+            with (
+                self.subTest(corruption=corruption),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = Path(directory)
+                Workspace(root).initialize()
+                parent = root / "agent_states/orchestrator_state/writing_artifacts"
+                parent.mkdir(parents=True)
+                lock = parent / ".artifacts.lock"
+                anchor = parent / ".artifacts.lock.anchor"
+                ready = parent / ".artifacts.lock.ready"
+                lock.write_bytes(b"lock")
+                os.link(lock, anchor)
+                if corruption == "wrong ready inode":
+                    ready.write_bytes(b"wrong inode")
+                else:
+                    os.link(lock, ready)
+                    os.link(lock, parent / ".extra-lock-link")
+                storage = SecureWorkspaceStorage(root)
+                body_entered = False
+
+                with self.assertRaisesRegex(
+                    ArtifactLeaseSecurityError,
+                    "stable linked regular file",
+                ):
+                    with storage.exclusive_lock(relative):
+                        body_entered = True
+                self.assertFalse(body_entered)
+                self.assertIsNone(storage._active_lease)
+
+    def test_bootstrap_flock_and_ancestry_durability_failures_prevent_body(
+        self,
+    ) -> None:
+        relative = "agent_states/orchestrator_state/writing_artifacts/.artifacts.lock"
+        for failure in ("bootstrap flock", "ancestry durability"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                Workspace(root).initialize()
+                parent = root / "agent_states/orchestrator_state/writing_artifacts"
+                storage = SecureWorkspaceStorage(root)
+                storage.ensure_directory(parent.relative_to(root).as_posix())
+                real_flock = storage_module.fcntl.flock
+                body_entered = False
+
+                def fail_bootstrap(descriptor, operation):
+                    if (
+                        failure == "bootstrap flock"
+                        and operation == storage_module.fcntl.LOCK_EX
+                        and stat.S_ISDIR(os.fstat(descriptor).st_mode)
+                    ):
+                        raise OSError(failure)
+                    return real_flock(descriptor, operation)
+
+                ancestry_effect = (
+                    OSError(failure)
+                    if failure == "ancestry durability"
+                    else None
+                )
+                ancestry_patch = (
+                    mock.patch.object(
+                        SecureWorkspaceStorage,
+                        "_fsync_directory_ancestry",
+                        side_effect=ancestry_effect,
+                    )
+                    if ancestry_effect is not None
+                    else mock.patch.object(
+                        SecureWorkspaceStorage,
+                        "_fsync_directory_ancestry",
+                        wraps=SecureWorkspaceStorage._fsync_directory_ancestry,
+                    )
+                )
+                with (
+                    mock.patch.object(
+                        storage_module.fcntl,
+                        "flock",
+                        side_effect=fail_bootstrap,
+                    ),
+                    ancestry_patch,
+                    self.assertRaisesRegex(
+                        ArtifactLeaseSecurityError,
+                        "cannot securely acquire",
+                    ),
+                ):
+                    with storage.exclusive_lock(relative):
+                        body_entered = True
+
+                self.assertFalse(body_entered)
+                self.assertIsNone(storage._active_lease)
+                self.assertFalse(parent.joinpath(".artifacts.lock").exists())
+                self.assertFalse(parent.joinpath(".artifacts.lock.anchor").exists())
+                self.assertFalse(parent.joinpath(".artifacts.lock.ready").exists())
+
+    def test_two_simultaneous_first_lock_writers_serialize_without_deadlock(self) -> None:
+        relative = "agent_states/orchestrator_state/writing_artifacts/.first.lock"
+        first = SecureWorkspaceStorage(self.root)
+        second = SecureWorkspaceStorage(self.root)
+        start = threading.Barrier(3)
+        first_body = threading.Event()
+        release = threading.Event()
+        results: list[str] = []
+        results_lock = threading.Lock()
+
+        def contender(label: str, storage: SecureWorkspaceStorage) -> None:
+            start.wait(timeout=1)
+            with storage.exclusive_lock(relative):
+                with results_lock:
+                    results.append(label)
+                    position = len(results)
+                if position == 1:
+                    first_body.set()
+                    release.wait(timeout=1)
+
+        threads = (
+            threading.Thread(target=contender, args=("first", first), daemon=True),
+            threading.Thread(target=contender, args=("second", second), daemon=True),
+        )
+        for thread in threads:
+            thread.start()
+        start.wait(timeout=1)
+        self.assertTrue(first_body.wait(timeout=1))
+        with results_lock:
+            self.assertEqual(len(results), 1)
+        release.set()
+        for thread in threads:
+            thread.join(timeout=2)
+            self.assertFalse(thread.is_alive())
+        self.assertCountEqual(results, ("first", "second"))
+
+    def test_active_lease_detects_ready_name_replacement(self) -> None:
+        relative = "agent_states/orchestrator_state/writing_artifacts/.active.lock"
+        ready = self.root / f"{relative}.ready"
+        storage = SecureWorkspaceStorage(self.root)
+        body_entered = False
+
+        with self.assertRaisesRegex(
+            ArtifactLeaseSecurityError,
+            "artifact lock",
+        ):
+            with storage.exclusive_lock(relative):
+                body_entered = True
+                ready.unlink()
+                ready.write_bytes(b"replacement")
+                storage._require_active_lease()
+
+        self.assertTrue(body_entered)
+        self.assertIsNone(storage._active_lease)
 
     def test_read_traversal_does_not_fsync_but_child_creation_fsyncs_parent_once(
         self,
@@ -1304,7 +1558,8 @@ class SecureStorageTests(WritingArtifactTestCase):
                 def replace_then_verify(
                     directory: int,
                     name: str,
-                    _anchor: str,
+                    anchor: str,
+                    ready: str,
                     descriptor: int,
                 ) -> None:
                     nonlocal verification_calls
@@ -1314,7 +1569,7 @@ class SecureStorageTests(WritingArtifactTestCase):
                         replacement.write_bytes(b"unsafe replacement")
                         lock_path.unlink()
                         replacement.rename(lock_path)
-                    real_verify(directory, name, _anchor, descriptor)
+                    real_verify(directory, name, anchor, ready, descriptor)
 
                 with (
                     mock.patch.object(
@@ -1341,26 +1596,37 @@ class SecureStorageTests(WritingArtifactTestCase):
                         body_entered = True
                 self.assertFalse(body_entered)
 
-    def test_replacing_either_paired_lock_name_is_rejected(self) -> None:
+    def test_replacing_any_triple_lock_name_after_primary_flock_is_rejected(self) -> None:
         relative_parent = "agent_states/orchestrator_state/writing_artifacts"
         real_verify = SecureWorkspaceStorage._verify_lock_identity
 
-        for replaced_name in ("lock", "anchor"):
+        for replaced_name in ("lock", "anchor", "ready"):
             with self.subTest(replaced_name=replaced_name):
                 relative = f"{relative_parent}/.{replaced_name}-pair.lock"
                 lock_path = self.root / relative
                 anchor_path = lock_path.with_name(f"{lock_path.name}.anchor")
+                ready_path = lock_path.with_name(f"{lock_path.name}.ready")
                 body_entered = False
                 calls = 0
 
-                def replace_after_flock(directory, name, anchor, descriptor):
+                def replace_after_flock(
+                    directory,
+                    name,
+                    anchor,
+                    ready,
+                    descriptor,
+                ):
                     nonlocal calls
                     calls += 1
                     if calls == 2:
-                        selected = lock_path if replaced_name == "lock" else anchor_path
+                        selected = {
+                            "lock": lock_path,
+                            "anchor": anchor_path,
+                            "ready": ready_path,
+                        }[replaced_name]
                         selected.unlink()
                         selected.write_bytes(b"replacement")
-                    real_verify(directory, name, anchor, descriptor)
+                    real_verify(directory, name, anchor, ready, descriptor)
 
                 storage = SecureWorkspaceStorage(self.root)
                 with (
@@ -1449,6 +1715,139 @@ class RepositoryRecoveryTests(WritingArtifactTestCase):
             "outline two",
         )
         self.assertEqual(len(tuple(state.joinpath("commits").glob("*.json"))), 2)
+
+    def test_omitted_committed_core_row_blocks_reads_and_future_commit(self) -> None:
+        manuscript_path, _ = self.commit(
+            core_updates={"global_outline.md": "committed outline"},
+        )
+        state = self.root / "agent_states/orchestrator_state/writing_artifacts"
+        catalog_path = state / "catalog.json"
+        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+        catalog["entries"] = [
+            entry
+            for entry in catalog["entries"]
+            if entry["path"] != "core_documents/global_outline.md"
+        ]
+        catalog_path.write_bytes(self.repository._json_bytes(catalog))
+
+        for operation in (
+            lambda: self.repository.list_paths(),
+            lambda: self.repository.read_text("core_documents/global_outline.md"),
+            lambda: self.commit(output_path="part-02/new.md"),
+        ):
+            with self.assertRaisesRegex(
+                WorkspaceFormatError,
+                "path set does not match commit ledger",
+            ):
+                operation()
+        self.assertTrue(self.root.joinpath(manuscript_path).is_file())
+        self.assertFalse(self.root.joinpath("manuscript/part-02/new.md").exists())
+        self.assertFalse(tuple(state.joinpath("transactions").glob("*.json")))
+
+    def test_pending_first_core_introduction_contributes_no_before_paths(self) -> None:
+        with (
+            mock.patch.object(
+                self.repository,
+                "_complete_transaction",
+                side_effect=OSError("prepared"),
+            ),
+            self.assertRaisesRegex(OSError, "prepared"),
+        ):
+            self.commit(core_updates={"global_outline.md": "first outline"})
+        state = self.root / "agent_states/orchestrator_state/writing_artifacts"
+        journal = next(state.joinpath("transactions").glob("*.json"))
+        transaction = json.loads(journal.read_text(encoding="utf-8"))
+        self.assertEqual(transaction["catalog_before"]["image"]["entries"], [])
+        self.assertEqual(
+            {entry["path"] for entry in transaction["catalog_after"]["entries"]},
+            {
+                "core_documents/global_outline.md",
+                "manuscript/part-01/chapter-01.md",
+            },
+        )
+        commit = transaction["commit"]
+        state.joinpath("commits", f"{commit['commit_id']}.json").write_bytes(
+            self.repository._json_bytes(commit)
+        )
+
+        self.assertEqual(
+            WritingArtifactRepository(self.root).list_paths(),
+            (
+                "core_documents/global_outline.md",
+                "manuscript/part-01/chapter-01.md",
+            ),
+        )
+
+    def test_pending_core_update_requires_established_current_row(self) -> None:
+        for remove_current in (False, True):
+            with (
+                self.subTest(remove_current=remove_current),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = Path(directory)
+                Workspace(root).initialize()
+                repository = WritingArtifactRepository(root)
+                self.commit_repository(
+                    repository,
+                    output_path="part-01/first.md",
+                    core_updates={"global_outline.md": "older outline"},
+                )
+                with (
+                    mock.patch.object(
+                        repository,
+                        "_complete_transaction",
+                        side_effect=OSError("prepared"),
+                    ),
+                    self.assertRaisesRegex(OSError, "prepared"),
+                ):
+                    self.commit_repository(
+                        repository,
+                        output_path="part-02/second.md",
+                        core_updates={"global_outline.md": "new outline"},
+                    )
+                state = root / "agent_states/orchestrator_state/writing_artifacts"
+                journal = next(state.joinpath("transactions").glob("*.json"))
+                transaction = json.loads(journal.read_text(encoding="utf-8"))
+                before_entries = transaction["catalog_before"]["image"]["entries"]
+                self.assertIn(
+                    "core_documents/global_outline.md",
+                    {entry["path"] for entry in before_entries},
+                )
+                commit = transaction["commit"]
+                state.joinpath("commits", f"{commit['commit_id']}.json").write_bytes(
+                    repository._json_bytes(commit)
+                )
+                if remove_current:
+                    catalog_path = state / "catalog.json"
+                    catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+                    catalog["entries"] = [
+                        entry
+                        for entry in catalog["entries"]
+                        if entry["path"] != "core_documents/global_outline.md"
+                    ]
+                    catalog_path.write_bytes(repository._json_bytes(catalog))
+
+                recovered = WritingArtifactRepository(root)
+                if remove_current:
+                    with self.assertRaisesRegex(
+                        WorkspaceFormatError,
+                        "recovery is blocked",
+                    ):
+                        recovered.list_paths()
+                    self.assertFalse(root.joinpath("manuscript/part-02/second.md").exists())
+                else:
+                    self.assertEqual(
+                        recovered.read_text("core_documents/global_outline.md"),
+                        "new outline",
+                    )
+                    self.assertEqual(
+                        recovered.list_paths(),
+                        (
+                            "core_documents/global_outline.md",
+                            "manuscript/part-01/first.md",
+                            "manuscript/part-02/second.md",
+                        ),
+                    )
 
     def test_missing_empty_or_subset_catalog_with_commits_blocks_before_mutation(
         self,
