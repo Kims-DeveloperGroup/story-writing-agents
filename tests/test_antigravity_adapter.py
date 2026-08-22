@@ -18,6 +18,7 @@ from story_writing_agents import (
     AgentBackend,
     AgentReply,
     AgentRequest,
+    BackendProtocolError,
     PLOT_ARCHITECT,
     Phase,
 )
@@ -757,6 +758,55 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                     process.terminate.assert_called_once_with()
                     process.wait.assert_called_once_with()
                 process.kill.assert_not_called()
+
+    def test_backend_preflight_reports_unverified_headless_capabilities(
+        self,
+    ) -> None:
+        backend = AgentBackend(
+            self.workspace,
+            executable=sys.executable,
+            antigravity_executable="CONFIDENTIAL_AGY_EXECUTABLE",
+        )
+        self.addCleanup(backend.close)
+        resolved = mock.Mock(backend="antigravity")
+        forbidden_process = mock.AsyncMock(
+            side_effect=AssertionError("provider process invoked")
+        )
+
+        with (
+            mock.patch(
+                "story_writing_agents.backend.ConfigManager.resolve_from_snapshot",
+                return_value=resolved,
+            ),
+            mock.patch.object(
+                backend._antigravity_adapter,
+                "executable_available",
+                return_value=True,
+            ) as executable_available,
+            mock.patch.object(
+                backend._antigravity_adapter,
+                "headless_capabilities_available",
+                return_value=False,
+            ) as headless_capabilities_available,
+            mock.patch(
+                "story_writing_agents.antigravity_adapter.run_process",
+                forbidden_process,
+            ),
+            self.assertRaises(BackendProtocolError) as caught,
+        ):
+            backend.validate_provider_configuration("preflight-session")
+
+        error = caught.exception
+        self.assertEqual(
+            str(error),
+            "Antigravity CLI headless capabilities could not be verified",
+        )
+        self.assertNotIn("CONFIDENTIAL", str(error))
+        self.assertIsNone(error.__cause__)
+        self.assertIsNone(error.__context__)
+        executable_available.assert_called_once_with()
+        headless_capabilities_available.assert_called_once_with()
+        forbidden_process.assert_not_awaited()
 
     def test_capability_probe_is_bounded_isolated_and_requires_public_flags(
         self,

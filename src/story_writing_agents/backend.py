@@ -2001,7 +2001,7 @@ class AgentBackend:
                 and not self._antigravity_adapter.headless_capabilities_available()
             ):
                 raise BackendProtocolError(
-                    "Antigravity CLI lacks required headless capabilities"
+                    "Antigravity CLI headless capabilities could not be verified"
                 )
 
     def _session_lifecycle(
