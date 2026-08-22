@@ -163,6 +163,19 @@ by agent and definition fingerprint; provider-native invocation state is
 isolated by story session, agent, and definition fingerprint. This state is
 plaintext and should be included in workspace backup and exposure decisions.
 
+On supported POSIX systems, the adapter best-effort requests owner-only
+(`0700`) modes for its Antigravity state root and adapter-owned definition and
+session directory chains. Before a provider launch, it rejects a detected
+symbolic link or non-directory in those components. It does not recursively
+change the backend-owned containing directory, capability-probe scratch path,
+or files created by `agy`; provider-native retention is unchanged.
+
+This directory hardening is not application access control or race-proof
+containment. Unsupported platforms, including Windows, and ordinary
+mode-setting failures retain platform behavior. Keep the complete workspace
+and provider-state paths protected through OS-level controls; the runtime does
+not encrypt or securely erase them.
+
 The runtime manifest keys threads by story session, backend, and agent. A
 compatible, untainted record is resumed automatically with its exact
 Antigravity conversation ID. Conversation focus and debate IDs do not create
