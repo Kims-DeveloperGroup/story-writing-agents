@@ -81,6 +81,31 @@ hit's handle with `/transcript ID`; it can also read archives.
 Code `1` includes `failed_check`; repeat with `story smoke --workspace
 ./smoke-debug` to retain artifacts. Code `2` uses the normal error channel.
 
+## Use the bounded runtime debug log
+
+After workspace resolution, interactive errors show
+`[debug log] If available, workspace-relative: debug_logs/runtime.jsonl`.
+A caught noninteractive exception adds
+`Debug log (if available, workspace-relative): debug_logs/runtime.jsonl` as its
+second stderr line after CLI workspace initialization or discovery succeeds.
+Handle acquisition, record submission, or root revalidation may still fail, so
+the hint can appear when the file does not exist. Initialization and discovery
+failures and implicit smoke remain hint-free. Smoke invariant exit `1` and run
+deadlock/failed-result exits `3`/`4` retain their JSON output without a hint.
+Resolve the fixed path beneath the workspace root; the CLI never prints an
+absolute diagnostic path.
+
+The file may be absent even when a hint appears because logging is fail-open.
+Do not treat it as retry, telemetry, or proof that an operation completed. It
+contains bounded safe operational facts and exception type/frame structure,
+not story prose, arbitrary payloads, exception messages, or provider stderr.
+Read-only story/session operations can append diagnostics. Users cannot choose
+another diagnostic destination or recover discarded provider stderr from this
+feature. See
+[privacy](../operations/privacy-and-provider.md#workspace-debug-log-privacy),
+[retention](../reference/configuration/session-storage.md#runtime-debug-log-storage),
+and [filesystem safety](../operations/filesystem-safety.md#debug-log-filesystem-safety).
+
 ## Provider configuration or session contention
 
 Confirm Codex login or `CODEX_API_KEY`, ready session, model, and timeout.
@@ -123,9 +148,13 @@ documents if needed, and start a new debate. `active` proves only reservation;
 A recoverable advisory Ctrl-C reports `[cancelled]` and keeps attachment; an
 entered turn must cancel and join, and its provider thread may restart. Fatal
 `operation_interrupted` means proof or terminal I/O failed and exits `2` through
-cleanup. `cleanup_failed` forces exit `2` and means Runner close, access release,
-or backend close may be incomplete. Before retrying, inspect retained temporary
-or claim state, stop a known owner normally, and preserve uncertain ownership.
+cleanup. Cleanup still attempts Runner close, known-access release, backend
+close, and state clearing in order. An uncaught body process control wins;
+otherwise the first cleanup process control propagates after the later stages.
+`cleanup_failed` forces exit `2` and means an ordinary Runner close, access
+release, or backend close may be incomplete. Before retrying, inspect retained
+temporary or claim state, stop a known owner normally, and preserve uncertain
+ownership.
 
 Malformed JSON/JSONL raises; preserve it before intervention. See
 [Inspection and recovery](inspection-and-recovery.md) and the

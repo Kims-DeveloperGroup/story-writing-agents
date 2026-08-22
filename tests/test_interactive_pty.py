@@ -240,22 +240,25 @@ def _copy_terminal_attributes(attributes: list[Any]) -> list[Any]:
 
 
 def _durable_tree(root: Path) -> dict[str, bytes]:
-    """Capture exact file bytes below one test-owned workspace."""
+    """Capture exact non-diagnostic bytes below one test-owned workspace."""
 
     return {
         path.relative_to(root).as_posix(): path.read_bytes()
         for path in sorted(root.rglob("*"))
         if path.is_file()
+        and "debug_logs" not in path.relative_to(root).parts
     }
 
 
 def _durable_tree_without_access(root: Path) -> dict[str, bytes]:
-    """Capture persistent bytes while excluding transient access claims."""
+    """Capture domain bytes while excluding claims and diagnostics."""
 
     return {
         path.relative_to(root).as_posix(): path.read_bytes()
         for path in sorted(root.rglob("*"))
-        if path.is_file() and not path.name.endswith(".access.json")
+        if path.is_file()
+        and not path.name.endswith(".access.json")
+        and "debug_logs" not in path.relative_to(root).parts
     }
 
 

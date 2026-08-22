@@ -18,6 +18,13 @@ from .cli_context import (
     save_default_session,
 )
 from .config import ConfigManager
+from .debug_log import (
+    DebugComponent,
+    DebugOperation,
+    DebugOutcome,
+    DebugPhase,
+    WorkspaceDebugLog,
+)
 from .errors import (
     BackendProtocolError,
     ConfigurationError,
@@ -42,13 +49,19 @@ from .session_lifecycle import (
     SessionLifecycleState,
     provider_work_is_ready,
 )
-from .workspace import initialize_workspace
+from .workspace import Workspace, initialize_workspace
 
 
 _WORKSPACE_HELP = (
     "explicit initialized workspace; omitted discovers the nearest ancestor"
 )
 _SESSION_HELP = "explicit session; omitted uses the workspace default"
+_INTERACTIVE_DEBUG_LOG_NOTICE = (
+    "If available, workspace-relative: debug_logs/runtime.jsonl"
+)
+_NONINTERACTIVE_DEBUG_LOG_HINT = (
+    "Debug log (if available, workspace-relative): debug_logs/runtime.jsonl"
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -317,7 +330,11 @@ def _reject_unexpected_startup_input(_prompt: str) -> str:
     raise RuntimeError("startup error rendering must not read input")
 
 
-def _write_interactive_cli_error(error: InteractiveError) -> None:
+def _write_interactive_cli_error(
+    error: InteractiveError,
+    *,
+    debug_log_available: bool = False,
+) -> None:
     """Render one sanitized interactive startup error only on stderr.
 
     The helper borrows stderr for a single record and uses a reader that always
@@ -329,7 +346,87 @@ def _write_interactive_cli_error(error: InteractiveError) -> None:
         _reject_unexpected_startup_input,
         sys.stderr.write,
     )
-    terminal.write_error(error)
+    terminal.write_error(
+        error,
+        debug_log_path=(
+            _INTERACTIVE_DEBUG_LOG_NOTICE
+            if debug_log_available
+            else None
+        ),
+    )
+
+
+def _record_cli_error(
+    debug_log: WorkspaceDebugLog | None,
+    operation: DebugOperation,
+    failure: BaseException,
+    *,
+    session_id: str | None = None,
+) -> None:
+    """Record a CLI failure without allowing diagnostics to replace it."""
+
+    if debug_log is None:
+        return
+    try:
+        debug_log.error(
+            DebugComponent.CLI,
+            operation,
+            failure,
+            session_id=session_id,
+            outcome=DebugOutcome.FAILED,
+        )
+    except BaseException:
+        pass
+
+
+def _create_cli_debug_log(workspace: Workspace) -> WorkspaceDebugLog | None:
+    """Create one optional CLI logger without changing command behavior."""
+
+    try:
+        return WorkspaceDebugLog(workspace)
+    except BaseException:
+        return None
+
+
+def _trace_cli(
+    debug_log: WorkspaceDebugLog | None,
+    operation: DebugOperation,
+    phase: DebugPhase,
+    *,
+    session_id: str | None = None,
+    outcome: DebugOutcome | None = None,
+) -> None:
+    """Record a CLI trace without allowing diagnostics to alter behavior."""
+
+    if debug_log is None:
+        return
+    try:
+        debug_log.trace(
+            component=DebugComponent.CLI,
+            operation=operation,
+            phase=phase,
+            session_id=session_id,
+            outcome=outcome,
+        )
+    except BaseException:
+        pass
+
+
+def _trace_cli_completion(
+    debug_log: WorkspaceDebugLog | None,
+    *,
+    session_id: str | None = None,
+    outcome: DebugOutcome = DebugOutcome.COMPLETED,
+) -> None:
+    """Record one successful post-workspace command completion."""
+
+    _trace_cli(
+        debug_log,
+        DebugOperation.CLI_COMMAND,
+        DebugPhase.SUCCEEDED,
+        session_id=session_id,
+        outcome=outcome,
+    )
 
 
 def _classify_workspace_entry_failure(failure: Exception) -> InteractiveError:
@@ -396,7 +493,8 @@ def _close_unstarted_interactive_backend(backend: AgentBackend) -> bool:
         backend.close()
     except Exception:
         _write_interactive_cli_error(
-            InteractiveError(InteractiveErrorCode.CLEANUP_FAILED)
+            InteractiveError(InteractiveErrorCode.CLEANUP_FAILED),
+            debug_log_available=True,
         )
         return False
     return True
@@ -448,20 +546,42 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
     except Exception as exc:
         _write_interactive_cli_error(_classify_workspace_entry_failure(exc))
         return 2
+    debug_log = _create_cli_debug_log(workspace)
+    _trace_cli(
+        debug_log,
+        DebugOperation.WORKSPACE_DISCOVERY,
+        DebugPhase.SUCCEEDED,
+        outcome=DebugOutcome.READY,
+    )
+    _trace_cli(
+        debug_log,
+        DebugOperation.CLI_COMMAND,
+        DebugPhase.STARTED,
+    )
 
     try:
         cli_context = load_cli_context(workspace)
     except Exception as exc:
+        _record_cli_error(debug_log, DebugOperation.CLI_CONTEXT, exc)
         _write_interactive_cli_error(
-            _classify_interactive_configuration_failure(exc)
+            _classify_interactive_configuration_failure(exc),
+            debug_log_available=True,
         )
         return 2
+    _trace_cli(
+        debug_log,
+        DebugOperation.CLI_CONTEXT,
+        DebugPhase.SUCCEEDED,
+        outcome=DebugOutcome.COMPLETED,
+    )
 
     try:
         terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
-    except Exception:
+    except Exception as exc:
+        _record_cli_error(debug_log, DebugOperation.CLI_COMMAND, exc)
         _write_interactive_cli_error(
-            InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            InteractiveError(InteractiveErrorCode.INTERNAL_ERROR),
+            debug_log_available=True,
         )
         return 2
 
@@ -473,8 +593,10 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
             backend_overrides=backend_overrides,
         )
     except Exception as exc:
+        _record_cli_error(debug_log, DebugOperation.CONFIGURATION, exc)
         _write_interactive_cli_error(
-            _classify_interactive_configuration_failure(exc)
+            _classify_interactive_configuration_failure(exc),
+            debug_log_available=True,
         )
         return 2
 
@@ -485,22 +607,35 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
             backend,
             terminal,
         )
-    except Exception:
+    except Exception as exc:
+        _record_cli_error(debug_log, DebugOperation.CLI_COMMAND, exc)
         _write_interactive_cli_error(
-            InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            InteractiveError(InteractiveErrorCode.INTERNAL_ERROR),
+            debug_log_available=True,
         )
         _close_unstarted_interactive_backend(backend)
         return 2
 
     try:
-        return controller.run_session_lobby(
+        result = controller.run_session_lobby(
             requested_session=requested_session
         )
-    except Exception:
+    except Exception as exc:
+        _record_cli_error(debug_log, DebugOperation.INTERACTIVE_LOBBY, exc)
         _write_interactive_cli_error(
-            InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            InteractiveError(InteractiveErrorCode.INTERNAL_ERROR),
+            debug_log_available=True,
         )
         return 2
+    _trace_cli(
+        debug_log,
+        DebugOperation.CLI_COMMAND,
+        DebugPhase.SUCCEEDED if result == 0 else DebugPhase.FAILED,
+        outcome=(
+            DebugOutcome.COMPLETED if result == 0 else DebugOutcome.FAILED
+        ),
+    )
+    return result
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -514,19 +649,42 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     if arguments.command is None or arguments.command == "chat":
         return _run_interactive_cli(arguments)
+    debug_log: WorkspaceDebugLog | None = None
+    debug_log_hint_available = False
+    session_id: str | None = None
     try:
         if arguments.command == "init":
             workspace = initialize_workspace(
                 arguments.workspace,
                 overwrite_prompts=arguments.overwrite_prompts,
             )
+            debug_log_hint_available = True
+            debug_log = _create_cli_debug_log(workspace)
+            _trace_cli(
+                debug_log,
+                DebugOperation.WORKSPACE_INITIALIZATION,
+                DebugPhase.SUCCEEDED,
+                outcome=DebugOutcome.READY,
+            )
+            _trace_cli(
+                debug_log,
+                DebugOperation.CLI_COMMAND,
+                DebugPhase.STARTED,
+            )
             print(json.dumps({"workspace": str(workspace.root)}, indent=2))
+            _trace_cli_completion(debug_log)
             return 0
 
         if arguments.command == "smoke":
             from .smoke import run_smoke
 
-            report, exit_code = run_smoke(arguments.workspace)
+            if arguments.workspace is None:
+                report, exit_code = run_smoke()
+            else:
+                workspace = initialize_workspace(arguments.workspace)
+                debug_log_hint_available = True
+                debug_log = _create_cli_debug_log(workspace)
+                report, exit_code = run_smoke(workspace)
             print(
                 json.dumps(
                     report,
@@ -535,10 +693,44 @@ def main(argv: Sequence[str] | None = None) -> int:
                     sort_keys=True,
                 )
             )
+            if debug_log is not None:
+                _trace_cli(
+                    debug_log,
+                    DebugOperation.CLI_COMMAND,
+                    (
+                        DebugPhase.SUCCEEDED
+                        if exit_code == 0
+                        else DebugPhase.FAILED
+                    ),
+                    outcome=(
+                        DebugOutcome.COMPLETED
+                        if exit_code == 0
+                        else DebugOutcome.FAILED
+                    ),
+                )
             return exit_code
 
         workspace = resolve_workspace(arguments.workspace)
+        debug_log_hint_available = True
+        debug_log = _create_cli_debug_log(workspace)
+        _trace_cli(
+            debug_log,
+            DebugOperation.WORKSPACE_DISCOVERY,
+            DebugPhase.SUCCEEDED,
+            outcome=DebugOutcome.READY,
+        )
+        _trace_cli(
+            debug_log,
+            DebugOperation.CLI_COMMAND,
+            DebugPhase.STARTED,
+        )
         cli_context = load_cli_context(workspace)
+        _trace_cli(
+            debug_log,
+            DebugOperation.CLI_CONTEXT,
+            DebugPhase.SUCCEEDED,
+            outcome=DebugOutcome.COMPLETED,
+        )
         if arguments.command == "session":
             if arguments.session_name is not None:
                 session_id = workspace.validate_identifier(
@@ -622,6 +814,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     sort_keys=True,
                 )
             )
+            _trace_cli_completion(debug_log, session_id=session_id)
             return 0
 
         runtime = StoryRuntime(workspace)
@@ -633,6 +826,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if arguments.command == "directive":
             state = runtime.apply_directive(session_id, arguments.text)
             print(json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True))
+            _trace_cli_completion(debug_log, session_id=session_id)
             return 0
 
         if arguments.command == "inspect":
@@ -642,6 +836,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 else runtime.inspect_session(session_id)
             )
             print(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True))
+            _trace_cli_completion(debug_log, session_id=session_id)
             return 0
 
         input_kind, input_payload = _resolve_run_input(arguments)
@@ -675,12 +870,38 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         )
         if result.status is DebateStatus.CONSENSUS:
+            _trace_cli_completion(
+                debug_log,
+                session_id=session_id,
+                outcome=DebugOutcome.CONSENSUS,
+            )
             return 0
         if result.status is DebateStatus.DEADLOCK:
+            _trace_cli_completion(
+                debug_log,
+                session_id=session_id,
+                outcome=DebugOutcome.DEADLOCK,
+            )
             return 3
+        _trace_cli(
+            debug_log,
+            DebugOperation.CLI_COMMAND,
+            DebugPhase.FAILED,
+            session_id=session_id,
+            outcome=DebugOutcome.FAILED,
+        )
         return 4
     except Exception as exc:
+        if debug_log is not None:
+            _record_cli_error(
+                debug_log,
+                DebugOperation.CLI_COMMAND,
+                exc,
+                session_id=session_id,
+            )
         print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
+        if debug_log_hint_available:
+            print(_NONINTERACTIVE_DEBUG_LOG_HINT, file=sys.stderr)
         return 2
 
 

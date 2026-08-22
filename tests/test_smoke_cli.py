@@ -6,6 +6,7 @@ import contextlib
 import io
 import json
 import os
+import shutil
 import socket
 import subprocess
 import tempfile
@@ -35,7 +36,12 @@ from story_writing_agents import (
 from story_writing_agents import backend as backend_module
 from story_writing_agents import cli as cli_module
 from story_writing_agents import smoke as smoke_module
-from story_writing_agents.agents import CORE_DOCUMENTS, ROSTER, SPECIALIST_IDS
+from story_writing_agents.agents import (
+    AGENT_SPECS,
+    CORE_DOCUMENTS,
+    ROSTER,
+    SPECIALIST_IDS,
+)
 from story_writing_agents.conversation_retrieval import (
     ConversationRetrievalActionKind,
     ConversationRetrievalProgressPhase,
@@ -43,6 +49,11 @@ from story_writing_agents.conversation_retrieval import (
     ConversationRetrievalReply,
     ConversationRetrievalSearchObservation,
 )
+from story_writing_agents.debug_log import (
+    DEBUG_LOG_RELATIVE_PATH,
+    WorkspaceDebugLog,
+)
+from story_writing_agents.workspace import WORKSPACE_DIRECTORIES
 
 from tests.helpers import ScriptedBackend, all_manuscripts
 
@@ -88,6 +99,60 @@ def invoke_cli(arguments: list[str]) -> tuple[int, str, str]:
     ):
         exit_code = cli_module.main(arguments)
     return exit_code, stdout.getvalue(), stderr.getvalue()
+
+
+def smoke_boundary_report(
+    workspace: Workspace,
+    *,
+    status: str,
+) -> dict[str, object]:
+    """Build one compact stub report for CLI boundary-only assertions."""
+
+    report: dict[str, object] = {
+        "checks": EXPECTED_CHECKS if status == "passed" else EXPECTED_CHECKS[:8],
+        "command": "smoke",
+        "debate_id": "smoke_debate_boundary",
+        "debate_status": "consensus",
+        "note": "No LLM or external provider was called.",
+        "provider_tested": False,
+        "revision_id": "r1",
+        "rounds_completed": 1,
+        "session_id": "smoke_session_boundary",
+        "status": status,
+        "workspace": {
+            "mode": "persistent",
+            "path": str(workspace.root),
+            "retained": True,
+        },
+    }
+    if status == "failed":
+        report["failed_check"] = "revision_workflow"
+    return report
+
+
+def traceback_contains(
+    traceback: object,
+    expected: object,
+) -> bool:
+    """Return whether one traceback chain retains an exact injected node."""
+
+    current = traceback
+    while current is not None:
+        if current is expected:
+            return True
+        current = current.tb_next  # type: ignore[union-attr]
+    return False
+
+
+def snapshot_directory_namespace(directory: Path) -> dict[str, bytes | None]:
+    """Return every descendant name and file byte sequence below a directory."""
+
+    return {
+        path.relative_to(directory).as_posix(): (
+            None if path.is_dir() else path.read_bytes()
+        )
+        for path in sorted(directory.rglob("*"))
+    }
 
 
 def snapshot_retained_smoke_artifacts(
@@ -267,6 +332,8 @@ class SmokeTemporaryTests(unittest.TestCase):
         self.assertEqual(report["workspace"]["mode"], "temporary")
         self.assertIs(report["workspace"]["retained"], False)
         self.assertFalse(Path(report["workspace"]["path"]).exists())
+        self.assertNotIn("debug_logs/runtime.jsonl", stdout)
+        self.assertNotIn("debug_logs/runtime.jsonl", stderr)
 
 
 class SmokePersistentTests(unittest.TestCase):
@@ -320,6 +387,133 @@ class SmokePersistentTests(unittest.TestCase):
             workspace.root,
         )
         self.assertTrue(workspace.root.exists())
+
+        debug_path = workspace.path(DEBUG_LOG_RELATIVE_PATH)
+        raw_debug_log = debug_path.read_text(encoding="utf-8")
+        debug_records = [
+            json.loads(line) for line in raw_debug_log.splitlines()
+        ]
+        smoke_records = [
+            record
+            for record in debug_records
+            if record["component"] == "smoke"
+        ]
+        self.assertEqual(
+            {
+                key: value
+                for key, value in smoke_records[0].items()
+                if key != "timestamp"
+            },
+            {
+                "schema_version": 1,
+                "level": "trace",
+                "component": "smoke",
+                "operation": "workspace_initialization",
+                "phase": "succeeded",
+                "outcome": "ready",
+            },
+        )
+        smoke_completion = next(
+            record
+            for record in reversed(smoke_records)
+            if record["operation"] == "cli_command"
+            and record["phase"] == "succeeded"
+        )
+        self.assertEqual(smoke_completion["session_id"], report["session_id"])
+        self.assertEqual(smoke_completion["debate_id"], report["debate_id"])
+        self.assertEqual(smoke_completion["outcome"], "completed")
+        cli_completion = [
+            record
+            for record in debug_records
+            if record["component"] == "cli"
+            and record["operation"] == "cli_command"
+        ]
+        self.assertEqual(len(cli_completion), 1)
+        self.assertEqual(
+            {
+                key: value
+                for key, value in cli_completion[0].items()
+                if key != "timestamp"
+            },
+            {
+                "schema_version": 1,
+                "level": "trace",
+                "component": "cli",
+                "operation": "cli_command",
+                "phase": "succeeded",
+                "outcome": "completed",
+            },
+        )
+        allowed_record_keys = {
+            "schema_version",
+            "timestamp",
+            "level",
+            "component",
+            "operation",
+            "phase",
+            "session_id",
+            "conversation_id",
+            "debate_id",
+            "agent_id",
+            "outcome",
+            "exception",
+        }
+        for record in debug_records:
+            self.assertLessEqual(set(record), allowed_record_keys)
+        runtime_rows = [
+            (
+                record["operation"],
+                record["phase"],
+                record.get("outcome"),
+            )
+            for record in debug_records
+            if record["component"] == "runtime"
+        ]
+        self.assertTrue(
+            {
+                ("directive", "succeeded", "completed"),
+                ("advisory_turn", "started", None),
+                ("advisory_turn", "succeeded", "completed"),
+                ("retrieval_turn", "started", None),
+                ("retrieval_turn", "succeeded", "completed"),
+                ("consensus_run", "started", None),
+                ("consensus_run", "succeeded", "consensus"),
+                ("inspection", "observed", "completed"),
+            }.issubset(set(runtime_rows))
+        )
+        for record in debug_records:
+            if record["component"] != "runtime":
+                continue
+            self.assertEqual(record.get("session_id"), report["session_id"])
+            if record["operation"] == "consensus_run":
+                self.assertEqual(record.get("debate_id"), report["debate_id"])
+            if record["operation"] in {"advisory_turn", "retrieval_turn"}:
+                self.assertIsInstance(record.get("conversation_id"), str)
+                self.assertIn(record.get("agent_id"), ROSTER)
+        self.assertIn(
+            ("cli_command", "succeeded", "completed"),
+            {
+                (
+                    record["operation"],
+                    record["phase"],
+                    record.get("outcome"),
+                )
+                for record in debug_records
+                if record["component"] == "cli"
+            },
+        )
+        for prohibited in (
+            smoke_module._SOURCE_SUBJECT,
+            smoke_module._RETRIEVAL_SUBJECT,
+            smoke_module._LEAD_QUESTION,
+            smoke_module._RETRIEVAL_QUESTION,
+            smoke_module._REVISION_ONE,
+            str(workspace.root),
+            "owner_hostname",
+            "owner_pid",
+            "access_claim_token",
+        ):
+            self.assertNotIn(prohibited, raw_debug_log)
 
         reconstructed_workspace = Workspace(workspace.root)
         catalog = FilesystemConversationCatalog(reconstructed_workspace)
@@ -540,6 +734,170 @@ class SmokePersistentTests(unittest.TestCase):
             {"unrelated_session.json"},
         )
 
+    def test_diagnostic_storage_failure_does_not_change_smoke_result(self) -> None:
+        """Keep the provider-free result and exit code when every append drops."""
+
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        workspace = initialize_workspace(Path(temporary.name) / "workspace")
+        with mock.patch.object(
+            smoke_module.WorkspaceDebugLog,
+            "_append",
+            side_effect=OSError("diagnostic storage unavailable"),
+        ) as append:
+            exit_code, stdout, stderr = invoke_cli(
+                ["smoke", "--workspace", str(workspace.root)]
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr, "")
+        report = json.loads(stdout)
+        self.assertEqual(report["status"], "passed")
+        self.assertEqual(report["checks"], EXPECTED_CHECKS)
+        self.assertTrue(append.called)
+        self.assertFalse(workspace.path(DEBUG_LOG_RELATIVE_PATH).exists())
+        inspected = StoryRuntime(workspace).inspect_debate(
+            report["session_id"],
+            report["debate_id"],
+        )
+        self.assertEqual(inspected["status"], "consensus")
+
+    def test_legacy_workspace_without_debug_logs_remains_ready(self) -> None:
+        """Keep optional diagnostics out of borrowed-workspace readiness."""
+
+        for unavailable in ("acquisition", "submission"):
+            with self.subTest(unavailable=unavailable):
+                temporary = tempfile.TemporaryDirectory()
+                self.addCleanup(temporary.cleanup)
+                workspace = initialize_workspace(
+                    Path(temporary.name) / "workspace"
+                )
+                shutil.rmtree(workspace.path("debug_logs"))
+                if unavailable == "acquisition":
+                    with (
+                        mock.patch.object(
+                            WorkspaceDebugLog,
+                            "_record",
+                            side_effect=OSError(
+                                "runtime diagnostic submission unavailable"
+                            ),
+                        ) as runtime_submission,
+                        mock.patch.object(
+                            WorkspaceDebugLog,
+                            "_append",
+                        ) as submission,
+                        mock.patch.object(
+                            smoke_module,
+                            "WorkspaceDebugLog",
+                            side_effect=OSError(
+                                "diagnostic acquisition unavailable"
+                            ),
+                        ) as acquisition,
+                    ):
+                        report, exit_code = smoke_module.run_smoke(workspace)
+                    acquisition.assert_called_once_with(workspace)
+                    self.assertTrue(runtime_submission.called)
+                else:
+                    with mock.patch.object(
+                        WorkspaceDebugLog,
+                        "_append",
+                        side_effect=OSError(
+                            "diagnostic submission unavailable"
+                        ),
+                    ) as submission:
+                        report, exit_code = smoke_module.run_smoke(workspace)
+                inspected_status = workspace.inspect_debate(
+                    report["session_id"],
+                    report["debate_id"],
+                )["status"]
+
+                if unavailable == "acquisition":
+                    submission.assert_not_called()
+                else:
+                    self.assertGreater(submission.call_count, 0)
+
+                self.assertEqual(exit_code, 0)
+                self.assertEqual(report["status"], "passed")
+                self.assertEqual(report["checks"], EXPECTED_CHECKS)
+                self.assertEqual(
+                    report["workspace"],
+                    {
+                        "mode": "persistent",
+                        "path": str(workspace.root),
+                        "retained": True,
+                    },
+                )
+                self.assertEqual(report["debate_status"], "consensus")
+                self.assertEqual(inspected_status, "consensus")
+                self.assertFalse(workspace.path("debug_logs").exists())
+                self.assertFalse(
+                    workspace.path(DEBUG_LOG_RELATIVE_PATH).exists()
+                )
+
+    def test_trace_failures_preserve_explicit_and_implicit_smoke_results(
+        self,
+    ) -> None:
+        """Keep the complete provider-free workflow independent of trace sinks."""
+
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        workspace = initialize_workspace(Path(temporary.name) / "workspace")
+        with mock.patch.object(
+            WorkspaceDebugLog,
+            "trace",
+            side_effect=SystemExit("diagnostic trace failure"),
+        ) as explicit_trace:
+            exit_code, stdout, stderr = invoke_cli(
+                ["smoke", "--workspace", str(workspace.root)]
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr, "")
+        explicit_report = json.loads(stdout)
+        self.assertEqual(explicit_report["status"], "passed")
+        self.assertEqual(explicit_report["checks"], EXPECTED_CHECKS)
+        self.assertGreater(explicit_trace.call_count, 0)
+        self.assertFalse(workspace.path(DEBUG_LOG_RELATIVE_PATH).exists())
+        self.assertEqual(
+            StoryRuntime(workspace).inspect_debate(
+                explicit_report["session_id"],
+                explicit_report["debate_id"],
+            )["status"],
+            "consensus",
+        )
+
+        implicit_roots: list[Path] = []
+        real_initialize = smoke_module.initialize_workspace
+
+        def record_implicit_workspace(path: Path) -> Workspace:
+            initialized = real_initialize(path)
+            implicit_roots.append(initialized.root)
+            return initialized
+
+        with (
+            mock.patch.object(
+                smoke_module,
+                "initialize_workspace",
+                side_effect=record_implicit_workspace,
+            ),
+            mock.patch.object(
+                WorkspaceDebugLog,
+                "trace",
+                side_effect=KeyboardInterrupt("diagnostic trace failure"),
+            ) as implicit_trace,
+        ):
+            exit_code, stdout, stderr = invoke_cli(["smoke"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr, "")
+        implicit_report = json.loads(stdout)
+        self.assertEqual(implicit_report["status"], "passed")
+        self.assertEqual(implicit_report["checks"], EXPECTED_CHECKS)
+        self.assertGreater(implicit_trace.call_count, 0)
+        self.assertEqual(len(implicit_roots), 1)
+        self.assertFalse(implicit_roots[0].exists())
+        self.assertNotIn("debug_logs/runtime.jsonl", stdout)
+
     def test_two_persistent_runs_create_unique_session_debate_and_outputs(
         self,
     ) -> None:
@@ -662,6 +1020,163 @@ class SmokePersistentTests(unittest.TestCase):
             {Path(first_manuscript).name, Path(second_manuscript).name},
         )
 
+    def test_explicit_smoke_fresh_consumers_borrow_supplied_workspace(
+        self,
+    ) -> None:
+        """Keep fresh service instances without reconstructing their workspace."""
+
+        workspace = initialize_workspace(
+            Path(self.enterContext(tempfile.TemporaryDirectory())) / "workspace"
+        )
+        runtime_instances: list[StoryRuntime] = []
+        catalog_instances: list[FilesystemConversationCatalog] = []
+        store_instances: list[FilesystemConversationEventStore] = []
+        memory_instances: list[ConversationMemoryService] = []
+        runtime_type = smoke_module.StoryRuntime
+        catalog_type = smoke_module.FilesystemConversationCatalog
+        store_type = smoke_module.FilesystemConversationEventStore
+        memory_type = smoke_module.ConversationMemoryService
+
+        def construct_runtime(*args: object, **kwargs: object) -> StoryRuntime:
+            instance = runtime_type(*args, **kwargs)  # type: ignore[arg-type]
+            runtime_instances.append(instance)
+            return instance
+
+        def construct_catalog(
+            *args: object,
+            **kwargs: object,
+        ) -> FilesystemConversationCatalog:
+            instance = catalog_type(*args, **kwargs)  # type: ignore[arg-type]
+            catalog_instances.append(instance)
+            return instance
+
+        def construct_store(
+            *args: object,
+            **kwargs: object,
+        ) -> FilesystemConversationEventStore:
+            instance = store_type(*args, **kwargs)  # type: ignore[arg-type]
+            store_instances.append(instance)
+            return instance
+
+        def construct_memory(
+            *args: object,
+            **kwargs: object,
+        ) -> ConversationMemoryService:
+            instance = memory_type(*args, **kwargs)  # type: ignore[arg-type]
+            memory_instances.append(instance)
+            return instance
+
+        with (
+            mock.patch.object(
+                Workspace,
+                "__init__",
+                side_effect=AssertionError("smoke reconstructed Workspace"),
+            ) as workspace_constructor,
+            mock.patch.object(
+                smoke_module,
+                "StoryRuntime",
+                side_effect=construct_runtime,
+            ),
+            mock.patch.object(
+                smoke_module,
+                "FilesystemConversationCatalog",
+                side_effect=construct_catalog,
+            ),
+            mock.patch.object(
+                smoke_module,
+                "FilesystemConversationEventStore",
+                side_effect=construct_store,
+            ),
+            mock.patch.object(
+                smoke_module,
+                "ConversationMemoryService",
+                side_effect=construct_memory,
+            ),
+        ):
+            report, exit_code = smoke_module.run_smoke(workspace)
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(report["checks"], EXPECTED_CHECKS)
+        workspace_constructor.assert_not_called()
+        for instances in (
+            runtime_instances,
+            catalog_instances,
+            store_instances,
+            memory_instances,
+        ):
+            self.assertGreaterEqual(len(instances), 2)
+            self.assertEqual(
+                len({id(instance) for instance in instances}),
+                len(instances),
+            )
+        self.assertTrue(
+            all(instance.workspace is workspace for instance in runtime_instances)
+        )
+        self.assertTrue(
+            all(instance.workspace is workspace for instance in catalog_instances)
+        )
+        self.assertTrue(
+            all(instance.workspace is workspace for instance in store_instances)
+        )
+        self.assertTrue(
+            all(
+                instance._catalog.workspace is workspace
+                and instance._event_store.workspace is workspace
+                for instance in memory_instances
+            )
+        )
+
+    def test_mid_workflow_replacement_receives_no_redirected_diagnostics(
+        self,
+    ) -> None:
+        """Keep diagnostics bound while pathname-based domain work continues."""
+
+        temporary = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        root = temporary / "workspace"
+        parked = temporary / "workspace-parked"
+        workspace = initialize_workspace(root)
+        search_source = smoke_module._search_source_conversation
+        replaced = False
+        replacement_debug_before: dict[str, bytes | None] = {}
+
+        def replace_after_initial_search(
+            memory: ConversationMemoryService,
+            source: ConversationMetadata,
+            *,
+            failed_check: str,
+        ) -> smoke_module._SmokeSearchEvidence:
+            nonlocal replaced, replacement_debug_before
+            evidence = search_source(
+                memory,
+                source,
+                failed_check=failed_check,
+            )
+            if not replaced:
+                root.rename(parked)
+                shutil.copytree(parked, root)
+                replacement_debug_before = snapshot_directory_namespace(
+                    root / "debug_logs"
+                )
+                replaced = True
+            return evidence
+
+        with mock.patch.object(
+            smoke_module,
+            "_search_source_conversation",
+            side_effect=replace_after_initial_search,
+        ):
+            report, exit_code = smoke_module.run_smoke(workspace)
+
+        self.assertTrue(replaced)
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(report["checks"], EXPECTED_CHECKS)
+        self.assertEqual(
+            snapshot_directory_namespace(root / "debug_logs"),
+            replacement_debug_before,
+        )
+        # Other workspace namespaces remain pathname-based and are deliberately
+        # outside this diagnostic-containment assertion.
+
     def test_internal_trace_covers_routing_retrieval_context_and_revision(
         self,
     ) -> None:
@@ -734,10 +1249,13 @@ class SmokePersistentTests(unittest.TestCase):
                 wraps=smoke_module._verify_revision_workflow,
             ) as revision_verification,
         ):
-            report, exit_code = smoke_module.run_smoke(workspace_path)
+            workspace = initialize_workspace(workspace_path)
+            report, exit_code = smoke_module.run_smoke(workspace)
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(report["checks"], EXPECTED_CHECKS)
+        self.assertEqual(Path(report["workspace"]["path"]), workspace.root)
+        self.assertTrue(workspace.root.exists())
         self.assertEqual(len(backend_instances), 2)
         conversation_backend, resumed_backend = backend_instances
         self.assertIsNot(conversation_backend, resumed_backend)
@@ -886,6 +1404,396 @@ class SmokePersistentTests(unittest.TestCase):
 
 
 class SmokeFailureTests(unittest.TestCase):
+    def test_every_nondiagnostic_readiness_sentinel_remains_required(self) -> None:
+        """Fail the first readiness check for each required directory or file."""
+
+        sentinels = tuple(
+            ("directory", relative)
+            for relative in WORKSPACE_DIRECTORIES
+            if relative != "debug_logs"
+        ) + tuple(
+            ("file", f"core_documents/{filename}")
+            for filename in CORE_DOCUMENTS
+        ) + tuple(
+            ("file", os.fspath(AGENT_SPECS[agent_id].system_prompt_file))
+            for agent_id in ROSTER
+        )
+        self.assertEqual(len(sentinels), 22)
+        for kind, relative in sentinels:
+            with self.subTest(kind=kind, relative=relative):
+                temporary = tempfile.TemporaryDirectory()
+                self.addCleanup(temporary.cleanup)
+                workspace = initialize_workspace(
+                    Path(temporary.name) / "workspace"
+                )
+                missing = workspace.path(relative)
+                if kind == "directory":
+                    shutil.rmtree(missing)
+                else:
+                    missing.unlink()
+                before = snapshot_directory_namespace(workspace.root)
+
+                with mock.patch.object(
+                    smoke_module,
+                    "WorkspaceDebugLog",
+                    side_effect=OSError("diagnostic acquisition unavailable"),
+                ) as diagnostic:
+                    report, exit_code = smoke_module.run_smoke(workspace)
+
+                self.assertEqual(exit_code, 1)
+                self.assertEqual(report["status"], "failed")
+                self.assertEqual(report["failed_check"], "workspace_initialized")
+                self.assertEqual(report["checks"], [])
+                diagnostic.assert_called_once_with(workspace)
+                self.assertEqual(
+                    snapshot_directory_namespace(workspace.root),
+                    before,
+                )
+                self.assertFalse(missing.exists())
+
+    def test_explicit_result_survives_parked_and_replaced_workspace_root(
+        self,
+    ) -> None:
+        """Keep the smoke result authoritative after its bound root changes."""
+
+        cases = (
+            ("parked", "passed", 0),
+            ("directory", "passed", 0),
+            ("symlink", "passed", 0),
+            ("parked", "failed", 1),
+            ("directory", "failed", 1),
+            ("symlink", "failed", 1),
+        )
+        for replacement, status, expected_code in cases:
+            with self.subTest(replacement=replacement, status=status):
+                with tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary) / "workspace"
+                    initialized: list[Workspace] = []
+                    real_initialize = cli_module.initialize_workspace
+
+                    def capture_initialize(path: Path) -> Workspace:
+                        workspace = real_initialize(path)
+                        initialized.append(workspace)
+                        return workspace
+
+                    def finish_after_replacement(
+                        workspace: Workspace,
+                    ) -> tuple[dict[str, object], int]:
+                        self.assertEqual(initialized, [workspace])
+                        parked = root.with_name("workspace-parked")
+                        root.rename(parked)
+                        if replacement == "directory":
+                            root.mkdir()
+                        elif replacement == "symlink":
+                            target = root.with_name("workspace-replacement")
+                            target.mkdir()
+                            root.symlink_to(target, target_is_directory=True)
+                        return (
+                            smoke_boundary_report(workspace, status=status),
+                            expected_code,
+                        )
+
+                    with (
+                        mock.patch.object(
+                            cli_module,
+                            "initialize_workspace",
+                            side_effect=capture_initialize,
+                        ),
+                        mock.patch.object(
+                            smoke_module,
+                            "run_smoke",
+                            side_effect=finish_after_replacement,
+                        ) as run_smoke,
+                        mock.patch.object(
+                            cli_module,
+                            "resolve_workspace",
+                        ) as resolve_workspace,
+                    ):
+                        exit_code, stdout, stderr = invoke_cli(
+                            ["smoke", "--workspace", str(root)]
+                        )
+
+                    self.assertEqual(exit_code, expected_code)
+                    self.assertEqual(stderr, "")
+                    self.assertEqual(len(stdout.splitlines()), 1)
+                    decoded = json.loads(stdout)
+                    self.assertEqual(decoded["status"], status)
+                    self.assertEqual(
+                        stdout,
+                        json.dumps(
+                            decoded,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                            sort_keys=True,
+                        )
+                        + "\n",
+                    )
+                    run_smoke.assert_called_once_with(initialized[0])
+                    resolve_workspace.assert_not_called()
+                    self.assertFalse(
+                        root.joinpath(DEBUG_LOG_RELATIVE_PATH).exists()
+                    )
+
+    def test_explicit_ordinary_failure_survives_workspace_replacement(self) -> None:
+        """Keep the established status-two error and fixed diagnostic hint."""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "workspace"
+
+            def fail_after_replacement(workspace: Workspace) -> None:
+                bound_root = workspace.root
+                bound_root.rename(bound_root.with_name("workspace-parked"))
+                bound_root.mkdir()
+                raise RuntimeError("PRIVATE_REPLACED_SMOKE_FAILURE")
+
+            with mock.patch.object(
+                smoke_module,
+                "run_smoke",
+                side_effect=fail_after_replacement,
+            ):
+                exit_code, stdout, stderr = invoke_cli(
+                    ["smoke", "--workspace", str(root)]
+                )
+
+            self.assertEqual(exit_code, 2)
+            self.assertEqual(stdout, "")
+            self.assertEqual(
+                stderr,
+                "RuntimeError: PRIVATE_REPLACED_SMOKE_FAILURE\n"
+                "Debug log (if available, workspace-relative): "
+                "debug_logs/runtime.jsonl\n",
+            )
+            self.assertFalse(root.joinpath(DEBUG_LOG_RELATIVE_PATH).exists())
+
+    def test_diagnostic_handle_controls_are_application_inert(self) -> None:
+        """Suppress CLI and smoke logger acquisition process controls."""
+
+        for control_type, status, expected_code in (
+            (KeyboardInterrupt, "passed", 0),
+            (SystemExit, "failed", 1),
+        ):
+            with self.subTest(boundary="cli", status=status):
+                with tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary) / "workspace"
+
+                    def stub_smoke(
+                        workspace: Workspace,
+                    ) -> tuple[dict[str, object], int]:
+                        return (
+                            smoke_boundary_report(workspace, status=status),
+                            expected_code,
+                        )
+
+                    with (
+                        mock.patch.object(
+                            cli_module,
+                            "WorkspaceDebugLog",
+                            side_effect=control_type("cli logger acquisition"),
+                        ) as logger,
+                        mock.patch.object(
+                            smoke_module,
+                            "run_smoke",
+                            side_effect=stub_smoke,
+                        ),
+                    ):
+                        exit_code, stdout, stderr = invoke_cli(
+                            ["smoke", "--workspace", str(root)]
+                        )
+
+                    self.assertEqual(exit_code, expected_code)
+                    self.assertEqual(stderr, "")
+                    self.assertEqual(json.loads(stdout)["status"], status)
+                    logger.assert_called_once()
+
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = initialize_workspace(Path(temporary) / "workspace")
+            with mock.patch.object(
+                smoke_module,
+                "WorkspaceDebugLog",
+                side_effect=KeyboardInterrupt("smoke logger acquisition"),
+            ) as logger:
+                report, exit_code = smoke_module.run_smoke(workspace)
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(report["status"], "passed")
+            logger.assert_called_once_with(workspace)
+
+        for failure in (
+            smoke_module._SmokeInvariantError("workspace_initialized"),
+            RuntimeError("PRIVATE_SMOKE_ACQUISITION_FAILURE"),
+        ):
+            with self.subTest(boundary="smoke", failure=type(failure).__name__):
+                with tempfile.TemporaryDirectory() as temporary:
+                    workspace = initialize_workspace(
+                        Path(temporary) / "workspace"
+                    )
+                    with (
+                        mock.patch.object(
+                            smoke_module,
+                            "WorkspaceDebugLog",
+                            side_effect=SystemExit(
+                                "smoke logger acquisition"
+                            ),
+                        ),
+                        mock.patch.object(
+                            smoke_module,
+                            "_verify_workspace_initialized",
+                            side_effect=failure,
+                        ),
+                    ):
+                        if isinstance(failure, smoke_module._SmokeInvariantError):
+                            report, exit_code = smoke_module.run_smoke(workspace)
+                            self.assertEqual(exit_code, 1)
+                            self.assertEqual(report["status"], "failed")
+                        else:
+                            with self.assertRaises(RuntimeError) as raised:
+                                smoke_module.run_smoke(workspace)
+                            self.assertIs(raised.exception, failure)
+
+    def test_cli_logger_acquisition_control_does_not_replace_ordinary_failure(
+        self,
+    ) -> None:
+        """Retain status two and its hint without an acquired CLI logger."""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "workspace"
+            failure = RuntimeError("PRIVATE_CLI_ACQUISITION_FAILURE")
+            with (
+                mock.patch.object(
+                    cli_module,
+                    "WorkspaceDebugLog",
+                    side_effect=KeyboardInterrupt("cli logger acquisition"),
+                ),
+                mock.patch.object(
+                    smoke_module,
+                    "run_smoke",
+                    side_effect=failure,
+                ),
+            ):
+                exit_code, stdout, stderr = invoke_cli(
+                    ["smoke", "--workspace", str(root)]
+                )
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(stdout, "")
+        self.assertEqual(
+            stderr,
+            "RuntimeError: PRIVATE_CLI_ACQUISITION_FAILURE\n"
+            "Debug log (if available, workspace-relative): "
+            "debug_logs/runtime.jsonl\n",
+        )
+
+    def test_diagnostic_submission_controls_do_not_replace_ordinary_failure(
+        self,
+    ) -> None:
+        """Suppress smoke and CLI error-writer process controls."""
+
+        for control in (
+            KeyboardInterrupt("diagnostic submission"),
+            SystemExit("diagnostic submission"),
+        ):
+            with self.subTest(control=type(control).__name__):
+                with tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary) / "workspace"
+                    failure = RuntimeError("PRIVATE_SMOKE_FAILURE")
+                    with (
+                        mock.patch.object(
+                            smoke_module,
+                            "_verify_workspace_initialized",
+                            side_effect=failure,
+                        ),
+                        mock.patch.object(
+                            WorkspaceDebugLog,
+                            "error",
+                            side_effect=control,
+                        ) as error,
+                    ):
+                        exit_code, stdout, stderr = invoke_cli(
+                            ["smoke", "--workspace", str(root)]
+                        )
+
+                    self.assertEqual(exit_code, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertEqual(
+                        stderr,
+                        "RuntimeError: PRIVATE_SMOKE_FAILURE\n"
+                        "Debug log (if available, workspace-relative): "
+                        "debug_logs/runtime.jsonl\n",
+                    )
+                    self.assertGreaterEqual(error.call_count, 2)
+
+    def test_implicit_smoke_never_acquires_a_cli_logger_or_workspace(self) -> None:
+        """Keep temporary workspace ownership wholly inside smoke."""
+
+        implicit_roots: list[Path] = []
+        real_initialize = smoke_module.initialize_workspace
+
+        def record_initialize(path: Path) -> Workspace:
+            workspace = real_initialize(path)
+            implicit_roots.append(workspace.root)
+            return workspace
+
+        with (
+            mock.patch.object(
+                smoke_module,
+                "initialize_workspace",
+                side_effect=record_initialize,
+            ),
+            mock.patch.object(cli_module, "_create_cli_debug_log") as logger,
+            mock.patch.object(cli_module, "resolve_workspace") as resolve,
+        ):
+            exit_code, stdout, stderr = invoke_cli(["smoke"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr, "")
+        self.assertEqual(json.loads(stdout)["status"], "passed")
+        logger.assert_not_called()
+        resolve.assert_not_called()
+        self.assertEqual(len(implicit_roots), 1)
+        self.assertFalse(implicit_roots[0].exists())
+
+    def test_genuine_smoke_process_controls_preserve_object_and_traceback(
+        self,
+    ) -> None:
+        """Propagate genuine controls with their exact injected traceback tail."""
+
+        for control in (
+            KeyboardInterrupt("genuine smoke interrupt"),
+            SystemExit("genuine smoke exit"),
+        ):
+            with self.subTest(control=type(control).__name__):
+                injected_tracebacks: list[object] = []
+
+                def inject_control(_workspace: Workspace) -> None:
+                    try:
+                        raise control
+                    except BaseException as raised:
+                        injected_tracebacks.append(raised.__traceback__)
+                        raise
+
+                with tempfile.TemporaryDirectory() as temporary:
+                    workspace = initialize_workspace(
+                        Path(temporary) / "workspace"
+                    )
+                    with mock.patch.object(
+                        smoke_module,
+                        "_verify_workspace_initialized",
+                        side_effect=inject_control,
+                    ):
+                        try:
+                            smoke_module.run_smoke(workspace)
+                        except BaseException as raised:
+                            self.assertIs(raised, control)
+                            self.assertEqual(len(injected_tracebacks), 1)
+                            self.assertTrue(
+                                traceback_contains(
+                                    raised.__traceback__,
+                                    injected_tracebacks[0],
+                                )
+                            )
+                        else:
+                            self.fail("genuine smoke control did not propagate")
+
     def test_malformed_existing_config_uses_existing_cli_error_contract(
         self,
     ) -> None:
@@ -903,6 +1811,90 @@ class SmokeFailureTests(unittest.TestCase):
         self.assertTrue(stderr.startswith("WorkspaceFormatError: "))
         self.assertIn("config/system_defaults.json", stderr)
         self.assertTrue(stderr.endswith("\n"))
+
+    def test_explicit_initialization_failure_is_hint_free(self) -> None:
+        """Do not advertise a workspace log before initialization succeeds."""
+
+        failure = RuntimeError("PRIVATE_INITIALIZATION_FAILURE")
+        with mock.patch.object(
+            cli_module,
+            "initialize_workspace",
+            side_effect=failure,
+        ):
+            exit_code, stdout, stderr = invoke_cli(
+                ["smoke", "--workspace", "uninitialized-workspace"]
+            )
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(stdout, "")
+        self.assertEqual(
+            stderr,
+            "RuntimeError: PRIVATE_INITIALIZATION_FAILURE\n",
+        )
+        self.assertNotIn("debug_logs/runtime.jsonl", stderr)
+
+    def test_explicit_and_implicit_propagated_failures_keep_boundary_contracts(
+        self,
+    ) -> None:
+        """Expose a fixed hint only when smoke has retained a usable workspace."""
+
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        workspace = initialize_workspace(Path(temporary.name) / "workspace")
+        explicit_failure = RuntimeError("PRIVATE_EXPLICIT_SMOKE_FAILURE")
+        with mock.patch.object(
+            smoke_module,
+            "_verify_workspace_initialized",
+            side_effect=explicit_failure,
+        ):
+            exit_code, stdout, stderr = invoke_cli(
+                ["smoke", "--workspace", str(workspace.root)]
+            )
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(stdout, "")
+        self.assertEqual(
+            stderr,
+            "RuntimeError: PRIVATE_EXPLICIT_SMOKE_FAILURE\n"
+            "Debug log (if available, workspace-relative): "
+            "debug_logs/runtime.jsonl\n",
+        )
+        raw_debug_log = workspace.path(DEBUG_LOG_RELATIVE_PATH).read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("PRIVATE_EXPLICIT_SMOKE_FAILURE", raw_debug_log)
+
+        implicit_roots: list[Path] = []
+        real_initialize = smoke_module.initialize_workspace
+
+        def record_implicit_workspace(path: Path) -> Workspace:
+            initialized = real_initialize(path)
+            implicit_roots.append(initialized.root)
+            return initialized
+
+        with (
+            mock.patch.object(
+                smoke_module,
+                "initialize_workspace",
+                side_effect=record_implicit_workspace,
+            ),
+            mock.patch.object(
+                smoke_module,
+                "_verify_workspace_initialized",
+                side_effect=RuntimeError("PRIVATE_IMPLICIT_SMOKE_FAILURE"),
+            ),
+        ):
+            exit_code, stdout, stderr = invoke_cli(["smoke"])
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(stdout, "")
+        self.assertEqual(
+            stderr,
+            "RuntimeError: PRIVATE_IMPLICIT_SMOKE_FAILURE\n",
+        )
+        self.assertNotIn("debug_logs/runtime.jsonl", stderr)
+        self.assertEqual(len(implicit_roots), 1)
+        self.assertFalse(implicit_roots[0].exists())
 
     def test_invariant_failure_is_compact_failed_json_with_code_one(self) -> None:
         """Preserve the post-debate invariant report and code-one contract."""
@@ -942,6 +1934,145 @@ class SmokeFailureTests(unittest.TestCase):
         self.assertEqual(report["checks"], EXPECTED_CHECKS[:8])
         self.assertIs(report["provider_tested"], False)
         self.assertEqual(report["debate_status"], "consensus")
+        workspace = Workspace(workspace_path)
+        raw_debug_log = workspace.path(DEBUG_LOG_RELATIVE_PATH).read_text(
+            encoding="utf-8"
+        )
+        records = [
+            json.loads(line) for line in raw_debug_log.splitlines()
+        ]
+        cli_records = [
+            record
+            for record in records
+            if record["component"] == "cli"
+            and record["operation"] == "cli_command"
+        ]
+        self.assertEqual(len(cli_records), 1)
+        self.assertEqual(
+            {
+                key: value
+                for key, value in cli_records[0].items()
+                if key != "timestamp"
+            },
+            {
+                "schema_version": 1,
+                "level": "trace",
+                "component": "cli",
+                "operation": "cli_command",
+                "phase": "failed",
+                "outcome": "failed",
+            },
+        )
+        self.assertFalse(
+            any(
+                record["phase"] == "succeeded"
+                and record.get("outcome") == "failed"
+                for record in cli_records
+            )
+        )
+        smoke_records = [
+            record
+            for record in records
+            if record["component"] == "smoke"
+            and record["operation"] == "cli_command"
+        ]
+        self.assertEqual(len(smoke_records), 2)
+        self.assertEqual(
+            {
+                key: value
+                for key, value in smoke_records[0].items()
+                if key != "timestamp"
+            },
+            {
+                "schema_version": 1,
+                "level": "trace",
+                "component": "smoke",
+                "operation": "cli_command",
+                "phase": "started",
+                "session_id": report["session_id"],
+                "debate_id": report["debate_id"],
+            },
+        )
+        smoke_exception = smoke_records[1]["exception"]
+        self.assertIs(type(smoke_exception), dict)
+        self.assertEqual(
+            {
+                key: value
+                for key, value in smoke_records[1].items()
+                if key not in {"timestamp", "exception"}
+            },
+            {
+                "schema_version": 1,
+                "level": "error",
+                "component": "smoke",
+                "operation": "cli_command",
+                "phase": "failed",
+                "session_id": report["session_id"],
+                "debate_id": report["debate_id"],
+                "outcome": "failed",
+            },
+        )
+        self.assertEqual(
+            set(smoke_exception),  # type: ignore[arg-type]
+            {"type", "frames", "frames_truncated"},
+        )
+        self.assertTrue(
+            str(smoke_exception["type"]).endswith(  # type: ignore[index]
+                "._SmokeInvariantError"
+            )
+        )
+
+    def test_trace_failure_preserves_invariant_report_and_code_one(self) -> None:
+        """Keep a named smoke failure independent of every trace sink."""
+
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        workspace_path = Path(temporary.name) / "workspace"
+        trace_marker = "PRIVATE_SMOKE_TRACE_SINK"
+
+        with (
+            mock.patch.object(
+                smoke_module,
+                "_verify_revision_workflow",
+                side_effect=smoke_module._SmokeInvariantError(
+                    "revision_workflow"
+                ),
+            ),
+            mock.patch.object(
+                WorkspaceDebugLog,
+                "trace",
+                side_effect=SystemExit(trace_marker),
+            ) as trace,
+        ):
+            exit_code, stdout, stderr = invoke_cli(
+                ["smoke", "--workspace", str(workspace_path)]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(stderr, "")
+        self.assertEqual(len(stdout.splitlines()), 1)
+        report = json.loads(stdout)
+        self.assertEqual(
+            stdout,
+            json.dumps(
+                report,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+            + "\n",
+        )
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(report["failed_check"], "revision_workflow")
+        self.assertEqual(report["checks"], EXPECTED_CHECKS[:8])
+        self.assertIs(report["provider_tested"], False)
+        self.assertEqual(report["debate_status"], "consensus")
+        self.assertGreater(trace.call_count, 0)
+        raw_debug_log = Workspace(workspace_path).path(
+            DEBUG_LOG_RELATIVE_PATH
+        ).read_text(encoding="utf-8")
+        self.assertNotIn(trace_marker, raw_debug_log)
+        self.assertNotIn(str(workspace_path), raw_debug_log)
 
     def test_predebate_invariant_failure_removes_temporary_workspace(self) -> None:
         """Report a named pre-debate failure and remove all temporary artifacts."""

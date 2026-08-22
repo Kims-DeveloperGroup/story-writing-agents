@@ -30,6 +30,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 | Run consensus with included, fresh, or draft-file input | Focused active shell conversation; noninteractive CLI and Python API remain available |
 | Cancel active advisory/consensus work or partial local rendering | Installed shell; process-level PTY verified on supported POSIX. [Delivery and platform scope](operations/recovery-and-limitations.md#posix-pty-boundary) |
 | Show one focused transcript snapshot and context accounting | Attached shell `/history`; active focus required |
+| Locate bounded runtime diagnostics and exact failure hints | Workspace `debug_logs/runtime.jsonl`; [CLI output](reference/cli.md#runtime-debug-logs) and [privacy boundary](operations/privacy-and-provider.md#workspace-debug-log-privacy) |
 | Standalone artifact commands | Not implemented in the shell |
 
 ## Start and concepts
@@ -81,6 +82,6 @@ Use this index to find one canonical answer instead of searching a long manual.
 ## Operations
 
 - [Filesystem safety](operations/filesystem-safety.md)
-- [Privacy and provider exposure](operations/privacy-and-provider.md)
+- [Privacy, provider exposure, and runtime debug logs](operations/privacy-and-provider.md)
 - [Terminal display safety](operations/terminal-safety.md)
 - [Recovery and limitations](operations/recovery-and-limitations.md)
