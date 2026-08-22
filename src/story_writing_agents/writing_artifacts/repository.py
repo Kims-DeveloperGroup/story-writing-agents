@@ -1665,7 +1665,7 @@ class _RepositoryReferenceReadInvocation:
         with self._lock:
             if self._state != "authorized":
                 self._terminate_without_replacing(
-                    ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH
+                    ReferenceAuthorizationErrorCode.INVALID_TRANSITION
                 )
                 raise ReferenceAuthorizationError(
                     ReferenceAuthorizationErrorCode.INVALID_TRANSITION
