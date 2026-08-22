@@ -294,6 +294,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   construction, headless capability check, NDJSON stream validation, and
   provider conversation-ID protocol. Binding writes deterministic rules beneath
   `agent_states/orchestrator_state/provider_sessions/.antigravity/definitions/<agent>/<fingerprint>/AGENTS.md`.
+  Before definition writes or provider launch, the adapter sequentially
+  prepares its owned `state_root`, definitions chain, sessions/runtime chain,
+  and provider/workspace directories. On supported systems it best-effort
+  requests owner-only directory modes and rejects detected links or
+  non-directories in those chains. It does not harden the backend-owned
+  containing parent, provider-created files, or capability-probe scratch.
+  Provider-native retention remains unchanged, and this hardening does not
+  claim application access control or descriptor-anchored, race-proof
+  containment.
   Invocation serializes its output schema, payload, and NDJSON stdin event
   before creating any new per-session runtime tree; encoding failure therefore
   creates no new provider or workspace directory. After serialization, it
