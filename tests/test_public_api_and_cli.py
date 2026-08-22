@@ -218,7 +218,7 @@ class PublicApiTests(unittest.TestCase):
                     issubclass(getattr(story_writing_agents, name), base_error)
                 )
 
-    def test_agent_backend_signature_and_configuration_exports_are_unchanged(
+    def test_agent_backend_signature_and_configuration_exports_are_exact(
         self,
     ) -> None:
         signature = inspect.signature(story_writing_agents.AgentBackend)
@@ -230,6 +230,9 @@ class PublicApiTests(unittest.TestCase):
                 "model",
                 "timeout_seconds",
                 "backend_overrides",
+                "antigravity_executable",
+                "antigravity_model",
+                "antigravity_effort",
             ),
         )
         self.assertIs(
@@ -241,6 +244,9 @@ class PublicApiTests(unittest.TestCase):
             "model",
             "timeout_seconds",
             "backend_overrides",
+            "antigravity_executable",
+            "antigravity_model",
+            "antigravity_effort",
         ):
             with self.subTest(parameter=name):
                 self.assertIs(
@@ -251,6 +257,12 @@ class PublicApiTests(unittest.TestCase):
         self.assertIsNone(signature.parameters["model"].default)
         self.assertEqual(signature.parameters["timeout_seconds"].default, 300)
         self.assertIsNone(signature.parameters["backend_overrides"].default)
+        self.assertEqual(
+            signature.parameters["antigravity_executable"].default,
+            "agy",
+        )
+        self.assertIsNone(signature.parameters["antigravity_model"].default)
+        self.assertIsNone(signature.parameters["antigravity_effort"].default)
         for internal in ("ConfigManager", "SystemDefaults"):
             with self.subTest(internal=internal):
                 self.assertNotIn(internal, story_writing_agents.__all__)
