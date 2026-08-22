@@ -1108,6 +1108,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         ).encode("utf-8")
         keyboard_interrupt = KeyboardInterrupt("PRIVATE_ACTIVE_INTERRUPT")
         system_exit = SystemExit("PRIVATE_ACTIVE_EXIT")
+        cancellation = asyncio.CancelledError("PRIVATE_ACTIVE_CANCELLATION")
         cases = (
             (
                 "success",
@@ -1126,6 +1127,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             ),
             ("keyboard interrupt", keyboard_interrupt, None),
             ("system exit", system_exit, None),
+            ("cancellation", cancellation, None),
         )
         behavior: object = None
 
@@ -1165,7 +1167,10 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                     "story_writing_agents.antigravity_adapter.shutil.rmtree",
                     side_effect=cleanup_failure,
                 ) as cleanup:
-                    if isinstance(behavior, (KeyboardInterrupt, SystemExit)):
+                    if isinstance(
+                        behavior,
+                        (KeyboardInterrupt, SystemExit, asyncio.CancelledError),
+                    ):
                         with self.assertRaises(type(behavior)) as caught:
                             adapter.headless_capabilities_available()
                         self.assertIs(caught.exception, behavior)
@@ -1176,6 +1181,42 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                         )
                 cleanup.assert_called_once_with(probe, ignore_errors=True)
                 self.assertTrue(probe.is_dir())
+
+    def test_capability_cleanup_process_control_propagates_exactly(self) -> None:
+        full_help = " ".join(_REQUIRED_HEADLESS_FLAGS).encode("utf-8")
+        failures = (
+            KeyboardInterrupt("PRIVATE_CLEANUP_INTERRUPT"),
+            SystemExit("PRIVATE_CLEANUP_EXIT"),
+            asyncio.CancelledError("PRIVATE_CLEANUP_CANCELLATION"),
+        )
+        for failure in failures:
+            with self.subTest(exception=type(failure).__name__):
+                capability_run = mock.Mock(
+                    return_value=subprocess.CompletedProcess(
+                        [],
+                        0,
+                        stdout=full_help,
+                        stderr=b"",
+                    )
+                )
+                adapter = self.adapter(
+                    f"cleanup-control-{type(failure).__name__.lower()}",
+                    which=mock.Mock(return_value="/private/fake-agy"),
+                    capability_run=capability_run,
+                )
+                probe = adapter.state_root / "capability-probe"
+                with (
+                    mock.patch(
+                        "story_writing_agents.antigravity_adapter.shutil.rmtree",
+                        side_effect=failure,
+                    ) as cleanup,
+                    self.assertRaises(type(failure)) as caught,
+                ):
+                    adapter.headless_capabilities_available()
+
+                self.assertIs(caught.exception, failure)
+                capability_run.assert_called_once()
+                cleanup.assert_called_once_with(probe, ignore_errors=True)
 
 
 if __name__ == "__main__":
