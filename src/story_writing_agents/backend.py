@@ -1103,7 +1103,7 @@ class AgentBackend:
         try:
             try:
                 reply = decode(result.response_text)
-            except (BackendProtocolError, json.JSONDecodeError, UnicodeError):
+            except BackendProtocolError:
                 if stored is not None:
                     self._taint_thread(session, bound_agent.definition)
                 raise
