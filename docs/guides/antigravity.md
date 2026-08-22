@@ -13,10 +13,18 @@ continuing uncertain provider history.
 
 Follow the vendor's current
 [Installation & auth guide](https://antigravity.google/docs/cli/install/). On
-macOS or Linux, its installer is:
+macOS or Linux, download the installer to a temporary local file, inspect that
+exact file, and then execute it:
 
 ```bash
-curl -fsSL https://antigravity.google/cli/install.sh | bash
+(
+  set -eu
+  agy_installer="$(mktemp "${TMPDIR:-/tmp}/antigravity-install.XXXXXX")"
+  trap 'rm -f "$agy_installer"' EXIT
+  curl -fsSL https://antigravity.google/cli/install.sh -o "$agy_installer"
+  less "$agy_installer"
+  bash "$agy_installer"
+)
 ```
 
 The default executable path is `$HOME/.local/bin/agy`. If it is not already on
