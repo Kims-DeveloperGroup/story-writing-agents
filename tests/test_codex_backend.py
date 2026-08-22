@@ -80,7 +80,10 @@ from story_writing_agents.errors import (
 )
 from story_writing_agents.prompts import PromptAssembler
 from story_writing_agents.orchestrator import StoryRuntime
-from story_writing_agents.provider_adapter import ProviderResult
+from story_writing_agents.provider_adapter import (
+    ProviderInvocationError,
+    ProviderResult,
+)
 from story_writing_agents.provider_process import ProcessRequest, run_process
 
 from tests.helpers import all_manuscripts, core_snapshot, initialized_workspace
@@ -2183,6 +2186,86 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                         "Codex CLI returned malformed structured output",
                     )
                     self.assertIs(caught.exception.__cause__, failure)
+
+    async def test_provider_invocation_error_preserves_adapter_cause_and_taint(
+        self,
+    ) -> None:
+        session_id = "provider_error_chain_session"
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        backend.create_session_with_access(session_id)
+        definition = self.definition()
+        bound = await backend.bind(definition)
+        unchained = ProviderInvocationError(
+            "safe unchained provider failure",
+            taint_existing_thread=False,
+        )
+        underlying = OSError("underlying provider failure")
+        chained = ProviderInvocationError(
+            "safe chained provider failure",
+            taint_existing_thread=True,
+        )
+        chained.__cause__ = underlying
+        cases = (
+            ("unchained", unchained, None, False),
+            ("chained", chained, underlying, True),
+        )
+
+        for index, (label, provider_error, expected_cause, should_taint) in enumerate(
+            cases
+        ):
+            with self.subTest(error=label):
+                thread_id = f"provider-error-thread-{index}"
+                backend._store_thread(
+                    session_id,
+                    definition,
+                    thread_id,
+                    tainted=False,
+                )
+                invoke = mock.AsyncMock(side_effect=provider_error)
+                decode = mock.Mock()
+                with (
+                    mock.patch.object(backend._codex_adapter, "invoke", invoke),
+                    mock.patch.object(
+                        backend,
+                        "_taint_thread",
+                        wraps=backend._taint_thread,
+                    ) as taint,
+                    mock.patch.object(
+                        backend,
+                        "_write_manifest",
+                        wraps=backend._write_manifest,
+                    ) as write_manifest,
+                    mock.patch.object(
+                        backend,
+                        "_store_thread",
+                        wraps=backend._store_thread,
+                    ) as store_thread,
+                ):
+                    with self.assertRaises(BackendProtocolError) as caught:
+                        await backend._invoke_provider_structured(
+                            bound,
+                            session_id=session_id,
+                            schema={},
+                            payload={},
+                            decode=decode,
+                        )
+
+                self.assertIs(type(caught.exception), BackendProtocolError)
+                self.assertEqual(str(caught.exception), provider_error.diagnostic)
+                self.assertIs(caught.exception.__cause__, expected_cause)
+                self.assertIsNot(caught.exception.__cause__, provider_error)
+                self.assertIsNone(caught.exception.__context__)
+                invoke.assert_awaited_once()
+                decode.assert_not_called()
+                store_thread.assert_not_called()
+                self.assertIs(self.thread(session_id)["tainted"], should_taint)
+                if should_taint:
+                    taint.assert_called_once_with(session_id, definition)
+                    write_manifest.assert_called_once()
+                else:
+                    taint.assert_not_called()
+                    write_manifest.assert_not_called()
 
     async def test_conversation_provider_failures_taint_without_story_mutation(
         self,
