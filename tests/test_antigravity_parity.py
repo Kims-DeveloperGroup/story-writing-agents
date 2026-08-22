@@ -9,6 +9,7 @@ import os
 import signal
 import sys
 import tempfile
+import time
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -51,6 +52,12 @@ from story_writing_agents.prompts import PromptAssembler
 from story_writing_agents.provider_adapter import ProviderResult
 
 from tests.helpers import initialized_workspace
+
+
+_PROCESS_EXIT_HANDSHAKE_SECONDS = 2.0
+_PROCESS_TERMINATE_GRACE_SECONDS = 0.5
+_PROCESS_KILL_GRACE_SECONDS = 1.0
+_PROCESS_POLL_INTERVAL_SECONDS = 0.01
 
 
 _FAKE_AGY = r"""#!/usr/bin/env python3
@@ -573,11 +580,13 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self.environment.stop)
 
     def definition(self, agent_id: str = PLOT_ARCHITECT, *, backend: str = "antigravity"):
-        definition = PromptAssembler(self.workspace).build_definition(
+        return PromptAssembler(
+            self.workspace,
+            backend_overrides={agent_id: backend},
+        ).build_definition(
             session_id="definition-session",
             agent_id=agent_id,
         )
-        return replace(definition, backend=backend)
 
     def backend(self, *, timeout_seconds: float = 4) -> AgentBackend:
         backend = AgentBackend(
@@ -683,16 +692,94 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             return True
         return True
 
-    def assert_fake_process_stopped(self, pid: int) -> None:
-        """Fail on an orphan after first performing emergency cleanup."""
+    @classmethod
+    def _wait_for_process_exit(
+        cls,
+        pid: int,
+        *,
+        timeout_seconds: float,
+    ) -> bool:
+        """Poll one exact PID for a bounded process-cleanup handshake."""
 
-        if not self._process_is_running(pid):
+        deadline = time.monotonic() + timeout_seconds
+        while cls._process_is_running(pid):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            time.sleep(min(_PROCESS_POLL_INTERVAL_SECONDS, remaining))
+        return True
+
+    @staticmethod
+    def _hard_kill_process(pid: int) -> None:
+        """Force-stop one exact PID using the platform's hard-kill primitive."""
+
+        if os.name != "nt":
+            os.kill(pid, signal.SIGKILL)
+            return
+
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = (
+            wintypes.DWORD,
+            wintypes.BOOL,
+            wintypes.DWORD,
+        )
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.TerminateProcess.argtypes = (
+            wintypes.HANDLE,
+            wintypes.UINT,
+        )
+        kernel32.TerminateProcess.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        handle = kernel32.OpenProcess(0x0001, False, pid)
+        if not handle:
+            error = ctypes.get_last_error()
+            if error == 87:
+                return
+            raise OSError(error, "cannot open fake Antigravity process to kill")
+        try:
+            if not kernel32.TerminateProcess(handle, 137):
+                error = ctypes.get_last_error()
+                if error != 5:
+                    raise OSError(error, "cannot kill fake Antigravity process")
+        finally:
+            kernel32.CloseHandle(handle)
+
+    def assert_fake_process_stopped(self, pid: int) -> None:
+        """Allow bounded launcher cleanup, then fail after reaping an orphan."""
+
+        if self._wait_for_process_exit(
+            pid,
+            timeout_seconds=_PROCESS_EXIT_HANDSHAKE_SECONDS,
+        ):
             return
         try:
             os.kill(pid, signal.SIGTERM)
         except OSError:
             pass
-        self.fail(f"fake Antigravity process remained active: {pid}")
+        if not self._wait_for_process_exit(
+            pid,
+            timeout_seconds=_PROCESS_TERMINATE_GRACE_SECONDS,
+        ):
+            try:
+                self._hard_kill_process(pid)
+            except OSError:
+                pass
+            if not self._wait_for_process_exit(
+                pid,
+                timeout_seconds=_PROCESS_KILL_GRACE_SECONDS,
+            ):
+                self.fail(
+                    "fake Antigravity process remained active after emergency "
+                    f"hard-kill cleanup: {pid}"
+                )
+        self.fail(
+            "fake Antigravity process exceeded the 2-second cleanup handshake: "
+            f"{pid}"
+        )
 
     def test_invocation_reader_ignores_incomplete_trailing_utf8_record(self) -> None:
         complete = b'{"record":1}\n'
@@ -713,6 +800,52 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             self.invocations(),
             [{"record": 1}, {"record": "한"}],
         )
+
+    def test_process_exit_handshake_is_bounded_and_hard_kill_is_strict(
+        self,
+    ) -> None:
+        with (
+            mock.patch.object(
+                type(self),
+                "_process_is_running",
+                side_effect=(True, True, False),
+            ) as is_running,
+            mock.patch.object(time, "sleep") as sleep,
+        ):
+            self.assertTrue(
+                self._wait_for_process_exit(123, timeout_seconds=1)
+            )
+        self.assertEqual(is_running.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+
+        with (
+            mock.patch.object(
+                type(self),
+                "_process_is_running",
+                return_value=True,
+            ),
+            mock.patch.object(time, "monotonic", side_effect=(0.0, 1.0)),
+            mock.patch.object(time, "sleep") as sleep,
+        ):
+            self.assertFalse(
+                self._wait_for_process_exit(123, timeout_seconds=0.5)
+            )
+        sleep.assert_not_called()
+
+        with (
+            mock.patch.object(
+                self,
+                "_wait_for_process_exit",
+                side_effect=(False, False, True),
+            ) as wait_for_exit,
+            mock.patch.object(os, "kill") as terminate,
+            mock.patch.object(self, "_hard_kill_process") as hard_kill,
+            self.assertRaisesRegex(AssertionError, "2-second cleanup handshake"),
+        ):
+            self.assert_fake_process_stopped(123)
+        self.assertEqual(wait_for_exit.call_count, 3)
+        terminate.assert_called_once_with(123, signal.SIGTERM)
+        hard_kill.assert_called_once_with(123)
 
     def test_windows_cleanup_launcher_is_syntax_valid_and_selected_portably(
         self,
@@ -760,6 +893,8 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
 
         for phase in (Phase.DRAFT, Phase.PROPOSE_REVISION, Phase.SYNTHESIZE):
             self.assertEqual(phase_replies[phase].content, f"reply-{phase.value}")
+        for phase, reply in phase_replies.items():
+            self.assertEqual(reply.revision_id, f"r-{phase.value}")
         self.assertIs(phase_replies[Phase.AUDIT].verdict, Verdict.APPROVE)
         self.assertEqual(
             dict(phase_replies[Phase.FINALIZE].core_updates),
@@ -812,9 +947,26 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             all(item["resumed_id"] == thread_id for item in invocations[1:])
         )
+        phase_invocations = invocations[: len(Phase)]
         self.assertEqual(
-            [item["phase"] for item in invocations[: len(Phase)]],
-            [phase.value for phase in Phase],
+            [
+                (
+                    item["session_id"],
+                    item["agent_id"],
+                    item["phase"],
+                    item["revision_id"],
+                )
+                for item in phase_invocations
+            ],
+            [
+                (
+                    session_id,
+                    PLOT_ARCHITECT,
+                    phase.value,
+                    f"r-{phase.value}",
+                )
+                for phase in Phase
+            ],
         )
         self.assertEqual(
             [item["retrieval_action_index"] for item in invocations[-2:]],
@@ -1139,6 +1291,10 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             (SessionDurableState.READY, SessionAccessState.HELD_HERE),
         )
         plot = self.definition()
+        codex_plot = self.definition(backend="codex")
+        self.assertEqual(plot.backend, "antigravity")
+        self.assertEqual(codex_plot.backend, "codex")
+        self.assertNotEqual(plot.fingerprint, codex_plot.fingerprint)
         character = self.definition(CHARACTER_CUSTODIAN)
         plot_bound = await backend.bind(plot)
         character_bound = await backend.bind(character)
@@ -1286,16 +1442,18 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         backend = self.backend()
         backend.create_session_with_access(session_id)
         antigravity_bound = await backend.bind(self.definition())
-        codex_definition = self.definition(CHARACTER_CUSTODIAN, backend="codex")
+        codex_definition = self.definition(backend="codex")
         codex_bound = await backend.bind(codex_definition)
 
         entered = asyncio.Event()
         release = asyncio.Event()
         antigravity_calls = 0
+        antigravity_thread_ids: list[str | None] = []
 
         async def gated_antigravity(_binding, invocation):
             nonlocal antigravity_calls
             antigravity_calls += 1
+            antigravity_thread_ids.append(invocation.thread_id)
             if antigravity_calls == 1:
                 entered.set()
                 await release.wait()
@@ -1354,7 +1512,6 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                             session_id=session_id,
                             debate_id="codex-independent",
                             phase=Phase.DRAFT,
-                            agent_id=CHARACTER_CUSTODIAN,
                         )
                     )
                 )
@@ -1362,6 +1519,8 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 codex_reply = await asyncio.wait_for(codex, timeout=1)
                 self.assertEqual(codex_reply.content, "codex mixed reply")
                 codex_invoke.assert_awaited_once()
+                codex_invocation = codex_invoke.await_args.args[1]
+                self.assertIsNone(codex_invocation.thread_id)
                 self.assertEqual(antigravity_calls, 1)
             finally:
                 release.set()
@@ -1380,17 +1539,27 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first_reply.content, "antigravity mixed reply")
         self.assertEqual(second_reply.content, "antigravity mixed reply")
         self.assertEqual(antigravity_calls, 2)
+        self.assertEqual(antigravity_thread_ids, [None, "agy-mixed-thread"])
         manifest = self.manifest(session_id)
         self.assertEqual(
             set(manifest["provider_threads"]),
             {
                 "antigravity:plot_architect",
-                "codex:character_custodian",
+                "codex:plot_architect",
             },
+        )
+        self.assertEqual(
+            manifest["provider_threads"]["antigravity:plot_architect"]
+            ["thread_id"],
+            "agy-mixed-thread",
+        )
+        self.assertEqual(
+            manifest["provider_threads"]["codex:plot_architect"]["thread_id"],
+            "codex-mixed-thread",
         )
         self.assertNotEqual(
             backend._thread_lock(session_id, "antigravity", PLOT_ARCHITECT),
-            backend._thread_lock(session_id, "codex", CHARACTER_CUSTODIAN),
+            backend._thread_lock(session_id, "codex", PLOT_ARCHITECT),
         )
 
     def test_public_surface_and_provider_schema_remain_provider_neutral(self) -> None:
