@@ -2715,6 +2715,10 @@ def _require_pending_workspace_root_creation_operations() -> None:
         "unlink",
     }
     required_no_follow_operations = {"stat", "link"}
+    # CPython reports replace's shared dir-fd implementation under rename.
+    replace_supports_dir_fd = (
+        "replace" in dir_fd_operations or "rename" in dir_fd_operations
+    )
     if (
         any(not callable(getattr(os, name, None)) for name in required_operations)
         or not getattr(os, "O_DIRECTORY", 0)
@@ -2725,6 +2729,7 @@ def _require_pending_workspace_root_creation_operations() -> None:
         or not hasattr(os, "O_WRONLY")
         or not required_dir_fd_operations.issubset(dir_fd_operations)
         or not required_no_follow_operations.issubset(no_follow_operations)
+        or not replace_supports_dir_fd
     ):
         raise OSError(
             getattr(errno, "ENOTSUP", errno.ENOSYS),

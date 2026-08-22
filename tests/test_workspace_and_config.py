@@ -2074,65 +2074,63 @@ class WorkspaceTests(unittest.TestCase):
                 self.assertFalse(root.exists())
                 self.assert_terminal_initialize_has_no_io(workspace)
 
-    def test_pending_preflight_ignores_unused_rename_but_requires_link(
+    def test_pending_preflight_accepts_replace_dir_fd_compatibility_signals(
         self,
     ) -> None:
-        """Keep compatibility tied to descriptor operations the workflow uses."""
+        """Accept either replace signal and reject their joint absence."""
 
         reported = tuple(getattr(os, "supports_dir_fd", ()))
-        reported_names = {
-            getattr(operation, "__name__", None) for operation in reported
-        }
-        if "link" not in reported_names:
-            self.skipTest("required link dir_fd capability is unavailable")
-
-        without_rename = frozenset(
+        without_replace_signals = frozenset(
             operation
             for operation in reported
-            if getattr(operation, "__name__", None) != "rename"
+            if getattr(operation, "__name__", None) not in {"rename", "replace"}
         )
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary) / "rename_optional_workspace"
-            workspace = Workspace(root)
-            with mock.patch.object(
-                workspace_module.os,
-                "supports_dir_fd",
-                without_rename,
-            ):
-                self.assertIs(workspace.initialize(), workspace)
-            self.assertTrue(
-                workspace.path("config/system_defaults.json").is_file()
-            )
 
-        without_link = frozenset(
-            operation
-            for operation in reported
-            if getattr(operation, "__name__", None) != "link"
+        def rename(*_args: object, **_kwargs: object) -> NoReturn:
+            raise AssertionError("rename compatibility proxy was called")
+
+        def replace(*_args: object, **_kwargs: object) -> NoReturn:
+            raise AssertionError("replace capability proxy was called")
+
+        capability_cases = (
+            ("rename_proxy", without_replace_signals | {rename}, True),
+            ("neither_signal", without_replace_signals, False),
+            ("explicit_replace", without_replace_signals | {replace}, True),
         )
-        with tempfile.TemporaryDirectory() as temporary:
-            parent = Path(temporary)
-            root = parent / "link_required_workspace"
-            workspace = Workspace(root)
-            before = snapshot_directory_namespace(parent)
-            with (
-                mock.patch.object(
+        for label, reported_capabilities, succeeds in capability_cases:
+            with self.subTest(capability=label):
+                temporary = tempfile.TemporaryDirectory()
+                self.addCleanup(temporary.cleanup)
+                parent = Path(temporary.name)
+                root = parent / f"{label}_workspace"
+                workspace = Workspace(root)
+                before = snapshot_directory_namespace(parent)
+                with mock.patch.object(
                     workspace_module.os,
                     "supports_dir_fd",
-                    without_link,
-                ),
-                self.assertRaises(OSError) as raised,
-            ):
-                workspace.initialize()
-            self.assertEqual(
-                raised.exception.args,
-                (
-                    getattr(errno, "ENOTSUP", errno.ENOSYS),
-                    "safe pending workspace root creation is unsupported",
-                ),
-            )
-            self.assertEqual(snapshot_directory_namespace(parent), before)
-            self.assertFalse(root.exists())
-            self.assert_terminal_initialize_has_no_io(workspace)
+                    reported_capabilities,
+                ):
+                    if succeeds:
+                        self.assertIs(workspace.initialize(), workspace)
+                    else:
+                        with self.assertRaises(OSError) as raised:
+                            workspace.initialize()
+
+                if succeeds:
+                    self.assertTrue(
+                        workspace.path("config/system_defaults.json").is_file()
+                    )
+                else:
+                    self.assertEqual(
+                        raised.exception.args,
+                        (
+                            getattr(errno, "ENOTSUP", errno.ENOSYS),
+                            "safe pending workspace root creation is unsupported",
+                        ),
+                    )
+                    self.assertEqual(snapshot_directory_namespace(parent), before)
+                    self.assertFalse(root.exists())
+                    self.assert_terminal_initialize_has_no_io(workspace)
 
     def test_invalid_overwrite_option_is_pre_io_and_does_not_terminalize(self) -> None:
         """Validate the option before capability checks and permit a later success."""
