@@ -59,6 +59,7 @@ import os
 from pathlib import Path
 import signal
 import sys
+import threading
 
 argv = sys.argv[1:]
 if "--help" in argv:
@@ -204,11 +205,9 @@ if not resume_known:
     print("CONFIDENTIAL_UNKNOWN_CONVERSATION", file=sys.stderr)
     raise SystemExit(84)
 if mode == "hang":
-    while True:
-        signal.pause()
+    threading.Event().wait()
 if mode == "ignore_term":
-    while True:
-        signal.pause()
+    threading.Event().wait()
 
 if "operation" in payload and payload["operation"] == "conversation_retrieval":
     action_index = payload["retrieval"]["action_index"]
@@ -433,9 +432,11 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
     def invocations(self) -> list[dict[str, object]]:
         if not self.log_path.exists():
             return []
+        snapshot = self.log_path.read_bytes()
         return [
-            json.loads(line)
-            for line in self.log_path.read_text(encoding="utf-8").splitlines()
+            json.loads(record.decode("utf-8", errors="strict"))
+            for record in snapshot.split(b"\n")[:-1]
+            if record
         ]
 
     def provider_invocations(self) -> list[dict[str, object]]:
@@ -455,6 +456,82 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 return
             await asyncio.sleep(0.01)
         self.fail(f"fake Antigravity did not record {count} invocations")
+
+    @staticmethod
+    def _process_is_running(pid: int) -> bool:
+        """Return whether one exact PID is still active on this platform."""
+
+        if os.name == "nt":
+            import ctypes
+            from ctypes import wintypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.OpenProcess.argtypes = (
+                wintypes.DWORD,
+                wintypes.BOOL,
+                wintypes.DWORD,
+            )
+            kernel32.OpenProcess.restype = wintypes.HANDLE
+            kernel32.GetExitCodeProcess.argtypes = (
+                wintypes.HANDLE,
+                ctypes.POINTER(wintypes.DWORD),
+            )
+            kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+            kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+            kernel32.CloseHandle.restype = wintypes.BOOL
+            handle = kernel32.OpenProcess(0x1000, False, pid)
+            if not handle:
+                error = ctypes.get_last_error()
+                if error == 87:
+                    return False
+                if error == 5:
+                    return True
+                raise OSError(error, "cannot inspect fake Antigravity process")
+            try:
+                exit_code = wintypes.DWORD()
+                if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                    return False
+                return exit_code.value == 259
+            finally:
+                kernel32.CloseHandle(handle)
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+
+    def assert_fake_process_stopped(self, pid: int) -> None:
+        """Fail on an orphan after first performing emergency cleanup."""
+
+        if not self._process_is_running(pid):
+            return
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+        self.fail(f"fake Antigravity process remained active: {pid}")
+
+    def test_invocation_reader_ignores_incomplete_trailing_utf8_record(self) -> None:
+        complete = b'{"record":1}\n'
+        trailing = json.dumps(
+            {"record": "한"},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        multibyte = "한".encode("utf-8")
+        split_at = trailing.index(multibyte) + 1
+        self.log_path.write_bytes(complete + trailing[:split_at])
+
+        self.assertEqual(self.invocations(), [{"record": 1}])
+
+        with self.log_path.open("ab") as handle:
+            handle.write(trailing[split_at:] + b"\n")
+        self.assertEqual(
+            self.invocations(),
+            [{"record": 1}, {"record": "한"}],
+        )
 
     async def test_all_phases_direct_and_retrieval_conversation_are_correlated(
         self,
@@ -1478,12 +1555,9 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_cancellation_and_timeout_terminate_without_orphans(self) -> None:
-        if (
-            os.name == "nt"
-            or not hasattr(signal, "SIGTERM")
-            or not hasattr(signal, "pause")
-        ):
-            self.skipTest("POSIX signal process cleanup is unavailable")
+        posix_termination_marker = (
+            os.name != "nt" and hasattr(signal, "SIGTERM")
+        )
 
         for label in ("cancellation", "timeout"):
             with self.subTest(cleanup=label):
@@ -1556,15 +1630,18 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                             "Antigravity CLI timed out after 10 seconds",
                         )
 
-                termination = [
-                    item
-                    for item in self.invocations()
-                    if item.get("terminated") is True
-                ][-1]
-                pid = termination["pid"]
+                invocation = self.provider_invocations()[ready_count - 1]
+                pid = invocation["pid"]
                 assert isinstance(pid, int)
-                with self.assertRaises(ProcessLookupError):
-                    os.kill(pid, 0)
+                if posix_termination_marker:
+                    termination = [
+                        item
+                        for item in self.invocations()
+                        if item.get("terminated") is True
+                        and item.get("pid") == pid
+                    ]
+                    self.assertEqual(len(termination), 1)
+                self.assert_fake_process_stopped(pid)
                 tainted = self.manifest(session_id)["provider_threads"][
                     "antigravity:plot_architect"
                 ]
@@ -1589,7 +1666,6 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         if (
             os.name == "nt"
             or not hasattr(signal, "SIGTERM")
-            or not hasattr(signal, "pause")
         ):
             self.skipTest("POSIX signal process cleanup is unavailable")
 
@@ -1650,8 +1726,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         invocation = self.provider_invocations()[-1]
         pid = invocation["pid"]
         assert isinstance(pid, int)
-        with self.assertRaises(ProcessLookupError):
-            os.kill(pid, 0)
+        self.assert_fake_process_stopped(pid)
         self.assertFalse(
             any(
                 item.get("terminated") is True and item.get("pid") == pid
