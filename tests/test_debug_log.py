@@ -374,6 +374,69 @@ class _ControlledProcessLock:
         self._lock.release()
 
 
+class _AcquisitionBoundaryProcessLock:
+    """Control acquisition and cleanup around one real process lock."""
+
+    def __init__(
+        self,
+        *,
+        acquire_result: bool = True,
+        acquire_failure: BaseException | None = None,
+        release_failure: BaseException | None = None,
+        arm_post_acquire: Callable[[], None] | None = None,
+    ) -> None:
+        self._lock = threading.Lock()
+        self.acquire_result = acquire_result
+        self.acquire_failure = acquire_failure
+        self.release_failure = release_failure
+        self.arm_post_acquire = arm_post_acquire
+        self.acquire_attempts = 0
+        self.acquire_timeouts: list[float] = []
+        self.release_attempts = 0
+        self.acquire_traceback: TracebackType | None = None
+        self.release_traceback: TracebackType | None = None
+
+    def acquire(self, *, timeout: float) -> bool:
+        self.acquire_attempts += 1
+        self.acquire_timeouts.append(timeout)
+        if self.acquire_failure is not None:
+            try:
+                raise self.acquire_failure
+            except BaseException as caught:
+                self.acquire_traceback = caught.__traceback__
+                raise
+        if not self.acquire_result:
+            return False
+        acquired = self._lock.acquire(timeout=timeout)
+        if acquired and self.arm_post_acquire is not None:
+            self.arm_post_acquire()
+        return acquired
+
+    def release(self) -> None:
+        self.release_attempts += 1
+        self._lock.release()
+        if self.release_failure is not None and self.release_attempts == 1:
+            try:
+                raise self.release_failure
+            except BaseException as caught:
+                self.release_traceback = caught.__traceback__
+                raise
+
+    def locked(self) -> bool:
+        return self._lock.locked()
+
+    def hold_externally(self) -> None:
+        if not self._lock.acquire(blocking=False):
+            raise AssertionError("process lock was already held")
+
+    def release_external_hold(self) -> None:
+        self._lock.release()
+
+    def assert_reusable(self, test_case: unittest.TestCase) -> None:
+        test_case.assertTrue(self._lock.acquire(blocking=False))
+        self._lock.release()
+
+
 class _AttemptCleanupHarness:
     """Capture one real logging attempt and inject named cleanup failures."""
 
@@ -2360,6 +2423,225 @@ class DebugLogStorageTests(unittest.TestCase):
         self.assertTrue(persisted)
         self.assertEqual(len(persisted), len(set(persisted)))
         self.assertTrue(set(persisted).issubset(attempted))
+
+    def test_process_lock_nonownership_and_acquire_controls_do_not_release_or_store(
+        self,
+    ) -> None:
+        cases: tuple[tuple[str, BaseException | None], ...] = (
+            ("not_acquired", None),
+            ("keyboard_interrupt", KeyboardInterrupt("PRIVATE_ACQUIRE_CONTROL")),
+            ("system_exit", SystemExit("PRIVATE_ACQUIRE_CONTROL")),
+        )
+        storage_seams = (
+            "_prepare_debug_directory",
+            "_validate_existing_regular",
+            "_validate_existing_guard",
+            "_verify_debug_directory",
+            "_open_verified_regular_file",
+            "_acquire_advisory_lock",
+            "_append_under_guard",
+        )
+        for label, control in cases:
+            with self.subTest(label=label):
+                workspace = initialized_workspace(self)
+                log = WorkspaceDebugLog(workspace)
+                process_lock = _AcquisitionBoundaryProcessLock(
+                    acquire_result=False,
+                    acquire_failure=control,
+                )
+                process_lock.hold_externally()
+                holder = mock.Mock(lock=process_lock)
+
+                with mock.patch.object(
+                    debug_module,
+                    "_process_lock_for",
+                    return_value=holder,
+                ):
+                    with contextlib.ExitStack() as stack:
+                        storage = {
+                            seam: stack.enter_context(
+                                mock.patch.object(debug_module, seam)
+                            )
+                            for seam in storage_seams
+                        }
+                        close = stack.enter_context(
+                            mock.patch.object(debug_module.os, "close")
+                        )
+                        if control is None:
+                            _trace(log, session_id=f"dropped_{label}")
+                        else:
+                            caught, final_traceback = _capture_raised(
+                                self,
+                                type(control),
+                                lambda: _trace(
+                                    log,
+                                    session_id=f"dropped_{label}",
+                                ),
+                            )
+                            self.assertIs(caught, control)
+                            self.assertIsNone(control.__cause__)
+                            self.assertIsNone(control.__context__)
+                            assert process_lock.acquire_traceback is not None
+                            self.assertTrue(
+                                _traceback_contains(
+                                    final_traceback,
+                                    process_lock.acquire_traceback,
+                                )
+                            )
+
+                    for operation in (*storage.values(), close):
+                        operation.assert_not_called()
+                    self.assertEqual(process_lock.acquire_attempts, 1)
+                    self.assertEqual(
+                        process_lock.acquire_timeouts,
+                        [DEBUG_LOG_LOCK_TIMEOUT_SECONDS],
+                    )
+                    self.assertEqual(process_lock.release_attempts, 0)
+                    self.assertTrue(process_lock.locked())
+                    process_lock.release_external_hold()
+                    self.assertFalse(process_lock.locked())
+                    process_lock.assert_reusable(self)
+                    self.assertFalse(log.path.exists())
+
+                    process_lock.acquire_failure = None
+                    process_lock.acquire_result = True
+                    _trace(log, session_id=f"recovered_{label}")
+
+                self.assertEqual(process_lock.acquire_attempts, 2)
+                self.assertEqual(process_lock.release_attempts, 1)
+                process_lock.assert_reusable(self)
+                self.assertEqual(
+                    [record["session_id"] for record in _records(workspace)],
+                    [f"recovered_{label}"],
+                )
+
+    def test_first_post_acquire_controls_release_once_and_body_control_wins(
+        self,
+    ) -> None:
+        cases = (
+            (
+                KeyboardInterrupt("PRIVATE_POST_ACQUIRE_BODY"),
+                SystemExit("PRIVATE_PROCESS_LOCK_CLEANUP"),
+            ),
+            (
+                SystemExit("PRIVATE_POST_ACQUIRE_BODY"),
+                KeyboardInterrupt("PRIVATE_PROCESS_LOCK_CLEANUP"),
+            ),
+        )
+        storage_seams = (
+            "_prepare_debug_directory",
+            "_validate_existing_regular",
+            "_validate_existing_guard",
+            "_verify_debug_directory",
+            "_open_verified_regular_file",
+            "_acquire_advisory_lock",
+            "_append_under_guard",
+        )
+        for body, cleanup in cases:
+            with self.subTest(
+                body=type(body).__name__,
+                cleanup=type(cleanup).__name__,
+            ):
+                workspace = initialized_workspace(self)
+                log = WorkspaceDebugLog(workspace)
+                trace_state: dict[str, object] = {
+                    "armed": False,
+                    "injections": 0,
+                    "traceback": None,
+                }
+
+                def arm_post_acquire() -> None:
+                    trace_state["armed"] = True
+
+                def inject_at_first_append_line(
+                    frame: object,
+                    event: str,
+                    _argument: object,
+                ) -> object:
+                    if (
+                        trace_state["armed"]
+                        and getattr(frame, "f_code", None)
+                        is WorkspaceDebugLog._append.__code__
+                        and event == "line"
+                    ):
+                        trace_state["armed"] = False
+                        trace_state["injections"] = int(
+                            trace_state["injections"]
+                        ) + 1
+                        try:
+                            raise body
+                        except BaseException as caught:
+                            trace_state["traceback"] = caught.__traceback__
+                            raise
+                    return inject_at_first_append_line
+
+                process_lock = _AcquisitionBoundaryProcessLock(
+                    release_failure=cleanup,
+                    arm_post_acquire=arm_post_acquire,
+                )
+                holder = mock.Mock(lock=process_lock)
+                previous_trace = sys.gettrace()
+
+                with mock.patch.object(
+                    debug_module,
+                    "_process_lock_for",
+                    return_value=holder,
+                ):
+                    with contextlib.ExitStack() as stack:
+                        storage = {
+                            seam: stack.enter_context(
+                                mock.patch.object(debug_module, seam)
+                            )
+                            for seam in storage_seams
+                        }
+                        close = stack.enter_context(
+                            mock.patch.object(debug_module.os, "close")
+                        )
+                        sys.settrace(inject_at_first_append_line)
+                        try:
+                            caught, final_traceback = _capture_raised(
+                                self,
+                                type(body),
+                                lambda: _trace(
+                                    log,
+                                    session_id="post_acquire_dropped",
+                                ),
+                            )
+                        finally:
+                            sys.settrace(previous_trace)
+
+                    self.assertIs(sys.gettrace(), previous_trace)
+                    self.assertIs(caught, body)
+                    self.assertIsNone(body.__cause__)
+                    self.assertIsNone(body.__context__)
+                    self.assertIsNone(cleanup.__cause__)
+                    self.assertIsNone(cleanup.__context__)
+                    injected_traceback = trace_state["traceback"]
+                    assert isinstance(injected_traceback, TracebackType)
+                    self.assertTrue(
+                        _traceback_contains(final_traceback, injected_traceback)
+                    )
+                    self.assertEqual(trace_state["injections"], 1)
+                    self.assertIsNotNone(process_lock.release_traceback)
+                    for operation in (*storage.values(), close):
+                        operation.assert_not_called()
+                    self.assertEqual(process_lock.acquire_attempts, 1)
+                    self.assertEqual(process_lock.release_attempts, 1)
+                    self.assertFalse(process_lock.locked())
+                    process_lock.assert_reusable(self)
+                    self.assertFalse(log.path.exists())
+
+                    process_lock.arm_post_acquire = None
+                    process_lock.release_failure = None
+                    _trace(log, session_id="post_acquire_recovered")
+
+                self.assertEqual(process_lock.acquire_attempts, 2)
+                self.assertEqual(process_lock.release_attempts, 2)
+                process_lock.assert_reusable(self)
+                self.assertEqual(
+                    [record["session_id"] for record in _records(workspace)],
+                    ["post_acquire_recovered"],
+                )
 
     def test_thread_and_advisory_locks_share_one_deadline(self) -> None:
         class FakeThreadLock:
