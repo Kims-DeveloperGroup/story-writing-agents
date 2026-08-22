@@ -170,7 +170,14 @@ symbolic link or non-directory in those components. It does not recursively
 change the backend-owned containing directory, capability-probe scratch path,
 or files created by `agy`; provider-native retention is unchanged.
 
-This directory hardening is not application access control or race-proof
+Adapter-owned staged and workspace `AGENTS.md` rules leaves are verified as
+regular and singly linked when present. Canonical bytes are installed through
+an exclusively created same-directory temporary with requested `0600` mode and
+atomic replacement. A detected symbolic link, non-regular entry, or multiply
+linked leaf is preserved and rejected before provider launch.
+
+These directory-mode and rules-leaf protections do not descriptor-anchor
+parent-directory traversal and are not application access control or race-proof
 containment. Unsupported platforms, including Windows, and ordinary
 mode-setting failures retain platform behavior. Keep the complete workspace
 and provider-state paths protected through OS-level controls; the runtime does
