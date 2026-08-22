@@ -99,6 +99,25 @@ class ReferenceAuthorizationError(RuntimeError):
         super().__init__(_ERROR_MESSAGES[code])
 
 
+class ReferenceOperationFailure(RuntimeError):
+    """Content-free public failure identity for one top-level operation."""
+
+    def __init__(
+        self,
+        reference_operation_id: str,
+        code: ReferenceAuthorizationErrorCode,
+    ) -> None:
+        validate_reference_identity(reference_operation_id)
+        if type(code) is not ReferenceAuthorizationErrorCode:
+            raise TypeError("code must be a ReferenceAuthorizationErrorCode")
+        self.reference_operation_id = reference_operation_id
+        self.code = code
+        super().__init__(
+            "reference operation "
+            f"{reference_operation_id} failed with {code.value}"
+        )
+
+
 class ReferenceOperationState(StrEnum):
     REQUESTED = "requested"
     CAPTURED = "captured"

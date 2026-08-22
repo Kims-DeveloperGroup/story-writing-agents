@@ -55,6 +55,7 @@ from .writing_artifacts import canonical_artifact_kind
 
 
 _SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
+_SAFE_REFERENCE_OPERATION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 _SAFE_TEMPLATE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 _CONVERSATION_METADATA_FIELDS = frozenset({
     "schema_version",
@@ -983,7 +984,10 @@ class Workspace:
             "error",
             "action_required",
         }
-        if not isinstance(value, dict) or set(value) != expected:
+        if not isinstance(value, dict) or frozenset(value) not in {
+            frozenset(expected),
+            frozenset((*expected, "reference_operation_id")),
+        }:
             raise WorkspaceFormatError("debate result has an invalid schema")
         required_strings = {"session_id", "debate_id", "input_kind", "status"}
         if any(not isinstance(value[field], str) for field in required_strings):
@@ -1001,6 +1005,15 @@ class Workspace:
             for field in nullable_strings
         ):
             raise WorkspaceFormatError("debate result has an invalid optional field")
+        if "reference_operation_id" in value and (
+            type(value["reference_operation_id"]) is not str
+            or _SAFE_REFERENCE_OPERATION_ID.fullmatch(
+                value["reference_operation_id"]
+            ) is None
+        ):
+            raise WorkspaceFormatError(
+                "debate result reference_operation_id is invalid"
+            )
         rounds = value["rounds_completed"]
         if isinstance(rounds, bool) or not isinstance(rounds, int) or rounds < 0:
             raise WorkspaceFormatError("debate result rounds_completed is invalid")
