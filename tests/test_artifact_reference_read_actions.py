@@ -467,6 +467,65 @@ class ReferenceReadRepositoryTests(unittest.TestCase):
             outcome=ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
         )
 
+    def test_acceptance_failures_terminate_with_exact_durable_outcome(self) -> None:
+        for case, expected_outcome in (
+            ("unexpected", ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE),
+            ("drift", ReferenceAuthorizationErrorCode.DRIFT),
+        ):
+            with self.subTest(case=case):
+                operation_id = f"accept-{case}"
+                authorization, invocation = self.invocation(
+                    operation_id,
+                    "invoke",
+                    1,
+                )
+                invocation.handle_reference_read_action(_action(invocation.request))
+                invocation.record_result_received()
+
+                if case == "unexpected":
+                    unexpected = OSError("acceptance revalidation failed")
+                    with mock.patch.object(
+                        self.repository,
+                        "_revalidate_reference_authorization",
+                        side_effect=unexpected,
+                    ):
+                        with self.assertRaises(OSError) as raised:
+                            invocation.accept()
+                    self.assertIs(raised.exception, unexpected)
+                else:
+                    self.root.joinpath(
+                        "core_documents/global_outline.md"
+                    ).write_bytes(b"CHANGED")
+                    with self.assertRaises(ReferenceAuthorizationError) as raised:
+                        invocation.accept()
+                    self.assertIs(
+                        raised.exception.code,
+                        ReferenceAuthorizationErrorCode.DRIFT,
+                    )
+
+                history = self.repository.inspect_reference_operation(operation_id)
+                assert history is not None
+                self.assertEqual(
+                    tuple(
+                        event.invocation_state
+                        for event in history.invocation_events[0]
+                    ),
+                    (
+                        ReferenceInvocationState.AUTHORIZED,
+                        ReferenceInvocationState.DELIVERED,
+                        ReferenceInvocationState.RESULT_RECEIVED,
+                        ReferenceInvocationState.TERMINATED,
+                    ),
+                )
+                self.assertIs(
+                    history.invocation_events[0][-1].outcome,
+                    expected_outcome,
+                )
+                self.repository.finish_reference_operation(
+                    authorization,
+                    outcome=expected_outcome,
+                )
+
     def test_cleanup_failure_never_replaces_primary_failure(self) -> None:
         authorization, invocation = self.invocation("cleanup", "invoke", 1)
         wrong = ReferenceReadAction(
@@ -507,6 +566,31 @@ class ReferenceReadRepositoryTests(unittest.TestCase):
         ):
             with self.assertRaises(OSError) as raised:
                 invocation.handle_reference_read_action(_action(invocation.request))
+        self.assertIs(raised.exception, unexpected)
+        authorization.close()
+
+        authorization, invocation = self.invocation(
+            "cleanup-acceptance",
+            "invoke",
+            1,
+        )
+        invocation.handle_reference_read_action(_action(invocation.request))
+        invocation.record_result_received()
+        unexpected = OSError("acceptance revalidation failed")
+        with (
+            mock.patch.object(
+                self.repository,
+                "_revalidate_reference_authorization",
+                side_effect=unexpected,
+            ),
+            mock.patch.object(
+                self.repository,
+                "terminate_reference_invocation",
+                side_effect=RuntimeError("cleanup failed"),
+            ),
+        ):
+            with self.assertRaises(OSError) as raised:
+                invocation.accept()
         self.assertIs(raised.exception, unexpected)
         authorization.close()
 
