@@ -1617,10 +1617,14 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Supported surface:** Private `SecureWorkspaceStorage`, consumed only by
   `writing_artifacts.repository`.
 - **Direct internal dependencies:** `errors`.
-- **State, resources, and side effects:** Construction retains only the named
-  resolved workspace root; required platform primitives are checked lazily on
-  first I/O, which binds a meaningful root `(st_dev, st_ino)` pair. Every
-  later operation reopens and verifies that identity. Each traversal uses
+- **State, resources, and side effects:** Construction captures only a lexical
+  absolute workspace-root name, without symlink resolution, filesystem access,
+  or a platform/security probe. Required primitives are checked lazily on first
+  artifact I/O, which binds a meaningful root `(st_dev, st_ino)` pair. Every
+  later operation reopens and verifies that identity. Every successfully opened
+  child descriptor enters call-local ownership immediately; a post-open
+  validation failure unwinds through one reverse cleanup and closes it exactly
+  once. Each traversal uses
   retained and revalidated ancestor descriptors, `O_NOFOLLOW`, nonblocking
   pre-stat/name/descriptor checks, unique-regular-file checks, and exact stored
   entry spelling. Final file names are alias-checked before their first stat and
@@ -1676,13 +1680,19 @@ every intermediate arrow. The current runtime graph is acyclic.
   topology. Staging retains exclusively named prior versions, failed
   publications, and completed journals; recovery enumerates only authoritative
   transaction JSON and ignores all such residue. Immutable exact-name commit
-  records form the permanent audit ledger: manuscript paths must be unique
-  across the ledger, and the catalog path set must equal the union of every
-  artifact path across every non-exempt commit, with repeated core paths
+  records form the permanent audit ledger, and their stored bytes must exactly
+  equal the repository's canonical JSON serialization. Manuscript paths must be
+  unique across the ledger, and the catalog path set must equal the union of
+  every artifact path across every non-exempt commit, with repeated core paths
   collapsed. Every catalog entry must project an exact artifact and metadata
   record from its named commit. Historical core records may be superseded, but
-  their paths remain required and each current core entry must match one
-  validated commit. Outside one exact pending phase, a missing catalog is valid
+  their paths remain required; for each repeated core path the current entry
+  must name the unique commit with the greatest parsed, offset-aware
+  `committed_at`. Equal greatest instants and stale projections fail closed.
+  Each supported commit instant is strictly greater than the maximum instant in
+  the entire ledger even if the clock moves backward; timestamp overflow fails
+  before transaction or target mutation. Outside one exact pending phase, a
+  missing catalog is valid
   only with an empty non-exempt ledger; divergence fails closed and is never
   reconstructed. Every read and commit performs locked recovery first. One
   create-only immutable schema-v2 transaction journal records the
@@ -1692,9 +1702,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   rejects duplicate object keys recursively for journals, catalogs, and commits.
   At exact catalog-before, recovery accepts each target only at its recorded old
   or new bytes and may exempt only this journal's exact already-published commit
-  from the expected path union, so that commit contributes no paths while all
-  older established manuscript and core paths remain required; the projected
-  catalog-after is audited without an exemption. Recovery completes remaining
+  from the expected path union and newest-core authority selection, so that
+  commit contributes no paths while all older established manuscript and core
+  paths remain required; the projected catalog-after is audited without an
+  exemption. Recovery completes remaining
   target and commit publication,
   rechecks journal authority and catalog-before, then publishes the catalog
   last. At exact catalog-after, recovery is verification-only with no exemption
@@ -1743,15 +1754,24 @@ every intermediate arrow. The current runtime graph is acyclic.
   verifies without republishing; divergent catalog, commit, target, or journal
   authority durably blocks. Non-target catalog entries remain identical across
   the recorded before/after images. Immutable commits are the permanent
-  reservation ledger: the catalog path set equals the full artifact-path union
-  of all non-exempt commits, each current catalog entry exactly projects its
-  commit, and superseded core history remains valid and represented. Only the
-  active journal's exact commit may be exempted while the catalog is at its
-  exact before image; it then contributes no expected paths, while every older
-  established path remains required. Catalog-after and ordinary access have no
-  exemption or reconstruction. Strict final journal retirement occurs only
-  after target, commit, catalog-after, and ledger verification. `_storage`
-  independently prechecks final names and all readiness-triple spelling, rejects
+  reservation ledger: every stored record is canonical repository JSON, the
+  catalog path set equals the full artifact-path union of all non-exempt
+  commits, and each current catalog entry exactly projects its commit.
+  Superseded core history remains valid and represented, while each repeated
+  core path is governed by its unique greatest offset-aware commit instant;
+  equal newest instants or a stale projection fail closed. New supported commit
+  instants advance strictly beyond the full ledger maximum, including across
+  clock rollback, and overflow fails before mutation. Only the active journal's
+  exact commit may be exempted while the catalog is at its exact before image;
+  it then contributes neither expected paths nor newest-core authority, while
+  every older established path remains required. Catalog-after and ordinary
+  access have no exemption or reconstruction. Strict final journal retirement
+  occurs only after target, commit, catalog-after, and ledger verification.
+  `_storage`
+  captures its root as a lexical absolute name without construction-time
+  resolution or I/O, immediately owns every opened traversal descriptor for
+  exact-once failure cleanup, independently prechecks final names and all
+  readiness-triple spelling, rejects
   normalized/case aliases, fsyncs created child entries through retained parent
   descriptors, and completes triple durability under bootstrap before the
   primary flock can guard body entry.

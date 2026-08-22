@@ -13,6 +13,7 @@ import tempfile
 import threading
 import unittest
 from copy import deepcopy
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -41,6 +42,7 @@ from story_writing_agents.writing_artifacts import (
     manuscript_artifact_path,
 )
 from story_writing_agents.writing_artifacts import _storage as storage_module
+from story_writing_agents.writing_artifacts import repository as repository_module
 from story_writing_agents.writing_artifacts._storage import (
     ArtifactEntrySecurityError,
     ArtifactLeaseSecurityError,
@@ -325,8 +327,8 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
         )
         commit = json.loads(commit_path.read_text())
         commit["artifacts"][0]["sha256"] = hashlib.sha256(invalid).hexdigest()
-        commit_path.write_text(json.dumps(commit), encoding="utf-8")
-        catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
+        commit_path.write_bytes(self.repository._json_bytes(commit))
+        catalog_path.write_bytes(self.repository._json_bytes(catalog))
         with self.assertRaisesRegex(WorkspaceFormatError, "valid UTF-8"):
             WritingArtifactRepository(self.root).read_text(manuscript_path)
 
@@ -563,6 +565,199 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
 
 @unittest.skipUnless(os.name == "posix", "secure descriptor tests require POSIX")
 class SecureStorageTests(WritingArtifactTestCase):
+    def test_relative_repository_root_is_lexical_and_survives_cwd_change(self) -> None:
+        initial = self.root / "initial"
+        later = self.root / "later"
+        workspace_root = initial / "workspace"
+        workspace_root.mkdir(parents=True)
+        later.mkdir()
+        original_cwd = Path.cwd()
+        try:
+            os.chdir(initial)
+            lexical_root = Path(os.path.abspath("workspace"))
+            with (
+                mock.patch.object(
+                    Path,
+                    "resolve",
+                    side_effect=AssertionError("constructor resolved root"),
+                ) as resolve,
+                mock.patch.object(
+                    storage_module.os,
+                    "open",
+                    side_effect=AssertionError("constructor opened filesystem"),
+                ) as open_file,
+                mock.patch.object(
+                    storage_module.os,
+                    "stat",
+                    side_effect=AssertionError("constructor stated filesystem"),
+                ) as stat_file,
+                mock.patch.object(
+                    storage_module.os,
+                    "listdir",
+                    side_effect=AssertionError("constructor listed filesystem"),
+                ) as list_directory,
+                mock.patch.object(
+                    SecureWorkspaceStorage,
+                    "_require_primitives",
+                    side_effect=AssertionError("constructor probed primitives"),
+                ) as primitives,
+            ):
+                repository = WritingArtifactRepository("workspace")
+            resolve.assert_not_called()
+            open_file.assert_not_called()
+            stat_file.assert_not_called()
+            list_directory.assert_not_called()
+            primitives.assert_not_called()
+            self.assertEqual(repository._storage._root, lexical_root)
+            self.assertTrue(repository._storage._root.is_absolute())
+
+            os.chdir(later)
+            self.assertEqual(repository.list_paths(), ())
+            self.assertTrue(
+                workspace_root.joinpath(
+                    "agent_states/orchestrator_state/writing_artifacts"
+                ).is_dir()
+            )
+            self.assertFalse(later.joinpath("workspace").exists())
+        finally:
+            os.chdir(original_cwd)
+
+    def test_relative_repository_root_preserves_symlink_spelling(self) -> None:
+        initial = self.root / "symlink-root"
+        actual = initial / "actual"
+        alias = initial / "alias"
+        later = self.root / "symlink-later"
+        actual.mkdir(parents=True)
+        alias.symlink_to(actual, target_is_directory=True)
+        later.mkdir()
+        original_cwd = Path.cwd()
+        try:
+            os.chdir(initial)
+            lexical_alias = Path(os.path.abspath("alias"))
+            repository = WritingArtifactRepository("alias")
+            self.assertEqual(repository._storage._root, lexical_alias)
+            self.assertNotEqual(repository._storage._root, actual)
+            os.chdir(later)
+            with self.assertRaisesRegex(
+                ArtifactRootSecurityError,
+                "workspace root",
+            ):
+                repository.list_paths()
+            self.assertFalse(actual.joinpath("agent_states").exists())
+        finally:
+            os.chdir(original_cwd)
+
+    def test_open_directory_closes_child_once_for_every_post_open_failure(
+        self,
+    ) -> None:
+        self.root.joinpath("existing").mkdir()
+        for failure in (
+            "fstat",
+            "type",
+            "identity",
+            "exact name",
+            "chain",
+        ):
+            with self.subTest(failure=failure):
+                storage = SecureWorkspaceStorage(self.root)
+                real_open = storage_module.os.open
+                real_close = storage_module.os.close
+                real_fstat = storage_module.os.fstat
+                real_require = SecureWorkspaceStorage._require_exact_name
+                real_chain = SecureWorkspaceStorage._verify_directory_chain
+                child_descriptor = -1
+                closes = 0
+                exact_name_checks = 0
+
+                def record_open(path, *args, **kwargs):
+                    nonlocal child_descriptor
+                    descriptor = real_open(path, *args, **kwargs)
+                    if path == "existing":
+                        child_descriptor = descriptor
+                    return descriptor
+
+                def record_close(descriptor):
+                    nonlocal closes
+                    if descriptor == child_descriptor:
+                        closes += 1
+                    return real_close(descriptor)
+
+                def fail_fstat(descriptor):
+                    metadata = real_fstat(descriptor)
+                    if descriptor != child_descriptor:
+                        return metadata
+                    if failure == "fstat":
+                        raise OSError("post-open fstat failure")
+                    if failure == "type":
+                        return SimpleNamespace(
+                            st_mode=stat.S_IFREG | 0o600,
+                            st_dev=metadata.st_dev,
+                            st_ino=metadata.st_ino,
+                        )
+                    if failure == "identity":
+                        return SimpleNamespace(
+                            st_mode=metadata.st_mode,
+                            st_dev=metadata.st_dev,
+                            st_ino=metadata.st_ino + 1,
+                        )
+                    return metadata
+
+                def fail_exact_name(
+                    directory,
+                    name,
+                    *,
+                    directory_entry,
+                    missing_ok=False,
+                ):
+                    nonlocal exact_name_checks
+                    if name == "existing":
+                        exact_name_checks += 1
+                        if failure == "exact name" and exact_name_checks == 2:
+                            raise ArtifactRootSecurityError(
+                                "post-open spelling failure"
+                            )
+                    return real_require(
+                        directory,
+                        name,
+                        directory_entry=directory_entry,
+                        missing_ok=missing_ok,
+                    )
+
+                def fail_chain(chain):
+                    if failure == "chain" and chain:
+                        raise ArtifactRootSecurityError(
+                            "post-open chain failure"
+                        )
+                    return real_chain(chain)
+
+                with (
+                    mock.patch.object(SecureWorkspaceStorage, "_require_primitives"),
+                    mock.patch.object(storage_module.os, "open", side_effect=record_open),
+                    mock.patch.object(storage_module.os, "close", side_effect=record_close),
+                    mock.patch.object(storage_module.os, "fstat", side_effect=fail_fstat),
+                    mock.patch.object(
+                        SecureWorkspaceStorage,
+                        "_require_exact_name",
+                        side_effect=fail_exact_name,
+                    ),
+                    mock.patch.object(
+                        SecureWorkspaceStorage,
+                        "_verify_directory_chain",
+                        side_effect=fail_chain,
+                    ),
+                    self.assertRaises((OSError, WorkspaceSecurityError)),
+                ):
+                    with storage._open_root() as root_descriptor:
+                        with storage._open_directory(
+                            root_descriptor,
+                            ("existing",),
+                            create=False,
+                        ):
+                            self.fail("post-open failure entered directory body")
+
+                self.assertGreaterEqual(child_descriptor, 0)
+                self.assertEqual(closes, 1)
+
     def test_final_name_aliases_reject_before_stat_staging_or_mutation(self) -> None:
         parent = self.root / "manuscript/part-alias"
         parent.mkdir(parents=True)
@@ -1680,6 +1875,284 @@ class RepositoryRecoveryTests(WritingArtifactTestCase):
             transaction_path.read_text(encoding="utf-8")
         )
 
+    @staticmethod
+    def rewrite_commit_timestamps(
+        root: Path,
+        repository: WritingArtifactRepository,
+        timestamps_by_manuscript: dict[str, str],
+    ) -> dict[str, dict[str, object]]:
+        state = root / "agent_states/orchestrator_state/writing_artifacts"
+        commits: dict[str, dict[str, object]] = {}
+        for commit_path in state.joinpath("commits").glob("*.json"):
+            commit = json.loads(commit_path.read_text(encoding="utf-8"))
+            manuscript = next(
+                artifact
+                for artifact in commit["artifacts"]
+                if artifact["kind"] == ArtifactKind.MANUSCRIPT.value
+            )
+            timestamp = timestamps_by_manuscript.get(manuscript["path"])
+            if timestamp is not None:
+                commit["committed_at"] = timestamp
+            commits[commit["commit_id"]] = commit
+            commit_path.write_bytes(repository._json_bytes(commit))
+
+        catalog_path = state / "catalog.json"
+        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+        for entry in catalog["entries"]:
+            entry["committed_at"] = commits[entry["commit_id"]]["committed_at"]
+        catalog_path.write_bytes(repository._json_bytes(catalog))
+        return commits
+
+    @staticmethod
+    def point_catalog_core_to_commit(
+        root: Path,
+        repository: WritingArtifactRepository,
+        commit: dict[str, object],
+        path: str,
+    ) -> None:
+        state = root / "agent_states/orchestrator_state/writing_artifacts"
+        catalog_path = state / "catalog.json"
+        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+        artifact = next(
+            item for item in commit["artifacts"] if item["path"] == path
+        )
+        entry = next(item for item in catalog["entries"] if item["path"] == path)
+        entry.update(
+            {
+                "author_agent_id": artifact["author_agent_id"],
+                "commit_id": commit["commit_id"],
+                "committed_at": commit["committed_at"],
+                "debate_id": commit["debate_id"],
+                "kind": artifact["kind"],
+                "revision_id": commit["revision_id"],
+                "session_id": commit["session_id"],
+                "sha256": artifact["sha256"],
+            }
+        )
+        catalog_path.write_bytes(repository._json_bytes(catalog))
+
+    @staticmethod
+    def set_transaction_timestamp(
+        transaction: dict[str, object],
+        timestamp: str,
+    ) -> None:
+        commit = transaction["commit"]
+        assert isinstance(commit, dict)
+        commit["committed_at"] = timestamp
+        catalog_after = transaction["catalog_after"]
+        assert isinstance(catalog_after, dict)
+        for entry in catalog_after["entries"]:
+            if entry["commit_id"] == commit["commit_id"]:
+                entry["committed_at"] = timestamp
+
+    def test_commit_ledger_requires_canonical_json_without_rewrite(self) -> None:
+        manuscript_path, _ = self.commit()
+        state = self.root / "agent_states/orchestrator_state/writing_artifacts"
+        commit_path = next(state.joinpath("commits").glob("*.json"))
+        parsed = json.loads(commit_path.read_text(encoding="utf-8"))
+        noncanonical = json.dumps(
+            parsed,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        self.assertNotEqual(noncanonical, self.repository._json_bytes(parsed))
+        commit_path.write_bytes(noncanonical)
+        catalog_before = state.joinpath("catalog.json").read_bytes()
+
+        for operation in (
+            lambda: self.repository.catalog(),
+            lambda: self.commit(output_path="part-02/new.md"),
+        ):
+            with self.assertRaisesRegex(
+                WorkspaceFormatError,
+                "ledger record is not canonical",
+            ):
+                operation()
+
+        self.assertEqual(commit_path.read_bytes(), noncanonical)
+        self.assertEqual(state.joinpath("catalog.json").read_bytes(), catalog_before)
+        self.assertTrue(self.root.joinpath(manuscript_path).is_file())
+        self.assertFalse(self.root.joinpath("manuscript/part-02/new.md").exists())
+        self.assertFalse(tuple(state.joinpath("transactions").glob("*.json")))
+
+    def test_repeated_core_history_selects_unique_greatest_timestamp_instant(
+        self,
+    ) -> None:
+        first, _ = self.commit(
+            output_path="part-01/first.md",
+            core_updates={"global_outline.md": "older outline"},
+        )
+        second, _ = self.commit(
+            output_path="part-02/second.md",
+            core_updates={"global_outline.md": "newer outline"},
+            debate_id="debate_02",
+        )
+        self.rewrite_commit_timestamps(
+            self.root,
+            self.repository,
+            {
+                first: "2026-01-01T01:00:00+01:00",
+                second: "2025-12-31T20:00:01-04:00",
+            },
+        )
+
+        self.assertEqual(
+            self.repository.read_text("core_documents/global_outline.md"),
+            "newer outline",
+        )
+        self.assertEqual(
+            self.repository.list_paths(),
+            (
+                "core_documents/global_outline.md",
+                first,
+                second,
+            ),
+        )
+
+    def test_repeated_core_history_rejects_stale_catalog_and_greatest_tie(
+        self,
+    ) -> None:
+        for state_kind in ("stale", "tie"):
+            with (
+                self.subTest(state_kind=state_kind),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = Path(directory)
+                Workspace(root).initialize()
+                repository = WritingArtifactRepository(root)
+                first, _ = self.commit_repository(
+                    repository,
+                    output_path="part-01/first.md",
+                    core_updates={"global_outline.md": "older outline"},
+                )
+                second, _ = self.commit_repository(
+                    repository,
+                    output_path="part-02/second.md",
+                    core_updates={"global_outline.md": "newer outline"},
+                )
+                commits = self.rewrite_commit_timestamps(
+                    root,
+                    repository,
+                    {
+                        first: "2026-01-01T00:00:00+00:00",
+                        second: (
+                            "2025-12-31T19:00:00-05:00"
+                            if state_kind == "tie"
+                            else "2026-01-01T00:00:01+00:00"
+                        ),
+                    },
+                )
+                if state_kind == "stale":
+                    older = next(
+                        commit
+                        for commit in commits.values()
+                        if any(
+                            artifact["path"] == first
+                            for artifact in commit["artifacts"]
+                        )
+                    )
+                    self.point_catalog_core_to_commit(
+                        root,
+                        repository,
+                        older,
+                        "core_documents/global_outline.md",
+                    )
+
+                expected = (
+                    "not the newest commit"
+                    if state_kind == "stale"
+                    else "no unique newest commit"
+                )
+                with self.assertRaisesRegex(WorkspaceFormatError, expected):
+                    repository.catalog()
+
+    def test_clock_regression_advances_beyond_entire_commit_ledger(self) -> None:
+        first, _ = self.commit(
+            output_path="part-01/first.md",
+            core_updates={"global_outline.md": "outline"},
+        )
+        second, _ = self.commit(
+            output_path="part-02/future-manuscript.md",
+            debate_id="debate_02",
+        )
+        ledger_maximum = "2099-01-02T00:00:00+00:00"
+        self.rewrite_commit_timestamps(
+            self.root,
+            self.repository,
+            {
+                first: "2099-01-01T00:00:00+00:00",
+                second: ledger_maximum,
+            },
+        )
+        regressed_clock = mock.Mock(wraps=datetime)
+        regressed_clock.now.return_value = datetime(2000, 1, 1, tzinfo=UTC)
+
+        with mock.patch.object(
+            repository_module,
+            "datetime",
+            regressed_clock,
+        ):
+            third, _ = self.commit(
+                output_path="part-03/after-regression.md",
+                debate_id="debate_03",
+            )
+
+        state = self.root / "agent_states/orchestrator_state/writing_artifacts"
+        third_commit = next(
+            json.loads(path.read_text(encoding="utf-8"))
+            for path in state.joinpath("commits").glob("*.json")
+            if any(
+                artifact["path"] == third
+                for artifact in json.loads(path.read_text(encoding="utf-8"))[
+                    "artifacts"
+                ]
+            )
+        )
+        self.assertGreater(
+            datetime.fromisoformat(third_commit["committed_at"]),
+            datetime.fromisoformat(ledger_maximum),
+        )
+
+    def test_maximum_ledger_timestamp_blocks_before_any_publication(self) -> None:
+        first, _ = self.commit(output_path="part-01/first.md")
+        maximum = datetime.max.replace(tzinfo=UTC).isoformat()
+        self.rewrite_commit_timestamps(
+            self.root,
+            self.repository,
+            {first: maximum},
+        )
+        state = self.root / "agent_states/orchestrator_state/writing_artifacts"
+        catalog_before = state.joinpath("catalog.json").read_bytes()
+        commits_before = {
+            path.name: path.read_bytes()
+            for path in state.joinpath("commits").glob("*.json")
+        }
+
+        with (
+            mock.patch.object(
+                self.repository._storage,
+                "publish_bytes",
+                side_effect=AssertionError("overflow reached publication"),
+            ) as publish,
+            self.assertRaisesRegex(
+                WorkspaceFormatError,
+                "timestamp cannot advance",
+            ),
+        ):
+            self.commit(output_path="part-02/overflow.md")
+
+        publish.assert_not_called()
+        self.assertFalse(self.root.joinpath("manuscript/part-02/overflow.md").exists())
+        self.assertFalse(tuple(state.joinpath("transactions").glob("*.json")))
+        self.assertEqual(state.joinpath("catalog.json").read_bytes(), catalog_before)
+        self.assertEqual(
+            {
+                path.name: path.read_bytes()
+                for path in state.joinpath("commits").glob("*.json")
+            },
+            commits_before,
+        )
+
     def test_empty_ledger_allows_first_commit_and_valid_history_reserves_paths(
         self,
     ) -> None:
@@ -1757,6 +2230,11 @@ class RepositoryRecoveryTests(WritingArtifactTestCase):
         state = self.root / "agent_states/orchestrator_state/writing_artifacts"
         journal = next(state.joinpath("transactions").glob("*.json"))
         transaction = json.loads(journal.read_text(encoding="utf-8"))
+        self.set_transaction_timestamp(
+            transaction,
+            "2099-01-01T00:00:00+00:00",
+        )
+        journal.write_bytes(self.repository._json_bytes(transaction))
         self.assertEqual(transaction["catalog_before"]["image"]["entries"], [])
         self.assertEqual(
             {entry["path"] for entry in transaction["catalog_after"]["entries"]},
@@ -1808,6 +2286,11 @@ class RepositoryRecoveryTests(WritingArtifactTestCase):
                 state = root / "agent_states/orchestrator_state/writing_artifacts"
                 journal = next(state.joinpath("transactions").glob("*.json"))
                 transaction = json.loads(journal.read_text(encoding="utf-8"))
+                self.set_transaction_timestamp(
+                    transaction,
+                    "2099-01-01T00:00:00+00:00",
+                )
+                journal.write_bytes(repository._json_bytes(transaction))
                 before_entries = transaction["catalog_before"]["image"]["entries"]
                 self.assertIn(
                     "core_documents/global_outline.md",
@@ -1848,6 +2331,58 @@ class RepositoryRecoveryTests(WritingArtifactTestCase):
                             "manuscript/part-02/second.md",
                         ),
                     )
+
+    def test_pending_after_includes_newest_core_commit(self) -> None:
+        self.commit(
+            output_path="part-01/first.md",
+            core_updates={"global_outline.md": "older outline"},
+        )
+        with (
+            mock.patch.object(
+                self.repository,
+                "_complete_transaction",
+                side_effect=OSError("prepared"),
+            ),
+            self.assertRaisesRegex(OSError, "prepared"),
+        ):
+            self.commit(
+                output_path="part-02/second.md",
+                core_updates={"global_outline.md": "newest outline"},
+                debate_id="debate_02",
+            )
+        state = self.root / "agent_states/orchestrator_state/writing_artifacts"
+        journal = next(state.joinpath("transactions").glob("*.json"))
+        transaction = json.loads(journal.read_text(encoding="utf-8"))
+        self.set_transaction_timestamp(
+            transaction,
+            "2099-01-01T00:00:00+00:00",
+        )
+        journal.write_bytes(self.repository._json_bytes(transaction))
+        for target in transaction["targets"]:
+            destination = self.root / target["path"]
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(base64.b64decode(target["new_content_base64"]))
+        commit = transaction["commit"]
+        state.joinpath("commits", f"{commit['commit_id']}.json").write_bytes(
+            self.repository._json_bytes(commit)
+        )
+        state.joinpath("catalog.json").write_bytes(
+            self.repository._json_bytes(transaction["catalog_after"])
+        )
+
+        recovered = WritingArtifactRepository(self.root)
+        self.assertEqual(
+            recovered.read_text("core_documents/global_outline.md"),
+            "newest outline",
+        )
+        self.assertEqual(
+            recovered.list_paths(),
+            (
+                "core_documents/global_outline.md",
+                "manuscript/part-01/first.md",
+                "manuscript/part-02/second.md",
+            ),
+        )
 
     def test_missing_empty_or_subset_catalog_with_commits_blocks_before_mutation(
         self,

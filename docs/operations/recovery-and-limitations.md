@@ -68,12 +68,16 @@ Recovery compares the current catalog with those two exact positions. From
 catalog-before, every target may equal only its recorded old or new bytes;
 recovery rolls the set forward, publishes immutable commit history, and
 publishes the catalog last. If the pending commit record already exists here,
-the audit exempts it only when its bytes exactly equal this journal's commit;
-that exempt commit contributes no paths to the expected before-catalog union,
-while paths from every older established commit remain required. An unrelated
-record absent from the exact catalog-before view or divergent ledger state still
-blocks. At catalog-after, every target and commit must be exact, and catalog
-paths must equal the union from all commits, so recovery only verifies them. It
+the audit exempts it only when its byte-canonical record exactly equals this
+journal's commit. That exempt commit contributes neither paths nor a
+newest-core candidate to the expected before catalog; paths and unique newest
+core authority from every older established commit remain required. The
+projected after catalog includes the pending commit and must pass the full audit.
+An unrelated record absent from the exact before view or divergent ledger state
+still blocks. At catalog-after there is no exemption: every target and canonical
+commit must be exact, catalog paths must equal the full union, and each repeated
+core path must project the unique newest offset-aware commit, so recovery only
+verifies them. It
 then hash-checks the unchanged journal and moves it with native no-replace rename to
 a `.completed` name in staging. A catalog matching neither position, an
 untrusted target, or missing/replaced journal or final commit authority blocks
@@ -112,11 +116,19 @@ listing omits the stale entry. A later commit to the same path raises
 `ManuscriptExistsError`; choose a new part-scoped revision path. Catalog loss
 does not free reservations: a missing, empty, or subset catalog beside existing
 commits fails closed. Malformed, unexpected, extra, mismatched, or
-duplicate-reservation commit records also fail global audit. Historical core
-commits may remain after their catalog entries are superseded: their shared core
-paths remain required by the full ledger union, while every current entry must
-exactly match its referenced commit. There is no automatic ledger/catalog
-reconstruction or migration.
+duplicate-reservation commit records also fail global audit. Immutable commit
+JSON must have the repository's exact canonical bytes; merely reformatting an
+otherwise equivalent record invalidates the ledger. Historical core commits may
+remain, but the catalog must select the unique newest normalized instant for a
+repeated path. An equal newest tie or an older projection is ambiguous and fails
+closed. These records are preserved rather than rewritten or migrated.
+
+Operators should stop workspace processes, preserve a complete backup, and
+restore exact verified repository metadata. The runtime does not guess a tie or
+normalize a hand-edited commit. New repository timestamps remain strictly later
+than all ledger timestamps even when the wall clock moves backward. If the
+latest representable instant cannot advance, a new commit fails before creating
+a journal or mutating an artifact; it does not reinterpret existing history.
 
 The permanent artifact lock is similarly not repaired. Exact primary, anchor,
 and `ready` aliases fail before final inspection or locking, and the three names

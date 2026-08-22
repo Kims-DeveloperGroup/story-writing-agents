@@ -7,7 +7,7 @@ import hashlib
 import json
 import re
 import threading
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Mapping
 from uuid import uuid4
@@ -179,7 +179,7 @@ class WritingArtifactRepository:
                 raise WorkspaceFormatError(
                     "artifact commit identity is already reserved"
                 )
-            committed_at = datetime.now(UTC).isoformat()
+            committed_at = self._next_commit_timestamp(ledger)
             target_specs: list[dict[str, object]] = []
             new_entries = dict(catalog.entries)
             ordered_updates = tuple(
@@ -865,8 +865,49 @@ class WritingArtifactRepository:
             parsed = self._decode_json(raw)
             self._validate_commit(parsed, transaction_id=commit_id)
             assert isinstance(parsed, dict)
+            if raw != self._json_bytes(parsed):
+                raise WorkspaceFormatError(
+                    "artifact commit ledger record is not canonical"
+                )
             ledger[commit_id] = (parsed, raw)
         return ledger
+
+    @staticmethod
+    def _commit_timestamp(commit: Mapping[str, object]) -> datetime:
+        """Return one validated commit timestamp normalized to UTC."""
+
+        value = commit["committed_at"]
+        assert isinstance(value, str)
+        try:
+            timestamp = datetime.fromisoformat(value)
+            if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+                raise ValueError
+            return timestamp.astimezone(UTC)
+        except (OverflowError, TypeError, ValueError) as exc:
+            raise WorkspaceFormatError(
+                "artifact commit timestamp is invalid"
+            ) from exc
+
+    @classmethod
+    def _next_commit_timestamp(
+        cls,
+        ledger: Mapping[str, tuple[dict[str, object], bytes]],
+    ) -> str:
+        """Return a UTC instant strictly newer than the immutable ledger."""
+
+        latest = max(
+            (cls._commit_timestamp(commit) for commit, _ in ledger.values()),
+            default=None,
+        )
+        current = datetime.now(UTC)
+        if latest is None or current > latest:
+            return current.isoformat()
+        try:
+            return (latest + timedelta(microseconds=1)).isoformat()
+        except OverflowError as exc:
+            raise WorkspaceFormatError(
+                "artifact commit timestamp cannot advance"
+            ) from exc
 
     @staticmethod
     def _ledger_manuscript_paths(
@@ -931,12 +972,24 @@ class WritingArtifactRepository:
             raise WorkspaceFormatError("pending artifact commit exemption is absent")
         self._ledger_manuscript_paths(ledger)
         expected_paths: set[str] = set()
+        latest_core: dict[str, tuple[datetime, set[str]]] = {}
         for commit_id, (commit, _) in ledger.items():
             if commit_id == exempt_commit_id:
                 continue
+            timestamp = self._commit_timestamp(commit)
             artifacts = commit["artifacts"]
             assert isinstance(artifacts, list)
             expected_paths.update(artifact["path"] for artifact in artifacts)
+            for artifact in artifacts:
+                if artifact["kind"] != ArtifactKind.CORE_DOCUMENT.value:
+                    continue
+                path = artifact["path"]
+                assert isinstance(path, str)
+                selected = latest_core.get(path)
+                if selected is None or timestamp > selected[0]:
+                    latest_core[path] = (timestamp, {commit_id})
+                elif timestamp == selected[0]:
+                    selected[1].add(commit_id)
         if exempt_commit_id is not None:
             if any(
                 entry.commit_id == exempt_commit_id
@@ -964,6 +1017,16 @@ class WritingArtifactRepository:
             ):
                 raise WorkspaceFormatError(
                     "artifact catalog entry does not match its immutable commit"
+                )
+        for path, (_, commit_ids) in latest_core.items():
+            if len(commit_ids) != 1:
+                raise WorkspaceFormatError(
+                    "artifact core history has no unique newest commit"
+                )
+            entry = catalog.entries[path]
+            if entry.commit_id != next(iter(commit_ids)):
+                raise WorkspaceFormatError(
+                    "artifact catalog core entry is not the newest commit"
                 )
 
     def _audit_transaction_ledger(

@@ -109,14 +109,22 @@ accumulate.
 
 Immutable commits are also the permanent manuscript-reservation ledger, not
 just history for current catalog rows. Each access globally audits exact commit
-records against the catalog: catalog paths equal the union of every artifact
-path in all non-exempt commits, and each entry exactly matches its referenced
-commit. Historical core records may be superseded by a newer current entry, but
-their shared core paths remain required by the union. Catalog loss, subsets,
-malformed or extra commits, mismatches, and duplicate manuscript reservations
-fail closed instead of being reconstructed. During recovery at exact
-catalog-before, only the pending journal's already published exact commit is
-exempt and contributes no paths; all older established paths remain required.
+records against the catalog. Each immutable commit file must equal the
+repository's canonical JSON bytes, catalog paths equal the union of every
+artifact path in all non-exempt commits, and each entry exactly matches its
+referenced commit. Reformatting is divergence, not a migration input.
+
+Commit times are offset-aware instants. For a repeated core path, the catalog
+must select the unique newest normalized instant; an equal-newest tie or older
+projection fails closed. Generated timestamps are strictly later than every
+ledger instant even across wall-clock rollback, and an unrepresentable next
+instant fails before mutation. During exact catalog-before recovery, only the
+pending journal's already published byte-identical canonical commit is exempt:
+it contributes no paths or newest-core candidate, while all older established
+authority remains required. Projected and exact catalog-after audit the full
+commit set without an exemption. Catalog loss, subsets, malformed/noncanonical
+or extra commits, mismatches, and duplicate manuscript reservations fail closed
+instead of being rewritten, reconstructed, or migrated.
 
 The permanent repository readiness triple has its own durability boundary:
 primary lock, anchor, and `ready` are exact hard-link names for one regular inode

@@ -39,7 +39,7 @@ class SecureWorkspaceStorage:
     """Perform call-local artifact I/O from one verified workspace root."""
 
     def __init__(self, root: str | os.PathLike[str]) -> None:
-        self._root = Path(root)
+        self._root = Path(os.path.abspath(os.fspath(root)))
         self._identity: tuple[int, int] | None = None
         self._identity_lock = threading.Lock()
         self._active_lease: tuple[
@@ -281,6 +281,7 @@ class SecureWorkspaceStorage:
                         os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
                         dir_fd=current,
                     )
+                    descriptors.append(child)
                 except FileNotFoundError:
                     raise
                 except OSError as exc:
@@ -291,7 +292,6 @@ class SecureWorkspaceStorage:
                     or not stat.S_ISDIR(opened.st_mode)
                     or (named.st_dev, named.st_ino) != (opened.st_dev, opened.st_ino)
                 ):
-                    os.close(child)
                     raise ArtifactRootSecurityError("artifact directory changed during traversal")
                 self._require_exact_name(
                     current,
@@ -300,7 +300,6 @@ class SecureWorkspaceStorage:
                 )
                 identity = (opened.st_dev, opened.st_ino)
                 chain.append((current, name, child, identity))
-                descriptors.append(child)
                 current = child
             self._verify_directory_chain(tuple(chain))
             yield current, tuple(chain)

@@ -26,6 +26,15 @@ Workspace and template identifiers have additional validation.
 CLI discovery chooses the nearest initialized ancestor and never initializes a
 directory. Use an explicit path for automation or nested workspaces.
 
+The writing-artifact storage adapter has a distinct construction contract. It
+captures a supplied relative root immediately as a lexical absolute path using
+the construction-time current directory. It does not use `Path.resolve()`,
+dereference symlink spelling, inspect the filesystem, or probe secure primitives
+at construction, and a later current-directory change cannot retarget it. The
+first artifact operation performs the secure no-follow root open and identity
+validation. An unsafe captured root therefore raises at that operation instead
+of being silently resolved or causing constructor I/O.
+
 Orchestration core-document access is limited to four exact filenames.
 Manuscript outputs require `PART/PATH.md` and publish beneath
 `manuscript/PART/`. Generic `Workspace.write_text()` and `write_json()` reject
@@ -51,6 +60,11 @@ The rename is `renameatx_np(RENAME_EXCL)` on Darwin and
 `renameat2(RENAME_NOREPLACE)` on Linux. Repository, runtime, and workspace
 construction remain available on an unsupported host; the artifact operation
 itself raises `WorkspaceSecurityError`.
+
+Every child directory descriptor is registered for cleanup immediately after
+it opens. A later `fstat`, type, identity, exact-name, or retained-chain failure
+therefore closes that descriptor exactly once; repeated failed traversal does
+not leak directory handles.
 
 Artifact mutation additionally requires the workspace-local repository lease.
 The permanent `.artifacts.lock`, `.artifacts.lock.anchor`, and
@@ -147,18 +161,22 @@ retirement compares its exact hash before an exclusive no-replace move to
 Outside recovery, every artifact read or commit audits the complete permanent
 commit ledger against the catalog before trusting an entry or publishing new
 bytes. The catalog path set must equal the union of every artifact path in every
-non-exempt commit, and every entry must exactly match its referenced commit.
-Every ledger commit permanently reserves its one manuscript identity.
-Historical core updates may be superseded, but their shared core paths remain
-required by the union and each current entry must match the selected newer
-commit. Missing, subset, malformed, extra, duplicate-reservation, or otherwise
-mismatched ledger/catalog state fails closed; catalog loss does not free paths
-and is never reconstructed.
+non-exempt commit, every entry must exactly match its referenced commit, and
+every immutable commit file must have the repository's exact canonical JSON
+bytes. Semantic reformatting is not repaired. Every ledger commit permanently
+reserves its one manuscript identity. For a repeated core path, the current
+entry must reference the unique newest offset-aware commit instant; an equal
+newest tie or older projection fails closed. Missing, subset, malformed, extra,
+duplicate-reservation, noncanonical, or otherwise mismatched ledger/catalog
+state also fails closed; catalog loss does not free paths and is never rewritten,
+reconstructed, or migrated. See
+[Canonical writing artifacts](../reference/writing-artifacts.md#provenance-and-work-history).
 
 At exact catalog-before recovery, an on-disk pending commit is exempt only when
-it exactly matches the journal and contributes no expected paths; paths from
-all older established commits remain required. Catalog-after includes that
-commit in the full union and exact-entry audit.
+its canonical bytes exactly match the journal. It contributes no expected paths
+or newest-core candidate; paths and core authority from all older established
+commits remain required. Projected and stored catalog-after include that commit
+in the full path, exact-entry, and unique-newest audit.
 
 On the next artifact access, an exact catalog-before position rolls forward;
 an exact catalog-after position is verified without republishing. A catalog
