@@ -294,15 +294,20 @@ every intermediate arrow. The current runtime graph is acyclic.
   construction, headless capability check, NDJSON stream validation, and
   provider conversation-ID protocol. Binding writes deterministic rules beneath
   `agent_states/orchestrator_state/provider_sessions/.antigravity/definitions/<agent>/<fingerprint>/AGENTS.md`.
-  Invocation retains provider-native state and isolated cwd beneath
+  Invocation serializes its output schema, payload, and NDJSON stdin event
+  before creating any new per-session runtime tree; encoding failure therefore
+  creates no new provider or workspace directory. After serialization, it
+  retains provider-native state and isolated cwd beneath
   `agent_states/orchestrator_state/provider_sessions/.antigravity/sessions/<session>/<agent>/<fingerprint>/provider`
   and sibling `workspace`, copies only the bound rules into that workspace,
   sends the story request as one NDJSON stdin event, and delegates bounded
   `agy` subprocess ownership to `provider_process`. Provider preflight runs a
   bounded, provider-free `agy --help` capability check with an isolated
-  `--gemini_dir`; `close()` intentionally retains definitions, provider state,
-  workspaces, and any capability-probe state for later backend instances.
-  Importing performs no I/O.
+  `--gemini_dir`. Its fixed `state_root/capability-probe` scratch directory is
+  best-effort removed after every capability check and is not retained
+  provider-native state. `close()` intentionally retains definitions, session
+  workspaces, and provider-native conversation state for later backend
+  instances. Importing performs no I/O.
 - **Primary verification/documentation:** `tests/test_antigravity_adapter.py`
   and `tests/test_antigravity_parity.py`; shared adapter and subprocess
   contracts are also verified by `tests/test_codex_backend.py`.

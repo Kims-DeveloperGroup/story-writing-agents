@@ -537,6 +537,8 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         adapter = self.adapter("encoding-state")
         binding = adapter.bind(self.definition)
+        sessions_root = adapter.state_root / "sessions"
+        self.assertFalse(sessions_root.exists())
         confidential_schema_value = type(
             "CONFIDENTIAL_SCHEMA_VALUE",
             (),
@@ -597,6 +599,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                     self.assertNotIn("CONFIDENTIAL", str(error))
                     self.assertIsNone(error.__cause__)
                     self.assertIsNone(error.__context__)
+                    self.assertFalse(sessions_root.exists())
 
         forbidden_process.assert_not_awaited()
 
@@ -928,19 +931,91 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         incomplete_help = " ".join(
             flag for flag in _REQUIRED_HEADLESS_FLAGS if flag != "--sandbox"
         ).encode("utf-8")
-        outputs = iter((full_help, incomplete_help))
-        calls: list[tuple[list[str], dict[str, object]]] = []
+        keyboard_interrupt = KeyboardInterrupt("PRIVATE_PROBE_INTERRUPT")
+        system_exit = SystemExit("PRIVATE_PROBE_EXIT")
+        cases = (
+            ("unavailable", None, None, False),
+            ("oserror", "/private/fake-agy", OSError("PRIVATE_OSERROR"), False),
+            (
+                "subprocess",
+                "/private/fake-agy",
+                subprocess.SubprocessError("PRIVATE_SUBPROCESS_ERROR"),
+                False,
+            ),
+            (
+                "nonzero",
+                "/private/fake-agy",
+                subprocess.CompletedProcess(
+                    [],
+                    7,
+                    stdout=b"PRIVATE_STDOUT",
+                    stderr=b"PRIVATE_STDERR",
+                ),
+                False,
+            ),
+            (
+                "invalid UTF-8",
+                "/private/fake-agy",
+                subprocess.CompletedProcess([], 0, stdout=b"\xff", stderr=b""),
+                False,
+            ),
+            (
+                "missing flags",
+                "/private/fake-agy",
+                subprocess.CompletedProcess(
+                    [],
+                    0,
+                    stdout=incomplete_help,
+                    stderr=b"",
+                ),
+                False,
+            ),
+            (
+                "success",
+                "/private/fake-agy",
+                subprocess.CompletedProcess(
+                    [],
+                    0,
+                    stdout=full_help,
+                    stderr=b"",
+                ),
+                True,
+            ),
+            (
+                "keyboard interrupt",
+                "/private/fake-agy",
+                keyboard_interrupt,
+                None,
+            ),
+            ("system exit", "/private/fake-agy", system_exit, None),
+        )
+        calls: list[tuple[str, list[str], dict[str, object]]] = []
+        active_label = ""
+        behavior: object = None
 
         def capability_run(
             command: list[str],
             **options: object,
         ) -> subprocess.CompletedProcess[bytes]:
-            calls.append((command, options))
+            calls.append((active_label, command, options))
+            probe = Path(
+                next(
+                    argument.split("=", 1)[1]
+                    for argument in command
+                    if argument.startswith("--gemini_dir=")
+                )
+            )
+            nested = probe / "nested"
+            nested.mkdir(parents=True, exist_ok=True)
+            (nested / "runner-residue.bin").write_bytes(b"PRIVATE_PROBE_RESIDUE")
+            if isinstance(behavior, BaseException):
+                raise behavior
+            assert isinstance(behavior, subprocess.CompletedProcess)
             return subprocess.CompletedProcess(
                 command,
-                0,
-                stdout=next(outputs),
-                stderr=b"",
+                behavior.returncode,
+                stdout=behavior.stdout,
+                stderr=behavior.stderr,
             )
 
         which = mock.Mock(return_value="/private/fake-agy")
@@ -950,12 +1025,56 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             which=which,
             capability_run=capability_run,
         )
-        self.assertTrue(adapter.headless_capabilities_available())
-        self.assertFalse(adapter.headless_capabilities_available())
-        self.assertEqual(which.call_count, 2)
-        self.assertEqual(len(calls), 2)
-        expected_probe = self.workspace.path("capability-state/capability-probe")
-        for command, options in calls:
+        binding = adapter.bind(self.definition)
+        rules_before = (binding.staging_directory / "AGENTS.md").read_bytes()
+        native_state = (
+            adapter.state_root
+            / "sessions"
+            / "ordinary-session"
+            / self.definition.agent_id
+            / self.definition.fingerprint
+            / "provider"
+            / "native-state.bin"
+        )
+        native_state.parent.mkdir(parents=True)
+        native_state.write_bytes(b"PRIVATE_RETAINED_PROVIDER_STATE")
+        expected_probe = adapter.state_root / "capability-probe"
+
+        for active_label, executable, behavior, expected in cases:
+            with self.subTest(result=active_label):
+                which.return_value = executable
+                nested = expected_probe / "preexisting" / "nested"
+                nested.mkdir(parents=True)
+                (nested / "residue.bin").write_bytes(b"PRIVATE_OLD_PROBE_STATE")
+                if isinstance(behavior, (KeyboardInterrupt, SystemExit)):
+                    with self.assertRaises(type(behavior)) as caught:
+                        adapter.headless_capabilities_available()
+                    self.assertIs(caught.exception, behavior)
+                else:
+                    self.assertIs(
+                        adapter.headless_capabilities_available(),
+                        expected,
+                    )
+                self.assertFalse(expected_probe.exists())
+                self.assertEqual(
+                    (binding.staging_directory / "AGENTS.md").read_bytes(),
+                    rules_before,
+                )
+                self.assertEqual(
+                    native_state.read_bytes(),
+                    b"PRIVATE_RETAINED_PROVIDER_STATE",
+                )
+
+        self.assertEqual(which.call_count, len(cases))
+        self.assertEqual(
+            [label for label, _command, _options in calls],
+            [
+                label
+                for label, executable, _behavior, _expected in cases
+                if executable
+            ],
+        )
+        for _label, command, options in calls:
             self.assertEqual(
                 command,
                 [
@@ -977,7 +1096,127 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(
                 any("dangerously" in argument for argument in command)
             )
-        self.assertFalse(self.workspace.path("capability-state").exists())
+        self.assertTrue(binding.staging_directory.is_dir())
+        self.assertTrue(native_state.parent.is_dir())
+
+    def test_capability_cleanup_failure_preserves_result_and_active_exception(
+        self,
+    ) -> None:
+        full_help = " ".join(_REQUIRED_HEADLESS_FLAGS).encode("utf-8")
+        incomplete_help = " ".join(
+            flag for flag in _REQUIRED_HEADLESS_FLAGS if flag != "--sandbox"
+        ).encode("utf-8")
+        keyboard_interrupt = KeyboardInterrupt("PRIVATE_ACTIVE_INTERRUPT")
+        system_exit = SystemExit("PRIVATE_ACTIVE_EXIT")
+        cancellation = asyncio.CancelledError("PRIVATE_ACTIVE_CANCELLATION")
+        cases = (
+            (
+                "success",
+                subprocess.CompletedProcess([], 0, stdout=full_help, stderr=b""),
+                True,
+            ),
+            (
+                "missing flags",
+                subprocess.CompletedProcess(
+                    [],
+                    0,
+                    stdout=incomplete_help,
+                    stderr=b"",
+                ),
+                False,
+            ),
+            ("keyboard interrupt", keyboard_interrupt, None),
+            ("system exit", system_exit, None),
+            ("cancellation", cancellation, None),
+        )
+        behavior: object = None
+
+        def capability_run(
+            command: list[str],
+            **_options: object,
+        ) -> subprocess.CompletedProcess[bytes]:
+            probe = Path(
+                next(
+                    argument.split("=", 1)[1]
+                    for argument in command
+                    if argument.startswith("--gemini_dir=")
+                )
+            )
+            probe.mkdir(parents=True, exist_ok=True)
+            (probe / "residue.bin").write_bytes(b"PRIVATE_PROBE_RESIDUE")
+            if isinstance(behavior, BaseException):
+                raise behavior
+            assert isinstance(behavior, subprocess.CompletedProcess)
+            return subprocess.CompletedProcess(
+                command,
+                behavior.returncode,
+                stdout=behavior.stdout,
+                stderr=behavior.stderr,
+            )
+
+        for label, behavior, expected in cases:
+            with self.subTest(result=label):
+                adapter = self.adapter(
+                    f"cleanup-failure-{label.replace(' ', '-')}",
+                    which=mock.Mock(return_value="/private/fake-agy"),
+                    capability_run=capability_run,
+                )
+                probe = adapter.state_root / "capability-probe"
+                cleanup_failure = OSError("PRIVATE_CLEANUP_FAILURE")
+                with mock.patch(
+                    "story_writing_agents.antigravity_adapter.shutil.rmtree",
+                    side_effect=cleanup_failure,
+                ) as cleanup:
+                    if isinstance(
+                        behavior,
+                        (KeyboardInterrupt, SystemExit, asyncio.CancelledError),
+                    ):
+                        with self.assertRaises(type(behavior)) as caught:
+                            adapter.headless_capabilities_available()
+                        self.assertIs(caught.exception, behavior)
+                    else:
+                        self.assertIs(
+                            adapter.headless_capabilities_available(),
+                            expected,
+                        )
+                cleanup.assert_called_once_with(probe, ignore_errors=True)
+                self.assertTrue(probe.is_dir())
+
+    def test_capability_cleanup_process_control_propagates_exactly(self) -> None:
+        full_help = " ".join(_REQUIRED_HEADLESS_FLAGS).encode("utf-8")
+        failures = (
+            KeyboardInterrupt("PRIVATE_CLEANUP_INTERRUPT"),
+            SystemExit("PRIVATE_CLEANUP_EXIT"),
+            asyncio.CancelledError("PRIVATE_CLEANUP_CANCELLATION"),
+        )
+        for failure in failures:
+            with self.subTest(exception=type(failure).__name__):
+                capability_run = mock.Mock(
+                    return_value=subprocess.CompletedProcess(
+                        [],
+                        0,
+                        stdout=full_help,
+                        stderr=b"",
+                    )
+                )
+                adapter = self.adapter(
+                    f"cleanup-control-{type(failure).__name__.lower()}",
+                    which=mock.Mock(return_value="/private/fake-agy"),
+                    capability_run=capability_run,
+                )
+                probe = adapter.state_root / "capability-probe"
+                with (
+                    mock.patch(
+                        "story_writing_agents.antigravity_adapter.shutil.rmtree",
+                        side_effect=failure,
+                    ) as cleanup,
+                    self.assertRaises(type(failure)) as caught,
+                ):
+                    adapter.headless_capabilities_available()
+
+                self.assertIs(caught.exception, failure)
+                capability_run.assert_called_once()
+                cleanup.assert_called_once_with(probe, ignore_errors=True)
 
 
 if __name__ == "__main__":

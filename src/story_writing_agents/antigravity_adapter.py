@@ -276,26 +276,6 @@ class AntigravityAdapter:
         )
         provider_state_directory = runtime_root / "provider"
         working_directory = runtime_root / "workspace"
-        try:
-            provider_state_directory.mkdir(
-                parents=True,
-                exist_ok=True,
-                mode=0o700,
-            )
-            working_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-            staged_rules = binding.staging_directory / "AGENTS.md"
-            target_rules = working_directory / "AGENTS.md"
-            target_rules.write_bytes(staged_rules.read_bytes())
-            try:
-                target_rules.chmod(0o600)
-            except OSError:
-                pass
-        except OSError as exc:
-            raise ProviderInvocationError(
-                "Antigravity provider workspace could not be prepared",
-                taint_existing_thread=False,
-            ) from exc
-
         encoding_failed = False
         try:
             command = self.command(
@@ -329,6 +309,25 @@ class AntigravityAdapter:
                 "Antigravity request could not be encoded",
                 taint_existing_thread=False,
             ) from None
+        try:
+            provider_state_directory.mkdir(
+                parents=True,
+                exist_ok=True,
+                mode=0o700,
+            )
+            working_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+            staged_rules = binding.staging_directory / "AGENTS.md"
+            target_rules = working_directory / "AGENTS.md"
+            target_rules.write_bytes(staged_rules.read_bytes())
+            try:
+                target_rules.chmod(0o600)
+            except OSError:
+                pass
+        except OSError as exc:
+            raise ProviderInvocationError(
+                "Antigravity provider workspace could not be prepared",
+                taint_existing_thread=False,
+            ) from exc
         try:
             result = await run_process(
                 ProcessRequest(
@@ -652,34 +651,40 @@ class AntigravityAdapter:
     def headless_capabilities_available(self) -> bool:
         """Run one bounded, provider-free check for required headless flags."""
 
-        if not self.executable_available():
-            return False
         probe_directory = self.state_root / "capability-probe"
         try:
-            result = self._capability_run()(
-                [
-                    self.executable,
-                    f"--gemini_dir={probe_directory}",
-                    "--help",
-                ],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=min(5.0, self.timeout_seconds),
-                check=False,
-            )
-        except (OSError, subprocess.SubprocessError):
-            return False
-        if result.returncode != 0:
-            return False
-        try:
-            output = (result.stdout + result.stderr).decode(
-                "utf-8",
-                errors="strict",
-            )
-        except UnicodeDecodeError:
-            return False
-        return all(flag in output for flag in _REQUIRED_HEADLESS_FLAGS)
+            if not self.executable_available():
+                return False
+            try:
+                result = self._capability_run()(
+                    [
+                        self.executable,
+                        f"--gemini_dir={probe_directory}",
+                        "--help",
+                    ],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=min(5.0, self.timeout_seconds),
+                    check=False,
+                )
+            except (OSError, subprocess.SubprocessError):
+                return False
+            if result.returncode != 0:
+                return False
+            try:
+                output = (result.stdout + result.stderr).decode(
+                    "utf-8",
+                    errors="strict",
+                )
+            except UnicodeDecodeError:
+                return False
+            return all(flag in output for flag in _REQUIRED_HEADLESS_FLAGS)
+        finally:
+            try:
+                shutil.rmtree(probe_directory, ignore_errors=True)
+            except Exception:
+                pass
 
     def close(self) -> None:
         """Retain provider-native state for later backend instances."""
