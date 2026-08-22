@@ -274,10 +274,16 @@ def _driver(
         width = widths[min(len(size_calls) - 1, len(widths) - 1)]
         return os.terminal_size((width, 24))
 
+    def fpathconf(descriptor: int, name: str) -> int:
+        if descriptor != 7 or name != "PC_VDISABLE":
+            raise AssertionError((descriptor, name))
+        return 0
+
     os_double = SimpleNamespace(
         name=os_name,
         environ=environment,
         get_terminal_size=get_terminal_size,
+        fpathconf=fpathconf,
     )
     driver = RawTerminalDriver(
         fallback_read,

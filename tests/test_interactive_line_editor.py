@@ -194,6 +194,14 @@ class FakeTermios:
             raise self.restoration_failure
 
 
+def _fake_fpathconf(descriptor: int, name: str) -> int:
+    """Return one validated deterministic POSIX disabled-control sentinel."""
+
+    if descriptor != 7 or name != "PC_VDISABLE":
+        raise AssertionError((descriptor, name))
+    return 0
+
+
 @contextlib.contextmanager
 def capable_terminal(
     termios_double: FakeTermios,
@@ -205,6 +213,11 @@ def capable_terminal(
     with (
         mock.patch.object(editor_module, "_termios", termios_double),
         mock.patch.object(editor_module.os, "name", "posix"),
+        mock.patch.object(
+            editor_module.os,
+            "fpathconf",
+            side_effect=_fake_fpathconf,
+        ),
         mock.patch.dict(os.environ, {"TERM": "xterm-256color"}),
         mock.patch.object(
             editor_module.os,
@@ -945,6 +958,11 @@ class CapabilityAndFailureTests(unittest.TestCase):
                 editor_module.os,
                 "get_terminal_size",
                 side_effect=OSError("size unavailable"),
+            ),
+            mock.patch.object(
+                editor_module.os,
+                "fpathconf",
+                side_effect=_fake_fpathconf,
             ),
         ):
             self.assertEqual(editor.read_line("p> "), "")

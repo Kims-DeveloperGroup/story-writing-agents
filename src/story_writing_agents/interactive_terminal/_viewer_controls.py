@@ -92,9 +92,11 @@ def transition_text_viewer_fallback(
     if answer == "/cancel":
         return state, TextViewerResult(TextViewerExitKind.CANCELLED)
 
-    match = _FALLBACK_RANGE.fullmatch(answer)
     maximum = state.document.line_count
-    if match is None or maximum == 0:
+    if maximum == 0:
+        return replace(state, notice=TextViewerNotice.EMPTY_DOCUMENT), None
+    match = _FALLBACK_RANGE.fullmatch(answer)
+    if match is None:
         return replace(state, notice=TextViewerNotice.INVALID_RANGE), None
     first = _bounded_line_number(match.group(1), maximum)
     second = _bounded_line_number(match.group(2), maximum)

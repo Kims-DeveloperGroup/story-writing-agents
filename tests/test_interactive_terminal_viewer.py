@@ -15,6 +15,7 @@ from story_writing_agents.interactive_terminal import (
     InteractiveTextViewer,
     build_stream_terminal,
 )
+from story_writing_agents.interactive_terminal import _driver as driver_module
 from story_writing_agents.interactive_terminal._controls import (
     append_main_input_history,
     transition_line_input,
@@ -146,6 +147,7 @@ def _driver(
     *,
     answers: tuple[object, ...] = ("/cancel",),
     sizes: tuple[tuple[int, int], ...] = ((80, 24),),
+    disabled_control: object = 0,
 ) -> tuple[RawTerminalDriver, _ScriptedInput, _RecordingOutput, mock.Mock, _FakeTermios, list[str]]:
     events: list[str] = []
     input_stream = _ScriptedInput(characters, events)
@@ -161,10 +163,19 @@ def _driver(
         calls += 1
         return os.terminal_size((width, height))
 
+    def fpathconf(descriptor: int, name: str) -> object:
+        events.append("os.fpathconf")
+        if descriptor != 7 or name != "PC_VDISABLE":
+            raise AssertionError((descriptor, name))
+        if isinstance(disabled_control, BaseException):
+            raise disabled_control
+        return disabled_control
+
     os_double = SimpleNamespace(
         name="posix",
         environ={"TERM": "xterm-256color"},
         get_terminal_size=get_terminal_size,
+        fpathconf=fpathconf,
     )
     driver = RawTerminalDriver(
         fallback,
@@ -414,6 +425,26 @@ class ViewerFallbackControlTests(unittest.TestCase):
         self.assertIsNone(result)
         self.assertEqual(updated.notice, TextViewerNotice.INVALID_RANGE)
 
+    def test_empty_fallback_invalid_answers_retain_empty_guidance_until_cancel(self) -> None:
+        state = initialize_text_viewer("", display_name="empty.md")
+        for answer in ("", "1-1", "0-0", "bad", " 1-1 "):
+            with self.subTest(answer=answer):
+                state, result = transition_text_viewer_fallback(state, answer)
+                self.assertIsNone(result)
+                self.assertEqual(state.notice, TextViewerNotice.EMPTY_DOCUMENT)
+                frame = render_text_viewer_fallback(
+                    state,
+                    _capabilities(width=80),
+                )
+                self.assertIn(
+                    "No selectable lines; cancel to close.",
+                    frame.plain_text,
+                )
+                self.assertNotIn("valid one-based", frame.plain_text)
+        state, result = transition_text_viewer_fallback(state, "/cancel")
+        self.assertEqual(result, TextViewerResult(TextViewerExitKind.CANCELLED))
+        self.assertEqual(state.notice, TextViewerNotice.EMPTY_DOCUMENT)
+
 
 class ViewerRenderingTests(unittest.TestCase):
     def test_empty_one_and_two_row_frames_show_fixed_default_guidance(self) -> None:
@@ -485,6 +516,193 @@ class ViewerRenderingTests(unittest.TestCase):
 
 
 class ViewerDriverTests(unittest.TestCase):
+    def test_post_activation_interrupt_restores_without_screen_or_fallback(self) -> None:
+        driver, _input, output, fallback, _termios, events = _driver("\n")
+        activate = driver_module._activate_terminal
+
+        def activate_then_interrupt(configuration: object) -> None:
+            activate(configuration)  # type: ignore[arg-type]
+            raise KeyboardInterrupt
+
+        with mock.patch.object(
+            driver_module,
+            "_activate_terminal",
+            side_effect=activate_then_interrupt,
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                _read(
+                    driver,
+                    initialize_text_viewer("one", display_name="x"),
+                )
+        fallback.assert_not_called()
+        self.assertEqual(events.count("termios.activate"), 1)
+        self.assertEqual(events.count("termios.restore"), 1)
+        rendered = "".join(output.records)
+        self.assertNotIn("\x1b[?1049h", rendered)
+        self.assertNotIn("\x1b[?1049l", rendered)
+
+    def test_screen_exit_interrupt_restores_and_precedes_active_failure(self) -> None:
+        driver, input_stream, output, fallback, _termios, events = _driver("x")
+        active = RuntimeError("active")
+        input_stream.read = mock.Mock(side_effect=active)  # type: ignore[method-assign]
+        writes = output.write
+
+        def interrupt_after_exit_write(text: str) -> int:
+            written = writes(text)
+            if text == "\x1b[?1049l":
+                raise KeyboardInterrupt
+            return written
+
+        output.write = interrupt_after_exit_write  # type: ignore[method-assign]
+        with self.assertRaises(KeyboardInterrupt):
+            _read(driver, initialize_text_viewer("one", display_name="x"))
+        fallback.assert_not_called()
+        rendered = "".join(output.records)
+        self.assertEqual(rendered.count("\x1b[?1049h"), 1)
+        self.assertEqual(rendered.count("\x1b[?1049l"), 1)
+        self.assertEqual(events.count("termios.restore"), 1)
+
+    def test_escape_readiness_interrupt_is_typed_and_false_is_cancelled(self) -> None:
+        for readiness, expected in (
+            (KeyboardInterrupt(), TextViewerExitKind.INTERRUPTED),
+            (False, TextViewerExitKind.CANCELLED),
+        ):
+            with self.subTest(expected=expected):
+                driver, _input, output, fallback, _termios, events = _driver(
+                    "\x1b"
+                )
+                patch_arguments = (
+                    {"side_effect": readiness}
+                    if isinstance(readiness, BaseException)
+                    else {"return_value": readiness}
+                )
+                with mock.patch.object(
+                    driver_module,
+                    "_escape_input_is_ready",
+                    **patch_arguments,
+                ):
+                    result = _read(
+                        driver,
+                        initialize_text_viewer("one", display_name="x"),
+                    )
+                self.assertEqual(result, TextViewerResult(expected))
+                fallback.assert_not_called()
+                rendered = "".join(output.records)
+                self.assertEqual(rendered.count("\x1b[?1049h"), 1)
+                self.assertEqual(rendered.count("\x1b[?1049l"), 1)
+                self.assertEqual(events.count("termios.restore"), 1)
+
+    def test_disabled_controls_are_absent_for_viewer_and_shared_editor(self) -> None:
+        for disabled_value in (0, 255):
+            disabled_character = chr(disabled_value)
+            disabled_bytes = bytes((disabled_value,))
+            for disabled_names in (("vintr",), ("veof",), ("vintr", "veof")):
+                with self.subTest(
+                    disabled=disabled_value,
+                    controls=disabled_names,
+                ):
+                    driver, input_stream, output, fallback, termios, events = _driver(
+                        disabled_character + "\n",
+                        disabled_control=disabled_value,
+                    )
+                    termios.original[6][termios.VINTR] = (  # type: ignore[index]
+                        disabled_bytes if "vintr" in disabled_names else b"\x03"
+                    )
+                    termios.original[6][termios.VEOF] = (  # type: ignore[index]
+                        disabled_bytes if "veof" in disabled_names else b"\x04"
+                    )
+                    seen: list[KeyKind] = []
+
+                    def observe_transition(
+                        state: TextViewerState,
+                        event: KeyEvent,
+                    ) -> tuple[TextViewerState, TextViewerResult | None]:
+                        seen.append(event.kind)
+                        return transition_text_viewer(state, event)
+
+                    result = driver.read_text_viewer(
+                        initialize_text_viewer("one", display_name="x"),
+                        observe_transition,
+                        transition_text_viewer_fallback,
+                        project_text_viewer_viewport,
+                        render_text_viewer,
+                        render_text_viewer_fallback,
+                    )
+                    self.assertEqual(
+                        result,
+                        TextViewerResult(TextViewerExitKind.SELECTED, (1, 1)),
+                    )
+                    self.assertEqual(seen, [KeyKind.TEXT, KeyKind.ENTER])
+                    fallback.assert_not_called()
+                    self.assertEqual(events.count("os.fpathconf"), 1)
+                    self.assertEqual(events.count("termios.restore"), 1)
+                    rendered = "".join(output.records)
+                    self.assertEqual(rendered.count("\x1b[?1049h"), 1)
+                    self.assertEqual(rendered.count("\x1b[?1049l"), 1)
+
+                    configuration = driver_module._terminal_configuration(
+                        input_stream,
+                        output,
+                        termios_module=termios,
+                        os_module=driver._os_provider(),
+                        width=40,
+                    )
+                    assert configuration is not None
+                    if "vintr" in disabled_names:
+                        self.assertIsNone(configuration.interrupt_character)
+                    else:
+                        self.assertEqual(
+                            driver_module._key_event("\x03", configuration),
+                            KeyEvent(KeyKind.INTERRUPT),
+                        )
+                    if "veof" in disabled_names:
+                        self.assertIsNone(configuration.eof_character)
+                    else:
+                        self.assertEqual(
+                            driver_module._key_event("\x04", configuration),
+                            KeyEvent(KeyKind.EOF),
+                        )
+                    self.assertEqual(
+                        driver_module._key_event(
+                            disabled_character,
+                            configuration,
+                        ),
+                        KeyEvent(KeyKind.TEXT, text=disabled_character),
+                    )
+                    self.assertEqual(
+                        driver_module._key_event("\n", configuration),
+                        KeyEvent(KeyKind.ENTER),
+                    )
+                    self.assertEqual(
+                        driver_module._key_event("\t", configuration),
+                        KeyEvent(KeyKind.TAB),
+                    )
+                    self.assertEqual(
+                        driver_module._key_event("\x7f", configuration),
+                        KeyEvent(KeyKind.BACKSPACE),
+                    )
+
+    def test_pc_vdisable_query_failure_falls_back_before_activation(self) -> None:
+        for disabled_control in (
+            OSError("unavailable"),
+            ValueError("query failed"),
+        ):
+            with self.subTest(error=type(disabled_control).__name__):
+                driver, _input, output, fallback, _termios, events = _driver(
+                    "",
+                    answers=("1-1",),
+                    disabled_control=disabled_control,
+                )
+                result = _read(
+                    driver,
+                    initialize_text_viewer("one", display_name="x"),
+                )
+                self.assertEqual(result.line_range, (1, 1))
+                fallback.assert_called_once()
+                self.assertEqual(events.count("os.fpathconf"), 1)
+                self.assertNotIn("termios.activate", events)
+                self.assertEqual(output.records, [])
+
     def test_configured_controls_precede_escape_enter_and_ordinary_key_roles(self) -> None:
         cases = (
             ("vintr_escape", "\x1b", "\x1b", "\x04", TextViewerExitKind.INTERRUPTED),

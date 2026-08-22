@@ -194,10 +194,16 @@ def make_driver(
         observed_widths.append(descriptor)
         return SimpleNamespace(columns=40, lines=24)
 
+    def fpathconf(descriptor: int, name: str) -> int:
+        if descriptor != 7 or name != "PC_VDISABLE":
+            raise AssertionError((descriptor, name))
+        return 0
+
     os_module = SimpleNamespace(
         name="posix" if terminal else "nt",
         environ={"TERM": "xterm-256color"},
         get_terminal_size=get_terminal_size,
+        fpathconf=fpathconf,
         observed_widths=observed_widths,
     )
     driver = RawTerminalDriver(

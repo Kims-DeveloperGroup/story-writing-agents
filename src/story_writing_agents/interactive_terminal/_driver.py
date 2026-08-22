@@ -84,8 +84,8 @@ class _TerminalConfiguration:
     original_attributes: list[object]
     editor_attributes: list[object]
     width: int
-    eof_character: str
-    interrupt_character: str
+    eof_character: str | None
+    interrupt_character: str | None
     termios_module: object
 
 
@@ -814,40 +814,52 @@ class RawTerminalDriver:
                 fallback_renderer,
             )
 
-        try:
-            _activate_terminal(configuration)
-        except BaseException as setup_failure:
-            _restore_terminal_or_raise(configuration, setup_failure)
-            raise
-
         outcome: TextViewerResult | None = None
         active_failure: BaseException | None = None
-        screen_entered = True
-        try:
-            self._write_live_text(_VIEWER_SCREEN_ENTER)
-            _state, outcome = self._read_live_text_viewer(
-                state,
-                configuration,
-                capabilities,
-                transition,
-                viewport_projector,
-                viewport_renderer,
-            )
-        except BaseException as failure:
-            active_failure = failure
-
         screen_failure: BaseException | None = None
-        if screen_entered:
-            screen_entered = False
+        lifecycle_failure: BaseException | None = None
+        screen_cleanup_required = False
+        try:
             try:
-                self._write_live_text(_VIEWER_SCREEN_EXIT)
+                _activate_terminal(configuration)
             except BaseException as failure:
-                screen_failure = failure
-
-        restoration_context = screen_failure or active_failure
-        _restore_terminal_or_raise(configuration, restoration_context)
+                lifecycle_failure = failure
+            else:
+                try:
+                    # Pair even a partial alternate-screen entry with one exit
+                    # attempt before the enclosing terminal restoration.
+                    screen_cleanup_required = True
+                    try:
+                        self._write_live_text(_VIEWER_SCREEN_ENTER)
+                        _state, outcome = self._read_live_text_viewer(
+                            state,
+                            configuration,
+                            capabilities,
+                            transition,
+                            viewport_projector,
+                            viewport_renderer,
+                        )
+                    except BaseException as failure:
+                        active_failure = failure
+                finally:
+                    if screen_cleanup_required:
+                        try:
+                            self._write_live_text(_VIEWER_SCREEN_EXIT)
+                        except BaseException as failure:
+                            screen_failure = failure
+        except BaseException as failure:
+            # This boundary covers interruption gaps between activation,
+            # alternate-screen cleanup, and the enclosing restoration.
+            lifecycle_failure = failure
+        finally:
+            restoration_context = (
+                screen_failure or lifecycle_failure or active_failure
+            )
+            _restore_terminal_or_raise(configuration, restoration_context)
         if screen_failure is not None:
             raise screen_failure
+        if lifecycle_failure is not None:
+            raise lifecycle_failure
         if active_failure is not None:
             raise active_failure
         assert outcome is not None
@@ -1421,7 +1433,15 @@ class RawTerminalDriver:
                     continue
 
             if character == "\x1b":
-                if not _escape_input_is_ready(configuration.input_descriptor):
+                try:
+                    escape_input_is_ready = _escape_input_is_ready(
+                        configuration.input_descriptor,
+                    )
+                except KeyboardInterrupt:
+                    return state, TextViewerResult(
+                        TextViewerExitKind.INTERRUPTED,
+                    )
+                if not escape_input_is_ready:
                     state, outcome = _apply_viewer_event(
                         state,
                         KeyEvent(KeyKind.ESCAPE),
@@ -1960,6 +1980,10 @@ def _terminal_configuration(
 
     input_descriptor = _stream_descriptor(input_stream)
     output_descriptor = _stream_descriptor(output_stream)
+    disabled_control_character = _disabled_control_character(
+        input_descriptor,
+        os_module,
+    )
     original_attributes = termios_module.tcgetattr(input_descriptor)
     editor_attributes = list(original_attributes)
     editor_attributes[6] = list(original_attributes[6])
@@ -1969,10 +1993,12 @@ def _terminal_configuration(
     eof_character = _configured_control_character(
         original_attributes[6][termios_module.VEOF],
         "VEOF",
+        disabled_control_character,
     )
     interrupt_character = _configured_control_character(
         original_attributes[6][termios_module.VINTR],
         "VINTR",
+        disabled_control_character,
     )
     if width is None:
         columns = os_module.get_terminal_size(output_descriptor).columns
@@ -2015,20 +2041,50 @@ def _stream_descriptor(stream: TextIO) -> int:
     return descriptor
 
 
-def _configured_control_character(value: object, name: str) -> str:
+def _disabled_control_character(
+    input_descriptor: int,
+    os_module: object,
+) -> str:
+    """Resolve this terminal's platform-specific disabled control value."""
+
+    fpathconf = getattr(os_module, "fpathconf", None)
+    if not callable(fpathconf):
+        raise OSError("PC_VDISABLE is unavailable")
+    value = fpathconf(input_descriptor, "PC_VDISABLE")
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or not 0 <= value <= 255
+    ):
+        raise ValueError("PC_VDISABLE must be one terminal control character")
+    return chr(value)
+
+
+def _configured_control_character(
+    value: object,
+    name: str,
+    disabled_character: str,
+) -> str | None:
     """Decode one termios control character for active input comparison.
 
-    The returned code point is not displayed. Unsupported termios shapes raise
-    before mode activation so fallback can proceed without cleanup.
+    Enabled code points are not displayed, while the platform's disabled value
+    becomes ``None``. Unsupported termios shapes raise before mode activation
+    so fallback can proceed without cleanup.
     """
 
     if isinstance(value, bytes) and len(value) == 1:
-        return value.decode("latin-1")
-    if isinstance(value, str) and len(value) == 1:
-        return value
-    if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 255:
-        return chr(value)
-    raise ValueError(f"{name} must be one terminal control character")
+        character = value.decode("latin-1")
+    elif isinstance(value, str) and len(value) == 1:
+        character = value
+    elif (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and 0 <= value <= 255
+    ):
+        character = chr(value)
+    else:
+        raise ValueError(f"{name} must be one terminal control character")
+    return None if character == disabled_character else character
 
 
 def _activate_terminal(configuration: _TerminalConfiguration) -> None:
@@ -2171,9 +2227,15 @@ def _key_event(
 
     if character in {"\r", "\n"}:
         return KeyEvent(KeyKind.ENTER)
-    if character == configuration.interrupt_character:
+    if (
+        configuration.interrupt_character is not None
+        and character == configuration.interrupt_character
+    ):
         return KeyEvent(KeyKind.INTERRUPT)
-    if character == configuration.eof_character:
+    if (
+        configuration.eof_character is not None
+        and character == configuration.eof_character
+    ):
         return KeyEvent(KeyKind.EOF)
     if character in {"\x08", "\x7f"}:
         return KeyEvent(KeyKind.BACKSPACE)
@@ -2188,9 +2250,15 @@ def _viewer_configured_control_event(
 ) -> KeyEvent | None:
     """Prioritize viewer VINTR, then VEOF, before every ordinary key role."""
 
-    if character == configuration.interrupt_character:
+    if (
+        configuration.interrupt_character is not None
+        and character == configuration.interrupt_character
+    ):
         return KeyEvent(KeyKind.INTERRUPT)
-    if character == configuration.eof_character:
+    if (
+        configuration.eof_character is not None
+        and character == configuration.eof_character
+    ):
         return KeyEvent(KeyKind.EOF)
     return None
 
