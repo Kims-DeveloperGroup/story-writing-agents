@@ -74,9 +74,13 @@ possible provider/artifact use, not shell gates. Parsing performs no I/O.
 explicit Save may replace configuration documents.
 
 For `/run`, `--output` must be first, or immediately after `--fresh`. The parser
-preserves its `PART/PATH.md` token in `output_path`; the controller validates
-the artifact grammar and prompts when it is absent. Registry membership is not
-main-prompt availability: the installed shell rejects standalone `/compose`,
+recognizes only ASCII space or tab between `--output`, its `PART/PATH.md`, and
+the optional prompt. Unicode whitespace attached to `--output` returns a typed
+`parse_error`; when attached to the path, it remains part of that token and is
+later rejected by the artifact path validator. The parser preserves the token
+in `output_path`; the controller validates the artifact grammar and prompts
+when it is absent. Registry membership is not main-prompt availability: the
+installed shell rejects standalone `/compose`,
 `/send`, and `/cancel`. Run composition recognizes `/send` and `/cancel`;
 `/say /send` and `/say /cancel` are exact
 aliases.

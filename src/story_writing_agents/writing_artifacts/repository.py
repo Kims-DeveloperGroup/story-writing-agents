@@ -37,7 +37,7 @@ _SNAPSHOTS_DIRECTORY = f"{_STATE_DIRECTORY}/input_snapshots"
 _STAGING_DIRECTORY = f"{_STATE_DIRECTORY}/staging"
 _LOCK_PATH = f"{_STATE_DIRECTORY}/.artifacts.lock"
 _RECOVERY_BLOCK_PATH = f"{_STATE_DIRECTORY}/recovery_blocked.json"
-_TRANSACTION_SCHEMA_VERSION = 1
+_TRANSACTION_SCHEMA_VERSION = 2
 _COMMIT_SCHEMA_VERSION = 1
 _RECOVERY_SCHEMA_VERSION = 1
 _SAFE_IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
@@ -164,11 +164,15 @@ class WritingArtifactRepository:
             )
 
         with self._locked_repository():
+            catalog, catalog_raw = self._load_catalog_image()
+            if manuscript_path in catalog.entries:
+                raise ManuscriptExistsError(
+                    f"refusing to overwrite cataloged path {manuscript_path}"
+                )
             if self._storage.read_bytes_if_exists(manuscript_path) is not None:
                 raise ManuscriptExistsError(
                     f"refusing to overwrite {manuscript_path}"
                 )
-            catalog = self._load_catalog()
             commit_id = uuid4().hex
             committed_at = datetime.now(UTC).isoformat()
             target_specs: list[dict[str, object]] = []
@@ -247,10 +251,18 @@ class WritingArtifactRepository:
                 "session_id": session_id,
             }
             transaction = {
+                "catalog_before": {
+                    "exists": catalog_raw is not None,
+                    "image": catalog.to_dict(),
+                    "sha256": (
+                        None
+                        if catalog_raw is None
+                        else hashlib.sha256(catalog_raw).hexdigest()
+                    ),
+                },
                 "catalog_after": ArtifactCatalog(new_entries).to_dict(),
                 "commit": commit_record,
                 "schema_version": _TRANSACTION_SCHEMA_VERSION,
-                "state": "prepared",
                 "targets": target_specs,
                 "transaction_id": commit_id,
             }
@@ -317,68 +329,222 @@ class WritingArtifactRepository:
             transaction,
             expected_id=transaction["transaction_id"],
         )
-        for raw_target in transaction["targets"]:
-            assert isinstance(raw_target, dict)
-            path = raw_target["path"]
-            assert isinstance(path, str)
-            expected_hash = raw_target["new_sha256"]
-            assert isinstance(expected_hash, str)
-            try:
-                new_content = base64.b64decode(
-                    raw_target["new_content_base64"],
-                    validate=True,
-                )
-            except (TypeError, ValueError) as exc:
-                raise WorkspaceFormatError("transaction content encoding is invalid") from exc
-            if hashlib.sha256(new_content).hexdigest() != expected_hash:
-                raise WorkspaceFormatError("transaction content hash is invalid")
-            current = self._storage.read_bytes_if_exists(path)
-            current_hash = (
-                None if current is None else hashlib.sha256(current).hexdigest()
+        journal_bytes = self._json_bytes(transaction)
+        self._require_journal_authority(transaction_path, journal_bytes)
+        catalog_position = self._catalog_position(transaction)
+        if catalog_position == "divergent":
+            self._block_recovery(
+                "artifact catalog does not match transaction authority"
             )
-            if current_hash == expected_hash:
-                continue
-            old_exists = raw_target["old_exists"]
-            old_hash = raw_target["old_sha256"]
-            if (current is not None) != old_exists or current_hash != old_hash:
-                raise WorkspaceSecurityError("artifact diverged during recovery")
-            self._storage.publish_bytes(
-                path,
-                new_content,
-                expected_sha256=old_hash,
-                expected_exists=old_exists,
-                create_only=raw_target["create_only"],
-                staging_directory=_STAGING_DIRECTORY,
-            )
-            published = self._storage.read_bytes(path)
-            if hashlib.sha256(published).hexdigest() != expected_hash:
-                raise WorkspaceSecurityError("artifact publication could not be verified")
-
-        if transaction["state"] == "prepared":
-            transaction = dict(transaction)
-            transaction["state"] = "artifacts_published"
-            self._replace_json(transaction_path, transaction)
-
         commit = transaction["commit"]
         assert isinstance(commit, dict)
         commit_id = commit["commit_id"]
         assert isinstance(commit_id, str)
-        self._write_immutable_json(
-            f"{_COMMITS_DIRECTORY}/{commit_id}.json",
-            commit,
-        )
+        commit_path = f"{_COMMITS_DIRECTORY}/{commit_id}.json"
+        commit_bytes = self._json_bytes(commit)
+        try:
+            current_commit = self._storage.read_bytes_if_exists(commit_path)
+        except WorkspaceSecurityError as exc:
+            self._block_recovery(
+                "immutable artifact commit is unsafe",
+                cause=exc,
+            )
+
+        targets = transaction["targets"]
+        assert isinstance(targets, list)
+        if catalog_position == "before":
+            self._verify_target_states(targets, allow_old=True)
+            for target in targets:
+                assert isinstance(target, dict)
+                path = target["path"]
+                assert isinstance(path, str)
+                current = self._storage.read_bytes_if_exists(path)
+                current_hash = (
+                    None
+                    if current is None
+                    else hashlib.sha256(current).hexdigest()
+                )
+                if current_hash == target["new_sha256"]:
+                    continue
+                self._require_journal_authority(
+                    transaction_path,
+                    journal_bytes,
+                )
+                new_content = self._target_content(target)
+                self._storage.publish_bytes(
+                    path,
+                    new_content,
+                    expected_sha256=target["old_sha256"],
+                    expected_exists=target["old_exists"],
+                    create_only=target["create_only"],
+                    staging_directory=_STAGING_DIRECTORY,
+                )
+            self._verify_target_states(targets, allow_old=False)
+            self._require_journal_authority(transaction_path, journal_bytes)
+            current_commit = self._storage.read_bytes_if_exists(commit_path)
+            if current_commit not in {None, commit_bytes}:
+                self._block_recovery(
+                    "immutable artifact commit conflicts with transaction"
+                )
+            if current_commit is None:
+                self._write_immutable_json(commit_path, commit)
+            if self._storage.read_bytes_if_exists(commit_path) != commit_bytes:
+                self._block_recovery(
+                    "immutable artifact commit diverged during publication"
+                )
+            self._require_journal_authority(transaction_path, journal_bytes)
+            if self._catalog_position(transaction) != "before":
+                self._block_recovery(
+                    "artifact catalog changed before final publication"
+                )
+            catalog_before = transaction["catalog_before"]
+            assert isinstance(catalog_before, dict)
+            catalog_after = transaction["catalog_after"]
+            assert isinstance(catalog_after, dict)
+            try:
+                self._storage.publish_bytes(
+                    _CATALOG_PATH,
+                    self._json_bytes(catalog_after),
+                    expected_sha256=catalog_before["sha256"],
+                    expected_exists=catalog_before["exists"],
+                    create_only=False,
+                    staging_directory=_STAGING_DIRECTORY,
+                )
+            except ArtifactEntrySecurityError as exc:
+                self._block_recovery(
+                    "artifact catalog diverged during final publication",
+                    cause=exc,
+                )
+            if self._catalog_position(transaction) != "after":
+                self._block_recovery(
+                    "artifact catalog publication could not be verified"
+                )
+        elif catalog_position == "after":
+            self._verify_target_states(targets, allow_old=False)
+            if current_commit != commit_bytes:
+                self._block_recovery(
+                    "published artifact commit is missing or divergent"
+                )
+        self._require_journal_authority(transaction_path, journal_bytes)
+        self._verify_target_states(targets, allow_old=False)
+        if self._storage.read_bytes_if_exists(commit_path) != commit_bytes:
+            self._block_recovery(
+                "published artifact commit is missing or divergent"
+            )
         catalog_after = transaction["catalog_after"]
         assert isinstance(catalog_after, dict)
-        ArtifactCatalog.from_dict(catalog_after)
-        self._write_json_exact(_CATALOG_PATH, catalog_after)
-        self._storage.unlink(
-            transaction_path,
-            expected_sha256=hashlib.sha256(
-                self._json_bytes(transaction)
-            ).hexdigest(),
-            retirement_directory=_STAGING_DIRECTORY,
-            missing_ok=True,
-        )
+        if self._catalog_position(transaction) != "after":
+            self._block_recovery("artifact catalog is not durably complete")
+        self._require_journal_authority(transaction_path, journal_bytes)
+        try:
+            self._storage.unlink(
+                transaction_path,
+                expected_sha256=hashlib.sha256(journal_bytes).hexdigest(),
+                retirement_directory=_STAGING_DIRECTORY,
+                missing_ok=False,
+            )
+        except (FileNotFoundError, WorkspaceSecurityError) as exc:
+            self._block_recovery(
+                "transaction journal could not be strictly retired",
+                cause=exc,
+            )
+
+    def _require_journal_authority(
+        self,
+        transaction_path: str,
+        expected: bytes,
+    ) -> None:
+        """Fail closed when the immutable prepared journal is not exact."""
+
+        try:
+            current = self._storage.read_bytes(transaction_path)
+        except (FileNotFoundError, WorkspaceSecurityError) as exc:
+            self._block_recovery(
+                "transaction journal authority is missing or unsafe",
+                cause=exc,
+            )
+        if current != expected:
+            self._block_recovery("transaction journal authority diverged")
+
+    def _catalog_position(self, transaction: dict[str, object]) -> str:
+        """Return whether current catalog bytes exactly match before or after."""
+
+        before = transaction["catalog_before"]
+        after = transaction["catalog_after"]
+        assert isinstance(before, dict)
+        assert isinstance(after, dict)
+        try:
+            current = self._storage.read_bytes_if_exists(_CATALOG_PATH)
+        except WorkspaceSecurityError as exc:
+            self._block_recovery(
+                "artifact catalog state is unsafe",
+                cause=exc,
+            )
+        if current is None:
+            if before["exists"] is False:
+                return "before"
+            return "divergent"
+        if before["exists"] is True and (
+            hashlib.sha256(current).hexdigest() == before["sha256"]
+        ):
+            try:
+                current_image = self._decode_json(current)
+            except WorkspaceFormatError:
+                return "divergent"
+            if current_image == before["image"]:
+                return "before"
+        if current == self._json_bytes(after):
+            return "after"
+        return "divergent"
+
+    def _verify_target_states(
+        self,
+        targets: list[object],
+        *,
+        allow_old: bool,
+    ) -> None:
+        """Require every target to be exactly old/new or exactly new."""
+
+        for raw_target in targets:
+            assert isinstance(raw_target, dict)
+            path = raw_target["path"]
+            assert isinstance(path, str)
+            try:
+                current = self._storage.read_bytes_if_exists(path)
+            except WorkspaceSecurityError as exc:
+                self._block_recovery(
+                    "artifact target state is unsafe",
+                    cause=exc,
+                )
+            current_hash = (
+                None if current is None else hashlib.sha256(current).hexdigest()
+            )
+            if current_hash == raw_target["new_sha256"]:
+                continue
+            if allow_old and (
+                (current is not None) == raw_target["old_exists"]
+                and current_hash == raw_target["old_sha256"]
+            ):
+                continue
+            self._block_recovery("artifact target diverged from transaction")
+
+    @staticmethod
+    def _target_content(target: dict[str, object]) -> bytes:
+        """Decode one already-validated transaction target image."""
+
+        try:
+            content = base64.b64decode(
+                target["new_content_base64"],
+                validate=True,
+            )
+        except (TypeError, ValueError) as exc:
+            raise WorkspaceFormatError(
+                "transaction content encoding is invalid"
+            ) from exc
+        assert isinstance(target["new_sha256"], str)
+        if hashlib.sha256(content).hexdigest() != target["new_sha256"]:
+            raise WorkspaceFormatError("transaction content hash is invalid")
+        return content
 
     def _validate_transaction(
         self,
@@ -387,10 +553,10 @@ class WritingArtifactRepository:
         expected_id: object,
     ) -> None:
         expected_fields = {
+            "catalog_before",
             "catalog_after",
             "commit",
             "schema_version",
-            "state",
             "targets",
             "transaction_id",
         }
@@ -408,8 +574,6 @@ class WritingArtifactRepository:
             or transaction_id != expected_id
         ):
             raise WorkspaceFormatError("transaction identity is invalid")
-        if value["state"] not in {"prepared", "artifacts_published"}:
-            raise WorkspaceFormatError("transaction state is invalid")
         commit = value["commit"]
         self._validate_commit(commit, transaction_id=transaction_id)
         assert isinstance(commit, dict)
@@ -432,6 +596,13 @@ class WritingArtifactRepository:
                 raise WorkspaceFormatError("transaction target fields are invalid")
             path = target["path"]
             kind = target["kind"]
+            if (
+                type(path) is not str
+                or type(kind) is not str
+                or type(target["author_agent_id"]) is not str
+                or type(target["new_content_base64"]) is not str
+            ):
+                raise WorkspaceFormatError("transaction target types are invalid")
             try:
                 parsed_kind = ArtifactKind(kind)
             except (TypeError, ValueError) as exc:
@@ -468,7 +639,41 @@ class WritingArtifactRepository:
                     raise WorkspaceFormatError("transaction old hash is invalid")
             elif old_hash is not None:
                 raise WorkspaceFormatError("absent transaction target has an old hash")
-        catalog = ArtifactCatalog.from_dict(value["catalog_after"])
+            self._target_content(target)
+
+        catalog_before_record = value["catalog_before"]
+        if (
+            type(catalog_before_record) is not dict
+            or set(catalog_before_record) != {"exists", "image", "sha256"}
+            or type(catalog_before_record["exists"]) is not bool
+        ):
+            raise WorkspaceFormatError("transaction catalog-before state is invalid")
+        before_exists = catalog_before_record["exists"]
+        before_hash = catalog_before_record["sha256"]
+        if before_exists:
+            if (
+                type(before_hash) is not str
+                or re.fullmatch(r"[0-9a-f]{64}", before_hash) is None
+            ):
+                raise WorkspaceFormatError(
+                    "transaction catalog-before hash is invalid"
+                )
+        elif before_hash is not None:
+            raise WorkspaceFormatError(
+                "absent transaction catalog has a hash"
+            )
+        try:
+            catalog_before = ArtifactCatalog.from_dict(
+                catalog_before_record["image"]
+            )
+            catalog_after = ArtifactCatalog.from_dict(value["catalog_after"])
+        except (TypeError, ValueError) as exc:
+            raise WorkspaceFormatError("transaction catalog image is invalid") from exc
+        if not before_exists and catalog_before.entries:
+            raise WorkspaceFormatError(
+                "absent transaction catalog must have an empty image"
+            )
+
         target_metadata = {
             target["path"]: (
                 target["kind"],
@@ -479,6 +684,24 @@ class WritingArtifactRepository:
         }
         commit_artifacts = commit["artifacts"]
         assert isinstance(commit_artifacts, list)
+        target_paths = [target["path"] for target in targets]
+        commit_paths = [artifact["path"] for artifact in commit_artifacts]
+        if commit_paths != target_paths:
+            raise WorkspaceFormatError(
+                "transaction commit order does not exactly match targets"
+            )
+        manuscript_paths = [
+            target["path"]
+            for target in targets
+            if target["kind"] == ArtifactKind.MANUSCRIPT.value
+        ]
+        ordered_core_paths = [
+            f"core_documents/{filename}"
+            for filename in CORE_DOCUMENTS
+            if f"core_documents/{filename}" in target_paths
+        ]
+        if target_paths != [*manuscript_paths, *ordered_core_paths]:
+            raise WorkspaceFormatError("transaction target order is invalid")
         commit_metadata = {
             artifact["path"]: (
                 artifact["kind"],
@@ -491,9 +714,25 @@ class WritingArtifactRepository:
             raise WorkspaceFormatError(
                 "transaction commit does not exactly match targets"
             )
+        before_paths = set(catalog_before.entries)
+        after_paths = set(catalog_after.entries)
+        target_path_set = set(target_metadata)
+        if after_paths != before_paths.union(target_path_set):
+            raise WorkspaceFormatError(
+                "transaction catalog membership does not match before and targets"
+            )
+        if any(path in before_paths for path in manuscript_paths):
+            raise WorkspaceFormatError(
+                "transaction manuscript already exists in catalog-before"
+            )
+        for path in before_paths.difference(target_path_set):
+            if catalog_before.entries[path] != catalog_after.entries[path]:
+                raise WorkspaceFormatError(
+                    "transaction changed unrelated catalog metadata"
+                )
         catalog_entries = {
             path: entry
-            for path, entry in catalog.entries.items()
+            for path, entry in catalog_after.entries.items()
             if entry.commit_id == transaction_id
         }
         if set(catalog_entries) != set(target_metadata):
@@ -501,7 +740,7 @@ class WritingArtifactRepository:
                 "transaction catalog commit set does not match targets"
             )
         for target in targets:
-            entry = catalog.entries.get(target["path"])
+            entry = catalog_after.entries.get(target["path"])
             if (
                 entry is None
                 or entry.commit_id != transaction_id
@@ -556,6 +795,13 @@ class WritingArtifactRepository:
         for artifact in artifacts:
             if type(artifact) is not dict or set(artifact) != artifact_fields:
                 raise WorkspaceFormatError("artifact commit entry fields are invalid")
+            if (
+                type(artifact["kind"]) is not str
+                or type(artifact["path"]) is not str
+                or type(artifact["author_agent_id"]) is not str
+                or type(artifact["sha256"]) is not str
+            ):
+                raise WorkspaceFormatError("artifact commit entry types are invalid")
             try:
                 kind = ArtifactKind(artifact["kind"])
             except (TypeError, ValueError) as exc:
@@ -584,15 +830,7 @@ class WritingArtifactRepository:
             raise WorkspaceFormatError("artifact commit must contain one manuscript")
 
     def _load_catalog(self) -> ArtifactCatalog:
-        raw = self._storage.read_bytes_if_exists(_CATALOG_PATH)
-        if raw is None:
-            return ArtifactCatalog.empty()
-        try:
-            catalog = ArtifactCatalog.from_dict(
-                json.loads(raw.decode("utf-8", errors="strict"))
-            )
-        except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
-            raise WorkspaceFormatError("artifact catalog is invalid") from exc
+        catalog, _ = self._load_catalog_image()
         verified: dict[str, ArtifactCatalogEntry] = {}
         commits: dict[str, dict[str, object] | None] = {}
         for path, entry in catalog.entries.items():
@@ -603,16 +841,12 @@ class WritingArtifactRepository:
                     commits[entry.commit_id] = None
                 else:
                     try:
-                        parsed_commit = json.loads(
-                            raw_commit.decode("utf-8", errors="strict")
-                        )
+                        parsed_commit = self._decode_json(raw_commit)
                         self._validate_commit(
                             parsed_commit,
                             transaction_id=entry.commit_id,
                         )
                     except (
-                        UnicodeDecodeError,
-                        json.JSONDecodeError,
                         TypeError,
                         ValueError,
                     ) as exc:
@@ -642,11 +876,43 @@ class WritingArtifactRepository:
                 verified[path] = entry
         return ArtifactCatalog(verified)
 
-    def _read_json(self, relative: str) -> object:
+    def _load_catalog_image(self) -> tuple[ArtifactCatalog, bytes | None]:
+        """Return the exact authoritative catalog image and its stored bytes."""
+
+        raw = self._storage.read_bytes_if_exists(_CATALOG_PATH)
+        if raw is None:
+            return ArtifactCatalog.empty(), None
         try:
-            return json.loads(self._storage.read_bytes(relative).decode("utf-8", errors="strict"))
+            return ArtifactCatalog.from_dict(self._decode_json(raw)), raw
+        except (WorkspaceFormatError, TypeError, ValueError) as exc:
+            raise WorkspaceFormatError("artifact catalog is invalid") from exc
+
+    def _read_json(self, relative: str) -> object:
+        return self._decode_json(self._storage.read_bytes(relative))
+
+    @staticmethod
+    def _decode_json(raw: bytes) -> object:
+        """Decode strict UTF-8 JSON while rejecting duplicate keys recursively."""
+
+        def reject_duplicates(pairs):
+            value: dict[str, object] = {}
+            for key, item in pairs:
+                if key in value:
+                    raise WorkspaceFormatError(
+                        "artifact repository JSON contains duplicate keys"
+                    )
+                value[key] = item
+            return value
+
+        try:
+            text = raw.decode("utf-8", errors="strict")
+            return json.loads(text, object_pairs_hook=reject_duplicates)
+        except WorkspaceFormatError:
+            raise
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise WorkspaceFormatError("artifact repository JSON is invalid") from exc
+            raise WorkspaceFormatError(
+                "artifact repository JSON is invalid"
+            ) from exc
 
     @staticmethod
     def _json_bytes(value: object) -> bytes:
@@ -664,17 +930,6 @@ class WritingArtifactRepository:
             expected_sha256=None,
             expected_exists=False,
             create_only=True,
-            staging_directory=_STAGING_DIRECTORY,
-        )
-
-    def _replace_json(self, relative: str, value: object) -> None:
-        current = self._storage.read_bytes(relative)
-        self._storage.publish_bytes(
-            relative,
-            self._json_bytes(value),
-            expected_sha256=hashlib.sha256(current).hexdigest(),
-            expected_exists=True,
-            create_only=False,
             staging_directory=_STAGING_DIRECTORY,
         )
 

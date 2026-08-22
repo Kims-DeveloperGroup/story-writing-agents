@@ -10,6 +10,7 @@ import os
 import stat
 import sys
 import threading
+import unicodedata
 from collections.abc import Iterator
 from pathlib import Path, PurePosixPath
 from uuid import uuid4
@@ -145,6 +146,49 @@ class SecureWorkspaceStorage:
             raise WorkspaceSecurityError("unsafe artifact storage path")
         return parts
 
+    @staticmethod
+    def _entry_spelling_key(value: str) -> str:
+        """Return the filesystem-alias key used only to diagnose unsafe names."""
+
+        return unicodedata.normalize("NFKC", value).casefold()
+
+    @classmethod
+    def _require_exact_name(
+        cls,
+        directory: int,
+        name: str,
+        *,
+        directory_entry: bool,
+        missing_ok: bool = False,
+    ) -> None:
+        """Require one descriptor-relative name with exact stored spelling."""
+
+        try:
+            names = os.listdir(directory)
+        except OSError as exc:
+            error_type = (
+                ArtifactRootSecurityError
+                if directory_entry
+                else ArtifactEntrySecurityError
+            )
+            raise error_type("cannot verify artifact entry spelling") from exc
+        key = cls._entry_spelling_key(name)
+        if any(
+            candidate != name and cls._entry_spelling_key(candidate) == key
+            for candidate in names
+        ):
+            error_type = (
+                ArtifactRootSecurityError
+                if directory_entry
+                else ArtifactEntrySecurityError
+            )
+            raise error_type("artifact entry spelling is not exact")
+        if name in names:
+            return
+        if missing_ok:
+            return
+        raise FileNotFoundError(name)
+
     @contextlib.contextmanager
     def _open_root(self) -> Iterator[int]:
         self._require_primitives()
@@ -212,12 +256,24 @@ class SecureWorkspaceStorage:
             for name in parts:
                 if create:
                     try:
+                        self._require_exact_name(
+                            current,
+                            name,
+                            directory_entry=True,
+                            missing_ok=True,
+                        )
                         os.mkdir(name, mode=0o700, dir_fd=current)
+                        os.fsync(current)
                     except FileExistsError:
                         pass
                     except OSError as exc:
                         raise ArtifactRootSecurityError("cannot create artifact directory") from exc
                 try:
+                    self._require_exact_name(
+                        current,
+                        name,
+                        directory_entry=True,
+                    )
                     named = os.stat(name, dir_fd=current, follow_symlinks=False)
                     child = os.open(
                         name,
@@ -236,6 +292,11 @@ class SecureWorkspaceStorage:
                 ):
                     os.close(child)
                     raise ArtifactRootSecurityError("artifact directory changed during traversal")
+                self._require_exact_name(
+                    current,
+                    name,
+                    directory_entry=True,
+                )
                 identity = (opened.st_dev, opened.st_ino)
                 chain.append((current, name, child, identity))
                 descriptors.append(child)
@@ -255,6 +316,11 @@ class SecureWorkspaceStorage:
 
         for parent, name, child, identity in chain:
             try:
+                SecureWorkspaceStorage._require_exact_name(
+                    parent,
+                    name,
+                    directory_entry=True,
+                )
                 named = os.stat(name, dir_fd=parent, follow_symlinks=False)
                 opened = os.fstat(child)
             except OSError as exc:
@@ -283,6 +349,11 @@ class SecureWorkspaceStorage:
             raise ArtifactEntrySecurityError(
                 "artifact file is not a unique regular file"
             )
+        SecureWorkspaceStorage._require_exact_name(
+            directory,
+            name,
+            directory_entry=False,
+        )
         try:
             descriptor = os.open(
                 name,
@@ -305,6 +376,11 @@ class SecureWorkspaceStorage:
                 or (named.st_dev, named.st_ino) != (opened.st_dev, opened.st_ino)
             ):
                 raise ArtifactEntrySecurityError("artifact file is not a unique regular file")
+            SecureWorkspaceStorage._require_exact_name(
+                directory,
+                name,
+                directory_entry=False,
+            )
             if max_bytes is not None and opened.st_size > max_bytes:
                 raise WorkspaceFormatError("artifact file exceeds the permitted size")
             chunks: list[bytes] = []
@@ -333,6 +409,11 @@ class SecureWorkspaceStorage:
             ):
                 raise ArtifactEntrySecurityError("artifact file changed while being read")
             try:
+                SecureWorkspaceStorage._require_exact_name(
+                    directory,
+                    name,
+                    directory_entry=False,
+                )
                 final_name = os.stat(name, dir_fd=directory, follow_symlinks=False)
             except OSError as exc:
                 raise ArtifactEntrySecurityError(
@@ -501,6 +582,11 @@ class SecureWorkspaceStorage:
                 raise ArtifactEntrySecurityError(
                     "staged artifact is not a unique regular file"
                 )
+            self._require_exact_name(
+                stage_directory,
+                temporary,
+                directory_entry=False,
+            )
             os.close(descriptor)
             descriptor = -1
 
@@ -609,6 +695,11 @@ class SecureWorkspaceStorage:
         for attempt in range(128):
             destination = f".artifacts-{uuid4().hex}-{attempt}.{suffix}"
             try:
+                cls._require_exact_name(
+                    source_directory,
+                    source,
+                    directory_entry=False,
+                )
                 cls._rename_noreplace(
                     source_directory,
                     source,
@@ -621,6 +712,11 @@ class SecureWorkspaceStorage:
                 destination,
                 dir_fd=retirement_directory,
                 follow_symlinks=False,
+            )
+            cls._require_exact_name(
+                retirement_directory,
+                destination,
+                directory_entry=False,
             )
             if not stat.S_ISREG(moved.st_mode):
                 raise ArtifactEntrySecurityError(
@@ -646,6 +742,11 @@ class SecureWorkspaceStorage:
             retirement_name,
             dir_fd=retirement_directory,
             follow_symlinks=False,
+        )
+        cls._require_exact_name(
+            retirement_directory,
+            retirement_name,
+            directory_entry=False,
         )
         if (
             not stat.S_ISREG(retained.st_mode)

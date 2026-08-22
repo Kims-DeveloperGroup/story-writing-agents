@@ -889,6 +889,55 @@ class SuccessfulParsingTests(unittest.TestCase):
                     InteractiveAction(ActionKind.RUN_FRESH, text=text),
                 )
 
+    def test_run_output_uses_only_ascii_delimiters_and_preserves_prompt_exactly(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "/run\t--output\tpart-01/chapter.md\tprompt  exact\t ",
+                InteractiveAction(
+                    ActionKind.RUN,
+                    text="prompt  exact\t ",
+                    output_path="part-01/chapter.md",
+                ),
+            ),
+            (
+                "/run --fresh\t--output part-01/chapter.md\tprompt  exact\t ",
+                InteractiveAction(
+                    ActionKind.RUN_FRESH,
+                    text="prompt  exact\t ",
+                    output_path="part-01/chapter.md",
+                ),
+            ),
+        )
+        for line, expected in cases:
+            with self.subTest(line=line):
+                self.assertEqual(parse_interactive_line(line), expected)
+
+        for whitespace in ("\u00a0", "\u2003", "\u3000"):
+            with self.subTest(whitespace=repr(whitespace)):
+                output_path = f"part-01{whitespace}suffix/chapter.md"
+                self.assertEqual(
+                    parse_interactive_line(
+                        f"/run --output {output_path} prompt exact"
+                    ),
+                    InteractiveAction(
+                        ActionKind.RUN,
+                        text="prompt exact",
+                        output_path=output_path,
+                    ),
+                )
+                self.assertEqual(
+                    parse_interactive_line(
+                        f"/run --fresh --output {output_path} prompt exact"
+                    ),
+                    InteractiveAction(
+                        ActionKind.RUN_FRESH,
+                        text="prompt exact",
+                        output_path=output_path,
+                    ),
+                )
+
     def test_token_arguments_accept_printable_non_whitespace_values(self) -> None:
         cases = (
             (
@@ -1187,6 +1236,16 @@ class InvalidInputTests(ParserAssertions, unittest.TestCase):
         ):
             with self.subTest(line=line):
                 self.assert_parse_error(line)
+
+    def test_unicode_whitespace_does_not_become_a_run_output_delimiter(self) -> None:
+        for whitespace in ("\u00a0", "\u2003", "\u3000"):
+            with self.subTest(whitespace=repr(whitespace)):
+                self.assert_parse_error(
+                    f"/run --output{whitespace}part-01/chapter.md prompt"
+                )
+                self.assert_parse_error(
+                    f"/run --fresh --output{whitespace}part-01/chapter.md prompt"
+                )
 
     def test_history_accepts_only_positive_ascii_digit_counts(self) -> None:
         invalid = (

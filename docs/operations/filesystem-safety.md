@@ -29,16 +29,21 @@ directory. Use an explicit path for automation or nested workspaces.
 Orchestration core-document access is limited to four exact filenames.
 Manuscript outputs require `PART/PATH.md` and publish beneath
 `manuscript/PART/`. Generic `Workspace.write_text()` and `write_json()` reject
-those four core paths and every canonical manuscript path: canonical
-application writes must go through the writing-artifact repository. Other
-safely contained workspace paths retain the generic helpers.
+those four core paths, every canonical manuscript path, and case-folded or
+Unicode-normalized aliases of the reserved `core_documents/` and `manuscript/`
+names before creating a parent or target. Canonical application writes must go
+through the writing-artifact repository. Other safely contained workspace
+paths retain the generic helpers.
 
 Writing artifacts use a stronger domain adapter. It opens the workspace root
 and every directory by descriptor without following links, retains and
 revalidates the complete ancestor chain, requires each read target to be a
 unique regular file with one link, opens reads nonblocking, and rechecks the
-name and file after reading. Symlinks, hard-linked artifacts, nonregular files,
-root or ancestor replacement, and detected concurrent change fail closed. Required
+name and file after reading. Each descriptor-relative component must have its
+exact stored spelling; case-folded and NFKC-normalized aliases are rejected
+instead of being treated as the requested canonical identity. Symlinks,
+hard-linked artifacts, nonregular files, root or ancestor replacement, and
+detected concurrent change fail closed. Required
 descriptor-relative, no-follow, listing, link, advisory-lock, and native atomic
 no-replace rename primitives are checked on the first artifact I/O operation.
 The rename is `renameatx_np(RENAME_EXCL)` on Darwin and
@@ -103,7 +108,9 @@ file with `O_EXCL` outside the authoritative transaction directory. After
 flushing it, the repository exclusively moves verified prior bytes to a unique
 `.held` staging name when replacing, then uses native no-replace rename to move
 the `.tmp` bytes into the absent target. Published bytes, retained path chain,
-root, and lease are then reverified.
+root, and lease are then reverified. Directory creation flushes each newly
+created child's parent directory, and publication/retirement flushes the
+directories whose entries changed.
 
 Publication does not unlink or use a replacing rename. A detected failure after
 target publication exclusively retires the new bytes to `.retired` and restores
@@ -112,12 +119,17 @@ safe. Failed `.tmp` bytes and successful `.held` prior bytes remain retained;
 name collisions are preserved while a different exclusive staging name is
 tried.
 
-After all targets, the repository changes the journal from `prepared` to
-`artifacts_published`, publishes immutable commit history, and publishes the
-current catalog last. Completed journal retirement compares its exact hash
-before an exclusive no-replace move to `.completed` staging.
-An interrupted valid journal rolls forward on the next artifact access; target
-divergence, changed journal bytes, or invalid authoritative transaction state
+The schema-v2 journal is one immutable prepared image: it contains the exact
+catalog-before state, catalog-after image, commit, and ordered targets, and is
+never replaced with a later phase. After all targets, the repository publishes
+immutable commit history and the current catalog last. Completed journal
+retirement compares its exact hash before an exclusive no-replace move to
+`.completed` staging.
+
+On the next artifact access, an exact catalog-before position rolls forward;
+an exact catalog-after position is verified without republishing. A catalog
+matching neither image, target divergence, changed or missing journal bytes,
+missing/divergent published commit, or invalid authoritative transaction state
 writes a persistent marker and blocks all later artifact access. Every `.tmp`,
 `.held`, `.retired`, and `.completed` file is retained under non-authoritative
 staging, ignored by transaction recovery and catalog listing, and may accumulate.

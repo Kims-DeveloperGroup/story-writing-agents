@@ -520,8 +520,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ActionKind` member names and values remain unchanged. Consensus actions
   carry an optional `output_path`; `/run --output PART/PATH.md [PROMPT]` and
   `/run --fresh --output PART/PATH.md PROMPT` provide it directly, while an
-  omitted value is collected by the controller before composition. The
-  package facade does not re-export the route metadata.
+  omitted value is collected by the controller before composition. Run-option
+  fields split only on ASCII space and tab: Unicode whitespace cannot introduce
+  or separate `--output`, and malformed fresh-output flag spellings return a
+  typed parse error. The package facade does not re-export the route metadata.
 - **Direct internal dependencies:** `agents`.
 - **State, resources, and side effects:** Immutable command and agent-route
   metadata only. Completion projection is pure and call-local; the module owns
@@ -1510,9 +1512,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   immutable debate-context sidecars under
   `discussion_logs/<session_id>/<debate_id>.context.json`, and generic atomic
   text/JSON replacement, except that its supported generic text/JSON writers
-  reject canonical writing-artifact identities. It no longer creates core-
-  document templates or owns manuscript/core-document reads, writes, commits,
-  or rollback. Context
+  reject canonical writing-artifact identities plus every case-folded or
+  NFKC-normalized alias of the repository-owned `core_documents` and
+  `manuscript` namespaces before mutation. It no longer creates core-document
+  templates or owns manuscript/core-document reads, writes, commits, or
+  rollback. Context
   sidecars use an exact identity-bound version-1 schema, require a non-null
   canonical snapshot for included mode and a null snapshot for fresh mode,
   reject malformed or colliding files, and return `None` when absent for legacy
@@ -1614,11 +1618,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   first I/O, which binds a meaningful root `(st_dev, st_ino)` pair. Every
   later operation reopens and verifies that identity. Each traversal uses
   retained and revalidated ancestor descriptors, `O_NOFOLLOW`, nonblocking
-  pre-stat/name/descriptor checks, unique-regular-file checks, fsync, and a
-  lazily required Darwin/Linux native atomic no-replace rename. Publication,
-  replacement holding, rollback, temporary cleanup, and completed-journal
-  removal never overwrite or unlink a name: prior, failed, and completed bytes
-  move exclusively into ignored non-authoritative staging and remain retained.
+  pre-stat/name/descriptor checks, unique-regular-file checks, and exact stored
+  entry spelling. Descriptor-relative directory listings reject case-folded or
+  NFKC-normalized aliases before access; traversal fsyncs each parent directory
+  entry after successful child creation and before descending. Publication also
+  fsyncs its target/staging directories and uses a lazily required Darwin/Linux
+  native atomic no-replace rename. Publication, replacement holding, rollback,
+  temporary cleanup, and completed-journal removal never overwrite or unlink a
+  name: prior, failed, and completed bytes move exclusively into ignored
+  non-authoritative staging and remain retained.
   The adapter owns a permanent paired-hard-link lock identity, while each
   context owns its descriptor/flock and mutation lease only for that lifetime.
   It fails closed on unsupported primitives, special files, symlinks,
@@ -1651,19 +1659,31 @@ every intermediate arrow. The current runtime graph is acyclic.
   `transactions/`, reserved `input_snapshots/`, and non-journal `staging/`
   topology. Staging retains exclusively named prior versions, failed
   publications, and completed journals; recovery enumerates only authoritative
-  transaction JSON and ignores all such residue. Every read and
-  commit performs locked recovery first; a staged journal contains the bytes
-  and old/new hashes needed to roll forward, artifact bytes publish before an
-  absence-or-exact immutable commit record and catalog-last provenance, and
-  unexpected divergence creates a durable recovery-block marker and fails
-  closed. Listings expose only cataloged
+  transaction JSON and ignores all such residue. Every read and commit performs
+  locked recovery first. One create-only immutable schema-v2 transaction
+  journal records the exact catalog-before existence/hash/image, complete
+  catalog-after image, immutable commit, ordered targets, old/new hashes, and
+  complete new bytes before any target mutation; it has no replaceable phase
+  field. JSON decoding rejects duplicate object keys recursively for journals,
+  catalogs, and commits. At exact catalog-before, recovery accepts each target
+  only at its recorded old or new bytes, completes remaining target and commit
+  publication, rechecks journal authority and catalog-before, then publishes
+  the catalog last. At exact catalog-after, recovery is verification-only and
+  requires every target and the commit to be final. Any other catalog position,
+  unrelated catalog-entry change, target/commit divergence, or missing/changed
+  journal creates a durable recovery-block marker and fails closed. The exact
+  immutable journal is strictly retired only after final target, commit, and
+  catalog-after verification; a missing retirement source is never success.
+  Listings expose only cataloged
   canonical paths whose current unique regular-file bytes match repository
   hashes. Selective reads return only requested current entries as immutable
   content snapshots. Consensus commits require the execution specialist for
   revision-zero manuscripts and the lead for later manuscripts, publish them
-  create-only beneath a part directory, and allow only lead-authored core
-  updates. Transaction/commit/catalog sets and scalar schemas are correlated
-  exactly. Manual, initialization, internal, unsupported,
+  create-only beneath a part directory, permanently reserve every cataloged
+  manuscript identity even when its file is later deleted, and allow only
+  lead-authored core updates. Transaction/commit/catalog-before/catalog-after
+  sets, unrelated-entry preservation, authorship, ordering, and scalar schemas
+  are correlated exactly. Manual, initialization, internal, unsupported,
   unsafe, root-manuscript, symlink, hardlink, absent, and hash-divergent files
   cannot become eligible.
 - **Primary verification/documentation:** `tests/test_writing_artifacts.py`,
@@ -1678,8 +1698,20 @@ every intermediate arrow. The current runtime graph is acyclic.
   `PromptAssembler` requests only the current agent's configured core paths;
   provider binding and staging decode the captured bytes and never reopen the
   lexical workspace path. `Workspace` generic writers reject canonical
-  artifact identities, while repository mutation remains protected by its
-  permanent paired lock and call-scoped lease.
+  artifact identities and case-folded or NFKC-normalized aliases of both
+  repository-owned namespaces before mutation, while repository mutation
+  remains protected by its permanent paired lock and call-scoped lease.
+
+- `WritingArtifactRepository` creates one immutable authoritative schema-v2
+  journal before target publication and never replaces it with a phase update.
+  Exact catalog-before recovery rolls forward; exact catalog-after recovery
+  verifies without republishing; divergent catalog, commit, target, or journal
+  authority durably blocks. Non-target catalog entries remain identical across
+  the recorded before/after images, cataloged manuscript paths remain reserved
+  after file deletion, and strict final journal retirement occurs only after
+  target, commit, and catalog-after verification. `_storage` independently
+  requires exact descriptor-relative entry spelling, rejects normalized/case
+  aliases, and fsyncs created child entries through their parent descriptors.
 
 - `Workspace` initializes the canonical five-key system-default document but
   never rewrites an existing one. `ConfigManager` owns full system and per-agent

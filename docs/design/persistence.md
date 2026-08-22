@@ -95,19 +95,23 @@ though provider output in visible fields may still be sensitive.
 
 Terminal result creation and lifecycle transition finish before terminal
 progress. Approved artifact publication is a separate recoverable transaction:
-it journals the complete intended manuscript/core set, publishes and verifies
-the target bytes, writes immutable commit history, publishes the catalog last,
-then exclusively retires the completed journal to non-authoritative staging.
-The next artifact access rolls a valid interrupted journal forward; untrusted
-divergence writes a persistent block marker and fails all later artifact access
-closed. Retained `.tmp`, `.held`, `.retired`, and `.completed` staging files are
-ignored by recovery and catalog listing and may accumulate.
+one immutable schema-v2 journal records the exact catalog-before state,
+catalog-after image, commit, and ordered manuscript/core targets. It is not
+rewritten as publication advances. The repository publishes and verifies target
+bytes, writes immutable commit history, publishes the catalog last, then
+exclusively retires the unchanged completed journal to non-authoritative
+staging. The next artifact access rolls forward only from exact catalog-before
+or verifies an exact catalog-after state; any other catalog position or missing,
+replaced, or divergent authority writes a persistent block marker and fails all
+later artifact access closed. Retained `.tmp`, `.held`, `.retired`, and
+`.completed` staging files are ignored by recovery and catalog listing and may
+accumulate.
 
 That artifact transaction does not combine sidecars, blackboards, defaults,
 transcripts, debate lifecycle, results, provider state, and agent state into one
 database transaction. Infrastructure interruption can therefore leave a
 recoverable artifact journal alongside an incomplete non-artifact operation.
-Exact artifact paths, eligibility, journal states, and user responses are in
+Exact artifact paths, eligibility, recovery positions, and user responses are in
 [Canonical writing artifacts](../reference/writing-artifacts.md).
 
 One-step and retrieval turns append exactly one user event before provider work,

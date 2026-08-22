@@ -314,6 +314,12 @@ reads can include archives. See [grammar](interactive-command-parser.md) and
 | `/run --fresh --output PART/PATH.md PROMPT` | Records focused identity; sends no transcript. |
 | `/draft-file PATH` | Strict-UTF-8 draft plus one focused snapshot; prompts for `PART/PATH.md`. |
 
+In both `/run --output ...` and `/run --fresh --output ...`, option boundaries
+use ASCII space or tab only. Unicode whitespace cannot separate `--output` from
+its path or the path from its prompt. Attached to the flag it causes a parse
+error; captured in the path token it is not silently normalized and fails path
+validation. Both fail before provider or artifact work.
+
 When interactive `--output` is omitted, the controller first prompts for a safe
 create-only `PART/PATH.md` beneath `manuscript/`; invalid input retries, cancel
 returns to the main prompt, and EOF exits normally. The noninteractive

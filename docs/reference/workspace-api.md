@@ -41,16 +41,22 @@ component. Text is strict UTF-8. JSON readers reject malformed structures where
 the consuming contract performs schema validation.
 
 `write_text` and `write_json` atomically replace one file when overwrite is
-allowed, except that both reject the four canonical core-document paths and
-every canonical `manuscript/PART/PATH.md`. Canonical application writes must go
-through the artifact repository so bytes, authorship, commit history, and the
-current catalog cannot diverge. Generic writes remain available for other
-safely contained workspace files. An external filesystem edit can still make
+allowed, except that both reject the four canonical core-document paths, every
+canonical `manuscript/PART/PATH.md`, and case-folded or NFKC-normalized aliases
+of either reserved top-level namespace. This check occurs before parent or
+target mutation. Canonical application writes must go through the artifact
+repository so bytes, authorship, commit history, and the current catalog cannot
+diverge. Generic writes remain available for other safely contained workspace
+files. An external filesystem edit can still make
 an artifact manual or stale; those bytes remain on disk but are ineligible
 unless a matching catalog and commit record exist and the current hash agrees.
 Stop all workspace processes before making such an external edit. Orchestration
 restricts core updates to four names and delegates publication to the separate
 artifact repository.
+
+Cataloged manuscript paths are permanent create-only identities. Deleting one
+externally makes it stale and ineligible but does not free the path for reuse;
+a later revision must use a distinct `PART/PATH.md`.
 
 ## Orchestration persistence primitives
 

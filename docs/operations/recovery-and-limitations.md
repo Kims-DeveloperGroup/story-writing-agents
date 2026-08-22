@@ -58,17 +58,23 @@ preterminal debates `interrupted` when possible; later failures cannot rewrite r
 ## Writing-artifact recovery
 
 Every artifact catalog read, exact artifact read, or commit first checks for a
-pending publication journal under the verified paired-lock lease. A valid
-`prepared` journal means target publication may not have started or may be
-partial; a valid `artifacts_published` journal means all targets were verified
-and only repository metadata may remain. Both roll forward: each target must
-still equal its recorded old or new hash, then immutable commit history and the
-catalog are published last. The completed journal is hash-checked and moved with
-native no-replace rename to a `.completed` name in staging. If the journal name
-or identity changed, the repository preserves it and blocks instead of retiring
-uncertain state. Users may see an infrastructure failure followed by successful
-recovery on the next artifact access; inspect the associated debate because its
-result and lifecycle are outside the artifact transaction.
+pending publication journal under the verified paired-lock lease. The
+schema-v2 journal is one immutable image containing the exact catalog-before
+existence/hash/image, catalog-after image, commit, and ordered targets with
+their complete new bytes and old/new hashes. It is never rewritten to record a
+later phase.
+
+Recovery compares the current catalog with those two exact positions. From
+catalog-before, every target may equal only its recorded old or new bytes;
+recovery rolls the set forward, publishes immutable commit history, and
+publishes the catalog last. At catalog-after, every target and commit must
+already be the exact new state, so recovery only verifies them. It then
+hash-checks the unchanged journal and moves it with native no-replace rename to
+a `.completed` name in staging. A catalog matching neither position, an
+untrusted target, or missing/replaced journal or final commit authority blocks
+rather than guessing. Users may see an infrastructure failure followed by
+successful recovery on the next artifact access; inspect the associated debate
+because its result and lifecycle are outside the artifact transaction.
 
 Publication temporaries live under the repository's separate `staging/`
 directory rather than `transactions/`. Failed `.tmp` bytes, prior `.held`
@@ -94,6 +100,11 @@ integrity failure; those errors propagate because safe enumeration is no longer
 possible. A manual byte edit is therefore nondestructive but makes that entry
 ineligible. Restoring the exact cataloged bytes can make it eligible again when
 the commit and catalog evidence remain valid.
+
+A cataloged manuscript identity is never reusable. If its file is deleted, the
+catalog retains the historical identity while eligible listing omits the stale
+entry. A later commit to the same path raises `ManuscriptExistsError`; choose a
+new part-scoped revision path.
 
 Stop every workspace process before a manual or external filesystem edit. The
 repository lease serializes supported repository writers, but an actively

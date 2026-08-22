@@ -935,7 +935,7 @@ def _parse_run(tail: str | None) -> InteractiveAction:
         return InteractiveAction(ActionKind.RUN)
 
     output_path: str | None = None
-    initial_fields = prompt.split(None, 2)
+    initial_fields = _split_run_fields(prompt)
     if initial_fields and initial_fields[0] == _RUN_OUTPUT_FLAG:
         fields = initial_fields
         if len(fields) < 2 or fields[1].startswith("--"):
@@ -964,7 +964,16 @@ def _parse_run(tail: str | None) -> InteractiveAction:
         return _parse_error("/run --fresh requires a prompt")
 
     fresh_prompt = prompt[first_end:].lstrip(" \t")
-    fresh_fields = fresh_prompt.split(None, 2)
+    fresh_fields = _split_run_fields(fresh_prompt)
+    if (
+        fresh_fields
+        and fresh_fields[0].startswith(_RUN_OUTPUT_FLAG)
+        and len(fresh_fields[0]) > len(_RUN_OUTPUT_FLAG)
+        and fresh_fields[0][len(_RUN_OUTPUT_FLAG)].isspace()
+    ):
+        return _parse_error(
+            "/run --fresh --output requires ASCII space/tab delimiters"
+        )
     if fresh_fields and fresh_fields[0] == _RUN_OUTPUT_FLAG:
         fields = fresh_fields
         if len(fields) < 3 or fields[1].startswith("--"):
@@ -1280,6 +1289,27 @@ def _split_head(value: str) -> tuple[str, str | None]:
         if character in " \t":
             return value[:index], value[index:]
     return value, None
+
+
+def _split_run_fields(value: str) -> tuple[str, ...]:
+    """Split at most two ASCII-delimited fields and preserve prompt remainder."""
+
+    fields: list[str] = []
+    cursor = 0
+    length = len(value)
+    while cursor < length and value[cursor] in " \t":
+        cursor += 1
+    while cursor < length and len(fields) < 2:
+        end = cursor
+        while end < length and value[end] not in " \t":
+            end += 1
+        fields.append(value[cursor:end])
+        cursor = end
+        while cursor < length and value[cursor] in " \t":
+            cursor += 1
+    if cursor < length:
+        fields.append(value[cursor:])
+    return tuple(fields)
 
 
 def _tokens(tail: str | None) -> tuple[str, ...]:

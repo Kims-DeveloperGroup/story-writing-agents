@@ -79,8 +79,9 @@ agent-returned bytes without inventing or editing story content. A successful
 commit always contains exactly one manuscript, even when the user's primary
 goal was a core-document change.
 
-Manuscripts are create-only. To revise one, supply the current text as draft
-input and choose a distinct path such as
+Manuscripts are create-only, and an identity remains reserved after it has been
+cataloged even if its file is later deleted. To revise or replace one, supply
+the current text as draft input and choose a distinct path such as
 `part-01/revisions/opening-r2.md`. The runtime never overwrites the earlier
 manuscript. Core documents, by contrast, keep their four stable identities and
 can be replaced by a later unanimous publication.
@@ -95,8 +96,8 @@ agent-authored bytes whose publication history still validates.
 | Absent | No file and no current catalog entry. | The file is not supplied as agent context. A later unanimous run may create it. |
 | Manual or unprovenanced | Bytes exist, but no matching repository-owned catalog and commit record exists. Generic `Workspace` writes cannot create this state because they reject canonical paths; it can result from an external filesystem edit. | The bytes remain on disk but are excluded from the eligible catalog and core prompt context. A manuscript at that path also blocks create-only publication. |
 | Current and eligible | The path is canonical, its catalog entry and immutable commit record agree exactly, and its current SHA-256 matches. | The runtime may list/read it through the artifact repository. Eligible core documents are supplied only to their allowed agents. |
-| Stale and ineligible | A catalog entry exists, but the file is missing, unsafe, nonregular, or its bytes no longer match the recorded hash. | Catalog listing and selective context reads omit that entry; an exact artifact read fails. The runtime does not delete or silently repair the bytes. |
-| Recovery pending | A validated JSON transaction journal remains in authoritative `transactions/` with state `prepared` or `artifacts_published`. | The next catalog read, artifact read, or commit first attempts deterministic roll-forward under the artifact lock. No partially published set becomes eligible. |
+| Stale and ineligible | A catalog entry exists, but the file is missing, unsafe, nonregular, or its bytes no longer match the recorded hash. | Catalog listing and selective context reads omit that entry; an exact artifact read fails. The runtime does not delete or silently repair the bytes. A deleted cataloged manuscript identity remains reserved and cannot be reused. |
+| Recovery pending | One immutable schema-v2 JSON transaction journal remains in authoritative `transactions/`. It records the exact catalog-before position, catalog-after image, commit, ordered targets, old/new hashes, and complete new bytes. | The next catalog read, artifact read, or commit first attempts deterministic recovery under the artifact lock. No partially published set becomes eligible. |
 | Recovered | Roll-forward completed, the commit record and catalog were published, and the journal was exclusively retired into non-authoritative staging with a `.completed` suffix. This is an observed outcome, not a stored state name. | The newly current entries become eligible on that same access. The retained journal bytes are internal evidence, not a listed artifact or pending transaction. |
 | Recovery blocked | A pending journal, target, or recovery invariant could not be trusted, and a persistent block marker was written. | Every later artifact-repository read or commit fails closed. Preserve the workspace and investigate or restore a verified backup; there is no automatic repair command. |
 | Retained staging residue | A `.tmp`, `.held`, `.retired`, or `.completed` file remains under the repository's non-authoritative `staging/` directory. | This is normal internal state and never appears in the canonical catalog or agent context. It may grow over time; do not treat it as a writing artifact or move it into `transactions/`. |
@@ -116,8 +117,10 @@ documents.
 
 `WritingArtifactRepository` is the only application write path for canonical
 artifacts. Generic `Workspace.write_text()` and `write_json()` reject all four
-core paths and every canonical manuscript path. Repository construction does no
-artifact I/O. The first catalog read, artifact read, or commit checks for the
+core paths, every canonical manuscript path, and case-folded or
+Unicode-normalized aliases of those reserved namespaces before mutating the
+filesystem. Repository construction does no artifact I/O. The first catalog
+read, artifact read, or commit checks for the
 required descriptor-relative, no-follow, listing, and advisory-lock primitives,
 takes an in-process lock and a workspace-local lease, then resolves pending
 recovery before continuing. Other workspace and runtime APIs remain usable on a
@@ -131,19 +134,24 @@ themselves must still be unique regular files with one link.
 One successful commit follows this order:
 
 1. Validate the output grammar, strict-UTF-8 agent text, four-name core
-   allowlist, story-agent authorship, and session/debate/revision identities.
+   allowlist, story-agent authorship, session/debate/revision identities, and
+   exact repository JSON schemas. Duplicate object keys are rejected at every
+   nesting level.
 2. Reject any existing manuscript target before publication.
-3. Record old and new hashes, complete new bytes, authors, and the catalog-after
-   image in a create-only `prepared` transaction journal.
+3. Create one immutable schema-v2 transaction journal containing the exact
+   catalog-before existence/hash/image, catalog-after image, commit, and ordered
+   targets with old/new hashes, complete new bytes, and authors. The journal is
+   never replaced with another phase image.
 4. Stage each target outside the authoritative `transactions/` directory, then
    publish it with descriptor-relative, no-follow, compare-before-replace I/O.
    Publication creates a unique `.tmp` with `O_EXCL`, flushes it, exclusively
    moves verified prior bytes to a `.held` name when replacing, and uses the
    host's native atomic no-replace rename to move staged bytes into the absent
    target name. It then verifies the published bytes and retained identities.
-5. Change the journal to `artifacts_published`.
-6. Publish the immutable commit record, then publish the catalog last.
-7. Verify the completed journal and exclusively move it from `transactions/`
+   Newly created directories are made durable by flushing each parent; target
+   publication and retirement flush the directories whose entries changed.
+5. Publish the immutable commit record, then publish the catalog last.
+6. Verify the unchanged journal and exclusively move it from `transactions/`
    to a `.completed` name in staging.
 
 The repository never unlinks or uses a replacing rename for this publication
@@ -155,10 +163,15 @@ preserved and recovery blocks instead of retiring uncertain state. Every
 directory is not transaction authority, is ignored by catalog/recovery reads,
 and can grow across successful and failed operations.
 
-If the process stops after step 3, the next access validates each target. A
-target may equal either its recorded old bytes, in which case recovery publishes
-the new bytes, or its recorded new bytes, in which case recovery continues. Any
-other content is divergence and blocks recovery. Catalog-last ordering means an
+If the process stops after step 3, recovery first compares the current catalog
+bytes with the journal's two exact positions. At catalog-before, every target
+must equal its recorded old or new bytes; recovery rolls the transaction
+forward and publishes the catalog last. At catalog-after, every target and the
+immutable commit must already equal the recorded new state; recovery only
+verifies them and retires the journal. A catalog matching neither position, an
+untrusted target, a missing/replaced journal, or a missing/divergent commit in
+catalog-after state blocks recovery durably rather than guessing. Catalog-last
+ordering means an
 interrupted target set is never advertised as partly eligible.
 
 This transaction covers its manuscript, changed core documents, commit record,
@@ -195,9 +208,11 @@ no-replace rename: `renameatx_np(RENAME_EXCL)` on Darwin or
 `renameat2(RENAME_NOREPLACE)` on Linux. The check occurs on the first artifact
 operation, not repository or runtime construction. A host without that native
 operation fails the artifact operation while other non-artifact APIs remain
-usable. Symlinks, hard-linked artifacts, directories, other nonregular targets,
-workspace-root or ancestor replacement, unsafe path components, and detected
-file changes fail closed. Catalog and selective reads omit an entry-local failure;
+usable. Every descriptor-relative component must have exact stored spelling;
+case-folded or NFKC-normalized aliases fail closed rather than resolving to the
+canonical identity. Symlinks, hard-linked artifacts, directories, other
+nonregular targets, workspace-root or ancestor replacement, unsafe path
+components, and detected file changes fail closed. Catalog and selective reads omit an entry-local failure;
 root, lease, recovery, catalog-schema, and global provenance-integrity failures
 propagate because the repository boundary is no longer trustworthy. Artifact
 text is strict UTF-8. The repository does not encrypt content, provenance, or

@@ -7,6 +7,7 @@ import os
 import re
 import tempfile
 import threading
+import unicodedata
 import weakref
 from datetime import UTC, datetime
 from pathlib import Path
@@ -284,6 +285,7 @@ class Workspace:
     ) -> Path:
         if not isinstance(content, str):
             raise WorkspaceFormatError("text content must be a string")
+        self._reject_reserved_artifact_write(relative)
         target = self.path(relative)
         workspace_relative = target.relative_to(self.root).as_posix()
         try:
@@ -302,6 +304,21 @@ class Workspace:
             overwrite=overwrite,
         )
         return target
+
+    @staticmethod
+    def _reject_reserved_artifact_write(
+        relative: str | os.PathLike[str],
+    ) -> None:
+        """Reject lexical aliases of repository-owned artifact namespaces."""
+
+        raw = Path(relative)
+        if raw.is_absolute() or not raw.parts:
+            return
+        first = unicodedata.normalize("NFKC", raw.parts[0]).casefold()
+        if first in {"core_documents", "manuscript"}:
+            raise WorkspaceSecurityError(
+                "canonical writing artifacts must be published by the repository"
+            )
 
     def write_json(
         self,
@@ -838,6 +855,13 @@ class Workspace:
     def _ensure_text(self, relative: str, content: str) -> None:
         target = self.path(relative)
         if not target.exists():
+            if relative == "manuscript/.gitkeep":
+                self._atomic_write_bytes(
+                    target,
+                    content.encode("utf-8", errors="strict"),
+                    overwrite=False,
+                )
+                return
             self.write_text(relative, content, overwrite=False)
 
     def _ensure_json(self, relative: str, value: Any) -> None:

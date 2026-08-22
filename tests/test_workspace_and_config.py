@@ -184,6 +184,37 @@ class WorkspaceTests(unittest.TestCase):
             {"value": 1},
         )
 
+    def test_generic_writes_reject_reserved_case_and_normalization_aliases(self) -> None:
+        workspace = initialized_workspace(self)
+        aliases = (
+            "Core_Documents/global_outline.md",
+            "CORE_DOCUMENTS/global_outline.md",
+            "ｍａｎｕｓｃｒｉｐｔ/part-01/chapter.md",
+            "Manuscript/part-01/chapter.md",
+        )
+        for relative in aliases:
+            with self.subTest(relative=relative):
+                target = workspace.path(relative)
+                before = target.read_bytes() if target.is_file() else None
+                with self.assertRaisesRegex(
+                    WorkspaceSecurityError,
+                    "published by the repository",
+                ):
+                    workspace.write_text(relative, "must not be written")
+                with self.assertRaisesRegex(
+                    WorkspaceSecurityError,
+                    "published by the repository",
+                ):
+                    workspace.write_json(relative, {"must": "not be written"})
+                after = target.read_bytes() if target.is_file() else None
+                self.assertEqual(after, before)
+
+        workspace.write_text("discussion_logs/Case_Alias.txt", "unrelated")
+        self.assertEqual(
+            workspace.read_text("discussion_logs/Case_Alias.txt"),
+            "unrelated",
+        )
+
     def test_initial_system_defaults_are_exact_and_legacy_bytes_are_preserved(
         self,
     ) -> None:
