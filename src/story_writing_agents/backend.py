@@ -702,7 +702,11 @@ class AgentBackend:
         return self.get_session_lifecycle(session)
 
     def close(self) -> None:
-        """Release owned access claims and remove ephemeral prompt staging."""
+        """Release owned access claims and close provider adapters.
+
+        Codex removes ephemeral staging; Antigravity intentionally retains
+        provider-native state for later backend instances.
+        """
 
         if self._closed:
             return

@@ -255,6 +255,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Primary verification/documentation:** `tests/test_codex_backend.py`,
   `tests/test_antigravity_adapter.py`, `tests/test_antigravity_parity.py`,
   `tests/test_session_lifecycle.py`, `docs/reference/backend-and-sessions.md`,
+  `docs/guides/antigravity.md`,
   `docs/reference/conversation-retrieval.md`,
   `docs/design/prompts-and-provider.md`, `docs/design/session-lifecycle.md`, and
   `docs/operations/privacy-and-provider.md`.
@@ -286,8 +287,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   Importing performs no I/O.
 - **Primary verification/documentation:** `tests/test_antigravity_adapter.py`
   and `tests/test_antigravity_parity.py`; shared adapter and subprocess
-  contracts are also verified by `tests/test_codex_backend.py`. No dedicated
-  Antigravity documentation reference is present yet.
+  contracts are also verified by `tests/test_codex_backend.py`.
+  `docs/guides/antigravity.md` is the dedicated setup, transport, lifecycle,
+  retention, and provider-free verification guide.
 
 ### `story_writing_agents.codex_adapter`
 
@@ -386,7 +388,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
   `tests/test_cli_context.py`, `tests/test_smoke_cli.py`, and
   `tests/test_interactive_pty.py` for primary process-level POSIX PTY
-  verification; `docs/reference/cli.md` and `docs/getting-started.md`.
+  verification; `docs/reference/cli.md`, `docs/getting-started.md`, and
+  `docs/guides/antigravity.md`.
 
 ### `story_writing_agents.cli_context`
 

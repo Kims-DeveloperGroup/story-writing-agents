@@ -14,6 +14,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 | Capability | Available through |
 | --- | --- |
 | Initialize a workspace; run or inspect a debate | Installed CLI and Python API |
+| Configure Codex or Antigravity per agent | Persistent JSON or shell `/settings`; one-process CLI overrides for `story chat` and `story run` |
 | Create, reopen, or pause a provider session | Installed CLI and Python API |
 | Open the TTY shell; list, create, resume, switch, or pause sessions | Bare `story` or `story chat` |
 | Show registry help or shell status | Global in the installed shell |
@@ -45,6 +46,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 - [Story sessions and subject conversations](guides/story-sessions.md)
 - [Glasswater interactive end-to-end journey](guides/glasswater-scenario.md)
 - [Provider-free smoke test](guides/smoke-test.md)
+- [Antigravity setup, routing, and safety](guides/antigravity.md)
 - [Consensus runs](guides/consensus-runs.md)
 - [Directives](guides/directives.md)
 - [Inspection and recovery](guides/inspection-and-recovery.md)
