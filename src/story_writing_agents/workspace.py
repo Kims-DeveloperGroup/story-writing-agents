@@ -2214,6 +2214,10 @@ def _bind_pending_workspace_root_identity(workspace: Workspace) -> tuple[int, in
 
     descriptor = os.open(workspace.root.anchor, flags)
     try:
+        try:
+            os.set_inheritable(descriptor, False)
+        except (AttributeError, OSError):
+            pass
         for component in workspace.root.parts[1:]:
             try:
                 child_descriptor = os.open(
@@ -2231,6 +2235,16 @@ def _bind_pending_workspace_root_identity(workspace: Workspace) -> tuple[int, in
                     flags,
                     dir_fd=descriptor,
                 )
+            try:
+                os.set_inheritable(child_descriptor, False)
+            except (AttributeError, OSError):
+                pass
+            except BaseException:
+                try:
+                    os.close(child_descriptor)
+                except BaseException:
+                    pass
+                raise
             try:
                 os.close(descriptor)
             except BaseException:

@@ -76,6 +76,97 @@ def snapshot_directory_namespace(directory: Path) -> dict[str, bytes | None]:
     }
 
 
+class _PendingDescriptorTracker:
+    """Observe pending-root descriptor ordering without mocking filesystem state."""
+
+    def __init__(
+        self,
+        root: Path,
+        *,
+        set_failure: Callable[[str], BaseException | None] | None = None,
+    ) -> None:
+        self._root = root
+        self._set_failure = set_failure
+        self._real_open = os.open
+        self._real_mkdir = os.mkdir
+        self._real_fstat = os.fstat
+        self._real_close = os.close
+        self._real_set_inheritable = os.set_inheritable
+        self._next_token = 0
+        self._live: dict[int, int] = {}
+        self._paths: dict[int, str] = {}
+        self._final_closed = False
+        self.active = True
+        self.events: list[tuple[object, ...]] = []
+        self.opened: list[int] = []
+        self.closed: list[int] = []
+        self.double_closes: list[int] = []
+
+    def open(
+        self,
+        path: object,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if self.active and dir_fd in self._live:
+            self.events.append(("use", self._live[dir_fd], "open"))
+        descriptor = self._real_open(path, flags, mode, dir_fd=dir_fd)
+        if not self.active:
+            return descriptor
+        token = self._next_token
+        self._next_token += 1
+        self._live[descriptor] = token
+        self._paths[token] = os.fspath(path)
+        self.opened.append(token)
+        self.events.append(("open", token))
+        return descriptor
+
+    def mkdir(
+        self,
+        path: object,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> None:
+        if self.active and dir_fd in self._live:
+            self.events.append(("use", self._live[dir_fd], "mkdir"))
+        self._real_mkdir(path, mode, dir_fd=dir_fd)
+
+    def fstat(self, descriptor: int) -> os.stat_result:
+        if self.active and descriptor in self._live:
+            self.events.append(("use", self._live[descriptor], "fstat"))
+        return self._real_fstat(descriptor)
+
+    def set_inheritable(self, descriptor: int, inheritable: bool) -> None:
+        if not self.active or descriptor not in self._live:
+            self._real_set_inheritable(descriptor, inheritable)
+            return
+        token = self._live[descriptor]
+        self.events.append(("set_inheritable", token, inheritable))
+        if self._set_failure is not None:
+            failure = self._set_failure(self._paths[token])
+            if failure is not None:
+                raise failure
+        self._real_set_inheritable(descriptor, inheritable)
+
+    def close(self, descriptor: int) -> None:
+        if not self.active or descriptor not in self._live:
+            if self.active:
+                self.double_closes.append(descriptor)
+            self._real_close(descriptor)
+            return
+        token = self._live.pop(descriptor)
+        self._real_close(descriptor)
+        self.closed.append(token)
+        self.events.append(("close", token))
+        if self._paths[token] == self._root.name:
+            self._final_closed = True
+        if self._final_closed and not self._live:
+            self.active = False
+
+
 def debate_context_window(
     *,
     session_id: str = "session_a",
@@ -222,6 +313,13 @@ class WorkspaceTests(unittest.TestCase):
                 side_effect=AssertionError("terminal retry reached os.stat"),
             ) as named_stat,
             mock.patch.object(
+                workspace_module.os,
+                "set_inheritable",
+                side_effect=AssertionError(
+                    "terminal retry reached os.set_inheritable"
+                ),
+            ) as set_inheritable,
+            mock.patch.object(
                 workspace,
                 "_directory",
                 side_effect=AssertionError("terminal retry reached child I/O"),
@@ -243,6 +341,7 @@ class WorkspaceTests(unittest.TestCase):
             created,
             opened_stat,
             named_stat,
+            set_inheritable,
             child,
             ensure_json,
             ensure_text,
@@ -921,6 +1020,220 @@ class WorkspaceTests(unittest.TestCase):
                         "text_scaffold",
                     }:
                         self.assertTrue(root.is_dir())
+
+    def test_pending_root_descriptors_are_non_inheritable_before_first_use(
+        self,
+    ) -> None:
+        """Mark every opened traversal descriptor before child or identity I/O."""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "descriptor_ancestor" / "descriptor_root"
+            workspace = Workspace(root)
+            tracker = _PendingDescriptorTracker(workspace.root)
+            with (
+                mock.patch.object(
+                    workspace_module.os,
+                    "open",
+                    side_effect=tracker.open,
+                ),
+                mock.patch.object(
+                    workspace_module.os,
+                    "mkdir",
+                    side_effect=tracker.mkdir,
+                ),
+                mock.patch.object(
+                    workspace_module.os,
+                    "fstat",
+                    side_effect=tracker.fstat,
+                ),
+                mock.patch.object(
+                    workspace_module.os,
+                    "set_inheritable",
+                    side_effect=tracker.set_inheritable,
+                ),
+                mock.patch.object(
+                    workspace_module.os,
+                    "close",
+                    side_effect=tracker.close,
+                ),
+            ):
+                self.assertIs(workspace.initialize(), workspace)
+
+            self.assertGreaterEqual(len(tracker.opened), 3)
+            self.assertEqual(sorted(tracker.closed), tracker.opened)
+            self.assertEqual(tracker.double_closes, [])
+            for token in tracker.opened:
+                with self.subTest(token=token):
+                    opened_at = tracker.events.index(("open", token))
+                    self.assertEqual(
+                        tracker.events[opened_at + 1],
+                        ("set_inheritable", token, False),
+                    )
+                    set_at = opened_at + 1
+                    for used_at, event in enumerate(tracker.events):
+                        if event[:2] == ("use", token):
+                            self.assertGreater(used_at, set_at)
+
+    def test_pending_root_set_inheritable_platform_failures_are_best_effort(
+        self,
+    ) -> None:
+        """Do not change successful initialization for unsupported setter calls."""
+
+        for exception_type in (AttributeError, OSError):
+            with self.subTest(exception=exception_type.__name__):
+                temporary = tempfile.TemporaryDirectory()
+                self.addCleanup(temporary.cleanup)
+                parent = Path(temporary.name)
+                external = parent / "external"
+                external.mkdir()
+                (external / "sentinel.bin").write_bytes(b"external sentinel\x00")
+                external_before = snapshot_directory_namespace(external)
+                root = parent / "descriptor_ancestor" / "descriptor_root"
+                workspace = Workspace(root)
+                tracker = _PendingDescriptorTracker(
+                    workspace.root,
+                    set_failure=lambda _path: exception_type(
+                        "set_inheritable unavailable"
+                    ),
+                )
+                with (
+                    mock.patch.object(
+                        workspace_module.os,
+                        "open",
+                        side_effect=tracker.open,
+                    ),
+                    mock.patch.object(
+                        workspace_module.os,
+                        "mkdir",
+                        side_effect=tracker.mkdir,
+                    ),
+                    mock.patch.object(
+                        workspace_module.os,
+                        "fstat",
+                        side_effect=tracker.fstat,
+                    ),
+                    mock.patch.object(
+                        workspace_module.os,
+                        "set_inheritable",
+                        side_effect=tracker.set_inheritable,
+                    ),
+                    mock.patch.object(
+                        workspace_module.os,
+                        "close",
+                        side_effect=tracker.close,
+                    ),
+                ):
+                    self.assertIs(workspace.initialize(), workspace)
+
+                set_tokens = [
+                    event[1]
+                    for event in tracker.events
+                    if event[0] == "set_inheritable"
+                ]
+                self.assertEqual(set_tokens, tracker.opened)
+                self.assertEqual(sorted(tracker.closed), tracker.opened)
+                self.assertEqual(tracker.double_closes, [])
+                self.assertEqual(
+                    snapshot_directory_namespace(external),
+                    external_before,
+                )
+                self.assertTrue(
+                    workspace.path("config/system_defaults.json").is_file()
+                )
+                self.assertIs(workspace.initialize(), workspace)
+
+    def test_pending_root_set_inheritable_process_control_closes_descriptors(
+        self,
+    ) -> None:
+        """Reraise controls exactly after closing each acquired descriptor once."""
+
+        for target in ("anchor", "intermediate", "final"):
+            for exception_type in (KeyboardInterrupt, SystemExit):
+                with self.subTest(target=target, exception=exception_type.__name__):
+                    temporary = tempfile.TemporaryDirectory()
+                    self.addCleanup(temporary.cleanup)
+                    root = (
+                        Path(temporary.name)
+                        / "descriptor_ancestor"
+                        / "descriptor_root"
+                    )
+                    workspace = Workspace(root)
+                    target_path = {
+                        "anchor": os.fspath(workspace.root.anchor),
+                        "intermediate": "descriptor_ancestor",
+                        "final": "descriptor_root",
+                    }[target]
+                    failure = exception_type(
+                        f"{target} set_inheritable process control"
+                    )
+
+                    def fail_selected_set_inheritable(
+                        path: str,
+                    ) -> BaseException | None:
+                        if path == target_path:
+                            raise failure
+                        return None
+
+                    tracker = _PendingDescriptorTracker(
+                        workspace.root,
+                        set_failure=fail_selected_set_inheritable,
+                    )
+                    with (
+                        mock.patch.object(
+                            workspace_module.os,
+                            "open",
+                            side_effect=tracker.open,
+                        ),
+                        mock.patch.object(
+                            workspace_module.os,
+                            "mkdir",
+                            side_effect=tracker.mkdir,
+                        ),
+                        mock.patch.object(
+                            workspace_module.os,
+                            "fstat",
+                            side_effect=tracker.fstat,
+                        ),
+                        mock.patch.object(
+                            workspace_module.os,
+                            "set_inheritable",
+                            side_effect=tracker.set_inheritable,
+                        ),
+                        mock.patch.object(
+                            workspace_module.os,
+                            "close",
+                            side_effect=tracker.close,
+                        ),
+                    ):
+                        try:
+                            workspace.initialize()
+                        except exception_type as caught:
+                            self.assertIs(caught, failure)
+                            self.assert_originating_traceback(
+                                caught,
+                                "fail_selected_set_inheritable",
+                            )
+                        else:
+                            self.fail(
+                                f"{target} {exception_type.__name__} did not propagate"
+                            )
+
+                    self.assertEqual(sorted(tracker.closed), tracker.opened)
+                    self.assertEqual(len(set(tracker.closed)), len(tracker.closed))
+                    self.assertEqual(tracker.double_closes, [])
+                    failed_token = next(
+                        event[1]
+                        for event in reversed(tracker.events)
+                        if event[0] == "set_inheritable"
+                    )
+                    if target == "anchor":
+                        self.assertEqual(tracker.closed[-1:], [failed_token])
+                    else:
+                        self.assertEqual(
+                            tracker.closed[-2:],
+                            [failed_token, failed_token - 1],
+                        )
+                    self.assert_terminal_initialize_has_no_io(workspace)
 
     def test_missing_safe_creation_primitive_fails_before_mutation(self) -> None:
         """Reject each required capability without creating the pending root."""
