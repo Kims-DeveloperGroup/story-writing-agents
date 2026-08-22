@@ -2712,7 +2712,6 @@ def _require_pending_workspace_root_creation_operations() -> None:
         "mkdir",
         "stat",
         "link",
-        "rename",
         "unlink",
     }
     required_no_follow_operations = {"stat", "link"}
