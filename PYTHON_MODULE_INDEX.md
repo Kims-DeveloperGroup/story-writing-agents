@@ -1650,20 +1650,26 @@ every intermediate arrow. The current runtime graph is acyclic.
   remains pending for its first valid `initialize()` attempt. Invalid
   `overwrite_prompts` input raises `TypeError` before I/O without consuming that
   attempt. A first valid pending attempt becomes terminal before capability
-  checks or mutation, requires descriptor-relative creation and no-follow
-  directory primitives, and securely walks the canonical root from an opened
-  filesystem anchor, creating each missing component beneath its opened parent.
-  The opened and named final-root identities must be meaningful and equal before
-  child scaffold or default writes begin. Missing safe primitives raise
-  `OSError` before mutation. The exact first `OSError`, `KeyboardInterrupt`, or
-  `SystemExit` from root traversal, identity verification, scaffold creation, or
-  default writes propagates unchanged; safely created components and partial
-  intended-path scaffold are not rolled back. The root identity records success
-  only after complete initialization. After any earlier failure, every later
-  `initialize()` call raises the established identity-unavailable `OSError`
-  before all filesystem operations without retry or rebind; repeated calls
-  after success retain their established behavior, and a new `Workspace`
-  performs its own construction probe. An existing root whose
+  checks or mutation and preflights the required descriptor-relative directory
+  and atomic-file primitives. It walks or creates canonical-root components
+  without following names, verifies the opened and named root identities, and
+  retains the root descriptor throughout pending topology and default writes.
+  Directory and file-parent traversal stays beneath that descriptor. File
+  installation stages an exclusive temporary regular file, keeps create-only
+  and prompt-overwrite handling distinct, and verifies the staged and installed
+  identities. After all writes, initialization rewalks the canonical root and
+  matches it to the retained identity. Owned descriptors follow exact-once
+  cleanup, and the instance records success only after final root-descriptor
+  cleanup completes. Missing primitives raise `OSError` before mutation. The
+  exact first `OSError`, `KeyboardInterrupt`, or `SystemExit` from initialization
+  or final cleanup propagates unchanged; cleanup does not replace an active
+  failure, and created components or intended partial data are not rolled back.
+  After any earlier failure, every later `initialize()` call raises the
+  established identity-unavailable `OSError` before all filesystem operations
+  without retry or rebind. Roots existing at construction, repeated successful
+  calls, and ordinary post-initialization path operations retain their
+  established behavior; a new `Workspace` performs its own construction probe.
+  An existing root whose
   initial probe is unavailable or nonmeaningful remains in the distinct
   unavailable state: diagnostic helper access fails closed without rebinding,
   while established pathname-based initialization may still scaffold it. The

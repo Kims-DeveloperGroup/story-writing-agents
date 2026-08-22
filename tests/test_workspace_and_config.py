@@ -15,6 +15,7 @@ from collections.abc import Callable
 from dataclasses import FrozenInstanceError, fields
 from pathlib import Path
 from types import MappingProxyType
+from typing import NoReturn
 from unittest import mock
 
 import story_writing_agents
@@ -336,6 +337,36 @@ class WorkspaceTests(unittest.TestCase):
                 ),
             ) as set_inheritable,
             mock.patch.object(
+                workspace_module.os,
+                "write",
+                side_effect=AssertionError("terminal retry reached os.write"),
+            ) as written,
+            mock.patch.object(
+                workspace_module.os,
+                "fsync",
+                side_effect=AssertionError("terminal retry reached os.fsync"),
+            ) as synced,
+            mock.patch.object(
+                workspace_module.os,
+                "link",
+                side_effect=AssertionError("terminal retry reached os.link"),
+            ) as linked,
+            mock.patch.object(
+                workspace_module.os,
+                "replace",
+                side_effect=AssertionError("terminal retry reached os.replace"),
+            ) as replaced,
+            mock.patch.object(
+                workspace_module.os,
+                "unlink",
+                side_effect=AssertionError("terminal retry reached os.unlink"),
+            ) as unlinked,
+            mock.patch.object(
+                workspace_module.os,
+                "close",
+                side_effect=AssertionError("terminal retry reached os.close"),
+            ) as closed,
+            mock.patch.object(
                 workspace,
                 "_directory",
                 side_effect=AssertionError("terminal retry reached child I/O"),
@@ -358,6 +389,12 @@ class WorkspaceTests(unittest.TestCase):
             opened_stat,
             named_stat,
             set_inheritable,
+            written,
+            synced,
+            linked,
+            replaced,
+            unlinked,
+            closed,
             child,
             ensure_json,
             ensure_text,
@@ -696,6 +733,178 @@ class WorkspaceTests(unittest.TestCase):
                         external_before,
                     )
 
+    def test_post_bind_replacements_remain_contained_through_every_write_phase(
+        self,
+    ) -> None:
+        """Retain the opened root and reject every canonical ancestor replacement."""
+
+        components = ("held_ancestor_one", "held_ancestor_two", "held_root")
+        phases = (
+            "before_first_child",
+            "nested_traversal",
+            "default_existence",
+            "create_only_install",
+            "overwrite_install",
+        )
+        for external_kind in ("empty", "prepared"):
+            for replacement_index in range(len(components)):
+                for phase in phases:
+                    with self.subTest(
+                        external=external_kind,
+                        replacement=replacement_index,
+                        phase=phase,
+                    ):
+                        temporary = tempfile.TemporaryDirectory()
+                        self.addCleanup(temporary.cleanup)
+                        parent = Path(temporary.name)
+                        external = parent / "external"
+                        external.mkdir()
+                        if external_kind == "prepared":
+                            Workspace(external).initialize()
+                        else:
+                            (external / "sentinel.bin").write_bytes(
+                                b"external sentinel\x00"
+                            )
+                        external_before = snapshot_directory_namespace(external)
+                        root = parent.joinpath(*components)
+                        workspace = Workspace(root)
+                        selected = parent.joinpath(
+                            *components[: replacement_index + 1]
+                        )
+                        parked = selected.with_name(
+                            f".parked-{selected.name}-{phase}"
+                        )
+                        replaced = False
+
+                        def replace_selected_ancestor() -> None:
+                            nonlocal replaced
+                            if replaced:
+                                return
+                            selected.rename(parked)
+                            try:
+                                selected.symlink_to(
+                                    external,
+                                    target_is_directory=True,
+                                )
+                            except (NotImplementedError, OSError) as exc:
+                                self.skipTest(
+                                    f"directory symlink replacement unavailable: {exc}"
+                                )
+                            replaced = True
+
+                        real_entries = (
+                            workspace_module._initialize_pending_workspace_entries
+                        )
+                        real_walk = (
+                            workspace_module._walk_pending_workspace_directories
+                        )
+                        real_stat = os.stat
+                        real_link = os.link
+                        real_replace = os.replace
+
+                        def replace_before_entries(
+                            target_workspace: Workspace,
+                            root_descriptor: int,
+                            *,
+                            overwrite_prompts: bool,
+                        ) -> None:
+                            replace_selected_ancestor()
+                            real_entries(
+                                target_workspace,
+                                root_descriptor,
+                                overwrite_prompts=overwrite_prompts,
+                            )
+
+                        def replace_during_nested_walk(
+                            start_descriptor: int,
+                            walk_components: tuple[str, ...],
+                            **kwargs: object,
+                        ) -> int:
+                            if walk_components == ("config", "persona_templates"):
+                                replace_selected_ancestor()
+                            return real_walk(
+                                start_descriptor,
+                                walk_components,
+                                **kwargs,
+                            )
+
+                        def replace_before_default_stat(
+                            path: object,
+                            *args: object,
+                            **kwargs: object,
+                        ):
+                            if (
+                                path == "system_defaults.json"
+                                and kwargs.get("dir_fd") is not None
+                            ):
+                                replace_selected_ancestor()
+                            return real_stat(path, *args, **kwargs)
+
+                        def replace_after_create_only_install(
+                            source: object,
+                            target: object,
+                            **kwargs: object,
+                        ) -> None:
+                            real_link(source, target, **kwargs)
+                            if target == "system_defaults.json":
+                                replace_selected_ancestor()
+
+                        def replace_after_overwrite_install(
+                            source: object,
+                            target: object,
+                            **kwargs: object,
+                        ) -> None:
+                            real_replace(source, target, **kwargs)
+                            if target == "AGENTS.md":
+                                replace_selected_ancestor()
+
+                        if phase == "before_first_child":
+                            patcher = mock.patch.object(
+                                workspace_module,
+                                "_initialize_pending_workspace_entries",
+                                side_effect=replace_before_entries,
+                            )
+                        elif phase == "nested_traversal":
+                            patcher = mock.patch.object(
+                                workspace_module,
+                                "_walk_pending_workspace_directories",
+                                side_effect=replace_during_nested_walk,
+                            )
+                        elif phase == "default_existence":
+                            patcher = mock.patch.object(
+                                workspace_module.os,
+                                "stat",
+                                side_effect=replace_before_default_stat,
+                            )
+                        elif phase == "create_only_install":
+                            patcher = mock.patch.object(
+                                workspace_module.os,
+                                "link",
+                                side_effect=replace_after_create_only_install,
+                            )
+                        else:
+                            patcher = mock.patch.object(
+                                workspace_module.os,
+                                "replace",
+                                side_effect=replace_after_overwrite_install,
+                            )
+
+                        with patcher:
+                            self.assert_safe_symlink_refusal(
+                                lambda: workspace.initialize(
+                                    overwrite_prompts=(phase == "overwrite_install")
+                                )
+                            )
+
+                        self.assertTrue(replaced)
+                        self.assertTrue(selected.is_symlink())
+                        self.assertTrue(parked.is_dir())
+                        self.assertEqual(
+                            snapshot_directory_namespace(external),
+                            external_before,
+                        )
+                        self.assert_terminal_initialize_has_no_io(workspace)
+
     def test_final_component_directory_file_and_broken_symlink_races(
         self,
     ) -> None:
@@ -994,15 +1203,15 @@ class WorkspaceTests(unittest.TestCase):
     def test_pending_initialization_propagates_first_failure_and_never_retries(
         self,
     ) -> None:
-        """Terminalize every creation, bind, child, and defaults failure seam."""
+        """Terminalize each root and descriptor-relative entry failure seam."""
 
         for seam in (
             "intermediate_creation",
             "final_creation",
             "bind_stat",
-            "child_scaffold",
-            "defaults_write",
-            "text_scaffold",
+            "topology_directory_creation",
+            "defaults_temporary_write",
+            "text_atomic_install",
         ):
             for exception_type in (OSError, KeyboardInterrupt, SystemExit):
                 with self.subTest(seam=seam, exception=exception_type.__name__):
@@ -1013,10 +1222,14 @@ class WorkspaceTests(unittest.TestCase):
                     workspace = Workspace(root)
                     failure = exception_type(f"{seam} first failure")
 
-                    def raise_injected(*_args: object, **_kwargs: object) -> None:
+                    def raise_injected(
+                        *_args: object,
+                        **_kwargs: object,
+                    ) -> NoReturn:
                         raise failure
 
                     real_mkdir = os.mkdir
+                    real_link = os.link
 
                     def fail_selected_creation(
                         path: object,
@@ -1047,6 +1260,31 @@ class WorkspaceTests(unittest.TestCase):
                             raise_injected()
                         return real_stat(path, *args, **kwargs)
 
+                    def fail_topology_creation(
+                        path: object,
+                        mode: int = 0o777,
+                        *,
+                        dir_fd: int | None = None,
+                    ) -> None:
+                        if path == "config":
+                            raise_injected()
+                        real_mkdir(path, mode, dir_fd=dir_fd)
+
+                    def fail_defaults_write(
+                        descriptor: int,
+                        data: object,
+                    ) -> int:
+                        raise_injected()
+
+                    def fail_text_install(
+                        source: object,
+                        target: object,
+                        **kwargs: object,
+                    ) -> None:
+                        if target == "default_kim_eun_hee.md":
+                            raise_injected()
+                        real_link(source, target, **kwargs)
+
                     if seam in {"intermediate_creation", "final_creation"}:
                         patcher = mock.patch.object(
                             workspace_module.os,
@@ -1059,23 +1297,23 @@ class WorkspaceTests(unittest.TestCase):
                             "stat",
                             side_effect=fail_bind_stat,
                         )
-                    elif seam == "child_scaffold":
+                    elif seam == "topology_directory_creation":
                         patcher = mock.patch.object(
-                            workspace,
-                            "_directory",
-                            side_effect=raise_injected,
+                            workspace_module.os,
+                            "mkdir",
+                            side_effect=fail_topology_creation,
                         )
-                    elif seam == "defaults_write":
+                    elif seam == "defaults_temporary_write":
                         patcher = mock.patch.object(
-                            workspace,
-                            "_ensure_json",
-                            side_effect=raise_injected,
+                            workspace_module.os,
+                            "write",
+                            side_effect=fail_defaults_write,
                         )
                     else:
                         patcher = mock.patch.object(
-                            workspace,
-                            "_ensure_text",
-                            side_effect=raise_injected,
+                            workspace_module.os,
+                            "link",
+                            side_effect=fail_text_install,
                         )
 
                     with patcher:
@@ -1098,9 +1336,9 @@ class WorkspaceTests(unittest.TestCase):
                         self.assertTrue(parent.joinpath("failure_ancestor").is_dir())
                     if seam in {
                         "bind_stat",
-                        "child_scaffold",
-                        "defaults_write",
-                        "text_scaffold",
+                        "topology_directory_creation",
+                        "defaults_temporary_write",
+                        "text_atomic_install",
                     }:
                         self.assertTrue(root.is_dir())
 
@@ -1156,6 +1394,362 @@ class WorkspaceTests(unittest.TestCase):
                     for used_at, event in enumerate(tracker.events):
                         if event[:2] == ("use", token):
                             self.assertGreater(used_at, set_at)
+
+    def test_pending_writes_retain_root_and_rewalk_anchor_before_success(
+        self,
+    ) -> None:
+        """Use one held root, component-only no-follow I/O, then reverify it."""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "retained_ancestor" / "retained_root"
+            workspace = Workspace(root)
+            real_bind = workspace_module._bind_pending_workspace_root_identity
+            real_write_text = workspace_module._write_pending_workspace_text
+            real_open = os.open
+            real_stat = os.stat
+            real_link = os.link
+            real_close = os.close
+            bound_descriptor: int | None = None
+            terminalized_state: object | None = None
+            root_close_count = 0
+            events: list[tuple[object, ...]] = []
+            relative_opens: list[tuple[object, int, int | None]] = []
+            relative_stats: list[dict[str, object]] = []
+            links: list[dict[str, object]] = []
+            write_roots: list[int] = []
+
+            def capture_bind(
+                target_workspace: Workspace,
+            ) -> tuple[int, tuple[int, int]]:
+                nonlocal bound_descriptor, terminalized_state
+                result = real_bind(target_workspace)
+                bound_descriptor = result[0]
+                terminalized_state = target_workspace._root_identity
+                events.append(("bound", bound_descriptor))
+                return result
+
+            def capture_write_text(
+                target_workspace: Workspace,
+                root_descriptor: int,
+                relative: str,
+                content: str,
+                *,
+                overwrite: bool,
+            ) -> None:
+                write_roots.append(root_descriptor)
+                events.append(("write", relative, root_descriptor))
+                real_write_text(
+                    target_workspace,
+                    root_descriptor,
+                    relative,
+                    content,
+                    overwrite=overwrite,
+                )
+
+            def capture_open(
+                path: object,
+                flags: int,
+                mode: int = 0o777,
+                *,
+                dir_fd: int | None = None,
+            ) -> int:
+                descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+                if dir_fd is None:
+                    events.append(("anchor_open", os.fspath(path), descriptor))
+                else:
+                    relative_opens.append((path, flags, dir_fd))
+                return descriptor
+
+            def capture_stat(
+                path: object,
+                *args: object,
+                **kwargs: object,
+            ):
+                if kwargs.get("dir_fd") is not None:
+                    relative_stats.append(dict(kwargs))
+                return real_stat(path, *args, **kwargs)
+
+            def capture_link(
+                source: object,
+                target: object,
+                **kwargs: object,
+            ) -> None:
+                links.append(dict(kwargs))
+                real_link(source, target, **kwargs)
+
+            def capture_close(descriptor: int) -> None:
+                nonlocal root_close_count
+                if descriptor == bound_descriptor:
+                    root_close_count += 1
+                    events.append(("root_close", descriptor))
+                    self.assertIs(workspace._root_identity, terminalized_state)
+                real_close(descriptor)
+
+            with (
+                mock.patch.object(
+                    workspace_module,
+                    "_bind_pending_workspace_root_identity",
+                    side_effect=capture_bind,
+                ),
+                mock.patch.object(
+                    workspace_module,
+                    "_write_pending_workspace_text",
+                    side_effect=capture_write_text,
+                ),
+                mock.patch.object(
+                    workspace_module.os,
+                    "open",
+                    side_effect=capture_open,
+                ),
+                mock.patch.object(
+                    workspace_module.os,
+                    "stat",
+                    side_effect=capture_stat,
+                ),
+                mock.patch.object(
+                    workspace_module.os,
+                    "link",
+                    side_effect=capture_link,
+                ),
+                mock.patch.object(
+                    workspace_module.os,
+                    "close",
+                    side_effect=capture_close,
+                ),
+            ):
+                self.assertIs(workspace.initialize(), workspace)
+
+            self.assertIsNotNone(bound_descriptor)
+            self.assertTrue(write_roots)
+            self.assertEqual(set(write_roots), {bound_descriptor})
+            self.assertEqual(root_close_count, 1)
+            self.assertIsInstance(workspace._root_identity, tuple)
+            anchor_events = [
+                event for event in events if event[0] == "anchor_open"
+            ]
+            self.assertEqual(len(anchor_events), 2)
+            self.assertTrue(
+                all(event[1] == os.fspath(workspace.root.anchor) for event in anchor_events)
+            )
+            root_close_at = next(
+                index
+                for index, event in enumerate(events)
+                if event[0] == "root_close"
+            )
+            self.assertGreater(
+                root_close_at,
+                max(
+                    index
+                    for index, event in enumerate(events)
+                    if event[0] in {"write", "anchor_open"}
+                ),
+            )
+            self.assertTrue(relative_opens)
+            for path, flags, dir_fd in relative_opens:
+                with self.subTest(operation="open", path=path):
+                    self.assertEqual(Path(os.fspath(path)).parts, (os.fspath(path),))
+                    self.assertIsNotNone(dir_fd)
+                    self.assertTrue(flags & os.O_NOFOLLOW)
+            self.assertTrue(relative_stats)
+            self.assertTrue(
+                all(
+                    values.get("follow_symlinks") is False
+                    for values in relative_stats
+                )
+            )
+            self.assertTrue(links)
+            self.assertTrue(
+                all(values.get("follow_symlinks") is False for values in links)
+            )
+
+    def test_pending_atomic_create_and_overwrite_parity_and_substitution_checks(
+        self,
+    ) -> None:
+        """Keep both install modes byte-compatible and verify installed identities."""
+
+        snapshots: dict[bool, dict[str, bytes | None]] = {}
+        for overwrite_prompts in (False, True):
+            with self.subTest(mode="parity", overwrite=overwrite_prompts):
+                temporary = tempfile.TemporaryDirectory()
+                self.addCleanup(temporary.cleanup)
+                root = Path(temporary.name) / "atomic_workspace"
+                workspace = Workspace(root)
+                real_link = os.link
+                real_replace = os.replace
+                link_targets: list[object] = []
+                replace_targets: list[object] = []
+
+                def capture_link(
+                    source: object,
+                    target: object,
+                    **kwargs: object,
+                ) -> None:
+                    link_targets.append(target)
+                    real_link(source, target, **kwargs)
+
+                def capture_replace(
+                    source: object,
+                    target: object,
+                    **kwargs: object,
+                ) -> None:
+                    replace_targets.append(target)
+                    real_replace(source, target, **kwargs)
+
+                with (
+                    mock.patch.object(
+                        workspace_module.os,
+                        "link",
+                        side_effect=capture_link,
+                    ),
+                    mock.patch.object(
+                        workspace_module.os,
+                        "replace",
+                        side_effect=capture_replace,
+                    ),
+                ):
+                    self.assertIs(
+                        workspace.initialize(overwrite_prompts=overwrite_prompts),
+                        workspace,
+                    )
+
+                if overwrite_prompts:
+                    self.assertEqual(
+                        replace_targets,
+                        ["AGENTS.md"] * len(ROSTER),
+                    )
+                else:
+                    self.assertEqual(replace_targets, [])
+                self.assertTrue(link_targets)
+                self.assertFalse(
+                    any(path.name.endswith(".tmp") for path in root.rglob("*"))
+                )
+                snapshots[overwrite_prompts] = snapshot_directory_namespace(root)
+        self.assertEqual(snapshots[False], snapshots[True])
+
+        substitution_cases = (
+            ("temporary_name", False, "symlink"),
+            ("installed_target", False, "symlink"),
+            ("installed_target", False, "regular"),
+            ("installed_target", True, "symlink"),
+            ("installed_target", True, "regular"),
+        )
+        for seam, overwrite_prompts, replacement_kind in substitution_cases:
+            with self.subTest(
+                seam=seam,
+                overwrite=overwrite_prompts,
+                replacement=replacement_kind,
+            ):
+                temporary = tempfile.TemporaryDirectory()
+                self.addCleanup(temporary.cleanup)
+                parent = Path(temporary.name)
+                root = parent / "substitution_workspace"
+                external = parent / "external"
+                external.mkdir()
+                external_file = external / "sentinel.bin"
+                external_file.write_bytes(b"external sentinel\x00")
+                external_before = snapshot_directory_namespace(external)
+                workspace = Workspace(root)
+                real_open = os.open
+                real_link = os.link
+                real_replace = os.replace
+                substituted = False
+
+                def install_replacement(
+                    target: object,
+                    *,
+                    dir_fd: int,
+                ) -> None:
+                    nonlocal substituted
+                    parked_name = f".parked-{os.fspath(target)}"
+                    os.rename(
+                        target,
+                        parked_name,
+                        src_dir_fd=dir_fd,
+                        dst_dir_fd=dir_fd,
+                    )
+                    if replacement_kind == "symlink":
+                        os.symlink(external_file, target, dir_fd=dir_fd)
+                    else:
+                        replacement_descriptor = real_open(
+                            target,
+                            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                            0o600,
+                            dir_fd=dir_fd,
+                        )
+                        try:
+                            os.write(replacement_descriptor, b"replacement bytes\x00")
+                        finally:
+                            os.close(replacement_descriptor)
+                    substituted = True
+
+                def substitute_temporary_name(
+                    path: object,
+                    flags: int,
+                    mode: int = 0o777,
+                    *,
+                    dir_fd: int | None = None,
+                ) -> int:
+                    descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+                    if (
+                        not substituted
+                        and dir_fd is not None
+                        and os.fspath(path).startswith(".system_defaults.json.")
+                    ):
+                        install_replacement(path, dir_fd=dir_fd)
+                    return descriptor
+
+                def substitute_create_only_target(
+                    source: object,
+                    target: object,
+                    **kwargs: object,
+                ) -> None:
+                    real_link(source, target, **kwargs)
+                    if not substituted and target == "system_defaults.json":
+                        install_replacement(
+                            target,
+                            dir_fd=int(kwargs["dst_dir_fd"]),
+                        )
+
+                def substitute_overwrite_target(
+                    source: object,
+                    target: object,
+                    **kwargs: object,
+                ) -> None:
+                    real_replace(source, target, **kwargs)
+                    if not substituted and target == "AGENTS.md":
+                        install_replacement(
+                            target,
+                            dir_fd=int(kwargs["dst_dir_fd"]),
+                        )
+
+                if seam == "temporary_name":
+                    patcher = mock.patch.object(
+                        workspace_module.os,
+                        "open",
+                        side_effect=substitute_temporary_name,
+                    )
+                elif overwrite_prompts:
+                    patcher = mock.patch.object(
+                        workspace_module.os,
+                        "replace",
+                        side_effect=substitute_overwrite_target,
+                    )
+                else:
+                    patcher = mock.patch.object(
+                        workspace_module.os,
+                        "link",
+                        side_effect=substitute_create_only_target,
+                    )
+
+                with patcher, self.assertRaises(WorkspaceSecurityError):
+                    workspace.initialize(overwrite_prompts=overwrite_prompts)
+
+                self.assertTrue(substituted)
+                self.assertEqual(
+                    snapshot_directory_namespace(external),
+                    external_before,
+                )
+                self.assert_terminal_initialize_has_no_io(workspace)
 
     def test_pending_root_set_inheritable_platform_failures_are_best_effort(
         self,
@@ -1318,6 +1912,123 @@ class WorkspaceTests(unittest.TestCase):
                         )
                     self.assert_terminal_initialize_has_no_io(workspace)
 
+    def test_pending_root_body_and_cleanup_exception_precedence_is_exact(
+        self,
+    ) -> None:
+        """Close the retained root once while preserving body/cleanup precedence."""
+
+        for body_type in (OSError, KeyboardInterrupt, SystemExit):
+            with self.subTest(mode="body_wins", body=body_type.__name__):
+                temporary = tempfile.TemporaryDirectory()
+                self.addCleanup(temporary.cleanup)
+                workspace = Workspace(Path(temporary.name) / "body_failure_root")
+                real_bind = workspace_module._bind_pending_workspace_root_identity
+                real_close = os.close
+                root_descriptor: int | None = None
+                root_close_count = 0
+                body_failure = body_type("pending write body failure")
+                cleanup_failure = SystemExit("retained root cleanup failure")
+
+                def capture_bind(
+                    target_workspace: Workspace,
+                ) -> tuple[int, tuple[int, int]]:
+                    nonlocal root_descriptor
+                    result = real_bind(target_workspace)
+                    root_descriptor = result[0]
+                    return result
+
+                def fail_body_write(*_args: object, **_kwargs: object) -> NoReturn:
+                    raise body_failure
+
+                def fail_root_close(descriptor: int) -> None:
+                    nonlocal root_close_count
+                    real_close(descriptor)
+                    if descriptor == root_descriptor:
+                        root_close_count += 1
+                        raise cleanup_failure
+
+                with (
+                    mock.patch.object(
+                        workspace_module,
+                        "_bind_pending_workspace_root_identity",
+                        side_effect=capture_bind,
+                    ),
+                    mock.patch.object(
+                        workspace_module.os,
+                        "write",
+                        side_effect=fail_body_write,
+                    ),
+                    mock.patch.object(
+                        workspace_module.os,
+                        "close",
+                        side_effect=fail_root_close,
+                    ),
+                ):
+                    try:
+                        workspace.initialize()
+                    except body_type as caught:
+                        self.assertIs(caught, body_failure)
+                        self.assert_originating_traceback(caught, "fail_body_write")
+                    else:
+                        self.fail(f"{body_type.__name__} body failure did not propagate")
+
+                self.assertEqual(root_close_count, 1)
+                self.assert_terminal_initialize_has_no_io(workspace)
+
+        for cleanup_type in (OSError, KeyboardInterrupt, SystemExit):
+            with self.subTest(mode="cleanup_wins", cleanup=cleanup_type.__name__):
+                temporary = tempfile.TemporaryDirectory()
+                self.addCleanup(temporary.cleanup)
+                workspace = Workspace(Path(temporary.name) / "cleanup_failure_root")
+                real_bind = workspace_module._bind_pending_workspace_root_identity
+                real_close = os.close
+                root_descriptor: int | None = None
+                root_close_count = 0
+                cleanup_failure = cleanup_type("retained root cleanup failure")
+
+                def capture_cleanup_bind(
+                    target_workspace: Workspace,
+                ) -> tuple[int, tuple[int, int]]:
+                    nonlocal root_descriptor
+                    result = real_bind(target_workspace)
+                    root_descriptor = result[0]
+                    return result
+
+                def fail_successful_root_close(descriptor: int) -> None:
+                    nonlocal root_close_count
+                    real_close(descriptor)
+                    if descriptor == root_descriptor:
+                        root_close_count += 1
+                        raise cleanup_failure
+
+                with (
+                    mock.patch.object(
+                        workspace_module,
+                        "_bind_pending_workspace_root_identity",
+                        side_effect=capture_cleanup_bind,
+                    ),
+                    mock.patch.object(
+                        workspace_module.os,
+                        "close",
+                        side_effect=fail_successful_root_close,
+                    ),
+                ):
+                    try:
+                        workspace.initialize()
+                    except cleanup_type as caught:
+                        self.assertIs(caught, cleanup_failure)
+                        self.assert_originating_traceback(
+                            caught,
+                            "fail_successful_root_close",
+                        )
+                    else:
+                        self.fail(
+                            f"{cleanup_type.__name__} cleanup failure did not propagate"
+                        )
+
+                self.assertEqual(root_close_count, 1)
+                self.assert_terminal_initialize_has_no_io(workspace)
+
     def test_missing_safe_creation_primitive_fails_before_mutation(self) -> None:
         """Reject each required capability without creating the pending root."""
 
@@ -1327,8 +2038,15 @@ class WorkspaceTests(unittest.TestCase):
             ("fstat", {"fstat": None}),
             ("stat", {"stat": None}),
             ("close", {"close": None}),
+            ("write", {"write": None}),
+            ("fsync", {"fsync": None}),
+            ("link", {"link": None}),
+            ("replace", {"replace": None}),
+            ("unlink", {"unlink": None}),
             ("directory_flag", {"O_DIRECTORY": 0}),
             ("no_follow_flag", {"O_NOFOLLOW": 0}),
+            ("create_flag", {"O_CREAT": 0}),
+            ("exclusive_flag", {"O_EXCL": 0}),
             ("dir_fd", {"supports_dir_fd": frozenset()}),
             ("no_follow_stat", {"supports_follow_symlinks": frozenset()}),
         )

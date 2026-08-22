@@ -50,9 +50,12 @@ directory on a storage attempt only after opening and reverifying a bound
 workspace root and confirming the required safe descriptor-relative and
 no-follow primitives. An existing root binds when `Workspace` is constructed; a
 specifically missing root's first valid initialization securely creates missing
-canonical components descriptor-relatively and binds the final identity before
-scaffold/default work. Any other unavailable identity, a replaced root, or
-missing safe primitive drops the record, and the directory may remain absent.
+canonical components descriptor-relatively, retains the verified root
+descriptor throughout scaffold/default installation, and rewalks the canonical
+root after those writes. It records the final identity only after the retained
+descriptor closes successfully. Any other unavailable identity, a replaced
+root, or missing safe primitive drops the record, and the directory may remain
+absent.
 There is no fallback destination. Importing or constructing the internal writer
 creates nothing. The active `runtime.jsonl` and persistent `.runtime.lock` guard
 remain lazy: the writer creates them only during storage attempts, and backups

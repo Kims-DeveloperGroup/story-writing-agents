@@ -1199,6 +1199,82 @@ class CliTests(unittest.TestCase):
             )
             self.assertFalse(external.joinpath("debug_logs").exists())
 
+    def test_post_bind_init_replacement_is_hint_free_and_contained(self) -> None:
+        """Keep CLI failure exact when the canonical root changes during writes."""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            root = parent / "pending_cli_workspace"
+            parked = parent / ".parked-pending-cli-workspace"
+            external = parent / "external"
+            external.mkdir()
+            (external / "sentinel.bin").write_bytes(b"external bytes\x00")
+            external_before = {
+                path.relative_to(external).as_posix(): (
+                    None if path.is_dir() else path.read_bytes()
+                )
+                for path in sorted(external.rglob("*"))
+            }
+            real_entries = workspace_module._initialize_pending_workspace_entries
+            substituted = False
+
+            def substitute_after_bind(
+                target_workspace: Workspace,
+                root_descriptor: int,
+                *,
+                overwrite_prompts: bool,
+            ) -> None:
+                nonlocal substituted
+                root.rename(parked)
+                try:
+                    root.symlink_to(external, target_is_directory=True)
+                except (NotImplementedError, OSError) as exc:
+                    self.skipTest(
+                        f"directory symlink replacement unavailable: {exc}"
+                    )
+                substituted = True
+                real_entries(
+                    target_workspace,
+                    root_descriptor,
+                    overwrite_prompts=overwrite_prompts,
+                )
+
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with (
+                mock.patch.object(
+                    workspace_module,
+                    "_initialize_pending_workspace_entries",
+                    side_effect=substitute_after_bind,
+                ),
+                contextlib.redirect_stdout(stdout),
+                contextlib.redirect_stderr(stderr),
+            ):
+                exit_code = main(["init", str(root)])
+
+            self.assertEqual(exit_code, 2)
+            self.assertTrue(substituted)
+            self.assertEqual(stdout.getvalue(), "")
+            self.assertTrue(
+                stderr.getvalue().startswith(
+                    ("NotADirectoryError: ", "OSError: ")
+                )
+            )
+            self.assertNotIn("debug_logs/runtime.jsonl", stderr.getvalue())
+            self.assertTrue(root.is_symlink())
+            self.assertTrue(parked.is_dir())
+            self.assertEqual(
+                {
+                    path.relative_to(external).as_posix(): (
+                        None if path.is_dir() else path.read_bytes()
+                    )
+                    for path in sorted(external.rglob("*"))
+                },
+                external_before,
+            )
+            self.assertFalse(external.joinpath("debug_logs").exists())
+            self.assertFalse(parked.joinpath("debug_logs/runtime.jsonl").exists())
+
     def test_init_root_failures_keep_codes_and_process_control_semantics(
         self,
     ) -> None:
