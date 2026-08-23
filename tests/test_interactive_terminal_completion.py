@@ -1146,6 +1146,135 @@ class CompletionDriverTests(unittest.TestCase):
         self.assertEqual(termios.set_calls, [])
         self.assertEqual(os_module.observed_widths, [])
 
+    def test_reference_fallback_unamended_failure_retries_before_replacement(
+        self,
+    ) -> None:
+        path = "core_documents/global_outline.md"
+        marker = f"use $${{{path}}}"
+        replacement = "use a replacement draft"
+        retry_prompt = (
+            f"Draft retained: {marker}\n"
+            "Press Enter to retry the marker without submitting, or type "
+            "a replacement draft: "
+        )
+        driver, input_stream, output, fallback, termios, os_module = make_driver(
+            "unused",
+            terminal=False,
+        )
+        fallback.side_effect = (marker, "", replacement)
+        scope_provider = mock.Mock(
+            side_effect=lambda buffer, _cursor: ReferenceInputScope(0, len(buffer))
+        )
+        paths_provider = mock.Mock(
+            side_effect=ReferenceInputFailure(ReferenceInputFailureKind.UNAVAILABLE)
+        )
+        text_reader = mock.Mock(side_effect=AssertionError("viewer text read"))
+        failure_writer = mock.Mock()
+
+        result = _core.read_main_command_line(
+            driver,
+            "main> ",
+            reference_scope_provider=scope_provider,
+            reference_paths_provider=paths_provider,
+            reference_text_reader=text_reader,
+            reference_failure_writer=failure_writer,
+        )
+
+        self.assertEqual(result, replacement)
+        self.assertEqual(
+            driver._history_state,
+            MainInputHistoryState((replacement,)),
+        )
+        self.assertEqual(
+            scope_provider.call_args_list,
+            [
+                mock.call(marker, len(marker)),
+                mock.call(marker, len(marker)),
+                mock.call(replacement, len(replacement)),
+            ],
+        )
+        self.assertEqual(paths_provider.call_count, 2)
+        self.assertEqual(
+            failure_writer.call_args_list,
+            [
+                mock.call(ReferenceInputFailureKind.UNAVAILABLE),
+                mock.call(ReferenceInputFailureKind.UNAVAILABLE),
+            ],
+        )
+        self.assertEqual(
+            fallback.call_args_list,
+            [mock.call("main> "), mock.call(retry_prompt), mock.call(retry_prompt)],
+        )
+        self.assertNotIn(
+            "Press Enter to submit it",
+            "".join(call.args[0] for call in fallback.call_args_list),
+        )
+        text_reader.assert_not_called()
+        self.assertNotIn(("read", 1), input_stream.calls)
+        self.assertEqual(output.records, [])
+        self.assertEqual(termios.set_calls, [])
+        self.assertEqual(os_module.observed_widths, [])
+
+    def test_reference_fallback_cancel_retains_marker_with_retry_prompt(self) -> None:
+        path = "core_documents/global_outline.md"
+        marker = f"use $${{{path}}}"
+        replacement = "use a replacement draft"
+        retry_prompt = (
+            f"Draft retained: {marker}\n"
+            "Press Enter to retry the marker without submitting, or type "
+            "a replacement draft: "
+        )
+        driver, input_stream, output, fallback, termios, os_module = make_driver(
+            "unused",
+            terminal=False,
+        )
+        fallback.side_effect = (marker, "/cancel", replacement)
+        scope_provider = mock.Mock(
+            side_effect=lambda buffer, _cursor: ReferenceInputScope(0, len(buffer))
+        )
+        paths_provider = mock.Mock(return_value=(path,))
+        text_reader = mock.Mock(return_value="one\ntwo\nthree")
+        failure_writer = mock.Mock()
+
+        result = _core.read_main_command_line(
+            driver,
+            "main> ",
+            reference_scope_provider=scope_provider,
+            reference_paths_provider=paths_provider,
+            reference_text_reader=text_reader,
+            reference_failure_writer=failure_writer,
+        )
+
+        self.assertEqual(result, replacement)
+        self.assertEqual(
+            driver._history_state,
+            MainInputHistoryState((replacement,)),
+        )
+        self.assertEqual(
+            scope_provider.call_args_list,
+            [
+                mock.call(marker, len(marker)),
+                mock.call(replacement, len(replacement)),
+            ],
+        )
+        paths_provider.assert_called_once_with()
+        text_reader.assert_called_once_with(path)
+        failure_writer.assert_not_called()
+        self.assertEqual(fallback.call_count, 3)
+        self.assertIn(
+            "Select START-END or /cancel: ",
+            fallback.call_args_list[1].args[0],
+        )
+        self.assertEqual(fallback.call_args_list[2], mock.call(retry_prompt))
+        self.assertNotIn(
+            "Press Enter to submit it",
+            fallback.call_args_list[2].args[0],
+        )
+        self.assertNotIn(("read", 1), input_stream.calls)
+        self.assertEqual(output.records, [])
+        self.assertEqual(termios.set_calls, [])
+        self.assertEqual(os_module.observed_widths, [])
+
     def test_reference_fallback_completion_uses_bounded_span_and_preserves_suffix(
         self,
     ) -> None:
