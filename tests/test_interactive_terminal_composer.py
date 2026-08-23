@@ -802,6 +802,92 @@ class SemanticInputDriverTests(unittest.TestCase):
             [termios_double.TCSANOW, termios_double.TCSADRAIN],
         )
 
+    def test_partial_escape_prompt_eof_is_typed_without_cancel_marker(self) -> None:
+        view = InputPromptView((), Prompt("prompt>"))
+        for characters in ("\x1b[", "\x1bO"):
+            with self.subTest(characters=repr(characters)):
+                editor, _input, editor_output, editor_fallback, editor_termios, _size = (
+                    _driver(characters)
+                )
+                with mock.patch.object(
+                    driver_module,
+                    "_escape_input_is_ready",
+                    return_value=True,
+                ):
+                    with self.assertRaises(EOFError):
+                        editor.read_line("line> ")
+                self.assertEqual(editor_output.records[-1], "\r\r\x1b[J\n")
+                editor_fallback.assert_not_called()
+                self.assertEqual(
+                    [when for _fd, when, _attrs in editor_termios.set_calls],
+                    [editor_termios.TCSANOW, editor_termios.TCSADRAIN],
+                )
+
+                driver, _input, output, fallback, termios_double, _size = _driver(
+                    characters
+                )
+                with mock.patch.object(
+                    driver_module,
+                    "_escape_input_is_ready",
+                    return_value=True,
+                ) as readiness:
+                    outcome = driver.read_prompt(
+                        view,
+                        render_input_prompt,
+                        _controls.transition_prompt_input,
+                        transient=True,
+                    )
+                self.assertEqual(outcome, ControlOutcome(ControlOutcomeKind.EOF))
+                readiness.assert_called_once_with(7)
+                self.assertEqual(output.records[-1], "\r\r\x1b[J\n")
+                self.assertNotIn("[cancelled]", "".join(output.records))
+                fallback.assert_not_called()
+                self.assertEqual(driver._history_state, MainInputHistoryState())
+                self.assertEqual(
+                    [when for _fd, when, _attrs in termios_double.set_calls],
+                    [termios_double.TCSANOW, termios_double.TCSADRAIN],
+                )
+
+    def test_subject_read_line_live_clears_and_fallback_stays_ordinary(self) -> None:
+        driver, _input, output, fallback, termios_double, _size = _driver(
+            "Harbor subject\n"
+        )
+        terminal = InteractiveTerminal(driver.read_line, driver.write_text)
+
+        self.assertEqual(
+            terminal.request_conversation_subject(),
+            TerminalAction(TerminalActionKind.LINE, text="Harbor subject"),
+        )
+        fallback.assert_not_called()
+        self.assertEqual(output.records[-1], "\r\r\x1b[J")
+        self.assertEqual(driver._history_state, MainInputHistoryState())
+        self.assertEqual(
+            [when for _fd, when, _attrs in termios_double.set_calls],
+            [termios_double.TCSANOW, termios_double.TCSADRAIN],
+        )
+
+        ordinary = mock.Mock(return_value="Fallback subject")
+        fallback_driver, input_stream, fallback_output, _fallback, fallback_termios, _size = (
+            _driver(
+                "unused",
+                fallback=ordinary,
+                terminal_name="dumb",
+            )
+        )
+        fallback_terminal = InteractiveTerminal(
+            fallback_driver.read_line,
+            fallback_driver.write_text,
+        )
+        self.assertEqual(
+            fallback_terminal.request_conversation_subject(),
+            TerminalAction(TerminalActionKind.LINE, text="Fallback subject"),
+        )
+        ordinary.assert_called_once_with("conversation[subject]> ")
+        self.assertEqual(input_stream.read_calls, 0)
+        self.assertEqual(fallback_output.records, [])
+        self.assertEqual(fallback_termios.set_calls, [])
+        self.assertEqual(fallback_driver._history_state, MainInputHistoryState())
+
     def test_live_input_uses_trusted_ansi_plain_cursor_and_reserved_noops(self) -> None:
         reserved = "\x1b[A\x1b[B\t\x1b[Z\x1b"
         driver, _input, output, fallback, termios_double, size_calls = _driver(

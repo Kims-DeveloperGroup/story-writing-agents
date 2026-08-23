@@ -1181,6 +1181,8 @@ class PickerDriverTests(unittest.TestCase):
         )
         cases = (
             ("\x1b", (((), (), ()),), ControlOutcomeKind.CANCEL, "[cancelled]"),
+            ("\x1b[", (((7,), (), ()),), ControlOutcomeKind.EOF, None),
+            ("\x1bO", (((7,), (), ()),), ControlOutcomeKind.EOF, None),
             ("\x03", (), ControlOutcomeKind.INTERRUPT, None),
             ("\x04", (), ControlOutcomeKind.EOF, None),
             ("", (), ControlOutcomeKind.EOF, None),

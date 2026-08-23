@@ -1093,6 +1093,34 @@ class ViewerDriverTests(unittest.TestCase):
                 self.assertEqual(rendered.count("\x1b[?1049l"), 1)
                 self.assertEqual(events.count("termios.restore"), 1)
 
+    def test_partial_escape_physical_eof_is_eof_without_cancel_frame(self) -> None:
+        for characters in ("\x1b[", "\x1bO"):
+            with self.subTest(characters=repr(characters)):
+                driver, _input, output, fallback, _termios, events = _driver(
+                    characters
+                )
+                with mock.patch.object(
+                    driver_module,
+                    "_escape_input_is_ready",
+                    return_value=True,
+                ) as readiness:
+                    result = _read(
+                        driver,
+                        initialize_text_viewer("one", display_name="x"),
+                    )
+                self.assertEqual(
+                    result,
+                    TextViewerResult(TextViewerExitKind.EOF),
+                )
+                readiness.assert_called_once_with(7)
+                fallback.assert_not_called()
+                rendered = "".join(output.records)
+                self.assertNotIn("[cancelled]", rendered)
+                self.assertEqual(rendered.count("\x1b[?1049h"), 1)
+                self.assertEqual(rendered.count("\x1b[?1049l"), 1)
+                self.assertEqual(events.count("input.read"), 3)
+                self.assertEqual(events.count("termios.restore"), 1)
+
     def test_disabled_controls_are_absent_for_viewer_and_shared_editor(self) -> None:
         for disabled_value in (0, 255):
             disabled_character = chr(disabled_value)
