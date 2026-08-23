@@ -463,9 +463,11 @@ row and still emits the context record with `History displayed: 0/0 events`.
 
 ## Main-prompt live suggestions
 
-The unified driver provides a selectable semantic `Suggestions [open]` palette
-at capable POSIX main prompts. A root `/` opens with its first candidate
-highlighted. Compact registry order (not output layout):
+The unified driver provides selectable semantic palettes at capable POSIX main
+prompts. Static command completion uses `Suggestions [open]`; artifact
+completion uses the distinct `Writing artifact selection [open]` contract
+described below. A root `/` opens with its first candidate highlighted. Compact
+registry order (not output layout):
 
 ```text
 /say /to /agent /agents /language /persona /reset /settings /run /draft-file /session
@@ -790,11 +792,17 @@ and `/run` prompt remainders are eligible; command, option, identity, output,
 and every non-provider field are inert. `\$` is literal.
 
 The private pure activation layer recognizes only the cursor-active marker.
-`$` projects catalog completion, exact `$${path}` requests a direct viewer, and
-exact `$$` requests the catalog picker followed by a viewer. Enter or Tab on a
-catalog candidate replaces the marker with `${path}` without submitting.
-Range selection replaces it with `${path}#Lx-Ly`. Several completed references
-remain ordered; each later activation receives a fresh catalog and text read.
+`$` projects `Writing artifact selection [open]`, followed by
+`[controls] Up/Down selects; Enter/Tab inserts a whole-file reference.` Exact
+`$${path}` requests a direct viewer, and exact `$$` requests the catalog picker
+followed by a viewer. A case-sensitive path fragment after `$` filters the
+completion rows. No match projects the artifact-specific empty text; a truly
+empty eligible catalog projects the visible empty-catalog text plus a deferred
+failure that Enter or Tab surfaces through the established error writer. Enter
+or Tab on a catalog candidate replaces the marker with `${path}` without
+submitting. Range selection replaces it with `${path}#Lx-Ly`. Several completed
+references remain ordered; each later activation receives a fresh catalog and
+text read.
 
 The immutable buffer/cursor at activation is the origin. A successful edit
 changes only the marker span and places the cursor after the indicator.

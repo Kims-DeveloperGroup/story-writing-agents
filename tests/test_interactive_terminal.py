@@ -219,6 +219,12 @@ ERROR_DEFAULTS = {
     ),
 }
 
+_ARTIFACT_REFERENCE_GUIDANCE = (
+    "Artifact references require an attached session and focused conversation. "
+    "In provider-bound prompts, $ chooses a whole-file reference; $$ then "
+    "Enter/Tab opens ranged selection."
+)
+
 AGENT_CASES = (
     (LEAD_ORCHESTRATOR, "lead", "Lead Orchestrator"),
     (PLOT_ARCHITECT, "plot", "Plot & Structure Architect"),
@@ -327,6 +333,11 @@ def expected_session_orientation(
         f"  Target: {display_name}\n"
         f"  History: {history_count} visible room {event_word}\n"
         "  [info] Room messages are saved locally and shared with addressed agents.\n"
+        "  [info] Artifact references require an attached session and focused "
+        "conversatio\n"
+        "         n. In provider-bound prompts, $ chooses a whole-file reference; "
+        "$$ then\n"
+        "          Enter/Tab opens ranged selection.\n"
         "  [info] Type /help for commands; /quit releases access without pausing.\n"
         f"{'-' * 80}\n"
     )
@@ -1327,6 +1338,11 @@ class PromptAndRenderingTests(unittest.TestCase):
                 "  [warning] Provider calls are unavailable in the lobby. Use "
                 "/session create NAM\n"
                 "            E, /session resume [NAME], or /session list.\n"
+                "  [info] Artifact references require an attached session and focused "
+                "conversatio\n"
+                "         n. In provider-bound prompts, $ chooses a whole-file "
+                "reference; $$ then\n"
+                "          Enter/Tab opens ranged selection.\n"
                 "  [info] Type /help for commands; /quit exits.\n"
                 f"{'-' * 80}\n"
             ],
@@ -1396,6 +1412,11 @@ class PromptAndRenderingTests(unittest.TestCase):
                 "  Workspace: /stories/example\n"
                 "  Session: SESSION (created)\n"
                 "  Target: Lead Orchestrator\n"
+                "  [info] Artifact references require an attached session and focused "
+                "conversatio\n"
+                "         n. In provider-bound prompts, $ chooses a whole-file "
+                "reference; $$ then\n"
+                "          Enter/Tab opens ranged selection.\n"
                 "  [info] Type /help for commands; /quit releases access without pausing.\n"
                 f"{'-' * 80}\n"
             ],
@@ -2129,49 +2150,58 @@ class HelpAndErrorTests(unittest.TestCase):
         terminal, callbacks = make_terminal(width=200)
         terminal.write_help()
 
-        sections = tuple(
+        sections = (
             terminal_module.Section(
-                group,
-                (
-                    terminal_module.ListView(
-                        "Commands",
-                        tuple(
-                            terminal_module.Record(
-                                "command",
-                                title=spec.syntax,
-                                fields=(
-                                    terminal_module.Field(
-                                        "Aliases",
-                                        ", ".join(spec.aliases)
-                                        if spec.aliases
-                                        else "none",
-                                    ),
-                                    terminal_module.Field(
-                                        "Calls provider",
-                                        "yes" if spec.may_call_provider else "no",
-                                    ),
-                                    terminal_module.Field(
-                                        "May write artifacts",
-                                        "yes"
-                                        if spec.may_write_artifacts
-                                        else "no",
-                                    ),
-                                ),
-                                role=terminal_module.SemanticRole.COMMAND,
-                                state=terminal_module.ViewState.COMPLETED,
-                            )
-                            for spec in COMMANDS
-                            if spec.group == group
-                        ),
-                        total_count=sum(
-                            spec.group == group for spec in COMMANDS
-                        ),
-                        state=terminal_module.ViewState.COMPLETED,
-                    ),
-                ),
+                "Writing artifact references",
+                (terminal_module.Notice(_ARTIFACT_REFERENCE_GUIDANCE),),
                 state=terminal_module.ViewState.COMPLETED,
-            )
-            for group in dict.fromkeys(spec.group for spec in COMMANDS)
+            ),
+            *tuple(
+                terminal_module.Section(
+                    group,
+                    (
+                        terminal_module.ListView(
+                            "Commands",
+                            tuple(
+                                terminal_module.Record(
+                                    "command",
+                                    title=spec.syntax,
+                                    fields=(
+                                        terminal_module.Field(
+                                            "Aliases",
+                                            ", ".join(spec.aliases)
+                                            if spec.aliases
+                                            else "none",
+                                        ),
+                                        terminal_module.Field(
+                                            "Calls provider",
+                                            "yes"
+                                            if spec.may_call_provider
+                                            else "no",
+                                        ),
+                                        terminal_module.Field(
+                                            "May write artifacts",
+                                            "yes"
+                                            if spec.may_write_artifacts
+                                            else "no",
+                                        ),
+                                    ),
+                                    role=terminal_module.SemanticRole.COMMAND,
+                                    state=terminal_module.ViewState.COMPLETED,
+                                )
+                                for spec in COMMANDS
+                                if spec.group == group
+                            ),
+                            total_count=sum(
+                                spec.group == group for spec in COMMANDS
+                            ),
+                            state=terminal_module.ViewState.COMPLETED,
+                        ),
+                    ),
+                    state=terminal_module.ViewState.COMPLETED,
+                )
+                for group in dict.fromkeys(spec.group for spec in COMMANDS)
+            ),
         )
         expected = terminal_module.Panel(
             "Help",
