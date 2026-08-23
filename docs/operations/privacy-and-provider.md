@@ -47,6 +47,33 @@ absolute diagnostic path. Terminal escaping is not redaction. See
 [Conversation search](../reference/conversation-search.md) and
 [Terminal safety](terminal-safety.md).
 
+<a id="native-authentication-boundary"></a>
+
+## Native authentication boundary
+
+Interactive authentication runs only `codex login status`, `codex login`,
+`agy models`, and bare `agy`, without shell evaluation. Status probes use null
+stdin/stdout/stderr and a bounded wait at the resolved workspace root. The
+runtime keeps only one of four content-free states in memory: authenticated,
+unauthenticated, unavailable, or indeterminate. It does not scan, decode,
+retain, display, or log status output.
+
+Native sign-in runs at the same workspace root and inherits the real stdin,
+stdout, stderr, process environment, and process group. The provider CLI may
+therefore display prompts in terminal scrollback and open a
+provider-controlled browser. The runtime does not synthesize, inspect, or
+capture a browser URL; parse provider output or account facts; read tokens or
+credentials; or inspect, copy, replace, or log the provider's native credential
+persistence. The provider and terminal may retain their own data independently.
+
+The workspace stores only a provider name when fresh authentication fills a
+missing `default_backend`; it stores no status, account, login return code,
+token, credential, or OAuth URL. Authentication guidance and results use fixed,
+sanitized copy. Debug logs may contain ordinary fixed CLI operation facts but
+have no authentication-state or provider-output field. A sign-in exit code and
+prior state are never treated as authorization; the runtime freshly probes
+after login and again at each effective-route gate.
+
 ## Provider disclosure
 
 A Python one-step call sends current text and bounded complete turns. Retrieval
@@ -201,10 +228,10 @@ so these protections are neither application access control nor race-proof
 containment. Protect the complete workspace and provider-state paths with
 OS-level controls; the runtime provides neither encryption nor secure erase.
 
-Use `codex login` or process-environment `CODEX_API_KEY`. Never put credentials
-in story content, configuration, filenames, prompts, replies, transcripts, or
-logs. For Antigravity installation and browser/SSH authentication, follow the
-[Antigravity guide](../guides/antigravity.md); do not copy authentication
-material into story configuration. Public models have no hidden-reasoning
-field; ordinary returned content is visible and may persist. `story smoke`
-uses synthetic data and neither provider.
+Use interactive `/auth` or the startup picker to enter native sign-in. Never put
+credentials in story content, configuration, filenames, prompts, replies,
+transcripts, or logs. For Antigravity installation and native authentication,
+follow the [Antigravity guide](../guides/antigravity.md); do not copy
+authentication material into story configuration. Public models have no
+hidden-reasoning field; ordinary returned content is visible and may persist.
+`story smoke` uses synthetic data and neither provider.

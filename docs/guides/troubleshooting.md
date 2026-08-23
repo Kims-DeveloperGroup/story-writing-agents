@@ -32,6 +32,33 @@ If a nonstandard executable path is intentional, pass
 `--antigravity-executable PATH`. See the
 [Antigravity setup guide](antigravity.md#install-and-authenticate-agy).
 
+## Interactive authentication does not complete
+
+The picker reports only `authenticated`, `unauthenticated`, `unavailable`, or
+`indeterminate` from these exact native probes:
+
+```text
+codex login status
+agy models
+```
+
+An unavailable entry means the matching executable is missing from the
+environment that launched `story`; install it or correct `PATH`, source the
+applicable shell profile, and retry. An unauthenticated Codex selection runs
+`codex login`; an unauthenticated Antigravity selection runs bare `agy`.
+Indeterminate means the probe timed out, failed to launch cleanly, or returned
+an unrecognized status; verify the native CLI outside the runtime, then rerun
+`/auth` or restart `story` to probe again.
+
+The native login may open a provider-controlled browser. Complete its own
+prompt and return to the terminal. A successful login exit is not enough: the
+next fresh status probe must report authenticated. Startup Cancel leaves the
+gate open; Ctrl-C or EOF exits without starting the story runtime. `/auth`
+cancellation returns to the existing shell. In `/settings`, failed or cancelled
+provider authentication preserves the pending route, and stale authentication
+at Save prevents the file update. See
+[authentication recovery](../operations/recovery-and-limitations.md#authentication-recovery).
+
 ## Interactive mode requires a terminal
 
 `story` and `story chat` require TTY stdin/stdout. Failed `isatty()` emits
@@ -121,8 +148,9 @@ and [filesystem safety](../operations/filesystem-safety.md#debug-log-filesystem-
 
 ## Provider configuration or session contention
 
-For Codex, confirm `codex login` or `CODEX_API_KEY`, the ready session, model,
-and timeout. For Antigravity, confirm `agy` resolution and authentication, then
+For Codex, rerun `/auth` and require a fresh `codex login status` result, then
+check the ready session, model, and timeout. For Antigravity, require a fresh
+`agy models` result, then
 check the configured model/effort and the same legacy-named
 `--codex-timeout` bound. The Antigravity capability preflight is a bounded,
 provider-free help probe: success verifies required headless flags, not

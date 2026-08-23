@@ -23,7 +23,8 @@ authority, replies, and artifacts. See the
 readiness, with no resource or I/O. `AgentBackend` retains manifests, access
 claims, prompt staging, routes, processes, and threads;
 `BoundAgent` owns one binding. Codex and Antigravity adapters are implemented;
-Codex remains the default. The obsolete backend name `gemini` is rejected with
+the workspace default precedes the final Codex fallback. The obsolete backend
+name `gemini` is rejected with
 guidance to use `antigravity`.
 
 Provider threads are partitioned by story session, backend, and agent.

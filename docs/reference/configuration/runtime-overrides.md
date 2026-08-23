@@ -48,10 +48,20 @@ Language and persona resolve independently, first match winning:
 4. value in `config/system_defaults.json`.
 
 Backend routing is separate: `AgentBackend` one-run override, then per-agent
-configured backend, then `codex`. Supported values are exactly `codex` and
-`antigravity`; `gemini` is rejected with guidance to use `antigravity`. The
-repeatable CLI `--backend CANONICAL_AGENT_ID=BACKEND` supplies only the first
-level and never rewrites configuration.
+configured backend, workspace `default_backend`, then `codex`. Supported values
+are exactly `codex` and `antigravity`; legacy `gemini` is rejected with guidance
+to use `antigravity`. The repeatable CLI
+`--backend CANONICAL_AGENT_ID=BACKEND` supplies only the first level and never
+rewrites configuration. Per-agent routes and the workspace default may be null;
+new workspaces initialize both that way.
+
+Interactive startup first establishes a missing workspace default from fresh
+authentication, preserving existing defaults and explicit routes, then applies
+this precedence and freshly gates every distinct effective provider. A newly
+authenticated provider wins the absent-default choice; otherwise a sole
+authenticated provider wins, or Codex wins when both already authenticate.
+Noninteractive paths do not perform this onboarding write and use the same
+precedence directly.
 
 Provider model and effort resolution is independent of the language/persona
 and backend-routing cascades. First non-null value wins:
@@ -80,7 +90,10 @@ Session-wide and per-agent runtime language/persona overrides remain live above
 that snapshot, and explicit backend and run arguments retain their higher
 precedence. `/settings` changes persistent fallbacks only; it does not clear or
 rewrite those overrides, refresh provider threads, or alter the precedence
-table.
+table. Its provider editor authenticates before changing a pending route, and
+Save freshly gates every distinct effective provider outside the configuration
+transaction. Any absent-default write performed during authentication is
+durable even if pending settings are cancelled.
 
 Codex reasoning accepts `minimal`, `low`, `medium`, `high`, and `xhigh`.
 Antigravity effort accepts `low`, `medium`, and `high`. See

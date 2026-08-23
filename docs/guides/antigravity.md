@@ -2,47 +2,42 @@
 
 > **Availability:** Antigravity is implemented through the `agy` CLI for
 > debates, direct conversation, bounded retrieval, and persistent provider
-> conversations. Codex remains the default provider.
+> conversations. Interactive onboarding invokes the resolved Antigravity
+> executable without arguments for native sign-in; it defaults to `agy`. Codex
+> remains the final route fallback.
 
 Key terms: **backend name**—the configuration value `antigravity`;
-**executable**—the command `agy`; **provider conversation**—Antigravity's private
-history identified by a runtime-managed ID; **taint**—a marker that prevents
-continuing uncertain provider history.
+**executable**—the resolved Antigravity command, `agy` by default; **provider
+conversation**—Antigravity's private history identified by a runtime-managed
+ID; **taint**—a marker that prevents continuing uncertain provider history.
 
 ## Install and authenticate `agy`
 
-Follow the vendor's current
-[Installation & auth guide](https://antigravity.google/docs/cli/install/). On
-macOS or Linux, download the installer to a temporary local file, inspect that
-exact file, and then execute it:
+Install Antigravity using its provider-supplied instructions, then make the
+`agy` executable visible to the same environment that launches `story`. For a
+zsh setup whose install location is already configured in `~/.zshrc`:
 
 ```bash
-(
-  set -eu
-  agy_installer="$(mktemp "${TMPDIR:-/tmp}/antigravity-install.XXXXXX")"
-  trap 'rm -f "$agy_installer"' EXIT
-  curl -fsSL https://antigravity.google/cli/install.sh -o "$agy_installer"
-  less "$agy_installer"
-  bash "$agy_installer"
-)
-```
-
-The default executable path is `$HOME/.local/bin/agy`. If it is not already on
-`PATH`, add the directory to the applicable shell profile. For zsh:
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
 source ~/.zshrc
 command -v agy
 agy --version
 ```
 
-The official guide also provides Windows PowerShell and Command Prompt
-installers. After installation, launch `agy` in a terminal and complete its
-browser or remote-SSH authentication flow. Antigravity stores signed-in account
-credentials in the operating-system keyring; `/logout` is entered inside the
-Antigravity prompt. The story runtime neither performs login nor writes
-credentials into its workspace.
+At interactive startup, the runtime silently executes `agy models` by default
+as the Antigravity status probe. Return code `0` means authenticated, `1` means
+unauthenticated, a missing executable means unavailable, and other or timed-out
+results are indeterminate. Selecting an unauthenticated Antigravity entry runs
+the resolved executable without arguments: bare `agy` by default, or a
+supported `--antigravity-executable PATH` override invoked the same way. Do not
+substitute a Gemini command or add `login` or other sign-in arguments.
+
+The native sign-in inherits stdin, stdout, stderr, and the process environment
+and runs at the resolved story workspace root. It may open a
+provider-controlled browser. The runtime does not synthesize or inspect a URL,
+read provider output or account facts, capture tokens or credentials, or manage
+Antigravity's native credential persistence. After the native process ends,
+only a fresh `models` probe from that resolved executable can authorize
+Antigravity; the sign-in exit code and prior status are not authorization.
 
 Keep credentials out of story configuration, prompts, drafts, filenames, and
 logs. Provider subprocesses inherit the story process environment, so treat
@@ -50,19 +45,26 @@ environment variables as visible to the selected local provider executable.
 
 ## Choose Antigravity for an agent
 
-The only backend names are `codex` and `antigravity`. An omitted backend is
-`codex`. The executable name `agy` is not a backend value, and `gemini` is not
-an alias. A legacy `gemini` value fails with:
+The only backend names are `codex` and `antigravity`. The executable name `agy`
+is not a backend value. Provider resolution is a CLI override, an explicit
+per-agent route, the workspace `default_backend`, then Codex. A legacy
+`gemini` value is not an executable route or alias and fails with:
 
 ```text
 backend 'gemini' is no longer supported; use 'antigravity'
 ```
 
+Use global no-argument `/auth` from the lobby or an attached shell to refresh
+both providers and open the same native authentication picker. A completed new
+authentication may fill a missing workspace default; cancellation keeps any
+existing default and explicit routes unchanged.
+
 For a persistent route, use global `/settings`, choose Providers, choose an
-agent, and select Antigravity. Model and effort then edit that agent's active
-provider settings. Switching providers preserves the inactive provider's saved
+agent, and select Antigravity. If needed, native authentication runs before the
+pending route changes. Model and effort then edit that agent's active provider
+settings. Switching providers preserves the inactive provider's saved
 settings. Direct JSON editing is also supported; this excerpt routes only the
-plot architect and leaves omitted agents on Codex:
+plot architect and leaves omitted agents to inherit the workspace default:
 
 ```json
 {
@@ -82,7 +84,7 @@ The complete persistent schemas are in
 [Agent configuration](../reference/configuration/agent-configuration.md).
 
 For one shell or run, use repeatable CLI overrides. Other agents retain their
-persisted routes, which default to Codex:
+persisted routes, then inherit the workspace default and final Codex fallback:
 
 ```bash
 story chat draft \
@@ -110,7 +112,7 @@ backend, not one already running.
 
 | Effective value | First non-null value wins |
 | --- | --- |
-| Provider route | Repeatable CLI or `backend_overrides` entry; per-agent `backend`; `codex`. |
+| Provider route | Repeatable CLI or `backend_overrides` entry; per-agent `backend`; workspace `default_backend`; `codex`. |
 | Codex model | `--codex-model` or `AgentBackend(model=...)`; per-agent `codex_model`; system `codex_model`; provider default. |
 | Codex reasoning | Per-agent `codex_reasoning_effort`; system `codex_reasoning_effort`; provider default. |
 | Antigravity model | `--antigravity-model` or constructor value; per-agent `antigravity_model`; system `antigravity_model`; provider default. |
@@ -122,6 +124,10 @@ passed through after flag-safety validation; the runtime does not query a model
 catalog or prove provider support.
 
 ## Capability preflight and fixed errors
+
+Interactive authentication and adapter capability preflight are separate.
+Authentication invokes the resolved executable with `models` for status and no
+arguments for sign-in: `agy models` and bare `agy` by default.
 
 Before provider work, preflight resolves each executable required by the
 effective provider routes. For an Antigravity route it also runs a bounded,
@@ -148,10 +154,6 @@ model names and local path/session metadata as process-visible, not secret.
 Story prompts, drafts, retrieval observations, provider replies, and credentials
 are not inserted into argv; credentials may instead be available through the
 inherited environment or provider keyring.
-
-`agy` retains the inherited option spelling `--gemini_dir` for its state-root
-argument. That external compatibility spelling does not enable a `gemini`
-backend in this runtime.
 
 ## Sessions, provider conversations, and retention
 
@@ -224,6 +226,10 @@ Local vendor checks are optional and still do not make a provider turn:
 agy --version
 agy --help
 ```
+
+The default native authentication probe is `agy models`; it is not part of
+`story smoke` or the adapter capability check. Sign-in invokes that resolved
+executable with no arguments.
 
 A real `story chat` or `story run` call is a live provider check. It may require
 credentials and network access, consume provider quota, transmit story content,
