@@ -69,9 +69,10 @@
   command omits a session or when session attachment restores conversation
   scope. A default does not prove attachment, focus, or provider readiness.
 
-- **Core documents.** Agent-authored outlines, character/world facts, and
-  narrative rules at four exact stable paths; each role receives its allowed
-  current, provenance-backed subset.
+- **Core documents.** Outlines, character/world facts, and narrative rules at
+  four exact stable paths; each role receives its allowed current safe
+  filesystem subset. Publication provenance separately records agent-authored
+  replacements.
   See [Workspaces](guides/workspaces.md).
 
 - **Debate.** One immutable attempt to reach consensus; a story session can

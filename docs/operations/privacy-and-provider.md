@@ -56,8 +56,8 @@ absolute diagnostic path. Terminal escaping is not redaction. See
 ## Explicit-reference data boundary
 
 Reference indicators and durable authorization history are content-free. The
-history records ordered canonical paths and ranges, catalog provenance,
-selected hashes and counts, agent/invocation correlation, lifecycle states,
+schema-v2 history records ordered canonical paths and ranges, filesystem source
+identity and full/selected hashes and counts, agent/invocation correlation, lifecycle states,
 checkpoints, and fixed outcomes. It excludes artifact bytes, parser source and
 provider projections, prompts, provider results, and diagnostic values derived
 from content. Authorization errors use fixed coded messages without echoing a
@@ -71,11 +71,12 @@ tuples; Python and the operating system do not provide a secure memory-zeroing
 guarantee. The durable evidence remains plaintext and has no encryption,
 access control, secure erase, or retention policy.
 
-Interactive catalog entries contain canonical paths only. Opening an artifact
+Interactive source entries contain canonical paths only. Listing reads path and
+type metadata, not file bytes. Opening an artifact
 loads verified plaintext into local process memory and renders it in the
 terminal. A capable viewer uses an alternate screen, but closing it is cleanup,
 not secure erasure from the process, emulator, multiplexer, or remote terminal.
-Fallback prints the complete numbered content into scrollback. Catalog/viewer
+Fallback prints the complete numbered content into scrollback. Source-list/viewer
 activity is not sent to a provider and creates no durable reference-operation
 evidence; only a later submitted `${...}` indicator starts the runtime path.
 UI error output is fixed and content-free.
@@ -114,9 +115,10 @@ and complete user/reply pairs from the current session. It cannot request
 archives, another session/workspace, arbitrary IDs, runtime errors, private
 state, tools, or native data. Observations are framed as untrusted story data.
 
-Agent definitions separately supply only current provenance-backed allowlisted
-core documents. A generic manual edit remains on disk but is omitted after its
-hash diverges; the runtime does not send stale bytes or delete them. Debates,
+Agent definitions separately supply present safe current allowlisted core
+documents. A manual, pre-provenance, published, or hash-divergent safe file may
+therefore reach the provider in a later definition; this does not create
+publication provenance. The runtime does not delete those bytes. Debates,
 manuscripts, core updates, and owner state are not retrieval memory. Direct
 routing selects a shared-transcript responder, not a private channel.
 

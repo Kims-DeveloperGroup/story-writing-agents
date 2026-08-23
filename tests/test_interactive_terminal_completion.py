@@ -502,8 +502,9 @@ class CompletionControlTests(unittest.TestCase):
                     "Up/Down selects; Enter/Tab inserts a whole-file reference."
                 ),
                 empty_text=(
-                    "No current writing artifacts. Complete a consensus run "
-                    "to create one."
+                    "No current writing artifacts. Add a supported canonical "
+                    "core document or part-scoped Markdown manuscript, or "
+                    "publish one through consensus."
                 ),
             ),
         )
@@ -964,8 +965,9 @@ class CompletionRenderingTests(unittest.TestCase):
             candidates=(),
             highlighted_id=None,
             empty_text=(
-                "No current writing artifacts. Complete a consensus run to "
-                "create one."
+                "No current writing artifacts. Add a supported canonical core "
+                "document or part-scoped Markdown manuscript, or publish one "
+                "through consensus."
             ),
         )
         self.assertEqual(
@@ -974,10 +976,12 @@ class CompletionRenderingTests(unittest.TestCase):
                 "Writing artifact selection [open]\n"
                 "  [controls] Up/Down selects; Enter/Tab inserts a whole-file "
                 "reference.\n"
-                "  [empty] No current writing artifacts. Complete a consensus "
-                "run to create one.",
+                "  [empty] No current writing artifacts. Add a supported "
+                "canonical core document \n"
+                "  or part-scoped Markdown manuscript, or publish one through "
+                "consensus.",
                 80,
-                3,
+                4,
             ),
         )
 

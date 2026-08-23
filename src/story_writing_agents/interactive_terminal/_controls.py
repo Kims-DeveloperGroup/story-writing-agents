@@ -37,7 +37,8 @@ _ARTIFACT_REFERENCE_PALETTE_INSTRUCTION = (
     "Up/Down selects; Enter/Tab inserts a whole-file reference."
 )
 _ARTIFACT_REFERENCE_EMPTY_CATALOG_TEXT = (
-    "No current writing artifacts. Complete a consensus run to create one."
+    "No current writing artifacts. Add a supported canonical core document or "
+    "part-scoped Markdown manuscript, or publish one through consensus."
 )
 _ARTIFACT_REFERENCE_NO_MATCH_TEXT = (
     "No matching writing artifacts. Change the path fragment."

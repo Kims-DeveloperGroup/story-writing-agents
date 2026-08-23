@@ -31,6 +31,22 @@ detailed evidence through Python inspection rather than a reference-specific
 shell history view. There is no standalone artifact command, automation picker,
 or public selection API.
 
+Discovery is based on the current filesystem, not publication history. It
+includes safe empty, manually created, pre-provenance, older, published, and
+hash-divergent files at the four exact core paths or recursively below a valid
+`manuscript/PART/` directory. It excludes `.gitkeep`, extra core files,
+root-level manuscripts, unsupported or invalid paths, normalized/case aliases,
+symlinks, multiply linked or nonregular files, and every internal or outside
+path. Listing is deterministic path/type metadata only; file bytes are opened
+later for viewing or runtime capture. The shell uses its normally resolved
+workspace: an explicit `--workspace` wins, otherwise the nearest initialized
+ancestor is selected.
+
+Missing or corrupt publication catalog, ledger, journal, or recovery state does
+not empty this source list or block safe source reads. It still blocks catalog
+audit, transaction recovery, and consensus publication. An unsafe shared
+repository lock or workspace root blocks both boundaries.
+
 ## Write a reference
 
 ```text
@@ -87,9 +103,9 @@ and distinguish `$` whole-file selection from `$$` ranged selection.
 
 | Typed control | Capable terminal | Ordinary-line fallback | Result in the draft |
 | --- | --- | --- | --- |
-| `$` | Shows `Writing artifact selection [open]`, then `[controls] Up/Down selects; Enter/Tab inserts a whole-file reference.` Up/Down chooses and Enter or Tab completes. | Shows a numbered catalog. | `${path}` replaces only the active marker; the prompt is not submitted. |
+| `$` | Shows `Writing artifact selection [open]`, then `[controls] Up/Down selects; Enter/Tab inserts a whole-file reference.` Up/Down chooses and Enter or Tab completes. | Shows a numbered source list. | `${path}` replaces only the active marker; the prompt is not submitted. |
 | `$${path}` | Enter or Tab opens that artifact in the independent viewer. | Submitting the marker line opens its complete numbered text viewer. | Enter on a range inserts `${path}#Lx-Ly`. |
-| `$$` | Enter or Tab opens the catalog picker, then the selected artifact in the viewer. | Submitting the marker line uses a numbered picker, then the complete numbered viewer. | The selected path and inclusive range replace only the marker. |
+| `$$` | Enter or Tab opens the source picker, then the selected artifact in the viewer. | Submitting the marker line uses a numbered picker, then the complete numbered viewer. | The selected path and inclusive range replace only the marker. |
 | `\$` | No activation. | No activation. | A literal dollar remains in the prompt. |
 
 In the capable viewer, Up/Down moves the active line. Shift+Up/Down creates,
@@ -100,7 +116,7 @@ receives verified text from the caller, retains no document or selection after
 return, and closes before editing resumes.
 
 One prompt can contain several completed indicators. Each new activation uses
-a fresh catalog/read/view operation; completed indicators stay in their typed
+a fresh filesystem-list/read/view operation; completed indicators stay in their typed
 order. A selection replaces only its active `$` marker and leaves the rest of
 the buffer unchanged, with the cursor immediately after the inserted token.
 
@@ -120,13 +136,14 @@ the line. You can continue editing and add `$$`, then press Enter or Tab to
 choose an artifact and open the independent viewer for a line range. Only a
 later ordinary prompt submission dispatches the resulting references.
 
-If the fragment matches no eligible path, the open panel instead shows
+If the fragment matches no current safe path, the open panel instead shows
 `[empty] No matching writing artifacts. Change the path fragment.` Edit or
-remove the fragment to recover. If the current eligible catalog itself is
-empty, typing `$` immediately shows
-`[empty] No current writing artifacts. Complete a consensus run to create one.`
-No provider call starts. Enter or Tab then emits the established
-`command_invalid` empty-catalog error below and restores the `$` draft.
+remove the fragment to recover. If no current safe canonical file exists,
+typing `$` immediately shows `[empty] No current writing artifacts. Add a
+supported canonical core document or part-scoped Markdown manuscript, or
+publish one through consensus.` No provider call starts. Enter or Tab then
+emits the established `command_invalid` empty-list error below and restores the
+`$` draft.
 
 ### Capable and fallback completion boundary
 
@@ -144,19 +161,23 @@ start no provider work. The fixed content-free failures are:
 
 | Condition / category | Exact summary | Exact recovery hint |
 | --- | --- | --- |
-| Empty catalog / `command_invalid` | `No current writing artifacts are available.` | `Complete a consensus run that creates canonical writing artifacts.` |
+| Empty source list / `command_invalid` | `No current writing artifacts are available.` | `Add a supported canonical core document or part-scoped Markdown manuscript, or publish one through consensus.` |
 | Invalid insertion / `command_invalid` | `The artifact reference cannot be inserted.` | `Remove the active marker or choose a nonconflicting current artifact.` |
 | Stale selection / `workspace_invalid` | `The selected writing artifact is no longer current.` | `Type $ again to refresh the canonical artifact list.` |
 | Unsafe view / `workspace_invalid` | `The selected writing artifact cannot be viewed safely.` | `Inspect its size and UTF-8 repository state, then refresh the list.` |
 | Repository unavailable / `workspace_invalid` | `The writing-artifact repository is unavailable.` | `Inspect workspace recovery guidance, then retry discovery.` |
 
-These messages disclose no path or selected content. Listing is a fresh
-eligible-catalog snapshot; opening performs a bounded provenance-backed read;
-normal submission later performs an independent runtime capture and
+These messages disclose no path or selected content. Listing is a fresh sorted
+metadata-only filesystem snapshot; opening performs a bounded descriptor-safe
+read of current bytes; normal submission later performs an independent runtime capture and
 revalidation instead of reusing viewer bytes. Unsafe listing-to-view or
-post-capture drift fails closed. A legitimately published new current version
-between viewing and submission may therefore be the version agents read; reopen
-the viewer when exact displayed lines matter. The viewer's 8 MiB display limit is independent from the
+post-capture drift fails closed. Any replacement between viewing and submission
+may therefore be the version agents read; reopen the viewer when exact
+displayed lines matter. Every source open is limited to 8 MiB: larger explicit
+limits clamp to 8 MiB, while stricter positive limits are honored. Content must
+be strict UTF-8 without NUL. A path can appear in the metadata-only list and
+still fail when opened because listing does not decode or read it. The viewer's
+8 MiB display limit is independent from the
 runtime's 128 KiB per-reference and 256 KiB per-batch limits.
 
 ## Where references work
@@ -214,6 +235,14 @@ document replacements.
 | Apply narrative rules | `@execution Review ${core_documents/narrative_rules.md}#L8-L20 and ${manuscript/part-01/scenes/opening.md}#L66-L90 before recommending prose changes.` | The execution agent receives only those selected ranges as transient untrusted context. |
 | Publish a manuscript revision | `/run --output part-01/revisions/opening-r2.md Revise ${manuscript/part-01/scenes/opening.md} using ${core_documents/global_outline.md}, ${core_documents/character_sheets.md}, and ${core_documents/narrative_rules.md}.` | Every participating role and debate phase gets a fresh read obligation; prior evidence cannot be borrowed. The approved result is written only to the new part-scoped path. |
 
+The source files in these examples may be manual or pre-provenance bytes; the
+read contract is the same. Advisory work still cannot write them. Consensus
+can publish approved full replacements for the four stable core paths, but a
+manuscript path is create-only even when its current file was created manually
+or is absent while its publication ledger still reserves the identity. Choose
+a new revision path instead. Reading a manual source never creates or repairs
+catalog, commit, or authorship records.
+
 ## What happens during one operation
 
 There are two related lifecycles:
@@ -221,8 +250,8 @@ There are two related lifecycles:
 | Scope and state | Internal meaning | What you can conclude externally |
 | --- | --- | --- |
 | Operation `requested` | A content-free manifest exists before artifact reads. | The attempt was recorded; no provider reply is accepted yet. |
-| Operation `captured` | Every ordered selection was eligible and captured from current provenance. | The requested batch existed and passed capture checks. |
-| Final revalidation | The runtime checks current provenance and hashes immediately before completion. Explicit repository checkpoints may be recorded as `revalidated`; routine history can proceed directly from `captured` to `accepted`. | Files did not drift during the accepted operation. |
+| Operation `captured` | Every ordered selection was captured from current safe filesystem sources with full-source identity and selected-byte proofs. | The requested batch existed and passed capture checks. No publication provenance is implied. |
+| Final revalidation | The runtime reopens each source and checks its path, kind, physical identity, size, and full hash immediately before completion. Explicit repository checkpoints may be recorded as `revalidated`; routine history can proceed directly from `captured` to `accepted`. | Files were not deleted, replaced, made unsafe, enlarged beyond the source bound, or otherwise changed during the accepted operation. |
 | Operation `accepted` | All invocations are terminal and final revalidation passed. | The complete operation succeeded. |
 | Operation `terminated` | Parsing, authorization, drift, cancellation, provider, protocol, or workflow failure ended it. | No referenced result from that operation was accepted. |
 | Invocation `authorized` | One fresh ordinal, correlation, and private one-use capability were created. | This agent/phase/round has its own obligation. |
@@ -265,9 +294,11 @@ if operation_id is not None:
 
 `StoryRuntime.inspect_reference_operation(operation_id)` provides the
 unbound equivalent. A `RuntimeSession` rejects an ID belonging to another
-session. History contains paths/ranges, hashes, byte counts, correlations,
+session. History uses schema v2 and contains paths/ranges, filesystem source
+identities, hashes, byte counts, correlations,
 states, and outcomes—not selected text, user/provider prompts, replies, or
-diagnostics. A handled `ReferenceOperationFailure` carries the operation ID and
+diagnostics. Schema-v1 evidence is neither migrated nor reusable for a new
+authorization or resumed operation. A handled `ReferenceOperationFailure` carries the operation ID and
 a content-free failure code for inspection; a handled terminal debate failure
 may instead retain the ID on its failed `DebateResult`.
 
@@ -281,7 +312,7 @@ coordinator, and capability.
 The shell deliberately uses its existing content-free categories: malformed
 syntax is `command_invalid`; provider/read-action failures are
 `provider_protocol_error`; cancellation is `operation_cancelled`; and unsafe,
-ineligible, changed, or corrupt artifact state is `workspace_invalid`. It does
+missing, changed, or corrupt source/evidence state is `workspace_invalid`. It does
 not display paths, selected text, the operation ID, or internal exception prose.
 Use the Python inspection API when an integration needs the durable operation
 history.
@@ -300,7 +331,7 @@ work:
 
 ```text
 editing a provider-bound span
-  $              -> artifact selection -> ${path}          -> same editing span
+  $              -> filesystem selection -> ${path}        -> same editing span
   $${path}+Enter -> viewer            -> ${path}#Lx-Ly    -> same editing span
   $$+Enter       -> picker -> viewer  -> ${path}#Lx-Ly    -> same editing span
   cancel/error   ------------------------------------------> exact original span
@@ -310,26 +341,28 @@ read prelude -> transient provider context -> accepted result or atomic failure
 ```
 
 Internally, the controller supplies only the provider-bound buffer span and
-artifact callbacks. A pure activation layer classifies the active marker and
-returns a content-free completion, viewer request, or failure. For an eligible
-but empty catalog, it projects an empty artifact panel together with a deferred
-empty-catalog failure: rendering `$` stays side-effect-free, while Enter or Tab
+filesystem-source callbacks. A pure activation layer classifies the active
+marker and
+returns a content-free completion, viewer request, or failure. For an available
+but empty source list, it projects an empty artifact panel together with a deferred
+empty-list failure: rendering `$` stays side-effect-free, while Enter or Tab
 surfaces the fixed error. A no-match panel is instead the filtered view of a
 nonempty completion projection, so changing the path fragment can reveal rows
 again. The terminal driver owns the one input latch and nested picker/viewer
 resources; it restores the immutable origin on every noncommit path and clears
 call-local callbacks. Only the later normal submission reaches the parser and
 runtime. The private viewer remains independent and storage-free: the
-controller reads an eligible artifact, supplies its text and display name, and
+controller safely reads one current source, supplies its text and display name, and
 attaches the returned line numbers to the path.
 
-Catalog display, highlighting, viewing, and cancellation create no durable
+Source-list display, highlighting, viewing, and cancellation create no durable
 work-history row. A completed token enters main history only if the user later
 submits the prompt; composer navigation remains history-free, while its final
 sent prompt is recorded by the debate workflow. Conversation and debate
 history retain the exact indicator text, not selected bytes. Runtime inspection
 then records content-free operation and per-invocation evidence as described
 above, and writing-artifact provenance shows only agent-authored publications.
+Displaying or referencing a manual file does not adopt it into that history.
 
 Automation and noninteractive commands do not receive this UI. Supply literal
 `${...}` indicators in their quoted prompt text. The independent viewer is not
@@ -338,6 +371,6 @@ standalone artifact command. No legacy reference spelling or selection model is
 accepted or migrated.
 
 See [Canonical writing artifacts](../reference/writing-artifacts.md) for path,
-eligibility, and evidence contracts; [Runtime API](../reference/runtime-api.md)
+source, publication, and evidence contracts; [Runtime API](../reference/runtime-api.md)
 for Python values; and [Privacy and provider boundaries](../operations/privacy-and-provider.md)
 for the trust model.

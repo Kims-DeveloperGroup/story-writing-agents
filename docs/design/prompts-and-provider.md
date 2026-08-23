@@ -16,7 +16,7 @@ history**—state behind a provider thread ID.
 
 Stable prompt context and dynamic call data use different channels. During
 definition construction, role prompts and personas are read once, while the
-artifact repository selectively reads only the current provenance-backed core
+artifact repository selectively reads only present safe current core
 documents allowlisted for that role. Every result becomes an immutable
 content-backed reference containing a lexical absolute path, SHA-256, and the
 exact captured bytes. The backend stages those bytes at binding and never
@@ -25,20 +25,23 @@ call.
 
 ## Bound role context
 
-When eligible, the plot architect receives global and part outlines; the
+When present and safe, the plot architect receives global and part outlines; the
 character custodian gets character sheets; the execution specialist gets
 narrative rules; and the lead gets all four core documents. `read_current()`
 touches only those requested core paths, so accumulating manuscripts are not
-read while definitions are assembled. Absent, manual, stale, or unprovenanced
-core files are omitted rather than bound. Definitions include no unrelated
+read while definitions are assembled. Absent or unsafe core files are omitted;
+manual, pre-provenance, published, and hash-divergent current bytes are bound
+without fabricating publication history. Definitions include no unrelated
 workspace paths.
 
 The fingerprint covers agent, provider, language, component identities, and
 hashes. Editing a role prompt or persona changes the next definition. An
-external manual core edit made while workspace processes are stopped removes
-that document from eligibility; generic `Workspace` writes reject canonical
-artifact paths. Later agent republication can bind new provenanced bytes. Either
-effective-context change starts a fresh provider thread for that agent.
+external manual core edit made while workspace processes are stopped changes
+the next filesystem snapshot and definition fingerprint; generic `Workspace`
+writes reject canonical artifact paths. Later agent republication can replace
+the current bytes and record provenance, but provenance is not required for
+binding. Either effective-context change starts a fresh provider thread for
+that agent.
 Provider conversation state remains partitioned by story session and agent.
 
 ## Binding resource lifecycle

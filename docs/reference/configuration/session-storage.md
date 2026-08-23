@@ -1,10 +1,10 @@
 # Session and workspace storage
 
 > **Availability:** V2 defaults, provider sessions, debates, conversations,
-> provenance-backed core documents, part-scoped manuscripts, explicit-reference
-> evidence, provider-native state, and bounded runtime debug logs persist as
-> plaintext workspace files. Runtime-managed documents and records are strict
-> UTF-8.
+> current canonical filesystem sources, provenance-backed publication records,
+> part-scoped manuscripts, explicit-reference evidence, provider-native state,
+> and bounded runtime debug logs persist as plaintext workspace files.
+> Runtime-managed documents and records are strict UTF-8.
 
 Key terms: **default**—a persisted command or conversation fallback;
 **manifest**—durable provider state; **access claim**—temporary process ownership;
@@ -36,7 +36,7 @@ workspace/
 │   │       ├── staging/.artifacts-*.held                       [retained prior bytes]
 │   │       ├── staging/.artifacts-*.retired                    [retained failed publication]
 │   │       ├── staging/.artifacts-*.completed                  [retained completed journal]
-│   │       ├── input_snapshots/<operation_id>/manifest.json    [reference request; schema v1]
+│   │       ├── input_snapshots/<operation_id>/manifest.json    [reference request; schema v2]
 │   │       ├── input_snapshots/<operation_id>/operation_events/<sequence>.json
 │   │       ├── input_snapshots/<operation_id>/invocations/<invocation_id>/manifest.json
 │   │       ├── input_snapshots/<operation_id>/invocations/<invocation_id>/events/<sequence>.json

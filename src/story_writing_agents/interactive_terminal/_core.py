@@ -1999,7 +1999,8 @@ def _reference_input_error(kind: ReferenceInputFailureKind) -> InteractiveError:
     copy = {
         ReferenceInputFailureKind.EMPTY_CATALOG: (
             "No current writing artifacts are available.",
-            "Complete a consensus run that creates canonical writing artifacts.",
+            "Add a supported canonical core document or part-scoped Markdown "
+            "manuscript, or publish one through consensus.",
         ),
         ReferenceInputFailureKind.STALE: (
             "The selected writing artifact is no longer current.",

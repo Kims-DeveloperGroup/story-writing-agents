@@ -274,15 +274,19 @@ Multiple inserted indicators retain order. Completion/viewing remains local;
 only the later normal submit reaches the parser and runtime, where each
 provider invocation must perform its own read.
 
-The text after `$` is a case-sensitive path fragment. No match leaves the
+The text after `$` is a case-sensitive path fragment over the current safe
+canonical filesystem sources. Discovery uses the explicit workspace or the
+nearest initialized ancestor selected by normal CLI resolution, returns lexical
+paths, and reads metadata rather than file bytes. No match leaves the
 labeled panel open with
 `[empty] No matching writing artifacts. Change the path fragment.` When the
-eligible catalog itself is empty, `$` immediately shows
-`[empty] No current writing artifacts. Complete a consensus run to create one.`
+source list is empty, `$` immediately shows `[empty] No current writing
+artifacts. Add a supported canonical core document or part-scoped Markdown
+manuscript, or publish one through consensus.`
 Enter or Tab then writes the existing `command_invalid` empty-catalog error and
 restores the draft; previewing the empty state starts no provider work.
 
-Line fallback prints a numbered catalog and complete numbered viewer. It
+Line fallback prints a numbered source list and complete numbered viewer. It
 accepts exact ASCII `START-END` or `/cancel`, then prints the amended draft and
 requires a second Enter before submission. Blank accepts that draft; nonblank
 replacement text is reevaluated. Catalog/viewer input is history-free, and

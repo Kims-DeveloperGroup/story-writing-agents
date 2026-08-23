@@ -215,13 +215,14 @@ settings remain inert.
 While editing an eligible span, type `$` to open
 `Writing artifact selection [open]`. It shows
 `[controls] Up/Down selects; Enter/Tab inserts a whole-file reference.`, and
-lists only current eligible artifacts. Type a case-sensitive path fragment
+lists current safe canonical filesystem sources in lexical order. Type a case-sensitive path fragment
 after `$` to filter the list; no match shows
 `[empty] No matching writing artifacts. Change the path fragment.` Up/Down and
 Enter or Tab insert `${path}` on a capable terminal without sending the prompt.
-If the eligible catalog is empty, the panel immediately says to complete a
-consensus run; Enter or Tab emits the established empty-catalog error and
-restores the draft.
+If no source exists, the panel says `No current writing artifacts. Add a
+supported canonical core document or part-scoped Markdown manuscript, or
+publish one through consensus.` Enter or Tab emits the established empty-list
+error and restores the draft.
 
 Type `$${path}` then Enter or Tab to open that artifact directly, or `$$` then
 Enter or Tab to choose it first; Shift+Up/Down selects an inclusive range and
@@ -229,7 +230,7 @@ Enter inserts `${path}#Lx-Ly`. Escape, Ctrl-C, EOF, or a handled read error
 restores the exact draft and cursor with no dispatch or history entry. Type
 `\$` for a literal dollar.
 
-Ordinary-line fallback uses numbered catalog choices and exact `START-END`
+Ordinary-line fallback uses numbered source choices and exact `START-END`
 viewer input, then displays the amended draft for a second Enter confirmation.
 It never submits a selection implicitly. Multiple completed indicators remain
 in order; every later agent or debate phase still performs its own enforced
