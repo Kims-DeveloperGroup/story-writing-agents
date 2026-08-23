@@ -142,7 +142,7 @@ class InteractiveAuthCoordinator:
         for provider in AUTH_PROVIDERS:
             status = snapshot.status_for(provider)
             description, enabled, disabled_reason = _choice_status(status)
-            if provider == selected_provider:
+            if enabled and provider == selected_provider:
                 description = f"{description} Current selection."
             choices.append(
                 Choice(
