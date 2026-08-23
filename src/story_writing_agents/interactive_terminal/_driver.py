@@ -262,6 +262,7 @@ class RawTerminalDriver:
                 LineInputState(),
                 self._line_transition,
                 configuration=configuration,
+                transient=True,
             )
 
     def write_text(self, text: str) -> None:
@@ -1321,30 +1322,8 @@ class RawTerminalDriver:
             try:
                 character = self._read_character()
             except EOFError:
-                if display_state.escape_sequence is None:
-                    raise
                 display_state.escape_sequence = None
-                control_state, outcome, changed = _apply_control_event(
-                    control_state,
-                    KeyEvent(KeyKind.ESCAPE),
-                    transition,
-                )
-                completed = _completed_text_or_raise(outcome)
-                if completed is not None:
-                    return completed, _control_line_state(control_state)
-                if changed:
-                    display_state.rendered_cursor_row = self._redraw_live_display(
-                        prompt,
-                        configuration.width,
-                        display_state,
-                        control_state,
-                        suggestion_provider,
-                        rendered_input,
-                        live_capabilities,
-                        palette_projector,
-                        palette_renderer,
-                    )
-                continue
+                raise
 
             configured_event = _configured_control_event(
                 character,
@@ -1474,28 +1453,7 @@ class RawTerminalDriver:
             except KeyboardInterrupt:
                 return state, ControlOutcome(ControlOutcomeKind.INTERRUPT)
             except EOFError:
-                if display_state.escape_sequence is not None:
-                    display_state.escape_sequence = None
-                    state, outcome, changed = _apply_picker_event(
-                        state,
-                        KeyEvent(KeyKind.ESCAPE),
-                        transition,
-                    )
-                    if outcome is not None and (
-                        outcome.kind is not ControlOutcomeKind.REJECTED
-                    ):
-                        return state, outcome
-                    if changed:
-                        display_state.rendered_cursor_row = (
-                            self._redraw_live_picker(
-                                state,
-                                display_state,
-                                capabilities,
-                                viewport_projector,
-                                viewport_renderer,
-                            )
-                        )
-                    continue
+                display_state.escape_sequence = None
                 return state, ControlOutcome(ControlOutcomeKind.EOF)
 
             configured_event = _configured_control_event(
@@ -1624,22 +1582,7 @@ class RawTerminalDriver:
             except KeyboardInterrupt:
                 return state, TextViewerResult(TextViewerExitKind.INTERRUPTED)
             except EOFError:
-                if escape_sequence is not None:
-                    escape_sequence = None
-                    state, outcome = _apply_viewer_event(
-                        state,
-                        KeyEvent(KeyKind.ESCAPE),
-                        transition,
-                    )
-                    if outcome is not None:
-                        return state, outcome
-                    self._redraw_live_text_viewer(
-                        state,
-                        capabilities,
-                        viewport_projector,
-                        viewport_renderer,
-                    )
-                    continue
+                escape_sequence = None
                 return state, TextViewerResult(TextViewerExitKind.EOF)
 
             configured_event = _configured_control_event(
