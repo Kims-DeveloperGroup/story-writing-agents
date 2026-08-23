@@ -17,12 +17,9 @@ from story_writing_agents.agents import PLOT_ARCHITECT, ROSTER
 from story_writing_agents.config import (
     AgentConfig,
     ConfigurationSnapshot,
-    ConfigManager,
-    SystemDefaults,
 )
 from story_writing_agents.errors import (
     ConfigurationError,
-    WorkspaceFormatError,
     WorkspaceSecurityError,
 )
 from story_writing_agents import interactive_settings as settings_module
@@ -35,6 +32,8 @@ from story_writing_agents.interactive_settings import (
     SettingsError,
     SettingsErrorKind,
     SettingsState,
+    establish_default_backend,
+    establish_settings_default_backend,
     load_settings_state,
     save_settings_state,
     update_agent_antigravity_effort,
@@ -136,6 +135,8 @@ class SettingsModelContractTests(SettingsTestCase):
             update_persona: ("state", "persona"),
             update_max_debate_rounds: ("state", "max_debate_rounds"),
             update_agent_backend: ("state", "agent_id", "backend"),
+            establish_default_backend: ("workspace", "backend"),
+            establish_settings_default_backend: ("workspace", "state", "backend"),
             update_agent_codex_model: ("state", "agent_id", "codex_model"),
             update_agent_codex_reasoning_effort: (
                 "state",
@@ -164,6 +165,8 @@ class SettingsModelContractTests(SettingsTestCase):
             "SettingsError",
             "SettingsErrorKind",
             "SettingsState",
+            "establish_default_backend",
+            "establish_settings_default_backend",
             "load_settings_state",
             "save_settings_state",
         )
@@ -511,6 +514,146 @@ class SettingsLoadingAndUpdateTests(SettingsTestCase):
                     operation()
 
 
+class SettingsDefaultPersistenceTests(SettingsTestCase):
+    """Verify absent-only defaults and rebasing around open settings edits."""
+
+    def test_missing_default_is_canonical_idempotent_and_agent_byte_neutral(
+        self,
+    ) -> None:
+        agent_before = self.workspace.path(_AGENT_PATH).read_bytes()
+        with mock.patch.object(
+            self.workspace,
+            "write_text",
+            wraps=self.workspace.write_text,
+        ) as write:
+            self.assertTrue(establish_default_backend(self.workspace, "codex"))
+        self.assertEqual([call.args[0] for call in write.call_args_list], [_SYSTEM_PATH])
+        self.assertEqual(self.workspace.path(_AGENT_PATH).read_bytes(), agent_before)
+        persisted = self.workspace.read_json(_SYSTEM_PATH)
+        self.assertEqual(persisted["default_backend"], "codex")
+        self.assertEqual(
+            self.workspace.read_text(_SYSTEM_PATH),
+            _canonical(
+                {
+                    "language": "KO",
+                    "persona": "default_kim_eun_hee",
+                    "max_debate_rounds": 1,
+                    "codex_model": None,
+                    "codex_reasoning_effort": None,
+                    "antigravity_model": None,
+                    "antigravity_effort": None,
+                    "default_backend": "codex",
+                }
+            ),
+        )
+
+        before = _files(self.workspace.root)
+        with mock.patch.object(
+            self.workspace,
+            "write_text",
+            wraps=self.workspace.write_text,
+        ) as write:
+            self.assertFalse(
+                establish_default_backend(self.workspace, "antigravity")
+            )
+        write.assert_not_called()
+        self.assertEqual(_files(self.workspace.root), before)
+        self.assertEqual(
+            self.workspace.read_json(_SYSTEM_PATH)["default_backend"],
+            "codex",
+        )
+
+    def test_open_settings_edits_rebase_over_durable_default_without_loss(
+        self,
+    ) -> None:
+        opened = self.load()
+        pending = update_agent_backend(
+            update_language(opened, "EN"),
+            PLOT_ARCHITECT,
+            "antigravity",
+        )
+        agent_before = self.workspace.path(_AGENT_PATH).read_bytes()
+
+        rebased = establish_settings_default_backend(
+            self.workspace,
+            pending,
+            "codex",
+        )
+        durable = self.load().pending
+        self.assertEqual(durable.system_defaults.language, "KO")
+        self.assertEqual(durable.system_defaults.default_backend, "codex")
+        self.assertEqual(self.workspace.path(_AGENT_PATH).read_bytes(), agent_before)
+        self.assertEqual(rebased.baseline.configuration, durable)
+        self.assertEqual(rebased.pending.system_defaults.language, "EN")
+        self.assertEqual(rebased.pending.system_defaults.default_backend, "codex")
+        self.assertEqual(
+            rebased.pending.agent_configs[PLOT_ARCHITECT].backend,
+            "antigravity",
+        )
+
+        save_settings_state(self.workspace, rebased)
+        final = self.load().pending
+        self.assertEqual(final.system_defaults.language, "EN")
+        self.assertEqual(final.system_defaults.default_backend, "codex")
+        self.assertEqual(
+            final.agent_configs[PLOT_ARCHITECT].backend,
+            "antigravity",
+        )
+
+    def test_default_rebase_conflicts_are_typed_prewrite_and_redacted(self) -> None:
+        opened = self.load()
+        pending_default = SettingsState(
+            opened.baseline,
+            ConfigurationSnapshot(
+                replace(
+                    opened.pending.system_defaults,
+                    default_backend="antigravity",
+                ),
+                opened.pending.agent_configs,
+            ),
+        )
+        before = _files(self.workspace.root)
+        with mock.patch.object(
+            self.workspace,
+            "write_text",
+            wraps=self.workspace.write_text,
+        ) as write:
+            with self.assertRaises(SettingsError) as caught:
+                establish_settings_default_backend(
+                    self.workspace,
+                    pending_default,
+                    "codex",
+                )
+        self.assertIs(caught.exception.kind, SettingsErrorKind.CONFLICT)
+        self.assertEqual(str(caught.exception), "settings changed on disk")
+        write.assert_not_called()
+        self.assertEqual(_files(self.workspace.root), before)
+
+        opened = self.load()
+        self.workspace.write_text(
+            _SYSTEM_PATH,
+            self.workspace.read_text(_SYSTEM_PATH).replace(
+                '"language": "KO"',
+                '"language": "JA"',
+            ),
+        )
+        raced = _files(self.workspace.root)
+        with mock.patch.object(
+            self.workspace,
+            "write_text",
+            wraps=self.workspace.write_text,
+        ) as write:
+            with self.assertRaises(SettingsError) as caught:
+                establish_settings_default_backend(
+                    self.workspace,
+                    opened,
+                    "codex",
+                )
+        self.assertIs(caught.exception.kind, SettingsErrorKind.CONFLICT)
+        write.assert_not_called()
+        self.assertEqual(_files(self.workspace.root), raced)
+
+
 class SettingsPersistenceTests(SettingsTestCase):
     """Exercise exact conflicts, deterministic writes, and complete rollback."""
 
@@ -547,6 +690,7 @@ class SettingsPersistenceTests(SettingsTestCase):
                     "codex_reasoning_effort": None,
                     "antigravity_model": None,
                     "antigravity_effort": None,
+                    "default_backend": None,
                 }
             ),
         )
@@ -667,6 +811,7 @@ class SettingsPersistenceTests(SettingsTestCase):
                     "codex_reasoning_effort": None,
                     "antigravity_model": None,
                     "antigravity_effort": None,
+                    "default_backend": None,
                 }
             ),
         )

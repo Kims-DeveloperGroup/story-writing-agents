@@ -1,0 +1,535 @@
+"""Deterministic provider-neutral interactive authentication tests."""
+
+from __future__ import annotations
+
+import inspect
+import subprocess
+import sys
+import tempfile
+import unittest
+from dataclasses import FrozenInstanceError, fields
+from pathlib import Path
+
+import story_writing_agents
+from story_writing_agents import interactive_auth
+from story_writing_agents.interactive_auth import (
+    InteractiveAuthCoordinator,
+    InteractiveAuthResult,
+    InteractiveAuthResultKind,
+    select_default_provider,
+)
+from story_writing_agents.interactive_terminal import (
+    ControlOutcome,
+    ControlOutcomeKind,
+    InteractiveTerminal,
+    SemanticRole,
+    ViewState,
+)
+from story_writing_agents.provider_auth import (
+    AUTH_PROVIDERS,
+    ProviderAuthSnapshot,
+    ProviderAuthState,
+    ProviderAuthStatus,
+    ProviderLoginResult,
+)
+
+
+def status(provider: str, state: ProviderAuthState) -> ProviderAuthStatus:
+    return ProviderAuthStatus(provider, state)
+
+
+def snapshot(
+    codex: ProviderAuthState,
+    antigravity: ProviderAuthState,
+) -> ProviderAuthSnapshot:
+    return ProviderAuthSnapshot(
+        (
+            status("codex", codex),
+            status("antigravity", antigravity),
+        )
+    )
+
+
+class ScriptedAuthService:
+    """Expose exact auth collaborator calls with queued typed results."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, object | None]] = []
+        self.probe_results: list[object] = []
+        self.probe_all_results: list[object] = []
+        self.login_results: list[object] = []
+
+    def probe(self, provider: str) -> ProviderAuthStatus:
+        self.events.append(("probe", provider))
+        result = self.probe_results.pop(0)
+        if isinstance(result, BaseException):
+            raise result
+        return result  # type: ignore[return-value]
+
+    def probe_all(self) -> ProviderAuthSnapshot:
+        self.events.append(("probe_all", None))
+        result = self.probe_all_results.pop(0)
+        if isinstance(result, BaseException):
+            raise result
+        return result  # type: ignore[return-value]
+
+    def login(self, provider: str) -> ProviderLoginResult:
+        self.events.append(("login", provider))
+        result = self.login_results.pop(0)
+        if isinstance(result, BaseException):
+            raise result
+        return result  # type: ignore[return-value]
+
+
+class TerminalHarness:
+    """Build one callback terminal with recorded picker/presentation calls."""
+
+    def __init__(self, *outcomes: object) -> None:
+        self.outcomes = list(outcomes)
+        self.picker_states: list[object] = []
+        self.events: list[tuple[str, object]] = []
+        self.writes: list[str] = []
+        self.sleeps: list[float] = []
+        self.terminal = InteractiveTerminal(
+            lambda prompt: (_ for _ in ()).throw(
+                AssertionError(f"unexpected line read: {prompt}")
+            ),
+            self.writes.append,
+        )
+        self.terminal._picker_read = self.read_picker
+        self.terminal._startup_welcome = self.show_welcome
+        self.terminal._startup_notice = self.show_notice
+        self.terminal._startup_result_notice = self.show_result
+
+    def read_picker(self, state: object, *, transient: bool = True) -> ControlOutcome:
+        self.events.append(("picker", transient))
+        self.picker_states.append(state)
+        if not self.outcomes:
+            raise AssertionError("unexpected auth picker read")
+        result = self.outcomes.pop(0)
+        if isinstance(result, BaseException):
+            raise result
+        return result  # type: ignore[return-value]
+
+    def show_welcome(self, sleeper: object) -> None:
+        self.events.append(("welcome", sleeper))
+
+    def show_notice(self, notice: object, sleeper: object) -> None:
+        self.events.append(("notice", notice))
+
+    def show_result(self, notice: object, sleeper: object) -> None:
+        self.events.append(("result", notice))
+
+    def coordinator(self, auth: object) -> InteractiveAuthCoordinator:
+        return InteractiveAuthCoordinator(
+            auth,
+            self.terminal,
+            sleeper=self.sleeps.append,
+        )
+
+
+class InteractiveAuthContractTests(unittest.TestCase):
+    def test_default_selection_matrix_is_exact(self) -> None:
+        states = tuple(ProviderAuthState)
+        for codex in states:
+            for antigravity in states:
+                current = snapshot(codex, antigravity)
+                authenticated = current.authenticated_providers
+                expected = (
+                    authenticated[0]
+                    if len(authenticated) == 1
+                    else "codex"
+                    if len(authenticated) == 2
+                    else None
+                )
+                with self.subTest(codex=codex, antigravity=antigravity):
+                    self.assertEqual(select_default_provider(current), expected)
+
+        both = snapshot(
+            ProviderAuthState.AUTHENTICATED,
+            ProviderAuthState.AUTHENTICATED,
+        )
+        self.assertEqual(
+            select_default_provider(
+                both,
+                newly_authenticated_provider="antigravity",
+            ),
+            "antigravity",
+        )
+        for provider in AUTH_PROVIDERS:
+            unavailable = snapshot(
+                ProviderAuthState.UNAUTHENTICATED
+                if provider == "codex"
+                else ProviderAuthState.AUTHENTICATED,
+                ProviderAuthState.UNAUTHENTICATED
+                if provider == "antigravity"
+                else ProviderAuthState.AUTHENTICATED,
+            )
+            with self.subTest(provider=provider), self.assertRaises(ValueError):
+                select_default_provider(
+                    unavailable,
+                    newly_authenticated_provider=provider,
+                )
+        for malformed in ("gemini", "Codex", "", 17):
+            with self.subTest(malformed=malformed), self.assertRaises(ValueError):
+                select_default_provider(
+                    both,
+                    newly_authenticated_provider=malformed,  # type: ignore[arg-type]
+                )
+
+    def test_result_contract_is_exact_frozen_slotted_and_correlated(self) -> None:
+        self.assertEqual(
+            tuple((member.name, member.value) for member in InteractiveAuthResultKind),
+            (
+                ("AUTHENTICATED", "authenticated"),
+                ("NOT_AUTHENTICATED", "not_authenticated"),
+                ("CANCEL", "cancel"),
+                ("INTERRUPT", "interrupt"),
+                ("EOF", "eof"),
+            ),
+        )
+        self.assertEqual(
+            tuple(field.name for field in fields(InteractiveAuthResult)),
+            ("kind", "snapshot", "provider", "status"),
+        )
+        current = snapshot(
+            ProviderAuthState.AUTHENTICATED,
+            ProviderAuthState.UNAUTHENTICATED,
+        )
+        result = InteractiveAuthResult(
+            InteractiveAuthResultKind.AUTHENTICATED,
+            current,
+            provider="codex",
+            status=current.status_for("codex"),
+        )
+        with self.assertRaises(FrozenInstanceError):
+            result.provider = "antigravity"  # type: ignore[misc]
+        self.assertFalse(hasattr(result, "__dict__"))
+
+        malformed_arguments = (
+            (
+                InteractiveAuthResultKind.CANCEL,
+                {"provider": "codex", "status": current.status_for("codex")},
+            ),
+            (
+                InteractiveAuthResultKind.AUTHENTICATED,
+                {
+                    "provider": "antigravity",
+                    "status": current.status_for("antigravity"),
+                },
+            ),
+            (
+                InteractiveAuthResultKind.NOT_AUTHENTICATED,
+                {"provider": "codex", "status": current.status_for("codex")},
+            ),
+        )
+        for kind, kwargs in malformed_arguments:
+            with self.subTest(kind=kind), self.assertRaises(ValueError):
+                InteractiveAuthResult(kind, current, **kwargs)
+
+    def test_choices_render_every_state_without_color_dependence(self) -> None:
+        auth = ScriptedAuthService()
+        harness = TerminalHarness()
+        coordinator = harness.coordinator(auth)
+        expected = {
+            ProviderAuthState.AUTHENTICATED: (
+                "Authenticated. Ready to use.",
+                True,
+                None,
+            ),
+            ProviderAuthState.UNAUTHENTICATED: (
+                "Not authenticated. Select to start native sign-in.",
+                True,
+                None,
+            ),
+            ProviderAuthState.UNAVAILABLE: (
+                "Unavailable.",
+                False,
+                "Install the provider CLI, then retry.",
+            ),
+            ProviderAuthState.INDETERMINATE: (
+                "Status indeterminate. Select to check again.",
+                True,
+                None,
+            ),
+        }
+        for codex_state in ProviderAuthState:
+            for antigravity_state in ProviderAuthState:
+                current = snapshot(codex_state, antigravity_state)
+                choices = coordinator.choices(current, selected_provider="codex")
+                self.assertEqual(tuple(choice.identity for choice in choices), AUTH_PROVIDERS)
+                self.assertEqual(tuple(choice.label for choice in choices), ("Codex", "Antigravity"))
+                for choice, state in zip(
+                    choices,
+                    (codex_state, antigravity_state),
+                    strict=True,
+                ):
+                    description, enabled, disabled_reason = expected[state]
+                    if choice.identity == "codex" and enabled:
+                        description = f"{description} Current selection."
+                    with self.subTest(
+                        codex=codex_state,
+                        antigravity=antigravity_state,
+                        provider=choice.identity,
+                    ):
+                        self.assertEqual(choice.description, description)
+                        self.assertIs(choice.enabled, enabled)
+                        self.assertEqual(choice.disabled_reason, disabled_reason)
+                        self.assertNotIn("\x1b", choice.description)
+
+
+class InteractiveAuthCoordinatorTests(unittest.TestCase):
+    def test_terminal_controls_and_authenticated_selection_do_not_login(self) -> None:
+        current = snapshot(
+            ProviderAuthState.AUTHENTICATED,
+            ProviderAuthState.UNAUTHENTICATED,
+        )
+        outcomes = (
+            (ControlOutcome(ControlOutcomeKind.COMMIT, text="codex"), InteractiveAuthResultKind.AUTHENTICATED),
+            (ControlOutcome(ControlOutcomeKind.CANCEL), InteractiveAuthResultKind.CANCEL),
+            (ControlOutcome(ControlOutcomeKind.INTERRUPT), InteractiveAuthResultKind.INTERRUPT),
+            (ControlOutcome(ControlOutcomeKind.EOF), InteractiveAuthResultKind.EOF),
+        )
+        for outcome, expected_kind in outcomes:
+            with self.subTest(outcome=outcome.kind):
+                auth = ScriptedAuthService()
+                harness = TerminalHarness(outcome)
+                result = harness.coordinator(auth).run(
+                    current,
+                    selected_provider="codex",
+                )
+                self.assertEqual(result.kind, expected_kind)
+                self.assertIs(result.snapshot, current)
+                self.assertEqual(auth.events, [])
+                self.assertEqual(harness.events, [("picker", True)])
+                state = harness.picker_states[0]
+                picker = state.picker  # type: ignore[attr-defined]
+                self.assertEqual(picker.prompt.name, "Provider authentication")
+                self.assertEqual(picker.highlighted_id, "codex")
+                self.assertEqual(picker.selected_id, "codex")
+                self.assertEqual(picker.state, ViewState.OPEN)
+                self.assertEqual(picker.notice.label, "authentication")
+                self.assertEqual(picker.notice.role, SemanticRole.INFO)
+
+    def test_native_login_handoff_refreshes_both_and_cleans_transients(self) -> None:
+        initial = snapshot(
+            ProviderAuthState.UNAUTHENTICATED,
+            ProviderAuthState.UNAVAILABLE,
+        )
+        refreshed = snapshot(
+            ProviderAuthState.AUTHENTICATED,
+            ProviderAuthState.UNAUTHENTICATED,
+        )
+        auth = ScriptedAuthService()
+        auth.login_results.append(
+            ProviderLoginResult(
+                "codex",
+                27,
+                status("codex", ProviderAuthState.UNAUTHENTICATED),
+            )
+        )
+        auth.probe_all_results.append(refreshed)
+        harness = TerminalHarness(
+            ControlOutcome(ControlOutcomeKind.COMMIT, text="codex")
+        )
+        coordinator = harness.coordinator(auth)
+        result = coordinator.run(initial)
+
+        self.assertEqual(result.kind, InteractiveAuthResultKind.AUTHENTICATED)
+        self.assertIs(result.snapshot, refreshed)
+        self.assertEqual(result.status, refreshed.status_for("codex"))
+        self.assertEqual(
+            auth.events,
+            [("login", "codex"), ("probe_all", None)],
+        )
+        self.assertEqual([event[0] for event in harness.events], ["picker", "notice", "result"])
+        notice = harness.events[1][1]
+        self.assertEqual(notice.label, "authentication")  # type: ignore[attr-defined]
+        self.assertEqual(notice.role, SemanticRole.INFO)  # type: ignore[attr-defined]
+        self.assertEqual(notice.state, ViewState.LOADING)  # type: ignore[attr-defined]
+        result_notice = harness.events[2][1]
+        self.assertEqual(result_notice.role, SemanticRole.SUCCESS)  # type: ignore[attr-defined]
+        self.assertEqual(result_notice.state, ViewState.COMPLETED)  # type: ignore[attr-defined]
+        rendered = repr((notice, result_notice))
+        for secret in ("27", "account", "token", "https://"):
+            self.assertNotIn(secret, rendered)
+
+        stale_success = snapshot(
+            ProviderAuthState.UNAUTHENTICATED,
+            ProviderAuthState.AUTHENTICATED,
+        )
+        auth = ScriptedAuthService()
+        auth.login_results.append(
+            ProviderLoginResult(
+                "codex",
+                0,
+                status("codex", ProviderAuthState.AUTHENTICATED),
+            )
+        )
+        auth.probe_all_results.append(stale_success)
+        harness = TerminalHarness(
+            ControlOutcome(ControlOutcomeKind.COMMIT, text="codex")
+        )
+        result = harness.coordinator(auth).run(initial)
+        self.assertEqual(result.kind, InteractiveAuthResultKind.NOT_AUTHENTICATED)
+        self.assertIsNotNone(result.status)
+        self.assertFalse(result.status.authenticated)
+        failure_notice = harness.events[-1][1]
+        self.assertEqual(failure_notice.role, SemanticRole.ERROR)  # type: ignore[attr-defined]
+
+    def test_indeterminate_unavailable_failures_and_bad_collaborators_are_safe(self) -> None:
+        initial = snapshot(
+            ProviderAuthState.INDETERMINATE,
+            ProviderAuthState.UNAVAILABLE,
+        )
+        auth = ScriptedAuthService()
+        auth.probe_results.append(
+            status("codex", ProviderAuthState.AUTHENTICATED)
+        )
+        harness = TerminalHarness(
+            ControlOutcome(ControlOutcomeKind.COMMIT, text="codex")
+        )
+        result = harness.coordinator(auth).run(initial)
+        self.assertEqual(result.kind, InteractiveAuthResultKind.AUTHENTICATED)
+        self.assertEqual(auth.events, [("probe", "codex")])
+        self.assertEqual([event[0] for event in harness.events], ["picker"])
+
+        unavailable = TerminalHarness(
+            ControlOutcome(ControlOutcomeKind.COMMIT, text="antigravity")
+        )
+        with self.assertRaisesRegex(RuntimeError, "unavailable"):
+            unavailable.coordinator(ScriptedAuthService()).run(initial)
+
+        rogue = TerminalHarness(
+            ControlOutcome(ControlOutcomeKind.COMMIT, text="gemini")
+        )
+        with self.assertRaisesRegex(ValueError, "codex or antigravity"):
+            rogue.coordinator(ScriptedAuthService()).run(initial)
+
+        malformed_cases = (
+            ("probe_all", object(), TypeError),
+            (
+                "probe",
+                status("antigravity", ProviderAuthState.AUTHENTICATED),
+                ValueError,
+            ),
+            ("login", object(), TypeError),
+            (
+                "login",
+                ProviderLoginResult(
+                    "antigravity",
+                    0,
+                    status("antigravity", ProviderAuthState.AUTHENTICATED),
+                ),
+                ValueError,
+            ),
+        )
+        for boundary, value, error in malformed_cases:
+            with self.subTest(boundary=boundary):
+                auth = ScriptedAuthService()
+                if boundary == "probe_all":
+                    auth.probe_all_results.append(value)
+                    harness = TerminalHarness()
+                    with self.assertRaises(error):
+                        harness.coordinator(auth).probe_all()
+                elif boundary == "probe":
+                    auth.probe_results.append(value)
+                    harness = TerminalHarness(
+                        ControlOutcome(ControlOutcomeKind.COMMIT, text="codex")
+                    )
+                    with self.assertRaises(error):
+                        harness.coordinator(auth).run(initial)
+                else:
+                    auth.login_results.append(value)
+                    harness = TerminalHarness(
+                        ControlOutcome(ControlOutcomeKind.COMMIT, text="codex")
+                    )
+                    login_initial = snapshot(
+                        ProviderAuthState.UNAUTHENTICATED,
+                        ProviderAuthState.UNAVAILABLE,
+                    )
+                    with self.assertRaises(error):
+                        harness.coordinator(auth).run(login_initial)
+
+    def test_welcome_and_implicit_probe_are_explicit_and_ordered(self) -> None:
+        current = snapshot(
+            ProviderAuthState.AUTHENTICATED,
+            ProviderAuthState.UNAUTHENTICATED,
+        )
+        auth = ScriptedAuthService()
+        auth.probe_all_results.append(current)
+        harness = TerminalHarness(
+            ControlOutcome(ControlOutcomeKind.COMMIT, text="codex")
+        )
+        coordinator = harness.coordinator(auth)
+        coordinator.show_welcome()
+        result = coordinator.run()
+        self.assertEqual(result.kind, InteractiveAuthResultKind.AUTHENTICATED)
+        self.assertEqual(auth.events, [("probe_all", None)])
+        self.assertEqual([event[0] for event in harness.events], ["welcome", "picker"])
+
+
+class InteractiveAuthBoundaryTests(unittest.TestCase):
+    def test_contract_is_private_clean_source_isolated_and_acyclic(self) -> None:
+        for private_name in (
+            "InteractiveAuthCoordinator",
+            "InteractiveAuthResult",
+            "InteractiveAuthResultKind",
+            "select_default_provider",
+        ):
+            self.assertNotIn(private_name, story_writing_agents.__all__)
+            self.assertFalse(hasattr(story_writing_agents, private_name))
+
+        self.assertEqual(
+            tuple(inspect.signature(InteractiveAuthCoordinator).parameters),
+            ("auth_service", "terminal", "sleeper"),
+        )
+        repository_root = Path(__file__).resolve().parents[1]
+        source_root = repository_root / "src"
+        script = "\n".join(
+            (
+                "import subprocess, sys, time",
+                f"sys.path.insert(0, {str(source_root)!r})",
+                "class ForbiddenPopen:",
+                "    @classmethod",
+                "    def __class_getitem__(cls, item):",
+                "        return cls",
+                "    def __new__(cls, *args, **kwargs):",
+                "        raise AssertionError('import launched a provider')",
+                "subprocess.Popen = ForbiddenPopen",
+                "time.sleep = lambda value: (_ for _ in ()).throw(AssertionError('import slept'))",
+                "import story_writing_agents.interactive_auth as module",
+                "assert module.AUTH_PROVIDERS == ('codex', 'antigravity')",
+                "assert not hasattr(__import__('story_writing_agents'), 'InteractiveAuthCoordinator')",
+            )
+        )
+        completed = subprocess.run(
+            [sys.executable, "-I", "-c", script],
+            cwd=tempfile.gettempdir(),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stdout, "")
+        self.assertEqual(completed.stderr, "")
+
+        source = inspect.getsource(interactive_auth)
+        self.assertIn("from .provider_auth import", source)
+        self.assertIn("from .interactive_terminal import", source)
+        for forbidden in (
+            "subprocess",
+            "webbrowser",
+            "requests",
+            "keyring",
+            "open(",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, source)
+
+
+if __name__ == "__main__":
+    unittest.main()
