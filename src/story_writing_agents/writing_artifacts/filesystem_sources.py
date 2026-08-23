@@ -12,7 +12,11 @@ from .catalog import (
     ArtifactKind,
     canonical_artifact_kind,
 )
-from .references import ArtifactContentSnapshot, ArtifactSourceIdentity
+from .references import (
+    MAX_VIEWER_UTF8_BYTES,
+    ArtifactContentSnapshot,
+    ArtifactSourceIdentity,
+)
 
 
 class ArtifactSourceInvalidUtf8Error(WorkspaceFormatError):
@@ -69,7 +73,13 @@ class CanonicalArtifactFilesystem:
             raise WorkspaceSecurityError(
                 "path is not a canonical writing artifact"
             )
-        captured = self._storage.read_snapshot(path, max_bytes=max_bytes)
+        effective_max_bytes = (
+            MAX_VIEWER_UTF8_BYTES if max_bytes is None else max_bytes
+        )
+        captured = self._storage.read_snapshot(
+            path,
+            max_bytes=effective_max_bytes,
+        )
         content = captured.content
         try:
             decoded = content.decode("utf-8", errors="strict")

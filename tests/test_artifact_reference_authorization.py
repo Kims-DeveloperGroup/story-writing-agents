@@ -20,6 +20,7 @@ from story_writing_agents.agents import EXECUTION_SPECIALIST
 from story_writing_agents.writing_artifacts import (
     MAX_REFERENCE_TOTAL_BYTES,
     MAX_REFERENCE_UTF8_BYTES,
+    MAX_VIEWER_UTF8_BYTES,
     ArtifactContentSnapshot,
     ArtifactKind,
     ArtifactLineRange,
@@ -974,6 +975,68 @@ class ReferenceDriftAndLifetimeTests(ReferenceRepositoryTestCase):
         )
         with _expect_error(self, ReferenceAuthorizationErrorCode.CLOSED):
             authorization.authorized_references
+
+    def test_growth_past_default_limit_is_drift_and_new_capture_is_coded(
+        self,
+    ) -> None:
+        requested = (ArtifactReference(_MANUSCRIPT_PATH),)
+        authorization = self.capture("oversize_growth", requested)
+        os.truncate(
+            self.root / _MANUSCRIPT_PATH,
+            MAX_VIEWER_UTF8_BYTES + 1,
+        )
+
+        with _expect_error(self, ReferenceAuthorizationErrorCode.DRIFT):
+            self.repository.revalidate_reference_operation(
+                authorization,
+                checkpoint="before_provider",
+            )
+        growth_history = self.repository.inspect_reference_operation(
+            "oversize_growth"
+        )
+        assert growth_history is not None
+        self.assertEqual(
+            tuple(
+                event.operation_state
+                for event in growth_history.operation_events
+            ),
+            (
+                ReferenceOperationState.REQUESTED,
+                ReferenceOperationState.CAPTURED,
+                ReferenceOperationState.TERMINATED,
+            ),
+        )
+        self.assertIs(
+            growth_history.operation_events[-1].outcome,
+            ReferenceAuthorizationErrorCode.DRIFT,
+        )
+
+        with _expect_error(
+            self,
+            ReferenceAuthorizationErrorCode.READ_LIMIT_EXCEEDED,
+        ):
+            self.repository.capture_reference_authorization(
+                operation_id="oversize_capture",
+                batch=_reference_batch(*requested),
+            )
+        capture_history = self.repository.inspect_reference_operation(
+            "oversize_capture"
+        )
+        assert capture_history is not None
+        self.assertEqual(
+            tuple(
+                event.operation_state
+                for event in capture_history.operation_events
+            ),
+            (
+                ReferenceOperationState.REQUESTED,
+                ReferenceOperationState.TERMINATED,
+            ),
+        )
+        self.assertIs(
+            capture_history.operation_events[-1].outcome,
+            ReferenceAuthorizationErrorCode.READ_LIMIT_EXCEEDED,
+        )
 
     def test_delivery_and_authorization_hide_serialize_close_and_race_atomically(self) -> None:
         requested = (ArtifactReference(_MANUSCRIPT_PATH),)

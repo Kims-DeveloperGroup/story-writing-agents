@@ -170,6 +170,10 @@ class WritingArtifactRepository:
                         raise ReferenceAuthorizationError(
                             ReferenceAuthorizationErrorCode.NUL_CONTENT
                         ) from None
+                    except WorkspaceFormatError:
+                        raise ReferenceAuthorizationError(
+                            ReferenceAuthorizationErrorCode.READ_LIMIT_EXCEEDED
+                        ) from None
                 snapshots = tuple(
                     sources[item.path] for item in batch.references
                 )

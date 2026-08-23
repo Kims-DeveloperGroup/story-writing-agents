@@ -400,20 +400,19 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
 
         target.write_bytes(b"x" * MAX_VIEWER_UTF8_BYTES)
         self.assertEqual(
-            len(
-                self.repository.read_text(
-                    manuscript_path,
-                    max_bytes=MAX_VIEWER_UTF8_BYTES,
-                )
-            ),
+            len(self.repository.read_text(manuscript_path)),
             MAX_VIEWER_UTF8_BYTES,
         )
-        target.write_bytes(b"x" * (MAX_VIEWER_UTF8_BYTES + 1))
+        current = self.repository.read_current((manuscript_path,))
+        self.assertEqual(len(current[0].content), MAX_VIEWER_UTF8_BYTES)
+        del current
+
+        with target.open("ab") as stream:
+            stream.write(b"x")
         with self.assertRaisesRegex(WorkspaceFormatError, "permitted size"):
-            self.repository.read_text(
-                manuscript_path,
-                max_bytes=MAX_VIEWER_UTF8_BYTES,
-            )
+            self.repository.read_text(manuscript_path)
+        with self.assertRaisesRegex(WorkspaceFormatError, "permitted size"):
+            self.repository.read_current((manuscript_path,))
 
         target.write_bytes(b"\xff")
         with self.assertRaisesRegex(WorkspaceFormatError, "valid UTF-8"):
