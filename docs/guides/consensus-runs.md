@@ -29,6 +29,14 @@ On capable POSIX live editing, a whole-buffer `/` prefix previews only `/send`
 then `/cancel`; the preview does not complete or run either control. Unsupported
 terminals keep the same line-oriented composer without a panel.
 
+Within `/run` prompt text or its composer, `$` completes an eligible whole-file
+indicator, `$${path}` opens that artifact in the ranged viewer, and `$$` opens
+the artifact picker before viewing. These controls never start consensus;
+selection returns to the exact prompt and `/send` or the normal main-input
+submission remains necessary. Fallback selection requires a second Enter
+confirmation. Noninteractive `story run` has no picker/viewer UI and accepts
+literal quoted `${...}` indicators only.
+
 ## Run noninteractively
 
 A prompt asks the execution specialist to create `r0`:

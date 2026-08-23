@@ -5,8 +5,9 @@
 > serialized transcript replacement, atomic per-file default/metadata
 > replacement, guarded interactive settings persistence, and content-free
 > explicit-reference authorization evidence and inline runtime/provider
-> enforcement are implemented. `$`/`$$` discovery and viewer attachment are
-> not.
+> enforcement are implemented. Interactive `$`/`$$` discovery and viewer
+> attachment use the same verified repository boundary; they add no artifact
+> write path.
 
 Key terms: **containment**—keeping paths beneath the workspace root; **symlink**—
 a filesystem alias the runtime rejects; **exclusive creation**—failure instead
@@ -131,6 +132,17 @@ accepting the operation, the repository reopens each unique source and checks
 its full catalog provenance and SHA-256 against capture. Captured content is
 never refreshed. A path/range mismatch consumes the capability; provenance or
 byte drift fails closed.
+
+Interactive listing uses only the repository's current eligible catalog and
+excludes transcripts, discussion logs, provider/agent state, configuration,
+diagnostics, and repository metadata. A picker/viewer activation performs a
+fresh bounded repository read before displaying text. The viewer receives text,
+not a path or filesystem handle, and retains no repository authority. A stale
+choice or listing-to-view race returns a fixed `workspace_invalid` failure; a
+later submission independently captures and revalidates the then-current
+artifact rather than reusing viewer bytes. A legitimately published new
+current version may therefore be what agents read. No UI operation creates
+provenance, repairs a stale artifact, or changes canonical bytes.
 
 Operation and invocation manifests/events are schema-v1 canonical JSON,
 published create-only with exact path identities and contiguous sequences.

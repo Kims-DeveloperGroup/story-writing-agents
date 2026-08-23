@@ -43,6 +43,19 @@ from story_writing_agents.interactive_controller._runtime_policy import (
     validate_consensus_result,
     validate_conversation_retrieval_result,
 )
+from story_writing_agents.interactive_terminal._model import (
+    LineInputState,
+    MainCommandControlState,
+    MainInputControlState,
+)
+from story_writing_agents.interactive_terminal._reference_activation import (
+    ReferenceActivationKind,
+    ReferenceActivationRequest,
+    ReferenceInputScope,
+    project_reference_input,
+    replace_reference_completion,
+    replace_reference_range,
+)
 from story_writing_agents.workspace import (
     FilesystemConversationCatalog,
     FilesystemConversationEventStore,
@@ -86,6 +99,58 @@ _EXPECTED_CONTENTS = (
     _RULES.encode(),
     _MANUSCRIPT.encode(),
 )
+
+
+def _ui_built_source_text() -> str:
+    """Build the shared four-reference prompt through terminal-owned edits."""
+
+    state = MainCommandControlState(
+        MainInputControlState(
+            LineInputState(
+                "Use $ then $ and $ plus $; keep \\${literal} unchanged.",
+                0,
+            )
+        )
+    )
+    catalog = tuple(sorted(_EXPECTED_PATHS))
+    for path, selected_range in zip(
+        _EXPECTED_PATHS,
+        (None, (2, 2), None, None),
+    ):
+        line = state.main_input.line_state.buffer
+        start = line.index("$", state.main_input.line_state.cursor)
+        state = MainCommandControlState(
+            replace(
+                state.main_input,
+                line_state=LineInputState(line, start + 1),
+            )
+        )
+        if selected_range is not None:
+            state = replace_reference_range(
+                state,
+                ReferenceActivationRequest(
+                    ReferenceActivationKind.VIEW,
+                    start,
+                    start + 1,
+                    path=path,
+                ),
+                *selected_range,
+            )
+            continue
+        projected = project_reference_input(
+            line,
+            start + 1,
+            ReferenceInputScope(0, len(line)),
+            catalog,
+        )
+        assert projected is not None and projected.completion is not None
+        token = f"${{{path}}}"
+        state = replace_reference_completion(
+            state,
+            projected.completion,
+            token,
+        )
+    return state.main_input.line_state.buffer
 
 
 @dataclass(frozen=True)
@@ -450,8 +515,10 @@ class RuntimeReferenceIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_every_debate_provider_phase_reads_fresh_batch_before_modification(self) -> None:
         progress: list[DebateProgressEvent] = []
+        source_text = _ui_built_source_text()
+        self.assertEqual(source_text, _SOURCE_TEXT)
         result = await self.runtime.session(_SESSION).run_prompt(
-            _SOURCE_TEXT,
+            source_text,
             output_path="part-02/reference-result.md",
             debate_id="reference_debate",
             progress_sink=progress.append,
@@ -491,7 +558,7 @@ class RuntimeReferenceIntegrationTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(
             all(
-                request.user_payload == _SOURCE_TEXT.replace("\\${", "${")
+                request.user_payload == source_text.replace("\\${", "${")
                 for request in self.backend.agent_requests
             )
         )
@@ -516,7 +583,7 @@ class RuntimeReferenceIntegrationTests(unittest.IsolatedAsyncioTestCase):
             inspected["result"]["reference_operation_id"],
             result.reference_operation_id,
         )
-        self.assertEqual(inspected["messages"][0]["content"], _SOURCE_TEXT)
+        self.assertEqual(inspected["messages"][0]["content"], source_text)
         terminal, artifact = validate_consensus_result(
             result,
             expected_session_id=_SESSION,

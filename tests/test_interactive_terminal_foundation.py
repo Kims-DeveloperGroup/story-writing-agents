@@ -1862,9 +1862,14 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
             "_viewer_model.py": set(),
             "_viewer_controls.py": {"._model", "._viewer_model"},
             "_viewer_render.py": {"._model", "._viewer_model"},
+            "_reference_activation.py": {
+                "..writing_artifacts",
+                "._model",
+            },
             "_driver.py": {
                 "._input_lifecycle",
                 "._model",
+                "._reference_activation",
                 "._viewer_model",
             },
             "_core.py": {
@@ -1873,6 +1878,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
                 "._controls",
                 "._driver",
                 "._model",
+                "._reference_activation",
                 "._render",
                 "._viewer_controls",
                 "._viewer_model",
@@ -1906,6 +1912,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
             "story_writing_agents.interactive_terminal._viewer_model",
             "story_writing_agents.interactive_terminal._viewer_controls",
             "story_writing_agents.interactive_terminal._viewer_render",
+            "story_writing_agents.interactive_terminal._reference_activation",
             "story_writing_agents.interactive_terminal._driver",
             "story_writing_agents.interactive_terminal._core",
             "story_writing_agents.interactive_terminal",

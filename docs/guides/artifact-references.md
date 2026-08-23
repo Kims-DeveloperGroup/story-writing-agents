@@ -1,9 +1,10 @@
 # Use canonical artifact references
 
 > **Availability:** inline `${path}` and `${path}#Lx-Ly` references are active
-> in provider-bound conversation, retrieval, and consensus input. The `$`,
-> `$${file}`, and `$$` interactive discovery/viewer controls are not connected
-> yet; type complete indicators directly.
+> in provider-bound conversation, retrieval, and consensus input. In the TTY
+> shell, `$` lists eligible artifacts, `$${path}` opens one directly, and `$$`
+> opens a picker before the independent ranged viewer. These controls augment
+> prompt editing; `$` is not a command and does not submit the prompt.
 
 An artifact reference tells every addressed story agent which existing output
 it must read before its reply can be accepted. It carries a canonical path and
@@ -20,10 +21,13 @@ cannot silently ignore a reference or borrow another call's evidence. This
 guarantees the read sequence and current source identity, not the quality of an
 agent's interpretation.
 
-You still cannot type `$` to browse artifacts, open `$${file}` to select lines,
-or use `$$` to pick and attach a file. Inline indicators must be typed exactly,
-and the runtime exposes detailed evidence through Python inspection rather than
-a reference-specific shell history view.
+In a provider-bound shell prompt you can now discover current artifacts without
+leaving the draft, insert a whole-file indicator, or select an inclusive line
+range. Selection, cancellation, Ctrl-C, EOF, and handled errors return to the
+same draft and cursor without dispatching it. The runtime still exposes
+detailed evidence through Python inspection rather than a reference-specific
+shell history view. There is no standalone artifact command, automation picker,
+or public selection API.
 
 ## Write a reference
 
@@ -48,10 +52,78 @@ ranged reference to the same path are rejected. Internal transcripts,
 discussion logs, agent/provider state, and configuration are not canonical
 writing artifacts and cannot be referenced.
 
-To send the literal text `${...}` without creating a reference, escape the
-dollar with one backslash: `\${...}`. The exact typed input remains in durable
-conversation/debate history; the provider projection removes the escaping
-backslash. `$$` is reserved for the later picker and is rejected today.
+To send a literal dollar without opening artifact controls, type `\$`. To send
+the literal text `${...}` without creating a runtime reference, use
+`\${...}`. The exact typed input remains in durable conversation/debate
+history; the provider projection removes the escaping backslash.
+
+## Discover, view, and attach in the shell
+
+Artifact controls are active only in provider-bound prompt spans: ordinary
+advisory text with an attached session and focused conversation, the text after
+an `@agent` route or `/say`, and `/run` prompt text. They also work in the
+multiline `/run` composer and the package-internal chat composer. They are inert
+in the lobby and in command names, management arguments, identities, options,
+output paths, subjects, settings, confirmations, and displayed output.
+
+| Surface | `$` activation |
+| --- | --- |
+| Attached + focused ordinary advisory line | Eligible across the line. |
+| Valid `@agent TEXT` or `/say TEXT` | Eligible only in `TEXT`. |
+| `/run [--fresh] [--output PATH] PROMPT` | Eligible only in `PROMPT`, never flags or `PATH`. |
+| `/run` multiline composer; internal chat composer | Eligible in composed prompt text. |
+| Lobby/no focus; management, ID, subject, option, output-path, settings, confirmation, and output fields | Inert. |
+| Noninteractive CLI, automation, or Python | No activation UI; type literal `${...}` indicators. |
+
+| Typed control | Capable terminal | Ordinary-line fallback | Result in the draft |
+| --- | --- | --- | --- |
+| `$` | Shows the current eligible catalog; Up/Down chooses and Enter or Tab completes. | Shows a numbered catalog. | `${path}` replaces only the active marker; the prompt is not submitted. |
+| `$${path}` | Enter or Tab opens that artifact in the independent viewer. | Submitting the marker line opens its complete numbered text viewer. | Enter on a range inserts `${path}#Lx-Ly`. |
+| `$$` | Enter or Tab opens the catalog picker, then the selected artifact in the viewer. | Submitting the marker line uses a numbered picker, then the complete numbered viewer. | The selected path and inclusive range replace only the marker. |
+| `\$` | No activation. | No activation. | A literal dollar remains in the prompt. |
+
+In the capable viewer, Up/Down moves the active line. Shift+Up/Down creates,
+extends, contracts, or reverses a normalized inclusive range; Enter selects it
+and Escape cancels. In fallback, enter exact ASCII `START-END` or `/cancel`.
+The full artifact remains visible in fallback scrollback. The terminal viewer
+receives verified text from the caller, retains no document or selection after
+return, and closes before editing resumes.
+
+One prompt can contain several completed indicators. Each new activation uses
+a fresh catalog/read/view operation; completed indicators stay in their typed
+order. A selection replaces only its active `$` marker and leaves the rest of
+the buffer unchanged, with the cursor immediately after the inserted token.
+
+### Capable and fallback completion boundary
+
+Capable editing performs completion or range attachment inside the same live
+input read and returns to the exact buffer without submission. A fallback
+activation first completes the picker/viewer interaction, then prints the
+amended draft and asks for a second confirmation. Press Enter to submit that
+draft, type a replacement draft to reevaluate it, or resolve another active
+marker. This extra confirmation prevents a fallback selection from dispatching
+implicitly. Fallback input remains visible in scrollback.
+
+Cancellation, interrupt, EOF, and handled activation failures restore the
+exact modeled draft, cursor, focus, and input mode. They add no main history and
+start no provider work. The fixed content-free failures are:
+
+| Condition / category | Exact summary | Exact recovery hint |
+| --- | --- | --- |
+| Empty catalog / `command_invalid` | `No current writing artifacts are available.` | `Complete a consensus run that creates canonical writing artifacts.` |
+| Invalid insertion / `command_invalid` | `The artifact reference cannot be inserted.` | `Remove the active marker or choose a nonconflicting current artifact.` |
+| Stale selection / `workspace_invalid` | `The selected writing artifact is no longer current.` | `Type $ again to refresh the canonical artifact list.` |
+| Unsafe view / `workspace_invalid` | `The selected writing artifact cannot be viewed safely.` | `Inspect its size and UTF-8 repository state, then refresh the list.` |
+| Repository unavailable / `workspace_invalid` | `The writing-artifact repository is unavailable.` | `Inspect workspace recovery guidance, then retry discovery.` |
+
+These messages disclose no path or selected content. Listing is a fresh
+eligible-catalog snapshot; opening performs a bounded provenance-backed read;
+normal submission later performs an independent runtime capture and
+revalidation instead of reusing viewer bytes. Unsafe listing-to-view or
+post-capture drift fails closed. A legitimately published new current version
+between viewing and submission may therefore be the version agents read; reopen
+the viewer when exact displayed lines matter. The viewer's 8 MiB display limit is independent from the
+runtime's 128 KiB per-reference and 256 KiB per-batch limits.
 
 ## Where references work
 
@@ -187,15 +259,45 @@ erasure, and a provider or remote thread may retain content after receipt under
 its own policy. Acceptance proves the read/delivery/result sequence, not that a
 model understood or obeyed the material.
 
-## Interactive boundary still pending
+## From editing to an accepted agent result
 
-Issue #164 still owns typing `$` to list canonical artifacts, `$${file}` to
-open the independent ranged viewer, `$$` to pick a file, restoring the exact
-composer buffer/cursor, attaching the selected path/range, and
-reference-specific shell diagnostics. The supplied-text viewer exists and
-closes cleanly after selection or cancellation, but it does not discover files
-or construct references. Until that integration lands, type complete inline
-indicators and inspect evidence through the Python runtime API.
+The UI and runtime keep separate state so browsing never masquerades as agent
+work:
+
+```text
+editing a provider-bound span
+  $              -> catalog completion -> ${path}          -> same editing span
+  $${path}+Enter -> viewer            -> ${path}#Lx-Ly    -> same editing span
+  $$+Enter       -> picker -> viewer  -> ${path}#Lx-Ly    -> same editing span
+  cancel/error   ------------------------------------------> exact original span
+
+later ordinary submit -> parse once -> capture/revalidate -> per-invocation
+read prelude -> transient provider context -> accepted result or atomic failure
+```
+
+Internally, the controller supplies only the provider-bound buffer span and
+artifact callbacks. A pure activation layer classifies the active marker and
+returns a content-free completion, viewer request, or failure. The terminal
+driver owns the one input latch and nested picker/viewer resources; it restores
+the immutable origin on every noncommit path and clears call-local callbacks.
+Only the later normal submission reaches the parser and runtime. The private
+viewer remains independent and storage-free: the controller reads an eligible
+artifact, supplies its text and display name, and attaches the returned line
+numbers to the path.
+
+Catalog display, highlighting, viewing, and cancellation create no durable
+work-history row. A completed token enters main history only if the user later
+submits the prompt; composer navigation remains history-free, while its final
+sent prompt is recorded by the debate workflow. Conversation and debate
+history retain the exact indicator text, not selected bytes. Runtime inspection
+then records content-free operation and per-invocation evidence as described
+above, and writing-artifact provenance shows only agent-authored publications.
+
+Automation and noninteractive commands do not receive this UI. Supply literal
+`${...}` indicators in their quoted prompt text. The independent viewer is not
+a supported public selection API, and there is no installed `/compose` or
+standalone artifact command. No legacy reference spelling or selection model is
+accepted or migrated.
 
 See [Canonical writing artifacts](../reference/writing-artifacts.md) for path,
 eligibility, and evidence contracts; [Runtime API](../reference/runtime-api.md)

@@ -5,8 +5,8 @@
 > runtime explicit-reference authorization and backend enforcement.
 > They do not make Codex, its executable, workspace, or terminal trusted.
 > Inline canonical references in provider-bound prompt text are active.
-> `$`/`$$`, picker, viewer attachment, and reference-specific shell diagnostics
-> remain unavailable.
+> `$`/`$$` discovery and viewer attachment are active in eligible interactive
+> prompt spans; they remain local until the user normally submits the prompt.
 
 Key terms: **plaintext**—unencrypted content; **visible context**—events sent in
 a request; **provider-private history**—vendor thread state; **diagnostic**—
@@ -64,6 +64,15 @@ tuples; Python and the operating system do not provide a secure memory-zeroing
 guarantee. The durable evidence remains plaintext and has no encryption,
 access control, secure erase, or retention policy.
 
+Interactive catalog entries contain canonical paths only. Opening an artifact
+loads verified plaintext into local process memory and renders it in the
+terminal. A capable viewer uses an alternate screen, but closing it is cleanup,
+not secure erasure from the process, emulator, multiplexer, or remote terminal.
+Fallback prints the complete numbered content into scrollback. Catalog/viewer
+activity is not sent to a provider and creates no durable reference-operation
+evidence; only a later submitted `${...}` indicator starts the runtime path.
+UI error output is fixed and content-free.
+
 For an optional referenced backend call, the first provider payload contains
 only fixed rules, exact operation/invocation correlation, and the complete
 ordered canonical path/range indicators. The capability object is never
@@ -86,8 +95,9 @@ Closing local authorization, delivery, and result carriers drops their Python
 references but offers neither secure memory erasure nor provider erasure. Once
 the substantive request is sent, provider-private or remote systems may retain
 its context under their own policy. `StoryRuntime` now constructs this path
-from inline `${...}` indicators. #164 must still connect `$`/`$$` discovery,
-viewer selection, and composer attachment to it.
+from inline `${...}` indicators. The interactive controller can now construct
+those same indicators through `$`/`$$` discovery and viewer selection without
+copying selected content into the prompt or work history.
 
 ## Provider disclosure
 

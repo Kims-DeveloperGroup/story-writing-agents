@@ -384,6 +384,25 @@ class CommandCompletionContext:
             raise ValueError("replacements must be unique")
 
 
+@dataclass(frozen=True, slots=True)
+class ProviderTextSpan:
+    """Identify the exact provider-bound free-text region at one cursor."""
+
+    start: int
+    end: int
+
+    def __post_init__(self) -> None:
+        """Require one ordered nonnegative buffer span."""
+
+        for name, value in (("start", self.start), ("end", self.end)):
+            if type(value) is not int:
+                raise TypeError(f"{name} must be an integer")
+            if value < 0:
+                raise ValueError(f"{name} must not be negative")
+        if self.end < self.start:
+            raise ValueError("end must not precede start")
+
+
 COMMANDS: tuple[CommandSpec, ...] = (
     CommandSpec("Conversation", "/compose", (), False, False, "/compose"),
     CommandSpec("Conversation", "/send", (), False, False, "/send"),
@@ -696,6 +715,124 @@ def project_command_completion(
             (_TRANSCRIPT_FROM_FLAG,),
         )
     return None
+
+
+def project_provider_text_span(
+    buffer: str,
+    cursor: int,
+) -> ProviderTextSpan | None:
+    """Project only the cursor-active text that may reach a provider.
+
+    This is grammar projection only. Attachment, conversation focus, catalog
+    availability, and terminal activation remain with their owning layers.
+    """
+
+    if not isinstance(buffer, str):
+        raise TypeError("buffer must be a string")
+    buffer = str.__str__(buffer)
+    if type(cursor) is not int:
+        raise TypeError("cursor must be an integer")
+    if cursor < 0 or cursor > len(buffer):
+        raise ValueError("cursor must identify a buffer boundary")
+
+    if not buffer.startswith(("/", "@")):
+        return ProviderTextSpan(0, len(buffer))
+
+    head, tail = _split_head(buffer)
+    if tail is None:
+        return None
+    tail_start = len(head) + 1
+
+    if head.startswith("@"):
+        if head[1:] not in _AGENT_ALIASES:
+            return None
+        return _active_provider_span(tail_start, len(buffer), cursor)
+
+    command = _COMMAND_ALIASES.get(head[1:])
+    if command == "/say":
+        return _active_provider_span(tail_start, len(buffer), cursor)
+    if command != "/run":
+        return None
+    return _run_provider_text_span(buffer, tail_start, cursor)
+
+
+def _active_provider_span(
+    start: int,
+    end: int,
+    cursor: int,
+) -> ProviderTextSpan | None:
+    """Return one provider span only while its cursor is active."""
+
+    if start <= cursor <= end:
+        return ProviderTextSpan(start, end)
+    return None
+
+
+def _run_provider_text_span(
+    buffer: str,
+    prompt_start: int,
+    cursor: int,
+) -> ProviderTextSpan | None:
+    """Project the prompt remainder while excluding run option fields."""
+
+    first = _ascii_token_span(buffer, prompt_start)
+    if first is None:
+        return None
+    first_start, first_end = first
+    first_token = buffer[first_start:first_end]
+    if not first_token.startswith("--"):
+        return _active_provider_span(prompt_start, len(buffer), cursor)
+    if first_token == _RUN_OUTPUT_FLAG:
+        output = _ascii_token_span(buffer, first_end)
+        if output is None:
+            return None
+        _output_start, output_end = output
+        remainder = _ascii_remainder_start(buffer, output_end)
+        if remainder is None:
+            return None
+        return _active_provider_span(remainder, len(buffer), cursor)
+    if first_token != _RUN_FRESH_FLAG:
+        return None
+
+    fresh_start = _ascii_remainder_start(buffer, first_end)
+    if fresh_start is None:
+        return None
+    fresh_first = _ascii_token_span(buffer, fresh_start)
+    assert fresh_first is not None
+    fresh_first_start, fresh_first_end = fresh_first
+    if buffer[fresh_first_start:fresh_first_end] != _RUN_OUTPUT_FLAG:
+        return _active_provider_span(fresh_start, len(buffer), cursor)
+    output = _ascii_token_span(buffer, fresh_first_end)
+    if output is None:
+        return None
+    _output_start, output_end = output
+    remainder = _ascii_remainder_start(buffer, output_end)
+    if remainder is None:
+        return None
+    return _active_provider_span(remainder, len(buffer), cursor)
+
+
+def _ascii_token_span(buffer: str, start: int) -> tuple[int, int] | None:
+    """Return the next ASCII-space/tab-delimited token span."""
+
+    token_start = start
+    while token_start < len(buffer) and buffer[token_start] in " \t":
+        token_start += 1
+    if token_start == len(buffer):
+        return None
+    token_end = token_start
+    while token_end < len(buffer) and buffer[token_end] not in " \t":
+        token_end += 1
+    return token_start, token_end
+
+
+def _ascii_remainder_start(buffer: str, start: int) -> int | None:
+    """Return the first non-delimiter boundary after a complete field."""
+
+    remainder = start
+    while remainder < len(buffer) and buffer[remainder] in " \t":
+        remainder += 1
+    return None if remainder == len(buffer) else remainder
 
 
 def _completion_context(

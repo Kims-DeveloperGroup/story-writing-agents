@@ -2,8 +2,9 @@
 
 > **Availability:** this page describes implemented runtime ownership,
 > dependency direction, filesystem adapters, and the installed interactive
-> controller. It also records the package-internal supplied-text viewer, which
-> has no installed-shell command or supported public API yet.
+> controller. The controller now uses the package-internal supplied-text viewer
+> for `$`/`$$` prompt editing; the viewer still has no standalone command or
+> supported public API.
 
 Key terms: **controller**—owner of interactive transition order;
 **adapter**—provider-neutral implementation; **scope**—what a service may read;
@@ -78,13 +79,14 @@ revision; all must approve. Blackboard and owner-isolated history stay separate.
 | `interactive_settings` | Package-internal immutable current/pending configuration snapshots, safe persona catalog, exact conflict detection, and guarded changed-only persistence with reverse exact-byte rollback |
 | `cli_context`, catalog, memory service, event store | Defaults, identity, scoped reads, and authoritative events |
 | `interactive_terminal` | Stable package-supported facade, package-internal real-CLI factory, and unlisted internal semantic output, controller-main-input, picker, cancellable-prompt, and supplied-text viewer adapters and identities |
-| `interactive_terminal._core` | Established terminal API behavior, explicit ordinary/main/composition/confirmation routing, canonical static/dynamic main-choice adaptation, semantic input-view and lifecycle-event construction, resource-free semantic output/main/picker/prompt/viewer adapters, and terminal-leaf coordination |
+| `interactive_terminal._core` | Established terminal API behavior, explicit ordinary/main/composition/confirmation routing, canonical static/dynamic main-choice adaptation, semantic input-view and lifecycle-event construction, call-local reference scope/catalog/text binding, resource-free semantic output/main/picker/prompt/viewer adapters, and terminal-leaf coordination |
 | `interactive_terminal._model`, `_controls`, `_render` | Immutable semantic/history/completion/dynamic-choice/composer/picker foundation; normalized keys including Shift+Arrow; pure line, palette, history, composer, confirmation, prompt, and picker transitions; bounded picker viewport; and pure safe responsive output/input rendering |
+| `interactive_terminal._reference_activation` | Private pure provider-span-bounded `$` marker projection, catalog completion, nested picker/viewer requests, exact marker replacement, and content-free fixed failure contracts; no I/O or retained state. |
 | `interactive_terminal._viewer_model` | Private immutable strict-UTF-8 supplied document, active/anchor state, bounded viewport, notice, exit-kind, and content-free inclusive-range result contracts; LF-only line derivation with terminal-local 8 MiB source, 65,536-line, and complete 16 MiB fallback-projection limits |
 | `interactive_terminal._viewer_controls` | Pure fresh initialization, ordinary and anchored navigation, normalized commit and noncommit exits, exact ASCII fallback grammar, and bounded contiguous viewport projection |
 | `interactive_terminal._viewer_render` | Pure bounded-prefix one-row-per-source-line live and complete numbered fallback projections with visible escaping, line numbers, plain/ANSI state cues, cell-aware live ellipsis clipping, and no fallback clipping |
 | `interactive_terminal._input_lifecycle` | Irreversible per-driver `UNDECIDED` to `LIVE`/`FALLBACK` selection, exact source/decoder identity, admitted codec/error policy, persistent one-byte incremental decoding, bounded pending suffix, stable EOF, poison/interrupt behavior, and synchronous input exclusion |
-| `interactive_terminal._driver` | Sole real-CLI raw streams, capabilities, width/height, byte/key decoding integration, configured-control validation, pending-suffix-first fixed Escape readiness wait, complete-live-frame cleanup, viewer alternate screen, cursor controls, writes, flushes, restoration, one bounded process-local main-history store, and dedicated history-free picker/prompt/viewer lifecycles |
+| `interactive_terminal._driver` | Sole real-CLI raw streams, capabilities, width/height, byte/key decoding integration, configured-control validation, pending-suffix-first fixed Escape readiness wait, complete-live-frame cleanup, viewer alternate screen, cursor controls, writes, flushes, restoration, one bounded process-local main-history store, and same-latch reference picker/viewer plus dedicated history-free picker/prompt/viewer lifecycles |
 | `interactive_line_editor` | Standalone compatibility facade over the same supported main-command reader and one unified per-editor driver/history store |
 | `StoryRuntime`, `AgentBackend` | Orchestration/retrieval authority and provider resources |
 
@@ -149,14 +151,15 @@ one alternate screen, and cleanup. The result contains only `selected`,
 Selection and cancellation close the viewer after cleanup; every call drops its
 source, display, anchor, selection, and viewport state on return or failure.
 
-This package-internal component does not make `$`, `$${file}`, or `$$`
-available. It discovers and reads no file and constructs no artifact reference.
-The later #164 caller must list and securely read eligible artifacts through
-the writing-artifact boundary, enforce that boundary's separate limit, call
-the stateless viewer once per ordered selection, attach the path to returned
-line numbers, and restore the originating composer. Mandatory per-agent reads
-already apply to directly typed inline indicators. Until #164 lands, users
-cannot open the viewer from the shell.
+The installed controller now supplies that caller boundary. It projects only
+the cursor-active provider-text span, lists and securely reads eligible
+artifacts through the writing-artifact repository, enforces its separate
+limit, calls the stateless viewer once per ordered selection, attaches the path
+to returned line numbers, and restores the immutable originating draft/cursor.
+The private activation leaf owns only pure `$` marker interpretation and edit
+results. Normal submission still crosses the parser/runtime boundary exactly
+once, where mandatory per-agent reads apply. The viewer itself continues to
+discover no file and construct no reference.
 
 Every capable main, subject, composition, confirmation, picker, or prompt read
 clears its complete live frame before returning on submit, commit, cancel, interrupt,
@@ -236,12 +239,15 @@ callback through the adapter and otherwise depends downward on runtime,
 presentation, and storage. Retrieval's handler port prevents
 backend-to-orchestrator access.
 
-The viewer path flows only from the terminal facade/core to `_viewer_controls`,
-`_viewer_model`, `_viewer_render`, and the existing driver. Viewer controls and
-rendering depend only on terminal models; the driver depends on the viewer
-model for typed state and results. No edge connects this path to the
-controller, workspace, writing-artifact repository, runtime, backend, provider,
-parser, or composer.
+The viewer implementation path flows only from the terminal facade/core to
+`_viewer_controls`, `_viewer_model`, `_viewer_render`, and the existing driver.
+Viewer controls and rendering depend only on terminal models; the driver
+depends on the viewer model for typed state and results. The sibling private
+`_reference_activation` leaf depends on terminal models plus immutable
+writing-artifact reference/parser contracts. The controller alone bridges
+call-local provider-span, catalog, and verified-text callbacks to terminal
+input; the viewer leaves still have no controller, workspace, repository,
+runtime, backend, provider, parser, or composer dependency.
 
 This supports deterministic collaborators, not a dynamic plugin system. Exact
 imports live in [Package API](../reference/package-api.md), lifecycle meaning in

@@ -117,7 +117,8 @@ Provider-bound prompt text may include inline `${canonical/path.md}` or
 `${canonical/path.md}#Lx-Ly` indicators. Quote noninteractive prompts so the
 shell does not expand `$`. See [Canonical artifact references](guides/artifact-references.md)
 for exact paths, multi-reference examples, agent read enforcement, and the
-still-pending `$`/`$$` discovery UI.
+interactive `$` completion and `$$` ranged-viewer workflow. Scripts still type
+literal quoted indicators; they do not receive the interactive picker UI.
 
 Continue with [Workspaces](guides/workspaces.md), [Consensus runs](guides/consensus-runs.md),
 or the complete interactive [Glasswater journey](guides/glasswater-scenario.md).

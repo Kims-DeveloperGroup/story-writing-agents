@@ -16,7 +16,7 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 47.
+Importable production units indexed: 48.
 
 ## Current Dependency Direction
 
@@ -66,6 +66,7 @@ interactive_terminal._core -> agents/interactive_commands
                            -> interactive_terminal._controls
                            -> interactive_terminal._driver
                            -> interactive_terminal._model
+                           -> interactive_terminal._reference_activation
                            -> interactive_terminal._render
                            -> interactive_terminal._viewer_controls
                            -> interactive_terminal._viewer_model
@@ -73,7 +74,10 @@ interactive_terminal._core -> agents/interactive_commands
 interactive_terminal._controls -> interactive_terminal._model
 interactive_terminal._driver -> interactive_terminal._input_lifecycle
                              -> interactive_terminal._model
+                             -> interactive_terminal._reference_activation
                              -> interactive_terminal._viewer_model
+interactive_terminal._reference_activation -> interactive_terminal._model
+                                           -> writing_artifacts
 interactive_terminal._render -> interactive_terminal._model
 interactive_terminal._viewer_controls -> interactive_terminal._model
                                       -> interactive_terminal._viewer_model
@@ -556,6 +560,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   order; leading routed-message completion derives `@`-prefixed candidates
   from those same preferred aliases, while all ordered aliases remain valid
   parser inputs and fuzzy agent suggestions present the preferred alias. Other
+  package-internal `ProviderTextSpan` and `project_provider_text_span` values
+  project the cursor-active provider-bound region for ordinary prompts,
+  recognized routed prompts, `/say`, and `/run`, excluding run flags and output
+  identities. That projection performs no attachment, catalog, parser,
+  terminal, or repository work. Other
   parser helpers and command-alias maps are internal; agent parsing and
   canonical validation derive from the route registry. Search and transcript
   actions extend the
@@ -583,7 +592,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   metadata.
 - **Direct internal dependencies:** `agents`.
 - **State, resources, and side effects:** Immutable command and agent-route
-  metadata only. Completion projection is pure and call-local; the module owns
+  metadata only. Completion and provider-span projection are pure and
+  call-local; the module owns
   no editor, palette, history, process state, or external resource and performs
   no provider, filesystem, persistence, environment, or import-time
   operational side effects.
@@ -657,7 +667,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   generic-picker, and cancellable-prompt adapters. Omitted
   `/session resume` and `/conversation resume` pass a call-local provider of
   controller-built immutable `Picker` choices and opaque canonical command
-  identities through `InteractiveMainInput`; capable input obtains a fresh
+  identities through `InteractiveMainInput`; the same adapter receives private
+  call-local provider-span, canonical-path-list, and bounded-text-read callbacks
+  for attached, focused provider-text fields. A resource-free
+  `InteractiveCompositionInput` supplies those collaborators to internally
+  supported RUN and CHAT composition without exposing `/compose` or changing
+  public terminal methods. Capable input obtains a fresh
   backend lifecycle or active-catalog snapshot for each exact completion
   state, while fallback input bypasses the provider. Dynamic-choice Enter
   submits an explicit identity and bypasses the generic picker. An omitted
@@ -689,11 +704,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   contains only an explicit no-changes notice without empty sections. NO or
   nested Escape returns to the settings menu, while interrupt or EOF preserves
   whole-flow cancellation. Provider-bound routes pass the submitted text
-  unchanged to `StoryRuntime`; the controller consumes only the resulting
+  unchanged to `StoryRuntime`; reference UI therefore emits only ordinary
+  `${path}` or `${path}#Lx-Ly` tokens for the existing runtime parser and never
+  authorizes a read. The controller borrows `StoryRuntime.artifacts.list_paths`
+  only for an active eligible marker and borrows one bounded, freshly
+  revalidated `read_text` result only for the supplied-text viewer. It maps all
+  expected discovery/read failures to fixed content-free terminal categories,
+  retains no artifact body, and consumes only the resulting
   optional content-free reference-operation identity. It maps malformed
   directives and structured `ReferenceOperationFailure` codes to fixed safe
-  interactive errors without presenting exception prose or reading artifact
-  content itself.
+  interactive errors without presenting exception prose.
 - **Direct internal dependencies:** `agents`, `backend`, `cli_context`,
   `conversation_retrieval`, `conversation_search`, `conversations`, `errors`,
   `interactive_commands`, `interactive_controller._conversation_policy`,
@@ -748,7 +768,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   defaults remain distinct from the in-memory current focus.
   Reference parsing, capture, provider-read enforcement, durable evidence, and
   operation finalization remain below the controller boundary; it owns no
-  reference-operation state or artifact bytes.
+  reference-operation state, artifact storage, or retained artifact bytes.
   The controller also performs
   catalog create/list/get/rename/archive and compensating unarchive calls,
   persists session and conversation defaults through `cli_context`, applies
@@ -1046,7 +1066,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   returns only a typed noncommit outcome or one one-based inclusive tuple; it
   exposes no text, display metadata, viewport, terminal, composer, repository,
   or reference state. These bindings remain absent from the exact public
-  `__all__` and project-root facade.
+  `__all__` and project-root facade. Unlisted `InteractiveCompositionInput`,
+  `ReferenceInputScope`, `ReferenceInputFailureKind`, and
+  `ReferenceInputFailure` provide the controller with private resource-free,
+  call-local reference-input seams. They do not change the 12-name facade
+  export contract or add terminal/storage ownership.
 - **Direct internal dependencies:** `interactive_terminal._core`.
 - **State, resources, and side effects:** Owns no terminal resource or mutable
   process state. Import deterministically canonicalizes supported public object
@@ -1139,7 +1163,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   cycles, palette open/filter/highlight/clamp, static Tab/Enter completion and
   snapshot, dynamic Up/Down highlight and direct Enter commit, Escape
   restoration and latch, and the exact open-palette versus closed-history arrow
-  routing.
+  routing. Unlisted `completion_candidate_matches` is the single pure,
+  case-sensitive candidate predicate used by capable controls and injected
+  fallback: it preserves literal prefix matching and the existing omitted `/`
+  help-token match, permits only an omitted `{` after exactly one `$` for
+  canonical `${...}` candidates, and performs no `$$` normalization, fuzzy or
+  substring matching, or case folding.
   `transition_composer_line`
   applies exact `/send`, `/cancel`, `/say /send`, and `/say /cancel` semantics
   to immutable composer state, while `transition_confirmation_answer`
@@ -1337,6 +1366,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   completion/palette collaborators per live read. `read_main_line` preserves
   the history-aware compatibility route; package-internal supported
   `read_main_command_line` performs selectable history-aware main editing,
+  while `read_reference_main_command_line` and `read_reference_input_line`
+  accept private call-local activation bindings for main and RUN/CHAT input
+  without changing that established method signature. Those bindings carry the
+  controls-owned completion predicate so capable controls and ordinary
+  fallback apply the same exact matching relation; the driver interprets no
+  artifact-reference prefix grammar and retains no matching collaborator.
+  Enter or Tab activates a correlated request before line completion or
+  history mutation. A single `$` stays in the completion vocabulary; `$$`
+  opens the generic picker and then the supplied-text viewer, while `$${path}`
+  opens that viewer directly.
   `read_live_line` remains the history-free contextual compatibility route,
   `read_input_line` accepts an injected trusted semantic renderer for
   history-free composition and confirmation, and `read_line` uses the same
@@ -1386,7 +1425,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `AdvisoryProgressError` distinguishes indicator failure from provider failure
   for controller cleanup.
 - **Direct internal dependencies:** `interactive_terminal._input_lifecycle`,
-  `interactive_terminal._model`, and
+  `interactive_terminal._model`, `interactive_terminal._reference_activation`,
+  and
   `interactive_terminal._viewer_model`.
 - **State, resources, and side effects:** Sole owner of borrowed input/output
   streams, independent capability checks, detected width, normalized physical
@@ -1419,7 +1459,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   store. Cancellable prompt and picker input
   likewise never consult or mutate history or completion state; their live
   paths reuse the sole driver's decoding, raw-mode, cursor, write, flush, and
-  restoration lifecycle. Picker input observes width again for each redraw,
+  restoration lifecycle. Reference picker/viewer children run inside that same
+  held input latch and raw-mode lifetime rather than invoking another public
+  input operation. Success replaces only the activation span; cancel,
+  interrupt, EOF, expected failure, or disposal restores the outer control
+  state and never appends history or submits a composition. Picker input
+  observes width again for each redraw,
   and its safe line fallback renders the complete numbered choices. Viewer
   input owns one call-local alternate-screen lifecycle but never hides or shows
   the cursor: it validates before capability inspection, observes bounded width
@@ -1431,8 +1476,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   permanent line fallback; after LIVE selection, failures propagate after
   cleanup with termios restoration taking precedence over screen cleanup and
   the active failure. Viewer fallback
-  uses no ANSI, raw mode, or alternate screen. Semantic
-  input resolves capability and
+  uses no ANSI, raw mode, or alternate screen. Reference-aware fallback renders
+  complete numbered choices, retains or amends the draft, and requires a
+  separate blank confirmation before an amended canonical token can return;
+  unresolved markers cannot bypass activation through that confirmation.
+  Semantic input resolves capability and
   width once per read, uses the plain projection for fallback and cursor
   measurement, and emits the trusted styled projection only on its live path.
   Construction performs no stream access or terminal mutation, and history is
@@ -1458,6 +1506,39 @@ every intermediate arrow. The current runtime graph is acyclic.
   `docs/design/interactive-cli-design-system.md`,
   `docs/operations/terminal-safety.md`, and
   `docs/operations/recovery-and-limitations.md`.
+
+### `story_writing_agents.interactive_terminal._reference_activation`
+
+- **Source:** `src/story_writing_agents/interactive_terminal/_reference_activation.py`
+- **Responsibility:** Define pure private reference-input activation and edit
+  contracts for terminal coordination.
+- **Supported surface:** Package-internal frozen/slotted
+  `ReferenceInputScope`, `ReferenceActivationRequest`, and
+  `ReferenceInputProjection`; content-free `ReferenceInputFailureKind` and
+  `ReferenceInputFailure`; plus pure `project_reference_input`, catalog-token
+  completion, selected-path correlation, whole-span insertion, and inclusive
+  range-replacement helpers. Projection scans only the supplied cursor-active
+  provider scope, follows the directive parser's odd-backslash escape parity,
+  recognizes `$`, `$$`, and exact `$${path}` markers, and validates every
+  emitted `${path}` or `${path}#Lx-Ly` token through the existing writing-
+  artifact facade. It performs no catalog discovery, text read, display,
+  submission, history, or authorization operation and is not exported by the
+  terminal or project-root `__all__` contracts.
+- **Direct internal dependencies:** `interactive_terminal._model` and
+  `writing_artifacts`.
+- **State, resources, and side effects:** Pure immutable call-local values and
+  transformations only. It retains no buffer, catalog, artifact content,
+  viewer, terminal mode, input latch, filesystem handle, provider capability,
+  operation evidence, or import-time resource.
+- **Primary verification/documentation:**
+  `tests/test_interactive_terminal_reference_activation.py`,
+  `tests/test_interactive_terminal_completion.py`,
+  `tests/test_artifact_reference_directives.py`,
+  `tests/test_interactive_terminal_viewer.py`,
+  `docs/guides/artifact-references.md`,
+  `docs/reference/interactive-terminal.md`,
+  `docs/design/interactive-cli-design-system.md`, and
+  `docs/operations/terminal-safety.md`.
 
 ### `story_writing_agents.interactive_terminal._core`
 
@@ -1491,14 +1572,23 @@ every intermediate arrow. The current runtime graph is acyclic.
   precedence over static completion for that exact control state; fallback
   never invokes the provider. Its unlisted facade adapters supply the pure
   selectable control projection plus existing semantic palette renderer to the
-  driver.
+  driver. The same coordinator combines command-owned provider scopes with the
+  pure reference-activation projection and call-local catalog/read/fixed-error
+  callbacks. It gives reference completion precedence only inside an eligible
+  span, injects the controls-owned completion predicate into each call-local
+  `ReferenceInputBindings`, and binds the existing generic picker and
+  supplied-text viewer controls to driver-owned nested activation.
+  Callback-constructed terminals preserve their established ordinary behavior.
   The internal contextual factory preserves explicit ordinary/main/composition
   callback routing through deterministic plain semantic adapters, while the
   real stream factory binds the selectable main-command route, both preview
   providers, semantic composition and confirmation input, plus the pure
   main-input transitions to one driver. Resource-free `InteractiveMainInput`
   preserves the public main prompt and `TerminalAction` contracts while passing
-  one call-local choice provider only to capable stream input. Resource-free
+  call-local choice and reference collaborators to stream input. Resource-free
+  `InteractiveCompositionInput` selects the same private reference-aware reader
+  for RUN/CHAT while retaining the established public `compose` behavior and
+  signature. Resource-free
   `InteractivePickerInput`
   validates and initializes one generic picker, then delegates only its
   immutable control state; callback construction binds deterministic plain
@@ -1532,7 +1622,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   class and facade exports remain unchanged.
 - **Direct internal dependencies:** `agents`, `interactive_commands`,
   `interactive_terminal._controls`, `interactive_terminal._driver`,
-  `interactive_terminal._model`, `interactive_terminal._render`,
+  `interactive_terminal._model`, `interactive_terminal._reference_activation`,
+  `interactive_terminal._render`,
   `interactive_terminal._viewer_controls`,
   `interactive_terminal._viewer_model`, and
   `interactive_terminal._viewer_render`.
@@ -1543,9 +1634,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   keys, writes, flushes, restoration, readiness, irreversible input-source
   selection, persistent incremental decoding, and the bounded process-local
   main-input history store, plus advisory indicator task and cleanup to one
-  driver. Main completion, call-local choice, palette, and
-  composition providers plus semantic
-  input renderers are selected per call and never retained by that driver;
+  driver. Main completion, call-local choice, palette, reference scope/catalog/
+  read callbacks, and composition providers plus semantic input renderers are
+  selected per call and never retained by that driver;
   composition, confirmation, cancellable prompt, and picker input are history-
   free. Viewer text, display metadata, selection, and viewport state likewise
   remain call-local and are dropped after every return or raise. Capable
@@ -2241,7 +2332,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   Listings expose only cataloged
   canonical paths whose current unique regular-file bytes match repository
   hashes. Selective reads return only requested current entries as immutable
-  content snapshots. Consensus commits require the execution specialist for
+  content snapshots. Interactive discovery borrows the same sorted `list_paths`
+  result, while supplied-text viewing borrows bounded `read_text`; each read
+  revalidates containment, current provenance, hash, and strict UTF-8 before any
+  text leaves the repository. The repository imports no controller or terminal
+  unit and retains no viewer state. Consensus commits require the execution specialist for
   revision-zero manuscripts and the lead for later manuscripts, publish them
   create-only beneath a part directory, reject every identity already reserved
   by immutable commit history even when its file or catalog entry was externally
@@ -2320,9 +2415,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   attempt, and finalizes or terminates through the repository. The backend
   remains only the mandatory `read_actions` consumer, and the repository alone
   persists evidence. Controller error mapping and content-free result/inspection
-  identities do not move reference bytes above those boundaries. `$`/`$$`
-  shell attachment UI and composer integration remain absent, while the
-  supplied-text terminal viewer remains independent.
+  identities do not move reference bytes above those boundaries. Interactive
+  `$`/`$$` completion, picker, and direct-view activation consume only a
+  controller-borrowed sorted catalog and bounded repository `read_text`; the UI
+  replaces only its active provider-text span with ordinary `${path}` or
+  `${path}#Lx-Ly` tokens and therefore cannot bypass this downstream parser,
+  capture, authorization, provider-read, and evidence path. The supplied-text
+  terminal viewer remains independent of discovery, storage, provider/runtime
+  coordination, and authorization.
 
 - Canonical core context crosses the repository/provider boundary only as an
   `ArtifactContentSnapshot` converted to an immutable `PromptFileReference`.
@@ -2387,7 +2487,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   settings unit has no controller, terminal, backend, runtime, or parser edge.
 - `interactive_commands` owns canonical command and agent-route metadata, parse
   rules, typed parsed actions, and the pure cursor-aware completion grammar and
-  replacement spans derived from that same metadata. Agent-valued completion
+  replacement spans derived from that same metadata. Its pure provider-span
+  projection limits interactive artifact activation to ordinary, routed,
+  `/say`, and RUN prompt text while excluding management, identity, numeric,
+  output-path, and option fields. Agent-valued completion
   and fuzzy guidance expose only preferred prompt aliases in roster order while
   parsing retains every accepted route alias. `interactive_line_editor`
   preserves its legacy main suggestion projection while delegating actual main
@@ -2469,6 +2572,17 @@ every intermediate arrow. The current runtime graph is acyclic.
   writer; the controller owns none. The controller still receives only
   completed terminal outcomes, alone passes exact lines to the parser once, and
   neither it nor parser or storage code owns or persists command history.
+- `interactive_terminal._reference_activation` owns only pure active-marker,
+  completion, request, and replacement values. `_core` combines them with
+  controller-supplied provider scopes, sorted canonical paths, bounded text
+  reads, and fixed errors; `_driver` alone runs picker/viewer children under the
+  already-held input latch and raw-mode lifetime. This preserves outer buffer,
+  cursor, completion, history navigation, saved draft, overlay, composer, focus,
+  and mode state on cancellation or failure and mutates only the active span on
+  success. Main history and RUN/CHAT dispatch occur only after the returned
+  line's normal final commit. The controller and terminal retain no catalog or
+  artifact body after a call, and the emitted token remains subject to the
+  unchanged writing-artifact directive and runtime enforcement path.
 - The ranged text viewer remains wholly inside `interactive_terminal`:
   `_viewer_model` owns immutable LF-derived document/state/viewport/result
   values, the private terminal-local 8 MiB source and 65,536-line capacities,

@@ -3,7 +3,9 @@
 > **Availability:** bare `story` and `story chat` open the TTY shell for session
 > and conversation management, persistent settings, advisory/local reads, and
 > focused-context consensus. Provider-bound prompt text accepts inline
-> `${path}` and `${path}#Lx-Ly` canonical artifact references.
+> `${path}` and `${path}#Lx-Ly` canonical artifact references. In eligible
+> interactive prompt spans, `$`, `$${path}`, and `$$` discover and attach them
+> without submitting.
 
 `story` and `story-writing-agents` are aliases for
 `story_writing_agents.cli:main`.
@@ -149,6 +151,38 @@ capable form is live and transient; line fallback is numbered. Exact capable
 omitted resume commands also receive controller-owned pre-Enter choices through
 the existing main input; dynamic-choice Enter submits an explicit identity and
 bypasses the picker.
+
+Artifact activation is a separate overlay inside provider-bound text only:
+
+| Input | Capable-terminal result |
+| --- | --- |
+| `$` | Lists current eligible canonical artifacts; Enter or Tab inserts `${path}` without submitting. |
+| `$${path}` then Enter or Tab | Opens the named artifact in the independent viewer. |
+| `$$` then Enter or Tab | Opens the artifact picker, then the viewer. |
+| Shift+Up/Down, then Enter in the viewer | Selects a normalized inclusive range and inserts `${path}#Lx-Ly`. |
+| Escape, Ctrl-C, EOF, or handled activation failure | Restores the exact buffer/cursor and performs no dispatch or history append. |
+| `\$` | Leaves a literal dollar and performs no activation. |
+
+The eligible spans are attached, focused ordinary input; valid `@agent` and
+`/say` tails; `/run` prompt text; the `/run` composer; and the internal chat
+composer. Lobby input, management commands and arguments, IDs, subjects,
+options, output paths, settings, confirmations, and output are inert.
+Multiple inserted indicators retain order. Completion/viewing remains local;
+only the later normal submit reaches the parser and runtime, where each
+provider invocation must perform its own read.
+
+Line fallback prints a numbered catalog and complete numbered viewer. It
+accepts exact ASCII `START-END` or `/cancel`, then prints the amended draft and
+requires a second Enter before submission. Blank accepts that draft; nonblank
+replacement text is reevaluated. Catalog/viewer input is history-free, and
+fallback scrollback cannot be erased. Fixed empty, invalid, stale, unreadable,
+and repository-unavailable failures use content-free `command_invalid` or
+`workspace_invalid` output. Exact text and recovery are in the
+[artifact-reference guide](../guides/artifact-references.md#discover-view-and-attach-in-the-shell).
+
+This adds no `/compose`, standalone artifact command, public viewer API, or
+noninteractive picker. `story run` scripts must quote literal `${...}` prompt
+text so the invoking shell does not expand `$`.
 
 `/settings` is alias-free, takes no argument, and is available with or without
 an attached session. It edits isolated Current and Pending snapshots for

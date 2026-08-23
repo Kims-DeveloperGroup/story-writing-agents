@@ -22,12 +22,11 @@
 > consensus turns additionally use
 > one unlisted terminal-owned rolling indicator on capable raw streams;
 > callback and incapable paths remain silent, and these waits emit no
-> `[routing]` or `[waiting]` record. An independent package-internal ranged
-> text viewer can display caller-supplied text and return inclusive line
-> numbers. It is not a supported public API or installed-shell command: `$`,
-> `$${file}`, `$$`, artifact discovery, reference construction, composer
-> restoration, ordered multi-reference composition, and agent-read enforcement
-> remain unavailable until their owning integration slices land.
+> `[routing]` or `[waiting]` record. In provider-bound prompt spans the installed
+> shell now uses `$`, `$${path}`, and `$$` to discover eligible artifacts and
+> invoke the independent package-internal ranged viewer. The viewer remains an
+> unlisted supplied-text component rather than a public command or selection
+> API; downstream agent-read enforcement remains runtime-owned.
 
 ## Public API
 
@@ -778,16 +777,47 @@ without acquiring raw input. The unified driver remains the only raw resource
 owner and picker reads do not inspect or mutate main history, completion,
 parser, provider, runtime, filesystem, storage, or network state.
 
+<a id="artifact-reference-activation"></a>
+
+## Artifact-reference activation
+
+The controller binds three call-local collaborators to the terminal's main or
+composition input: a provider-text-span projection, a sorted current canonical
+path reader, and a bounded verified text reader. Nothing activates when the
+cursor is outside that span. Ordinary text, valid `@agent` and `/say` tails,
+and `/run` prompt remainders are eligible; command, option, identity, output,
+and every non-provider field are inert. `\$` is literal.
+
+The private pure activation layer recognizes only the cursor-active marker.
+`$` projects catalog completion, exact `$${path}` requests a direct viewer, and
+exact `$$` requests the catalog picker followed by a viewer. Enter or Tab on a
+catalog candidate replaces the marker with `${path}` without submitting.
+Range selection replaces it with `${path}#Lx-Ly`. Several completed references
+remain ordered; each later activation receives a fresh catalog and text read.
+
+The immutable buffer/cursor at activation is the origin. A successful edit
+changes only the marker span and places the cursor after the indicator.
+Cancellation, interrupt, EOF, stale/unreadable/unavailable repository state,
+or invalid replacement restores the origin and performs no parser, runtime,
+history, or provider action. The driver runs nested picker/viewer input under
+the same irreversible input latch and releases every call-local collaborator
+on return. In line fallback, completion/viewing is followed by a second exact
+submission prompt; a blank answer commits the amended draft and a replacement
+draft is reevaluated.
+
+See [Canonical artifact references](../guides/artifact-references.md) for the
+user controls, fixed errors, limits, and provider-read sequence.
+
 <a id="independent-ranged-text-viewer"></a>
 
 ## Independent ranged text viewer
 
-> **Availability:** #162 implements only an unlisted package-internal viewer
-> for exact caller-supplied text. Users cannot invoke it from the installed
-> shell yet. It does not discover or securely read artifacts, recognize `$` or
-> `$$` syntax, construct references, preserve a composer, or send anything to
-> an agent. The runtime now enforces inline references; #164 still owns
-> viewer-driven discovery, attachment, and composer restoration.
+> **Availability:** the viewer remains an unlisted package-internal component
+> for exact caller-supplied text. The installed controller now calls it after an
+> explicit `$${path}` activation or a `$$` picker selection in provider-bound
+> prompt spans. The caller—not the viewer—discovers and reads the artifact,
+> restores the draft, attaches its path to returned line numbers, and later
+> submits the prompt through the established runtime path.
 
 Each call accepts one exact `str`, a nonblank one-logical-line display name,
 and an optional one-based initial line. Before inspecting a stream, observing
@@ -796,8 +826,8 @@ for text and display metadata, at most 65,536 LF-derived logical lines, the
 initial line against the derived document, and a private 8 MiB UTF-8 text
 limit. The line limit is checked before line splitting or materialization.
 The terminal limit is an independent defensive boundary, not the
-writing-artifact reference limit. The later artifact caller must enforce its
-own limit before supplying verified text.
+writing-artifact reference limit. The artifact caller enforces its own limit
+before supplying verified text.
 
 Entry validation also proves that a complete sanitized ordinary-line fallback
 frame fits a private 16 MiB UTF-8 budget. That budget includes sanitized
@@ -895,16 +925,13 @@ or emulator memory. Reopening always starts from caller-supplied text and
 optional initial line. Selecting a range or cancelling closes the independent
 viewer after cleanup; it never leaves the caller trapped in viewer mode. The
 return is content-free and contains only the typed exit and optional line
-numbers. A later integration may invoke this stateless component
-repeatedly to collect multiple ordered references, but only that caller can
-read canonical files, retain and restore an originating composer, attach paths
-to the returned ranges, or require agents to read them.
+numbers. The installed caller invokes this stateless component repeatedly for
+multiple ordered references. It reads current canonical files, retains and
+restores the immutable originating draft/cursor, and attaches the path to a
+selected range; the viewer itself owns none of those responsibilities.
 
-Once #164 lands, users can read—but not edit—canonical text, select inclusive
-lines, and return to the exact originating composer buffer and cursor without
-submitting the message. Multiple ordered references will use repeated fresh
-viewer calls. That composer restoration, path/range attachment, and `$${path}`
-or `$$` command-line entry are not supplied by #162. Within this internal leaf,
+Users can read—but not edit—canonical text, select inclusive lines, and return
+to the exact originating prompt without submitting it. Within this internal leaf,
 accepted content remains fully visible in fallback and safely bounded per
 redraw in live mode. Over-limit pathological documents do not open, fallback
 content is never silently truncated, and an incompatible configured control

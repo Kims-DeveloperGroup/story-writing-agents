@@ -6,7 +6,7 @@ import inspect
 import pickle
 import re
 import unittest
-from dataclasses import FrozenInstanceError, fields
+from dataclasses import FrozenInstanceError, fields, replace
 from types import SimpleNamespace
 from typing import get_args
 from unittest import mock
@@ -16,6 +16,7 @@ from story_writing_agents import interactive_terminal as terminal_facade
 from story_writing_agents.interactive_terminal import _controls, _core, _driver, _model
 from story_writing_agents.interactive_terminal._controls import (
     append_main_input_history,
+    completion_candidate_matches,
     initialize_picker,
     main_command_uses_choices,
     project_main_choice_completion,
@@ -28,6 +29,14 @@ from story_writing_agents.interactive_terminal._controls import (
     transition_picker_fallback,
 )
 from story_writing_agents.interactive_terminal._driver import RawTerminalDriver
+from story_writing_agents.interactive_terminal._reference_activation import (
+    ReferenceActivationKind,
+    ReferenceActivationRequest,
+    ReferenceInputFailure,
+    ReferenceInputFailureKind,
+    ReferenceInputProjection,
+    ReferenceInputScope,
+)
 from story_writing_agents.interactive_terminal._model import (
     CapabilityProfile,
     Choice,
@@ -362,6 +371,33 @@ class CompletionControlTests(unittest.TestCase):
             )
             self.assertIsNone(outcome)
         return state
+
+    def test_completion_matcher_preserves_literal_slash_and_reference_rules(
+        self,
+    ) -> None:
+        reference = "${core_documents/global_outline.md}"
+        cases = (
+            (reference, "$", True),
+            (reference, "$c", True),
+            (reference, "$core_documents/", True),
+            (reference, "$core_documents/g", True),
+            (reference, "${core", True),
+            (reference, "$C", False),
+            (reference, "core_documents/", False),
+            (reference, "$$", False),
+            (reference, "$${core", False),
+            ("/status", "/st", True),
+            ("/status", "st", True),
+            ("/status", "St", False),
+            ("@plot", "@p", True),
+            ("@plot", "plot", False),
+        )
+        for replacement, prefix, expected in cases:
+            with self.subTest(replacement=replacement, prefix=prefix):
+                self.assertIs(
+                    completion_candidate_matches(replacement, prefix),
+                    expected,
+                )
 
     def test_initial_filter_highlight_clamp_and_palette_projection_are_exact(
         self,
@@ -875,6 +911,157 @@ class CompletionDriverTests(unittest.TestCase):
             render_component,
         )
 
+    def test_core_reference_bindings_inject_exact_matcher_and_validate_it(
+        self,
+    ) -> None:
+        bindings = _core._reference_input_bindings(
+            mock.Mock(return_value=None),
+            mock.Mock(return_value="text"),
+            mock.Mock(),
+        )
+
+        self.assertIs(
+            bindings.completion_candidate_matches,
+            completion_candidate_matches,
+        )
+        with self.assertRaisesRegex(
+            TypeError,
+            "^completion_candidate_matches must be callable$",
+        ):
+            replace(bindings, completion_candidate_matches=None)
+
+    def test_reference_projection_invalid_probe_skips_catalog_io(self) -> None:
+        invalid = ReferenceInputProjection(failure=ReferenceInputFailureKind.INVALID)
+        for buffer in (
+            "$${core_documents/global_outline.md",
+            "$${../escape.md}",
+        ):
+            with self.subTest(buffer=buffer):
+                scope_provider = mock.Mock(
+                    return_value=ReferenceInputScope(0, len(buffer))
+                )
+                paths_provider = mock.Mock(
+                    side_effect=AssertionError("catalog must not be read")
+                )
+                provider = _core._reference_projection_provider(
+                    scope_provider,
+                    paths_provider,
+                )
+
+                self.assertEqual(provider(buffer, len(buffer)), invalid)
+                scope_provider.assert_called_once_with(buffer, len(buffer))
+                paths_provider.assert_not_called()
+
+    def test_reference_projection_complete_single_directive_skips_catalog_io(
+        self,
+    ) -> None:
+        path = "core_documents/global_outline.md"
+        marker = f"${{{path}}}"
+        for suffix in ("", ".", ",", ")", "word", "#L2-L3", "#L2-L3word"):
+            with self.subTest(suffix=suffix):
+                buffer = f"use {marker}{suffix}"
+                cursor = buffer.index("$") + 1
+                scope_provider = mock.Mock(
+                    return_value=ReferenceInputScope(0, len(buffer))
+                )
+                paths_provider = mock.Mock(
+                    side_effect=AssertionError("catalog must not be read")
+                )
+                provider = _core._reference_projection_provider(
+                    scope_provider,
+                    paths_provider,
+                )
+
+                self.assertIsNone(provider(buffer, cursor))
+                scope_provider.assert_called_once_with(buffer, cursor)
+                paths_provider.assert_not_called()
+
+    def test_reference_projection_catalog_outcomes_have_one_exact_read(self) -> None:
+        path = "core_documents/global_outline.md"
+        other_path = "core_documents/character_sheets.md"
+        token = f"${{{path}}}"
+        position = "artifact-reference:0"
+        cases = (
+            (
+                "$",
+                (path,),
+                None,
+                ReferenceInputProjection(
+                    completion=CommandCompletionProjection(
+                        position,
+                        0,
+                        1,
+                        (CommandCompletionCandidate(position, token),),
+                    )
+                ),
+            ),
+            (
+                "$$",
+                (path,),
+                None,
+                ReferenceInputProjection(
+                    request=ReferenceActivationRequest(
+                        ReferenceActivationKind.PICK,
+                        0,
+                        2,
+                        (path,),
+                    )
+                ),
+            ),
+            (
+                f"$${{{path}}}",
+                (path,),
+                None,
+                ReferenceInputProjection(
+                    request=ReferenceActivationRequest(
+                        ReferenceActivationKind.VIEW,
+                        0,
+                        len(f"$${{{path}}}"),
+                        path=path,
+                    )
+                ),
+            ),
+            (
+                "$",
+                (),
+                None,
+                ReferenceInputProjection(
+                    failure=ReferenceInputFailureKind.EMPTY_CATALOG
+                ),
+            ),
+            (
+                "$",
+                (),
+                ReferenceInputFailure(ReferenceInputFailureKind.UNAVAILABLE),
+                ReferenceInputProjection(
+                    failure=ReferenceInputFailureKind.UNAVAILABLE
+                ),
+            ),
+            (
+                f"$${{{path}}}",
+                (other_path,),
+                None,
+                ReferenceInputProjection(failure=ReferenceInputFailureKind.STALE),
+            ),
+        )
+        for buffer, paths, failure, expected in cases:
+            with self.subTest(buffer=buffer, expected=expected):
+                scope_provider = mock.Mock(
+                    return_value=ReferenceInputScope(0, len(buffer))
+                )
+                paths_provider = mock.Mock(
+                    return_value=paths,
+                    side_effect=failure,
+                )
+                provider = _core._reference_projection_provider(
+                    scope_provider,
+                    paths_provider,
+                )
+
+                self.assertEqual(provider(buffer, len(buffer)), expected)
+                scope_provider.assert_called_once_with(buffer, len(buffer))
+                paths_provider.assert_called_once_with()
+
     def test_supported_live_read_selects_commits_appends_and_restores_once(
         self,
     ) -> None:
@@ -905,6 +1092,770 @@ class CompletionDriverTests(unittest.TestCase):
         self.assertIn("Suggestions [open]", rendered)
         self.assertIn("[highlighted] /settings", rendered)
         self.assertNotIn("[suggestions]", rendered)
+
+    def test_reference_completion_and_nested_viewers_share_one_latch_and_history(
+        self,
+    ) -> None:
+        paths = (
+            "core_documents/character_sheets.md",
+            "core_documents/global_outline.md",
+        )
+        cases = (
+            (
+                "$\t\n",
+                f"${{{paths[0]}}} ",
+                0,
+                0,
+                (),
+            ),
+            (
+                f"use $${{{paths[0]}}}\n\x1b[1;2B\n\n",
+                f"use ${{{paths[0]}}}#L1-L2",
+                1,
+                1,
+                (paths[0],),
+            ),
+            (
+                "use $$\n\x1b[B\n\x1b[1;2B\n\n",
+                f"use ${{{paths[1]}}}#L1-L2",
+                1,
+                1,
+                (paths[1],),
+            ),
+        )
+        for script, expected, screen_enters, screen_exits, reads in cases:
+            with self.subTest(expected=expected):
+                driver, _input, output, fallback, termios, os_module = make_driver(
+                    script
+                )
+                text_reader = mock.Mock(return_value="one\ntwo\nthree")
+                failure_writer = mock.Mock()
+                with mock.patch.object(
+                    _driver._select,
+                    "select",
+                    side_effect=lambda readable, writable, exceptional, _timeout: (
+                        readable,
+                        writable,
+                        exceptional,
+                    ),
+                ):
+                    line = _core.read_main_command_line(
+                        driver,
+                        "main> ",
+                        reference_scope_provider=lambda buffer, _cursor: (
+                            ReferenceInputScope(0, len(buffer))
+                        ),
+                        reference_paths_provider=lambda: paths,
+                        reference_text_reader=text_reader,
+                        reference_failure_writer=failure_writer,
+                    )
+
+                self.assertEqual(line, expected)
+                self.assertEqual(
+                    driver._history_state,
+                    MainInputHistoryState((expected,)),
+                )
+                self.assertEqual(
+                    tuple(call[1] for call in termios.set_calls),
+                    (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
+                )
+                rendered = "".join(output.records)
+                self.assertEqual(rendered.count("\x1b[?1049h"), screen_enters)
+                self.assertEqual(rendered.count("\x1b[?1049l"), screen_exits)
+                self.assertEqual(
+                    tuple(call.args[0] for call in text_reader.call_args_list),
+                    reads,
+                )
+                failure_writer.assert_not_called()
+                fallback.assert_not_called()
+                self.assertEqual(os_module.observed_widths[:2], [8, 8])
+
+    def test_reference_live_fragments_filter_and_complete_without_submission(
+        self,
+    ) -> None:
+        character, outline, rules = (
+            "core_documents/character_sheets.md",
+            "core_documents/global_outline.md",
+            "core_documents/narrative_rules.md",
+        )
+        paths = (character, outline, rules)
+        tokens = tuple(f"${{{path}}}" for path in paths)
+        earlier = tokens[2]
+        contextual = f"keep {earlier} then $c suffix"
+        cases = (
+            ("$", "\t", f"{tokens[0]} ", tokens),
+            ("$c", "\n", f"{tokens[0]} ", tokens),
+            ("$core_documents/g", "\t", f"{tokens[1]} ", (tokens[1],)),
+            ("${core", "\n", f"{tokens[0]} ", tokens),
+            (
+                contextual,
+                "\x1b[D" * len(" suffix") + "\t",
+                f"keep {earlier} then {tokens[0]} suffix",
+                tokens[:2],
+            ),
+        )
+        for original, completion_input, expected, visible in cases:
+            with self.subTest(original=original):
+                driver, input_stream, output, fallback, termios, os_module = (
+                    make_driver(original + completion_input + "\x03")
+                )
+
+                def wide_size(descriptor: int) -> object:
+                    os_module.observed_widths.append(descriptor)
+                    return SimpleNamespace(columns=160, lines=24)
+
+                os_module.get_terminal_size = wide_size
+                history_append = mock.Mock(wraps=append_main_input_history)
+                driver._history_append = history_append
+                text_reader = mock.Mock(
+                    side_effect=AssertionError("completion must not read text")
+                )
+                failure_writer = mock.Mock()
+                with mock.patch.object(
+                    _driver._select,
+                    "select",
+                    side_effect=lambda readable, writable, exceptional, _timeout: (
+                        readable,
+                        writable,
+                        exceptional,
+                    ),
+                ):
+                    with self.assertRaises(KeyboardInterrupt):
+                        _core.read_main_command_line(
+                            driver,
+                            "main> ",
+                            reference_scope_provider=lambda buffer, _cursor: (
+                                ReferenceInputScope(0, len(buffer))
+                            ),
+                            reference_paths_provider=lambda: paths,
+                            reference_text_reader=text_reader,
+                            reference_failure_writer=failure_writer,
+                        )
+
+                active_frames = tuple(
+                    strip_decorative_sgr(record)
+                    for record in output.records
+                    if f"main> {original}" in strip_decorative_sgr(record)
+                    and "Suggestions [open]" in strip_decorative_sgr(record)
+                )
+                self.assertTrue(active_frames)
+                active = active_frames[-1]
+                suggestions = active.split("Suggestions [open]", 1)[1]
+                for token in tokens:
+                    if token in visible:
+                        self.assertIn(token, suggestions)
+                    else:
+                        self.assertNotIn(token, suggestions)
+                self.assertIn("[highlighted]", suggestions)
+                self.assertIn(
+                    f"main> {expected}",
+                    strip_decorative_sgr("".join(output.records)),
+                )
+                history_append.assert_not_called()
+                self.assertEqual(driver._history_state, MainInputHistoryState())
+                self.assertEqual(input_stream.reads, [])
+                text_reader.assert_not_called()
+                failure_writer.assert_not_called()
+                fallback.assert_not_called()
+                self.assertEqual(
+                    tuple(call[1] for call in termios.set_calls),
+                    (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
+                )
+
+        driver, _input, output, fallback, _termios, os_module = make_driver(
+            "$C\t\x03"
+        )
+        os_module.get_terminal_size = lambda _descriptor: SimpleNamespace(
+            columns=160,
+            lines=24,
+        )
+        history_append = mock.Mock(wraps=append_main_input_history)
+        driver._history_append = history_append
+        with mock.patch.object(
+            _driver._select,
+            "select",
+            side_effect=lambda readable, writable, exceptional, _timeout: (
+                readable,
+                writable,
+                exceptional,
+            ),
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                _core.read_main_command_line(
+                    driver,
+                    "main> ",
+                    reference_scope_provider=lambda buffer, _cursor: (
+                        ReferenceInputScope(0, len(buffer))
+                    ),
+                    reference_paths_provider=lambda: paths,
+                    reference_text_reader=mock.Mock(),
+                    reference_failure_writer=mock.Mock(),
+                )
+        unmatched = next(
+            strip_decorative_sgr(record)
+            for record in output.records
+            if "main> $C" in strip_decorative_sgr(record)
+            and "Suggestions [open]" in strip_decorative_sgr(record)
+        )
+        self.assertIn("[empty] No suggestions.", unmatched)
+        self.assertNotIn("[highlighted]", unmatched)
+        history_append.assert_not_called()
+        self.assertEqual(driver._history_state, MainInputHistoryState())
+        fallback.assert_not_called()
+
+    def test_reference_fallback_retains_amendment_until_second_confirmation(
+        self,
+    ) -> None:
+        path = "core_documents/global_outline.md"
+        marker = f"use $${{{path}}}"
+        driver, input_stream, output, fallback, termios, os_module = make_driver(
+            "unused",
+            terminal=False,
+        )
+        fallback.side_effect = (marker, "2-3", "")
+        text_reader = mock.Mock(return_value="one\ntwo\nthree")
+        paths_provider = mock.Mock(return_value=(path,))
+
+        result = _core.read_main_command_line(
+            driver,
+            "main> ",
+            reference_scope_provider=lambda buffer, _cursor: (
+                ReferenceInputScope(0, len(buffer))
+            ),
+            reference_paths_provider=paths_provider,
+            reference_text_reader=text_reader,
+            reference_failure_writer=mock.Mock(),
+        )
+
+        expected = f"use ${{{path}}}#L2-L3"
+        self.assertEqual(result, expected)
+        self.assertEqual(driver._history_state, MainInputHistoryState((expected,)))
+        self.assertEqual(fallback.call_count, 3)
+        self.assertEqual(fallback.call_args_list[0], mock.call("main> "))
+        self.assertIn(
+            "Select START-END or /cancel: ",
+            fallback.call_args_list[1].args[0],
+        )
+        self.assertEqual(
+            fallback.call_args_list[2],
+            mock.call(
+                f"Draft retained: {expected}\n"
+                "Press Enter to submit it, or type a replacement draft: "
+            ),
+        )
+        paths_provider.assert_called_once_with()
+        text_reader.assert_called_once_with(path)
+        self.assertNotIn(("read", 1), input_stream.calls)
+        self.assertEqual(output.records, [])
+        self.assertEqual(termios.set_calls, [])
+        self.assertEqual(os_module.observed_widths, [])
+
+    def test_reference_fallback_unamended_failure_retries_before_replacement(
+        self,
+    ) -> None:
+        path = "core_documents/global_outline.md"
+        marker = f"use $${{{path}}}"
+        replacement = "use a replacement draft"
+        retry_prompt = (
+            f"Draft retained: {marker}\n"
+            "Press Enter to retry the marker without submitting, or type "
+            "a replacement draft: "
+        )
+        driver, input_stream, output, fallback, termios, os_module = make_driver(
+            "unused",
+            terminal=False,
+        )
+        fallback.side_effect = (marker, "", replacement)
+        scope_provider = mock.Mock(
+            side_effect=lambda buffer, _cursor: ReferenceInputScope(0, len(buffer))
+        )
+        paths_provider = mock.Mock(
+            side_effect=ReferenceInputFailure(ReferenceInputFailureKind.UNAVAILABLE)
+        )
+        text_reader = mock.Mock(side_effect=AssertionError("viewer text read"))
+        failure_writer = mock.Mock()
+
+        result = _core.read_main_command_line(
+            driver,
+            "main> ",
+            reference_scope_provider=scope_provider,
+            reference_paths_provider=paths_provider,
+            reference_text_reader=text_reader,
+            reference_failure_writer=failure_writer,
+        )
+
+        self.assertEqual(result, replacement)
+        self.assertEqual(
+            driver._history_state,
+            MainInputHistoryState((replacement,)),
+        )
+        self.assertEqual(
+            scope_provider.call_args_list,
+            [
+                mock.call(marker, marker.rfind("$") + 1),
+                mock.call(marker, marker.rfind("$") + 1),
+            ],
+        )
+        self.assertEqual(paths_provider.call_count, 2)
+        self.assertEqual(
+            failure_writer.call_args_list,
+            [
+                mock.call(ReferenceInputFailureKind.UNAVAILABLE),
+                mock.call(ReferenceInputFailureKind.UNAVAILABLE),
+            ],
+        )
+        self.assertEqual(
+            fallback.call_args_list,
+            [mock.call("main> "), mock.call(retry_prompt), mock.call(retry_prompt)],
+        )
+        self.assertNotIn(
+            "Press Enter to submit it",
+            "".join(call.args[0] for call in fallback.call_args_list),
+        )
+        text_reader.assert_not_called()
+        self.assertNotIn(("read", 1), input_stream.calls)
+        self.assertEqual(output.records, [])
+        self.assertEqual(termios.set_calls, [])
+        self.assertEqual(os_module.observed_widths, [])
+
+    def test_reference_fallback_cancel_retains_marker_with_retry_prompt(self) -> None:
+        path = "core_documents/global_outline.md"
+        marker = f"use $${{{path}}}"
+        replacement = "use a replacement draft"
+        retry_prompt = (
+            f"Draft retained: {marker}\n"
+            "Press Enter to retry the marker without submitting, or type "
+            "a replacement draft: "
+        )
+        driver, input_stream, output, fallback, termios, os_module = make_driver(
+            "unused",
+            terminal=False,
+        )
+        fallback.side_effect = (marker, "/cancel", replacement)
+        scope_provider = mock.Mock(
+            side_effect=lambda buffer, _cursor: ReferenceInputScope(0, len(buffer))
+        )
+        paths_provider = mock.Mock(return_value=(path,))
+        text_reader = mock.Mock(return_value="one\ntwo\nthree")
+        failure_writer = mock.Mock()
+
+        result = _core.read_main_command_line(
+            driver,
+            "main> ",
+            reference_scope_provider=scope_provider,
+            reference_paths_provider=paths_provider,
+            reference_text_reader=text_reader,
+            reference_failure_writer=failure_writer,
+        )
+
+        self.assertEqual(result, replacement)
+        self.assertEqual(
+            driver._history_state,
+            MainInputHistoryState((replacement,)),
+        )
+        self.assertEqual(
+            scope_provider.call_args_list,
+            [
+                mock.call(marker, marker.rfind("$") + 1),
+            ],
+        )
+        paths_provider.assert_called_once_with()
+        text_reader.assert_called_once_with(path)
+        failure_writer.assert_not_called()
+        self.assertEqual(fallback.call_count, 3)
+        self.assertIn(
+            "Select START-END or /cancel: ",
+            fallback.call_args_list[1].args[0],
+        )
+        self.assertEqual(fallback.call_args_list[2], mock.call(retry_prompt))
+        self.assertNotIn(
+            "Press Enter to submit it",
+            fallback.call_args_list[2].args[0],
+        )
+        self.assertNotIn(("read", 1), input_stream.calls)
+        self.assertEqual(output.records, [])
+        self.assertEqual(termios.set_calls, [])
+        self.assertEqual(os_module.observed_widths, [])
+
+    def test_reference_fallback_completion_uses_bounded_span_and_preserves_suffix(
+        self,
+    ) -> None:
+        original = "prefix $c suffix"
+        path = "core_documents/global_outline.md"
+        token = f"${{{path}}}"
+        position = "artifact-reference:7"
+        projection = CommandCompletionProjection(
+            position,
+            7,
+            9,
+            (CommandCompletionCandidate(position, token),),
+        )
+        prefix = original[projection.start : projection.end]
+        self.assertTrue(completion_candidate_matches(token, prefix))
+        self.assertFalse(token.startswith(prefix))
+
+        driver, input_stream, output, fallback, termios, os_module = make_driver(
+            "unused",
+            terminal=False,
+        )
+        fallback.side_effect = (original, "1", "")
+        projection_provider = mock.Mock(
+            return_value=ReferenceInputProjection(completion=projection)
+        )
+        failure_writer = mock.Mock()
+        bindings = _core._reference_input_bindings(
+            projection_provider,
+            mock.Mock(side_effect=AssertionError("viewer text read")),
+            failure_writer,
+        )
+        picker_factory = mock.Mock(wraps=bindings.initialize_picker)
+        bindings = replace(bindings, initialize_picker=picker_factory)
+
+        result = driver.read_reference_main_command_line(
+            "main> ",
+            _core._main_command_completion,
+            project_main_suggestion_palette,
+            render_component,
+            bindings,
+        )
+
+        expected = f"prefix {token} suffix"
+        self.assertEqual(result, expected)
+        self.assertEqual(driver._history_state, MainInputHistoryState((expected,)))
+        projection_provider.assert_called_once_with(
+            original,
+            original.rfind("$") + 1,
+        )
+        picker_factory.assert_called_once_with(
+            (token,),
+            "Select a whole-file reference",
+        )
+        failure_writer.assert_not_called()
+        self.assertEqual(fallback.call_count, 3)
+        self.assertEqual(fallback.call_args_list[0], mock.call("main> "))
+        self.assertEqual(
+            fallback.call_args_list[2],
+            mock.call(
+                f"Draft retained: {expected}\n"
+                "Press Enter to submit it, or type a replacement draft: "
+            ),
+        )
+        self.assertNotIn(("read", 1), input_stream.calls)
+        self.assertEqual(output.records, [])
+        self.assertEqual(termios.set_calls, [])
+        self.assertEqual(os_module.observed_widths, [])
+
+    def test_reference_fallback_embedded_markers_preserve_exact_suffixes(
+        self,
+    ) -> None:
+        path = "core_documents/character_sheets.md"
+        token = f"${{{path}}}"
+        cases = (
+            (
+                "prefix $ suffix",
+                ("1", ""),
+                f"prefix {token} suffix",
+                (),
+            ),
+            (
+                "prefix $$ suffix",
+                ("1", "2-3", ""),
+                f"prefix {token}#L2-L3 suffix",
+                (path,),
+            ),
+            (
+                f"use $${{{path}}}.",
+                ("2-3", ""),
+                f"use {token}#L2-L3.",
+                (path,),
+            ),
+        )
+        for original, answers, expected, reads in cases:
+            with self.subTest(original=original):
+                driver, input_stream, output, fallback, termios, os_module = (
+                    make_driver("unused", terminal=False)
+                )
+                fallback.side_effect = (original, *answers)
+                scope_provider = mock.Mock(
+                    side_effect=lambda buffer, _cursor: ReferenceInputScope(
+                        0,
+                        len(buffer),
+                    )
+                )
+                paths_provider = mock.Mock(return_value=(path,))
+                text_reader = mock.Mock(return_value="one\ntwo\nthree")
+                failure_writer = mock.Mock()
+
+                result = _core.read_main_command_line(
+                    driver,
+                    "main> ",
+                    reference_scope_provider=scope_provider,
+                    reference_paths_provider=paths_provider,
+                    reference_text_reader=text_reader,
+                    reference_failure_writer=failure_writer,
+                )
+
+                self.assertEqual(result, expected)
+                self.assertEqual(
+                    driver._history_state,
+                    MainInputHistoryState((expected,)),
+                )
+                scope_provider.assert_called_once_with(
+                    original,
+                    original.rfind("$") + 1,
+                )
+                paths_provider.assert_called_once_with()
+                self.assertEqual(
+                    tuple(call.args[0] for call in text_reader.call_args_list),
+                    reads,
+                )
+                failure_writer.assert_not_called()
+                self.assertEqual(
+                    fallback.call_args_list[-1],
+                    mock.call(
+                        f"Draft retained: {expected}\n"
+                        "Press Enter to submit it, or type a replacement draft: "
+                    ),
+                )
+                self.assertNotIn(("read", 1), input_stream.calls)
+                self.assertEqual(output.records, [])
+                self.assertEqual(termios.set_calls, [])
+                self.assertEqual(os_module.observed_widths, [])
+
+    def test_reference_fallback_rightmost_failure_has_exact_precedence(self) -> None:
+        original = "left $ marker then right $ marker"
+        replacement = "replacement draft"
+        for failure in (
+            ReferenceInputFailureKind.INVALID,
+            ReferenceInputFailureKind.UNAVAILABLE,
+        ):
+            with self.subTest(failure=failure):
+                driver, _input, _output, fallback, _termios, _os = make_driver(
+                    "unused",
+                    terminal=False,
+                )
+                fallback.side_effect = (original, replacement)
+                projection_provider = mock.Mock(
+                    return_value=ReferenceInputProjection(failure=failure)
+                )
+                failure_writer = mock.Mock()
+                bindings = _core._reference_input_bindings(
+                    projection_provider,
+                    mock.Mock(side_effect=AssertionError("viewer text read")),
+                    failure_writer,
+                )
+
+                result = driver.read_reference_main_command_line(
+                    "main> ",
+                    _core._main_command_completion,
+                    project_main_suggestion_palette,
+                    render_component,
+                    bindings,
+                )
+
+                self.assertEqual(result, replacement)
+                self.assertEqual(
+                    driver._history_state,
+                    MainInputHistoryState((replacement,)),
+                )
+                projection_provider.assert_called_once_with(
+                    original,
+                    original.rfind("$") + 1,
+                )
+                failure_writer.assert_called_once_with(failure)
+                self.assertIn(original, fallback.call_args_list[1].args[0])
+
+    def test_reference_fallback_skips_escaped_out_of_scope_and_no_dollar(
+        self,
+    ) -> None:
+        cases = (
+            ("prefix \\$ suffix", None, 1),
+            ("prefix $ suffix", ReferenceInputScope(0, 6), 1),
+            ("plain text", None, 0),
+        )
+        for line, fixed_scope, expected_projections in cases:
+            with self.subTest(line=line):
+                driver, input_stream, output, fallback, termios, os_module = (
+                    make_driver("unused", terminal=False)
+                )
+                fallback.return_value = line
+                scope_provider = mock.Mock(
+                    side_effect=lambda buffer, _cursor: (
+                        fixed_scope
+                        if fixed_scope is not None
+                        else ReferenceInputScope(0, len(buffer))
+                    )
+                )
+                paths_provider = mock.Mock(
+                    side_effect=AssertionError("catalog must not be read")
+                )
+                text_reader = mock.Mock(
+                    side_effect=AssertionError("viewer text must not be read")
+                )
+                failure_writer = mock.Mock()
+
+                result = _core.read_main_command_line(
+                    driver,
+                    "main> ",
+                    reference_scope_provider=scope_provider,
+                    reference_paths_provider=paths_provider,
+                    reference_text_reader=text_reader,
+                    reference_failure_writer=failure_writer,
+                )
+
+                self.assertEqual(result, line)
+                self.assertEqual(
+                    driver._history_state,
+                    MainInputHistoryState((line,)),
+                )
+                self.assertEqual(scope_provider.call_count, expected_projections)
+                if expected_projections:
+                    scope_provider.assert_called_once_with(
+                        line,
+                        line.rfind("$") + 1,
+                    )
+                paths_provider.assert_not_called()
+                text_reader.assert_not_called()
+                failure_writer.assert_not_called()
+                fallback.assert_called_once_with("main> ")
+                self.assertNotIn(("read", 1), input_stream.calls)
+                self.assertEqual(output.records, [])
+                self.assertEqual(termios.set_calls, [])
+                self.assertEqual(os_module.observed_widths, [])
+
+    def test_reference_fallback_resolves_two_markers_right_to_left(self) -> None:
+        character = "core_documents/character_sheets.md"
+        outline = "core_documents/global_outline.md"
+        character_token = f"${{{character}}}"
+        outline_token = f"${{{outline}}}"
+        original = "compare $core_documents/g with $c"
+        after_right = f"compare $core_documents/g with {character_token}"
+        expected = f"compare {outline_token} with {character_token}"
+        driver, input_stream, output, fallback, termios, os_module = make_driver(
+            "unused",
+            terminal=False,
+        )
+        fallback.side_effect = (original, "1", after_right, "1", "")
+        scope_provider = mock.Mock(
+            side_effect=lambda buffer, _cursor: ReferenceInputScope(0, len(buffer))
+        )
+        paths_provider = mock.Mock(return_value=(character, outline))
+        text_reader = mock.Mock(side_effect=AssertionError("viewer text read"))
+        failure_writer = mock.Mock()
+
+        result = _core.read_main_command_line(
+            driver,
+            "main> ",
+            reference_scope_provider=scope_provider,
+            reference_paths_provider=paths_provider,
+            reference_text_reader=text_reader,
+            reference_failure_writer=failure_writer,
+        )
+
+        self.assertEqual(result, expected)
+        self.assertEqual(
+            driver._history_state,
+            MainInputHistoryState((expected,)),
+        )
+        self.assertEqual(
+            scope_provider.call_args_list,
+            [
+                mock.call(original, original.rfind("$") + 1),
+                mock.call(after_right, after_right.rfind("$") + 1),
+                mock.call(after_right, after_right.find("$") + 1),
+            ],
+        )
+        self.assertEqual(paths_provider.call_count, 2)
+        text_reader.assert_not_called()
+        failure_writer.assert_not_called()
+        self.assertEqual(fallback.call_count, 5)
+        self.assertEqual(
+            fallback.call_args_list[2],
+            mock.call(
+                f"Draft retained: {after_right}\n"
+                "Press Enter to submit it, or type a replacement draft: "
+            ),
+        )
+        self.assertIn(outline_token, fallback.call_args_list[3].args[0])
+        self.assertNotIn(character_token, fallback.call_args_list[3].args[0])
+        self.assertEqual(
+            fallback.call_args_list[4],
+            mock.call(
+                f"Draft retained: {expected}\n"
+                "Press Enter to submit it, or type a replacement draft: "
+            ),
+        )
+        self.assertNotIn(("read", 1), input_stream.calls)
+        self.assertEqual(output.records, [])
+        self.assertEqual(termios.set_calls, [])
+        self.assertEqual(os_module.observed_widths, [])
+
+    def test_reference_fallback_unmatched_fragment_reports_invalid_and_retries(
+        self,
+    ) -> None:
+        original = "prefix $C suffix"
+        replacement = "replacement draft"
+        path = "core_documents/global_outline.md"
+        token = f"${{{path}}}"
+        position = "artifact-reference:7"
+        projection = CommandCompletionProjection(
+            position,
+            7,
+            9,
+            (CommandCompletionCandidate(position, token),),
+        )
+        retry_prompt = (
+            f"Draft retained: {original}\n"
+            "Press Enter to retry the marker without submitting, or type "
+            "a replacement draft: "
+        )
+        driver, input_stream, output, fallback, termios, os_module = make_driver(
+            "unused",
+            terminal=False,
+        )
+        fallback.side_effect = (original, replacement)
+        projection_provider = mock.Mock(
+            side_effect=(ReferenceInputProjection(completion=projection), None)
+        )
+        failure_writer = mock.Mock()
+        bindings = _core._reference_input_bindings(
+            projection_provider,
+            mock.Mock(side_effect=AssertionError("viewer text read")),
+            failure_writer,
+        )
+        picker_factory = mock.Mock(wraps=bindings.initialize_picker)
+        bindings = replace(bindings, initialize_picker=picker_factory)
+
+        result = driver.read_reference_main_command_line(
+            "main> ",
+            _core._main_command_completion,
+            project_main_suggestion_palette,
+            render_component,
+            bindings,
+        )
+
+        self.assertEqual(result, replacement)
+        self.assertEqual(
+            driver._history_state,
+            MainInputHistoryState((replacement,)),
+        )
+        self.assertFalse(completion_candidate_matches(token, "$C"))
+        self.assertEqual(
+            projection_provider.call_args_list,
+            [
+                mock.call(original, original.rfind("$") + 1),
+            ],
+        )
+        failure_writer.assert_called_once_with(ReferenceInputFailureKind.INVALID)
+        picker_factory.assert_not_called()
+        self.assertEqual(
+            fallback.call_args_list,
+            [mock.call("main> "), mock.call(retry_prompt)],
+        )
+        self.assertNotIn(("read", 1), input_stream.calls)
+        self.assertEqual(output.records, [])
+        self.assertEqual(termios.set_calls, [])
+        self.assertEqual(os_module.observed_widths, [])
 
     def test_standalone_escape_closes_palette_and_exact_readiness_timeout(self) -> None:
         driver, _input, output, fallback, _termios, _os = make_driver("/\x1b\n")

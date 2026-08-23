@@ -37,11 +37,22 @@ from ._model import (
     display_character_width,
     sanitize_terminal_text,
 )
+from ._reference_activation import (
+    ReferenceActivationKind,
+    ReferenceActivationRequest,
+    ReferenceInputFailure,
+    ReferenceInputFailureKind,
+    ReferenceInputProjection,
+    replace_reference_completion,
+    replace_reference_range,
+    selected_reference_request,
+)
 from ._viewer_model import (
     TextViewerExitKind,
     TextViewerResult,
     TextViewerState,
     TextViewerViewport,
+    dispose_text_viewer,
 )
 
 try:
@@ -115,7 +126,13 @@ _ControlState: TypeAlias = (
 )
 _ControlTransition: TypeAlias = Callable[
     [_ControlState, KeyEvent],
-    tuple[_ControlState, ControlOutcome | None],
+    tuple[
+        _ControlState,
+        ControlOutcome
+        | ReferenceActivationRequest
+        | ReferenceInputFailure
+        | None,
+    ],
 ]
 _LineTransition: TypeAlias = Callable[
     [LineInputState, KeyEvent],
@@ -180,6 +197,50 @@ _ViewerViewportRenderer: TypeAlias = Callable[
 _ViewerFallbackRenderer: TypeAlias = Callable[
     [TextViewerState, TerminalCapabilities], RenderedInputFrame
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class ReferenceInputBindings:
+    """Bind one call-local reference UI without owning its resources."""
+
+    projection_provider: Callable[[str, int], ReferenceInputProjection | None]
+    completion_candidate_matches: Callable[[str, str], bool]
+    read_text: Callable[[str], str]
+    write_failure: Callable[[ReferenceInputFailureKind], None]
+    initialize_picker: Callable[[tuple[str, ...], str], PickerControlState]
+    picker_transition: _PickerTransition
+    picker_fallback_transition: _PickerFallbackTransition
+    picker_viewport_projector: _PickerViewportProjector
+    picker_viewport_renderer: _PickerViewportRenderer
+    picker_fallback_renderer: _PickerFallbackRenderer
+    initialize_viewer: Callable[[str, str], TextViewerState]
+    viewer_transition: _ViewerTransition
+    viewer_fallback_transition: _ViewerFallbackTransition
+    viewer_viewport_projector: _ViewerViewportProjector
+    viewer_viewport_renderer: _ViewerViewportRenderer
+    viewer_fallback_renderer: _ViewerFallbackRenderer
+
+    def __post_init__(self) -> None:
+        for name in self.__dataclass_fields__:
+            if not callable(getattr(self, name)):
+                raise TypeError(f"{name} must be callable")
+
+
+def _fallback_reference_projection(
+    line: str,
+    bindings: ReferenceInputBindings,
+) -> ReferenceInputProjection | None:
+    """Project the rightmost actionable raw-dollar marker in one line."""
+
+    search_end = len(line)
+    while True:
+        marker = line.rfind("$", 0, search_end)
+        if marker < 0:
+            return None
+        projection = bindings.projection_provider(line, marker + 1)
+        if projection is not None:
+            return projection
+        search_end = marker
 
 
 class RawTerminalDriver:
@@ -763,7 +824,45 @@ class RawTerminalDriver:
         palette_projector: _PaletteProjector,
         palette_renderer: _PaletteRenderer,
     ) -> str:
-        """Read one selectable semantic main command through call-local seams."""
+        """Read one selectable semantic main command through stable seams."""
+
+        return self._read_main_command_line(
+            prompt,
+            completion_provider,
+            palette_projector,
+            palette_renderer,
+            None,
+        )
+
+    def read_reference_main_command_line(
+        self,
+        prompt: str,
+        completion_provider: _CompletionProvider,
+        palette_projector: _PaletteProjector,
+        palette_renderer: _PaletteRenderer,
+        reference_bindings: ReferenceInputBindings,
+    ) -> str:
+        """Read one main command with call-local reference activation."""
+
+        if type(reference_bindings) is not ReferenceInputBindings:
+            raise TypeError("reference_bindings must be a ReferenceInputBindings")
+        return self._read_main_command_line(
+            prompt,
+            completion_provider,
+            palette_projector,
+            palette_renderer,
+            reference_bindings,
+        )
+
+    def _read_main_command_line(
+        self,
+        prompt: str,
+        completion_provider: _CompletionProvider,
+        palette_projector: _PaletteProjector,
+        palette_renderer: _PaletteRenderer,
+        reference_bindings: ReferenceInputBindings | None,
+    ) -> str:
+        """Implement main input with optional package-internal activation."""
 
         if not isinstance(prompt, str):
             raise TypeError("prompt must be a string")
@@ -774,15 +873,41 @@ class RawTerminalDriver:
         ):
             if not callable(collaborator):
                 raise TypeError(f"{name} must be callable")
+        if reference_bindings is not None and type(
+            reference_bindings
+        ) is not ReferenceInputBindings:
+            raise TypeError(
+                "reference_bindings must be a ReferenceInputBindings or None"
+            )
 
         def transition(
             state: _ControlState,
             event: KeyEvent,
-        ) -> tuple[_ControlState, ControlOutcome | None]:
+        ) -> tuple[
+            _ControlState,
+            ControlOutcome
+            | ReferenceActivationRequest
+            | ReferenceInputFailure
+            | None,
+        ]:
             if type(state) is not MainCommandControlState:
                 raise TypeError(
                     "main command transition requires MainCommandControlState"
                 )
+            if (
+                reference_bindings is not None
+                and event.kind in {KeyKind.ENTER, KeyKind.TAB}
+            ):
+                line = state.main_input.line_state
+                projection = reference_bindings.projection_provider(
+                    line.buffer,
+                    line.cursor,
+                )
+                if projection is not None:
+                    if projection.request is not None:
+                        return state, projection.request
+                    if projection.failure is not None:
+                        return state, ReferenceInputFailure(projection.failure)
             return self._main_transition(
                 state,
                 event,
@@ -805,13 +930,286 @@ class RawTerminalDriver:
                     live_capabilities=capabilities,
                     palette_projector=palette_projector,
                     palette_renderer=palette_renderer,
+                    reference_bindings=reference_bindings,
                     transient=True,
                 )
                 if configuration is not None
-                else self._read_fallback_line(prompt, capabilities)
+                else (
+                    self._read_reference_fallback(
+                        prompt,
+                        capabilities,
+                        reference_bindings,
+                    )
+                    if reference_bindings is not None
+                    else self._read_fallback_line(prompt, capabilities)
+                )
             )
             self._append_completed_main_history(line)
             return line
+
+    def read_reference_input_line(
+        self,
+        view: InputPromptView,
+        renderer: _InputRenderer,
+        suggestion_provider: Callable[
+            [str], tuple[SlashCommandSuggestion, ...]
+        ],
+        completion_provider: _CompletionProvider,
+        palette_projector: _PaletteProjector,
+        palette_renderer: _PaletteRenderer,
+        reference_bindings: ReferenceInputBindings,
+    ) -> str:
+        """Read one history-free composer line with reference activation."""
+
+        if type(view) is not InputPromptView:
+            raise TypeError("view must be an InputPromptView")
+        if type(reference_bindings) is not ReferenceInputBindings:
+            raise TypeError("reference_bindings must be a ReferenceInputBindings")
+        for name, collaborator in (
+            ("renderer", renderer),
+            ("suggestion_provider", suggestion_provider),
+            ("completion_provider", completion_provider),
+            ("palette_projector", palette_projector),
+            ("palette_renderer", palette_renderer),
+        ):
+            if not callable(collaborator):
+                raise TypeError(f"{name} must be callable")
+        empty_history = MainInputHistoryState()
+
+        def transition(
+            state: _ControlState,
+            event: KeyEvent,
+        ) -> tuple[
+            _ControlState,
+            ControlOutcome
+            | ReferenceActivationRequest
+            | ReferenceInputFailure
+            | None,
+        ]:
+            if type(state) is not MainCommandControlState:
+                raise TypeError(
+                    "reference input transition requires MainCommandControlState"
+                )
+            if event.kind in {KeyKind.ENTER, KeyKind.TAB}:
+                line = state.main_input.line_state
+                projection = reference_bindings.projection_provider(
+                    line.buffer,
+                    line.cursor,
+                )
+                if projection is not None:
+                    if projection.request is not None:
+                        return state, projection.request
+                    if projection.failure is not None:
+                        return state, ReferenceInputFailure(projection.failure)
+            return self._main_transition(
+                state,
+                event,
+                empty_history,
+                completion_provider,
+            )
+
+        with self._input_latch.input_operation():
+            observed_capabilities = self._observe_input_capabilities()
+            rendered_input = renderer(view, observed_capabilities)
+            if type(rendered_input) is not RenderedInputFrame:
+                raise TypeError("renderer must return a RenderedInputFrame")
+            if rendered_input.width != observed_capabilities.width:
+                raise ValueError(
+                    "rendered input width must match current capabilities"
+                )
+            capabilities, configuration = self._prepare_input(
+                observed_capabilities
+            )
+            if configuration is None:
+                return self._read_reference_fallback(
+                    rendered_input.plain_text,
+                    capabilities,
+                    reference_bindings,
+                )
+            return self._read_control_line(
+                rendered_input.plain_text,
+                suggestion_provider,
+                MainCommandControlState(),
+                transition,
+                configuration=configuration,
+                rendered_input=rendered_input,
+                live_capabilities=capabilities,
+                palette_projector=palette_projector,
+                palette_renderer=palette_renderer,
+                reference_bindings=reference_bindings,
+                transient=True,
+            )
+
+    def _read_reference_fallback(
+        self,
+        prompt: str,
+        capabilities: TerminalCapabilities,
+        bindings: ReferenceInputBindings,
+    ) -> str:
+        """Run accessible line-mode activation with explicit redispatch."""
+
+        line = self._read_fallback_line(prompt, capabilities)
+        if not isinstance(line, str):
+            raise TypeError("read_line must return a string")
+        line = str.__str__(line)
+        if "\r" in line or "\n" in line:
+            raise ValueError("read_line must return one line without CR or LF")
+
+        while True:
+            state = MainCommandControlState(
+                MainInputControlState(LineInputState(line, len(line)))
+            )
+            projection = _fallback_reference_projection(line, bindings)
+            if projection is None:
+                return line
+            amended = False
+            if projection.failure is not None:
+                bindings.write_failure(projection.failure)
+            elif projection.completion is not None:
+                completion = projection.completion
+                prefix = line[completion.start : completion.end]
+                replacements = tuple(
+                    candidate.replacement
+                    for candidate in completion.candidates
+                    if bindings.completion_candidate_matches(
+                        candidate.replacement,
+                        prefix,
+                    )
+                )
+                if not replacements:
+                    bindings.write_failure(ReferenceInputFailureKind.INVALID)
+                else:
+                    picker = bindings.initialize_picker(
+                        replacements,
+                        "Select a whole-file reference",
+                    )
+                    outcome = self._read_picker_fallback(
+                        picker,
+                        capabilities,
+                        bindings.picker_fallback_transition,
+                        bindings.picker_fallback_renderer,
+                        transient=True,
+                    )
+                    if outcome.kind is ControlOutcomeKind.COMMIT:
+                        assert outcome.text is not None
+                        try:
+                            state = replace_reference_completion(
+                                state,
+                                completion,
+                                outcome.text,
+                            )
+                        except ReferenceInputFailure as failure:
+                            bindings.write_failure(failure.kind)
+                        else:
+                            line = state.main_input.line_state.buffer
+                            amended = True
+            else:
+                assert projection.request is not None
+                updated = self._run_fallback_reference_activation(
+                    state,
+                    projection.request,
+                    capabilities,
+                    bindings,
+                )
+                if updated != state:
+                    state = updated
+                    line = state.main_input.line_state.buffer
+                    amended = True
+
+            safe = sanitize_terminal_text(line)
+            if len(safe) > 240:
+                safe = f"{safe[:237]}..."
+            follow_up = (
+                "Press Enter to submit it, or type a replacement draft: "
+                if amended
+                else (
+                    "Press Enter to retry the marker without submitting, or type "
+                    "a replacement draft: "
+                )
+            )
+            answer = self._read_fallback_line(
+                f"Draft retained: {safe}\n{follow_up}",
+                capabilities,
+            )
+            if not isinstance(answer, str):
+                raise TypeError("read_line must return a string")
+            answer = str.__str__(answer)
+            if "\r" in answer or "\n" in answer:
+                raise ValueError("read_line must return one line without CR or LF")
+            if answer:
+                line = answer
+                continue
+            if amended:
+                return line
+
+    def _run_fallback_reference_activation(
+        self,
+        origin: MainCommandControlState,
+        request: ReferenceActivationRequest,
+        capabilities: TerminalCapabilities,
+        bindings: ReferenceInputBindings,
+    ) -> MainCommandControlState:
+        """Run picker/viewer children through ordinary line callbacks only."""
+
+        active_request = request
+        if request.kind is ReferenceActivationKind.PICK:
+            picker = bindings.initialize_picker(
+                request.paths,
+                "Select a writing artifact to view",
+            )
+            picker_outcome = self._read_picker_fallback(
+                picker,
+                capabilities,
+                bindings.picker_fallback_transition,
+                bindings.picker_fallback_renderer,
+                transient=True,
+            )
+            if picker_outcome.kind is not ControlOutcomeKind.COMMIT:
+                return origin
+            assert picker_outcome.text is not None
+            try:
+                active_request = selected_reference_request(
+                    request,
+                    picker_outcome.text,
+                )
+            except ReferenceInputFailure as failure:
+                bindings.write_failure(failure.kind)
+                return origin
+
+        assert active_request.path is not None
+        try:
+            text = bindings.read_text(active_request.path)
+        except ReferenceInputFailure as failure:
+            bindings.write_failure(failure.kind)
+            return origin
+        if type(text) is not str:
+            raise TypeError("reference text reader must return a string")
+        try:
+            viewer = bindings.initialize_viewer(text, active_request.path)
+        except ValueError:
+            bindings.write_failure(ReferenceInputFailureKind.UNREADABLE)
+            return origin
+        try:
+            result = self._read_text_viewer_fallback(
+                viewer,
+                capabilities,
+                bindings.viewer_fallback_transition,
+                bindings.viewer_fallback_renderer,
+            )
+        finally:
+            dispose_text_viewer(viewer)
+        if result.kind is not TextViewerExitKind.SELECTED:
+            return origin
+        assert result.line_range is not None
+        try:
+            return replace_reference_range(
+                origin,
+                active_request,
+                *result.line_range,
+            )
+        except ReferenceInputFailure as failure:
+            bindings.write_failure(failure.kind)
+            return origin
 
     def read_picker(
         self,
@@ -1183,6 +1581,7 @@ class RawTerminalDriver:
         live_capabilities: TerminalCapabilities | None = None,
         palette_projector: _PaletteProjector | None = None,
         palette_renderer: _PaletteRenderer | None = None,
+        reference_bindings: ReferenceInputBindings | None = None,
         transient: bool = False,
     ) -> str:
         """Read one exact buffer through one pure logical-state transition.
@@ -1244,6 +1643,16 @@ class RawTerminalDriver:
             raise TypeError("palette_projector must be callable or None")
         if palette_renderer is not None and not callable(palette_renderer):
             raise TypeError("palette_renderer must be callable or None")
+        if reference_bindings is not None and type(
+            reference_bindings
+        ) is not ReferenceInputBindings:
+            raise TypeError(
+                "reference_bindings must be a ReferenceInputBindings or None"
+            )
+        if reference_bindings is not None and live_capabilities is None:
+            raise ValueError(
+                "reference input requires live capabilities for capable input"
+            )
 
         try:
             _activate_terminal(configuration)
@@ -1267,6 +1676,7 @@ class RawTerminalDriver:
                 live_capabilities,
                 palette_projector,
                 palette_renderer,
+                reference_bindings,
             )
             if transient:
                 self._clear_live_display(display_state, line_break=False)
@@ -1308,6 +1718,7 @@ class RawTerminalDriver:
         live_capabilities: TerminalCapabilities | None,
         palette_projector: _PaletteProjector | None,
         palette_renderer: _PaletteRenderer | None,
+        reference_bindings: ReferenceInputBindings | None,
     ) -> tuple[str, LineInputState]:
         """Edit one code-point buffer until submit, interrupt, EOF, or failure.
 
@@ -1347,6 +1758,17 @@ class RawTerminalDriver:
                     configured_event,
                     transition,
                 )
+                control_state, outcome, reference_changed = (
+                    self._resolve_live_reference_outcome(
+                        control_state,
+                        outcome,
+                        configuration,
+                        display_state,
+                        live_capabilities,
+                        reference_bindings,
+                    )
+                )
+                changed = changed or reference_changed
                 completed = _completed_text_or_raise(outcome)
                 if completed is not None:
                     return completed, _control_line_state(control_state)
@@ -1375,6 +1797,17 @@ class RawTerminalDriver:
                         event,
                         transition,
                     )
+                    control_state, outcome, reference_changed = (
+                        self._resolve_live_reference_outcome(
+                            control_state,
+                            outcome,
+                            configuration,
+                            display_state,
+                            live_capabilities,
+                            reference_bindings,
+                        )
+                    )
+                    changed = changed or reference_changed
                     completed = _completed_text_or_raise(outcome)
                     if completed is not None:
                         return completed, _control_line_state(control_state)
@@ -1400,6 +1833,17 @@ class RawTerminalDriver:
                         KeyEvent(KeyKind.ESCAPE),
                         transition,
                     )
+                    control_state, outcome, reference_changed = (
+                        self._resolve_live_reference_outcome(
+                            control_state,
+                            outcome,
+                            configuration,
+                            display_state,
+                            live_capabilities,
+                            reference_bindings,
+                        )
+                    )
+                    changed = changed or reference_changed
                     completed = _completed_text_or_raise(outcome)
                     if completed is not None:
                         return completed, _control_line_state(control_state)
@@ -1424,6 +1868,17 @@ class RawTerminalDriver:
                 event,
                 transition,
             )
+            control_state, outcome, reference_changed = (
+                self._resolve_live_reference_outcome(
+                    control_state,
+                    outcome,
+                    configuration,
+                    display_state,
+                    live_capabilities,
+                    reference_bindings,
+                )
+            )
+            changed = changed or reference_changed
             completed = _completed_text_or_raise(outcome)
             if completed is not None:
                 return completed, _control_line_state(control_state)
@@ -1439,6 +1894,127 @@ class RawTerminalDriver:
                     palette_projector,
                     palette_renderer,
                 )
+
+    def _resolve_live_reference_outcome(
+        self,
+        state: _ControlState,
+        outcome: ControlOutcome
+        | ReferenceActivationRequest
+        | ReferenceInputFailure
+        | None,
+        configuration: _TerminalConfiguration,
+        display_state: _LiveEditorState,
+        capabilities: TerminalCapabilities | None,
+        bindings: ReferenceInputBindings | None,
+    ) -> tuple[_ControlState, ControlOutcome | None, bool]:
+        """Run one nested reference interaction inside the active input latch."""
+
+        if outcome is None or type(outcome) is ControlOutcome:
+            return state, outcome, False
+        if bindings is None or capabilities is None:
+            raise RuntimeError("reference activation requires live bindings")
+        if type(state) is not MainCommandControlState:
+            raise TypeError("reference activation requires main command state")
+        self._clear_live_display(display_state, line_break=False)
+        if type(outcome) is ReferenceInputFailure:
+            bindings.write_failure(outcome.kind)
+            return state, None, True
+        updated = self._run_live_reference_activation(
+            state,
+            outcome,
+            configuration,
+            display_state,
+            capabilities,
+            bindings,
+        )
+        return updated, None, True
+
+    def _run_live_reference_activation(
+        self,
+        origin: MainCommandControlState,
+        request: ReferenceActivationRequest,
+        configuration: _TerminalConfiguration,
+        display_state: _LiveEditorState,
+        capabilities: TerminalCapabilities,
+        bindings: ReferenceInputBindings,
+    ) -> MainCommandControlState:
+        """Run picker/viewer children without reacquiring raw mode or the latch."""
+
+        active_request = request
+        if request.kind is ReferenceActivationKind.PICK:
+            picker = bindings.initialize_picker(
+                request.paths,
+                "Select a writing artifact to view",
+            )
+            _picker_state, picker_outcome = self._read_live_picker(
+                picker,
+                configuration,
+                display_state,
+                capabilities,
+                bindings.picker_transition,
+                bindings.picker_viewport_projector,
+                bindings.picker_viewport_renderer,
+            )
+            self._clear_live_display(display_state, line_break=False)
+            if picker_outcome.kind is not ControlOutcomeKind.COMMIT:
+                return origin
+            assert picker_outcome.text is not None
+            try:
+                active_request = selected_reference_request(
+                    request,
+                    picker_outcome.text,
+                )
+            except ReferenceInputFailure as failure:
+                bindings.write_failure(failure.kind)
+                return origin
+
+        assert active_request.path is not None
+        try:
+            text = bindings.read_text(active_request.path)
+        except ReferenceInputFailure as failure:
+            bindings.write_failure(failure.kind)
+            return origin
+        if type(text) is not str:
+            raise TypeError("reference text reader must return a string")
+        try:
+            viewer = bindings.initialize_viewer(text, active_request.path)
+        except ValueError:
+            bindings.write_failure(ReferenceInputFailureKind.UNREADABLE)
+            return origin
+
+        viewer_result: TextViewerResult | None = None
+        screen_failure: BaseException | None = None
+        try:
+            self._write_live_text(_VIEWER_SCREEN_ENTER)
+            _viewer_state, viewer_result = self._read_live_text_viewer(
+                viewer,
+                configuration,
+                capabilities,
+                bindings.viewer_transition,
+                bindings.viewer_viewport_projector,
+                bindings.viewer_viewport_renderer,
+            )
+        finally:
+            try:
+                self._write_live_text(_VIEWER_SCREEN_EXIT)
+            except BaseException as failure:
+                screen_failure = failure
+            dispose_text_viewer(viewer)
+        if screen_failure is not None:
+            raise screen_failure
+        assert viewer_result is not None
+        if viewer_result.kind is not TextViewerExitKind.SELECTED:
+            return origin
+        assert viewer_result.line_range is not None
+        try:
+            return replace_reference_range(
+                origin,
+                active_request,
+                *viewer_result.line_range,
+            )
+        except ReferenceInputFailure as failure:
+            bindings.write_failure(failure.kind)
+            return origin
 
     def _read_live_picker(
         self,
@@ -1860,7 +2436,24 @@ class RawTerminalDriver:
                     "semantic palette projection requires MainCommandControlState"
                 )
             palette = palette_projector(control_state)
-            if palette is not None:
+            if palette is None:
+                suggestions = suggestion_provider(line_state.buffer)
+                if type(suggestions) is not tuple or any(
+                    type(item) is not SlashCommandSuggestion
+                    for item in suggestions
+                ):
+                    raise TypeError(
+                        "suggestion_provider must return SlashCommandSuggestion values"
+                    )
+                if suggestions:
+                    panel_lines.extend(
+                        _wrap_editor_text(_SUGGESTION_HEADER, render_width)
+                    )
+                    for suggestion in suggestions:
+                        panel_lines.extend(
+                            _wrap_editor_text(suggestion.token, render_width)
+                        )
+            else:
                 if type(palette) is not SuggestionPalette:
                     raise TypeError(
                         "palette_projector must return a SuggestionPalette or None"
@@ -2489,14 +3082,24 @@ def _apply_control_event(
     state: _ControlState,
     event: KeyEvent,
     transition: _ControlTransition,
-) -> tuple[_ControlState, ControlOutcome | None, bool]:
+) -> tuple[
+    _ControlState,
+    ControlOutcome | ReferenceActivationRequest | ReferenceInputFailure | None,
+    bool,
+]:
     """Apply one pure transition and report whether its complete state changed."""
 
     updated, outcome = transition(state, event)
     if type(updated) is not type(state):
         raise TypeError("transition must preserve the input control state type")
-    if outcome is not None and type(outcome) is not ControlOutcome:
-        raise TypeError("transition outcome must be a ControlOutcome or None")
+    if outcome is not None and type(outcome) not in {
+        ControlOutcome,
+        ReferenceActivationRequest,
+        ReferenceInputFailure,
+    }:
+        raise TypeError(
+            "transition outcome must be a supported input outcome or None"
+        )
     return updated, outcome, updated != state
 
 

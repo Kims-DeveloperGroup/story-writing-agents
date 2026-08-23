@@ -2,8 +2,9 @@
 
 > **Available:** guarded access recovery, shell workflows, and process-level
 > POSIX PTY verification, including the package-internal ranged viewer.
-> Automatic retry, destructive cleanup, event repair, `$`/`$$` artifact
-> discovery and selection, and Windows console emulation are not available.
+> Interactive `$`/`$$` artifact discovery and selection are available in
+> provider-bound prompt spans. Automatic retry, destructive cleanup, event
+> repair, automation picker UI, and Windows console emulation are not available.
 
 Key terms: **fail closed** means preserve uncertain state; **taint** means stop
 continuing incomplete provider history; **external backup** is outside the workspace.
@@ -202,8 +203,9 @@ Inline `${...}` input now creates and finalizes these states. Successful
 conversation, retrieval, and debate results carry an optional operation ID;
 `StoryRuntime` and `RuntimeSession` expose content-free inspection. The shell
 maps failures to existing safe error categories rather than displaying this
-history. #164 still owns `$`/`$$` discovery, viewer selection, composer
-attachment, and reference-specific shell diagnostics.
+history. Pre-submit `$`/`$$` discovery and viewer selection create no operation
+ID or evidence; their empty, invalid, stale, unreadable, and unavailable cases
+use fixed content-free shell errors and restore the exact draft.
 
 ## Controller cancellation proof
 
@@ -252,12 +254,20 @@ different mode.
 
 ## Ranged-text viewer exits and recovery
 
-The viewer is an unlisted package-internal supplied-text component. Users
-cannot invoke it from the shell in this delivery. `$`, `$${file}`, `$$`,
-artifact listing through the composer, viewer-driven reference construction,
-and exact originating-composer restoration remain unavailable until #164.
-Inline ordered path/range indicators and mandatory per-agent reads are active
-without the viewer.
+The viewer remains an unlisted package-internal supplied-text component rather
+than a command or public API. In provider-bound shell prompt spans, `$${path}`
+opens it directly and `$$` opens an eligible-artifact picker before it;
+`$` completes a whole-file indicator without viewing. The controller owns
+artifact listing, verified reads, exact originating-draft restoration, and
+path/range attachment. The viewer owns none of those concerns.
+
+Escape, Ctrl-C, EOF, an empty catalog, invalid marker, stale selection,
+unreadable artifact, or repository failure returns to the exact preactivation
+buffer, cursor, focus, and input mode with no dispatch, history append, or
+residue. Correct the cause and activate again; there is no resumable picker or
+viewer operation. Fallback uses complete numbered catalog/text projections and
+requires a second Enter to submit the amended draft. Capable nested input uses
+the same permanent live latch and cannot downgrade after a failure.
 
 Invalid source type, display metadata, strict UTF-8, private 8 MiB source
 capacity, more than 65,536 LF-derived logical lines, a complete sanitized
@@ -267,7 +277,7 @@ numbered records, separators, notices, and prompt, so escape-expansion-dense
 input can exceed it even when the source itself fits. Exact limits are
 accepted. Correct the caller input and open a new viewer call; there is no
 partially opened viewer to recover. These terminal limits are independent from
-the writing-artifact reference limit, which a later caller must enforce before
+the writing-artifact reference limit, which the controller caller enforces before
 supplying verified text.
 
 Accepted fallback content is complete: the renderer never width-clips source
@@ -309,12 +319,11 @@ Every return or raise drops the call-local source, display name, active line,
 anchor, selection, and viewport. Reopening starts from caller-supplied text and
 an optional initial line; there is no resume token or saved viewer state. This
 is lifecycle disposal, not secure erasure from process or terminal memory.
-When #164 lands, cancelling or selecting will return to the exact originating
-composer buffer/cursor with the message still unsubmitted, and a selection will
-attach only its path/range indicator. The viewer itself never receives or
-preserves the composer, and #162 makes none of that syntax shell-reachable.
-Multiple ordered references likewise require repeated fresh viewer calls owned
-by that caller.
+The controller returns cancellation or selection to the exact originating
+buffer/cursor with the message still unsubmitted; selection attaches only its
+path/range indicator. The viewer itself never receives or preserves the outer
+composer. Multiple ordered references use repeated fresh viewer calls owned by
+that caller.
 
 See the [exact viewer contract](../reference/interactive-terminal.md#independent-ranged-text-viewer)
 and [terminal safety boundary](terminal-safety.md#ranged-text-viewer-boundary).
@@ -357,11 +366,11 @@ work; the newest desired definition is selected instead.
 - Conversation search is active-only; transcript reads retain no cursor.
 - Parsing, repository authorization/evidence, top-level `StoryRuntime`
   propagation, and provider-enforced reads are active for inline canonical
-  references. Standalone compose/artifact commands, `$`/`$$` discovery and
-  selection UI, and reference-specific shell diagnostics remain unavailable.
-  The supplied-text viewer remains an independent
-  package-internal terminal component: it receives caller-supplied text but
-  discovers no artifact and attaches no reference.
+  references. Provider-bound interactive spans add `$` completion and
+  `$${path}`/`$$` ranged selection. Standalone compose/artifact commands,
+  automation selection UI, and public selection APIs remain unavailable. The
+  supplied-text viewer remains independent and package-internal: its controller
+  caller discovers artifacts and attaches references.
 
 See [Session lifecycle](../design/session-lifecycle.md),
 [Troubleshooting](../guides/troubleshooting.md), and

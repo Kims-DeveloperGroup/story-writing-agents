@@ -1362,6 +1362,71 @@ class SemanticComposerCoreTests(unittest.TestCase):
         self.assertEqual(reads.call_count, 2)
         self.assertEqual(writer_calls, 2)
 
+    def test_private_reference_composer_routes_run_and_chat_without_public_growth(
+        self,
+    ) -> None:
+        ordinary = mock.Mock(side_effect=AssertionError("ordinary reader used"))
+        records: list[str] = []
+        terminal = InteractiveTerminal(ordinary, records.append)
+        scope = mock.Mock()
+        paths = mock.Mock()
+        text = mock.Mock()
+        scripted = iter(
+            (
+                "run ${core_documents/global_outline.md}",
+                "/send",
+                "chat ${core_documents/character_sheets.md}#L2-L3",
+                "/send",
+            )
+        )
+        calls: list[tuple[object, ...]] = []
+
+        def read_reference(view: InputPromptView, *collaborators: object) -> str:
+            calls.append((view, *collaborators))
+            return next(scripted)
+
+        terminal._composition_reference_read_line = read_reference
+        composer = terminal_facade.InteractiveCompositionInput(terminal)
+        run = composer.compose(
+            ComposeMode.RUN,
+            reference_scope_provider=scope,
+            reference_paths_provider=paths,
+            reference_text_reader=text,
+        )
+        chat = composer.compose(
+            ComposeMode.CHAT,
+            agent_id=PLOT_ARCHITECT,
+            reference_scope_provider=scope,
+            reference_paths_provider=paths,
+            reference_text_reader=text,
+        )
+
+        self.assertEqual(
+            run,
+            TerminalAction(
+                TerminalActionKind.SEND,
+                text="run ${core_documents/global_outline.md}",
+                line_count=1,
+                character_count=39,
+            ),
+        )
+        self.assertEqual(
+            chat,
+            TerminalAction(
+                TerminalActionKind.SEND,
+                text="chat ${core_documents/character_sheets.md}#L2-L3",
+                line_count=1,
+                character_count=48,
+            ),
+        )
+        self.assertEqual(len(calls), 4)
+        self.assertTrue(all(call[1:] == (scope, paths, text) for call in calls))
+        self.assertTrue(calls[0][0].prompt.name.startswith("compose[run:"))
+        self.assertTrue(calls[2][0].prompt.name.startswith("compose[chat:plot:"))
+        ordinary.assert_not_called()
+        self.assertFalse(hasattr(terminal, "compose_with_references"))
+        self.assertNotIn("InteractiveCompositionInput", terminal_facade.__all__)
+
     def test_confirmation_attempts_hint_tree_and_no_final_event_are_exact(self) -> None:
         reads = iter(("later", " MAYBE ", "yes"))
         prompts: list[str] = []
