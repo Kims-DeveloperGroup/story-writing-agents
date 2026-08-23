@@ -190,6 +190,43 @@ class ReferenceProjectionTests(unittest.TestCase):
             ),
         )
 
+    def test_completed_direct_view_excludes_every_suffix_and_later_cursor(self) -> None:
+        path = _PATHS[1]
+        marker = f"$${{{path}}}"
+        marker_start = 4
+        marker_end = marker_start + len(marker)
+        expected = activation.ReferenceInputProjection(
+            request=activation.ReferenceActivationRequest(
+                activation.ReferenceActivationKind.VIEW,
+                marker_start,
+                marker_end,
+                path=path,
+            )
+        )
+        for suffix in (".", ",", ")", "word"):
+            with self.subTest(suffix=suffix):
+                buffer = f"use {marker}{suffix}"
+                scope = activation.ReferenceInputScope(0, len(buffer))
+
+                projected = activation.project_reference_input(
+                    buffer,
+                    marker_end,
+                    scope,
+                    _PATHS,
+                )
+
+                self.assertEqual(projected, expected)
+                assert projected is not None and projected.request is not None
+                self.assertEqual(buffer[projected.request.end :], suffix)
+                self.assertIsNone(
+                    activation.project_reference_input(
+                        buffer,
+                        len(buffer),
+                        scope,
+                        _PATHS,
+                    )
+                )
+
     def test_scope_cursor_escape_and_fragment_boundaries_do_not_overreach(self) -> None:
         cases = (
             ("prefix $", 8, None, None),
@@ -240,6 +277,24 @@ class ReferenceProjectionTests(unittest.TestCase):
                 activation.ReferenceInputFailureKind.INVALID,
             ),
             (
+                "$${core_documents/global_outline.md",
+                _PATHS,
+                None,
+                activation.ReferenceInputFailureKind.INVALID,
+            ),
+            (
+                "$${}",
+                _PATHS,
+                None,
+                activation.ReferenceInputFailureKind.INVALID,
+            ),
+            (
+                "$$core_documents/global_outline.md}",
+                _PATHS,
+                None,
+                activation.ReferenceInputFailureKind.INVALID,
+            ),
+            (
                 "$",
                 _PATHS,
                 activation.ReferenceInputFailureKind.UNAVAILABLE,
@@ -269,6 +324,40 @@ class ReferenceProjectionTests(unittest.TestCase):
 
 class ReferenceEditTests(unittest.TestCase):
     """Prove edits are atomic, range-inclusive, ordered, and history-neutral."""
+
+    def test_direct_view_range_replaces_only_marker_before_punctuation(self) -> None:
+        path = _PATHS[1]
+        marker = f"$${{{path}}}"
+        marker_start = 4
+        marker_end = marker_start + len(marker)
+        replacement = f"${{{path}}}#L2-L3"
+        for suffix in (".", ",", ")"):
+            with self.subTest(suffix=suffix):
+                buffer = f"use {marker}{suffix}"
+                projected = activation.project_reference_input(
+                    buffer,
+                    marker_end,
+                    activation.ReferenceInputScope(0, len(buffer)),
+                    _PATHS,
+                )
+                assert projected is not None and projected.request is not None
+
+                updated = activation.replace_reference_range(
+                    _state(buffer, marker_end),
+                    projected.request,
+                    2,
+                    3,
+                )
+
+                self.assertEqual(
+                    updated.main_input.line_state.buffer,
+                    f"use {replacement}{suffix}",
+                )
+                self.assertEqual(
+                    updated.main_input.line_state.cursor,
+                    marker_start + len(replacement),
+                )
+                self.assertEqual(buffer, f"use {marker}{suffix}")
 
     def test_completion_replaces_only_active_span_and_preserves_editor_state(self) -> None:
         original = _state("prefix $ suffix", 8)
