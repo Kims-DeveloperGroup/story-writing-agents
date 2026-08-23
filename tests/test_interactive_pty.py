@@ -1982,16 +1982,18 @@ print(
         """Complete typed $c, require explicit submission, and restore the PTY."""
 
         source = _REFERENCE_PROBE_PREAMBLE + r'''
-result = main.read_main_with_references(
-    choices,
-    main_scope,
-    paths,
-    text,
-    session_id="session",
-    agent_id=PLOT_ARCHITECT,
-)
+results = []
+for _attempt in range(2):
+    results.append(main.read_main_with_references(
+        choices,
+        main_scope,
+        paths,
+        text,
+        session_id="session",
+        agent_id=PLOT_ARCHITECT,
+    ))
 print("RESULT=" + json.dumps({
-    "text": result.text,
+    "texts": [result.text for result in results],
     "catalog_calls": len(catalog_calls),
     "read_calls": read_calls,
 }, separators=(",", ":")))
@@ -2005,25 +2007,42 @@ print("RESULT=" + json.dumps({
         token = f"${{{path}}}"
         process.wait_for_text("story[session:plot]>")
         preview_mark = process.output_mark()
-        process.send_text("typed $c")
-        preview = process.wait_for_text(token, after=preview_mark)
+        process.send_text("typed $c suffix")
+        process.wait_for_text("typed $c suffix", after=preview_mark)
+        cursor_mark = process.output_mark()
+        process.send_text("\x1b[D" * len(" suffix"))
+        preview = process.wait_for_text(token, after=cursor_mark)
+        self.assertIn("Suggestions [open]", preview)
         self.assertIn("[highlighted]", preview)
         process.send_text("\t")
-        process.wait_for_text(f"typed {token} ", after=preview_mark)
-        self.assertNotIn('RESULT={"text":', process.text_after(preview_mark))
-        process.send_text("\n")
-        process.wait_for_text('RESULT={"text":')
+        first_expected = f"typed {token} suffix"
+        process.wait_for_text(first_expected, after=cursor_mark)
+        self.assertNotIn('RESULT={"texts":', process.text_after(preview_mark))
+        second_prompt_mark = process.output_mark()
+        process.send_text("\x1b[C" * len(" suffix") + "\n")
+        process.wait_for_text("story[session:plot]>", after=second_prompt_mark)
+
+        direct = f"view $${{{path}}}."
+        process.send_text(direct)
+        process.wait_for_text(direct, after=second_prompt_mark)
+        process.send_text("\x1b[D\n")
+        process.wait_for_text(f"[viewer] {path}", after=second_prompt_mark)
+        process.send_text("\x1b[1;2B\n")
+        second_expected = f"view {token}#L1-L2."
+        process.wait_for_text(second_expected, after=second_prompt_mark)
+        process.send_text("\x1b[C\n")
+        process.wait_for_text('RESULT={"texts":')
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
 
         match = re.search(r"RESULT=(\{[^\r\n]+\})", process.normalized_text)
         self.assertIsNotNone(match, process.normalized_text)
         assert match is not None
         result = json.loads(match.group(1))
-        self.assertEqual(result["text"], f"typed {token} ")
+        self.assertEqual(result["texts"], [first_expected, second_expected])
         self.assertGreater(result["catalog_calls"], 0)
-        self.assertEqual(result["read_calls"], [])
-        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 0)
-        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 0)
+        self.assertEqual(result["read_calls"], [path])
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 1)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 1)
         self.assertEqual(
             process.final_terminal_attributes,
             process.original_terminal_attributes,
@@ -2037,16 +2056,18 @@ print("RESULT=" + json.dumps({
 
         source = _REFERENCE_PROBE_PREAMBLE + r'''
 PATHS = (PATHS[0],)
-result = main.read_main_with_references(
-    choices,
-    main_scope,
-    paths,
-    text,
-    session_id="session",
-    agent_id=PLOT_ARCHITECT,
-)
+results = []
+for _attempt in range(2):
+    results.append(main.read_main_with_references(
+        choices,
+        main_scope,
+        paths,
+        text,
+        session_id="session",
+        agent_id=PLOT_ARCHITECT,
+    ))
 print("RESULT=" + json.dumps({
-    "text": result.text,
+    "texts": [result.text for result in results],
     "catalog_calls": len(catalog_calls),
     "read_calls": read_calls,
 }, separators=(",", ":")))
@@ -2064,25 +2085,36 @@ print("RESULT=" + json.dumps({
         self.assertTrue(fallback_attributes[3] & termios.ICANON)
         self.assertTrue(fallback_attributes[3] & termios.ECHO)
 
-        process.send_line("fallback $c")
+        process.send_line("fallback $c suffix")
         picker = process.wait_for_text(f"1. [highlighted] {token}")
         self.assertNotIn("2. [", picker)
         process.send_line("1")
-        expected = f"fallback {token}"
-        process.wait_for_text(f"Draft retained: {expected}")
+        first_expected = f"fallback {token} suffix"
+        process.wait_for_text(f"Draft retained: {first_expected}")
         process.wait_for_text("Press Enter to submit it")
         confirmation_mark = process.output_mark()
         process.send_line("")
-        process.wait_for_text('RESULT={"text":', after=confirmation_mark)
+        process.wait_for_text("story[session:plot]>", after=confirmation_mark)
+
+        direct = f"view $${{{path}}}."
+        process.send_line(direct)
+        process.wait_for_text(f"[viewer] {path}")
+        process.wait_for_text("Select START-END or /cancel:")
+        process.send_line("2-3")
+        second_expected = f"view {token}#L2-L3."
+        process.wait_for_text(f"Draft retained: {second_expected}")
+        process.wait_for_text("Press Enter to submit it")
+        process.send_line("")
+        process.wait_for_text('RESULT={"texts":')
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
 
         match = re.search(r"RESULT=(\{[^\r\n]+\})", process.normalized_text)
         self.assertIsNotNone(match, process.normalized_text)
         assert match is not None
         result = json.loads(match.group(1))
-        self.assertEqual(result["text"], expected)
+        self.assertEqual(result["texts"], [first_expected, second_expected])
         self.assertGreater(result["catalog_calls"], 0)
-        self.assertEqual(result["read_calls"], [])
+        self.assertEqual(result["read_calls"], [path])
         self.assertNotIn("\x1b", process.normalized_text)
         self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 0)
         self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 0)

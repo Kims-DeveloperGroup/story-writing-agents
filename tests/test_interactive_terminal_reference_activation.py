@@ -227,6 +227,49 @@ class ReferenceProjectionTests(unittest.TestCase):
                     )
                 )
 
+    def test_complete_single_reference_is_inert_but_noncanonical_stays_active(
+        self,
+    ) -> None:
+        path = _PATHS[1]
+        marker = f"${{{path}}}"
+        suffixes = ("", ".", ",", ")", "word", "#L2-L3", "#L2-L3word")
+        for suffix in suffixes:
+            for failure in (
+                None,
+                activation.ReferenceInputFailureKind.STALE,
+                activation.ReferenceInputFailureKind.UNAVAILABLE,
+            ):
+                with self.subTest(suffix=suffix, failure=failure):
+                    buffer = f"use {marker}{suffix}"
+                    self.assertIsNone(
+                        activation.project_reference_input(
+                            buffer,
+                            buffer.index("$") + 1,
+                            activation.ReferenceInputScope(0, len(buffer)),
+                            (),
+                            failure=failure,
+                        )
+                    )
+
+        for marker in (
+            "${core",
+            "${}",
+            "${../escape.md}",
+            "$Core",
+            "${Core_documents/global_outline.md}",
+        ):
+            with self.subTest(active=marker):
+                buffer = f"use {marker}"
+                projected = activation.project_reference_input(
+                    buffer,
+                    buffer.index("$") + 1,
+                    activation.ReferenceInputScope(0, len(buffer)),
+                    _PATHS,
+                )
+                self.assertIsNotNone(projected)
+                assert projected is not None
+                self.assertIsNotNone(projected.completion)
+
     def test_scope_cursor_escape_and_fragment_boundaries_do_not_overreach(self) -> None:
         cases = (
             ("prefix $", 8, None, None),
