@@ -110,14 +110,13 @@ def _validate_fallback_projection(
     """
 
     display_name_bytes = _sanitized_utf8_bytes(display_name)
-    notice_bytes = max(len(_EMPTY_NOTICE), len(_INVALID_NOTICE))
     if logical_lines == 0:
         fixed_bytes = sum(
             (
                 len("[viewer]  | 0 lines"),
                 display_name_bytes,
                 len(_EMPTY_DOCUMENT),
-                notice_bytes,
+                len(_EMPTY_NOTICE),
                 len(_FALLBACK_PROMPT),
                 3,  # Newlines between the four complete fallback rows.
             )
@@ -129,7 +128,7 @@ def _validate_fallback_projection(
                 len(f"[viewer]  | lines {logical_lines}-{logical_lines}"),
                 display_name_bytes,
                 logical_lines * (digits + 6),
-                notice_bytes,
+                len(_INVALID_NOTICE),
                 len(_FALLBACK_PROMPT),
                 logical_lines + 2,
             )
@@ -180,10 +179,14 @@ class TextViewerState:
 
         if type(self.document) is not TextViewerDocument:
             raise TypeError("document must be a TextViewerDocument")
+        if self.notice is not None and not isinstance(self.notice, TextViewerNotice):
+            raise TypeError("notice must be a TextViewerNotice or None")
         count = self.document.line_count
         if count == 0:
             if self.active_line is not None or self.anchor_line is not None:
                 raise ValueError("empty viewer state cannot identify a line")
+            if self.notice is not TextViewerNotice.EMPTY_DOCUMENT:
+                raise ValueError("empty viewer state requires its empty notice")
         else:
             if type(self.active_line) is not int:
                 raise TypeError("active_line must be an integer for nonempty text")
@@ -194,8 +197,8 @@ class TextViewerState:
                     raise TypeError("anchor_line must be an integer or None")
                 if self.anchor_line < 1 or self.anchor_line > count:
                     raise ValueError("anchor_line must identify a document line")
-        if self.notice is not None and not isinstance(self.notice, TextViewerNotice):
-            raise TypeError("notice must be a TextViewerNotice or None")
+            if self.notice is TextViewerNotice.EMPTY_DOCUMENT:
+                raise ValueError("nonempty viewer state cannot use its empty notice")
 
     @property
     def selection(self) -> tuple[int, int] | None:
@@ -243,13 +246,18 @@ class TextViewerViewport:
             type(line) is not str for line in self.lines
         ):
             raise TypeError("lines must be a tuple of strings")
+        if self.notice is not None and not isinstance(self.notice, TextViewerNotice):
+            raise TypeError("notice must be a TextViewerNotice or None")
         if self.total_lines == 0:
             if (
                 self.start_line is not None
                 or self.lines
                 or self.active_line is not None
+                or self.selection is not None
             ):
                 raise ValueError("an empty viewport cannot project document lines")
+            if self.notice is not TextViewerNotice.EMPTY_DOCUMENT:
+                raise ValueError("an empty viewport requires its empty notice")
         else:
             if type(self.start_line) is not int or self.start_line < 1:
                 raise ValueError("start_line must identify the first projected line")
@@ -262,6 +270,8 @@ class TextViewerViewport:
                 self.start_line <= self.active_line <= end_line
             ):
                 raise ValueError("the active line must remain inside the viewport")
+            if self.notice is TextViewerNotice.EMPTY_DOCUMENT:
+                raise ValueError("a nonempty viewport cannot use its empty notice")
         if self.selection is not None:
             if (
                 type(self.selection) is not tuple
@@ -272,8 +282,6 @@ class TextViewerViewport:
             start, end = self.selection
             if start < 1 or end < start or end > self.total_lines:
                 raise ValueError("selection must remain inside the document")
-        if self.notice is not None and not isinstance(self.notice, TextViewerNotice):
-            raise TypeError("notice must be a TextViewerNotice or None")
 
 
 @dataclass(frozen=True, slots=True)
