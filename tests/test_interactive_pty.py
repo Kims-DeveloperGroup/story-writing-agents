@@ -1924,6 +1924,110 @@ print(
             process.original_terminal_attributes,
         )
 
+    def test_reference_viewer_reuses_main_latch_and_ineligible_dollar_stays_literal(
+        self,
+    ) -> None:
+        """Insert one range, then prove the next ineligible marker does no I/O."""
+
+        source = r'''
+import json
+import sys
+
+from story_writing_agents import PLOT_ARCHITECT
+from story_writing_agents.interactive_commands import project_provider_text_span
+from story_writing_agents.interactive_terminal import (
+    InteractiveMainInput,
+    build_stream_terminal,
+)
+from story_writing_agents.interactive_terminal._reference_activation import (
+    ReferenceInputScope,
+)
+
+path = "core_documents/global_outline.md"
+catalog_calls = []
+read_calls = []
+
+def scope(buffer, cursor):
+    span = project_provider_text_span(buffer, cursor)
+    return None if span is None else ReferenceInputScope(span.start, span.end)
+
+def paths():
+    catalog_calls.append("list")
+    return (path,)
+
+def text(selected):
+    read_calls.append(selected)
+    return "one\ntwo\nthree"
+
+terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
+main = InteractiveMainInput(terminal)
+choices = lambda _buffer, _cursor: None
+first = main.read_main_with_references(
+    choices,
+    scope,
+    paths,
+    text,
+    session_id="session",
+    agent_id=PLOT_ARCHITECT,
+)
+before_second = [len(catalog_calls), len(read_calls)]
+second = main.read_main_with_references(
+    choices,
+    scope,
+    paths,
+    text,
+    session_id="session",
+    agent_id=PLOT_ARCHITECT,
+)
+print("RESULT=" + json.dumps({
+    "first": first.text,
+    "second": second.text,
+    "before_second": before_second,
+    "after_second": [len(catalog_calls), len(read_calls)],
+    "read_calls": read_calls,
+}, separators=(",", ":")))
+'''
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=48,
+        )
+        path = "core_documents/global_outline.md"
+        process.wait_for_text("story[session:plot]>")
+        first_prompt_mark = process.output_mark()
+        process.send_text(f"use $${{{path}}}\n\x1b[1;2B\n\n")
+        process.wait_for_text(f"[viewer] {path}")
+        process.wait_for_text("story[session:plot]>", after=first_prompt_mark)
+        process.send_line("/status $")
+        process.wait_for_text(
+            'RESULT={"first":"use ${core_documents/global_outline.md}#L1-L2",'
+            '"second":"/status $","before_second":'
+        )
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        match = re.search(r"RESULT=(\{[^\r\n]+\})", process.normalized_text)
+        self.assertIsNotNone(match, process.normalized_text)
+        assert match is not None
+        result = json.loads(match.group(1))
+        self.assertEqual(
+            result,
+            {
+                "first": "use ${core_documents/global_outline.md}#L1-L2",
+                "second": "/status $",
+                "before_second": result["after_second"],
+                "after_second": result["after_second"],
+                "read_calls": ["core_documents/global_outline.md"],
+            },
+        )
+        self.assertGreater(result["after_second"][0], 0)
+        self.assertEqual(result["after_second"][1], 1)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 1)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 1)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+        self.assertFalse(self.provider_log.exists())
+
     def test_main_history_restores_draft_edits_preview_and_nonempty_veof(
         self,
     ) -> None:

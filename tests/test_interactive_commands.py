@@ -33,7 +33,9 @@ from story_writing_agents.interactive_commands import (
     AGENT_ROUTES,
     AgentRouteSpec,
     CommandCompletionContext,
+    ProviderTextSpan,
     project_command_completion,
+    project_provider_text_span,
 )
 
 
@@ -1898,6 +1900,68 @@ class CommandCompletionProjectionTests(unittest.TestCase):
             with self.subTest(buffer=buffer, cursor=cursor):
                 with self.assertRaises(error_type):
                     project_command_completion(buffer, cursor)  # type: ignore[arg-type]
+
+
+class ProviderTextSpanProjectionTests(unittest.TestCase):
+    """Lock exact cursor-active provider spans without parsing commands."""
+
+    def test_eligible_main_and_routed_text_spans_are_exact(self) -> None:
+        cases = (
+            ("ordinary ${x}", 4, ProviderTextSpan(0, 13)),
+            ("@plot revise ${x}", 10, ProviderTextSpan(6, 17)),
+            ("@plot_architect\trevise", 20, ProviderTextSpan(16, 22)),
+            ("/say revise ${x}", 8, ProviderTextSpan(5, 16)),
+            ("/run revise ${x}", 10, ProviderTextSpan(5, 16)),
+            ("/run --fresh revise", 17, ProviderTextSpan(13, 19)),
+            ("/run --output part.md revise", 25, ProviderTextSpan(22, 28)),
+            (
+                "/run --fresh --output part.md revise",
+                35,
+                ProviderTextSpan(30, 36),
+            ),
+        )
+        for buffer, cursor, expected in cases:
+            with self.subTest(buffer=buffer, cursor=cursor):
+                self.assertEqual(
+                    project_provider_text_span(buffer, cursor),
+                    expected,
+                )
+
+    def test_ineligible_commands_options_routes_and_inactive_cursors_are_none(self) -> None:
+        cases = (
+            ("/status", 7),
+            ("/help ${x}", 9),
+            ("/say revise", 2),
+            ("@unknown revise", 10),
+            ("@plot", 5),
+            ("/run", 4),
+            ("/run --output", 13),
+            ("/run --output part.md", 20),
+            ("/run --unknown revise", 18),
+            ("/run --fresh --output part.md revise", 20),
+        )
+        for buffer, cursor in cases:
+            with self.subTest(buffer=buffer, cursor=cursor):
+                self.assertIsNone(project_provider_text_span(buffer, cursor))
+
+    def test_projection_value_and_inputs_remain_internal_and_strict(self) -> None:
+        value = ProviderTextSpan(1, 2)
+        self.assertFalse(hasattr(value, "__dict__"))
+        self.assertEqual(pickle.loads(pickle.dumps(value)), value)
+        with self.assertRaises(FrozenInstanceError):
+            value.start = 0  # type: ignore[misc]
+        self.assertNotIn("ProviderTextSpan", commands_module.__all__)
+        self.assertNotIn("project_provider_text_span", commands_module.__all__)
+        for buffer, cursor, expected in (
+            (object(), 0, TypeError),
+            ("text", True, TypeError),
+            ("text", -1, ValueError),
+            ("text", 5, ValueError),
+        ):
+            with self.subTest(buffer=buffer, cursor=cursor), self.assertRaises(
+                expected
+            ):
+                project_provider_text_span(buffer, cursor)  # type: ignore[arg-type]
 
 
 if __name__ == "__main__":

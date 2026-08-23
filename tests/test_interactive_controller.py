@@ -88,6 +88,11 @@ from story_writing_agents.interactive_terminal import (
 )
 from story_writing_agents import interactive_terminal as terminal_module
 from story_writing_agents.interactive_terminal._render import render_plain
+from story_writing_agents.interactive_terminal._reference_activation import (
+    ReferenceInputFailure,
+    ReferenceInputFailureKind,
+    ReferenceInputScope,
+)
 from story_writing_agents.models import (
     DebateMessage,
     DebateProgressEvent,
@@ -103,6 +108,7 @@ from story_writing_agents.workspace import (
     FilesystemConversationCatalog,
     Workspace,
 )
+from story_writing_agents.writing_artifacts import MAX_VIEWER_UTF8_BYTES
 
 from tests.helpers import initialized_workspace
 
@@ -1136,7 +1142,103 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 47)
+        self.assertEqual(len(modules), 48)
+
+    def test_reference_callbacks_are_scoped_fresh_bounded_and_content_free(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        controller, _backend, _callbacks = self.make_controller(workspace)
+        focused = _conversation_metadata("c_0123456789", "Focused")
+        controller._attached_session_id = "session"
+        controller._focused_conversation = focused
+
+        scope_cases = (
+            ("ordinary $", 10, ReferenceInputScope(0, 10)),
+            ("@plot revise $", 14, ReferenceInputScope(6, 14)),
+            ("/say revise $", 13, ReferenceInputScope(5, 13)),
+            ("/run --fresh revise $", 21, ReferenceInputScope(13, 21)),
+            ("/status $", 9, None),
+            ("/run --output part.md $", 18, None),
+        )
+        for buffer, cursor, expected in scope_cases:
+            with self.subTest(buffer=buffer):
+                self.assertEqual(
+                    controller._main_reference_scope(buffer, cursor),
+                    expected,
+                )
+        controller._focused_conversation = None
+        self.assertIsNone(controller._main_reference_scope("ordinary $", 10))
+        controller._focused_conversation = focused
+        controller._attached_session_id = None
+        self.assertIsNone(controller._main_reference_scope("ordinary $", 10))
+        self.assertEqual(
+            controller._composition_reference_scope("line $", 3),
+            ReferenceInputScope(0, 6),
+        )
+
+        repository = controller._runtime.artifacts
+        snapshots = (
+            ("core_documents/global_outline.md",),
+            ("core_documents/character_sheets.md",),
+        )
+        with mock.patch.object(
+            repository,
+            "list_paths",
+            side_effect=snapshots,
+        ) as list_paths:
+            self.assertEqual(controller._reference_paths(), snapshots[0])
+            self.assertEqual(controller._reference_paths(), snapshots[1])
+        self.assertEqual(list_paths.call_count, 2)
+
+        path = snapshots[0][0]
+        with mock.patch.object(
+            repository,
+            "read_text",
+            return_value="private referenced bytes",
+        ) as read_text:
+            self.assertEqual(
+                controller._reference_text(path),
+                "private referenced bytes",
+            )
+        read_text.assert_called_once_with(path, max_bytes=MAX_VIEWER_UTF8_BYTES)
+
+        failures = (
+            (
+                "list_paths",
+                OSError("catalog secret"),
+                ReferenceInputFailureKind.UNAVAILABLE,
+            ),
+            (
+                "read_text",
+                WorkspaceSecurityError("race secret"),
+                ReferenceInputFailureKind.STALE,
+            ),
+            (
+                "read_text",
+                WorkspaceFormatError("decode secret"),
+                ReferenceInputFailureKind.UNREADABLE,
+            ),
+            (
+                "read_text",
+                OSError("storage secret"),
+                ReferenceInputFailureKind.UNAVAILABLE,
+            ),
+        )
+        for method, failure, expected in failures:
+            with self.subTest(method=method, expected=expected), mock.patch.object(
+                repository,
+                method,
+                side_effect=failure,
+            ):
+                with self.assertRaises(ReferenceInputFailure) as raised:
+                    if method == "list_paths":
+                        controller._reference_paths()
+                    else:
+                        controller._reference_text(path)
+                self.assertIs(raised.exception.kind, expected)
+                self.assertEqual(str(raised.exception), expected.value)
+                self.assertNotIn("secret", str(raised.exception))
 
 
 class ControllerDebateVisibilityTests(ControllerTestCase):

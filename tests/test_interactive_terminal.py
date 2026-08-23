@@ -1087,6 +1087,72 @@ class PromptAndRenderingTests(unittest.TestCase):
                     )
         self.assertEqual(callbacks.prompts, [])
 
+    def test_private_reference_main_input_is_call_local_and_cleans_after_failure(
+        self,
+    ) -> None:
+        terminal, callbacks = make_terminal("literal $")
+        direct = terminal_module.InteractiveMainInput(terminal)
+        choice_provider = mock.Mock(return_value=None)
+        scope_provider = mock.Mock(return_value=None)
+        paths_provider = mock.Mock(return_value=())
+        text_reader = mock.Mock(return_value="unused")
+
+        self.assertEqual(
+            direct.read_main(choice_provider),
+            TerminalAction(TerminalActionKind.LINE, text="literal $"),
+        )
+        self.assertEqual(callbacks.prompts, ["story[lobby]> "])
+        scope_provider.assert_not_called()
+        paths_provider.assert_not_called()
+        text_reader.assert_not_called()
+
+        observed: list[tuple[object, ...]] = []
+        failure = RuntimeError("reference reader failed")
+
+        def failing_read(*arguments: object) -> str:
+            observed.append(arguments)
+            if len(observed) == 1:
+                with self.assertRaisesRegex(RuntimeError, "already active"):
+                    direct.read_main_with_references(
+                        choice_provider,
+                        scope_provider,
+                        paths_provider,
+                        text_reader,
+                    )
+                raise failure
+            return "recovered $"
+
+        terminal._main_reference_read_line = failing_read
+        direct = terminal_module.InteractiveMainInput(terminal)
+        with self.assertRaises(RuntimeError) as raised:
+            direct.read_main_with_references(
+                choice_provider,
+                scope_provider,
+                paths_provider,
+                text_reader,
+                session_id="session",
+                agent_id=PLOT_ARCHITECT,
+            )
+        self.assertIs(raised.exception, failure)
+        self.assertEqual(len(observed), 1)
+        prompt, choices, scope, paths, text = observed[0]
+        self.assertEqual(prompt, "story[session:plot]> ")
+        self.assertIs(choices, choice_provider)
+        self.assertIs(scope, scope_provider)
+        self.assertIs(paths, paths_provider)
+        self.assertIs(text, text_reader)
+
+        self.assertEqual(
+            direct.read_main_with_references(
+                choice_provider,
+                scope_provider,
+                paths_provider,
+                text_reader,
+            ),
+            TerminalAction(TerminalActionKind.LINE, text="recovered $"),
+        )
+        self.assertEqual(len(observed), 2)
+
     def test_subject_prompt_is_exact_call_local_and_returns_typed_events(
         self,
     ) -> None:

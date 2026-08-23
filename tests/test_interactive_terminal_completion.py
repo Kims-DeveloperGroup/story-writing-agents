@@ -28,6 +28,9 @@ from story_writing_agents.interactive_terminal._controls import (
     transition_picker_fallback,
 )
 from story_writing_agents.interactive_terminal._driver import RawTerminalDriver
+from story_writing_agents.interactive_terminal._reference_activation import (
+    ReferenceInputScope,
+)
 from story_writing_agents.interactive_terminal._model import (
     CapabilityProfile,
     Choice,
@@ -905,6 +908,130 @@ class CompletionDriverTests(unittest.TestCase):
         self.assertIn("Suggestions [open]", rendered)
         self.assertIn("[highlighted] /settings", rendered)
         self.assertNotIn("[suggestions]", rendered)
+
+    def test_reference_completion_and_nested_viewers_share_one_latch_and_history(
+        self,
+    ) -> None:
+        paths = (
+            "core_documents/character_sheets.md",
+            "core_documents/global_outline.md",
+        )
+        cases = (
+            (
+                "$\t\n",
+                f"${{{paths[0]}}} ",
+                0,
+                0,
+                (),
+            ),
+            (
+                f"use $${{{paths[0]}}}\n\x1b[1;2B\n\n",
+                f"use ${{{paths[0]}}}#L1-L2",
+                1,
+                1,
+                (paths[0],),
+            ),
+            (
+                "use $$\n\x1b[B\n\x1b[1;2B\n\n",
+                f"use ${{{paths[1]}}}#L1-L2",
+                1,
+                1,
+                (paths[1],),
+            ),
+        )
+        for script, expected, screen_enters, screen_exits, reads in cases:
+            with self.subTest(expected=expected):
+                driver, _input, output, fallback, termios, os_module = make_driver(
+                    script
+                )
+                text_reader = mock.Mock(return_value="one\ntwo\nthree")
+                failure_writer = mock.Mock()
+                with mock.patch.object(
+                    _driver._select,
+                    "select",
+                    side_effect=lambda readable, writable, exceptional, _timeout: (
+                        readable,
+                        writable,
+                        exceptional,
+                    ),
+                ):
+                    line = _core.read_main_command_line(
+                        driver,
+                        "main> ",
+                        reference_scope_provider=lambda buffer, _cursor: (
+                            ReferenceInputScope(0, len(buffer))
+                        ),
+                        reference_paths_provider=lambda: paths,
+                        reference_text_reader=text_reader,
+                        reference_failure_writer=failure_writer,
+                    )
+
+                self.assertEqual(line, expected)
+                self.assertEqual(
+                    driver._history_state,
+                    MainInputHistoryState((expected,)),
+                )
+                self.assertEqual(
+                    tuple(call[1] for call in termios.set_calls),
+                    (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
+                )
+                rendered = "".join(output.records)
+                self.assertEqual(rendered.count("\x1b[?1049h"), screen_enters)
+                self.assertEqual(rendered.count("\x1b[?1049l"), screen_exits)
+                self.assertEqual(
+                    tuple(call.args[0] for call in text_reader.call_args_list),
+                    reads,
+                )
+                failure_writer.assert_not_called()
+                fallback.assert_not_called()
+                self.assertEqual(os_module.observed_widths[:2], [8, 8])
+
+    def test_reference_fallback_retains_amendment_until_second_confirmation(
+        self,
+    ) -> None:
+        path = "core_documents/global_outline.md"
+        marker = f"use $${{{path}}}"
+        driver, input_stream, output, fallback, termios, os_module = make_driver(
+            "unused",
+            terminal=False,
+        )
+        fallback.side_effect = (marker, "2-3", "")
+        text_reader = mock.Mock(return_value="one\ntwo\nthree")
+        paths_provider = mock.Mock(return_value=(path,))
+
+        result = _core.read_main_command_line(
+            driver,
+            "main> ",
+            reference_scope_provider=lambda buffer, _cursor: (
+                ReferenceInputScope(0, len(buffer))
+            ),
+            reference_paths_provider=paths_provider,
+            reference_text_reader=text_reader,
+            reference_failure_writer=mock.Mock(),
+        )
+
+        expected = f"use ${{{path}}}#L2-L3"
+        self.assertEqual(result, expected)
+        self.assertEqual(driver._history_state, MainInputHistoryState((expected,)))
+        self.assertEqual(fallback.call_count, 3)
+        self.assertEqual(fallback.call_args_list[0], mock.call("main> "))
+        self.assertIn(
+            "Select START-END or /cancel: ",
+            fallback.call_args_list[1].args[0],
+        )
+        self.assertEqual(
+            fallback.call_args_list[2],
+            mock.call(
+                f"Draft retained: {expected}\n"
+                "Press Enter to submit it, or type a replacement draft: "
+            ),
+        )
+        paths_provider.assert_called_once_with()
+        text_reader.assert_called_once_with(path)
+        self.assertNotIn(("read", 1), input_stream.calls)
+        self.assertEqual(output.records, [])
+        self.assertEqual(termios.set_calls, [])
+        self.assertEqual(os_module.observed_widths, [])
 
     def test_standalone_escape_closes_palette_and_exact_readiness_timeout(self) -> None:
         driver, _input, output, fallback, _termios, _os = make_driver("/\x1b\n")
