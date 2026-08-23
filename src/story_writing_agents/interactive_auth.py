@@ -87,6 +87,34 @@ class _ProviderAuth(Protocol):
         """Run native login and return its fresh post-login status."""
 
 
+def select_default_provider(
+    snapshot: ProviderAuthSnapshot,
+    *,
+    newly_authenticated_provider: str | None = None,
+) -> str | None:
+    """Choose a missing workspace default from exact live authentication.
+
+    A provider authenticated by the immediately preceding interaction wins.
+    Otherwise a sole authenticated provider is selected, both authenticated
+    providers prefer Codex, and no authenticated provider yields no default.
+    """
+
+    _require_snapshot(snapshot)
+    _require_optional_provider(newly_authenticated_provider)
+    if newly_authenticated_provider is not None:
+        if not snapshot.is_authenticated(newly_authenticated_provider):
+            raise ValueError(
+                "newly authenticated provider must be exactly authenticated"
+            )
+        return newly_authenticated_provider
+    authenticated = snapshot.authenticated_providers
+    if len(authenticated) == 1:
+        return authenticated[0]
+    if len(authenticated) == len(AUTH_PROVIDERS):
+        return "codex"
+    return None
+
+
 class InteractiveAuthCoordinator:
     """Coordinate one provider-neutral auth picker and native-login handoff."""
 
@@ -214,7 +242,7 @@ class InteractiveAuthCoordinator:
         if current.state is ProviderAuthState.AUTHENTICATED:
             return _provider_result(snapshot, current)
         if current.state is ProviderAuthState.UNAUTHENTICATED:
-            return self._login(provider, snapshot)
+            return self._login(provider)
         if current.state is ProviderAuthState.INDETERMINATE:
             refreshed = self._auth.probe(provider)
             _require_status(refreshed, provider)
@@ -225,9 +253,8 @@ class InteractiveAuthCoordinator:
     def _login(
         self,
         provider: str,
-        snapshot: ProviderAuthSnapshot,
     ) -> InteractiveAuthResult:
-        """Clear guidance before native TTY ownership, then report fresh status."""
+        """Clear guidance, run native login, then fully refresh both providers."""
 
         label = _provider_label(provider)
         self._presentation.show_notice(
@@ -247,9 +274,10 @@ class InteractiveAuthCoordinator:
         if login_result.provider != provider:
             raise ValueError("auth service returned a different provider")
         _require_status(login_result.status, provider)
-        refreshed_snapshot = _snapshot_with_status(snapshot, login_result.status)
-        self._presentation.show_result(_result_notice(login_result.status))
-        return _provider_result(refreshed_snapshot, login_result.status)
+        refreshed_snapshot = self.probe_all()
+        refreshed_status = refreshed_snapshot.status_for(provider)
+        self._presentation.show_result(_result_notice(refreshed_status))
+        return _provider_result(refreshed_snapshot, refreshed_status)
 
 
 def _choice_status(

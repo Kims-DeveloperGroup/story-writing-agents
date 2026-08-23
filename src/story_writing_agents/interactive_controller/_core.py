@@ -62,6 +62,13 @@ from ..errors import (
     WorkspaceSecurityError,
     WorkspaceVersionUnsupportedError,
 )
+from ..interactive_auth import (
+    InteractiveAuthCoordinator,
+    InteractiveAuthResult,
+    InteractiveAuthResultKind,
+    ProviderAuthSnapshot,
+    select_default_provider,
+)
 from ..interactive_commands import (
     AGENT_ROUTES,
     ActionKind,
@@ -75,6 +82,8 @@ from ..interactive_settings import (
     SettingsError,
     SettingsErrorKind,
     SettingsState,
+    establish_default_backend,
+    establish_settings_default_backend,
     load_settings_state,
     save_settings_state,
     update_agent_antigravity_effort,
@@ -203,9 +212,39 @@ _CONVERSATION_CATALOG_OPERATIONS = (
     "archive",
     "unarchive",
 )
+_AUTH_COORDINATOR_OPERATIONS = ("choices", "probe_all", "run")
 
 
 _ExceptionState = tuple[BaseException, TracebackType | None]
+
+
+def _effective_settings_provider(
+    state: SettingsState,
+    agent_id: str,
+    *,
+    pending: bool = True,
+) -> str:
+    """Resolve one settings route through agent, workspace, then Codex."""
+
+    configuration = (
+        state.pending if pending else state.baseline.configuration
+    )
+    agent = configuration.agent_configs[agent_id]
+    return (
+        agent.backend
+        or configuration.system_defaults.default_backend
+        or "codex"
+    )
+
+
+def _provider_display_name(provider: str) -> str:
+    """Return fixed display copy for one already-validated provider."""
+
+    if provider == "codex":
+        return "Codex"
+    if provider == "antigravity":
+        return "Antigravity"
+    raise ValueError("provider must be codex or antigravity")
 
 
 def _remember_first_process_control(
@@ -236,6 +275,10 @@ class _ControllerAbort(Exception):
         self.error = error
 
 
+class _SettingsFlowAbort(Exception):
+    """Stop one open settings transaction after its fixed error is rendered."""
+
+
 class InteractiveController:
     """Own one interactive process's attachment and synchronous shell loop.
 
@@ -250,6 +293,7 @@ class InteractiveController:
 
     __slots__ = (
         "_attached_session_id",
+        "_auth_coordinator",
         "_backend",
         "_closed",
         "_conversation_catalog",
@@ -284,15 +328,17 @@ class InteractiveController:
         terminal: InteractiveTerminal,
         *,
         conversation_catalog: ConversationCatalog | None = None,
+        auth_coordinator: InteractiveAuthCoordinator | None = None,
     ) -> None:
         """Bind collaborators and construct one shared transcript adapter.
 
         The four positional arguments remain the established construction
         contract. An omitted keyword-only catalog creates the workspace-backed
-        adapter; an injected protocol implementation is retained as borrowed
-        state and is never closed by this controller. The event store is shared
-        by the retained runtime and later attachment-scoped memory services.
-        Construction performs no provider call, filesystem write, or access claim.
+        adapter; injected catalog and authentication coordinators are retained
+        as borrowed state and are never closed by this controller. The event
+        store is shared by the retained runtime and later attachment-scoped
+        memory services. Construction performs no provider call, filesystem
+        write, or access claim.
         """
 
         if not isinstance(workspace, Workspace):
@@ -303,12 +349,20 @@ class InteractiveController:
             raise TypeError("backend must be an AgentBackend")
         if not isinstance(terminal, InteractiveTerminal):
             raise TypeError("terminal must be an InteractiveTerminal")
+        if auth_coordinator is not None and any(
+            not callable(getattr(auth_coordinator, operation, None))
+            for operation in _AUTH_COORDINATOR_OPERATIONS
+        ):
+            raise TypeError(
+                "auth_coordinator must provide choices, probe_all, and run"
+            )
         self._workspace = workspace
         self._debug_log = WorkspaceDebugLog(workspace)
         self._error_write_count = 0
         self._context = context
         self._backend = backend
         self._terminal = terminal
+        self._auth_coordinator = auth_coordinator
         self._semantic_output = InteractiveSemanticOutput(terminal)
         self._picker_input = InteractivePickerInput(terminal)
         self._prompt_input = InteractivePromptInput(terminal)
@@ -1598,6 +1652,9 @@ class InteractiveController:
         if action.kind is ActionKind.LIST_AGENTS:
             self._terminal.write_agent_roster()
             return False
+        if action.kind is ActionKind.AUTH:
+            self._run_auth()
+            return False
         if action.kind is ActionKind.SETTINGS:
             self._run_settings()
             return False
@@ -1703,6 +1760,134 @@ class InteractiveController:
         self._write_unavailable_lobby_command_error()
         return False
 
+    def _run_auth(self) -> None:
+        """Present live provider authentication without story-provider work."""
+
+        coordinator = self._auth_coordinator
+        if coordinator is None:
+            self._write_notice(
+                "Provider authentication is unavailable in this shell.",
+                label="authentication",
+                role=SemanticRole.ERROR,
+                state=ViewState.ERROR,
+            )
+            return
+
+        snapshot = coordinator.probe_all()
+        self._persist_missing_auth_default(snapshot)
+        result = coordinator.run(snapshot)
+        if result.kind in {
+            InteractiveAuthResultKind.CANCEL,
+            InteractiveAuthResultKind.INTERRUPT,
+            InteractiveAuthResultKind.EOF,
+        }:
+            self._write_notice(
+                (
+                    "Authentication picker cancelled. Any authenticated "
+                    "workspace default already established was kept."
+                ),
+                label="authentication",
+                role=SemanticRole.WARNING,
+                state=ViewState.CANCELLED,
+            )
+            return
+
+        refreshed = coordinator.probe_all()
+        newly_authenticated = self._newly_authenticated_provider(
+            snapshot,
+            result,
+            refreshed,
+        )
+        self._persist_missing_auth_default(
+            refreshed,
+            newly_authenticated_provider=newly_authenticated,
+        )
+        assert result.provider is not None
+        if not refreshed.is_authenticated(result.provider):
+            self._write_notice(
+                (
+                    f"{_provider_display_name(result.provider)} is not "
+                    "authenticated. Run /auth to retry."
+                ),
+                label="authentication",
+                role=SemanticRole.ERROR,
+                state=ViewState.ERROR,
+            )
+
+    def _persist_missing_auth_default(
+        self,
+        snapshot: ProviderAuthSnapshot,
+        *,
+        newly_authenticated_provider: str | None = None,
+    ) -> None:
+        """Best-effort persist one authenticated default outside settings."""
+
+        provider = select_default_provider(
+            snapshot,
+            newly_authenticated_provider=newly_authenticated_provider,
+        )
+        if provider is None:
+            return
+        try:
+            establish_default_backend(self._workspace, provider)
+        except ConfigurationError:
+            self._write_error(
+                InteractiveError(InteractiveErrorCode.CONFIGURATION_INVALID)
+            )
+        except WorkspaceSecurityError:
+            self._write_error(
+                InteractiveError(InteractiveErrorCode.WORKSPACE_UNSAFE)
+            )
+        except (WorkspaceFormatError, OSError):
+            self._write_error(
+                InteractiveError(InteractiveErrorCode.WORKSPACE_INVALID)
+            )
+        except SettingsError as failure:
+            self._write_settings_error(failure.kind)
+
+    def _rebase_missing_settings_default(
+        self,
+        state: SettingsState,
+        snapshot: ProviderAuthSnapshot,
+        *,
+        newly_authenticated_provider: str | None = None,
+    ) -> SettingsState:
+        """Persist and replay a settings-local missing default exactly once."""
+
+        provider = select_default_provider(
+            snapshot,
+            newly_authenticated_provider=newly_authenticated_provider,
+        )
+        if provider is None:
+            return state
+        try:
+            return establish_settings_default_backend(
+                self._workspace,
+                state,
+                provider,
+            )
+        except SettingsError as failure:
+            self._write_settings_error(failure.kind)
+            raise _SettingsFlowAbort from failure
+
+    @staticmethod
+    def _newly_authenticated_provider(
+        before: ProviderAuthSnapshot,
+        result: InteractiveAuthResult,
+        after: ProviderAuthSnapshot,
+    ) -> str | None:
+        """Return the exact provider whose interaction gained fresh auth."""
+
+        provider = result.provider
+        if (
+            result.kind is InteractiveAuthResultKind.AUTHENTICATED
+            and provider is not None
+            and not before.is_authenticated(provider)
+            and after.is_authenticated(provider)
+        ):
+            return provider
+        return None
+
     def _run_settings(self) -> None:
         """Edit one isolated configuration candidate and save only on request."""
 
@@ -1765,6 +1950,18 @@ class InteractiveController:
                 if selected == "cancel":
                     self._write_settings_cancelled()
                     return
+                if self._auth_coordinator is not None:
+                    try:
+                        state, auth_outcome = (
+                            self._authenticate_settings_routes(state)
+                        )
+                    except _SettingsFlowAbort:
+                        return
+                    if auth_outcome == "cancel":
+                        self._write_settings_cancelled()
+                        return
+                    if auth_outcome == "return":
+                        continue
                 try:
                     save_settings_state(self._workspace, state)
                 except SettingsError as failure:
@@ -1785,13 +1982,101 @@ class InteractiveController:
                     )
                 )
                 return
-            state, cancelled = self._edit_settings_value(
-                state,
-                selected,
-            )
+            try:
+                state, cancelled = self._edit_settings_value(
+                    state,
+                    selected,
+                )
+            except _SettingsFlowAbort:
+                return
             if cancelled:
                 self._write_settings_cancelled()
                 return
+
+    def _authenticate_settings_routes(
+        self,
+        state: SettingsState,
+    ) -> tuple[SettingsState, str]:
+        """Freshly authenticate every effective route before settings Save."""
+
+        coordinator = self._auth_coordinator
+        if coordinator is None:
+            return state, "ready"
+        attempted: set[str] = set()
+        snapshot = coordinator.probe_all()
+        state = self._rebase_missing_settings_default(state, snapshot)
+        while True:
+            provider = next(
+                (
+                    _effective_settings_provider(state, agent_id)
+                    for agent_id in ROSTER
+                    if not snapshot.is_authenticated(
+                        _effective_settings_provider(state, agent_id)
+                    )
+                ),
+                None,
+            )
+            if provider is None:
+                return state, "ready"
+            if provider in attempted:
+                status = snapshot.status_for(provider)
+                if status.authenticated:
+                    raise _ControllerAbort(
+                        InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+                    )
+                provider_name = _provider_display_name(provider)
+                if status.state.value == "unauthenticated":
+                    message = (
+                        f"{provider_name} is not authenticated. Complete "
+                        "native sign-in, then retry Save."
+                    )
+                elif status.state.value == "unavailable":
+                    message = (
+                        f"{provider_name} CLI is unavailable. Install it, "
+                        "then retry Save."
+                    )
+                elif status.state.value == "indeterminate":
+                    message = (
+                        f"{provider_name} authentication could not be "
+                        "confirmed. Check the native CLI, then retry Save."
+                    )
+                else:
+                    raise _ControllerAbort(
+                        InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+                    )
+                self._write_notice(
+                    message,
+                    label="authentication",
+                    role=SemanticRole.ERROR,
+                    state=ViewState.ERROR,
+                )
+                return state, "return"
+
+            attempted.add(provider)
+            before = snapshot
+            result = coordinator.run(
+                snapshot,
+                selected_provider=provider,
+            )
+            if result.kind is InteractiveAuthResultKind.CANCEL:
+                return state, "return"
+            if result.kind in {
+                InteractiveAuthResultKind.INTERRUPT,
+                InteractiveAuthResultKind.EOF,
+            }:
+                return state, "cancel"
+
+            snapshot = coordinator.probe_all()
+            newly_authenticated = self._newly_authenticated_provider(
+                before,
+                result,
+                snapshot,
+            )
+            state = self._rebase_missing_settings_default(
+                state,
+                snapshot,
+                newly_authenticated_provider=newly_authenticated,
+            )
 
     def _settings_save_confirmation(
         self,
@@ -1968,9 +2253,7 @@ class InteractiveController:
             if agent_id is None:
                 return state, False
             agent_highlight = agent_id
-            provider = (
-                state.pending.agent_configs[agent_id].backend or "codex"
-            )
+            provider = _effective_settings_provider(state, agent_id)
             provider_name = (
                 "Antigravity" if provider == "antigravity" else "Codex"
             )
@@ -2019,7 +2302,13 @@ class InteractiveController:
     ) -> tuple[SettingsState, bool]:
         """Edit one agent's provider without changing either provider's settings."""
 
-        current = state.pending.agent_configs[agent_id].backend or "codex"
+        if self._auth_coordinator is not None:
+            return self._edit_authenticated_settings_agent_provider(
+                state,
+                agent_id,
+            )
+
+        current = _effective_settings_provider(state, agent_id)
         outcome = self._picker_input.read_picker(
             Prompt(
                 "Provider",
@@ -2055,6 +2344,95 @@ class InteractiveController:
             return state, whole_cancel
         return update_agent_backend(state, agent_id, provider), False
 
+    def _edit_authenticated_settings_agent_provider(
+        self,
+        state: SettingsState,
+        agent_id: str,
+    ) -> tuple[SettingsState, bool]:
+        """Assign one route only after exact freshly probed authentication."""
+
+        coordinator = self._auth_coordinator
+        assert coordinator is not None
+        snapshot = coordinator.probe_all()
+        state = self._rebase_missing_settings_default(state, snapshot)
+        current = _effective_settings_provider(state, agent_id)
+        choices = coordinator.choices(
+            snapshot,
+            selected_provider=current,
+        )
+        current_choice = next(
+            choice for choice in choices if choice.identity == current
+        )
+        selected_id = current if current_choice.enabled else None
+        highlighted_id = selected_id or next(
+            (choice.identity for choice in choices if choice.enabled),
+            None,
+        )
+        outcome = self._picker_input.read_picker(
+            Prompt(
+                "Provider",
+                scope=AGENT_SPECS[agent_id].display_name,
+                instruction=(
+                    "Choose an authenticated provider, or select an available "
+                    "provider to authenticate it first."
+                ),
+            ),
+            choices,
+            highlighted_id=highlighted_id,
+            selected_id=selected_id,
+            transient=True,
+        )
+        provider, whole_cancel = self._nested_settings_value(outcome)
+        if whole_cancel or provider is None:
+            return state, whole_cancel
+
+        snapshot = coordinator.probe_all()
+        state = self._rebase_missing_settings_default(state, snapshot)
+        if snapshot.is_authenticated(provider):
+            return update_agent_backend(state, agent_id, provider), False
+
+        before = snapshot
+        result = coordinator.run(
+            snapshot,
+            selected_provider=provider,
+        )
+        if result.kind is InteractiveAuthResultKind.CANCEL:
+            return state, False
+        if result.kind in {
+            InteractiveAuthResultKind.INTERRUPT,
+            InteractiveAuthResultKind.EOF,
+        }:
+            return state, True
+
+        snapshot = coordinator.probe_all()
+        newly_authenticated = self._newly_authenticated_provider(
+            before,
+            result,
+            snapshot,
+        )
+        state = self._rebase_missing_settings_default(
+            state,
+            snapshot,
+            newly_authenticated_provider=newly_authenticated,
+        )
+        if (
+            result.kind is InteractiveAuthResultKind.AUTHENTICATED
+            and result.provider == provider
+            and snapshot.is_authenticated(provider)
+        ):
+            return update_agent_backend(state, agent_id, provider), False
+
+        self._write_notice(
+            (
+                f"{_provider_display_name(provider)} was not assigned because "
+                "fresh authentication was not confirmed."
+            ),
+            label="authentication required",
+            role=SemanticRole.ERROR,
+            state=ViewState.ERROR,
+        )
+        return state, False
+
     def _edit_settings_agent_model(
         self,
         state: SettingsState,
@@ -2064,7 +2442,7 @@ class InteractiveController:
 
         while True:
             agent = state.pending.agent_configs[agent_id]
-            provider = agent.backend or "codex"
+            provider = _effective_settings_provider(state, agent_id)
             antigravity = provider == "antigravity"
             provider_name = "Antigravity" if antigravity else "Codex"
             current = (
@@ -2110,7 +2488,7 @@ class InteractiveController:
         """Select one active-provider effort or inherited system value."""
 
         agent = state.pending.agent_configs[agent_id]
-        provider = agent.backend or "codex"
+        provider = _effective_settings_provider(state, agent_id)
         antigravity = provider == "antigravity"
         provider_name = "Antigravity" if antigravity else "Codex"
         pending = (
@@ -2199,7 +2577,8 @@ class InteractiveController:
         current = state.baseline.configuration
         pending = state.pending
 
-        def values(configuration) -> tuple[tuple[str, str], ...]:
+        def values(*, pending_configuration: bool) -> tuple[tuple[str, str], ...]:
+            configuration = pending if pending_configuration else current
             defaults = configuration.system_defaults
             rows = [
                 ("Language", defaults.language),
@@ -2209,9 +2588,19 @@ class InteractiveController:
             for agent_id in ROSTER:
                 display_name = AGENT_SPECS[agent_id].display_name
                 agent = configuration.agent_configs[agent_id]
+                provider = _effective_settings_provider(
+                    state,
+                    agent_id,
+                    pending=pending_configuration,
+                )
+                provider_value = (
+                    provider
+                    if agent.backend is not None
+                    else f"{provider} (default)"
+                )
                 rows.extend(
                     (
-                        (f"{display_name} Provider", agent.backend or "codex (default)"),
+                        (f"{display_name} Provider", provider_value),
                         (
                             f"{display_name} Codex model",
                             agent.codex_model or "inherit",
@@ -2232,8 +2621,8 @@ class InteractiveController:
                 )
             return tuple(rows)
 
-        current_values = values(current)
-        pending_values = values(pending)
+        current_values = values(pending_configuration=False)
+        pending_values = values(pending_configuration=True)
 
         changed_indices = tuple(
             index
