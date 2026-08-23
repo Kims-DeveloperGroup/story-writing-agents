@@ -753,16 +753,29 @@ def _palette_lines(
     lines = [
         (line, SemanticRole.COMMAND)
         for line in _wrap(
-            f"Suggestions{_state_suffix(palette.state)}",
+            f"{palette.title}{_state_suffix(palette.state)}",
             width,
             indent=indent,
         )
     ]
     child_indent = _child_indent(width, indent)
+    if palette.instruction is not None:
+        lines.extend(
+            (line, SemanticRole.MUTED)
+            for line in _wrap(
+                f"[controls] {palette.instruction}",
+                width,
+                indent=child_indent,
+            )
+        )
     if not palette.candidates:
         lines.extend(
             (line, SemanticRole.MUTED)
-            for line in _wrap("[empty] No suggestions.", width, indent=child_indent)
+            for line in _wrap(
+                f"[empty] {palette.empty_text}",
+                width,
+                indent=child_indent,
+            )
         )
         return lines
     for choice in palette.candidates:

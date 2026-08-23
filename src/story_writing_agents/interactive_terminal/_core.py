@@ -467,6 +467,11 @@ _SUMMARY_LIMIT = 512
 _HINT_LIMIT = 256
 _REDACTION = "<redacted>"
 _MAIN_PROMPT_EXCLUSIONS = frozenset({"/compose", "/send", "/cancel"})
+_ARTIFACT_REFERENCE_GUIDANCE = (
+    "Artifact references require an attached session and focused conversation. "
+    "In provider-bound prompts, $ chooses a whole-file reference; $$ then "
+    "Enter/Tab opens ranged selection."
+)
 
 
 class InteractiveTerminal:
@@ -757,6 +762,7 @@ class InteractiveTerminal:
                         ),
                         role=SemanticRole.WARNING,
                     ),
+                    Notice(_ARTIFACT_REFERENCE_GUIDANCE),
                     Notice("Type /help for commands; /quit exits."),
                 ),
             )
@@ -812,6 +818,7 @@ class InteractiveTerminal:
                     ),
                 )
             )
+        items.append(Notice(_ARTIFACT_REFERENCE_GUIDANCE))
         items.append(
             Notice(
                 "Type /help for commands; /quit releases access without pausing."
@@ -1111,7 +1118,13 @@ class InteractiveTerminal:
         """Render full or contextual help from the parser-owned registry."""
 
         if command is None:
-            sections: tuple[Section, ...] = ()
+            sections: tuple[Section, ...] = (
+                Section(
+                    "Writing artifact references",
+                    (Notice(_ARTIFACT_REFERENCE_GUIDANCE),),
+                    state=ViewState.COMPLETED,
+                ),
+            )
             for group in dict.fromkeys(spec.group for spec in COMMANDS):
                 records = tuple(
                     Record(

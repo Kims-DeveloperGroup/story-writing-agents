@@ -18,6 +18,7 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from story_writing_agents import EXECUTION_SPECIALIST
 from story_writing_agents.backend import AgentBackend
 from story_writing_agents.cli_context import (
     load_cli_context,
@@ -35,6 +36,9 @@ from story_writing_agents.workspace import (
     FilesystemConversationCatalog,
     FilesystemConversationEventStore,
     Workspace,
+)
+from story_writing_agents.writing_artifacts.repository import (
+    WritingArtifactRepository,
 )
 
 
@@ -689,6 +693,30 @@ class InteractiveCliPtyTests(unittest.TestCase):
             selected.conversation_id,
         )
         return selected
+
+    def _seed_reference_artifacts(
+        self,
+        *,
+        session_id: str = "alpha",
+    ) -> tuple[str, ...]:
+        """Publish one provenance-backed canonical catalog for shell discovery."""
+
+        repository = WritingArtifactRepository(self.workspace.root)
+        repository.commit_consensus(
+            output_path="part-01/chapter-01.md",
+            candidate="chapter one\nchapter two\n",
+            core_updates={
+                "character_sheets.md": "characters\ncontinuity\n",
+                "global_outline.md": "outline\nturning point\n",
+                "narrative_rules.md": "rules\nvoice\n",
+                "part_outlines.md": "parts\npart one\n",
+            },
+            session_id=session_id,
+            debate_id="artifact_picker_probe",
+            revision_id="r0",
+            candidate_author_agent_id=EXECUTION_SPECIALIST,
+        )
+        return repository.list_paths()
 
     def _spawn_cli(
         self,
@@ -1984,6 +2012,255 @@ print(
             process.original_terminal_attributes,
         )
 
+    def test_public_cli_artifact_completion_filters_and_inserts_without_submit(
+        self,
+    ) -> None:
+        """Drive provenance-backed `$` discovery through the installed shell."""
+
+        self._seed_default_session()
+        paths = self._seed_reference_artifacts()
+        character = "core_documents/character_sheets.md"
+        token = f"${{{character}}}"
+        self.assertIn(character, paths)
+        process = self._spawn_cli(
+            ("chat", "alpha", "--workspace", str(self.workspace.root)),
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=120,
+        )
+        prompt = "story[alpha:lead]> "
+        process.wait_for_text(prompt)
+
+        discovery_mark = process.output_mark()
+        process.send_text("$")
+        discovery = process.wait_for_text(
+            "[controls] Up/Down selects; Enter/Tab inserts a whole-file reference.",
+            after=discovery_mark,
+        )
+        for path in paths:
+            discovery = process.wait_for_text(
+                f"${{{path}}}",
+                after=discovery_mark,
+            )
+        self.assertIn("Writing artifact selection [open]", discovery)
+        self.assertNotIn("Suggestions [open]", discovery)
+
+        process.send_text("core_documents/characte")
+        process.wait_for_text(
+            f"{prompt}$core_documents/characte",
+            after=discovery_mark,
+        )
+        filter_mark = process.output_mark()
+        process.send_text("r")
+        filtered = process.wait_for_text(token, after=filter_mark)
+        self.assertIn("Writing artifact selection [open]", filtered)
+        for path in paths:
+            if path != character:
+                self.assertNotIn(f"${{{path}}}", filtered)
+
+        completion_mark = process.output_mark()
+        process.send_text("\t")
+        completed = process.wait_for_text(
+            f"{prompt}{token} ",
+            after=completion_mark,
+        )
+        self.assertNotIn(f"$${{{character}}}", completed)
+        self.assertNotIn(f"{token}#L", completed)
+        self.assertFalse(self.provider_log.exists())
+
+        process.send_interrupt()
+        process.wait_for_text(
+            "[cancelled] No action was taken.",
+            after=completion_mark,
+        )
+        history_mark = process.output_mark()
+        process.send_text("\x1b[AX")
+        recalled = process.wait_for_text(f"{prompt}X", after=history_mark)
+        self.assertNotIn(token, recalled)
+        process.send_interrupt()
+        process.wait_for_text(
+            "[cancelled] No action was taken.",
+            after=history_mark,
+        )
+        process.send_text("/quit\n\n")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertFalse(self.provider_log.exists())
+        self.assertFalse(
+            self.workspace.path(
+                f"{_SESSION_DIRECTORY}/alpha.access.json"
+            ).exists()
+        )
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
+    def test_public_cli_empty_artifact_catalog_is_visible_and_deferred(self) -> None:
+        """Preview empty `$`, then preserve its fixed activation failure contract."""
+
+        self._seed_default_session()
+        prompt = "story[alpha:lead]> "
+        for activation_key in ("\t", "\n"):
+            with self.subTest(activation_key=repr(activation_key)):
+                process = self._spawn_cli(
+                    ("chat", "alpha", "--workspace", str(self.workspace.root)),
+                    environment_overrides={"TERM": "xterm-256color"},
+                    terminal_columns=120,
+                )
+                process.wait_for_text(prompt)
+                preview_mark = process.output_mark()
+                process.send_text("$")
+                preview = process.wait_for_text(
+                    "[empty] No current writing artifacts. Complete a consensus "
+                    "run to create one.",
+                    after=preview_mark,
+                )
+                self.assertIn("Writing artifact selection [open]", preview)
+                self.assertIn(
+                    "[controls] Up/Down selects; Enter/Tab inserts a whole-file "
+                    "reference.",
+                    preview,
+                )
+                self.assertIn(f"{prompt}$", preview)
+
+                activation_mark = process.output_mark()
+                process.send_text(activation_key)
+                failure = process.wait_for_text(
+                    "[error command_invalid] No current writing artifacts are "
+                    "available.",
+                    after=activation_mark,
+                )
+                failure = process.wait_for_text(
+                    "[hint] Complete a consensus run that creates canonical "
+                    "writing artifacts.",
+                    after=activation_mark,
+                )
+                restored = process.wait_for_text(
+                    f"{prompt}$",
+                    after=activation_mark,
+                )
+                self.assertIn(
+                    "[error command_invalid] No current writing artifacts are "
+                    "available.",
+                    failure,
+                )
+                self.assertIn(f"{prompt}$", restored)
+                self.assertFalse(self.provider_log.exists())
+
+                process.send_interrupt()
+                process.wait_for_text(
+                    "[cancelled] No action was taken.",
+                    after=activation_mark,
+                )
+                history_mark = process.output_mark()
+                process.send_text("\x1b[AX")
+                recalled = process.wait_for_text(f"{prompt}X", after=history_mark)
+                self.assertNotIn(f"{prompt}$X", recalled)
+                process.send_interrupt()
+                process.wait_for_text(
+                    "[cancelled] No action was taken.",
+                    after=history_mark,
+                )
+                process.send_text("/quit\n\n")
+                self.assertEqual(
+                    process.wait_for_exit(),
+                    0,
+                    process.normalized_text,
+                )
+                self.assertFalse(self.provider_log.exists())
+                self.assertEqual(
+                    process.final_terminal_attributes,
+                    process.original_terminal_attributes,
+                )
+
+    def test_public_cli_reference_guidance_and_inert_states_are_visible(
+        self,
+    ) -> None:
+        """Explain `$`/`$$` while lobby and attached no-focus input stay inert."""
+
+        guidance = (
+            "Artifact references require an attached session and focused "
+            "conversation. In provider-bound prompts, $ chooses a whole-file "
+            "reference; $$ then Enter/Tab opens ranged selection."
+        )
+        lobby = self._spawn_cli(
+            (),
+            cwd=self.workspace.root,
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=120,
+        )
+        lobby.wait_for_text("story[lobby]> ")
+        self.assertIn(
+            "".join(guidance.split()),
+            "".join(lobby.normalized_text.split()),
+        )
+        inert_mark = lobby.output_mark()
+        lobby.send_text("$")
+        inert = lobby.wait_for_text("story[lobby]> $", after=inert_mark)
+        self.assertNotIn("Writing artifact selection [open]", inert)
+        lobby.send_interrupt()
+        lobby.wait_for_text("[cancelled] No action was taken.", after=inert_mark)
+        help_mark = lobby.output_mark()
+        lobby.send_text("/help\n\n")
+        lobby.wait_for_text(
+            "Writing artifact references [completed]",
+            after=help_mark,
+        )
+        help_output = lobby.wait_for_text("story[lobby]> ", after=help_mark)
+        self.assertIn("Writing artifact references [completed]", help_output)
+        self.assertIn(
+            "".join(guidance.split()),
+            "".join(help_output.split()),
+        )
+        lobby.send_text("/quit\n\n")
+        self.assertEqual(lobby.wait_for_exit(), 0, lobby.normalized_text)
+        self.assertEqual(
+            lobby.final_terminal_attributes,
+            lobby.original_terminal_attributes,
+        )
+
+        backend = AgentBackend(
+            self.workspace,
+            executable=str(self.fake_executable),
+        )
+        try:
+            backend.create_session_with_access("alpha")
+        finally:
+            backend.close()
+        save_default_session(self.workspace, "alpha")
+        attached = self._spawn_cli(
+            ("chat", "alpha", "--workspace", str(self.workspace.root)),
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=120,
+        )
+        attached.wait_for_text("story[alpha:lead]> ")
+        self.assertIn(
+            "".join(guidance.split()),
+            "".join(attached.normalized_text.split()),
+        )
+        no_focus_mark = attached.output_mark()
+        attached.send_text("$")
+        no_focus = attached.wait_for_text(
+            "story[alpha:lead]> $",
+            after=no_focus_mark,
+        )
+        self.assertNotIn("Writing artifact selection [open]", no_focus)
+        attached.send_interrupt()
+        attached.wait_for_text(
+            "[cancelled] No action was taken.",
+            after=no_focus_mark,
+        )
+        attached.send_text("/quit\n\n")
+        self.assertEqual(
+            attached.wait_for_exit(),
+            0,
+            attached.normalized_text,
+        )
+        self.assertFalse(self.provider_log.exists())
+        self.assertEqual(
+            attached.final_terminal_attributes,
+            attached.original_terminal_attributes,
+        )
+
     def test_reference_fragment_completion_is_capable_and_provider_free(self) -> None:
         """Complete typed $c, require explicit submission, and restore the PTY."""
 
@@ -2018,7 +2295,11 @@ print("RESULT=" + json.dumps({
         cursor_mark = process.output_mark()
         process.send_text("\x1b[D" * len(" suffix"))
         preview = process.wait_for_text(token, after=cursor_mark)
-        self.assertIn("Suggestions [open]", preview)
+        self.assertIn("Writing artifact selection [open]", preview)
+        self.assertIn(
+            "[controls] Up/Down selects; Enter/Tab inserts a whole-file reference.",
+            preview,
+        )
         self.assertIn("[highlighted]", preview)
         process.send_text("\t")
         first_expected = f"typed {token} suffix"

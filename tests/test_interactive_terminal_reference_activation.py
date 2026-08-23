@@ -13,6 +13,7 @@ from story_writing_agents.interactive_terminal import (
     _reference_activation as activation,
 )
 from story_writing_agents.interactive_terminal._model import (
+    CommandCompletionProjection,
     LineInputState,
     MainCommandControlState,
     MainInputControlState,
@@ -88,6 +89,13 @@ class ReferenceActivationContractTests(unittest.TestCase):
         self.assertFalse(hasattr(terminal_facade, "ReferenceActivationRequest"))
 
     def test_invalid_relations_fail_before_any_projection(self) -> None:
+        empty_position = "artifact-reference:empty:0"
+        empty_completion = CommandCompletionProjection(
+            empty_position,
+            0,
+            1,
+            (),
+        )
         invalid = (
             (lambda: activation.ReferenceInputScope(True, 1), TypeError),
             (lambda: activation.ReferenceInputScope(2, 1), ValueError),
@@ -131,10 +139,37 @@ class ReferenceActivationContractTests(unittest.TestCase):
                 ),
                 ValueError,
             ),
+            (
+                lambda: activation.ReferenceInputProjection(
+                    completion=empty_completion,
+                    failure=activation.ReferenceInputFailureKind.STALE,
+                ),
+                ValueError,
+            ),
+            (
+                lambda: activation.ReferenceInputProjection(
+                    completion=CommandCompletionProjection(
+                        "artifact-reference:0",
+                        0,
+                        1,
+                        (),
+                    ),
+                    failure=activation.ReferenceInputFailureKind.EMPTY_CATALOG,
+                ),
+                ValueError,
+            ),
         )
         for call, expected in invalid:
             with self.subTest(call=call), self.assertRaises(expected):
                 call()
+
+        self.assertEqual(
+            activation.ReferenceInputProjection(
+                completion=empty_completion,
+                failure=activation.ReferenceInputFailureKind.EMPTY_CATALOG,
+            ).completion,
+            empty_completion,
+        )
 
 
 class ReferenceProjectionTests(unittest.TestCase):
@@ -304,8 +339,22 @@ class ReferenceProjectionTests(unittest.TestCase):
 
     def test_empty_stale_invalid_and_repository_failures_are_content_free(self) -> None:
         direct = f"$${{{_PATHS[0]}}}"
+        empty_position = "artifact-reference:empty:0"
         cases = (
-            ("$", (), None, activation.ReferenceInputFailureKind.EMPTY_CATALOG),
+            (
+                "$",
+                (),
+                None,
+                activation.ReferenceInputProjection(
+                    completion=CommandCompletionProjection(
+                        empty_position,
+                        0,
+                        1,
+                        (),
+                    ),
+                    failure=activation.ReferenceInputFailureKind.EMPTY_CATALOG,
+                ),
+            ),
             ("$$", (), None, activation.ReferenceInputFailureKind.EMPTY_CATALOG),
             (
                 direct,
@@ -361,7 +410,9 @@ class ReferenceProjectionTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     result,
-                    activation.ReferenceInputProjection(failure=expected),
+                    expected
+                    if isinstance(expected, activation.ReferenceInputProjection)
+                    else activation.ReferenceInputProjection(failure=expected),
                 )
 
 

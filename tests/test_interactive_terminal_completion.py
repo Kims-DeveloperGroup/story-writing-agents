@@ -408,6 +408,7 @@ class CompletionControlTests(unittest.TestCase):
             tuple(item.replacement for item in state.palette.projection.candidates),
             ("/say", "/settings", "/session", "/search", "/status"),
         )
+
         self.assertEqual(
             state.palette.highlighted.replacement,  # type: ignore[union-attr]
             "/say",
@@ -449,6 +450,61 @@ class CompletionControlTests(unittest.TestCase):
                 ),
                 highlighted_id="root.command:/say",
                 state=ViewState.OPEN,
+            ),
+        )
+
+    def test_artifact_reference_palette_semantics_are_exact_and_scoped(self) -> None:
+        """Specialize artifact discovery without changing generic suggestions."""
+
+        path = "core_documents/character_sheets.md"
+        token = f"${{{path}}}"
+        position = "artifact-reference:0"
+        candidate = CommandCompletionCandidate(position, token)
+        state = MainCommandControlState(
+            MainInputControlState(LineInputState("$", 1), overlay_open=True),
+            MainCommandPaletteState(
+                CommandCompletionProjection(position, 0, 1, (candidate,)),
+                candidate,
+            ),
+        )
+
+        self.assertEqual(
+            project_main_suggestion_palette(state),
+            SuggestionPalette(
+                "$",
+                (Choice(f"{position}:{token}", token),),
+                highlighted_id=f"{position}:{token}",
+                title="Writing artifact selection",
+                instruction=(
+                    "Up/Down selects; Enter/Tab inserts a whole-file reference."
+                ),
+                empty_text=(
+                    "No matching writing artifacts. Change the path fragment."
+                ),
+            ),
+        )
+
+        empty_position = "artifact-reference:empty:0"
+        empty_state = MainCommandControlState(
+            MainInputControlState(LineInputState("$", 1), overlay_open=True),
+            MainCommandPaletteState(
+                CommandCompletionProjection(empty_position, 0, 1, ()),
+                None,
+            ),
+        )
+        self.assertEqual(
+            project_main_suggestion_palette(empty_state),
+            SuggestionPalette(
+                "$",
+                (),
+                title="Writing artifact selection",
+                instruction=(
+                    "Up/Down selects; Enter/Tab inserts a whole-file reference."
+                ),
+                empty_text=(
+                    "No current writing artifacts. Complete a consensus run "
+                    "to create one."
+                ),
             ),
         )
 
@@ -878,6 +934,53 @@ class CompletionRenderingTests(unittest.TestCase):
             "                ta\n                tu\n                s",
         )
 
+    def test_artifact_specific_plain_frames_are_exact(self) -> None:
+        """Render discovery guidance while generic frames remain byte-exact above."""
+
+        position = "artifact-reference:0"
+        token = "${core_documents/character_sheets.md}"
+        palette = SuggestionPalette(
+            "$c",
+            (Choice(position, token),),
+            highlighted_id=position,
+            title="Writing artifact selection",
+            instruction="Up/Down selects; Enter/Tab inserts a whole-file reference.",
+            empty_text="No matching writing artifacts. Change the path fragment.",
+        )
+        self.assertEqual(
+            render_component(palette, capabilities(CapabilityProfile.PLAIN)),
+            RenderedFrame(
+                "Writing artifact selection [open]\n"
+                "  [controls] Up/Down selects; Enter/Tab inserts a whole-file "
+                "reference.\n"
+                f"  > [highlighted] {token}",
+                80,
+                3,
+            ),
+        )
+
+        empty = replace(
+            palette,
+            candidates=(),
+            highlighted_id=None,
+            empty_text=(
+                "No current writing artifacts. Complete a consensus run to "
+                "create one."
+            ),
+        )
+        self.assertEqual(
+            render_component(empty, capabilities(CapabilityProfile.PLAIN)),
+            RenderedFrame(
+                "Writing artifact selection [open]\n"
+                "  [controls] Up/Down selects; Enter/Tab inserts a whole-file "
+                "reference.\n"
+                "  [empty] No current writing artifacts. Complete a consensus "
+                "run to create one.",
+                80,
+                3,
+            ),
+        )
+
     def test_untrusted_labels_are_sanitized_before_style_and_width(self) -> None:
         hostile = SuggestionPalette(
             "buffer\x1b]0;title\x07",
@@ -1026,7 +1129,13 @@ class CompletionDriverTests(unittest.TestCase):
                 (),
                 None,
                 ReferenceInputProjection(
-                    failure=ReferenceInputFailureKind.EMPTY_CATALOG
+                    completion=CommandCompletionProjection(
+                        "artifact-reference:empty:0",
+                        0,
+                        1,
+                        (),
+                    ),
+                    failure=ReferenceInputFailureKind.EMPTY_CATALOG,
                 ),
             ),
             (
@@ -1236,11 +1345,20 @@ class CompletionDriverTests(unittest.TestCase):
                     strip_decorative_sgr(record)
                     for record in output.records
                     if f"main> {original}" in strip_decorative_sgr(record)
-                    and "Suggestions [open]" in strip_decorative_sgr(record)
+                    and "Writing artifact selection [open]"
+                    in strip_decorative_sgr(record)
                 )
                 self.assertTrue(active_frames)
                 active = active_frames[-1]
-                suggestions = active.split("Suggestions [open]", 1)[1]
+                suggestions = active.split(
+                    "Writing artifact selection [open]",
+                    1,
+                )[1]
+                self.assertIn(
+                    "[controls] Up/Down selects; Enter/Tab inserts a whole-file "
+                    "reference.",
+                    suggestions,
+                )
                 for token in tokens:
                     if token in visible:
                         self.assertIn(token, suggestions)
@@ -1295,9 +1413,13 @@ class CompletionDriverTests(unittest.TestCase):
             strip_decorative_sgr(record)
             for record in output.records
             if "main> $C" in strip_decorative_sgr(record)
-            and "Suggestions [open]" in strip_decorative_sgr(record)
+            and "Writing artifact selection [open]"
+            in strip_decorative_sgr(record)
         )
-        self.assertIn("[empty] No suggestions.", unmatched)
+        self.assertIn(
+            "[empty] No matching writing artifacts. Change the path fragment.",
+            unmatched,
+        )
         self.assertNotIn("[highlighted]", unmatched)
         history_append.assert_not_called()
         self.assertEqual(driver._history_state, MainInputHistoryState())

@@ -273,6 +273,12 @@ class MainInputControlState:
             raise TypeError("overlay_open must be a bool")
 
 
+ARTIFACT_REFERENCE_POSITION_PREFIX = "artifact-reference:"
+EMPTY_ARTIFACT_REFERENCE_POSITION_PREFIX = (
+    f"{ARTIFACT_REFERENCE_POSITION_PREFIX}empty:"
+)
+
+
 @dataclass(frozen=True, slots=True)
 class CommandCompletionCandidate:
     """Identify one replacement within one stable grammar position."""
@@ -641,11 +647,17 @@ class SuggestionPalette:
     candidates: tuple[Choice, ...]
     _: KW_ONLY
     highlighted_id: str | None = None
+    title: str = "Suggestions"
+    instruction: str | None = None
+    empty_text: str = "No suggestions."
     state: ViewState = ViewState.OPEN
 
     def __post_init__(self) -> None:
         _require_text("buffer", self.buffer, allow_blank=True)
         _validate_choices(self.candidates, self.highlighted_id)
+        _require_text("title", self.title)
+        _require_optional_text("instruction", self.instruction)
+        _require_text("empty_text", self.empty_text)
         _require_state(self.state)
 
 

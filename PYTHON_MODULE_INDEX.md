@@ -1380,8 +1380,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   capabilities, line-input state, immutable `ComposerState`, bounded
   `MainInputHistoryState`, correlated `MainInputControlState`,
   `SlashCommandSuggestion`, internal `CommandCompletionCandidate`,
-  `CommandCompletionProjection`, `MainCommandPaletteState`, and correlated
-  `MainCommandControlState`, internal `PickerControlState` and bounded
+  `CommandCompletionProjection`, the package-internal
+  `ARTIFACT_REFERENCE_POSITION_PREFIX` and
+  `EMPTY_ARTIFACT_REFERENCE_POSITION_PREFIX` completion namespaces,
+  `MainCommandPaletteState`, and correlated `MainCommandControlState`, internal
+  `PickerControlState` and bounded
   `PickerViewport` transfer values, the internal rejected control outcome, the
   closed
   `Prompt`, `Panel`, `Section`, `Field`, `Notice`, `Message`, `Record`,

@@ -12,6 +12,8 @@ from ..writing_artifacts import (
     parse_artifact_references,
 )
 from ._model import (
+    ARTIFACT_REFERENCE_POSITION_PREFIX,
+    EMPTY_ARTIFACT_REFERENCE_POSITION_PREFIX,
     CommandCompletionCandidate,
     CommandCompletionProjection,
     LineInputState,
@@ -20,7 +22,6 @@ from ._model import (
 )
 
 
-_REFERENCE_POSITION_PREFIX = "artifact-reference:"
 _REFERENCE_FRAGMENT_CHARACTERS = frozenset(
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_./-{}"
 )
@@ -111,7 +112,7 @@ class ReferenceActivationRequest:
 
 @dataclass(frozen=True, slots=True)
 class ReferenceInputProjection:
-    """Correlate completion, nested activation, or deferred fixed failure."""
+    """Correlate completion, nested activation, and deferred fixed failures."""
 
     completion: CommandCompletionProjection | None = None
     request: ReferenceActivationRequest | None = None
@@ -133,10 +134,21 @@ class ReferenceInputProjection:
             ReferenceInputFailureKind,
         ):
             raise TypeError("failure must be a ReferenceInputFailureKind or None")
-        if sum(
+        outcome_count = sum(
             value is not None
             for value in (self.completion, self.request, self.failure)
-        ) != 1:
+        )
+        deferred_empty_preview = (
+            outcome_count == 2
+            and self.completion is not None
+            and self.request is None
+            and self.failure is ReferenceInputFailureKind.EMPTY_CATALOG
+            and self.completion.position.startswith(
+                EMPTY_ARTIFACT_REFERENCE_POSITION_PREFIX
+            )
+            and not self.completion.candidates
+        )
+        if outcome_count != 1 and not deferred_empty_preview:
             raise ValueError("a reference projection requires exactly one outcome")
 
 
@@ -226,11 +238,17 @@ def project_reference_input(
 
     if failure is not None:
         return ReferenceInputProjection(failure=failure)
+    position = f"{ARTIFACT_REFERENCE_POSITION_PREFIX}{start}"
     if not canonical_paths:
         return ReferenceInputProjection(
-            failure=ReferenceInputFailureKind.EMPTY_CATALOG
+            completion=CommandCompletionProjection(
+                f"{EMPTY_ARTIFACT_REFERENCE_POSITION_PREFIX}{start}",
+                start,
+                end,
+                (),
+            ),
+            failure=ReferenceInputFailureKind.EMPTY_CATALOG,
         )
-    position = f"{_REFERENCE_POSITION_PREFIX}{start}"
     candidates: list[CommandCompletionCandidate] = []
     for path in canonical_paths:
         token = ArtifactReference(path).token

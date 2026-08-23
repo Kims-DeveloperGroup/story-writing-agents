@@ -532,6 +532,30 @@ class SemanticModelFoundationTests(unittest.TestCase):
             ("line_state", "history_index", "saved_draft", "overlay_open"),
         )
         self.assertEqual(
+            tuple(field.name for field in fields(SuggestionPalette)),
+            (
+                "buffer",
+                "candidates",
+                "highlighted_id",
+                "title",
+                "instruction",
+                "empty_text",
+                "state",
+            ),
+        )
+        self.assertEqual(
+            tuple(inspect.signature(SuggestionPalette).parameters),
+            (
+                "buffer",
+                "candidates",
+                "highlighted_id",
+                "title",
+                "instruction",
+                "empty_text",
+                "state",
+            ),
+        )
+        self.assertEqual(
             tuple(_controls.__all__),
             (
                 "transition_line_input",
@@ -609,6 +633,9 @@ class SemanticModelFoundationTests(unittest.TestCase):
                 (Choice("off", "Off", enabled=False),),
                 highlighted_id="off",
             ),
+            lambda: SuggestionPalette("/", (), title=""),
+            lambda: SuggestionPalette("/", (), instruction=""),
+            lambda: SuggestionPalette("/", (), empty_text=""),
             lambda: Picker(
                 Prompt("Choose"),
                 (Choice("off", "Off", enabled=False),),
