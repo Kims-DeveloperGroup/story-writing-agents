@@ -29,6 +29,10 @@ from story_writing_agents.interactive_terminal._controls import (
 )
 from story_writing_agents.interactive_terminal._driver import RawTerminalDriver
 from story_writing_agents.interactive_terminal._reference_activation import (
+    ReferenceActivationKind,
+    ReferenceActivationRequest,
+    ReferenceInputFailure,
+    ReferenceInputFailureKind,
     ReferenceInputProjection,
     ReferenceInputScope,
 )
@@ -878,6 +882,114 @@ class CompletionDriverTests(unittest.TestCase):
             project_main_suggestion_palette,
             render_component,
         )
+
+    def test_reference_projection_invalid_probe_skips_catalog_io(self) -> None:
+        invalid = ReferenceInputProjection(failure=ReferenceInputFailureKind.INVALID)
+        for buffer in (
+            "$${core_documents/global_outline.md",
+            "$${../escape.md}",
+        ):
+            with self.subTest(buffer=buffer):
+                scope_provider = mock.Mock(
+                    return_value=ReferenceInputScope(0, len(buffer))
+                )
+                paths_provider = mock.Mock(
+                    side_effect=AssertionError("catalog must not be read")
+                )
+                provider = _core._reference_projection_provider(
+                    scope_provider,
+                    paths_provider,
+                )
+
+                self.assertEqual(provider(buffer, len(buffer)), invalid)
+                scope_provider.assert_called_once_with(buffer, len(buffer))
+                paths_provider.assert_not_called()
+
+    def test_reference_projection_catalog_outcomes_have_one_exact_read(self) -> None:
+        path = "core_documents/global_outline.md"
+        other_path = "core_documents/character_sheets.md"
+        token = f"${{{path}}}"
+        position = "artifact-reference:0"
+        cases = (
+            (
+                "$",
+                (path,),
+                None,
+                ReferenceInputProjection(
+                    completion=CommandCompletionProjection(
+                        position,
+                        0,
+                        1,
+                        (CommandCompletionCandidate(position, token),),
+                    )
+                ),
+            ),
+            (
+                "$$",
+                (path,),
+                None,
+                ReferenceInputProjection(
+                    request=ReferenceActivationRequest(
+                        ReferenceActivationKind.PICK,
+                        0,
+                        2,
+                        (path,),
+                    )
+                ),
+            ),
+            (
+                f"$${{{path}}}",
+                (path,),
+                None,
+                ReferenceInputProjection(
+                    request=ReferenceActivationRequest(
+                        ReferenceActivationKind.VIEW,
+                        0,
+                        len(f"$${{{path}}}"),
+                        path=path,
+                    )
+                ),
+            ),
+            (
+                "$",
+                (),
+                None,
+                ReferenceInputProjection(
+                    failure=ReferenceInputFailureKind.EMPTY_CATALOG
+                ),
+            ),
+            (
+                "$",
+                (),
+                ReferenceInputFailure(ReferenceInputFailureKind.UNAVAILABLE),
+                ReferenceInputProjection(
+                    failure=ReferenceInputFailureKind.UNAVAILABLE
+                ),
+            ),
+            (
+                f"$${{{path}}}",
+                (other_path,),
+                None,
+                ReferenceInputProjection(failure=ReferenceInputFailureKind.STALE),
+            ),
+        )
+        for buffer, paths, failure, expected in cases:
+            with self.subTest(buffer=buffer, expected=expected):
+                scope_provider = mock.Mock(
+                    return_value=ReferenceInputScope(0, len(buffer))
+                )
+                paths_provider = mock.Mock(
+                    return_value=paths,
+                    side_effect=failure,
+                )
+                provider = _core._reference_projection_provider(
+                    scope_provider,
+                    paths_provider,
+                )
+
+                self.assertEqual(provider(buffer, len(buffer)), expected)
+                scope_provider.assert_called_once_with(buffer, len(buffer))
+                paths_provider.assert_called_once_with()
 
     def test_supported_live_read_selects_commits_appends_and_restores_once(
         self,
