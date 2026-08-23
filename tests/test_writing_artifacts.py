@@ -397,10 +397,35 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
         target.write_text("é", encoding="utf-8")
         with self.assertRaisesRegex(WorkspaceFormatError, "permitted size"):
             self.repository.read_text(manuscript_path, max_bytes=1)
+        with mock.patch.object(
+            self.repository._storage,
+            "read_snapshot",
+            side_effect=AssertionError("invalid limit reached storage"),
+        ) as read_snapshot:
+            for invalid_limit in (0, -1, True, "8"):
+                with self.subTest(max_bytes=invalid_limit):
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        "positive integer",
+                    ):
+                        self.repository.read_text(
+                            manuscript_path,
+                            max_bytes=invalid_limit,
+                        )
+        read_snapshot.assert_not_called()
 
         target.write_bytes(b"x" * MAX_VIEWER_UTF8_BYTES)
         self.assertEqual(
             len(self.repository.read_text(manuscript_path)),
+            MAX_VIEWER_UTF8_BYTES,
+        )
+        self.assertEqual(
+            len(
+                self.repository.read_text(
+                    manuscript_path,
+                    max_bytes=MAX_VIEWER_UTF8_BYTES * 2,
+                )
+            ),
             MAX_VIEWER_UTF8_BYTES,
         )
         current = self.repository.read_current((manuscript_path,))
@@ -411,6 +436,11 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
             stream.write(b"x")
         with self.assertRaisesRegex(WorkspaceFormatError, "permitted size"):
             self.repository.read_text(manuscript_path)
+        with self.assertRaisesRegex(WorkspaceFormatError, "permitted size"):
+            self.repository.read_text(
+                manuscript_path,
+                max_bytes=MAX_VIEWER_UTF8_BYTES * 2,
+            )
         with self.assertRaisesRegex(WorkspaceFormatError, "permitted size"):
             self.repository.read_current((manuscript_path,))
 

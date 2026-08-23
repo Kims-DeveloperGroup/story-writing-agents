@@ -73,8 +73,14 @@ class CanonicalArtifactFilesystem:
             raise WorkspaceSecurityError(
                 "path is not a canonical writing artifact"
             )
+        if max_bytes is not None and (
+            type(max_bytes) is not int or max_bytes <= 0
+        ):
+            raise ValueError("max_bytes must be None or a positive integer")
         effective_max_bytes = (
-            MAX_VIEWER_UTF8_BYTES if max_bytes is None else max_bytes
+            MAX_VIEWER_UTF8_BYTES
+            if max_bytes is None
+            else min(max_bytes, MAX_VIEWER_UTF8_BYTES)
         )
         captured = self._storage.read_snapshot(
             path,
