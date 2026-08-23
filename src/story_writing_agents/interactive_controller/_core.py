@@ -59,6 +59,7 @@ from ..interactive_commands import (
     ActionKind,
     InteractiveAction,
     parse_interactive_line,
+    project_provider_text_span,
 )
 from ..interactive_settings import (
     SETTINGS_LANGUAGES,
@@ -79,6 +80,7 @@ from ..interactive_terminal import (
     AdvisoryProgressError,
     InteractiveAdvisoryProgress,
     InteractiveDebateProgress,
+    InteractiveCompositionInput,
     InteractiveMainInput,
     format_agent_reply_content,
     AttachmentKind,
@@ -92,6 +94,9 @@ from ..interactive_terminal import (
     InteractiveErrorCode,
     InteractivePickerInput,
     InteractivePromptInput,
+    ReferenceInputFailure,
+    ReferenceInputFailureKind,
+    ReferenceInputScope,
     InteractiveSemanticOutput,
     InteractiveTerminal,
     ListView,
@@ -130,6 +135,7 @@ from ..workspace import (
 )
 from ..writing_artifacts import (
     ArtifactReferenceDirectiveError,
+    MAX_VIEWER_UTF8_BYTES,
     ReferenceAuthorizationErrorCode,
     ReferenceOperationFailure,
     manuscript_artifact_path,
@@ -226,6 +232,7 @@ class InteractiveController:
         "_conversation_catalog",
         "_conversation_event_store",
         "_conversation_memory_service",
+        "_composition_input",
         "_context",
         "_last_started_debate_by_session",
         "_main_input",
@@ -281,6 +288,7 @@ class InteractiveController:
         self._prompt_input = InteractivePromptInput(terminal)
         self._advisory_progress = InteractiveAdvisoryProgress(terminal)
         self._debate_progress = InteractiveDebateProgress(terminal)
+        self._composition_input = InteractiveCompositionInput(terminal)
         self._main_input = InteractiveMainInput(terminal)
         resolved_catalog = (
             FilesystemConversationCatalog(workspace)
@@ -1207,8 +1215,11 @@ class InteractiveController:
         while True:
             if self._attached_session_id is not None:
                 self._write_attached_conversation_scope()
-            terminal_action = self._main_input.read_main(
+            terminal_action = self._main_input.read_main_with_references(
                 self._main_resume_choices,
+                self._main_reference_scope,
+                self._reference_paths,
+                self._reference_text,
                 session_id=self._attached_session_id,
                 agent_id=(
                     self._target_agent_id
@@ -1333,6 +1344,69 @@ class InteractiveController:
             )
         except Exception:
             return None
+
+    def _main_reference_scope(
+        self,
+        buffer: str,
+        cursor: int,
+    ) -> ReferenceInputScope | None:
+        """Project only attached, focused provider text into terminal input."""
+
+        if (
+            self._attached_session_id is None
+            or self._focused_conversation is None
+        ):
+            return None
+        span = project_provider_text_span(buffer, cursor)
+        if span is None:
+            return None
+        return ReferenceInputScope(span.start, span.end)
+
+    @staticmethod
+    def _composition_reference_scope(
+        buffer: str,
+        cursor: int,
+    ) -> ReferenceInputScope:
+        """Expose exactly one RUN/CHAT composition buffer as provider text."""
+
+        if type(buffer) is not str:
+            raise TypeError("buffer must be a string")
+        if type(cursor) is not int:
+            raise TypeError("cursor must be an integer")
+        if cursor < 0 or cursor > len(buffer):
+            raise ValueError("cursor must identify a buffer boundary")
+        return ReferenceInputScope(0, len(buffer))
+
+    def _reference_paths(self) -> tuple[str, ...]:
+        """Borrow one current canonical path snapshot from the repository."""
+
+        try:
+            return self._runtime.artifacts.list_paths()
+        except (OSError, WorkspaceFormatError, WorkspaceSecurityError):
+            raise ReferenceInputFailure(
+                ReferenceInputFailureKind.UNAVAILABLE
+            ) from None
+
+    def _reference_text(self, path: str) -> str:
+        """Borrow one revalidated bounded artifact body for the viewer."""
+
+        try:
+            return self._runtime.artifacts.read_text(
+                path,
+                max_bytes=MAX_VIEWER_UTF8_BYTES,
+            )
+        except WorkspaceSecurityError:
+            raise ReferenceInputFailure(
+                ReferenceInputFailureKind.STALE
+            ) from None
+        except WorkspaceFormatError:
+            raise ReferenceInputFailure(
+                ReferenceInputFailureKind.UNREADABLE
+            ) from None
+        except OSError:
+            raise ReferenceInputFailure(
+                ReferenceInputFailureKind.UNAVAILABLE
+            ) from None
 
     def _dispatch_session_lobby_action(
         self,
@@ -3041,7 +3115,12 @@ class InteractiveController:
         if action.kind is ActionKind.RUN:
             prompt = action.text
             if prompt is None:
-                composed = self._terminal.compose(ComposeMode.RUN)
+                composed = self._composition_input.compose(
+                    ComposeMode.RUN,
+                    reference_scope_provider=self._composition_reference_scope,
+                    reference_paths_provider=self._reference_paths,
+                    reference_text_reader=self._reference_text,
+                )
                 if composed.kind is TerminalActionKind.EOF:
                     return True
                 if composed.kind in {

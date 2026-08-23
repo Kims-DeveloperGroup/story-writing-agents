@@ -38,7 +38,11 @@ from ._controls import (
     transition_line_input,
     transition_prompt_input,
 )
-from ._driver import AdvisoryProgressError, RawTerminalDriver
+from ._driver import (
+    AdvisoryProgressError,
+    RawTerminalDriver,
+    ReferenceInputBindings,
+)
 from ._model import (
     CapabilityProfile,
     Choice,
@@ -76,6 +80,13 @@ from ._render import (
     render_input_prompt,
     render_picker_fallback,
     render_picker_viewport,
+)
+from ._reference_activation import (
+    ReferenceInputFailure,
+    ReferenceInputFailureKind,
+    ReferenceInputProjection,
+    ReferenceInputScope,
+    project_reference_input,
 )
 from ._viewer_controls import (
     initialize_text_viewer,
@@ -463,8 +474,10 @@ class InteractiveTerminal:
     __slots__ = (
         "_capability_provider",
         "_composition_read_line",
+        "_composition_reference_read_line",
         "_confirmation_read_line",
         "_main_choice_read_line",
+        "_main_reference_read_line",
         "_main_read_line",
         "_picker_read",
         "_prompt_read",
@@ -510,7 +523,15 @@ class InteractiveTerminal:
         self._main_choice_read_line = (
             lambda prompt, _choice_provider: self._main_read_line(prompt)
         )
+        self._main_reference_read_line = (
+            lambda prompt, choice_provider, _scope, _paths, _text: (
+                self._main_choice_read_line(prompt, choice_provider)
+            )
+        )
         self._composition_read_line = _plain_input_reader(read_line, width)
+        self._composition_reference_read_line = (
+            lambda view, _scope, _paths, _text: self._composition_read_line(view)
+        )
         self._confirmation_read_line = _plain_input_reader(read_line, width)
         self._picker_read = _plain_picker_reader(read_line, write_text, width)
         self._prompt_read = _plain_prompt_reader(read_line, width)
@@ -619,6 +640,24 @@ class InteractiveTerminal:
     ) -> TerminalAction:
         """Collect one exact chat or consensus composition synchronously."""
 
+        return self._compose(
+            mode,
+            agent_id=agent_id,
+            read_input=self._composition_read_line,
+        )
+
+    def _compose(
+        self,
+        mode: ComposeMode,
+        *,
+        agent_id: str | None,
+        read_input: Callable[[InputPromptView], str],
+    ) -> TerminalAction:
+        """Collect composition through one selected package-internal reader."""
+
+        if not callable(read_input):
+            raise TypeError("read_input must be callable")
+
         alias = _compose_alias(mode, agent_id)
         if mode is ComposeMode.CHAT:
             assert alias is not None
@@ -642,7 +681,7 @@ class InteractiveTerminal:
         while True:
             try:
                 line = _validated_input_line(
-                    self._composition_read_line(
+                    read_input(
                         _composer_input_view(mode, alias, state)
                     )
                 )
@@ -1285,7 +1324,12 @@ class InteractiveSemanticOutput:
 class InteractiveMainInput:
     """Bind call-local main choices without expanding the public terminal."""
 
-    __slots__ = ("_read",)
+    __slots__ = (
+        "_read",
+        "_reference_paths_provider",
+        "_reference_scope_provider",
+        "_reference_text_reader",
+    )
 
     def __init__(self, terminal: InteractiveTerminal) -> None:
         """Retain only one terminal's package-internal main-input capability."""
@@ -1293,8 +1337,22 @@ class InteractiveMainInput:
         if not isinstance(terminal, InteractiveTerminal):
             raise TypeError("terminal must be an InteractiveTerminal")
         self._read: Callable[
-            [str, Callable[[str, int], Picker | None]], str
-        ] = terminal._main_choice_read_line
+            [
+                str,
+                Callable[[str, int], Picker | None],
+                Callable[[str, int], ReferenceInputScope | None] | None,
+                Callable[[], tuple[str, ...]] | None,
+                Callable[[str], str] | None,
+            ],
+            str,
+        ] = terminal._main_reference_read_line
+        self._reference_scope_provider: (
+            Callable[[str, int], ReferenceInputScope | None] | None
+        ) = None
+        self._reference_paths_provider: (
+            Callable[[], tuple[str, ...]] | None
+        ) = None
+        self._reference_text_reader: Callable[[str], str] | None = None
 
     def read_main(
         self,
@@ -1305,11 +1363,95 @@ class InteractiveMainInput:
     ) -> TerminalAction:
         """Return one completed main line using call-local semantic choices."""
 
+        return self._read_main(
+            choice_provider,
+            session_id=session_id,
+            agent_id=agent_id,
+            reference_scope_provider=self._reference_scope_provider,
+            reference_paths_provider=self._reference_paths_provider,
+            reference_text_reader=self._reference_text_reader,
+        )
+
+    def read_main_with_references(
+        self,
+        choice_provider: Callable[[str, int], Picker | None],
+        reference_scope_provider: Callable[
+            [str, int], ReferenceInputScope | None
+        ],
+        reference_paths_provider: Callable[[], tuple[str, ...]],
+        reference_text_reader: Callable[[str], str],
+        *,
+        session_id: str | None = None,
+        agent_id: str | None = None,
+    ) -> TerminalAction:
+        """Return one main line with private call-local reference activation."""
+
+        collaborators = (
+            reference_scope_provider,
+            reference_paths_provider,
+            reference_text_reader,
+        )
+        if not all(callable(value) for value in collaborators):
+            raise TypeError("reference collaborators must be callable")
+        if any(
+            value is not None
+            for value in (
+                self._reference_scope_provider,
+                self._reference_paths_provider,
+                self._reference_text_reader,
+            )
+        ):
+            raise RuntimeError("reference main input is already active")
+        self._reference_scope_provider = reference_scope_provider
+        self._reference_paths_provider = reference_paths_provider
+        self._reference_text_reader = reference_text_reader
+        try:
+            return self.read_main(
+                choice_provider,
+                session_id=session_id,
+                agent_id=agent_id,
+            )
+        finally:
+            self._reference_scope_provider = None
+            self._reference_paths_provider = None
+            self._reference_text_reader = None
+
+    def _read_main(
+        self,
+        choice_provider: Callable[[str, int], Picker | None],
+        *,
+        session_id: str | None,
+        agent_id: str | None,
+        reference_scope_provider: (
+            Callable[[str, int], ReferenceInputScope | None] | None
+        ),
+        reference_paths_provider: Callable[[], tuple[str, ...]] | None,
+        reference_text_reader: Callable[[str], str] | None,
+    ) -> TerminalAction:
+        """Implement main input through one selected package-internal route."""
+
         if not callable(choice_provider):
             raise TypeError("choice_provider must be callable")
+        reference_collaborators = (
+            reference_scope_provider,
+            reference_paths_provider,
+            reference_text_reader,
+        )
+        if any(value is not None for value in reference_collaborators) and not all(
+            callable(value) for value in reference_collaborators
+        ):
+            raise ValueError(
+                "reference scope, paths, and text collaborators must be supplied together"
+            )
         prompt = _main_prompt(session_id=session_id, agent_id=agent_id)
         try:
-            line = self._read(prompt, choice_provider)
+            line = self._read(
+                prompt,
+                choice_provider,
+                reference_scope_provider,
+                reference_paths_provider,
+                reference_text_reader,
+            )
         except KeyboardInterrupt:
             return TerminalAction(TerminalActionKind.INTERRUPT)
         except EOFError:
@@ -1317,6 +1459,48 @@ class InteractiveMainInput:
         return TerminalAction(
             TerminalActionKind.LINE,
             text=_validated_input_line(line),
+        )
+
+
+class InteractiveCompositionInput:
+    """Bind RUN/CHAT composition to call-local reference collaborators."""
+
+    __slots__ = ("_terminal",)
+
+    def __init__(self, terminal: InteractiveTerminal) -> None:
+        if not isinstance(terminal, InteractiveTerminal):
+            raise TypeError("terminal must be an InteractiveTerminal")
+        self._terminal = terminal
+
+    def compose(
+        self,
+        mode: ComposeMode,
+        *,
+        agent_id: str | None = None,
+        reference_scope_provider: Callable[
+            [str, int], ReferenceInputScope | None
+        ],
+        reference_paths_provider: Callable[[], tuple[str, ...]],
+        reference_text_reader: Callable[[str], str],
+    ) -> TerminalAction:
+        """Collect one composition without expanding the public terminal API."""
+
+        for name, collaborator in (
+            ("reference_scope_provider", reference_scope_provider),
+            ("reference_paths_provider", reference_paths_provider),
+            ("reference_text_reader", reference_text_reader),
+        ):
+            if not callable(collaborator):
+                raise TypeError(f"{name} must be callable")
+        return self._terminal._compose(
+            mode,
+            agent_id=agent_id,
+            read_input=lambda view: self._terminal._composition_reference_read_line(
+                view,
+                reference_scope_provider,
+                reference_paths_provider,
+                reference_text_reader,
+            ),
         )
 
 
@@ -1707,6 +1891,116 @@ def _main_command_completion(
     )
 
 
+def _reference_projection_provider(
+    scope_provider: Callable[[str, int], ReferenceInputScope | None],
+    paths_provider: Callable[[], tuple[str, ...]],
+) -> Callable[[str, int], ReferenceInputProjection | None]:
+    """Defer repository listing until one eligible active marker exists."""
+
+    def project(buffer: str, cursor: int) -> ReferenceInputProjection | None:
+        scope = scope_provider(buffer, cursor)
+        if scope is not None and type(scope) is not ReferenceInputScope:
+            raise TypeError(
+                "reference scope provider must return a ReferenceInputScope or None"
+            )
+        probe = project_reference_input(buffer, cursor, scope)
+        if probe is None:
+            return None
+        try:
+            paths = paths_provider()
+        except ReferenceInputFailure as failure:
+            return project_reference_input(
+                buffer,
+                cursor,
+                scope,
+                failure=failure.kind,
+            )
+        if type(paths) is not tuple or any(type(path) is not str for path in paths):
+            raise TypeError("reference paths provider must return a tuple of strings")
+        return project_reference_input(buffer, cursor, scope, paths)
+
+    return project
+
+
+def _reference_picker_state(
+    values: tuple[str, ...],
+    instruction: str,
+) -> PickerControlState:
+    """Construct one deterministic generic picker for paths or tokens."""
+
+    if type(values) is not tuple or any(type(value) is not str for value in values):
+        raise TypeError("reference picker values must be a tuple of strings")
+    picker = Picker(
+        Prompt("writing artifact", instruction=instruction),
+        tuple(Choice(value, value) for value in values),
+    )
+    return initialize_picker(picker)
+
+
+def _reference_input_bindings(
+    projection_provider: Callable[[str, int], ReferenceInputProjection | None],
+    text_reader: Callable[[str], str],
+    failure_writer: Callable[[ReferenceInputFailureKind], None],
+) -> ReferenceInputBindings:
+    """Bind pure controls/renderers to one call-local driver interaction."""
+
+    return ReferenceInputBindings(
+        projection_provider,
+        text_reader,
+        failure_writer,
+        _reference_picker_state,
+        transition_picker,
+        transition_picker_fallback,
+        project_picker_viewport,
+        render_picker_viewport,
+        render_picker_fallback,
+        lambda text, path: initialize_text_viewer(text, display_name=path),
+        transition_text_viewer,
+        transition_text_viewer_fallback,
+        project_text_viewer_viewport,
+        render_text_viewer,
+        render_text_viewer_fallback,
+    )
+
+
+def _reference_input_error(kind: ReferenceInputFailureKind) -> InteractiveError:
+    """Map one content-free activation failure to fixed actionable copy."""
+
+    if not isinstance(kind, ReferenceInputFailureKind):
+        raise TypeError("kind must be a ReferenceInputFailureKind")
+    copy = {
+        ReferenceInputFailureKind.EMPTY_CATALOG: (
+            "No current writing artifacts are available.",
+            "Complete a consensus run that creates canonical writing artifacts.",
+        ),
+        ReferenceInputFailureKind.STALE: (
+            "The selected writing artifact is no longer current.",
+            "Type $ again to refresh the canonical artifact list.",
+        ),
+        ReferenceInputFailureKind.UNREADABLE: (
+            "The selected writing artifact cannot be viewed safely.",
+            "Inspect its size and UTF-8 repository state, then refresh the list.",
+        ),
+        ReferenceInputFailureKind.UNAVAILABLE: (
+            "The writing-artifact repository is unavailable.",
+            "Inspect workspace recovery guidance, then retry discovery.",
+        ),
+        ReferenceInputFailureKind.INVALID: (
+            "The artifact reference cannot be inserted.",
+            "Remove the active marker or choose a nonconflicting current artifact.",
+        ),
+    }[kind]
+    code = (
+        InteractiveErrorCode.COMMAND_INVALID
+        if kind in {
+            ReferenceInputFailureKind.EMPTY_CATALOG,
+            ReferenceInputFailureKind.INVALID,
+        }
+        else InteractiveErrorCode.WORKSPACE_INVALID
+    )
+    return InteractiveError(code, summary=copy[0], hint=copy[1])
+
+
 def read_main_command_line(
     driver: RawTerminalDriver,
     prompt: str,
@@ -1714,6 +2008,14 @@ def read_main_command_line(
     choice_provider: Callable[
         [str, int], Picker | None
     ] | None = None,
+    reference_scope_provider: Callable[
+        [str, int], ReferenceInputScope | None
+    ] | None = None,
+    reference_paths_provider: Callable[[], tuple[str, ...]] | None = None,
+    reference_text_reader: Callable[[str], str] | None = None,
+    reference_failure_writer: (
+        Callable[[ReferenceInputFailureKind], None] | None
+    ) = None,
 ) -> str:
     """Read one canonical selectable main command through the sole driver."""
 
@@ -1721,6 +2023,36 @@ def read_main_command_line(
         raise TypeError("driver must be a RawTerminalDriver")
     if choice_provider is not None and not callable(choice_provider):
         raise TypeError("choice_provider must be callable or None")
+    reference_collaborators = (
+        reference_scope_provider,
+        reference_paths_provider,
+        reference_text_reader,
+        reference_failure_writer,
+    )
+    if any(value is not None for value in reference_collaborators) and not all(
+        callable(value) for value in reference_collaborators
+    ):
+        raise ValueError(
+            "reference scope, paths, text, and failure collaborators must be supplied together"
+        )
+
+    reference_projection = (
+        None
+        if reference_scope_provider is None
+        else _reference_projection_provider(
+            reference_scope_provider,
+            reference_paths_provider,
+        )
+    )
+    reference_bindings = (
+        None
+        if reference_projection is None
+        else _reference_input_bindings(
+            reference_projection,
+            reference_text_reader,
+            reference_failure_writer,
+        )
+    )
 
     active_pickers: dict[tuple[str, int], Picker] = {}
 
@@ -1728,6 +2060,11 @@ def read_main_command_line(
         buffer: str,
         cursor: int,
     ) -> CommandCompletionProjection | None:
+        if reference_projection is not None:
+            projected_reference = reference_projection(buffer, cursor)
+            if projected_reference is not None:
+                active_pickers.clear()
+                return projected_reference.completion
         picker = (
             None
             if choice_provider is None
@@ -1752,11 +2089,56 @@ def read_main_command_line(
             raise RuntimeError("active main choices are not correlated")
         return project_main_choice_palette(state, picker)
 
-    return driver.read_main_command_line(
+    if reference_bindings is None:
+        return driver.read_main_command_line(
+            prompt,
+            completion_provider,
+            palette_projector,
+            render_component,
+        )
+    return driver.read_reference_main_command_line(
         prompt,
         completion_provider,
         palette_projector,
         render_component,
+        reference_bindings,
+    )
+
+
+def read_reference_composition_line(
+    driver: RawTerminalDriver,
+    view: InputPromptView,
+    scope_provider: Callable[[str, int], ReferenceInputScope | None],
+    paths_provider: Callable[[], tuple[str, ...]],
+    text_reader: Callable[[str], str],
+    failure_writer: Callable[[ReferenceInputFailureKind], None],
+) -> str:
+    """Read one RUN/CHAT line through the shared reference input route."""
+
+    if not isinstance(driver, RawTerminalDriver):
+        raise TypeError("driver must be a RawTerminalDriver")
+    projection = _reference_projection_provider(scope_provider, paths_provider)
+    bindings = _reference_input_bindings(
+        projection,
+        text_reader,
+        failure_writer,
+    )
+
+    def completion_provider(
+        buffer: str,
+        cursor: int,
+    ) -> CommandCompletionProjection | None:
+        projected = projection(buffer, cursor)
+        return None if projected is None else projected.completion
+
+    return driver.read_reference_input_line(
+        view,
+        render_input_prompt,
+        project_composition_suggestions,
+        completion_provider,
+        project_main_suggestion_palette,
+        render_component,
+        bindings,
     )
 
 
@@ -1789,11 +2171,38 @@ def build_stream_terminal(
             choice_provider=provider,
         )
     )
+    terminal._main_reference_read_line = (
+        lambda prompt, choices, scope, paths, text: read_main_command_line(
+            driver,
+            prompt,
+            choice_provider=choices,
+            reference_scope_provider=scope,
+            reference_paths_provider=paths,
+            reference_text_reader=text,
+            reference_failure_writer=(
+                None
+                if scope is None
+                else lambda kind: terminal.write_error(
+                    _reference_input_error(kind)
+                )
+            ),
+        )
+    )
     terminal._composition_read_line = lambda view: driver.read_input_line(
         view,
         render_input_prompt,
         project_composition_suggestions,
         transient=True,
+    )
+    terminal._composition_reference_read_line = (
+        lambda view, scope, paths, text: read_reference_composition_line(
+            driver,
+            view,
+            scope,
+            paths,
+            text,
+            lambda kind: terminal.write_error(_reference_input_error(kind)),
+        )
     )
     terminal._confirmation_read_line = lambda view: driver.read_input_line(
         view,
