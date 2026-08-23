@@ -2,15 +2,17 @@
 
 > **Availability:** JSON defaults, per-agent routing, interactive guarded
 > settings, editable role prompts, and persona templates are implemented for
-> Codex and Antigravity. Codex is the default provider.
+> Codex and Antigravity. Interactive authentication establishes a missing
+> workspace default; Codex is the final route fallback.
 
-Key terms: **system default**—the final fallback value; **agent configuration**—
+Key terms: **system default**—the workspace fallback below an agent-specific
+value; **agent configuration**—
 one role's persistent provider/language/persona choices; **role prompt**—that
 agent's static instructions; **persona template**—a reusable behavior document.
 
 ## System defaults
 
-`config/system_defaults.json` uses a closed seven-field schema. New workspaces are
+`config/system_defaults.json` uses a closed eight-field schema. New workspaces are
 initialized with:
 
 ```json
@@ -19,6 +21,7 @@ initialized with:
   "antigravity_model": null,
   "codex_model": null,
   "codex_reasoning_effort": null,
+  "default_backend": null,
   "language": "KO",
   "max_debate_rounds": 1,
   "persona": "default_kim_eun_hee"
@@ -34,16 +37,18 @@ initialized with:
 | `codex_reasoning_effort` | Optional workspace fallback; absent or `null` means no workspace reasoning fallback. The only string values are exactly `minimal`, `low`, `medium`, `high`, and `xhigh`. Whether `xhigh` is supported depends on the selected model/provider. |
 | `antigravity_model` | Optional Antigravity workspace fallback with the same safe-text rule as `codex_model`; absent or `null` inherits the Antigravity provider default. |
 | `antigravity_effort` | Optional Antigravity workspace fallback; absent or `null` inherits the provider default. The only string values are exactly `low`, `medium`, and `high`. |
+| `default_backend` | Optional workspace provider fallback; absent or `null` falls through to Codex. A value is exactly `codex` or `antigravity`. Interactive authentication fills a missing value once and does not replace an existing value. |
 
 Unknown fields are rejected. The complete object is validated before a backend
 accepts any explicit model/effort override, so malformed persisted fields are
 never hidden by CLI or `AgentBackend` constructor values.
 
-Existing three-key files remain valid: all missing provider-specific keys
-resolve as `null` and provide no workspace model/effort fallback.
+Existing three-key files remain valid: all missing provider-specific keys and
+`default_backend` resolve as `null`, providing no workspace model/effort or
+provider fallback beyond Codex.
 Running `story init` again, including with `--overwrite-prompts`, does not
 rewrite or migrate existing system-default bytes. Global `/settings` edits this
-canonical seven-field object and the per-agent object through an isolated
+canonical eight-field object and the per-agent object through an isolated
 current/pending view; it adds no supported public save API. The ten language
 choices are exactly `KO`, `EN`,
 `JA`, `ZH`, `ES`, `FR`, `DE`, `PT`, `IT`, and `RU`. Persona choices come from
@@ -54,6 +59,12 @@ ASCII integer, including `0`. System-level provider model/effort values are
 preserved but are not edited by the UI; direct validated JSON edits may change
 them.
 
+At interactive startup, `default_backend` is written only when missing. A
+provider authenticated by that immediate interaction wins; otherwise a sole
+authenticated provider wins; when both are already authenticated, Codex wins.
+The first durable default does not rewrite any explicit agent route. Later
+`/auth` or settings authentication follows the same absent-only rule.
+
 ## Per-agent configuration
 
 `config/agent_configs.json` accepts only the four canonical IDs and this shape:
@@ -63,7 +74,7 @@ them.
   "character_custodian": {
     "antigravity_effort": null,
     "antigravity_model": null,
-    "backend": "codex",
+    "backend": null,
     "codex_model": null,
     "codex_reasoning_effort": null,
     "language": null,
@@ -72,7 +83,7 @@ them.
   "execution_specialist": {
     "antigravity_effort": null,
     "antigravity_model": null,
-    "backend": "codex",
+    "backend": null,
     "codex_model": null,
     "codex_reasoning_effort": null,
     "language": null,
@@ -81,7 +92,7 @@ them.
   "lead_orchestrator": {
     "antigravity_effort": null,
     "antigravity_model": null,
-    "backend": "codex",
+    "backend": null,
     "codex_model": null,
     "codex_reasoning_effort": null,
     "language": null,
@@ -100,17 +111,21 @@ them.
 ```
 
 An omitted canonical agent is an empty object. Each agent object permits only
-`backend`, `language`, `persona`, `codex_model`, and
+`backend`, `language`, `persona`, `codex_model`,
 `codex_reasoning_effort`, `antigravity_model`, and `antigravity_effort`.
+New workspaces initialize every agent `backend` as `null`.
 Provider-specific `null` values inherit the corresponding system value and then
-provider default. Omitted backend becomes `codex`. Allowed backend names are
-exactly `codex` and `antigravity`. A `gemini` value is rejected with
+provider default. A null or omitted backend inherits `default_backend` and then
+Codex. Allowed backend names are exactly `codex` and `antigravity`. A legacy
+`gemini` value is rejected with
 `backend 'gemini' is no longer supported; use 'antigravity'`. Unknown agent IDs,
 fields, or backend names are errors.
 
 The `/settings` Providers editor follows canonical roster order. It first
 selects an agent, then offers Provider, Model, and Reasoning effort. Both Codex
-and Antigravity are selectable. Model accepts exact safe text or blank to
+and Antigravity are selectable. Provider assignment freshly checks status and,
+when needed, completes native authentication before mutating the candidate.
+Failed or cancelled authentication leaves that route unchanged. Model accepts exact safe text or blank to
 inherit the selected provider's system value. Codex reasoning offers Inherit,
 `minimal`, `low`, `medium`, `high`, and `xhigh`; Antigravity effort offers
 Inherit, `low`, `medium`, and `high`. Edits update only the selected agent's
@@ -119,12 +134,15 @@ values.
 
 Opening `/settings` captures exact bytes for both configuration documents, a
 fully validated immutable pair, and the safe persona catalog. Save revalidates
+every distinct effective provider before the file transaction, then revalidates
 the complete pending pair and requires all three opening facts to remain exact.
 It writes only changed documents, canonically, in system-defaults then
 agent-configs order. A failed write triggers reverse-order restoration of every
 attempted target, including the failing target, from its exact opening bytes;
 rollback uncertainty is reported separately. This is guarded coordination of
 two atomic per-file replacements, not a public API or cross-file transaction.
+Authentication and missing-default writes happen outside this candidate
+transaction and remain durable if the pending settings workflow later cancels.
 
 ## Role prompts
 

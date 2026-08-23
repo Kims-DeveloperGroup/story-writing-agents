@@ -46,6 +46,32 @@ Use this nondestructive reset:
 Do not copy old provider state, access files, guards, defaults, or CLI context
 into V2. Copy editable story/configuration files only after review; keep backup.
 
+<a id="authentication-recovery"></a>
+
+## Authentication recovery
+
+Only a fresh native status probe authorizes a provider. Never infer success
+from a completed login process, a previous picker row, a configured route, or a
+provider session manifest.
+
+| State or outcome | Meaning | Recovery |
+| --- | --- | --- |
+| `unavailable` | The provider executable could not be launched and its picker choice is disabled. | Install the Codex CLI or Antigravity `agy`, correct the executable path or `PATH` in the environment that launches `story`, then retry startup or `/auth`. |
+| `unauthenticated` | The exact probe returned the native unauthenticated code. | Select the provider to run `codex login` or bare `agy`, complete the native prompt, and wait for a fresh probe. |
+| `indeterminate` | Launch, wait, timeout, or return status did not prove either supported state. | Check `codex login status` or `agy models` outside the runtime, repair the native CLI or environment, then retry. Selection itself performs another probe and never authorizes optimistically. |
+| Login fails or returns without authentication | The following fresh probe still is not authenticated. | Read the native CLI's own terminal guidance, repair outside the runtime, and select it again. The runtime has no captured provider output or URL to recover. |
+| Startup picker Cancel | No provider was chosen. | The hard gate remains open; choose an enabled provider. Ctrl-C or EOF exits normally before context/backend/controller/session construction. |
+| `/auth` picker Cancel, interrupt, or EOF | The picker ended without a new authorization. | The shell continues, explicit routes stay unchanged, and any already persisted default remains. Run `/auth` again when ready. |
+| Ctrl-C during native login | The inherited provider process and runtime received the interrupt. | The runtime best-effort stops and reaps that child. Startup exits normally; an already running shell follows its fatal interruption cleanup. Retry after checking native state. |
+| Settings provider authentication is cancelled or fails | Fresh authorization was not proved before assignment. | The pending route is unchanged. Retry the provider choice or cancel settings. Any missing default already established by completed authentication remains durable. |
+| Save-time status is stale or fails | One distinct effective provider did not freshly authenticate before the file transaction. | Repair or complete native sign-in, return to Save, and reprobe. No pending settings file update occurs; completed auth/default writes are not rolled back. |
+
+Interactive startup first needs any authenticated provider, then every distinct
+effective route under CLI override → agent route → workspace default → Codex.
+Removing or rewriting an explicit route is not an authentication recovery
+mechanism. Noninteractive commands do not open the picker; prepare native
+authentication before using their provider routes.
+
 ## Debate and shell-run recovery
 
 Debate IDs reserve before providers and cannot resume; debate `active` is not
@@ -108,8 +134,9 @@ command or secure-erasure workflow.
 
 ## Current limits
 
-- Codex and Antigravity are supported; Codex remains the default. The legacy
-  backend name `gemini` is rejected with guidance to use `antigravity`.
+- Codex and Antigravity are supported. Nullable routes inherit the workspace
+  default and final Codex fallback. The legacy backend name `gemini` is
+  rejected with guidance to use `antigravity`.
 - Provider calls have a timeout but no retry or rate-limit manager.
 - Owner history has no compaction, expiry, or retention policy.
 - Artifact rollback is best effort across files, not one transaction.

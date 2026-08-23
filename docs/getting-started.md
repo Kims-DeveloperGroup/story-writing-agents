@@ -1,7 +1,8 @@
 # Getting started
 
 > **Availability:** this guide uses the installed CLI. Real runs and routed
-> interactive turns support Codex and Antigravity; Codex is the default.
+> interactive turns support Codex and Antigravity. A workspace default is
+> established from fresh native authentication; Codex is the final fallback.
 > `story smoke` is provider-free. See [Story sessions](guides/story-sessions.md)
 > for the shell.
 
@@ -12,23 +13,19 @@ used for turns in this shell; **smoke test**—a provider-free deterministic che
 
 ## 1. Prepare the tools
 
-Use Python 3.11 or later. For the default provider, install and authenticate the
-Codex CLI:
+Use Python 3.11 or later. Install the Codex CLI for the final fallback route:
 
 ```bash
 npm install -g @openai/codex
 rehash
-codex login
 ```
 
-You may set `CODEX_API_KEY` instead. Keep credentials outside workspaces,
-prompts, drafts, and logs.
-
-To use Antigravity for any agent, install and authenticate `agy`, confirm it is
-on `PATH`, and choose the `antigravity` backend. The complete commands,
+To use Antigravity for any agent, install `agy`, confirm it is on `PATH`, and
+choose the `antigravity` backend. The complete commands,
 configuration fields, precedence, and safety boundaries are in
-[Use Antigravity agents](guides/antigravity.md). A fresh workspace still routes
-every agent to Codex until explicitly changed.
+[Use Antigravity agents](guides/antigravity.md). New workspaces leave the
+workspace default and per-agent routes unset; noninteractive resolution falls
+through to Codex until configuration says otherwise.
 
 Choose one Python environment. Do not create a standard-library virtual
 environment inside active Conda.
@@ -85,6 +82,25 @@ Bare `story` is the primary interactive entry:
 story
 ```
 
+The welcome is followed by the first interactive gate. The runtime silently
+checks Codex with `codex login status` and Antigravity with `agy models`. Select
+an unauthenticated provider to hand the real terminal to its native sign-in:
+`codex login` for Codex or bare `agy` for Antigravity. The native process runs
+at the resolved workspace root with the inherited environment and may open a
+provider-controlled browser. The runtime does not capture provider output,
+account information, OAuth URLs, tokens, credentials, or native persistence.
+
+At least one provider must freshly report authenticated. The runtime then
+resolves all agent routes and freshly requires every distinct effective
+provider before it creates the CLI context, story backend, controller, or
+session. Picker Cancel keeps startup gated; Ctrl-C or EOF leaves cleanly.
+
+When `default_backend` is missing, a provider authenticated by that immediate
+interaction becomes the workspace default. Otherwise the sole authenticated
+provider wins, or Codex wins when both are already authenticated. An existing
+default and explicit agent routes are preserved. See the exact
+[authentication and routing contract](reference/cli.md#interactive-provider-authentication).
+
 At the lobby prompt, create a durable session and subject conversation:
 
 ```text
@@ -113,7 +129,9 @@ fallback; an empty or failed read reports its result or error without a picker.
 ## 5. Automate without a TTY
 
 Scripts, pipelines, and other non-TTY callers must use noninteractive
-`story run`; it never receives conversation focus. Use explicit workspace and
+`story run`; it never receives conversation focus and does not open the
+interactive authentication gate. Native provider authentication remains that
+CLI's responsibility. Use explicit workspace and
 session inputs in the [single automation example](guides/glasswater-scenario.md#use-one-explicit-automation-call-then-pause),
 then consult the exact [CLI contract](reference/cli.md#workspace-noninteractive-behavior-and-exits).
 
