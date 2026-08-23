@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import textwrap
+import time
 import unicodedata
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import KW_ONLY, dataclass
@@ -439,6 +440,50 @@ _SUMMARY_LIMIT = 512
 _HINT_LIMIT = 256
 _REDACTION = "<redacted>"
 _MAIN_PROMPT_EXCLUSIONS = frozenset({"/compose", "/send", "/cancel"})
+_STARTUP_WELCOME_FRAMES: tuple[Component, ...] = (
+    Notice(
+        "Story.",
+        label="welcome",
+        role=SemanticRole.INFO,
+        state=ViewState.LOADING,
+    ),
+    Panel(
+        "Story Writing",
+        (
+            Notice(
+                "A shared creative workspace is opening.",
+                role=SemanticRole.INFO,
+                state=ViewState.LOADING,
+            ),
+        ),
+        state=ViewState.LOADING,
+    ),
+    Panel(
+        "Story Writing Agents",
+        (
+            Notice(
+                "Four roles. One shared story workspace.",
+                role=SemanticRole.EMPHASIS,
+                state=ViewState.LOADING,
+            ),
+        ),
+        state=ViewState.LOADING,
+    ),
+    Panel(
+        "Story Writing Agents",
+        (
+            Notice(
+                "Four roles. One shared story workspace.",
+                role=SemanticRole.EMPHASIS,
+            ),
+            Notice(
+                "Provider access will be checked before the story session starts.",
+                role=SemanticRole.INFO,
+            ),
+        ),
+        state=ViewState.COMPLETED,
+    ),
+)
 
 
 class InteractiveTerminal:
@@ -452,6 +497,8 @@ class InteractiveTerminal:
         "_main_read_line",
         "_picker_read",
         "_prompt_read",
+        "_startup_notice",
+        "_startup_welcome",
         "_advisory_progress",
         "_debate_progress",
         "_read_line",
@@ -497,6 +544,12 @@ class InteractiveTerminal:
         self._confirmation_read_line = _plain_input_reader(read_line, width)
         self._picker_read = _plain_picker_reader(read_line, write_text, width)
         self._prompt_read = _plain_prompt_reader(read_line, width)
+        self._startup_welcome = lambda _sleeper: self._write_component(
+            _STARTUP_WELCOME_FRAMES[-1]
+        )
+        self._startup_notice = lambda notice, _sleeper: self._write_component(
+            notice
+        )
         self._advisory_progress = _plain_advisory_progress
         self._debate_progress = _plain_debate_progress
         self._write_text = write_text
@@ -1275,6 +1328,44 @@ class InteractiveSemanticOutput:
         self._write(component)
 
 
+class InteractiveStartupPresentation:
+    """Bind the fixed welcome and auth-notice presentation lifecycle."""
+
+    __slots__ = ("_show_notice", "_show_welcome", "_sleeper")
+
+    def __init__(
+        self,
+        terminal: InteractiveTerminal,
+        *,
+        sleeper: Callable[[float], object] = time.sleep,
+    ) -> None:
+        """Retain only terminal-owned startup callbacks and injected timing."""
+
+        if not isinstance(terminal, InteractiveTerminal):
+            raise TypeError("terminal must be an InteractiveTerminal")
+        if not callable(sleeper):
+            raise TypeError("sleeper must be callable")
+        self._show_welcome: Callable[[Callable[[float], object]], None] = (
+            terminal._startup_welcome
+        )
+        self._show_notice: Callable[
+            [Notice, Callable[[float], object]], None
+        ] = terminal._startup_notice
+        self._sleeper = sleeper
+
+    def show_welcome(self) -> None:
+        """Run the fixed bounded ceremony or one meaningful static rendering."""
+
+        self._show_welcome(self._sleeper)
+
+    def show_notice(self, notice: Notice) -> None:
+        """Show one bounded auth notice and clear any capable live frame."""
+
+        if type(notice) is not Notice:
+            raise TypeError("notice must be a Notice")
+        self._show_notice(notice, self._sleeper)
+
+
 class InteractiveMainInput:
     """Bind call-local main choices without expanding the public terminal."""
 
@@ -1746,6 +1837,17 @@ def build_stream_terminal(
 
     terminal._picker_read = read_picker
     terminal._prompt_read = read_prompt
+    terminal._startup_welcome = lambda sleeper: driver.run_startup_welcome(
+        lambda index, current: render_component(
+            _STARTUP_WELCOME_FRAMES[index],
+            current,
+        ),
+        sleeper,
+    )
+    terminal._startup_notice = lambda notice, sleeper: driver.run_startup_notice(
+        lambda current: render_component(notice, current),
+        sleeper,
+    )
 
     async def run_advisory_progress(operation):
         return await driver.run_advisory_progress(

@@ -50,6 +50,10 @@ _ESCAPE_LOOKAHEAD_SECONDS = 0.05
 _DEFAULT_TERMIOS = object()
 _PROGRESS_FRAME_COUNT = 4
 _PROGRESS_INTERVAL_SECONDS = 0.08
+_STARTUP_WELCOME_FRAME_COUNT = 4
+_STARTUP_WELCOME_INTERVAL_SECONDS = 0.4
+_STARTUP_NOTICE_DURATION_SECONDS = 0.8
+_REDUCED_MOTION_ENVIRONMENT_KEY = "STORY_REDUCED_MOTION"
 _T = TypeVar("_T")
 
 
@@ -408,6 +412,144 @@ class RawTerminalDriver:
             self._output_stream,
             termios_module=termios_module,
             os_module=os_module,
+        )
+
+    def run_startup_welcome(
+        self,
+        frame_renderer: Callable[[int, TerminalCapabilities], RenderedFrame],
+        sleeper: Callable[[float], object],
+    ) -> None:
+        """Render the one fixed bounded startup sequence or its static final."""
+
+        if not callable(frame_renderer):
+            raise TypeError("frame_renderer must be callable")
+        if not callable(sleeper):
+            raise TypeError("sleeper must be callable")
+        capabilities = self.capabilities()
+        if not self._startup_animation_is_safe(capabilities):
+            static_capabilities = _static_startup_capabilities(capabilities)
+            final_frame = _startup_frame(
+                frame_renderer,
+                _STARTUP_WELCOME_FRAME_COUNT - 1,
+                static_capabilities,
+            )
+            self._write_raw_text(f"{final_frame.text}\n")
+            return
+
+        live_lines = 0
+        active_failure: BaseException | None = None
+        try:
+            for index in range(_STARTUP_WELCOME_FRAME_COUNT):
+                frame = _startup_frame(frame_renderer, index, capabilities)
+                live_lines = self._replace_startup_frame(frame, live_lines)
+                if index < _STARTUP_WELCOME_FRAME_COUNT - 1:
+                    sleeper(_STARTUP_WELCOME_INTERVAL_SECONDS)
+            self._write_raw_text("\n")
+            live_lines = 0
+        except BaseException as failure:
+            active_failure = failure
+        if live_lines:
+            try:
+                self._clear_startup_frame(live_lines)
+            except BaseException as cleanup_failure:
+                if active_failure is None:
+                    active_failure = cleanup_failure
+        if active_failure is not None:
+            raise active_failure
+
+    def run_startup_notice(
+        self,
+        frame_renderer: Callable[[TerminalCapabilities], RenderedFrame],
+        sleeper: Callable[[float], object],
+    ) -> None:
+        """Show then clear one auth notice only when transient display is safe."""
+
+        if not callable(frame_renderer):
+            raise TypeError("frame_renderer must be callable")
+        if not callable(sleeper):
+            raise TypeError("sleeper must be callable")
+        capabilities = self.capabilities()
+        if not self._startup_animation_is_safe(capabilities):
+            static_capabilities = _static_startup_capabilities(capabilities)
+            frame = frame_renderer(static_capabilities)
+            _require_startup_frame(frame, static_capabilities)
+            self._write_raw_text(f"{frame.text}\n")
+            return
+        frame = frame_renderer(capabilities)
+        _require_startup_frame(frame, capabilities)
+
+        live_lines = 0
+        active_failure: BaseException | None = None
+        try:
+            live_lines = self._replace_startup_frame(frame, live_lines)
+            sleeper(_STARTUP_NOTICE_DURATION_SECONDS)
+        except BaseException as failure:
+            active_failure = failure
+        if live_lines:
+            try:
+                self._clear_startup_frame(live_lines)
+            except BaseException as cleanup_failure:
+                if active_failure is None:
+                    active_failure = cleanup_failure
+        if active_failure is not None:
+            raise active_failure
+
+    def _startup_animation_is_safe(
+        self,
+        capabilities: TerminalCapabilities,
+    ) -> bool:
+        """Require known ANSI cursor support and no reduced-motion request."""
+
+        if (
+            capabilities.profile is not CapabilityProfile.ANSI
+            or not capabilities.raw_mode
+            or not capabilities.cursor_controls
+            or not capabilities.decorative_sgr
+        ):
+            return False
+        try:
+            os_module = self._os_provider()
+            environment = getattr(os_module, "environ", {})
+            return _REDUCED_MOTION_ENVIRONMENT_KEY not in environment
+        except Exception:
+            return False
+
+    def _replace_startup_frame(
+        self,
+        frame: RenderedFrame,
+        previous_lines: int,
+    ) -> int:
+        """Replace one purpose-bound startup frame without claiming the screen."""
+
+        if type(previous_lines) is not int or previous_lines < 0:
+            raise ValueError("previous_lines must be a nonnegative integer")
+        payload = ""
+        if previous_lines:
+            payload = "".join(
+                (
+                    _CARRIAGE_RETURN,
+                    _CURSOR_UP * (previous_lines - 1),
+                    _CARRIAGE_RETURN,
+                    _CLEAR_TO_END,
+                )
+            )
+        self._write_raw_text(f"{payload}{frame.text}")
+        return frame.line_count
+
+    def _clear_startup_frame(self, line_count: int) -> None:
+        """Clear one complete call-local startup frame without leaving a row."""
+
+        if type(line_count) is not int or line_count <= 0:
+            raise ValueError("line_count must be positive")
+        self._write_raw_text(
+            "".join(
+                (
+                    _CARRIAGE_RETURN,
+                    _CURSOR_UP * (line_count - 1),
+                    _CARRIAGE_RETURN,
+                    _CLEAR_TO_END,
+                )
+            )
         )
 
     def read_live_line(
@@ -1409,6 +1551,46 @@ class RawTerminalDriver:
         """
 
         self.write_text(text)
+
+
+def _startup_frame(
+    renderer: Callable[[int, TerminalCapabilities], RenderedFrame],
+    index: int,
+    capabilities: TerminalCapabilities,
+) -> RenderedFrame:
+    """Render and validate one frame from the fixed startup vocabulary."""
+
+    frame = renderer(index, capabilities)
+    _require_startup_frame(frame, capabilities)
+    return frame
+
+
+def _static_startup_capabilities(
+    capabilities: TerminalCapabilities,
+) -> TerminalCapabilities:
+    """Remove styling and cursor authority from one startup fallback profile."""
+
+    return TerminalCapabilities(
+        CapabilityProfile.LINE,
+        capabilities.width,
+        input_tty=capabilities.input_tty,
+        output_tty=capabilities.output_tty,
+        raw_mode=False,
+        cursor_controls=False,
+        decorative_sgr=False,
+    )
+
+
+def _require_startup_frame(
+    frame: object,
+    capabilities: TerminalCapabilities,
+) -> None:
+    """Require startup rendering to retain the currently observed width."""
+
+    if type(frame) is not RenderedFrame:
+        raise TypeError("startup renderer must return a RenderedFrame")
+    if frame.width != capabilities.width:
+        raise ValueError("startup frame width must match current capabilities")
 
 
 def _single_character_reader(input_stream: TextIO) -> Callable[[], object]:
