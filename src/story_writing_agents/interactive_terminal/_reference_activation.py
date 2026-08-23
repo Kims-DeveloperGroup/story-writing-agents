@@ -12,6 +12,8 @@ from ..writing_artifacts import (
     parse_artifact_references,
 )
 from ._model import (
+    ARTIFACT_REFERENCE_POSITION_PREFIX,
+    EMPTY_ARTIFACT_REFERENCE_POSITION_PREFIX,
     CommandCompletionCandidate,
     CommandCompletionProjection,
     LineInputState,
@@ -20,8 +22,6 @@ from ._model import (
 )
 
 
-_REFERENCE_POSITION_PREFIX = "artifact-reference:"
-_EMPTY_REFERENCE_POSITION_PREFIX = f"{_REFERENCE_POSITION_PREFIX}empty:"
 _REFERENCE_FRAGMENT_CHARACTERS = frozenset(
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_./-{}"
 )
@@ -144,7 +144,7 @@ class ReferenceInputProjection:
             and self.request is None
             and self.failure is ReferenceInputFailureKind.EMPTY_CATALOG
             and self.completion.position.startswith(
-                _EMPTY_REFERENCE_POSITION_PREFIX
+                EMPTY_ARTIFACT_REFERENCE_POSITION_PREFIX
             )
             and not self.completion.candidates
         )
@@ -238,11 +238,11 @@ def project_reference_input(
 
     if failure is not None:
         return ReferenceInputProjection(failure=failure)
-    position = f"{_REFERENCE_POSITION_PREFIX}{start}"
+    position = f"{ARTIFACT_REFERENCE_POSITION_PREFIX}{start}"
     if not canonical_paths:
         return ReferenceInputProjection(
             completion=CommandCompletionProjection(
-                f"{_EMPTY_REFERENCE_POSITION_PREFIX}{start}",
+                f"{EMPTY_ARTIFACT_REFERENCE_POSITION_PREFIX}{start}",
                 start,
                 end,
                 (),

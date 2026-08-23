@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from ._model import (
+    ARTIFACT_REFERENCE_POSITION_PREFIX,
+    EMPTY_ARTIFACT_REFERENCE_POSITION_PREFIX,
     Choice,
     CommandCompletionCandidate,
     CommandCompletionProjection,
@@ -30,8 +32,6 @@ from ._model import (
 
 
 _COMPOSITION_SUGGESTION_TOKENS = ("/send", "/cancel")
-_ARTIFACT_REFERENCE_POSITION_PREFIX = "artifact-reference:"
-_EMPTY_ARTIFACT_REFERENCE_POSITION_PREFIX = "artifact-reference:empty:"
 _ARTIFACT_REFERENCE_PALETTE_TITLE = "Writing artifact selection"
 _ARTIFACT_REFERENCE_PALETTE_INSTRUCTION = (
     "Up/Down selects; Enter/Tab inserts a whole-file reference."
@@ -362,7 +362,7 @@ def project_main_suggestion_palette(
     )
     position = palette.projection.position
     is_artifact_reference = position.startswith(
-        _ARTIFACT_REFERENCE_POSITION_PREFIX
+        ARTIFACT_REFERENCE_POSITION_PREFIX
     )
     return SuggestionPalette(
         state.main_input.line_state.buffer,
@@ -380,7 +380,7 @@ def project_main_suggestion_palette(
         ),
         empty_text=(
             _ARTIFACT_REFERENCE_EMPTY_CATALOG_TEXT
-            if position.startswith(_EMPTY_ARTIFACT_REFERENCE_POSITION_PREFIX)
+            if position.startswith(EMPTY_ARTIFACT_REFERENCE_POSITION_PREFIX)
             else _ARTIFACT_REFERENCE_NO_MATCH_TEXT
             if is_artifact_reference
             else "No suggestions."

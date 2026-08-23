@@ -273,6 +273,12 @@ class MainInputControlState:
             raise TypeError("overlay_open must be a bool")
 
 
+ARTIFACT_REFERENCE_POSITION_PREFIX = "artifact-reference:"
+EMPTY_ARTIFACT_REFERENCE_POSITION_PREFIX = (
+    f"{ARTIFACT_REFERENCE_POSITION_PREFIX}empty:"
+)
+
+
 @dataclass(frozen=True, slots=True)
 class CommandCompletionCandidate:
     """Identify one replacement within one stable grammar position."""
