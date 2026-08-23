@@ -13,8 +13,9 @@
   responsibility and instructions, and a binding connects it to a backend. See
   [Agent contracts](reference/agent-contracts.md).
 
-- **Artifact.** Any file the runtime produces or changes; a manuscript is one kind. See
-  [Persistence](design/persistence.md).
+- **Writing artifact.** Agent-produced story output at one of four exact core
+  paths or beneath `manuscript/PART/`. Runtime internals are not writing
+  artifacts. See [Canonical writing artifacts](reference/writing-artifacts.md).
 
 - **Backend and provider.** The backend manages local routing/sessions and calls
   an external model provider. Codex is the final fallback; Antigravity is also
@@ -75,8 +76,9 @@
   command omits a session or when session attachment restores conversation
   scope. A default does not prove attachment, focus, or provider readiness.
 
-- **Core documents.** Editable outlines, character/world facts, and narrative
-  rules; each role receives its allowed subset.
+- **Core documents.** Agent-authored outlines, character/world facts, and
+  narrative rules at four exact stable paths; each role receives its allowed
+  current, provenance-backed subset.
   See [Workspaces](guides/workspaces.md).
 
 - **Debate.** One immutable attempt to reach consensus; a story session can
@@ -107,8 +109,9 @@
   when the backend closes. See
   [Session storage](reference/configuration/session-storage.md).
 
-- **Manuscript.** Immutable story output created after consensus/finalization. See
-  [Consensus runs](guides/consensus-runs.md).
+- **Manuscript.** Create-only story output at
+  `manuscript/PART/PATH.md` after consensus/finalization. A revision uses a
+  distinct part-scoped path. See [Consensus runs](guides/consensus-runs.md).
 
 - **Owner-isolated state.** Concise persisted outcomes supplied only to their
   agent, unlike the blackboard; files remain plaintext. See

@@ -69,10 +69,12 @@ story init ./first-story
 cd ./first-story
 ```
 
-`init` creates missing scaffold files without replacing existing content. Edit
-the four files under `core_documents/` and the four role prompts under
-`config/agents/<agent-id>/AGENTS.md`; all are strict UTF-8 Markdown. The runtime
-reads current content before each provider phase.
+`init` creates missing scaffold directories and configuration without replacing
+existing content. It does not create core-document templates. The four role
+prompts under `config/agents/<agent-id>/AGENTS.md` are strict UTF-8 Markdown.
+Canonical core documents are created or changed only when story agents return
+full-text updates after unanimous consensus; the runtime does not treat a
+manually created placeholder as an agent-produced artifact.
 
 ## 4. Begin the human workflow
 
@@ -83,12 +85,14 @@ story
 ```
 
 The welcome is followed by the first interactive gate. The runtime silently
-checks Codex with `codex login status` and Antigravity with `agy models`. Select
-an unauthenticated provider to hand the real terminal to its native sign-in:
-`codex login` for Codex or bare `agy` for Antigravity. The native process runs
-at the resolved workspace root with the inherited environment and may open a
-provider-controlled browser. The runtime does not capture provider output,
-account information, OAuth URLs, tokens, credentials, or native persistence.
+checks Codex with `codex login status` and the resolved Antigravity executable
+with `models` (`agy models` by default). Select an unauthenticated provider to
+hand the real terminal to its native sign-in: `codex login` for Codex or the
+resolved Antigravity executable with no arguments (bare `agy` by default). The
+native process runs at the resolved workspace root with the inherited
+environment and may open a provider-controlled browser. The runtime does not
+capture provider output, account information, OAuth URLs, tokens, credentials,
+or native persistence.
 
 At least one provider must freshly report authenticated. The runtime then
 resolves all agent routes and freshly requires every distinct effective
@@ -107,14 +111,17 @@ At the lobby prompt, create a durable session and subject conversation:
 /session create first_novel
 /conversation new Opening scene
 Which established fact should anchor the opening?
-/run Draft a restrained opening using the current conversation focus.
+/run --output part-01/opening.md Draft a restrained opening using the current conversation focus.
 /inspect last
 /status
 /quit
 ```
 
-The ordinary question is one advisory line. `/run PROMPT` starts consensus with
-one bounded snapshot of the current focus. `/inspect last` shows safe metadata
+The ordinary question is one advisory line. `/run --output PART/PATH.md PROMPT`
+starts consensus with one bounded snapshot of the current focus. Ask the agents
+to establish or modify outlines, character sheets, or narrative rules in that
+prompt when needed; only the lead's post-approval full-text updates are
+published. `/inspect last` shows safe metadata
 for this process's latest accepted run. `/status` names the durable state,
 process access, defaults, current attachment and focus, provider readiness, and
 next action. `/quit` releases access without pausing. Run `story` again to resume
@@ -131,10 +138,19 @@ fallback; an empty or failed read reports its result or error without a picker.
 Scripts, pipelines, and other non-TTY callers must use noninteractive
 `story run`; it never receives conversation focus and does not open the
 interactive authentication gate. Native provider authentication remains that
-CLI's responsibility. Use explicit workspace and
-session inputs in the [single automation example](guides/glasswater-scenario.md#use-one-explicit-automation-call-then-pause),
+CLI's responsibility. Use explicit workspace, session, and
+`--output PART/PATH.md` inputs in the [single automation example](guides/glasswater-scenario.md#use-one-explicit-automation-call-then-pause),
 then consult the exact [CLI contract](reference/cli.md#workspace-noninteractive-behavior-and-exits).
+
+Provider-bound prompt text may include inline `${canonical/path.md}` or
+`${canonical/path.md}#Lx-Ly` indicators. Quote noninteractive prompts so the
+shell does not expand `$`. See [Canonical artifact references](guides/artifact-references.md)
+for exact paths, multi-reference examples, agent read enforcement, and the
+interactive `$` completion and `$$` ranged-viewer workflow. Scripts still type
+literal quoted indicators; they do not receive the interactive picker UI.
 
 Continue with [Workspaces](guides/workspaces.md), [Consensus runs](guides/consensus-runs.md),
 or the complete interactive [Glasswater journey](guides/glasswater-scenario.md).
 Exact grammar and exits live in the [CLI reference](reference/cli.md).
+The exact output and provenance contract is in
+[Canonical writing artifacts](reference/writing-artifacts.md).

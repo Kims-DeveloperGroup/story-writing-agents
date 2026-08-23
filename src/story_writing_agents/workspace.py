@@ -9,6 +9,7 @@ import re
 import stat
 import tempfile
 import threading
+import unicodedata
 import weakref
 from datetime import UTC, datetime
 from pathlib import Path
@@ -20,7 +21,6 @@ from .agents import (
     AGENT_SPECS,
     AGENT_STATE_DIRECTORIES,
     CHARACTER_CUSTODIAN,
-    CORE_DOCUMENTS,
     EXECUTION_SPECIALIST,
     LEAD_ORCHESTRATOR,
     PLOT_ARCHITECT,
@@ -54,9 +54,11 @@ from .models import (
     DebateMessage,
     DebateResult,
 )
+from .writing_artifacts import canonical_artifact_kind
 
 
 _SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
+_SAFE_REFERENCE_OPERATION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 _SAFE_TEMPLATE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 _CONVERSATION_METADATA_FIELDS = frozenset({
     "schema_version",
@@ -172,13 +174,6 @@ with the narrative rules.
 """,
 }
 
-CORE_TEMPLATES: dict[str, str] = {
-    "global_outline.md": "# Global Outline\n",
-    "part_outlines.md": "# Part Outlines\n",
-    "character_sheets.md": "# Character Sheets\n",
-    "narrative_rules.md": "# Narrative Rules\n",
-}
-
 WORKSPACE_DIRECTORIES: tuple[str, ...] = (
     "config/agents/lead_orchestrator",
     "config/agents/plot_architect",
@@ -266,8 +261,6 @@ class Workspace:
                     prompt_file,
                     DEFAULT_AGENT_PROMPTS[agent_id],
                 )
-        for filename, content in CORE_TEMPLATES.items():
-            self._ensure_text(f"core_documents/{filename}", content)
         for state_dir in (
             "agent_states/orchestrator_state",
             "agent_states/orchestrator_state/conversation_defaults",
@@ -322,7 +315,17 @@ class Workspace:
     ) -> Path:
         if not isinstance(content, str):
             raise WorkspaceFormatError("text content must be a string")
+        self._reject_reserved_artifact_write(relative)
         target = self.path(relative)
+        workspace_relative = target.relative_to(self.root).as_posix()
+        try:
+            artifact_kind = canonical_artifact_kind(workspace_relative)
+        except ValueError:
+            artifact_kind = None
+        if artifact_kind is not None:
+            raise WorkspaceSecurityError(
+                "canonical writing artifacts must be published by the repository"
+            )
         target.parent.mkdir(parents=True, exist_ok=True)
         self._assert_contained(target.parent.resolve())
         self._atomic_write_bytes(
@@ -331,6 +334,21 @@ class Workspace:
             overwrite=overwrite,
         )
         return target
+
+    @staticmethod
+    def _reject_reserved_artifact_write(
+        relative: str | os.PathLike[str],
+    ) -> None:
+        """Reject lexical aliases of repository-owned artifact namespaces."""
+
+        raw = Path(relative)
+        if raw.is_absolute() or not raw.parts:
+            return
+        first = unicodedata.normalize("NFKC", raw.parts[0]).casefold()
+        if first in {"core_documents", "manuscript"}:
+            raise WorkspaceSecurityError(
+                "canonical writing artifacts must be published by the repository"
+            )
 
     def write_json(
         self,
@@ -374,29 +392,6 @@ class Workspace:
         except (WorkspaceFormatError, WorkspaceSecurityError):
             return False
         return True
-
-    def read_core_documents(self, filenames: tuple[str, ...]) -> dict[str, str]:
-        unknown = set(filenames).difference(CORE_DOCUMENTS)
-        if unknown:
-            raise WorkspaceSecurityError(
-                f"core document is not allowlisted: {sorted(unknown)[0]}"
-            )
-        return {
-            filename: self.read_text(f"core_documents/{filename}")
-            for filename in filenames
-        }
-
-    def read_manuscript(self, manuscript_name: str) -> str:
-        """Read a safely contained manuscript path."""
-
-        relative = self._manuscript_relative(manuscript_name)
-        return self.read_text(relative)
-
-    def write_manuscript(self, manuscript_name: str, content: str) -> Path:
-        """Create a manuscript without ever replacing an existing file."""
-
-        relative = self._manuscript_relative(manuscript_name)
-        return self.write_text(relative, content, overwrite=False)
 
     def load_session_overrides(self, session_id: str) -> dict[str, Any]:
         session = self.validate_identifier(session_id)
@@ -868,102 +863,6 @@ class Workspace:
             "debates": debates,
         }
 
-    def commit_approved_artifacts(
-        self,
-        manuscript_name: str,
-        candidate: str,
-        core_updates: Mapping[str, str],
-    ) -> tuple[str, tuple[str, ...]]:
-        """Apply an approved candidate and allowlisted core updates.
-
-        All inputs and the no-overwrite condition are validated before writes.
-        Each replacement is atomic; if a later operation fails, earlier
-        replacements are rolled back before the error is re-raised.
-        """
-
-        if not isinstance(candidate, str):
-            raise WorkspaceFormatError("approved candidate must be text")
-        updates = dict(core_updates)
-        unknown = set(updates).difference(CORE_DOCUMENTS)
-        if unknown:
-            raise WorkspaceSecurityError(
-                f"core document is not allowlisted: {sorted(unknown)[0]}"
-            )
-        if any(not isinstance(content, str) for content in updates.values()):
-            raise WorkspaceFormatError("core document updates must be text")
-
-        manuscript_relative = self._manuscript_relative(manuscript_name)
-        manuscript_target = self.path(manuscript_relative)
-        if manuscript_target.exists() or manuscript_target.is_symlink():
-            raise ManuscriptExistsError(
-                f"refusing to overwrite manuscript/{manuscript_name}"
-            )
-
-        core_targets = {
-            filename: self.path(f"core_documents/{filename}")
-            for filename in updates
-        }
-        originals = {
-            target: target.read_bytes() if target.exists() else None
-            for target in core_targets.values()
-        }
-        attempted_core: list[Path] = []
-        manuscript_attempted = False
-        manuscript_mutated = False
-
-        def mark_manuscript_mutated() -> None:
-            nonlocal manuscript_mutated
-            manuscript_mutated = True
-
-        try:
-            for filename in CORE_DOCUMENTS:
-                if filename not in updates:
-                    continue
-                target = core_targets[filename]
-                attempted_core.append(target)
-                self._atomic_write_bytes(
-                    target,
-                    updates[filename].encode("utf-8", errors="strict"),
-                )
-            manuscript_target.parent.mkdir(parents=True, exist_ok=True)
-            self.path(manuscript_relative)
-            manuscript_attempted = True
-            self._atomic_write_bytes(
-                manuscript_target,
-                candidate.encode("utf-8", errors="strict"),
-                overwrite=False,
-                on_mutation=mark_manuscript_mutated,
-            )
-        except Exception as original_error:
-            rollback_errors: list[Exception] = []
-            if manuscript_attempted and manuscript_mutated:
-                try:
-                    if manuscript_target.exists():
-                        manuscript_target.unlink()
-                except Exception as rollback_error:
-                    rollback_errors.append(rollback_error)
-            for target in reversed(attempted_core):
-                try:
-                    original = originals[target]
-                    if original is None:
-                        if target.exists():
-                            target.unlink()
-                    else:
-                        self._atomic_write_bytes(target, original)
-                except Exception as rollback_error:
-                    rollback_errors.append(rollback_error)
-            for rollback_error in rollback_errors:
-                original_error.add_note(
-                    "artifact rollback error: "
-                    f"{type(rollback_error).__name__}: {rollback_error}"
-                )
-            raise
-
-        return (
-            manuscript_relative.as_posix(),
-            tuple(filename for filename in CORE_DOCUMENTS if filename in updates),
-        )
-
     def _directory(self, relative: str) -> Path:
         target = self.path(relative)
         if target.exists() and not target.is_dir():
@@ -975,6 +874,13 @@ class Workspace:
     def _ensure_text(self, relative: str, content: str) -> None:
         target = self.path(relative)
         if not target.exists():
+            if relative == "manuscript/.gitkeep":
+                self._atomic_write_bytes(
+                    target,
+                    content.encode("utf-8", errors="strict"),
+                    overwrite=False,
+                )
+                return
             self.write_text(relative, content, overwrite=False)
 
     def _ensure_json(self, relative: str, value: Any) -> None:
@@ -1108,7 +1014,10 @@ class Workspace:
             "error",
             "action_required",
         }
-        if not isinstance(value, dict) or set(value) != expected:
+        if not isinstance(value, dict) or frozenset(value) not in {
+            frozenset(expected),
+            frozenset((*expected, "reference_operation_id")),
+        }:
             raise WorkspaceFormatError("debate result has an invalid schema")
         required_strings = {"session_id", "debate_id", "input_kind", "status"}
         if any(not isinstance(value[field], str) for field in required_strings):
@@ -1126,6 +1035,15 @@ class Workspace:
             for field in nullable_strings
         ):
             raise WorkspaceFormatError("debate result has an invalid optional field")
+        if "reference_operation_id" in value and (
+            type(value["reference_operation_id"]) is not str
+            or _SAFE_REFERENCE_OPERATION_ID.fullmatch(
+                value["reference_operation_id"]
+            ) is None
+        ):
+            raise WorkspaceFormatError(
+                "debate result reference_operation_id is invalid"
+            )
         rounds = value["rounds_completed"]
         if isinstance(rounds, bool) or not isinstance(rounds, int) or rounds < 0:
             raise WorkspaceFormatError("debate result rounds_completed is invalid")
@@ -1306,15 +1224,6 @@ class Workspace:
                 raise ValueError(f"duplicate field: {key}")
             result[key] = field_value
         return result
-
-    @staticmethod
-    def _manuscript_relative(manuscript_name: str) -> Path:
-        if not isinstance(manuscript_name, str) or not manuscript_name:
-            raise WorkspaceSecurityError("manuscript path must be non-empty text")
-        manuscript_raw = Path(manuscript_name)
-        if manuscript_raw.is_absolute() or ".." in manuscript_raw.parts:
-            raise WorkspaceSecurityError("unsafe manuscript path")
-        return Path("manuscript") / manuscript_raw
 
     def _assert_contained(self, target: Path) -> None:
         try:
@@ -2325,14 +2234,6 @@ def _initialize_pending_workspace_entries(
             AGENT_SPECS[agent_id].system_prompt_file,
             DEFAULT_AGENT_PROMPTS[agent_id],
             overwrite=overwrite_prompts,
-        )
-    for filename, content in CORE_TEMPLATES.items():
-        _write_pending_workspace_text(
-            workspace,
-            root_descriptor,
-            f"core_documents/{filename}",
-            content,
-            overwrite=False,
         )
     for state_dir in (
         "agent_states/orchestrator_state",

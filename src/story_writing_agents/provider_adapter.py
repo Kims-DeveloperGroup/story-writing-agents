@@ -70,6 +70,9 @@ class ProviderAdapter(Protocol):
     ) -> ProviderResult:
         """Run one structured provider turn."""
 
+    def release(self, binding: ProviderBinding) -> None:
+        """Release one exact provider binding idempotently."""
+
     def executable_available(self) -> bool:
         """Return whether this adapter's executable is ready to launch."""
 

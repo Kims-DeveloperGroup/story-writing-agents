@@ -65,6 +65,7 @@ class ConsensusOutcome:
     failure_kind: DebateFailureKind | None = None
     tampered_progress: bool = False
     tampered_result: bool = False
+    reference_operation_id: str | None = None
 
 
 class ScriptedConsensusRuntime:
@@ -73,6 +74,7 @@ class ScriptedConsensusRuntime:
     def __init__(self, *outcomes: ConsensusOutcome | BaseException) -> None:
         self.outcomes = list(outcomes)
         self.calls: list[dict[str, Any]] = []
+        self.output_paths: list[str] = []
         self.loops: list[asyncio.AbstractEventLoop] = []
         self.tasks: list[asyncio.Task[object] | None] = []
         self.on_call: Any = None
@@ -82,6 +84,7 @@ class ScriptedConsensusRuntime:
         session_id: str,
         prompt: str,
         *,
+        output_path,
         conversation_context,
         progress_sink,
     ) -> DebateResult:
@@ -91,6 +94,7 @@ class ScriptedConsensusRuntime:
             session_id,
             prompt,
             InputKind.PROMPT,
+            output_path,
             conversation_context,
             progress_sink,
         )
@@ -100,6 +104,7 @@ class ScriptedConsensusRuntime:
         session_id: str,
         draft: str,
         *,
+        output_path,
         conversation_context,
         progress_sink,
     ) -> DebateResult:
@@ -109,6 +114,7 @@ class ScriptedConsensusRuntime:
             session_id,
             draft,
             InputKind.DRAFT,
+            output_path,
             conversation_context,
             progress_sink,
         )
@@ -127,6 +133,7 @@ class ScriptedConsensusRuntime:
         session_id: str,
         payload: str,
         input_kind: InputKind,
+        output_path: str,
         conversation_context,
         progress_sink,
     ) -> DebateResult:
@@ -148,6 +155,7 @@ class ScriptedConsensusRuntime:
                 "conversation_context": conversation_context,
             }
         )
+        self.output_paths.append(output_path)
         if self.on_call is not None:
             self.on_call()
         if isinstance(outcome, BaseException):
@@ -208,7 +216,7 @@ class ScriptedConsensusRuntime:
         final_candidate = None
         failure_kind = outcome.failure_kind
         if outcome.status is DebateStatus.CONSENSUS:
-            manuscript_path = f"manuscript/{debate_id}.md"
+            manuscript_path = f"manuscript/{output_path}"
             final_candidate = "trusted candidate"
             self._emit(
                 progress_sink,
@@ -264,6 +272,7 @@ class ScriptedConsensusRuntime:
                 if outcome.status is DebateStatus.DEADLOCK
                 else None
             ),
+            reference_operation_id=outcome.reference_operation_id,
         )
         return (
             replace(result, session_id="foreign_session")
@@ -391,8 +400,8 @@ class InteractiveConsensusDispatchTests(InteractiveConversationTestCase):
             callbacks,
             _store,
         ) = self.prepared_selected_controller(
-            "/run inline prompt",
-            "/run --fresh isolated prompt",
+            "/run inline ${core_documents/global_outline.md}",
+            "/run --fresh isolated ${core_documents/character_sheets.md}",
             "/draft-file literal.md",
             "/run",
             "composed line one",
@@ -429,8 +438,8 @@ class InteractiveConsensusDispatchTests(InteractiveConversationTestCase):
         self.assertEqual(
             [call["payload"] for call in runtime.calls],
             [
-                "inline prompt",
-                "isolated prompt",
+                "inline ${core_documents/global_outline.md}",
+                "isolated ${core_documents/character_sheets.md}",
                 "exact loaded draft\r\n\x00",
                 "composed line one\n/send",
             ],
@@ -514,6 +523,23 @@ class InteractiveConsensusDispatchTests(InteractiveConversationTestCase):
 class InteractiveConsensusResultTests(InteractiveConversationTestCase):
     """Verify safe terminal mappings, recovery, and tamper rejection."""
 
+    def test_valid_reference_operation_identity_is_not_presented(self) -> None:
+        operation_id = "rr_07_session_" + "a" * 32
+        runtime = ScriptedConsensusRuntime(
+            ConsensusOutcome(reference_operation_id=operation_id)
+        )
+        (_workspace, _catalog, _entries, controller, _backend, callbacks, _store) = (
+            self.prepared_selected_controller(
+                "/run referenced",
+                "/quit",
+                runtime=runtime,  # type: ignore[arg-type]
+            )
+        )
+        self.assertEqual(controller.run_session_lobby(), 0)
+        rendered = "".join(callbacks.records)
+        self.assertIn("Consensus [completed]", rendered)
+        self.assertNotIn(operation_id, rendered)
+
     def test_all_terminal_mappings_are_safe_and_recover_to_the_prompt(self) -> None:
         failure_kinds = tuple(DebateFailureKind)
         runtime = ScriptedConsensusRuntime(
@@ -561,7 +587,7 @@ class InteractiveConsensusResultTests(InteractiveConversationTestCase):
             with self.subTest(code=code):
                 self.assertIn(_error_record(code), rendered)
         self.assertIn("debate_1", rendered)
-        self.assertIn("manuscript/debate_1.md", rendered)
+        self.assertIn("manuscript/part-01/interactive-2.md", rendered)
         self.assertIn("global_outline.md", rendered)
         self.assertIn("r0", rendered)
         self.assertNotIn("RAW_RESULT_SECRET", rendered)
@@ -817,6 +843,12 @@ class InteractiveConsensusResultTests(InteractiveConversationTestCase):
         cases = (
             ConsensusOutcome(tampered_progress=True),
             ConsensusOutcome(tampered_result=True),
+            ConsensusOutcome(
+                reference_operation_id=(
+                    "rr_11_different_session_" + "a" * 32
+                )
+            ),
+            ConsensusOutcome(reference_operation_id="rr_malformed"),
         )
         for outcome in cases:
             with self.subTest(outcome=outcome):
@@ -847,6 +879,7 @@ class InteractiveConsensusResultTests(InteractiveConversationTestCase):
                     rendered,
                 )
                 self.assertNotIn("foreign_session", rendered)
+                self.assertNotIn("rr_", rendered)
                 self.assertNotIn("RAW_RESULT_SECRET", rendered)
 
 

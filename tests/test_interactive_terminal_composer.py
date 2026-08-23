@@ -89,14 +89,17 @@ def _physical_width(text: str) -> int:
 
 
 class _ScriptedInput:
-    """Expose exact code-point reads and observable TTY capabilities."""
+    """Expose exact UTF-8 byte reads and observable TTY capabilities."""
 
     def __init__(self, characters: str, *, is_terminal: bool = True) -> None:
-        self.characters = list(characters)
+        self.characters = list(characters.encode("utf-8"))
         self.is_terminal = is_terminal
         self.read_calls = 0
         self.tty_calls = 0
         self.fileno_calls = 0
+        self.encoding = "utf-8"
+        self.errors = "strict"
+        self.buffer = self
 
     def isatty(self) -> bool:
         self.tty_calls += 1
@@ -107,12 +110,15 @@ class _ScriptedInput:
         return 7
 
     def read(self, size: int) -> str:
+        raise AssertionError(f"text read must not run for byte input: {size}")
+
+    def read1(self, size: int) -> bytes:
         if size != 1:
             raise AssertionError(f"unexpected read size: {size}")
         self.read_calls += 1
         if not self.characters:
-            return ""
-        return self.characters.pop(0)
+            return b""
+        return bytes((self.characters.pop(0),))
 
 
 class _RecordingOutput:
@@ -225,10 +231,16 @@ def _driver(
         size_calls.append(descriptor)
         return os.terminal_size((width, 24))
 
+    def fpathconf(descriptor: int, name: str) -> int:
+        if descriptor != 7 or name != "PC_VDISABLE":
+            raise AssertionError((descriptor, name))
+        return 0
+
     os_double = SimpleNamespace(
         name="posix",
         environ=environment,
         get_terminal_size=get_terminal_size,
+        fpathconf=fpathconf,
     )
     driver = RawTerminalDriver(
         fallback_read,
@@ -790,6 +802,123 @@ class SemanticInputDriverTests(unittest.TestCase):
             [termios_double.TCSANOW, termios_double.TCSADRAIN],
         )
 
+    def test_partial_escape_prompt_eof_is_typed_without_cancel_marker(self) -> None:
+        view = InputPromptView((), Prompt("prompt>"))
+        for characters in ("\x1b[", "\x1bO"):
+            with self.subTest(characters=repr(characters)):
+                editor, _input, editor_output, editor_fallback, editor_termios, _size = (
+                    _driver(characters)
+                )
+                with mock.patch.object(
+                    driver_module,
+                    "_escape_input_is_ready",
+                    return_value=True,
+                ):
+                    with self.assertRaises(EOFError):
+                        editor.read_line("line> ")
+                self.assertEqual(editor_output.records[-1], "\r\r\x1b[J\n")
+                editor_fallback.assert_not_called()
+                self.assertEqual(
+                    [when for _fd, when, _attrs in editor_termios.set_calls],
+                    [editor_termios.TCSANOW, editor_termios.TCSADRAIN],
+                )
+
+                driver, _input, output, fallback, termios_double, _size = _driver(
+                    characters
+                )
+                with mock.patch.object(
+                    driver_module,
+                    "_escape_input_is_ready",
+                    return_value=True,
+                ) as readiness:
+                    outcome = driver.read_prompt(
+                        view,
+                        render_input_prompt,
+                        _controls.transition_prompt_input,
+                        transient=True,
+                    )
+                self.assertEqual(outcome, ControlOutcome(ControlOutcomeKind.EOF))
+                readiness.assert_called_once_with(7)
+                self.assertEqual(output.records[-1], "\r\r\x1b[J\n")
+                self.assertNotIn("[cancelled]", "".join(output.records))
+                fallback.assert_not_called()
+                self.assertEqual(driver._history_state, MainInputHistoryState())
+                self.assertEqual(
+                    [when for _fd, when, _attrs in termios_double.set_calls],
+                    [termios_double.TCSANOW, termios_double.TCSADRAIN],
+                )
+
+    def test_post_introducer_escape_does_not_cancel_cancellable_prompt(self) -> None:
+        view = InputPromptView((), Prompt("prompt>"))
+        for introducer in ("\x1b[", "\x1bO"):
+            with self.subTest(introducer=repr(introducer)):
+                driver, _input, output, fallback, termios_double, _size = _driver(
+                    "typed" + introducer + "\x1b\n"
+                )
+                with mock.patch.object(
+                    driver_module,
+                    "_escape_input_is_ready",
+                    return_value=True,
+                ) as readiness:
+                    outcome = driver.read_prompt(
+                        view,
+                        render_input_prompt,
+                        _controls.transition_prompt_input,
+                        transient=True,
+                    )
+                self.assertEqual(
+                    outcome,
+                    ControlOutcome(ControlOutcomeKind.COMMIT, text="typed"),
+                )
+                readiness.assert_called_once_with(7)
+                self.assertNotIn("[cancelled]", "".join(output.records))
+                fallback.assert_not_called()
+                self.assertEqual(driver._history_state, MainInputHistoryState())
+                self.assertEqual(
+                    [when for _fd, when, _attrs in termios_double.set_calls],
+                    [termios_double.TCSANOW, termios_double.TCSADRAIN],
+                )
+
+    def test_subject_read_line_live_clears_and_fallback_stays_ordinary(self) -> None:
+        driver, _input, output, fallback, termios_double, _size = _driver(
+            "Harbor subject\n"
+        )
+        terminal = InteractiveTerminal(driver.read_line, driver.write_text)
+
+        self.assertEqual(
+            terminal.request_conversation_subject(),
+            TerminalAction(TerminalActionKind.LINE, text="Harbor subject"),
+        )
+        fallback.assert_not_called()
+        self.assertEqual(output.records[-1], "\r\r\x1b[J")
+        self.assertEqual(driver._history_state, MainInputHistoryState())
+        self.assertEqual(
+            [when for _fd, when, _attrs in termios_double.set_calls],
+            [termios_double.TCSANOW, termios_double.TCSADRAIN],
+        )
+
+        ordinary = mock.Mock(return_value="Fallback subject")
+        fallback_driver, input_stream, fallback_output, _fallback, fallback_termios, _size = (
+            _driver(
+                "unused",
+                fallback=ordinary,
+                terminal_name="dumb",
+            )
+        )
+        fallback_terminal = InteractiveTerminal(
+            fallback_driver.read_line,
+            fallback_driver.write_text,
+        )
+        self.assertEqual(
+            fallback_terminal.request_conversation_subject(),
+            TerminalAction(TerminalActionKind.LINE, text="Fallback subject"),
+        )
+        ordinary.assert_called_once_with("conversation[subject]> ")
+        self.assertEqual(input_stream.read_calls, 0)
+        self.assertEqual(fallback_output.records, [])
+        self.assertEqual(fallback_termios.set_calls, [])
+        self.assertEqual(fallback_driver._history_state, MainInputHistoryState())
+
     def test_live_input_uses_trusted_ansi_plain_cursor_and_reserved_noops(self) -> None:
         reserved = "\x1b[A\x1b[B\t\x1b[Z\x1b"
         driver, _input, output, fallback, termios_double, size_calls = _driver(
@@ -819,7 +948,7 @@ class SemanticInputDriverTests(unittest.TestCase):
         )
         renderer.assert_called_once()
         self.assertIs(renderer.call_args.args[1].profile, CapabilityProfile.ANSI)
-        self.assertEqual(size_calls, [8])
+        self.assertEqual(size_calls, [8, 8])
         fallback.assert_not_called()
         self.assertEqual(driver._history_state, MainInputHistoryState())
         self.assertEqual(
@@ -832,6 +961,107 @@ class SemanticInputDriverTests(unittest.TestCase):
         self.assertIn("界e\u0301", rendered)
         initial_calls = [call for call in provider.call_args_list if call == mock.call("")]
         self.assertEqual(len(initial_calls), 1)
+
+    def test_setup_geometry_failure_and_first_mismatch_fallback_before_mutation(
+        self,
+    ) -> None:
+        view = InputPromptView((), Prompt("input>"))
+        expected_prompt = render_input_prompt(
+            view,
+            _capability(CapabilityProfile.ANSI),
+        ).plain_text
+        for setup_result in (
+            OSError("setup size unavailable"),
+            os.terminal_size((79, 24)),
+        ):
+            with self.subTest(setup=type(setup_result).__name__):
+                fallback = mock.Mock(return_value="fallback value")
+                driver, input_stream, output, _fallback, termios_double, _size = (
+                    _driver("unused", fallback=fallback)
+                )
+                geometry = mock.Mock(
+                    side_effect=(
+                        os.terminal_size((80, 24)),
+                        setup_result,
+                    )
+                )
+                driver._os_provider().get_terminal_size = geometry
+
+                self.assertEqual(
+                    driver.read_input_line(
+                        view,
+                        render_input_prompt,
+                        lambda _buffer: (),
+                    ),
+                    "fallback value",
+                )
+                self.assertEqual(geometry.call_args_list, [mock.call(8)] * 2)
+                fallback.assert_called_once_with(expected_prompt)
+                self.assertEqual(input_stream.read_calls, 0)
+                self.assertEqual(output.records, [])
+                self.assertEqual(termios_double.set_calls, [])
+                self.assertEqual(driver._history_state, MainInputHistoryState())
+
+    def test_matching_resize_stays_live_and_later_setup_drift_fails_closed(
+        self,
+    ) -> None:
+        driver, _input, _output, fallback, termios_double, _size = _driver(
+            "first\nsecond\n"
+        )
+        geometry = mock.Mock(
+            side_effect=(
+                os.terminal_size((80, 24)),
+                os.terminal_size((80, 24)),
+                os.terminal_size((40, 24)),
+                os.terminal_size((40, 24)),
+            )
+        )
+        driver._os_provider().get_terminal_size = geometry
+
+        self.assertEqual(driver.read_line("first> "), "first")
+        self.assertEqual(driver.read_line("second> "), "second")
+        self.assertEqual(geometry.call_args_list, [mock.call(8)] * 4)
+        fallback.assert_not_called()
+        self.assertEqual(
+            [when for _fd, when, _attrs in termios_double.set_calls],
+            [
+                termios_double.TCSANOW,
+                termios_double.TCSADRAIN,
+                termios_double.TCSANOW,
+                termios_double.TCSADRAIN,
+            ],
+        )
+        self.assertEqual(driver._history_state, MainInputHistoryState())
+
+        for setup_result in (
+            OSError("later setup unavailable"),
+            os.terminal_size((39, 24)),
+        ):
+            with self.subTest(later_setup=type(setup_result).__name__):
+                driver, _input, _output, fallback, termios_double, _size = _driver(
+                    "first\nunused\n"
+                )
+                geometry = mock.Mock(
+                    side_effect=(
+                        os.terminal_size((80, 24)),
+                        os.terminal_size((80, 24)),
+                        os.terminal_size((40, 24)),
+                        setup_result,
+                    )
+                )
+                driver._os_provider().get_terminal_size = geometry
+                self.assertEqual(driver.read_line("first> "), "first")
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "^live terminal input preflight failed$",
+                ):
+                    driver.read_line("second> ")
+                fallback.assert_not_called()
+                self.assertEqual(
+                    [when for _fd, when, _attrs in termios_double.set_calls],
+                    [termios_double.TCSANOW, termios_double.TCSADRAIN],
+                )
+                self.assertEqual(driver._history_state, MainInputHistoryState())
 
     def test_vintr_veof_physical_eof_and_output_failures_restore(self) -> None:
         cases: tuple[tuple[str, object], ...] = (
@@ -914,12 +1144,10 @@ class SemanticInputDriverTests(unittest.TestCase):
             fallback=fallback,
             termios_double=termios_double,
         )
-        self.assertEqual(
-            driver.read_input_line(view, render_input_prompt, lambda _buffer: ()),
-            "fallback once",
-        )
+        with self.assertRaisesRegex(OSError, "^activate failed$"):
+            driver.read_input_line(view, render_input_prompt, lambda _buffer: ())
         self.assertEqual(input_stream.read_calls, 0)
-        fallback.assert_called_once()
+        fallback.assert_not_called()
         self.assertEqual(
             [when for _fd, when, _attrs in termios_double.set_calls],
             [termios_double.TCSANOW, termios_double.TCSADRAIN],
@@ -947,15 +1175,27 @@ class SemanticInputDriverTests(unittest.TestCase):
         rendered_input = RenderedInputFrame("input> ", "input> ", 80, 1)
         provider = mock.Mock(return_value=())
         transition = mock.Mock()
+        configuration = driver_module._TerminalConfiguration(
+            7,
+            8,
+            [0, 0, 0, 0, 0, 0, []],
+            [0, 0, 0, 0, 0, 0, []],
+            79,
+            None,
+            None,
+            0,
+            termios_double,
+        )
         with self.assertRaisesRegex(
             ValueError,
-            "^known_width is required with rendered_input$",
+            "^rendered input and known width must match$",
         ):
             driver._read_control_line(
                 rendered_input.plain_text,
                 provider,
                 _model.LineInputState(),
                 transition,
+                configuration=configuration,
                 rendered_input=rendered_input,
             )
         provider.assert_not_called()
@@ -1121,6 +1361,71 @@ class SemanticComposerCoreTests(unittest.TestCase):
             InteractiveTerminal(reads, fail_final).compose(ComposeMode.RUN)
         self.assertEqual(reads.call_count, 2)
         self.assertEqual(writer_calls, 2)
+
+    def test_private_reference_composer_routes_run_and_chat_without_public_growth(
+        self,
+    ) -> None:
+        ordinary = mock.Mock(side_effect=AssertionError("ordinary reader used"))
+        records: list[str] = []
+        terminal = InteractiveTerminal(ordinary, records.append)
+        scope = mock.Mock()
+        paths = mock.Mock()
+        text = mock.Mock()
+        scripted = iter(
+            (
+                "run ${core_documents/global_outline.md}",
+                "/send",
+                "chat ${core_documents/character_sheets.md}#L2-L3",
+                "/send",
+            )
+        )
+        calls: list[tuple[object, ...]] = []
+
+        def read_reference(view: InputPromptView, *collaborators: object) -> str:
+            calls.append((view, *collaborators))
+            return next(scripted)
+
+        terminal._composition_reference_read_line = read_reference
+        composer = terminal_facade.InteractiveCompositionInput(terminal)
+        run = composer.compose(
+            ComposeMode.RUN,
+            reference_scope_provider=scope,
+            reference_paths_provider=paths,
+            reference_text_reader=text,
+        )
+        chat = composer.compose(
+            ComposeMode.CHAT,
+            agent_id=PLOT_ARCHITECT,
+            reference_scope_provider=scope,
+            reference_paths_provider=paths,
+            reference_text_reader=text,
+        )
+
+        self.assertEqual(
+            run,
+            TerminalAction(
+                TerminalActionKind.SEND,
+                text="run ${core_documents/global_outline.md}",
+                line_count=1,
+                character_count=39,
+            ),
+        )
+        self.assertEqual(
+            chat,
+            TerminalAction(
+                TerminalActionKind.SEND,
+                text="chat ${core_documents/character_sheets.md}#L2-L3",
+                line_count=1,
+                character_count=48,
+            ),
+        )
+        self.assertEqual(len(calls), 4)
+        self.assertTrue(all(call[1:] == (scope, paths, text) for call in calls))
+        self.assertTrue(calls[0][0].prompt.name.startswith("compose[run:"))
+        self.assertTrue(calls[2][0].prompt.name.startswith("compose[chat:plot:"))
+        ordinary.assert_not_called()
+        self.assertFalse(hasattr(terminal, "compose_with_references"))
+        self.assertNotIn("InteractiveCompositionInput", terminal_facade.__all__)
 
     def test_confirmation_attempts_hint_tree_and_no_final_event_are_exact(self) -> None:
         reads = iter(("later", " MAYBE ", "yes"))

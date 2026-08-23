@@ -17,6 +17,8 @@ from .models import (
     PromptFileReference,
 )
 from .workspace import Workspace
+from .writing_artifacts import ArtifactContentSnapshot
+from .writing_artifacts.repository import WritingArtifactRepository
 
 
 class PromptAssembler:
@@ -26,10 +28,16 @@ class PromptAssembler:
         self,
         workspace: Workspace,
         *,
+        artifact_repository: WritingArtifactRepository | None = None,
         backend_overrides: Mapping[str, str] | None = None,
         configuration_snapshot: ConfigurationSnapshot | None = None,
     ) -> None:
         self.workspace = workspace
+        self.artifacts = (
+            artifact_repository
+            if artifact_repository is not None
+            else WritingArtifactRepository(workspace.root)
+        )
         self.config = ConfigManager(workspace)
         self.backend_overrides = dict(backend_overrides or {})
         if configuration_snapshot is not None and type(
@@ -70,17 +78,21 @@ class PromptAssembler:
                 self.workspace.root
             ).as_posix()
         )
-        context_document_files = tuple(
-            self._reference(f"core_documents/{filename}")
-            for filename in spec.context_documents
+        requested_artifacts = tuple(
+            f"core_documents/{filename}" for filename in spec.context_documents
         )
+        snapshots = self.artifacts.read_current(requested_artifacts)
+        context_document_files = [
+            self._artifact_reference(snapshot) for snapshot in snapshots
+        ]
+        context_document_file_tuple = tuple(context_document_files)
         fingerprint = self._fingerprint(
             agent_id=agent_id,
             backend=resolved.backend,
             language=resolved.language,
             system_prompt_file=system_prompt_file,
             persona_file=persona_file,
-            context_document_files=context_document_files,
+            context_document_files=context_document_file_tuple,
         )
         return AgentDefinition(
             agent_id=agent_id,
@@ -89,7 +101,7 @@ class PromptAssembler:
             system_prompt_file=system_prompt_file,
             persona_file=persona_file,
             language=resolved.language,
-            context_document_files=context_document_files,
+            context_document_files=context_document_file_tuple,
         )
 
     def build_request(
@@ -139,11 +151,20 @@ class PromptAssembler:
 
     def _reference(self, relative: str) -> PromptFileReference:
         target = self.workspace.path(relative)
-        reference = PromptFileReference.from_path(target)
-        # Re-check the logical category after reading in case an untrusted
-        # workspace was changed concurrently.
-        self.workspace.path(relative)
-        return reference
+        return PromptFileReference.from_path(target)
+
+    def _artifact_reference(
+        self,
+        snapshot: ArtifactContentSnapshot,
+    ) -> PromptFileReference:
+        """Bind repository-verified bytes without retaining path authority."""
+
+        if type(snapshot) is not ArtifactContentSnapshot:
+            raise TypeError("artifact snapshot has an invalid type")
+        return PromptFileReference.from_bytes(
+            self.workspace.root / snapshot.path,
+            snapshot.content,
+        )
 
     def _fingerprint(
         self,

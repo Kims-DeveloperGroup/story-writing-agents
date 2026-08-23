@@ -88,13 +88,18 @@ class CodexAdapter:
         for reference in definition.file_references():
             reference.read_text()
         staging_directory = self.stage_definition(definition)
-        for reference in definition.file_references():
-            reference.read_text()
-        return ProviderBinding(
+        binding = ProviderBinding(
             vendor=self.vendor,
             definition=definition,
             staging_directory=staging_directory,
         )
+        try:
+            for reference in definition.file_references():
+                reference.read_text()
+        except BaseException:
+            self.release(binding)
+            raise
+        return binding
 
     def stage_definition(self, definition: AgentDefinition) -> Path:
         """Create one isolated Codex project containing the bound AGENTS file."""
@@ -373,6 +378,17 @@ class CodexAdapter:
         """Return whether the configured Codex executable resolves."""
 
         return self._which()(self.executable) is not None
+
+    def release(self, binding: ProviderBinding) -> None:
+        """Remove one exact ephemeral Codex binding idempotently."""
+
+        if type(binding) is not ProviderBinding or binding.vendor != self.vendor:
+            raise TypeError("binding must be a Codex ProviderBinding")
+        directory = binding.staging_directory
+        if directory not in self.staging_directories:
+            return
+        self.staging_directories.remove(directory)
+        shutil.rmtree(directory, ignore_errors=True)
 
     def close(self) -> None:
         """Remove all Codex binding directories idempotently."""

@@ -42,6 +42,13 @@ from story_writing_agents.interactive_terminal._render import (
 )
 
 
+_ARTIFACT_REFERENCE_GUIDANCE = (
+    "Artifact references require an attached session and focused conversation. "
+    "In provider-bound prompts, $ chooses a whole-file reference; $$ then "
+    "Enter/Tab opens ranged selection."
+)
+
+
 def _capability(
     profile: CapabilityProfile,
     *,
@@ -431,6 +438,7 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
                             "/session list.",
                             role=SemanticRole.WARNING,
                         ),
+                        Notice(_ARTIFACT_REFERENCE_GUIDANCE),
                         Notice("Type /help for commands; /quit exits."),
                     ),
                 ),
@@ -454,6 +462,7 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
                             "Room messages are saved locally and shared with "
                             "addressed agents."
                         ),
+                        Notice(_ARTIFACT_REFERENCE_GUIDANCE),
                         Notice(
                             "Type /help for commands; /quit releases access "
                             "without pausing."
@@ -544,7 +553,13 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
             )
             for route in AGENT_ROUTES
         )
-        help_sections = tuple(
+        help_sections = (
+            Section(
+                "Writing artifact references",
+                (Notice(_ARTIFACT_REFERENCE_GUIDANCE),),
+                state=ViewState.COMPLETED,
+            ),
+            *tuple(
             Section(
                 group,
                 (
@@ -585,6 +600,7 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
                 state=ViewState.COMPLETED,
             )
             for group in dict.fromkeys(spec.group for spec in COMMANDS)
+            ),
         )
         agent_help = next(spec for spec in COMMANDS if spec.syntax == "/to NAME")
         cases = (

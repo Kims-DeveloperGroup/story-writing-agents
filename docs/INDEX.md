@@ -9,6 +9,10 @@ Use this index to find one canonical answer instead of searching a long manual.
 > status, attached directives and safe inspection, focused history, and
 > controller-boundary cancellation for active operations and local reads.
 > A native authentication gate precedes interactive runtime construction.
+> Inline `${path}` and `${path}#Lx-Ly` references are active in provider-bound
+> prompts. In those shell spans, `$` discovers eligible artifacts, `$${path}`
+> opens one in the independent ranged viewer, and `$$` opens a picker before
+> viewing. These are editing controls, not commands or automation UI.
 
 ## Availability matrix
 
@@ -25,12 +29,15 @@ Use this index to find one canonical answer instead of searching a long manual.
 | List or target agents; send ordinary, `@AGENT`, or `/say` turns | Installed shell; an active conversation must have current focus |
 | Read durable/access facts and perform exact session transitions | Python API; used by the installed shell and runtime |
 | Parse the interactive command language and route metadata | Python API; the shell dispatches a documented subset |
-| Compose a prompt and render safe terminal records | Bare shell `/run`; module-supported terminal Python API |
+| Compose a prompt and render safe terminal records | Shell `/run --output PART/PATH.md`; module-supported terminal Python API |
 | Append/read transcripts; derive bounded complete-turn context | Shell turns append/consume context and `/transcript` reads fresh bounded pages; Python API |
 | Search one session and cite hits | Attached shell `/search` for active records; Python API can explicitly include archived records |
 | Ask an agent to retrieve cited conversation history | Focused shell conversation; additive Python runtime API; active records in the current session only |
 | Persist and send one explicitly addressed one-step turn | Existing `StoryRuntime.converse()` Python API |
 | Run consensus with included, fresh, or draft-file input | Focused active shell conversation; noninteractive CLI and Python API remain available |
+| Publish and identify canonical agent-produced writing artifacts | Every unanimous consensus run; exact paths and eligibility in the writing-artifact reference |
+| Require agents to read canonical artifacts | Inline `${path}` and `${path}#Lx-Ly` in provider-bound conversation, retrieval, and consensus prompts; ordered multi-reference batches and per-invocation read enforcement are active. |
+| Discover a canonical artifact or select an inclusive range | Provider-bound shell prompt spans use `$`, `$${path}`, or `$$`; completion/viewer return to the exact draft without submission. The viewer remains package-internal, with no standalone command, public selection API, or automation UI. |
 | Cancel active advisory/consensus work or partial local rendering | Installed shell; process-level PTY verified on supported POSIX. [Delivery and platform scope](operations/recovery-and-limitations.md#posix-pty-boundary) |
 | Show one focused transcript snapshot and context accounting | Attached shell `/history`; active focus required |
 | Locate bounded runtime diagnostics and exact failure hints | Workspace `debug_logs/runtime.jsonl`; [CLI output](reference/cli.md#runtime-debug-logs) and [privacy boundary](operations/privacy-and-provider.md#workspace-debug-log-privacy) |
@@ -45,6 +52,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 
 ## Guides
 
+- [Canonical artifact references](guides/artifact-references.md)
 - [Workspaces](guides/workspaces.md)
 - [Story sessions and subject conversations](guides/story-sessions.md)
 - [Glasswater interactive end-to-end journey](guides/glasswater-scenario.md)
@@ -69,6 +77,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 - [Agent contracts](reference/agent-contracts.md)
 - [Runtime API](reference/runtime-api.md)
 - [Workspace API](reference/workspace-api.md)
+- [Canonical writing artifacts](reference/writing-artifacts.md)
 - Configuration: [agents](reference/configuration/agent-configuration.md),
   [runtime overrides](reference/configuration/runtime-overrides.md),
   [session storage](reference/configuration/session-storage.md), and
@@ -78,7 +87,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 
 - [Overview](design/overview.md)
 - [Interactive CLI design system contract](design/interactive-cli-design-system.md)
-- [Canonical Python module inventory (40 production units)](../PYTHON_MODULE_INDEX.md)
+- [Canonical Python module inventory (55 production units)](../PYTHON_MODULE_INDEX.md)
 - [Prompts and provider boundary](design/prompts-and-provider.md)
 - [Session lifecycle](design/session-lifecycle.md)
 - [Consensus workflow](design/consensus-workflow.md)

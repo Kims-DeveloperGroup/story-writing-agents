@@ -1,8 +1,11 @@
 # Persistence design
 
 > **Availability:** filesystem persistence covers configuration, sessions,
-> conversations, debates, optional debate-context sidecars, bounded runtime
-> debug-log infrastructure, and manuscripts.
+> conversations, debates, optional debate-context sidecars, canonical writing
+> artifacts, content-free explicit-reference authorization evidence, and
+> bounded runtime debug-log infrastructure. `StoryRuntime` creates and
+> finalizes reference evidence for inline referenced operations; Python callers
+> can inspect it by operation ID.
 
 Key terms: **blackboard**—public debate JSONL; **sidecar**—context stored apart
 from established debate records; **create-only**—never replaces an existing
@@ -21,7 +24,9 @@ The workspace uses separate inspectable files rather than a database:
 | Bounded runtime diagnostics | Internal `debug_log` writer |
 | Retrieval actions, observations, progress, sources | Process/terminal only |
 | Current conversation and agent focus | Controller memory only |
-| Approved manuscript | Workspace artifact commit |
+| Canonical writing artifacts and provenance | `WritingArtifactRepository` |
+| Explicit-reference operation and invocation evidence | `WritingArtifactRepository`; content-free create-only records |
+| Explicit-reference selected content | Transient repository/backend carriers and one immediate provider payload; no workspace evidence field |
 
 <a id="workspace-runtime-debug-log"></a>
 
@@ -200,10 +205,37 @@ work. The file is strict UTF-8 JSON, identity-bound to its path, rejects
 missing, extra, or duplicate keys, and is never overwritten. A collision raises
 `DebateExistsError`. `Workspace.inspect_debate_context()` and the matching
 runtime methods are read-only for debate/session state; runtime wrappers may
-append a bounded operational debug record. Existing inspection JSON, debate
-logs, result JSON, and `DebateResult` remain unchanged.
+append a bounded operational debug record. The sidecar itself does not change
+inspection JSON, debate logs, result JSON, or `DebateResult`; a separate
+referenced run may add its optional content-free operation ID to the result.
 
 ## Durability boundaries
+
+Explicit-reference authorization has a separate durability boundary under
+`writing_artifacts/input_snapshots/`. For each nonempty operation, the
+repository publishes a schema-v1 manifest and `requested` event before reading
+the catalog or artifact content. Later operation and invocation events are
+create-only, canonically encoded records with contiguous sequences and
+contiguous invocation ordinals. A delivery event is durable before selected
+bytes leave the repository boundary. The same repository lease serializes
+these evidence writes with artifact reads and provenance revalidation.
+
+Durable evidence contains schema and operation/invocation identity,
+path/range, provenance, hashes, counts, correlation, states, checkpoints, and
+fixed outcomes—not selected bytes, source/provider text, prompts, or results.
+The private invocation manifest also binds a capability identifier; the
+validated history returned to callers does not expose it. Captured and
+delivered byte tuples are process-local, closeable values. The capability
+object is never serialized or sent to a provider; its identifier remains
+repository-private and is absent from provider payloads and validated history.
+A backend-created read coordinator advances the existing invocation records:
+the exact full provider action precedes `delivered`, a structurally valid
+substantive result precedes `result_received`, and final provenance
+revalidation precedes `accepted`. Selected text, provider payloads, and provider
+results never become evidence fields. A restart can validate history but cannot
+reconstruct or resume transient capabilities. An empty reference batch creates
+neither evidence nor artifact I/O. These records are not part of the canonical
+writing-artifact catalog, completion, or picker namespace.
 
 The blackboard retains input, candidates, audits, proposals, visible errors,
 finalization metadata, and commit record. Result JSON is a projection and omits
@@ -211,10 +243,55 @@ its duplicated message list. Agent history remains owner-isolated and bounded,
 though provider output in visible fields may still be sensitive.
 
 Terminal result creation and lifecycle transition finish before terminal
-progress. Approved artifact commit validates the whole set, replaces core files
-in fixed order, then exclusively creates the manuscript; cross-file rollback is
-best effort. No sidecar, log, default, transcript, result, state, and artifact
-set forms one database transaction.
+progress. Approved artifact publication is a separate recoverable transaction:
+one immutable schema-v2 journal records the exact catalog-before state,
+catalog-after image, commit, and ordered manuscript/core targets. It is not
+rewritten as publication advances. The repository publishes and verifies target
+bytes, writes immutable commit history, publishes the catalog last, then
+exclusively retires the unchanged completed journal to non-authoritative
+staging. The next artifact access rolls forward only from exact catalog-before
+or verifies an exact catalog-after state; any other catalog position or missing,
+replaced, or divergent authority writes a persistent block marker and fails all
+later artifact access closed. Retained `.tmp`, `.held`, `.retired`, and
+`.completed` staging files are ignored by recovery and catalog listing and may
+accumulate.
+
+Immutable commits are also the permanent manuscript-reservation ledger, not
+just history for current catalog rows. Each access globally audits exact commit
+records against the catalog. Each immutable commit file must equal the
+repository's canonical JSON bytes, catalog paths equal the union of every
+artifact path in all non-exempt commits, and each entry exactly matches its
+referenced commit. Reformatting is divergence, not a migration input.
+
+Commit times are offset-aware instants. For a repeated core path, the catalog
+must select the unique newest normalized instant; an equal-newest tie or older
+projection fails closed. Generated timestamps are strictly later than every
+ledger instant even across wall-clock rollback, and an unrepresentable next
+instant fails before mutation. During exact catalog-before recovery, only the
+pending journal's already published byte-identical canonical commit is exempt:
+it contributes no paths or newest-core candidate, while all older established
+authority remains required. Projected and exact catalog-after audit the full
+commit set without an exemption. Catalog loss, subsets, malformed/noncanonical
+or extra commits, mismatches, and duplicate manuscript reservations fail closed
+instead of being rewritten, reconstructed, or migrated.
+
+The permanent repository readiness triple has its own durability boundary:
+primary lock, anchor, and `ready` are exact hard-link names for one regular inode
+with link count three. Initialization first takes a transient bootstrap `flock`
+on the open writing-artifact state directory and flushes its retained ancestry.
+It exclusively creates and flushes the primary, flushes the parent, links and
+flushes the anchor, verifies that `ready` is absent, then links and flushes
+`ready`. It verifies the triple, acquires the primary `flock`, reverifies, and
+releases bootstrap before work. Partial or old two-link state, aliases,
+divergent or extra links, and any failure prevent protected work and remain
+unchanged; no cleanup, reconstruction, or migration is attempted.
+
+That artifact transaction does not combine sidecars, blackboards, defaults,
+transcripts, debate lifecycle, results, provider state, and agent state into one
+database transaction. Infrastructure interruption can therefore leave a
+recoverable artifact journal alongside an incomplete non-artifact operation.
+Exact artifact paths, eligibility, recovery positions, and user responses are in
+[Canonical writing artifacts](../reference/writing-artifacts.md).
 
 One-step and retrieval turns append exactly one user event before provider work.
 Success appends one reply; ordinary failures attempt one sanitized runtime error,
@@ -223,9 +300,11 @@ and `asyncio.CancelledError` attempts its fixed runtime error. Provider
 instead attempts a separate `cancelled`/`interrupted` operational record and
 re-raises the identical exception without automatic retry. The unmatched user
 event remains visible to full transcript reads and is excluded from later context.
-Retrieval adds no control, source, sidecar, catalog, default, debate, state, or
-artifact record; compatible provider-thread metadata may update. Consensus
-snapshots never append the transcript.
+Retrieval actions and observations add no control, source, sidecar, catalog,
+default, debate, state, or canonical-artifact publication; compatible
+provider-thread metadata may update. A referenced top-level turn separately
+adds the content-free operation and invocation evidence described above.
+Consensus snapshots never append the transcript.
 
 The canonical path tree is in [Session storage](../reference/configuration/session-storage.md).
 Accessor signatures are in [Workspace API](../reference/workspace-api.md),

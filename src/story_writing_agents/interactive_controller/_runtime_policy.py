@@ -128,7 +128,10 @@ def validate_debate_inspection(
             "error",
             "action_required",
         }
-        if type(result) is not dict or set(result) != result_fields:
+        if type(result) is not dict or frozenset(result) not in {
+            frozenset(result_fields),
+            frozenset((*result_fields, "reference_operation_id")),
+        }:
             raise ValueError("runtime debate result has an invalid shape")
         if terminal is not True:
             raise ValueError("runtime terminal debate sources are inconsistent")
@@ -138,6 +141,11 @@ def validate_debate_inspection(
             or result["status"] != status
         ):
             raise ValueError("runtime debate result identity is invalid")
+        if "reference_operation_id" in result:
+            _validate_reference_operation_identifier(
+                result["reference_operation_id"],
+                session_id=session_id,
+            )
         if state is not None:
             state_fields = {
                 "schema_version",
@@ -263,12 +271,20 @@ def validate_session_inspection(
             "error",
         }
         fields = set(row)
-        if fields == result_fields:
+        if frozenset(fields) in {
+            frozenset(result_fields),
+            frozenset((*result_fields, "reference_operation_id")),
+        }:
             if row["terminal"] is not True:
                 raise ValueError(
                     "runtime session terminal summary is inconsistent"
                 )
             artifact = row["manuscript_path"]
+            if "reference_operation_id" in row:
+                _validate_reference_operation_identifier(
+                    row["reference_operation_id"],
+                    session_id=session_id,
+                )
         elif fields == state_fields:
             artifact = None
         else:
@@ -465,6 +481,24 @@ def _validate_safe_inspection_identifier(
         raise ValueError(f"runtime inspection {label} is invalid") from exc
 
 
+def _validate_reference_operation_identifier(
+    value: object,
+    *,
+    session_id: str,
+) -> str:
+    """Validate one safe operation identity and its embedded session scope."""
+
+    if type(value) is not str or len(value) > 128:
+        raise ValueError("runtime reference operation ID is invalid")
+    prefix = f"rr_{len(session_id):02x}_{session_id}_"
+    suffix = value[len(prefix):] if value.startswith(prefix) else ""
+    if len(suffix) != 32 or any(
+        character not in "0123456789abcdef" for character in suffix
+    ):
+        raise ValueError("runtime reference operation ID is invalid")
+    return value
+
+
 def classify_inspection_failure(failure: Exception) -> InteractiveError:
     """Map one inspection failure to fixed safe interactive output."""
 
@@ -609,6 +643,7 @@ def validate_conversation_retrieval_result(
         content=value.content,
         context=value.context,
         sources=tuple(sources),
+        reference_operation_id=value.reference_operation_id,
     )
     if (
         canonical.session_id != expected_session_id
@@ -616,6 +651,11 @@ def validate_conversation_retrieval_result(
         or canonical.agent_id != expected_agent_id
     ):
         raise ValueError("retrieval result identity does not match its turn")
+    if canonical.reference_operation_id is not None:
+        _validate_reference_operation_identifier(
+            canonical.reference_operation_id,
+            session_id=expected_session_id,
+        )
     if canonical.sources and not progress_events:
         raise ValueError("retrieval sources require completed search progress")
     if progress_events:
@@ -779,6 +819,11 @@ def validate_consensus_result(
         or type(result.core_updates) is not tuple
     ):
         raise ValueError("runtime consensus result is invalid")
+    if result.reference_operation_id is not None:
+        _validate_reference_operation_identifier(
+            result.reference_operation_id,
+            session_id=expected_session_id,
+        )
     expected_terminal = {
         DebateStatus.CONSENSUS: DebateProgressPhase.CONSENSUS,
         DebateStatus.DEADLOCK: DebateProgressPhase.DEADLOCK,

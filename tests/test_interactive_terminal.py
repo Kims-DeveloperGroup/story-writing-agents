@@ -219,6 +219,12 @@ ERROR_DEFAULTS = {
     ),
 }
 
+_ARTIFACT_REFERENCE_GUIDANCE = (
+    "Artifact references require an attached session and focused conversation. "
+    "In provider-bound prompts, $ chooses a whole-file reference; $$ then "
+    "Enter/Tab opens ranged selection."
+)
+
 AGENT_CASES = (
     (LEAD_ORCHESTRATOR, "lead", "Lead Orchestrator"),
     (PLOT_ARCHITECT, "plot", "Plot & Structure Architect"),
@@ -327,6 +333,11 @@ def expected_session_orientation(
         f"  Target: {display_name}\n"
         f"  History: {history_count} visible room {event_word}\n"
         "  [info] Room messages are saved locally and shared with addressed agents.\n"
+        "  [info] Artifact references require an attached session and focused "
+        "conversatio\n"
+        "         n. In provider-bound prompts, $ chooses a whole-file reference; "
+        "$$ then\n"
+        "          Enter/Tab opens ranged selection.\n"
         "  [info] Type /help for commands; /quit releases access without pausing.\n"
         f"{'-' * 80}\n"
     )
@@ -1093,6 +1104,72 @@ class PromptAndRenderingTests(unittest.TestCase):
                     )
         self.assertEqual(callbacks.prompts, [])
 
+    def test_private_reference_main_input_is_call_local_and_cleans_after_failure(
+        self,
+    ) -> None:
+        terminal, callbacks = make_terminal("literal $")
+        direct = terminal_module.InteractiveMainInput(terminal)
+        choice_provider = mock.Mock(return_value=None)
+        scope_provider = mock.Mock(return_value=None)
+        paths_provider = mock.Mock(return_value=())
+        text_reader = mock.Mock(return_value="unused")
+
+        self.assertEqual(
+            direct.read_main(choice_provider),
+            TerminalAction(TerminalActionKind.LINE, text="literal $"),
+        )
+        self.assertEqual(callbacks.prompts, ["story[lobby]> "])
+        scope_provider.assert_not_called()
+        paths_provider.assert_not_called()
+        text_reader.assert_not_called()
+
+        observed: list[tuple[object, ...]] = []
+        failure = RuntimeError("reference reader failed")
+
+        def failing_read(*arguments: object) -> str:
+            observed.append(arguments)
+            if len(observed) == 1:
+                with self.assertRaisesRegex(RuntimeError, "already active"):
+                    direct.read_main_with_references(
+                        choice_provider,
+                        scope_provider,
+                        paths_provider,
+                        text_reader,
+                    )
+                raise failure
+            return "recovered $"
+
+        terminal._main_reference_read_line = failing_read
+        direct = terminal_module.InteractiveMainInput(terminal)
+        with self.assertRaises(RuntimeError) as raised:
+            direct.read_main_with_references(
+                choice_provider,
+                scope_provider,
+                paths_provider,
+                text_reader,
+                session_id="session",
+                agent_id=PLOT_ARCHITECT,
+            )
+        self.assertIs(raised.exception, failure)
+        self.assertEqual(len(observed), 1)
+        prompt, choices, scope, paths, text = observed[0]
+        self.assertEqual(prompt, "story[session:plot]> ")
+        self.assertIs(choices, choice_provider)
+        self.assertIs(scope, scope_provider)
+        self.assertIs(paths, paths_provider)
+        self.assertIs(text, text_reader)
+
+        self.assertEqual(
+            direct.read_main_with_references(
+                choice_provider,
+                scope_provider,
+                paths_provider,
+                text_reader,
+            ),
+            TerminalAction(TerminalActionKind.LINE, text="recovered $"),
+        )
+        self.assertEqual(len(observed), 2)
+
     def test_subject_prompt_is_exact_call_local_and_returns_typed_events(
         self,
     ) -> None:
@@ -1261,6 +1338,11 @@ class PromptAndRenderingTests(unittest.TestCase):
                 "  [warning] Provider calls are unavailable in the lobby. Use "
                 "/session create NAM\n"
                 "            E, /session resume [NAME], or /session list.\n"
+                "  [info] Artifact references require an attached session and focused "
+                "conversatio\n"
+                "         n. In provider-bound prompts, $ chooses a whole-file "
+                "reference; $$ then\n"
+                "          Enter/Tab opens ranged selection.\n"
                 "  [info] Type /help for commands; /quit exits.\n"
                 f"{'-' * 80}\n"
             ],
@@ -1330,6 +1412,11 @@ class PromptAndRenderingTests(unittest.TestCase):
                 "  Workspace: /stories/example\n"
                 "  Session: SESSION (created)\n"
                 "  Target: Lead Orchestrator\n"
+                "  [info] Artifact references require an attached session and focused "
+                "conversatio\n"
+                "         n. In provider-bound prompts, $ chooses a whole-file "
+                "reference; $$ then\n"
+                "          Enter/Tab opens ranged selection.\n"
                 "  [info] Type /help for commands; /quit releases access without pausing.\n"
                 f"{'-' * 80}\n"
             ],
@@ -2063,49 +2150,58 @@ class HelpAndErrorTests(unittest.TestCase):
         terminal, callbacks = make_terminal(width=200)
         terminal.write_help()
 
-        sections = tuple(
+        sections = (
             terminal_module.Section(
-                group,
-                (
-                    terminal_module.ListView(
-                        "Commands",
-                        tuple(
-                            terminal_module.Record(
-                                "command",
-                                title=spec.syntax,
-                                fields=(
-                                    terminal_module.Field(
-                                        "Aliases",
-                                        ", ".join(spec.aliases)
-                                        if spec.aliases
-                                        else "none",
-                                    ),
-                                    terminal_module.Field(
-                                        "Calls provider",
-                                        "yes" if spec.may_call_provider else "no",
-                                    ),
-                                    terminal_module.Field(
-                                        "May write artifacts",
-                                        "yes"
-                                        if spec.may_write_artifacts
-                                        else "no",
-                                    ),
-                                ),
-                                role=terminal_module.SemanticRole.COMMAND,
-                                state=terminal_module.ViewState.COMPLETED,
-                            )
-                            for spec in COMMANDS
-                            if spec.group == group
-                        ),
-                        total_count=sum(
-                            spec.group == group for spec in COMMANDS
-                        ),
-                        state=terminal_module.ViewState.COMPLETED,
-                    ),
-                ),
+                "Writing artifact references",
+                (terminal_module.Notice(_ARTIFACT_REFERENCE_GUIDANCE),),
                 state=terminal_module.ViewState.COMPLETED,
-            )
-            for group in dict.fromkeys(spec.group for spec in COMMANDS)
+            ),
+            *tuple(
+                terminal_module.Section(
+                    group,
+                    (
+                        terminal_module.ListView(
+                            "Commands",
+                            tuple(
+                                terminal_module.Record(
+                                    "command",
+                                    title=spec.syntax,
+                                    fields=(
+                                        terminal_module.Field(
+                                            "Aliases",
+                                            ", ".join(spec.aliases)
+                                            if spec.aliases
+                                            else "none",
+                                        ),
+                                        terminal_module.Field(
+                                            "Calls provider",
+                                            "yes"
+                                            if spec.may_call_provider
+                                            else "no",
+                                        ),
+                                        terminal_module.Field(
+                                            "May write artifacts",
+                                            "yes"
+                                            if spec.may_write_artifacts
+                                            else "no",
+                                        ),
+                                    ),
+                                    role=terminal_module.SemanticRole.COMMAND,
+                                    state=terminal_module.ViewState.COMPLETED,
+                                )
+                                for spec in COMMANDS
+                                if spec.group == group
+                            ),
+                            total_count=sum(
+                                spec.group == group for spec in COMMANDS
+                            ),
+                            state=terminal_module.ViewState.COMPLETED,
+                        ),
+                    ),
+                    state=terminal_module.ViewState.COMPLETED,
+                )
+                for group in dict.fromkeys(spec.group for spec in COMMANDS)
+            ),
         )
         expected = terminal_module.Panel(
             "Help",
@@ -2154,8 +2250,8 @@ class HelpAndErrorTests(unittest.TestCase):
                 "  Group:\n"
                 "   Consensus\n"
                 "  Syntax:\n"
-                "   /run [PROMPT] | /run --fresh \n"
-                "   PROMPT\n"
+                "   /run [--fresh] [--output PART\n"
+                "   /PATH.md] [PROMPT]\n"
                 "  Aliases:\n"
                 "   none\n"
                 "  Calls provider:\n"
@@ -2163,7 +2259,8 @@ class HelpAndErrorTests(unittest.TestCase):
                 "  May write artifacts:\n"
                 "   yes\n"
                 "  Example:\n"
-                "   /run Outline chapter one\n"
+                "   /run --output part-01/chapter\n"
+                "   -01.md Outline chapter one\n"
                 f"{'-' * 32}\n"
             ],
         )

@@ -1,8 +1,10 @@
 # Session and workspace storage
 
 > **Availability:** V2 defaults, provider sessions, debates, conversations,
-> internal bounded runtime debug logs, and manuscripts persist as plaintext
-> workspace files.
+> provenance-backed core documents, part-scoped manuscripts, explicit-reference
+> evidence, provider-native state, and bounded runtime debug logs persist as
+> plaintext workspace files. Runtime-managed documents and records are strict
+> UTF-8.
 
 Key terms: **default**—a persisted command or conversation fallback;
 **manifest**—durable provider state; **access claim**—temporary process ownership;
@@ -15,7 +17,7 @@ Key terms: **default**—a persisted command or conversation fallback;
 ```text
 workspace/
 ├── config/{system_defaults.json,agent_configs.json,agents/,persona_templates/}
-├── core_documents/{global_outline.md,part_outlines.md,character_sheets.md,narrative_rules.md}
+├── core_documents/{global_outline.md,part_outlines.md,character_sheets.md,narrative_rules.md} [lazy agent publications]
 ├── agent_states/
 │   ├── orchestrator_state/
 │   │   ├── sessions/<session_id>.json                          [lazy overrides]
@@ -25,7 +27,23 @@ workspace/
 │   │   ├── provider_sessions/.antigravity/                      [lazy retained provider state]
 │   │   ├── provider_sessions/<session_id>.json                 [lazy manifest]
 │   │   ├── provider_sessions/<session_id>.access.json          [temporary claim]
-│   │   └── debates/<session_id>/<debate_id>.jsonl              [lazy history]
+│   │   ├── debates/<session_id>/<debate_id>.jsonl              [lazy history]
+│   │   └── writing_artifacts/
+│   │       ├── catalog.json                                    [lazy current provenance]
+│   │       ├── commits/<commit_id>.json                        [lazy immutable history]
+│   │       ├── transactions/<commit_id>.json                   [authoritative pending journal]
+│   │       ├── staging/.artifacts-*.tmp                        [retained staged bytes]
+│   │       ├── staging/.artifacts-*.held                       [retained prior bytes]
+│   │       ├── staging/.artifacts-*.retired                    [retained failed publication]
+│   │       ├── staging/.artifacts-*.completed                  [retained completed journal]
+│   │       ├── input_snapshots/<operation_id>/manifest.json    [reference request; schema v1]
+│   │       ├── input_snapshots/<operation_id>/operation_events/<sequence>.json
+│   │       ├── input_snapshots/<operation_id>/invocations/<invocation_id>/manifest.json
+│   │       ├── input_snapshots/<operation_id>/invocations/<invocation_id>/events/<sequence>.json
+│   │       ├── .artifacts.lock                                 [permanent readiness triple]
+│   │       ├── .artifacts.lock.anchor                          [same lock inode]
+│   │       ├── .artifacts.lock.ready                           [same lock inode; ready marker]
+│   │       └── recovery_blocked.json                           [exceptional fail-closed marker]
 │   └── {plot_architect,character_custodian,execution_specialist}_state/
 │       └── debates/<session_id>/<debate_id>.jsonl
 ├── debug_logs/
@@ -36,11 +54,39 @@ workspace/
 │   ├── <debate_id>.{state.json,jsonl,result.json}
 │   ├── <debate_id>.context.json                                [lazy debate context]
 │   └── interactive/conversations/<conversation_id>/{metadata.json,transcript.jsonl}
-└── manuscript/<safe-output-path>
+└── manuscript/<part-id>/<safe-relative-markdown-path>           [lazy create-only output]
 ```
 
-Initialization adds `.gitkeep` to empty directories. Normal init preserves
-files; prompt overwrite replaces only the four role prompts.
+Initialization adds `.gitkeep` to selected empty state and manuscript
+directories. Normal init preserves files; prompt overwrite replaces only the
+four role prompts. Initialization
+does not create any of the four core documents or a manuscript. Artifact state
+appears only when the artifact repository is accessed or a unanimous run
+publishes output; `recovery_blocked.json` appears only after recovery cannot be
+trusted. Staging residue is non-authoritative, never catalog-listed, retained
+after successful and failed publication, and may grow. Only exact JSON entries
+under `transactions/` are recovery journals. The three permanent lock names are
+hard links to one regular inode with link count three; partial or old two-link
+state is invalid and is not migrated or reconstructed. See
+[Canonical writing artifacts](../writing-artifacts.md).
+
+`input_snapshots/` is lazy, internal authorization evidence for nonempty
+explicit-reference operations. Its operation and invocation manifests and
+events are create-only, canonical strict-UTF-8 schema-v1 JSON. Event filenames
+are zero-padded contiguous sequence numbers; invocation ordinals are also
+contiguous. Records contain schema and operation/invocation identity,
+path/range indicators, provenance, hashes, counts, correlation, states,
+checkpoints, and fixed outcomes. A private invocation manifest also binds its
+capability identifier, which validated caller history does not expose.
+Selected bytes, source/provider text, prompts, and results are never stored
+there.
+
+The directory is excluded from the canonical artifact catalog, completion, and
+picker namespaces. Do not hand-edit it. A missing operation directory means no
+history; a present partial or invalid tree is corrupt and fails closed for that
+operation. See
+[Recovery](../../operations/recovery-and-limitations.md#explicit-reference-evidence-recovery)
+and [Canonical writing artifacts](../writing-artifacts.md#authorized-reads-and-lifecycle-evidence).
 
 <a id="runtime-debug-log-storage"></a>
 

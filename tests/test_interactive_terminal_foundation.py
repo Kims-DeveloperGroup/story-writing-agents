@@ -210,6 +210,15 @@ class StartupStream(io.StringIO):
         super().__init__(value)
         self.descriptor = descriptor
         self.read_calls = 0
+        self.buffer = self
+
+    @property
+    def encoding(self) -> str:
+        return "utf-8"
+
+    @property
+    def errors(self) -> str:
+        return "strict"
 
     def isatty(self) -> bool:
         return True
@@ -220,6 +229,9 @@ class StartupStream(io.StringIO):
     def read(self, size: int = -1) -> str:
         self.read_calls += 1
         return super().read(size)
+
+    def read1(self, size: int) -> bytes:
+        raise AssertionError(f"startup unexpectedly read {size} input bytes")
 
 
 class StartupTermios:
@@ -591,6 +603,30 @@ class SemanticModelFoundationTests(unittest.TestCase):
             ("line_state", "history_index", "saved_draft", "overlay_open"),
         )
         self.assertEqual(
+            tuple(field.name for field in fields(SuggestionPalette)),
+            (
+                "buffer",
+                "candidates",
+                "highlighted_id",
+                "title",
+                "instruction",
+                "empty_text",
+                "state",
+            ),
+        )
+        self.assertEqual(
+            tuple(inspect.signature(SuggestionPalette).parameters),
+            (
+                "buffer",
+                "candidates",
+                "highlighted_id",
+                "title",
+                "instruction",
+                "empty_text",
+                "state",
+            ),
+        )
+        self.assertEqual(
             tuple(_controls.__all__),
             (
                 "transition_line_input",
@@ -668,6 +704,9 @@ class SemanticModelFoundationTests(unittest.TestCase):
                 (Choice("off", "Off", enabled=False),),
                 highlighted_id="off",
             ),
+            lambda: SuggestionPalette("/", (), title=""),
+            lambda: SuggestionPalette("/", (), instruction=""),
+            lambda: SuggestionPalette("/", (), empty_text=""),
             lambda: Picker(
                 Prompt("Choose"),
                 (Choice("off", "Off", enabled=False),),
@@ -762,6 +801,8 @@ class PureControlFoundationTests(unittest.TestCase):
         for kind in (
             KeyKind.UP,
             KeyKind.DOWN,
+            KeyKind.SHIFT_UP,
+            KeyKind.SHIFT_DOWN,
             KeyKind.TAB,
             KeyKind.SHIFT_TAB,
             KeyKind.ESCAPE,
@@ -1033,6 +1074,96 @@ class RenderingFoundationTests(unittest.TestCase):
 
 
 class CapabilityAndDriverFoundationTests(unittest.TestCase):
+    def test_escape_reducer_discards_post_introducer_c0_and_del(self) -> None:
+        for introducer in ("\x1b[", "\x1bO"):
+            for value in (*range(0x20), 0x7F):
+                with self.subTest(
+                    introducer=repr(introducer),
+                    terminator=hex(value),
+                ):
+                    state = _driver._LiveEditorState(
+                        escape_sequence=introducer,
+                    )
+                    self.assertEqual(
+                        _driver._consume_escape_character(state, chr(value)),
+                        (None, False),
+                    )
+                    self.assertIsNone(state.escape_sequence)
+
+        bare_escape = _driver._LiveEditorState(escape_sequence="\x1b")
+        self.assertEqual(
+            _driver._consume_escape_character(bare_escape, "x"),
+            (KeyEvent(KeyKind.ESCAPE), True),
+        )
+        self.assertIsNone(bare_escape.escape_sequence)
+
+    def test_escape_reducer_bounds_overlong_sequences_in_identity_state(self) -> None:
+        for introducer in ("\x1b[", "\x1bO"):
+            with self.subTest(introducer=repr(introducer), boundary=True):
+                state = _driver._LiveEditorState(escape_sequence=introducer)
+                for _index in range(61):
+                    self.assertEqual(
+                        _driver._consume_escape_character(state, "1"),
+                        (None, False),
+                    )
+                self.assertEqual(state.escape_sequence, introducer + "1" * 61)
+                self.assertEqual(
+                    _driver._consume_escape_character(state, "1"),
+                    (None, False),
+                )
+                self.assertIs(
+                    state.escape_sequence,
+                    _driver._DISCARDING_ESCAPE_SEQUENCE,
+                )
+                for _index in range(10_000):
+                    self.assertEqual(
+                        _driver._consume_escape_character(state, "1"),
+                        (None, False),
+                    )
+                self.assertIs(
+                    state.escape_sequence,
+                    _driver._DISCARDING_ESCAPE_SEQUENCE,
+                )
+
+            suffixes = (
+                "A",
+                "B",
+                "H",
+                "1;2A",
+                "1;2B",
+                "1~",
+                "3~",
+                "Z",
+            )
+            for suffix in suffixes:
+                with self.subTest(
+                    introducer=repr(introducer),
+                    suffix=repr(suffix),
+                ):
+                    state = _driver._LiveEditorState(
+                        escape_sequence=_driver._DISCARDING_ESCAPE_SEQUENCE,
+                    )
+                    for character in suffix:
+                        self.assertEqual(
+                            _driver._consume_escape_character(state, character),
+                            (None, False),
+                        )
+                    self.assertIsNone(state.escape_sequence)
+
+            for value in (*range(0x20), 0x7F):
+                with self.subTest(
+                    introducer=repr(introducer),
+                    control=hex(value),
+                ):
+                    state = _driver._LiveEditorState(
+                        escape_sequence=_driver._DISCARDING_ESCAPE_SEQUENCE,
+                    )
+                    self.assertEqual(
+                        _driver._consume_escape_character(state, chr(value)),
+                        (None, False),
+                    )
+                    self.assertIsNone(state.escape_sequence)
+
     def test_capabilities_observe_streams_independently_and_select_profiles(
         self,
     ) -> None:
@@ -1310,12 +1441,29 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
         view = _model.InputPromptView((), prompt)
         frame = render_input_prompt(view, capabilities)
         renderer = mock.Mock(return_value=frame)
+        configuration = _driver._TerminalConfiguration(
+            7,
+            8,
+            [0, 0, 0, 0, 0, 0, []],
+            [0, 0, 0, 0, 0, 0, []],
+            60,
+            None,
+            None,
+            0,
+            object(),
+        )
         with (
             mock.patch.object(
                 RawTerminalDriver,
                 "capabilities",
                 autospec=True,
                 return_value=capabilities,
+            ),
+            mock.patch.object(
+                RawTerminalDriver,
+                "_prepare_input",
+                autospec=True,
+                return_value=(capabilities, configuration),
             ),
             mock.patch.object(
                 RawTerminalDriver,
@@ -1338,8 +1486,8 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             self.assertIs(call.args[2], _driver._empty_suggestion_preview)
             self.assertEqual(call.args[3], LineInputState())
             self.assertIs(call.args[4], transition_prompt_input)
+            self.assertIs(call.kwargs["configuration"], configuration)
             self.assertEqual(call.kwargs["rendered_input"], frame)
-            self.assertEqual(call.kwargs["known_width"], 60)
 
         invalid = (
             lambda: driver.read_prompt(object(), renderer, transition_prompt_input),
@@ -1819,6 +1967,7 @@ class StartupPresentationFoundationTests(unittest.TestCase):
             if environment is None
             else environment,
             get_terminal_size=lambda descriptor: os.terminal_size((80, 24)),
+            fpathconf=lambda descriptor, name: 0,
         )
         driver = RawTerminalDriver(
             lambda _prompt: "fallback",
@@ -1999,17 +2148,34 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
         terminal_root = package_root / "interactive_terminal"
         expected_dependencies = {
             "__init__.py": {"._core"},
+            "_input_lifecycle.py": set(),
             "_model.py": set(),
             "_controls.py": {"._model"},
             "_render.py": {"._model"},
-            "_driver.py": {"._model"},
+            "_viewer_model.py": set(),
+            "_viewer_controls.py": {"._model", "._viewer_model"},
+            "_viewer_render.py": {"._model", "._viewer_model"},
+            "_reference_activation.py": {
+                "..writing_artifacts",
+                "._model",
+            },
+            "_driver.py": {
+                "._input_lifecycle",
+                "._model",
+                "._reference_activation",
+                "._viewer_model",
+            },
             "_core.py": {
                 "..agents",
                 "..interactive_commands",
                 "._controls",
                 "._driver",
                 "._model",
+                "._reference_activation",
                 "._render",
+                "._viewer_controls",
+                "._viewer_model",
+                "._viewer_render",
             },
         }
         self.assertEqual(
@@ -2032,9 +2198,14 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
         environment["PYTHONPATH"] = str(package_root.parent)
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
         modules = (
+            "story_writing_agents.interactive_terminal._input_lifecycle",
             "story_writing_agents.interactive_terminal._model",
             "story_writing_agents.interactive_terminal._controls",
             "story_writing_agents.interactive_terminal._render",
+            "story_writing_agents.interactive_terminal._viewer_model",
+            "story_writing_agents.interactive_terminal._viewer_controls",
+            "story_writing_agents.interactive_terminal._viewer_render",
+            "story_writing_agents.interactive_terminal._reference_activation",
             "story_writing_agents.interactive_terminal._driver",
             "story_writing_agents.interactive_terminal._core",
             "story_writing_agents.interactive_terminal",

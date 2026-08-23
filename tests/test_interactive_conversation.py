@@ -99,6 +99,8 @@ class ScriptedTerminalCallbacks:
 
     def read_line(self, prompt: str) -> str:
         self.prompts.append(prompt)
+        if "Manuscript output" in prompt:
+            return f"part-01/interactive-{len(self.prompts)}.md"
         if not self.reads:
             raise AssertionError(f"unexpected input request: {prompt}")
         value = self.reads.pop(0)
@@ -268,6 +270,7 @@ def _conversation_result(
     *,
     turn_id: str = "current_turn",
     context: ConversationContextWindow | None = None,
+    reference_operation_id: str | None = None,
 ) -> ConversationRetrievalResult:
     """Build one direct-answer retrieval result for controller fixtures."""
 
@@ -279,6 +282,7 @@ def _conversation_result(
         content=content,
         context=_empty_context() if context is None else context,
         sources=(),
+        reference_operation_id=reference_operation_id,
     )
 
 
@@ -647,12 +651,12 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
             callbacks,
             store,
         ) = self.prepared_selected_controller(
-            "ordinary",
-            "@plot routed",
+            "ordinary ${core_documents/global_outline.md}",
+            "@plot routed ${core_documents/character_sheets.md}#L2-L2",
             "/to character",
-            "sticky",
+            "sticky ${core_documents/narrative_rules.md}",
             "/agent lead",
-            "/say /run is literal",
+            "/say /run is literal ${manuscript/part-01/seed.md}",
             "/quit",
             runtime=runtime,
         )
@@ -686,14 +690,29 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
         self.assertEqual(
             runtime.calls,
             [
-                ("session", conversation_id, LEAD_ORCHESTRATOR, "ordinary"),
-                ("session", conversation_id, PLOT_ARCHITECT, "routed"),
-                ("session", conversation_id, CHARACTER_CUSTODIAN, "sticky"),
                 (
                     "session",
                     conversation_id,
                     LEAD_ORCHESTRATOR,
-                    "/run is literal",
+                    "ordinary ${core_documents/global_outline.md}",
+                ),
+                (
+                    "session",
+                    conversation_id,
+                    PLOT_ARCHITECT,
+                    "routed ${core_documents/character_sheets.md}#L2-L2",
+                ),
+                (
+                    "session",
+                    conversation_id,
+                    CHARACTER_CUSTODIAN,
+                    "sticky ${core_documents/narrative_rules.md}",
+                ),
+                (
+                    "session",
+                    conversation_id,
+                    LEAD_ORCHESTRATOR,
+                    "/run is literal ${manuscript/part-01/seed.md}",
                 ),
             ],
         )
@@ -806,6 +825,32 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
             rendered,
         )
         self.assertNotIn("\x1b", rendered)
+
+    def test_reference_operation_identity_is_validated_but_not_presented(self) -> None:
+        operation_id = "rr_07_session_" + "a" * 32
+
+        def result(
+            session_id: str,
+            conversation_id: str,
+            agent_id: str,
+            _text: str,
+        ) -> ConversationRetrievalResult:
+            return _conversation_result(
+                session_id,
+                conversation_id,
+                agent_id,
+                "safe reply",
+                reference_operation_id=operation_id,
+            )
+
+        runtime = ScriptedRuntime(result)
+        (_workspace, _catalog, _entries, controller, _backend, callbacks, _store) = (
+            self.prepared_selected_controller("message", "/quit", runtime=runtime)
+        )
+        self.assertEqual(controller.run_session_lobby(), 0)
+        rendered = "".join(callbacks.records)
+        self.assertIn("lead [completed]> safe reply", rendered)
+        self.assertNotIn(operation_id, rendered)
 
     def test_retrieval_progress_sources_and_selected_scope_render_exactly(self) -> None:
         runtime = ScriptedRuntime()
@@ -1233,11 +1278,43 @@ class FailureAndResultTests(InteractiveConversationTestCase):
                 "foreign",
             )
 
+        def foreign_reference(
+            session_id: str,
+            conversation_id: str,
+            agent_id: str,
+            _text: str,
+        ) -> ConversationRetrievalResult:
+            return _conversation_result(
+                session_id,
+                conversation_id,
+                agent_id,
+                "foreign",
+                reference_operation_id=(
+                    "rr_11_different_session_" + "a" * 32
+                ),
+            )
+
+        def malformed_reference(
+            session_id: str,
+            conversation_id: str,
+            agent_id: str,
+            _text: str,
+        ) -> ConversationRetrievalResult:
+            return _conversation_result(
+                session_id,
+                conversation_id,
+                agent_id,
+                "foreign",
+                reference_operation_id="rr_malformed",
+            )
+
         cases: tuple[tuple[str, object], ...] = (
             ("wrong type", object()),
             ("wrong session", wrong_session),
             ("wrong conversation", wrong_conversation),
             ("wrong agent", wrong_agent),
+            ("foreign reference", foreign_reference),
+            ("malformed reference", malformed_reference),
             ("retrieval observer", ConversationRetrievalObserverError()),
         )
         for label, outcome in cases:
@@ -1278,6 +1355,7 @@ class FailureAndResultTests(InteractiveConversationTestCase):
                     rendered,
                 )
                 self.assertNotIn("lead [completed]> foreign", rendered)
+                self.assertNotIn("rr_", rendered)
                 self.assertEqual(len(runtime.calls), 1)
                 lease = workspace.path(
                     "agent_states/orchestrator_state/provider_sessions/"

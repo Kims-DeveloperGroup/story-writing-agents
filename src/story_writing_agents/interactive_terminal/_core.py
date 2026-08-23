@@ -22,6 +22,7 @@ from ..interactive_commands import (
 )
 from ._controls import (
     append_main_input_history,
+    completion_candidate_matches,
     initialize_picker,
     main_command_uses_choices,
     project_main_choice_completion,
@@ -32,14 +33,18 @@ from ._controls import (
     project_slash_suggestions,
     transition_composer_line,
     transition_confirmation_answer,
-    transition_main_input,
+    transition_main_input as transition_main_input,
     transition_main_command_input,
     transition_picker,
     transition_picker_fallback,
     transition_line_input,
     transition_prompt_input,
 )
-from ._driver import AdvisoryProgressError, RawTerminalDriver
+from ._driver import (
+    AdvisoryProgressError as AdvisoryProgressError,
+    RawTerminalDriver,
+    ReferenceInputBindings,
+)
 from ._model import (
     CapabilityProfile,
     Choice,
@@ -53,8 +58,8 @@ from ._model import (
     InputPromptView,
     ListView,
     MainCommandControlState,
-    MainInputControlState,
-    MainInputHistoryState,
+    MainInputControlState as MainInputControlState,
+    MainInputHistoryState as MainInputHistoryState,
     Message,
     Notice,
     Panel,
@@ -77,6 +82,29 @@ from ._render import (
     render_input_prompt,
     render_picker_fallback,
     render_picker_viewport,
+)
+from ._reference_activation import (
+    ReferenceInputFailure,
+    ReferenceInputFailureKind,
+    ReferenceInputProjection,
+    ReferenceInputScope,
+    project_reference_input,
+)
+from ._viewer_controls import (
+    initialize_text_viewer,
+    project_text_viewer_viewport,
+    transition_text_viewer,
+    transition_text_viewer_fallback,
+)
+from ._viewer_model import (
+    TextViewerExitKind,
+    TextViewerResult,
+    TextViewerState,
+    dispose_text_viewer,
+)
+from ._viewer_render import (
+    render_text_viewer,
+    render_text_viewer_fallback,
 )
 
 
@@ -273,158 +301,158 @@ class InteractiveError:
                 raise TypeError(f"{name} must be a string or None")
 
 
-INTERACTIVE_ERROR_SPECS: Mapping[
-    InteractiveErrorCode, InteractiveErrorSpec
-] = MappingProxyType(
-    {
-        InteractiveErrorCode.TTY_REQUIRED: InteractiveErrorSpec(
-            "Interactive mode requires a terminal.",
-            "Use story run for non-interactive automation.",
-        ),
-        InteractiveErrorCode.WORKSPACE_NOT_INITIALIZED: InteractiveErrorSpec(
-            "No initialized story workspace was found.",
-            "Run story init PATH, then try again.",
-        ),
-        InteractiveErrorCode.WORKSPACE_INVALID: InteractiveErrorSpec(
-            "The story workspace is invalid.",
-            "Inspect the reported workspace file and repair it before retrying.",
-        ),
-        InteractiveErrorCode.WORKSPACE_UNSAFE: InteractiveErrorSpec(
-            "The requested workspace path is unsafe.",
-            "Use a path inside the initialized workspace.",
-        ),
-        InteractiveErrorCode.WORKSPACE_VERSION_UNSUPPORTED: InteractiveErrorSpec(
-            "This workspace uses an unsupported older session format.",
-            "Use a new workspace or follow the documented manual reset procedure.",
-        ),
-        InteractiveErrorCode.CONFIGURATION_INVALID: InteractiveErrorSpec(
-            "Runtime configuration is invalid.",
-            "Correct the reported configuration value and retry.",
-        ),
-        InteractiveErrorCode.COMMAND_INVALID: InteractiveErrorSpec(
-            "The interactive command is invalid.",
-            "Type /help to see valid command syntax.",
-        ),
-        InteractiveErrorCode.AGENT_INVALID: InteractiveErrorSpec(
-            "The requested agent is invalid.",
-            "Type /agents to see available agents.",
-        ),
-        InteractiveErrorCode.SESSION_INVALID: InteractiveErrorSpec(
-            "The story session identifier is invalid.",
-            "Use letters, digits, underscores, or hyphens in a safe session name.",
-        ),
-        InteractiveErrorCode.SESSION_EXISTS: InteractiveErrorSpec(
-            "The story session already exists.",
-            "Resume it or choose a different session name.",
-        ),
-        InteractiveErrorCode.SESSION_NOT_FOUND: InteractiveErrorSpec(
-            "The story session was not found.",
-            "List sessions or create a new one.",
-        ),
-        InteractiveErrorCode.SESSION_NOT_ATTACHED: InteractiveErrorSpec(
-            "No story session is attached to this shell.",
-            "Create or resume a session before using this command.",
-        ),
-        InteractiveErrorCode.SESSION_PAUSED: InteractiveErrorSpec(
-            "The story session is paused.",
-            "Resume the session to make it ready before provider work.",
-        ),
-        InteractiveErrorCode.SESSION_ACCESS_BLOCKED: InteractiveErrorSpec(
-            "Story-session access is held by another live local process.",
-            "Wait for that process to release access, then resume the session.",
-        ),
-        InteractiveErrorCode.SESSION_OWNERSHIP_UNKNOWN: InteractiveErrorSpec(
-            "Story-session access ownership cannot be verified.",
-            "Do not remove the claim; inspect recovery guidance before retrying.",
-        ),
-        InteractiveErrorCode.CONVERSATION_REQUIRED: InteractiveErrorSpec(
-            "No conversation has current focus.",
-            "Create or choose a conversation first.",
-        ),
-        InteractiveErrorCode.CONVERSATION_INVALID: InteractiveErrorSpec(
-            "The conversation input is invalid.",
-            (
-                "Provide a valid subject or a full or unique ID prefix of at "
-                "least 12 characters."
+INTERACTIVE_ERROR_SPECS: Mapping[InteractiveErrorCode, InteractiveErrorSpec] = (
+    MappingProxyType(
+        {
+            InteractiveErrorCode.TTY_REQUIRED: InteractiveErrorSpec(
+                "Interactive mode requires a terminal.",
+                "Use story run for non-interactive automation.",
             ),
-        ),
-        InteractiveErrorCode.CONVERSATION_NOT_FOUND: InteractiveErrorSpec(
-            "No matching conversation was found.",
-            "Use `/conversation list [--all] [QUERY]` to find an ID.",
-        ),
-        InteractiveErrorCode.CONVERSATION_AMBIGUOUS: InteractiveErrorSpec(
-            "The conversation ID prefix is ambiguous.",
-            "Use a longer prefix or the full ID.",
-        ),
-        InteractiveErrorCode.CONVERSATION_ARCHIVED: InteractiveErrorSpec(
-            "The conversation is archived.",
-            "Choose an active conversation or create a new one.",
-        ),
-        InteractiveErrorCode.CONVERSATION_CREATE_FAILED: InteractiveErrorSpec(
-            "A unique conversation ID could not be created.",
-            "Try creating the conversation again.",
-        ),
-        InteractiveErrorCode.TRANSCRIPT_INVALID: InteractiveErrorSpec(
-            "The conversation transcript is invalid.",
-            "Inspect and repair the reported transcript before retrying.",
-        ),
-        InteractiveErrorCode.RETRIEVAL_INVALID: InteractiveErrorSpec(
-            "The agent returned an invalid retrieval action.",
-            "Start a new turn; if this repeats, check provider compatibility.",
-        ),
-        InteractiveErrorCode.RETRIEVAL_BUDGET_EXHAUSTED: InteractiveErrorSpec(
-            "The conversation retrieval budget was exhausted.",
-            "Ask a narrower question or use /search and /transcript directly.",
-        ),
-        InteractiveErrorCode.PROVIDER_PREFLIGHT_FAILED: InteractiveErrorSpec(
-            "Provider preflight failed.",
-            "Check the provider executable, login, model, and configuration.",
-        ),
-        InteractiveErrorCode.PROVIDER_EXITED: InteractiveErrorSpec(
-            "The provider process exited unsuccessfully.",
-            "Review the sanitized diagnostic and retry when the provider is ready.",
-        ),
-        InteractiveErrorCode.PROVIDER_TIMED_OUT: InteractiveErrorSpec(
-            "The provider operation timed out.",
-            "Retry or increase the configured provider timeout.",
-        ),
-        InteractiveErrorCode.PROVIDER_PROTOCOL_ERROR: InteractiveErrorSpec(
-            "The provider returned an invalid response.",
-            "Retry; if it repeats, inspect the sanitized diagnostic.",
-        ),
-        InteractiveErrorCode.DRAFT_INPUT_INVALID: InteractiveErrorSpec(
-            "The draft input is invalid.",
-            "Provide one readable strict-UTF-8 draft and retry.",
-        ),
-        InteractiveErrorCode.CONSENSUS_DEADLOCK: InteractiveErrorSpec(
-            "The consensus run ended in deadlock.",
-            "Revise the instruction and start a new run.",
-        ),
-        InteractiveErrorCode.CONSENSUS_FAILED: InteractiveErrorSpec(
-            "The consensus run failed.",
-            "Fix the reported cause and start a new run.",
-        ),
-        InteractiveErrorCode.ARTIFACT_CONFLICT: InteractiveErrorSpec(
-            "An output artifact already exists.",
-            "Choose a new output name; existing artifacts are not overwritten.",
-        ),
-        InteractiveErrorCode.OPERATION_CANCELLED: InteractiveErrorSpec(
-            "The operation was cancelled.",
-            "The current session remains available; start again when ready.",
-        ),
-        InteractiveErrorCode.OPERATION_INTERRUPTED: InteractiveErrorSpec(
-            "The operation was interrupted.",
-            "Inspect preserved state before starting a new operation.",
-        ),
-        InteractiveErrorCode.CLEANUP_FAILED: InteractiveErrorSpec(
-            "Cleanup did not complete.",
-            "Inspect retained temporary or access-claim state before retrying.",
-        ),
-        InteractiveErrorCode.INTERNAL_ERROR: InteractiveErrorSpec(
-            "An internal error occurred.",
-            "Retry once; if it repeats, report the internal_error code.",
-        ),
-    }
+            InteractiveErrorCode.WORKSPACE_NOT_INITIALIZED: InteractiveErrorSpec(
+                "No initialized story workspace was found.",
+                "Run story init PATH, then try again.",
+            ),
+            InteractiveErrorCode.WORKSPACE_INVALID: InteractiveErrorSpec(
+                "The story workspace is invalid.",
+                "Inspect the reported workspace file and repair it before retrying.",
+            ),
+            InteractiveErrorCode.WORKSPACE_UNSAFE: InteractiveErrorSpec(
+                "The requested workspace path is unsafe.",
+                "Use a path inside the initialized workspace.",
+            ),
+            InteractiveErrorCode.WORKSPACE_VERSION_UNSUPPORTED: InteractiveErrorSpec(
+                "This workspace uses an unsupported older session format.",
+                "Use a new workspace or follow the documented manual reset procedure.",
+            ),
+            InteractiveErrorCode.CONFIGURATION_INVALID: InteractiveErrorSpec(
+                "Runtime configuration is invalid.",
+                "Correct the reported configuration value and retry.",
+            ),
+            InteractiveErrorCode.COMMAND_INVALID: InteractiveErrorSpec(
+                "The interactive command is invalid.",
+                "Type /help to see valid command syntax.",
+            ),
+            InteractiveErrorCode.AGENT_INVALID: InteractiveErrorSpec(
+                "The requested agent is invalid.",
+                "Type /agents to see available agents.",
+            ),
+            InteractiveErrorCode.SESSION_INVALID: InteractiveErrorSpec(
+                "The story session identifier is invalid.",
+                "Use letters, digits, underscores, or hyphens in a safe session name.",
+            ),
+            InteractiveErrorCode.SESSION_EXISTS: InteractiveErrorSpec(
+                "The story session already exists.",
+                "Resume it or choose a different session name.",
+            ),
+            InteractiveErrorCode.SESSION_NOT_FOUND: InteractiveErrorSpec(
+                "The story session was not found.",
+                "List sessions or create a new one.",
+            ),
+            InteractiveErrorCode.SESSION_NOT_ATTACHED: InteractiveErrorSpec(
+                "No story session is attached to this shell.",
+                "Create or resume a session before using this command.",
+            ),
+            InteractiveErrorCode.SESSION_PAUSED: InteractiveErrorSpec(
+                "The story session is paused.",
+                "Resume the session to make it ready before provider work.",
+            ),
+            InteractiveErrorCode.SESSION_ACCESS_BLOCKED: InteractiveErrorSpec(
+                "Story-session access is held by another live local process.",
+                "Wait for that process to release access, then resume the session.",
+            ),
+            InteractiveErrorCode.SESSION_OWNERSHIP_UNKNOWN: InteractiveErrorSpec(
+                "Story-session access ownership cannot be verified.",
+                "Do not remove the claim; inspect recovery guidance before retrying.",
+            ),
+            InteractiveErrorCode.CONVERSATION_REQUIRED: InteractiveErrorSpec(
+                "No conversation has current focus.",
+                "Create or choose a conversation first.",
+            ),
+            InteractiveErrorCode.CONVERSATION_INVALID: InteractiveErrorSpec(
+                "The conversation input is invalid.",
+                (
+                    "Provide a valid subject or a full or unique ID prefix of at "
+                    "least 12 characters."
+                ),
+            ),
+            InteractiveErrorCode.CONVERSATION_NOT_FOUND: InteractiveErrorSpec(
+                "No matching conversation was found.",
+                "Use `/conversation list [--all] [QUERY]` to find an ID.",
+            ),
+            InteractiveErrorCode.CONVERSATION_AMBIGUOUS: InteractiveErrorSpec(
+                "The conversation ID prefix is ambiguous.",
+                "Use a longer prefix or the full ID.",
+            ),
+            InteractiveErrorCode.CONVERSATION_ARCHIVED: InteractiveErrorSpec(
+                "The conversation is archived.",
+                "Choose an active conversation or create a new one.",
+            ),
+            InteractiveErrorCode.CONVERSATION_CREATE_FAILED: InteractiveErrorSpec(
+                "A unique conversation ID could not be created.",
+                "Try creating the conversation again.",
+            ),
+            InteractiveErrorCode.TRANSCRIPT_INVALID: InteractiveErrorSpec(
+                "The conversation transcript is invalid.",
+                "Inspect and repair the reported transcript before retrying.",
+            ),
+            InteractiveErrorCode.RETRIEVAL_INVALID: InteractiveErrorSpec(
+                "The agent returned an invalid retrieval action.",
+                "Start a new turn; if this repeats, check provider compatibility.",
+            ),
+            InteractiveErrorCode.RETRIEVAL_BUDGET_EXHAUSTED: InteractiveErrorSpec(
+                "The conversation retrieval budget was exhausted.",
+                "Ask a narrower question or use /search and /transcript directly.",
+            ),
+            InteractiveErrorCode.PROVIDER_PREFLIGHT_FAILED: InteractiveErrorSpec(
+                "Provider preflight failed.",
+                "Check the provider executable, login, model, and configuration.",
+            ),
+            InteractiveErrorCode.PROVIDER_EXITED: InteractiveErrorSpec(
+                "The provider process exited unsuccessfully.",
+                "Review the sanitized diagnostic and retry when the provider is ready.",
+            ),
+            InteractiveErrorCode.PROVIDER_TIMED_OUT: InteractiveErrorSpec(
+                "The provider operation timed out.",
+                "Retry or increase the configured provider timeout.",
+            ),
+            InteractiveErrorCode.PROVIDER_PROTOCOL_ERROR: InteractiveErrorSpec(
+                "The provider returned an invalid response.",
+                "Retry; if it repeats, inspect the sanitized diagnostic.",
+            ),
+            InteractiveErrorCode.DRAFT_INPUT_INVALID: InteractiveErrorSpec(
+                "The draft input is invalid.",
+                "Provide one readable strict-UTF-8 draft and retry.",
+            ),
+            InteractiveErrorCode.CONSENSUS_DEADLOCK: InteractiveErrorSpec(
+                "The consensus run ended in deadlock.",
+                "Revise the instruction and start a new run.",
+            ),
+            InteractiveErrorCode.CONSENSUS_FAILED: InteractiveErrorSpec(
+                "The consensus run failed.",
+                "Fix the reported cause and start a new run.",
+            ),
+            InteractiveErrorCode.ARTIFACT_CONFLICT: InteractiveErrorSpec(
+                "An output artifact already exists.",
+                "Choose a new output name; existing artifacts are not overwritten.",
+            ),
+            InteractiveErrorCode.OPERATION_CANCELLED: InteractiveErrorSpec(
+                "The operation was cancelled.",
+                "The current session remains available; start again when ready.",
+            ),
+            InteractiveErrorCode.OPERATION_INTERRUPTED: InteractiveErrorSpec(
+                "The operation was interrupted.",
+                "Inspect preserved state before starting a new operation.",
+            ),
+            InteractiveErrorCode.CLEANUP_FAILED: InteractiveErrorSpec(
+                "Cleanup did not complete.",
+                "Inspect retained temporary or access-claim state before retrying.",
+            ),
+            InteractiveErrorCode.INTERNAL_ERROR: InteractiveErrorSpec(
+                "An internal error occurred.",
+                "Retry once; if it repeats, report the internal_error code.",
+            ),
+        }
+    )
 )
 
 
@@ -484,6 +512,11 @@ _STARTUP_WELCOME_FRAMES: tuple[Component, ...] = (
         state=ViewState.COMPLETED,
     ),
 )
+_ARTIFACT_REFERENCE_GUIDANCE = (
+    "Artifact references require an attached session and focused conversation. "
+    "In provider-bound prompts, $ chooses a whole-file reference; $$ then "
+    "Enter/Tab opens ranged selection."
+)
 
 
 class InteractiveTerminal:
@@ -492,14 +525,17 @@ class InteractiveTerminal:
     __slots__ = (
         "_capability_provider",
         "_composition_read_line",
+        "_composition_reference_read_line",
         "_confirmation_read_line",
         "_main_choice_read_line",
+        "_main_reference_read_line",
         "_main_read_line",
         "_picker_read",
         "_prompt_read",
         "_startup_notice",
         "_startup_result_notice",
         "_startup_welcome",
+        "_text_viewer_read",
         "_advisory_progress",
         "_debate_progress",
         "_read_line",
@@ -535,25 +571,30 @@ class InteractiveTerminal:
         if width < 20:
             raise ValueError("width must be at least 20")
         self._read_line = read_line
-        self._main_read_line = (
-            read_line if main_read_line is None else main_read_line
-        )
+        self._main_read_line = read_line if main_read_line is None else main_read_line
         self._main_choice_read_line = (
             lambda prompt, _choice_provider: self._main_read_line(prompt)
         )
+        self._main_reference_read_line = (
+            lambda prompt, choice_provider, _scope, _paths, _text: (
+                self._main_choice_read_line(prompt, choice_provider)
+            )
+        )
         self._composition_read_line = _plain_input_reader(read_line, width)
+        self._composition_reference_read_line = (
+            lambda view, _scope, _paths, _text: self._composition_read_line(view)
+        )
         self._confirmation_read_line = _plain_input_reader(read_line, width)
         self._picker_read = _plain_picker_reader(read_line, write_text, width)
         self._prompt_read = _plain_prompt_reader(read_line, width)
         self._startup_welcome = lambda _sleeper: self._write_component(
             _STARTUP_WELCOME_FRAMES[-1]
         )
-        self._startup_notice = lambda notice, _sleeper: self._write_component(
-            notice
-        )
+        self._startup_notice = lambda notice, _sleeper: self._write_component(notice)
         self._startup_result_notice = (
             lambda notice, _sleeper: self._write_startup_result_notice(notice)
         )
+        self._text_viewer_read = _plain_text_viewer_reader(read_line, width)
         self._advisory_progress = _plain_advisory_progress
         self._debate_progress = _plain_debate_progress
         self._write_text = write_text
@@ -658,6 +699,24 @@ class InteractiveTerminal:
     ) -> TerminalAction:
         """Collect one exact chat or consensus composition synchronously."""
 
+        return self._compose(
+            mode,
+            agent_id=agent_id,
+            read_input=self._composition_read_line,
+        )
+
+    def _compose(
+        self,
+        mode: ComposeMode,
+        *,
+        agent_id: str | None,
+        read_input: Callable[[InputPromptView], str],
+    ) -> TerminalAction:
+        """Collect composition through one selected package-internal reader."""
+
+        if not callable(read_input):
+            raise TypeError("read_input must be callable")
+
         alias = _compose_alias(mode, agent_id)
         if mode is ComposeMode.CHAT:
             assert alias is not None
@@ -665,9 +724,7 @@ class InteractiveTerminal:
                 f"Target: {alias}. Use /send to submit or /cancel to discard."
             )
         else:
-            introduction = (
-                "Consensus run. Use /send to submit or /cancel to discard."
-            )
+            introduction = "Consensus run. Use /send to submit or /cancel to discard."
         self._write_component(
             Notice(
                 introduction,
@@ -681,9 +738,7 @@ class InteractiveTerminal:
         while True:
             try:
                 line = _validated_input_line(
-                    self._composition_read_line(
-                        _composer_input_view(mode, alias, state)
-                    )
+                    read_input(_composer_input_view(mode, alias, state))
                 )
             except KeyboardInterrupt:
                 return self._record_discarded_composition(
@@ -756,6 +811,7 @@ class InteractiveTerminal:
                         ),
                         role=SemanticRole.WARNING,
                     ),
+                    Notice(_ARTIFACT_REFERENCE_GUIDANCE),
                     Notice("Type /help for commands; /quit exits."),
                 ),
             )
@@ -811,10 +867,9 @@ class InteractiveTerminal:
                     ),
                 )
             )
+        items.append(Notice(_ARTIFACT_REFERENCE_GUIDANCE))
         items.append(
-            Notice(
-                "Type /help for commands; /quit releases access without pausing."
-            )
+            Notice("Type /help for commands; /quit releases access without pausing.")
         )
         self._write_component(Panel("Story chat", tuple(items)))
 
@@ -900,11 +955,7 @@ class InteractiveTerminal:
                     Field("Focus", focus),
                     Field("Subject", safe_subject),
                 ),
-                role=(
-                    SemanticRole.MUTED
-                    if archived
-                    else SemanticRole.DEFAULT
-                ),
+                role=(SemanticRole.MUTED if archived else SemanticRole.DEFAULT),
                 state=ViewState.COMPLETED,
             )
         )
@@ -938,12 +989,8 @@ class InteractiveTerminal:
                 conversation_subject,
             )
         )
-        safe_match_kind = _inline_text(
-            _strict_required_text("match_kind", match_kind)
-        )
-        safe_snippet = _inline_text(
-            _strict_required_text("snippet", snippet)
-        )
+        safe_match_kind = _inline_text(_strict_required_text("match_kind", match_kind))
+        safe_snippet = _inline_text(_strict_required_text("snippet", snippet))
         if type(archived) is not bool:
             raise TypeError("archived must be a bool")
 
@@ -986,11 +1033,7 @@ class InteractiveTerminal:
                     Field("Citation", citation),
                     Field("Snippet", safe_snippet),
                 ),
-                role=(
-                    SemanticRole.MUTED
-                    if archived
-                    else SemanticRole.DEFAULT
-                ),
+                role=(SemanticRole.MUTED if archived else SemanticRole.DEFAULT),
                 state=ViewState.COMPLETED,
             )
         )
@@ -1021,9 +1064,7 @@ class InteractiveTerminal:
         safe_turn_id = _strict_safe_identifier("turn_id", turn_id)
         safe_kind = _inline_text(_strict_required_text("kind", kind))
         safe_sender = _inline_text(_strict_required_text("sender", sender))
-        safe_recipient = _inline_text(
-            _strict_required_text("recipient", recipient)
-        )
+        safe_recipient = _inline_text(_strict_required_text("recipient", recipient))
         safe_content = sanitize_terminal_text(
             _strict_nonempty_terminal_content(content)
         )
@@ -1110,7 +1151,13 @@ class InteractiveTerminal:
         """Render full or contextual help from the parser-owned registry."""
 
         if command is None:
-            sections: tuple[Section, ...] = ()
+            sections: tuple[Section, ...] = (
+                Section(
+                    "Writing artifact references",
+                    (Notice(_ARTIFACT_REFERENCE_GUIDANCE),),
+                    state=ViewState.COMPLETED,
+                ),
+            )
             for group in dict.fromkeys(spec.group for spec in COMMANDS):
                 records = tuple(
                     Record(
@@ -1358,12 +1405,12 @@ class InteractiveStartupPresentation:
         self._show_welcome: Callable[[Callable[[float], object]], None] = (
             terminal._startup_welcome
         )
-        self._show_notice: Callable[
-            [Notice, Callable[[float], object]], None
-        ] = terminal._startup_notice
-        self._show_result: Callable[
-            [Notice, Callable[[float], object]], None
-        ] = terminal._startup_result_notice
+        self._show_notice: Callable[[Notice, Callable[[float], object]], None] = (
+            terminal._startup_notice
+        )
+        self._show_result: Callable[[Notice, Callable[[float], object]], None] = (
+            terminal._startup_result_notice
+        )
         self._sleeper = sleeper
 
     def show_welcome(self) -> None:
@@ -1389,7 +1436,12 @@ class InteractiveStartupPresentation:
 class InteractiveMainInput:
     """Bind call-local main choices without expanding the public terminal."""
 
-    __slots__ = ("_read",)
+    __slots__ = (
+        "_read",
+        "_reference_paths_provider",
+        "_reference_scope_provider",
+        "_reference_text_reader",
+    )
 
     def __init__(self, terminal: InteractiveTerminal) -> None:
         """Retain only one terminal's package-internal main-input capability."""
@@ -1397,8 +1449,20 @@ class InteractiveMainInput:
         if not isinstance(terminal, InteractiveTerminal):
             raise TypeError("terminal must be an InteractiveTerminal")
         self._read: Callable[
-            [str, Callable[[str, int], Picker | None]], str
-        ] = terminal._main_choice_read_line
+            [
+                str,
+                Callable[[str, int], Picker | None],
+                Callable[[str, int], ReferenceInputScope | None] | None,
+                Callable[[], tuple[str, ...]] | None,
+                Callable[[str], str] | None,
+            ],
+            str,
+        ] = terminal._main_reference_read_line
+        self._reference_scope_provider: (
+            Callable[[str, int], ReferenceInputScope | None] | None
+        ) = None
+        self._reference_paths_provider: Callable[[], tuple[str, ...]] | None = None
+        self._reference_text_reader: Callable[[str], str] | None = None
 
     def read_main(
         self,
@@ -1409,11 +1473,93 @@ class InteractiveMainInput:
     ) -> TerminalAction:
         """Return one completed main line using call-local semantic choices."""
 
+        return self._read_main(
+            choice_provider,
+            session_id=session_id,
+            agent_id=agent_id,
+            reference_scope_provider=self._reference_scope_provider,
+            reference_paths_provider=self._reference_paths_provider,
+            reference_text_reader=self._reference_text_reader,
+        )
+
+    def read_main_with_references(
+        self,
+        choice_provider: Callable[[str, int], Picker | None],
+        reference_scope_provider: Callable[[str, int], ReferenceInputScope | None],
+        reference_paths_provider: Callable[[], tuple[str, ...]],
+        reference_text_reader: Callable[[str], str],
+        *,
+        session_id: str | None = None,
+        agent_id: str | None = None,
+    ) -> TerminalAction:
+        """Return one main line with private call-local reference activation."""
+
+        collaborators = (
+            reference_scope_provider,
+            reference_paths_provider,
+            reference_text_reader,
+        )
+        if not all(callable(value) for value in collaborators):
+            raise TypeError("reference collaborators must be callable")
+        if any(
+            value is not None
+            for value in (
+                self._reference_scope_provider,
+                self._reference_paths_provider,
+                self._reference_text_reader,
+            )
+        ):
+            raise RuntimeError("reference main input is already active")
+        self._reference_scope_provider = reference_scope_provider
+        self._reference_paths_provider = reference_paths_provider
+        self._reference_text_reader = reference_text_reader
+        try:
+            return self.read_main(
+                choice_provider,
+                session_id=session_id,
+                agent_id=agent_id,
+            )
+        finally:
+            self._reference_scope_provider = None
+            self._reference_paths_provider = None
+            self._reference_text_reader = None
+
+    def _read_main(
+        self,
+        choice_provider: Callable[[str, int], Picker | None],
+        *,
+        session_id: str | None,
+        agent_id: str | None,
+        reference_scope_provider: (
+            Callable[[str, int], ReferenceInputScope | None] | None
+        ),
+        reference_paths_provider: Callable[[], tuple[str, ...]] | None,
+        reference_text_reader: Callable[[str], str] | None,
+    ) -> TerminalAction:
+        """Implement main input through one selected package-internal route."""
+
         if not callable(choice_provider):
             raise TypeError("choice_provider must be callable")
+        reference_collaborators = (
+            reference_scope_provider,
+            reference_paths_provider,
+            reference_text_reader,
+        )
+        if any(value is not None for value in reference_collaborators) and not all(
+            callable(value) for value in reference_collaborators
+        ):
+            raise ValueError(
+                "reference scope, paths, and text collaborators must be supplied together"
+            )
         prompt = _main_prompt(session_id=session_id, agent_id=agent_id)
         try:
-            line = self._read(prompt, choice_provider)
+            line = self._read(
+                prompt,
+                choice_provider,
+                reference_scope_provider,
+                reference_paths_provider,
+                reference_text_reader,
+            )
         except KeyboardInterrupt:
             return TerminalAction(TerminalActionKind.INTERRUPT)
         except EOFError:
@@ -1421,6 +1567,46 @@ class InteractiveMainInput:
         return TerminalAction(
             TerminalActionKind.LINE,
             text=_validated_input_line(line),
+        )
+
+
+class InteractiveCompositionInput:
+    """Bind RUN/CHAT composition to call-local reference collaborators."""
+
+    __slots__ = ("_terminal",)
+
+    def __init__(self, terminal: InteractiveTerminal) -> None:
+        if not isinstance(terminal, InteractiveTerminal):
+            raise TypeError("terminal must be an InteractiveTerminal")
+        self._terminal = terminal
+
+    def compose(
+        self,
+        mode: ComposeMode,
+        *,
+        agent_id: str | None = None,
+        reference_scope_provider: Callable[[str, int], ReferenceInputScope | None],
+        reference_paths_provider: Callable[[], tuple[str, ...]],
+        reference_text_reader: Callable[[str], str],
+    ) -> TerminalAction:
+        """Collect one composition without expanding the public terminal API."""
+
+        for name, collaborator in (
+            ("reference_scope_provider", reference_scope_provider),
+            ("reference_paths_provider", reference_paths_provider),
+            ("reference_text_reader", reference_text_reader),
+        ):
+            if not callable(collaborator):
+                raise TypeError(f"{name} must be callable")
+        return self._terminal._compose(
+            mode,
+            agent_id=agent_id,
+            read_input=lambda view: self._terminal._composition_reference_read_line(
+                view,
+                reference_scope_provider,
+                reference_paths_provider,
+                reference_text_reader,
+            ),
         )
 
 
@@ -1479,9 +1665,7 @@ class InteractivePromptInput:
 
         if not isinstance(terminal, InteractiveTerminal):
             raise TypeError("terminal must be an InteractiveTerminal")
-        self._read: Callable[[InputPromptView], ControlOutcome] = (
-            terminal._prompt_read
-        )
+        self._read: Callable[[InputPromptView], ControlOutcome] = terminal._prompt_read
 
     def read_prompt(
         self,
@@ -1500,6 +1684,43 @@ class InteractivePromptInput:
         if type(outcome) is not ControlOutcome:
             raise TypeError("prompt reader must return a ControlOutcome")
         return outcome
+
+
+class InteractiveTextViewer:
+    """Bind one stateless supplied-text range viewer without storage access."""
+
+    __slots__ = ("_read",)
+
+    def __init__(self, terminal: InteractiveTerminal) -> None:
+        """Retain only one terminal's package-internal viewer capability."""
+
+        if not isinstance(terminal, InteractiveTerminal):
+            raise TypeError("terminal must be an InteractiveTerminal")
+        self._read: Callable[[TextViewerState], TextViewerResult] = (
+            terminal._text_viewer_read
+        )
+
+    def read_range(
+        self,
+        text: str,
+        *,
+        display_name: str,
+        initial_line: int | None = None,
+    ) -> TextViewerResult:
+        """Return one inclusive line range or a typed noncommit outcome."""
+
+        state = initialize_text_viewer(
+            text,
+            display_name=display_name,
+            initial_line=initial_line,
+        )
+        try:
+            outcome = self._read(state)
+            if type(outcome) is not TextViewerResult:
+                raise TypeError("viewer reader must return a TextViewerResult")
+            return outcome
+        finally:
+            dispose_text_viewer(state)
 
 
 class InteractiveAdvisoryProgress:
@@ -1683,10 +1904,14 @@ def _plain_picker_reader(
             )
             if outcome.kind is ControlOutcomeKind.REJECTED:
                 continue
-            if outcome.kind in {
-                ControlOutcomeKind.COMMIT,
-                ControlOutcomeKind.CANCEL,
-            } and not transient:
+            if (
+                outcome.kind
+                in {
+                    ControlOutcomeKind.COMMIT,
+                    ControlOutcomeKind.CANCEL,
+                }
+                and not transient
+            ):
                 final_frame = render_picker_fallback(
                     picker_state,
                     capabilities,
@@ -1695,6 +1920,38 @@ def _plain_picker_reader(
             return outcome
 
     return read_picker
+
+
+def _plain_text_viewer_reader(
+    read_line: Callable[[str], str],
+    width: int,
+) -> Callable[[TextViewerState], TextViewerResult]:
+    """Adapt one ordinary line callback to the strict ranged viewer fallback."""
+
+    if not callable(read_line):
+        raise TypeError("read_line must be callable")
+    capabilities = _plain_capabilities(width)
+
+    def read_text_viewer(state: TextViewerState) -> TextViewerResult:
+        if type(state) is not TextViewerState:
+            raise TypeError("state must be a TextViewerState")
+        current = state
+        while True:
+            frame = render_text_viewer_fallback(current, capabilities)
+            try:
+                callback_value = read_line(frame.plain_text)
+                if isinstance(callback_value, str):
+                    callback_value = str.__str__(callback_value)
+                answer = _validated_input_line(callback_value)
+            except KeyboardInterrupt:
+                return TextViewerResult(TextViewerExitKind.INTERRUPTED)
+            except EOFError:
+                return TextViewerResult(TextViewerExitKind.EOF)
+            current, outcome = transition_text_viewer_fallback(current, answer)
+            if outcome is not None:
+                return outcome
+
+    return read_text_viewer
 
 
 def _empty_slash_suggestions(
@@ -1742,13 +1999,132 @@ def _main_command_completion(
     )
 
 
+def _reference_projection_provider(
+    scope_provider: Callable[[str, int], ReferenceInputScope | None],
+    paths_provider: Callable[[], tuple[str, ...]],
+) -> Callable[[str, int], ReferenceInputProjection | None]:
+    """Defer repository listing until one eligible active marker exists."""
+
+    def project(buffer: str, cursor: int) -> ReferenceInputProjection | None:
+        scope = scope_provider(buffer, cursor)
+        if scope is not None and type(scope) is not ReferenceInputScope:
+            raise TypeError(
+                "reference scope provider must return a ReferenceInputScope or None"
+            )
+        probe = project_reference_input(buffer, cursor, scope)
+        if probe is None:
+            return None
+        if probe.failure is ReferenceInputFailureKind.INVALID:
+            return probe
+        try:
+            paths = paths_provider()
+        except ReferenceInputFailure as failure:
+            return project_reference_input(
+                buffer,
+                cursor,
+                scope,
+                failure=failure.kind,
+            )
+        if type(paths) is not tuple or any(type(path) is not str for path in paths):
+            raise TypeError("reference paths provider must return a tuple of strings")
+        return project_reference_input(buffer, cursor, scope, paths)
+
+    return project
+
+
+def _reference_picker_state(
+    values: tuple[str, ...],
+    instruction: str,
+) -> PickerControlState:
+    """Construct one deterministic generic picker for paths or tokens."""
+
+    if type(values) is not tuple or any(type(value) is not str for value in values):
+        raise TypeError("reference picker values must be a tuple of strings")
+    picker = Picker(
+        Prompt("writing artifact", instruction=instruction),
+        tuple(Choice(value, value) for value in values),
+    )
+    return initialize_picker(picker)
+
+
+def _reference_input_bindings(
+    projection_provider: Callable[[str, int], ReferenceInputProjection | None],
+    text_reader: Callable[[str], str],
+    failure_writer: Callable[[ReferenceInputFailureKind], None],
+) -> ReferenceInputBindings:
+    """Bind pure controls/renderers to one call-local driver interaction."""
+
+    return ReferenceInputBindings(
+        projection_provider,
+        completion_candidate_matches,
+        text_reader,
+        failure_writer,
+        _reference_picker_state,
+        transition_picker,
+        transition_picker_fallback,
+        project_picker_viewport,
+        render_picker_viewport,
+        render_picker_fallback,
+        lambda text, path: initialize_text_viewer(text, display_name=path),
+        transition_text_viewer,
+        transition_text_viewer_fallback,
+        project_text_viewer_viewport,
+        render_text_viewer,
+        render_text_viewer_fallback,
+    )
+
+
+def _reference_input_error(kind: ReferenceInputFailureKind) -> InteractiveError:
+    """Map one content-free activation failure to fixed actionable copy."""
+
+    if not isinstance(kind, ReferenceInputFailureKind):
+        raise TypeError("kind must be a ReferenceInputFailureKind")
+    copy = {
+        ReferenceInputFailureKind.EMPTY_CATALOG: (
+            "No current writing artifacts are available.",
+            "Complete a consensus run that creates canonical writing artifacts.",
+        ),
+        ReferenceInputFailureKind.STALE: (
+            "The selected writing artifact is no longer current.",
+            "Type $ again to refresh the canonical artifact list.",
+        ),
+        ReferenceInputFailureKind.UNREADABLE: (
+            "The selected writing artifact cannot be viewed safely.",
+            "Inspect its size and UTF-8 repository state, then refresh the list.",
+        ),
+        ReferenceInputFailureKind.UNAVAILABLE: (
+            "The writing-artifact repository is unavailable.",
+            "Inspect workspace recovery guidance, then retry discovery.",
+        ),
+        ReferenceInputFailureKind.INVALID: (
+            "The artifact reference cannot be inserted.",
+            "Remove the active marker or choose a nonconflicting current artifact.",
+        ),
+    }[kind]
+    code = (
+        InteractiveErrorCode.COMMAND_INVALID
+        if kind
+        in {
+            ReferenceInputFailureKind.EMPTY_CATALOG,
+            ReferenceInputFailureKind.INVALID,
+        }
+        else InteractiveErrorCode.WORKSPACE_INVALID
+    )
+    return InteractiveError(code, summary=copy[0], hint=copy[1])
+
+
 def read_main_command_line(
     driver: RawTerminalDriver,
     prompt: str,
     *,
-    choice_provider: Callable[
-        [str, int], Picker | None
-    ] | None = None,
+    choice_provider: Callable[[str, int], Picker | None] | None = None,
+    reference_scope_provider: Callable[[str, int], ReferenceInputScope | None]
+    | None = None,
+    reference_paths_provider: Callable[[], tuple[str, ...]] | None = None,
+    reference_text_reader: Callable[[str], str] | None = None,
+    reference_failure_writer: (
+        Callable[[ReferenceInputFailureKind], None] | None
+    ) = None,
 ) -> str:
     """Read one canonical selectable main command through the sole driver."""
 
@@ -1756,6 +2132,36 @@ def read_main_command_line(
         raise TypeError("driver must be a RawTerminalDriver")
     if choice_provider is not None and not callable(choice_provider):
         raise TypeError("choice_provider must be callable or None")
+    reference_collaborators = (
+        reference_scope_provider,
+        reference_paths_provider,
+        reference_text_reader,
+        reference_failure_writer,
+    )
+    if any(value is not None for value in reference_collaborators) and not all(
+        callable(value) for value in reference_collaborators
+    ):
+        raise ValueError(
+            "reference scope, paths, text, and failure collaborators must be supplied together"
+        )
+
+    reference_projection = (
+        None
+        if reference_scope_provider is None
+        else _reference_projection_provider(
+            reference_scope_provider,
+            reference_paths_provider,
+        )
+    )
+    reference_bindings = (
+        None
+        if reference_projection is None
+        else _reference_input_bindings(
+            reference_projection,
+            reference_text_reader,
+            reference_failure_writer,
+        )
+    )
 
     active_pickers: dict[tuple[str, int], Picker] = {}
 
@@ -1763,11 +2169,12 @@ def read_main_command_line(
         buffer: str,
         cursor: int,
     ) -> CommandCompletionProjection | None:
-        picker = (
-            None
-            if choice_provider is None
-            else choice_provider(buffer, cursor)
-        )
+        if reference_projection is not None:
+            projected_reference = reference_projection(buffer, cursor)
+            if projected_reference is not None:
+                active_pickers.clear()
+                return projected_reference.completion
+        picker = None if choice_provider is None else choice_provider(buffer, cursor)
         if picker is None:
             active_pickers.clear()
             return _main_command_completion(buffer, cursor)
@@ -1787,11 +2194,56 @@ def read_main_command_line(
             raise RuntimeError("active main choices are not correlated")
         return project_main_choice_palette(state, picker)
 
-    return driver.read_main_command_line(
+    if reference_bindings is None:
+        return driver.read_main_command_line(
+            prompt,
+            completion_provider,
+            palette_projector,
+            render_component,
+        )
+    return driver.read_reference_main_command_line(
         prompt,
         completion_provider,
         palette_projector,
         render_component,
+        reference_bindings,
+    )
+
+
+def read_reference_composition_line(
+    driver: RawTerminalDriver,
+    view: InputPromptView,
+    scope_provider: Callable[[str, int], ReferenceInputScope | None],
+    paths_provider: Callable[[], tuple[str, ...]],
+    text_reader: Callable[[str], str],
+    failure_writer: Callable[[ReferenceInputFailureKind], None],
+) -> str:
+    """Read one RUN/CHAT line through the shared reference input route."""
+
+    if not isinstance(driver, RawTerminalDriver):
+        raise TypeError("driver must be a RawTerminalDriver")
+    projection = _reference_projection_provider(scope_provider, paths_provider)
+    bindings = _reference_input_bindings(
+        projection,
+        text_reader,
+        failure_writer,
+    )
+
+    def completion_provider(
+        buffer: str,
+        cursor: int,
+    ) -> CommandCompletionProjection | None:
+        projected = projection(buffer, cursor)
+        return None if projected is None else projected.completion
+
+    return driver.read_reference_input_line(
+        view,
+        render_input_prompt,
+        project_composition_suggestions,
+        completion_provider,
+        project_main_suggestion_palette,
+        render_component,
+        bindings,
     )
 
 
@@ -1824,11 +2276,36 @@ def build_stream_terminal(
             choice_provider=provider,
         )
     )
+    terminal._main_reference_read_line = (
+        lambda prompt, choices, scope, paths, text: read_main_command_line(
+            driver,
+            prompt,
+            choice_provider=choices,
+            reference_scope_provider=scope,
+            reference_paths_provider=paths,
+            reference_text_reader=text,
+            reference_failure_writer=(
+                None
+                if scope is None
+                else lambda kind: terminal.write_error(_reference_input_error(kind))
+            ),
+        )
+    )
     terminal._composition_read_line = lambda view: driver.read_input_line(
         view,
         render_input_prompt,
         project_composition_suggestions,
         transient=True,
+    )
+    terminal._composition_reference_read_line = (
+        lambda view, scope, paths, text: read_reference_composition_line(
+            driver,
+            view,
+            scope,
+            paths,
+            text,
+            lambda kind: terminal.write_error(_reference_input_error(kind)),
+        )
     )
     terminal._confirmation_read_line = lambda view: driver.read_input_line(
         view,
@@ -1836,6 +2313,7 @@ def build_stream_terminal(
         _empty_slash_suggestions,
         transient=True,
     )
+
     def read_picker(state, *, transient=True):
         if type(transient) is not bool:
             raise TypeError("transient must be a bool")
@@ -1874,6 +2352,14 @@ def build_stream_terminal(
             sleeper,
         )
     )
+    terminal._text_viewer_read = lambda state: driver.read_text_viewer(
+        state,
+        transition_text_viewer,
+        transition_text_viewer_fallback,
+        project_text_viewer_viewport,
+        render_text_viewer,
+        render_text_viewer_fallback,
+    )
 
     async def run_advisory_progress(operation):
         return await driver.run_advisory_progress(
@@ -1899,9 +2385,7 @@ def _safe_identifier(name: str, value: object) -> str:
     if not isinstance(value, str):
         raise TypeError(f"{name} must be a string")
     if _SAFE_IDENTIFIER.fullmatch(value) is None:
-        raise ValueError(
-            f"{name} must match [A-Za-z0-9][A-Za-z0-9_-]{{0,63}}"
-        )
+        raise ValueError(f"{name} must match [A-Za-z0-9][A-Za-z0-9_-]{{0,63}}")
     return value
 
 
@@ -2245,6 +2729,9 @@ __all__ = [
     "InteractiveError",
     "sanitize_terminal_text",
     "InteractiveTerminal",
+    "InteractiveTextViewer",
+    "TextViewerExitKind",
+    "TextViewerResult",
     "build_contextual_terminal",
     "build_stream_terminal",
     "project_composition_suggestions",

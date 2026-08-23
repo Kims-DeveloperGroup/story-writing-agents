@@ -74,6 +74,7 @@ from ..interactive_commands import (
     ActionKind,
     InteractiveAction,
     parse_interactive_line,
+    project_provider_text_span,
 )
 from ..interactive_settings import (
     SETTINGS_ANTIGRAVITY_EFFORTS,
@@ -99,6 +100,7 @@ from ..interactive_terminal import (
     AdvisoryProgressError,
     InteractiveAdvisoryProgress,
     InteractiveDebateProgress,
+    InteractiveCompositionInput,
     InteractiveMainInput,
     format_agent_reply_content,
     AttachmentKind,
@@ -112,6 +114,9 @@ from ..interactive_terminal import (
     InteractiveErrorCode,
     InteractivePickerInput,
     InteractivePromptInput,
+    ReferenceInputFailure,
+    ReferenceInputFailureKind,
+    ReferenceInputScope,
     InteractiveSemanticOutput,
     InteractiveTerminal,
     ListView,
@@ -147,6 +152,13 @@ from ..workspace import (
     FilesystemConversationCatalog,
     FilesystemConversationEventStore,
     Workspace,
+)
+from ..writing_artifacts import (
+    ArtifactReferenceDirectiveError,
+    MAX_VIEWER_UTF8_BYTES,
+    ReferenceAuthorizationErrorCode,
+    ReferenceOperationFailure,
+    manuscript_artifact_path,
 )
 from ._conversation_policy import (
     ConversationCatalogProtocolFailure,
@@ -299,6 +311,7 @@ class InteractiveController:
         "_conversation_catalog",
         "_conversation_event_store",
         "_conversation_memory_service",
+        "_composition_input",
         "_context",
         "_debug_log",
         "_error_write_count",
@@ -368,6 +381,7 @@ class InteractiveController:
         self._prompt_input = InteractivePromptInput(terminal)
         self._advisory_progress = InteractiveAdvisoryProgress(terminal)
         self._debate_progress = InteractiveDebateProgress(terminal)
+        self._composition_input = InteractiveCompositionInput(terminal)
         self._main_input = InteractiveMainInput(terminal)
         resolved_catalog = (
             FilesystemConversationCatalog(workspace)
@@ -603,8 +617,8 @@ class InteractiveController:
             if event.input_kind is InputKind.DRAFT:
                 return (
                     ("user",),
-                    tuple(SPECIALIST_IDS),
-                    "Accept supplied draft as revision 0; request specialist audits.",
+                    (EXECUTION_SPECIALIST,),
+                    "Ask Execution Specialist to author revision 0 from the supplied draft.",
                 )
             return (
                 ("user",),
@@ -613,11 +627,7 @@ class InteractiveController:
             )
         if phase is DebateProgressPhase.DRAFTED:
             return (
-                (
-                    ("user",)
-                    if event.input_kind is InputKind.DRAFT
-                    else (EXECUTION_SPECIALIST,)
-                ),
+                (EXECUTION_SPECIALIST,),
                 tuple(SPECIALIST_IDS),
                 "Draft complete; request specialist audits.",
             )
@@ -1426,8 +1436,11 @@ class InteractiveController:
         while True:
             if self._attached_session_id is not None:
                 self._write_attached_conversation_scope()
-            terminal_action = self._main_input.read_main(
+            terminal_action = self._main_input.read_main_with_references(
                 self._main_resume_choices,
+                self._main_reference_scope,
+                self._reference_paths,
+                self._reference_text,
                 session_id=self._attached_session_id,
                 agent_id=(
                     self._target_agent_id
@@ -1552,6 +1565,69 @@ class InteractiveController:
             )
         except Exception:
             return None
+
+    def _main_reference_scope(
+        self,
+        buffer: str,
+        cursor: int,
+    ) -> ReferenceInputScope | None:
+        """Project only attached, focused provider text into terminal input."""
+
+        if (
+            self._attached_session_id is None
+            or self._focused_conversation is None
+        ):
+            return None
+        span = project_provider_text_span(buffer, cursor)
+        if span is None:
+            return None
+        return ReferenceInputScope(span.start, span.end)
+
+    @staticmethod
+    def _composition_reference_scope(
+        buffer: str,
+        cursor: int,
+    ) -> ReferenceInputScope:
+        """Expose exactly one RUN/CHAT composition buffer as provider text."""
+
+        if type(buffer) is not str:
+            raise TypeError("buffer must be a string")
+        if type(cursor) is not int:
+            raise TypeError("cursor must be an integer")
+        if cursor < 0 or cursor > len(buffer):
+            raise ValueError("cursor must identify a buffer boundary")
+        return ReferenceInputScope(0, len(buffer))
+
+    def _reference_paths(self) -> tuple[str, ...]:
+        """Borrow one current canonical path snapshot from the repository."""
+
+        try:
+            return self._runtime.artifacts.list_paths()
+        except (OSError, WorkspaceFormatError, WorkspaceSecurityError):
+            raise ReferenceInputFailure(
+                ReferenceInputFailureKind.UNAVAILABLE
+            ) from None
+
+    def _reference_text(self, path: str) -> str:
+        """Borrow one revalidated bounded artifact body for the viewer."""
+
+        try:
+            return self._runtime.artifacts.read_text(
+                path,
+                max_bytes=MAX_VIEWER_UTF8_BYTES,
+            )
+        except WorkspaceSecurityError:
+            raise ReferenceInputFailure(
+                ReferenceInputFailureKind.STALE
+            ) from None
+        except WorkspaceFormatError:
+            raise ReferenceInputFailure(
+                ReferenceInputFailureKind.UNREADABLE
+            ) from None
+        except OSError:
+            raise ReferenceInputFailure(
+                ReferenceInputFailureKind.UNAVAILABLE
+            ) from None
 
     def _dispatch_session_lobby_action(
         self,
@@ -3670,10 +3746,54 @@ class InteractiveController:
         if focused is None:
             return False
 
+        output_path = action.output_path
+        while True:
+            if output_path is None:
+                outcome = self._prompt_input.read_prompt(
+                    Prompt(
+                        "Manuscript output",
+                        scope="consensus",
+                        instruction=(
+                            "Enter a create-only PART/PATH.md beneath manuscript/."
+                        ),
+                    ),
+                    transient=True,
+                )
+                if outcome.kind is ControlOutcomeKind.EOF:
+                    return True
+                if outcome.kind in {
+                    ControlOutcomeKind.CANCEL,
+                    ControlOutcomeKind.INTERRUPT,
+                }:
+                    return False
+                if outcome.kind is not ControlOutcomeKind.COMMIT:
+                    raise _ControllerAbort(
+                        InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+                    )
+                assert outcome.text is not None
+                output_path = outcome.text
+            try:
+                manuscript_artifact_path(output_path)
+            except (TypeError, ValueError):
+                self._write_notice(
+                    "Output must be a safe PART/PATH.md beneath manuscript/.",
+                    label="Invalid output",
+                    role=SemanticRole.ERROR,
+                    state=ViewState.ERROR,
+                )
+                output_path = None
+                continue
+            break
+
         if action.kind is ActionKind.RUN:
             prompt = action.text
             if prompt is None:
-                composed = self._terminal.compose(ComposeMode.RUN)
+                composed = self._composition_input.compose(
+                    ComposeMode.RUN,
+                    reference_scope_provider=self._composition_reference_scope,
+                    reference_paths_provider=self._reference_paths,
+                    reference_text_reader=self._reference_text,
+                )
                 if composed.kind is TerminalActionKind.EOF:
                     return True
                 if composed.kind in {
@@ -3750,12 +3870,14 @@ class InteractiveController:
                     return await self._runtime.run_prompt(
                         session_id,
                         payload,
+                        output_path=output_path,
                         conversation_context=request,
                         progress_sink=accept_and_render_progress,
                     )
                 return await self._runtime.run_draft(
                     session_id,
                     payload,
+                    output_path=output_path,
                     conversation_context=request,
                     progress_sink=accept_and_render_progress,
                 )
@@ -4100,10 +4222,12 @@ class InteractiveController:
         rendered.
         """
 
-        error = classify_consensus_execution_failure(
-            failure,
-            draft_payload_was_empty=draft_payload_was_empty,
-            progress_events=tuple(progress_events),
+        error = self._reference_interactive_error(failure) or (
+            classify_consensus_execution_failure(
+                failure,
+                draft_payload_was_empty=draft_payload_was_empty,
+                progress_events=tuple(progress_events),
+            )
         )
         if error.code is InteractiveErrorCode.INTERNAL_ERROR:
             raise _ControllerAbort(error) from None
@@ -4145,7 +4269,9 @@ class InteractiveController:
         abort, while runtime remains the sole owner of durable turn outcomes.
         """
 
-        error = classify_advisory_turn_failure(failure)
+        error = self._reference_interactive_error(failure) or (
+            classify_advisory_turn_failure(failure)
+        )
         if error.code is InteractiveErrorCode.INTERNAL_ERROR:
             raise _ControllerAbort(error)
         if error.code is InteractiveErrorCode.CONVERSATION_NOT_FOUND:
@@ -4163,6 +4289,29 @@ class InteractiveController:
         }:
             self._confirm_attachment_after_command_failure()
         self._write_error(error)
+
+    @staticmethod
+    def _reference_interactive_error(
+        failure: Exception,
+    ) -> InteractiveError | None:
+        """Map explicit-reference failures without exposing exception prose."""
+
+        if isinstance(failure, ArtifactReferenceDirectiveError):
+            return InteractiveError(InteractiveErrorCode.COMMAND_INVALID)
+        if not isinstance(failure, ReferenceOperationFailure):
+            return None
+        if failure.code in {
+            ReferenceAuthorizationErrorCode.PROVIDER_FAILURE,
+            ReferenceAuthorizationErrorCode.CAPABILITY_CONSUMED,
+            ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH,
+            ReferenceAuthorizationErrorCode.INVALID_TRANSITION,
+        }:
+            code = InteractiveErrorCode.PROVIDER_PROTOCOL_ERROR
+        elif failure.code is ReferenceAuthorizationErrorCode.CANCELLED:
+            code = InteractiveErrorCode.OPERATION_CANCELLED
+        else:
+            code = InteractiveErrorCode.WORKSPACE_INVALID
+        return InteractiveError(code)
 
     def _write_unavailable_lobby_command_error(self) -> None:
         """Render the stable later-feature error without mutating controller state."""

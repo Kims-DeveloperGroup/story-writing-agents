@@ -610,7 +610,7 @@ class PublicApiTests(unittest.TestCase):
                 "phase": DebateProgressPhase.ARTIFACTS_COMMITTED,
                 "revision_id": "r1",
                 "round_number": 1,
-                "manuscript_path": "manuscript/chapter.md",
+                "manuscript_path": "manuscript/part-01/chapter.md",
                 "core_updates": ("global_outline.md",),
             },
             {
@@ -685,7 +685,7 @@ class PublicApiTests(unittest.TestCase):
                 with self.assertRaises((TypeError, ValueError)):
                     DebateProgressEvent(**common, **values)  # type: ignore[arg-type]
 
-    def test_debate_run_signatures_are_additive_and_result_shape_is_unchanged(
+    def test_debate_run_signatures_and_additive_result_shape_are_exact(
         self,
     ) -> None:
         method_cases = (
@@ -695,7 +695,7 @@ class PublicApiTests(unittest.TestCase):
                     "self",
                     "session_id",
                     "prompt",
-                    "manuscript_name",
+                    "output_path",
                     "max_debate_rounds",
                     "debate_id",
                     "conversation_context",
@@ -709,7 +709,7 @@ class PublicApiTests(unittest.TestCase):
                     "self",
                     "session_id",
                     "draft",
-                    "manuscript_name",
+                    "output_path",
                     "max_debate_rounds",
                     "debate_id",
                     "conversation_context",
@@ -722,7 +722,7 @@ class PublicApiTests(unittest.TestCase):
                 (
                     "self",
                     "prompt",
-                    "manuscript_name",
+                    "output_path",
                     "max_debate_rounds",
                     "debate_id",
                     "conversation_context",
@@ -735,7 +735,7 @@ class PublicApiTests(unittest.TestCase):
                 (
                     "self",
                     "draft",
-                    "manuscript_name",
+                    "output_path",
                     "max_debate_rounds",
                     "debate_id",
                     "conversation_context",
@@ -756,12 +756,19 @@ class PublicApiTests(unittest.TestCase):
                         for parameter in parameters[:positional_count]
                     )
                 )
+                keyword_only = parameters[positional_count:]
                 self.assertTrue(
                     all(
                         parameter.kind is inspect.Parameter.KEYWORD_ONLY
-                        and parameter.default is None
-                        for parameter in parameters[positional_count:]
+                        for parameter in keyword_only
                     )
+                )
+                self.assertIs(
+                    keyword_only[0].default,
+                    inspect.Parameter.empty,
+                )
+                self.assertTrue(
+                    all(parameter.default is None for parameter in keyword_only[1:])
                 )
         for method, names in (
             (
@@ -789,6 +796,7 @@ class PublicApiTests(unittest.TestCase):
                 "messages",
                 "error",
                 "action_required",
+                "reference_operation_id",
             ),
         )
         legacy = DebateResult(
@@ -1116,7 +1124,15 @@ class CliTests(unittest.TestCase):
                 "codex_timeout": "12.5",
             },
         )
-        run_parsed = parser.parse_args(["run", "--draft", "draft"])
+        run_parsed = parser.parse_args(
+            [
+                "run",
+                "--draft",
+                "draft",
+                "--output",
+                "part-01/draft.md",
+            ]
+        )
         self.assertEqual(run_parsed.antigravity_executable, "agy")
         self.assertIsNone(run_parsed.antigravity_model)
         self.assertIsNone(run_parsed.antigravity_effort)
@@ -1125,7 +1141,15 @@ class CliTests(unittest.TestCase):
 
         for arguments in (
             ["chat", "--codex-reasoning-effort", "high"],
-            ["run", "--draft", "draft", "--codex-reasoning-effort", "high"],
+            [
+                "run",
+                "--draft",
+                "draft",
+                "--output",
+                "part-01/reasoning.md",
+                "--codex-reasoning-effort",
+                "high",
+            ],
         ):
             stderr = io.StringIO()
             with (
@@ -2090,7 +2114,15 @@ class CliTests(unittest.TestCase):
 
             with contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(
-                    main(["run", "--workspace", str(workspace_path)]),
+                    main(
+                        [
+                            "run",
+                            "--workspace",
+                            str(workspace_path),
+                            "--output",
+                            "part-01/no-auth.md",
+                        ]
+                    ),
                     2,
                 )
             self.provider_auth_factory.assert_not_called()
@@ -2160,6 +2192,8 @@ class CliTests(unittest.TestCase):
                     "plot_architect=antigravity",
                     "--draft",
                     "draft",
+                    "--output",
+                    "part-01/antigravity.md",
                     "--antigravity-executable",
                     "private-agy",
                     "--antigravity-model",
@@ -2186,7 +2220,7 @@ class CliTests(unittest.TestCase):
         provider_runtime.run_draft.assert_awaited_once_with(
             "run-session",
             "draft",
-            manuscript_name=None,
+            output_path="part-01/antigravity.md",
             max_debate_rounds=None,
             debate_id=None,
         )
@@ -2864,9 +2898,9 @@ class CliTests(unittest.TestCase):
         workspace = Workspace(workspace_path)
         prompt_path = AGENT_SPECS[PLOT_ARCHITECT].system_prompt_file
         workspace.write_text(prompt_path, "custom prompt\n")
-        workspace.write_text(
-            "core_documents/global_outline.md",
+        workspace.path("core_documents/global_outline.md").write_text(
             "preserved outline\n",
+            encoding="utf-8",
         )
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
@@ -2972,6 +3006,8 @@ class CliTests(unittest.TestCase):
                     "unsafe backend spec",
                     "--draft",
                     "neutral draft",
+                    "--output",
+                    "part-01/invalid-backend.md",
                 ]
             )
         self.assertEqual(exit_code, 2)

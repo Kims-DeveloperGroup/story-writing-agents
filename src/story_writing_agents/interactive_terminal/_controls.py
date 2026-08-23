@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from ._model import (
+    ARTIFACT_REFERENCE_POSITION_PREFIX,
+    EMPTY_ARTIFACT_REFERENCE_POSITION_PREFIX,
     Choice,
     CommandCompletionCandidate,
     CommandCompletionProjection,
@@ -30,6 +32,16 @@ from ._model import (
 
 
 _COMPOSITION_SUGGESTION_TOKENS = ("/send", "/cancel")
+_ARTIFACT_REFERENCE_PALETTE_TITLE = "Writing artifact selection"
+_ARTIFACT_REFERENCE_PALETTE_INSTRUCTION = (
+    "Up/Down selects; Enter/Tab inserts a whole-file reference."
+)
+_ARTIFACT_REFERENCE_EMPTY_CATALOG_TEXT = (
+    "No current writing artifacts. Complete a consensus run to create one."
+)
+_ARTIFACT_REFERENCE_NO_MATCH_TEXT = (
+    "No matching writing artifacts. Change the path fragment."
+)
 _MAIN_INPUT_HISTORY_LIMIT = 100
 _MAIN_CHOICE_POSITION_PREFIX = "main.choice:"
 _PICKER_WINDOW_SIZE = 7
@@ -329,7 +341,7 @@ def transition_main_command_input(
 def project_main_suggestion_palette(
     state: MainCommandControlState,
 ) -> SuggestionPalette | None:
-    """Project one open command control into the semantic palette vocabulary."""
+    """Project one open completion control into the semantic palette vocabulary."""
 
     if type(state) is not MainCommandControlState:
         raise TypeError("state must be a MainCommandControlState")
@@ -348,10 +360,31 @@ def project_main_suggestion_palette(
         if palette.highlighted is None
         else _main_command_choice_identity(palette.highlighted)
     )
+    position = palette.projection.position
+    is_artifact_reference = position.startswith(
+        ARTIFACT_REFERENCE_POSITION_PREFIX
+    )
     return SuggestionPalette(
         state.main_input.line_state.buffer,
         choices,
         highlighted_id=highlighted_id,
+        title=(
+            _ARTIFACT_REFERENCE_PALETTE_TITLE
+            if is_artifact_reference
+            else "Suggestions"
+        ),
+        instruction=(
+            _ARTIFACT_REFERENCE_PALETTE_INSTRUCTION
+            if is_artifact_reference
+            else None
+        ),
+        empty_text=(
+            _ARTIFACT_REFERENCE_EMPTY_CATALOG_TEXT
+            if position.startswith(EMPTY_ARTIFACT_REFERENCE_POSITION_PREFIX)
+            else _ARTIFACT_REFERENCE_NO_MATCH_TEXT
+            if is_artifact_reference
+            else "No suggestions."
+        ),
         state=ViewState.OPEN,
     )
 
@@ -980,7 +1013,7 @@ def _project_main_command_state(
     candidates = tuple(
         candidate
         for candidate in projection.candidates
-        if _completion_candidate_matches(candidate.replacement, prefix)
+        if completion_candidate_matches(candidate.replacement, prefix)
     )
     filtered = CommandCompletionProjection(
         projection.position,
@@ -1022,11 +1055,17 @@ def _project_main_command_state(
     )
 
 
-def _completion_candidate_matches(replacement: str, prefix: str) -> bool:
-    """Match exact prefixes, accepting bare help prefixes for slash literals."""
+def completion_candidate_matches(replacement: str, prefix: str) -> bool:
+    """Match literal, slash-elided, or unbraced reference prefixes."""
 
     if replacement.startswith("/") and not prefix.startswith("/"):
         return replacement[1:].startswith(prefix)
+    if (
+        replacement.startswith("${")
+        and prefix.startswith("$")
+        and not prefix.startswith(("${", "$$"))
+    ):
+        return replacement.startswith("${" + prefix[1:])
     return replacement.startswith(prefix)
 
 

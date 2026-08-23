@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import asyncio
-import codecs
 import os
 import select as _select
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TextIO, TypeAlias, TypeVar
 
+from ._input_lifecycle import (
+    LiveDecoderSpec,
+    TerminalInputLatch,
+    TerminalInputMode,
+    inspect_live_decoder_spec,
+)
 from ._model import (
     CapabilityProfile,
     CommandCompletionProjection,
@@ -31,6 +36,23 @@ from ._model import (
     TerminalCapabilities,
     display_character_width,
     sanitize_terminal_text,
+)
+from ._reference_activation import (
+    ReferenceActivationKind,
+    ReferenceActivationRequest,
+    ReferenceInputFailure,
+    ReferenceInputFailureKind,
+    ReferenceInputProjection,
+    replace_reference_completion,
+    replace_reference_range,
+    selected_reference_request,
+)
+from ._viewer_model import (
+    TextViewerExitKind,
+    TextViewerResult,
+    TextViewerState,
+    TextViewerViewport,
+    dispose_text_viewer,
 )
 
 try:
@@ -55,6 +77,11 @@ _STARTUP_WELCOME_FRAME_COUNT = 4
 _STARTUP_WELCOME_INTERVAL_SECONDS = 0.4
 _STARTUP_NOTICE_DURATION_SECONDS = 0.8
 _REDUCED_MOTION_ENVIRONMENT_KEY = "STORY_REDUCED_MOTION"
+_DEFAULT_VIEWER_HEIGHT = 24
+_MAX_VIEWER_HEIGHT = 200
+_VIEWER_SCREEN_ENTER = "\x1b[?1049h\x1b[2J\x1b[H"
+_VIEWER_SCREEN_REDRAW = "\x1b[H\x1b[2J"
+_VIEWER_SCREEN_EXIT = "\x1b[?1049l"
 _T = TypeVar("_T")
 
 
@@ -62,11 +89,21 @@ class AdvisoryProgressError(RuntimeError):
     """Mark a terminal-owned indicator failure for fatal controller cleanup."""
 
 
+class _DiscardingEscapeSequence:
+    """Identify bounded consumption of one overlong escape sequence."""
+
+    __slots__ = ()
+
+
+_DISCARDING_ESCAPE_SEQUENCE = _DiscardingEscapeSequence()
+_EscapeSequenceState: TypeAlias = str | _DiscardingEscapeSequence | None
+
+
 @dataclass(slots=True)
 class _LiveEditorState:
     """Retain only call-local escape decoding and redraw position."""
 
-    escape_sequence: str | None = None
+    escape_sequence: _EscapeSequenceState = None
     rendered_cursor_row: int = 0
 
 
@@ -83,11 +120,13 @@ class _TerminalConfiguration:
     """Capture one validated POSIX terminal mode and its exact restoration."""
 
     input_descriptor: int
+    output_descriptor: int
     original_attributes: list[object]
     editor_attributes: list[object]
     width: int
-    eof_character: str
-    interrupt_character: str
+    eof_character: str | None
+    interrupt_character: str | None
+    disabled_control_byte: int
     termios_module: object
 
 
@@ -100,7 +139,10 @@ _ControlState: TypeAlias = (
 )
 _ControlTransition: TypeAlias = Callable[
     [_ControlState, KeyEvent],
-    tuple[_ControlState, ControlOutcome | None],
+    tuple[
+        _ControlState,
+        ControlOutcome | ReferenceActivationRequest | ReferenceInputFailure | None,
+    ],
 ]
 _LineTransition: TypeAlias = Callable[
     [LineInputState, KeyEvent],
@@ -139,15 +181,74 @@ _PickerFallbackTransition: TypeAlias = Callable[
     [PickerControlState, str],
     tuple[PickerControlState, ControlOutcome],
 ]
-_PickerViewportProjector: TypeAlias = Callable[
-    [PickerControlState], PickerViewport
-]
+_PickerViewportProjector: TypeAlias = Callable[[PickerControlState], PickerViewport]
 _PickerViewportRenderer: TypeAlias = Callable[
     [PickerViewport, TerminalCapabilities], RenderedFrame
 ]
 _PickerFallbackRenderer: TypeAlias = Callable[
     [PickerControlState, TerminalCapabilities], RenderedInputFrame
 ]
+_ViewerTransition: TypeAlias = Callable[
+    [TextViewerState, KeyEvent],
+    tuple[TextViewerState, TextViewerResult | None],
+]
+_ViewerFallbackTransition: TypeAlias = Callable[
+    [TextViewerState, str],
+    tuple[TextViewerState, TextViewerResult | None],
+]
+_ViewerViewportProjector: TypeAlias = Callable[
+    [TextViewerState, int], TextViewerViewport
+]
+_ViewerViewportRenderer: TypeAlias = Callable[
+    [TextViewerViewport, TerminalCapabilities], RenderedFrame
+]
+_ViewerFallbackRenderer: TypeAlias = Callable[
+    [TextViewerState, TerminalCapabilities], RenderedInputFrame
+]
+
+
+@dataclass(frozen=True, slots=True)
+class ReferenceInputBindings:
+    """Bind one call-local reference UI without owning its resources."""
+
+    projection_provider: Callable[[str, int], ReferenceInputProjection | None]
+    completion_candidate_matches: Callable[[str, str], bool]
+    read_text: Callable[[str], str]
+    write_failure: Callable[[ReferenceInputFailureKind], None]
+    initialize_picker: Callable[[tuple[str, ...], str], PickerControlState]
+    picker_transition: _PickerTransition
+    picker_fallback_transition: _PickerFallbackTransition
+    picker_viewport_projector: _PickerViewportProjector
+    picker_viewport_renderer: _PickerViewportRenderer
+    picker_fallback_renderer: _PickerFallbackRenderer
+    initialize_viewer: Callable[[str, str], TextViewerState]
+    viewer_transition: _ViewerTransition
+    viewer_fallback_transition: _ViewerFallbackTransition
+    viewer_viewport_projector: _ViewerViewportProjector
+    viewer_viewport_renderer: _ViewerViewportRenderer
+    viewer_fallback_renderer: _ViewerFallbackRenderer
+
+    def __post_init__(self) -> None:
+        for name in self.__dataclass_fields__:
+            if not callable(getattr(self, name)):
+                raise TypeError(f"{name} must be callable")
+
+
+def _fallback_reference_projection(
+    line: str,
+    bindings: ReferenceInputBindings,
+) -> ReferenceInputProjection | None:
+    """Project the rightmost actionable raw-dollar marker in one line."""
+
+    search_end = len(line)
+    while True:
+        marker = line.rfind("$", 0, search_end)
+        if marker < 0:
+            return None
+        projection = bindings.projection_provider(line, marker + 1)
+        if projection is not None:
+            return projection
+        search_end = marker
 
 
 class RawTerminalDriver:
@@ -155,10 +256,14 @@ class RawTerminalDriver:
 
     __slots__ = (
         "_fallback_read_line",
+        "_fallback_capabilities",
         "_history_append",
         "_history_state",
         "_input_stream",
+        "_input_latch",
         "_line_transition",
+        "_live_capabilities",
+        "_live_configuration",
         "_main_transition",
         "_os_provider",
         "_output_stream",
@@ -183,9 +288,8 @@ class RawTerminalDriver:
         """Retain borrowed fallback and terminal stream collaborators.
 
         Construction performs no stream access or terminal mutation.
-        ``read_live_line`` resolves live-terminal capabilities at call time;
-        ``read_line`` delegates ordinary fallback input, whose callback remains
-        responsible for its own I/O lifecycle.
+        The first input call resolves and permanently selects either the live
+        byte source or the ordinary fallback callback.
         """
 
         if not callable(fallback_read_line):
@@ -201,9 +305,13 @@ class RawTerminalDriver:
         if os_provider is not None and not callable(os_provider):
             raise TypeError("os_provider must be callable or None")
         self._fallback_read_line = fallback_read_line
+        self._fallback_capabilities: TerminalCapabilities | None = None
         self._input_stream = input_stream
+        self._input_latch = TerminalInputLatch()
         self._output_stream = output_stream
         self._line_transition = line_transition
+        self._live_capabilities: TerminalCapabilities | None = None
+        self._live_configuration: _TerminalConfiguration | None = None
         self._main_transition = main_transition
         self._history_append = history_append
         self._history_state = MainInputHistoryState()
@@ -216,9 +324,23 @@ class RawTerminalDriver:
         self._os_provider = (lambda: os) if os_provider is None else os_provider
 
     def read_line(self, prompt: str) -> str:
-        """Use the borrowed line fallback without acquiring raw resources."""
+        """Read one history-free line through the driver's selected input."""
 
-        return self._fallback_read_line(prompt)
+        if not isinstance(prompt, str):
+            raise TypeError("prompt must be a string")
+        with self._input_latch.input_operation():
+            observed_capabilities = self._observe_input_capabilities()
+            capabilities, configuration = self._prepare_input(observed_capabilities)
+            if configuration is None:
+                return self._read_fallback_line(prompt, capabilities)
+            return self._read_control_line(
+                prompt,
+                _empty_suggestion_preview,
+                LineInputState(),
+                self._line_transition,
+                configuration=configuration,
+                transient=True,
+            )
 
     def write_text(self, text: str) -> None:
         """Write and flush one payload through the sole stream owner."""
@@ -254,9 +376,7 @@ class RawTerminalDriver:
         """Draw the current fixed indicator frame at the cursor cell."""
 
         frame_renderer = (
-            self._progress_renderer
-            if frame_renderer is None
-            else frame_renderer
+            self._progress_renderer if frame_renderer is None else frame_renderer
         )
         if not callable(frame_renderer):
             raise TypeError("frame_renderer must be callable")
@@ -300,9 +420,7 @@ class RawTerminalDriver:
             ) from exc
 
         operation_task = asyncio.ensure_future(operation)
-        progress_task = asyncio.create_task(
-            self._run_progress_frames(frame_renderer)
-        )
+        progress_task = asyncio.create_task(self._run_progress_frames(frame_renderer))
         operation_failure: BaseException | None = None
         progress_failure: BaseException | None = None
         result: _T | None = None
@@ -400,9 +518,7 @@ class RawTerminalDriver:
 
         while True:
             await asyncio.sleep(_PROGRESS_INTERVAL_SECONDS)
-            self._progress_frame = (
-                self._progress_frame + 1
-            ) % _PROGRESS_FRAME_COUNT
+            self._progress_frame = (self._progress_frame + 1) % _PROGRESS_FRAME_COUNT
             self._draw_progress_frame(frame_renderer)
 
     def capabilities(self) -> TerminalCapabilities:
@@ -428,33 +544,34 @@ class RawTerminalDriver:
         frame_renderer: Callable[[int, TerminalCapabilities], RenderedFrame],
         sleeper: Callable[[float], object],
     ) -> None:
-        """Render the one fixed bounded startup sequence or its static final."""
+        """Render one bounded startup sequence without selecting input mode."""
 
         if not callable(frame_renderer):
             raise TypeError("frame_renderer must be callable")
         if not callable(sleeper):
             raise TypeError("sleeper must be callable")
-        base_capabilities = self.capabilities()
-        configuration = (
-            self._startup_terminal_configuration(base_capabilities)
-            if self._startup_animation_is_safe(base_capabilities)
-            else None
-        )
-        if configuration is None or not self._run_guarded_startup_presentation(
-            configuration,
-            lambda: self._run_startup_welcome_frames(
-                frame_renderer,
-                sleeper,
-                base_capabilities,
-            ),
-        ):
-            static_capabilities = _static_startup_capabilities(base_capabilities)
-            final_frame = _startup_frame(
-                frame_renderer,
-                _STARTUP_WELCOME_FRAME_COUNT - 1,
-                static_capabilities,
+        with self._input_latch.input_operation():
+            base_capabilities = self._observe_input_capabilities()
+            configuration = (
+                self._startup_terminal_configuration(base_capabilities)
+                if self._startup_animation_is_safe(base_capabilities)
+                else None
             )
-            self._write_raw_text(f"{final_frame.text}\n")
+            if configuration is None or not self._run_guarded_startup_presentation(
+                configuration,
+                lambda: self._run_startup_welcome_frames(
+                    frame_renderer,
+                    sleeper,
+                    base_capabilities,
+                ),
+            ):
+                static_capabilities = _static_startup_capabilities(base_capabilities)
+                final_frame = _startup_frame(
+                    frame_renderer,
+                    _STARTUP_WELCOME_FRAME_COUNT - 1,
+                    static_capabilities,
+                )
+                self._write_raw_text(f"{final_frame.text}\n")
         return
 
     def _run_startup_welcome_frames(
@@ -521,27 +638,28 @@ class RawTerminalDriver:
             raise TypeError("sleeper must be callable")
         if type(result_boundary) is not bool:
             raise TypeError("result_boundary must be a bool")
-        base_capabilities = self.capabilities()
-        configuration = (
-            self._startup_terminal_configuration(base_capabilities)
-            if self._startup_animation_is_safe(base_capabilities)
-            else None
-        )
-        if configuration is None or not self._run_guarded_startup_presentation(
-            configuration,
-            lambda: self._run_startup_notice_frame(
-                frame_renderer,
-                sleeper,
-                base_capabilities,
-                result_boundary=result_boundary,
-            ),
-        ):
-            static_capabilities = _static_startup_capabilities(base_capabilities)
-            frame = frame_renderer(static_capabilities)
-            _require_startup_frame(frame, static_capabilities)
-            if result_boundary:
-                self._write_raw_text("\n")
-            self._write_raw_text(f"{frame.text}\n")
+        with self._input_latch.input_operation():
+            base_capabilities = self._observe_input_capabilities()
+            configuration = (
+                self._startup_terminal_configuration(base_capabilities)
+                if self._startup_animation_is_safe(base_capabilities)
+                else None
+            )
+            if configuration is None or not self._run_guarded_startup_presentation(
+                configuration,
+                lambda: self._run_startup_notice_frame(
+                    frame_renderer,
+                    sleeper,
+                    base_capabilities,
+                    result_boundary=result_boundary,
+                ),
+            ):
+                static_capabilities = _static_startup_capabilities(base_capabilities)
+                frame = frame_renderer(static_capabilities)
+                _require_startup_frame(frame, static_capabilities)
+                if result_boundary:
+                    self._write_raw_text("\n")
+                self._write_raw_text(f"{frame.text}\n")
 
     def _run_startup_notice_frame(
         self,
@@ -555,9 +673,7 @@ class RawTerminalDriver:
 
         if result_boundary:
             self._write_raw_text(f"{_CARRIAGE_RETURN}\n")
-        render_capabilities = self._startup_render_capabilities(
-            base_capabilities
-        )
+        render_capabilities = self._startup_render_capabilities(base_capabilities)
         frame = frame_renderer(render_capabilities)
         _require_startup_frame(frame, render_capabilities)
 
@@ -581,20 +697,50 @@ class RawTerminalDriver:
         self,
         capabilities: TerminalCapabilities,
     ) -> _TerminalConfiguration | None:
-        """Prepare the exact startup guard only with atomic input discard."""
+        """Preflight one guard without selecting the permanent input mode."""
 
+        mode = self._input_latch.mode
+        if mode is TerminalInputMode.FALLBACK:
+            return None
         try:
             termios_module = self._termios_provider()
             if not _startup_input_discard_is_supported(termios_module):
-                return None
-            return _terminal_configuration(
+                raise ValueError("startup input discard is unavailable")
+            decoder_spec = inspect_live_decoder_spec(self._input_stream)
+            if decoder_spec is None:
+                raise ValueError("startup input requires a byte reader")
+            configuration = _terminal_configuration(
                 self._input_stream,
                 self._output_stream,
                 termios_module=termios_module,
                 os_module=self._os_provider(),
                 width=capabilities.width,
+                decoder_spec=decoder_spec,
             )
-        except Exception:
+            if configuration is None:
+                raise ValueError("startup terminal configuration is unavailable")
+            if configuration.width != capabilities.width:
+                raise ValueError("startup terminal geometry changed during preflight")
+            if mode is TerminalInputMode.LIVE:
+                baseline_capabilities = self._live_capabilities
+                if baseline_capabilities is None or not _same_live_capabilities(
+                    baseline_capabilities,
+                    capabilities,
+                ):
+                    raise RuntimeError("live terminal capability changed")
+                self._input_latch.require_live(decoder_spec)
+                baseline_configuration = self._live_configuration
+                if baseline_configuration is None or not _same_terminal_configuration(
+                    baseline_configuration,
+                    configuration,
+                ):
+                    raise RuntimeError("live terminal configuration changed")
+            return configuration
+        except Exception as failure:
+            if mode is TerminalInputMode.LIVE:
+                raise RuntimeError(
+                    "live terminal startup presentation preflight failed"
+                ) from failure
             return None
 
     def _run_guarded_startup_presentation(
@@ -608,7 +754,10 @@ class RawTerminalDriver:
             _activate_terminal(configuration)
         except BaseException as setup_failure:
             _restore_terminal_or_raise(configuration, setup_failure)
-            if isinstance(setup_failure, Exception):
+            if (
+                isinstance(setup_failure, Exception)
+                and self._input_latch.mode is not TerminalInputMode.LIVE
+            ):
                 return False
             raise
 
@@ -692,9 +841,7 @@ class RawTerminalDriver:
             state.physical_line_count = frame.line_count
         elif type(written) is int and 0 <= written <= len(frame.text):
             if written:
-                state.physical_line_count = (
-                    frame.text[:written].count("\n") + 1
-                )
+                state.physical_line_count = frame.text[:written].count("\n") + 1
             if written != len(frame.text):
                 raise OSError("interactive terminal write was incomplete")
         else:
@@ -761,37 +908,123 @@ class RawTerminalDriver:
                 (
                     _SGR_RESET,
                     _CARRIAGE_RETURN,
-                    _CURSOR_UP
-                    * (line_count if cursor_below_frame else line_count - 1),
+                    _CURSOR_UP * (line_count if cursor_below_frame else line_count - 1),
                     _CARRIAGE_RETURN,
                     _CLEAR_TO_END,
                 )
             )
         )
 
+    def _observe_input_capabilities(self) -> TerminalCapabilities:
+        """Observe capabilities without selecting or consuming an input source."""
+
+        if self._input_latch.mode is TerminalInputMode.FALLBACK:
+            assert self._fallback_capabilities is not None
+            return self._fallback_capabilities
+        return self.capabilities()
+
+    def _prepare_input(
+        self,
+        observed_capabilities: TerminalCapabilities,
+    ) -> tuple[TerminalCapabilities, _TerminalConfiguration | None]:
+        """Preflight or revalidate without consuming input or mutating output."""
+
+        if type(observed_capabilities) is not TerminalCapabilities:
+            raise TypeError("observed_capabilities must be a TerminalCapabilities")
+        mode = self._input_latch.mode
+        if mode is TerminalInputMode.FALLBACK:
+            assert self._fallback_capabilities is not None
+            return self._fallback_capabilities, None
+
+        capabilities = observed_capabilities
+        if not capabilities.raw_mode:
+            if mode is TerminalInputMode.LIVE:
+                raise RuntimeError("live terminal capability changed")
+            return _line_only_capabilities(capabilities), None
+        if mode is TerminalInputMode.LIVE:
+            baseline_capabilities = self._live_capabilities
+            if baseline_capabilities is None or not _same_live_capabilities(
+                baseline_capabilities,
+                capabilities,
+            ):
+                raise RuntimeError("live terminal capability changed")
+
+        try:
+            decoder_spec = inspect_live_decoder_spec(self._input_stream)
+            if decoder_spec is None:
+                raise ValueError("live terminal input requires a byte reader")
+            configuration = _terminal_configuration(
+                self._input_stream,
+                self._output_stream,
+                termios_module=self._termios_provider(),
+                os_module=self._os_provider(),
+                width=None,
+                decoder_spec=decoder_spec,
+            )
+            if configuration is None:
+                raise ValueError("live terminal configuration is unavailable")
+            if configuration.width != capabilities.width:
+                raise ValueError("live terminal geometry changed during preflight")
+        except Exception as failure:
+            if mode is TerminalInputMode.LIVE:
+                raise RuntimeError("live terminal input preflight failed") from failure
+            return _line_only_capabilities(capabilities), None
+
+        if mode is TerminalInputMode.LIVE:
+            self._input_latch.require_live(decoder_spec)
+            baseline = self._live_configuration
+            if baseline is None or not _same_terminal_configuration(
+                baseline,
+                configuration,
+            ):
+                raise RuntimeError("live terminal configuration changed")
+        else:
+            self._input_latch.latch_live(decoder_spec)
+            self._live_capabilities = capabilities
+            self._live_configuration = configuration
+        return capabilities, configuration
+
+    def _read_fallback_line(
+        self,
+        prompt: str,
+        capabilities: TerminalCapabilities,
+    ) -> str:
+        """Latch fallback immediately before invoking its ordinary callback."""
+
+        if self._input_latch.mode is TerminalInputMode.UNDECIDED:
+            self._fallback_capabilities = capabilities
+        self._input_latch.latch_fallback()
+        return self._fallback_read_line(prompt)
+
     def read_live_line(
         self,
         prompt: str,
-        suggestion_provider: Callable[
-            [str], tuple[SlashCommandSuggestion, ...]
-        ],
+        suggestion_provider: Callable[[str], tuple[SlashCommandSuggestion, ...]],
     ) -> str:
         """Read one history-free Unicode buffer with a preview provider."""
 
-        return self._read_control_line(
-            prompt,
-            suggestion_provider,
-            LineInputState(),
-            self._line_transition,
-        )
+        if not isinstance(prompt, str):
+            raise TypeError("prompt must be a string")
+        if not callable(suggestion_provider):
+            raise TypeError("suggestion_provider must be callable")
+        with self._input_latch.input_operation():
+            observed_capabilities = self._observe_input_capabilities()
+            capabilities, configuration = self._prepare_input(observed_capabilities)
+            if configuration is None:
+                return self._read_fallback_line(prompt, capabilities)
+            return self._read_control_line(
+                prompt,
+                suggestion_provider,
+                LineInputState(),
+                self._line_transition,
+                configuration=configuration,
+            )
 
     def read_input_line(
         self,
         view: InputPromptView,
         renderer: _InputRenderer,
-        suggestion_provider: Callable[
-            [str], tuple[SlashCommandSuggestion, ...]
-        ],
+        suggestion_provider: Callable[[str], tuple[SlashCommandSuggestion, ...]],
         *,
         transient: bool = False,
     ) -> str:
@@ -806,23 +1039,28 @@ class RawTerminalDriver:
         if type(transient) is not bool:
             raise TypeError("transient must be a bool")
 
-        capabilities = self.capabilities()
-        rendered_input = renderer(view, capabilities)
-        if type(rendered_input) is not RenderedInputFrame:
-            raise TypeError("renderer must return a RenderedInputFrame")
-        if rendered_input.width != capabilities.width:
-            raise ValueError("rendered input width must match current capabilities")
-        if not capabilities.raw_mode:
-            return self._fallback_read_line(rendered_input.plain_text)
-        return self._read_control_line(
-            rendered_input.plain_text,
-            suggestion_provider,
-            LineInputState(),
-            self._line_transition,
-            rendered_input=rendered_input,
-            known_width=capabilities.width,
-            transient=transient,
-        )
+        with self._input_latch.input_operation():
+            observed_capabilities = self._observe_input_capabilities()
+            rendered_input = renderer(view, observed_capabilities)
+            if type(rendered_input) is not RenderedInputFrame:
+                raise TypeError("renderer must return a RenderedInputFrame")
+            if rendered_input.width != observed_capabilities.width:
+                raise ValueError("rendered input width must match current capabilities")
+            capabilities, configuration = self._prepare_input(observed_capabilities)
+            if configuration is None:
+                return self._read_fallback_line(
+                    rendered_input.plain_text,
+                    capabilities,
+                )
+            return self._read_control_line(
+                rendered_input.plain_text,
+                suggestion_provider,
+                LineInputState(),
+                self._line_transition,
+                configuration=configuration,
+                rendered_input=rendered_input,
+                transient=transient,
+            )
 
     def read_prompt(
         self,
@@ -843,32 +1081,37 @@ class RawTerminalDriver:
         if type(transient) is not bool:
             raise TypeError("transient must be a bool")
 
-        capabilities = self.capabilities()
-        rendered_input = renderer(view, capabilities)
-        if type(rendered_input) is not RenderedInputFrame:
-            raise TypeError("renderer must return a RenderedInputFrame")
-        if rendered_input.width != capabilities.width:
-            raise ValueError("rendered input width must match current capabilities")
-        try:
-            line = (
-                self._read_control_line(
-                    rendered_input.plain_text,
-                    _empty_suggestion_preview,
-                    LineInputState(),
-                    transition,
-                    rendered_input=rendered_input,
-                    known_width=capabilities.width,
-                    transient=transient,
+        with self._input_latch.input_operation():
+            observed_capabilities = self._observe_input_capabilities()
+            rendered_input = renderer(view, observed_capabilities)
+            if type(rendered_input) is not RenderedInputFrame:
+                raise TypeError("renderer must return a RenderedInputFrame")
+            if rendered_input.width != observed_capabilities.width:
+                raise ValueError("rendered input width must match current capabilities")
+            capabilities, configuration = self._prepare_input(observed_capabilities)
+            try:
+                line = (
+                    self._read_control_line(
+                        rendered_input.plain_text,
+                        _empty_suggestion_preview,
+                        LineInputState(),
+                        transition,
+                        configuration=configuration,
+                        rendered_input=rendered_input,
+                        transient=transient,
+                    )
+                    if configuration is not None
+                    else self._read_fallback_line(
+                        rendered_input.plain_text,
+                        capabilities,
+                    )
                 )
-                if capabilities.raw_mode
-                else self._fallback_read_line(rendered_input.plain_text)
-            )
-        except _PromptCancelled:
-            return ControlOutcome(ControlOutcomeKind.CANCEL)
-        except KeyboardInterrupt:
-            return ControlOutcome(ControlOutcomeKind.INTERRUPT)
-        except EOFError:
-            return ControlOutcome(ControlOutcomeKind.EOF)
+            except _PromptCancelled:
+                return ControlOutcome(ControlOutcomeKind.CANCEL)
+            except KeyboardInterrupt:
+                return ControlOutcome(ControlOutcomeKind.INTERRUPT)
+            except EOFError:
+                return ControlOutcome(ControlOutcomeKind.EOF)
         if not isinstance(line, str):
             raise TypeError("read_line must return a string")
         line = str.__str__(line)
@@ -881,9 +1124,7 @@ class RawTerminalDriver:
     def read_main_line(
         self,
         prompt: str,
-        suggestion_provider: Callable[
-            [str], tuple[SlashCommandSuggestion, ...]
-        ],
+        suggestion_provider: Callable[[str], tuple[SlashCommandSuggestion, ...]],
     ) -> str:
         """Read one main line and retain its successful exact nonblank commit.
 
@@ -894,14 +1135,17 @@ class RawTerminalDriver:
         terminal restoration have completed successfully.
         """
 
+        if not isinstance(prompt, str):
+            raise TypeError("prompt must be a string")
+        if not callable(suggestion_provider):
+            raise TypeError("suggestion_provider must be callable")
+
         def transition(
             state: _ControlState,
             event: KeyEvent,
         ) -> tuple[_ControlState, ControlOutcome | None]:
             if type(state) is not MainCommandControlState:
-                raise TypeError(
-                    "main transition requires MainCommandControlState"
-                )
+                raise TypeError("main transition requires MainCommandControlState")
             return self._main_transition(
                 state,
                 event,
@@ -909,15 +1153,23 @@ class RawTerminalDriver:
                 _empty_command_completion,
             )
 
-        line = self._read_control_line(
-            prompt,
-            suggestion_provider,
-            MainCommandControlState(),
-            transition,
-            transient=True,
-        )
-        self._append_completed_main_history(line)
-        return line
+        with self._input_latch.input_operation():
+            observed_capabilities = self._observe_input_capabilities()
+            capabilities, configuration = self._prepare_input(observed_capabilities)
+            line = (
+                self._read_control_line(
+                    prompt,
+                    suggestion_provider,
+                    MainCommandControlState(),
+                    transition,
+                    configuration=configuration,
+                    transient=True,
+                )
+                if configuration is not None
+                else self._read_fallback_line(prompt, capabilities)
+            )
+            self._append_completed_main_history(line)
+            return line
 
     def read_main_command_line(
         self,
@@ -926,7 +1178,45 @@ class RawTerminalDriver:
         palette_projector: _PaletteProjector,
         palette_renderer: _PaletteRenderer,
     ) -> str:
-        """Read one selectable semantic main command through call-local seams."""
+        """Read one selectable semantic main command through stable seams."""
+
+        return self._read_main_command_line(
+            prompt,
+            completion_provider,
+            palette_projector,
+            palette_renderer,
+            None,
+        )
+
+    def read_reference_main_command_line(
+        self,
+        prompt: str,
+        completion_provider: _CompletionProvider,
+        palette_projector: _PaletteProjector,
+        palette_renderer: _PaletteRenderer,
+        reference_bindings: ReferenceInputBindings,
+    ) -> str:
+        """Read one main command with call-local reference activation."""
+
+        if type(reference_bindings) is not ReferenceInputBindings:
+            raise TypeError("reference_bindings must be a ReferenceInputBindings")
+        return self._read_main_command_line(
+            prompt,
+            completion_provider,
+            palette_projector,
+            palette_renderer,
+            reference_bindings,
+        )
+
+    def _read_main_command_line(
+        self,
+        prompt: str,
+        completion_provider: _CompletionProvider,
+        palette_projector: _PaletteProjector,
+        palette_renderer: _PaletteRenderer,
+        reference_bindings: ReferenceInputBindings | None,
+    ) -> str:
+        """Implement main input with optional package-internal activation."""
 
         if not isinstance(prompt, str):
             raise TypeError("prompt must be a string")
@@ -937,21 +1227,39 @@ class RawTerminalDriver:
         ):
             if not callable(collaborator):
                 raise TypeError(f"{name} must be callable")
-
-        capabilities = self.capabilities()
-        if not capabilities.raw_mode:
-            line = self._fallback_read_line(prompt)
-            self._append_completed_main_history(line)
-            return line
+        if (
+            reference_bindings is not None
+            and type(reference_bindings) is not ReferenceInputBindings
+        ):
+            raise TypeError(
+                "reference_bindings must be a ReferenceInputBindings or None"
+            )
 
         def transition(
             state: _ControlState,
             event: KeyEvent,
-        ) -> tuple[_ControlState, ControlOutcome | None]:
+        ) -> tuple[
+            _ControlState,
+            ControlOutcome | ReferenceActivationRequest | ReferenceInputFailure | None,
+        ]:
             if type(state) is not MainCommandControlState:
                 raise TypeError(
                     "main command transition requires MainCommandControlState"
                 )
+            if reference_bindings is not None and event.kind in {
+                KeyKind.ENTER,
+                KeyKind.TAB,
+            }:
+                line = state.main_input.line_state
+                projection = reference_bindings.projection_provider(
+                    line.buffer,
+                    line.cursor,
+                )
+                if projection is not None:
+                    if projection.request is not None:
+                        return state, projection.request
+                    if projection.failure is not None:
+                        return state, ReferenceInputFailure(projection.failure)
             return self._main_transition(
                 state,
                 event,
@@ -959,19 +1267,290 @@ class RawTerminalDriver:
                 completion_provider,
             )
 
-        line = self._read_control_line(
-            prompt,
-            _empty_suggestion_preview,
-            MainCommandControlState(),
-            transition,
-            known_width=capabilities.width,
-            live_capabilities=capabilities,
-            palette_projector=palette_projector,
-            palette_renderer=palette_renderer,
-            transient=True,
-        )
-        self._append_completed_main_history(line)
-        return line
+        with self._input_latch.input_operation():
+            observed_capabilities = self._observe_input_capabilities()
+            capabilities, configuration = self._prepare_input(observed_capabilities)
+            line = (
+                self._read_control_line(
+                    prompt,
+                    _empty_suggestion_preview,
+                    MainCommandControlState(),
+                    transition,
+                    configuration=configuration,
+                    live_capabilities=capabilities,
+                    palette_projector=palette_projector,
+                    palette_renderer=palette_renderer,
+                    reference_bindings=reference_bindings,
+                    transient=True,
+                )
+                if configuration is not None
+                else (
+                    self._read_reference_fallback(
+                        prompt,
+                        capabilities,
+                        reference_bindings,
+                    )
+                    if reference_bindings is not None
+                    else self._read_fallback_line(prompt, capabilities)
+                )
+            )
+            self._append_completed_main_history(line)
+            return line
+
+    def read_reference_input_line(
+        self,
+        view: InputPromptView,
+        renderer: _InputRenderer,
+        suggestion_provider: Callable[[str], tuple[SlashCommandSuggestion, ...]],
+        completion_provider: _CompletionProvider,
+        palette_projector: _PaletteProjector,
+        palette_renderer: _PaletteRenderer,
+        reference_bindings: ReferenceInputBindings,
+    ) -> str:
+        """Read one history-free composer line with reference activation."""
+
+        if type(view) is not InputPromptView:
+            raise TypeError("view must be an InputPromptView")
+        if type(reference_bindings) is not ReferenceInputBindings:
+            raise TypeError("reference_bindings must be a ReferenceInputBindings")
+        for name, collaborator in (
+            ("renderer", renderer),
+            ("suggestion_provider", suggestion_provider),
+            ("completion_provider", completion_provider),
+            ("palette_projector", palette_projector),
+            ("palette_renderer", palette_renderer),
+        ):
+            if not callable(collaborator):
+                raise TypeError(f"{name} must be callable")
+        empty_history = MainInputHistoryState()
+
+        def transition(
+            state: _ControlState,
+            event: KeyEvent,
+        ) -> tuple[
+            _ControlState,
+            ControlOutcome | ReferenceActivationRequest | ReferenceInputFailure | None,
+        ]:
+            if type(state) is not MainCommandControlState:
+                raise TypeError(
+                    "reference input transition requires MainCommandControlState"
+                )
+            if event.kind in {KeyKind.ENTER, KeyKind.TAB}:
+                line = state.main_input.line_state
+                projection = reference_bindings.projection_provider(
+                    line.buffer,
+                    line.cursor,
+                )
+                if projection is not None:
+                    if projection.request is not None:
+                        return state, projection.request
+                    if projection.failure is not None:
+                        return state, ReferenceInputFailure(projection.failure)
+            return self._main_transition(
+                state,
+                event,
+                empty_history,
+                completion_provider,
+            )
+
+        with self._input_latch.input_operation():
+            observed_capabilities = self._observe_input_capabilities()
+            rendered_input = renderer(view, observed_capabilities)
+            if type(rendered_input) is not RenderedInputFrame:
+                raise TypeError("renderer must return a RenderedInputFrame")
+            if rendered_input.width != observed_capabilities.width:
+                raise ValueError("rendered input width must match current capabilities")
+            capabilities, configuration = self._prepare_input(observed_capabilities)
+            if configuration is None:
+                return self._read_reference_fallback(
+                    rendered_input.plain_text,
+                    capabilities,
+                    reference_bindings,
+                )
+            return self._read_control_line(
+                rendered_input.plain_text,
+                suggestion_provider,
+                MainCommandControlState(),
+                transition,
+                configuration=configuration,
+                rendered_input=rendered_input,
+                live_capabilities=capabilities,
+                palette_projector=palette_projector,
+                palette_renderer=palette_renderer,
+                reference_bindings=reference_bindings,
+                transient=True,
+            )
+
+    def _read_reference_fallback(
+        self,
+        prompt: str,
+        capabilities: TerminalCapabilities,
+        bindings: ReferenceInputBindings,
+    ) -> str:
+        """Run accessible line-mode activation with explicit redispatch."""
+
+        line = self._read_fallback_line(prompt, capabilities)
+        if not isinstance(line, str):
+            raise TypeError("read_line must return a string")
+        line = str.__str__(line)
+        if "\r" in line or "\n" in line:
+            raise ValueError("read_line must return one line without CR or LF")
+
+        while True:
+            state = MainCommandControlState(
+                MainInputControlState(LineInputState(line, len(line)))
+            )
+            projection = _fallback_reference_projection(line, bindings)
+            if projection is None:
+                return line
+            amended = False
+            if projection.failure is not None:
+                bindings.write_failure(projection.failure)
+            elif projection.completion is not None:
+                completion = projection.completion
+                prefix = line[completion.start : completion.end]
+                replacements = tuple(
+                    candidate.replacement
+                    for candidate in completion.candidates
+                    if bindings.completion_candidate_matches(
+                        candidate.replacement,
+                        prefix,
+                    )
+                )
+                if not replacements:
+                    bindings.write_failure(ReferenceInputFailureKind.INVALID)
+                else:
+                    picker = bindings.initialize_picker(
+                        replacements,
+                        "Select a whole-file reference",
+                    )
+                    outcome = self._read_picker_fallback(
+                        picker,
+                        capabilities,
+                        bindings.picker_fallback_transition,
+                        bindings.picker_fallback_renderer,
+                        transient=True,
+                    )
+                    if outcome.kind is ControlOutcomeKind.COMMIT:
+                        assert outcome.text is not None
+                        try:
+                            state = replace_reference_completion(
+                                state,
+                                completion,
+                                outcome.text,
+                            )
+                        except ReferenceInputFailure as failure:
+                            bindings.write_failure(failure.kind)
+                        else:
+                            line = state.main_input.line_state.buffer
+                            amended = True
+            else:
+                assert projection.request is not None
+                updated = self._run_fallback_reference_activation(
+                    state,
+                    projection.request,
+                    capabilities,
+                    bindings,
+                )
+                if updated != state:
+                    state = updated
+                    line = state.main_input.line_state.buffer
+                    amended = True
+
+            safe = sanitize_terminal_text(line)
+            if len(safe) > 240:
+                safe = f"{safe[:237]}..."
+            follow_up = (
+                "Press Enter to submit it, or type a replacement draft: "
+                if amended
+                else (
+                    "Press Enter to retry the marker without submitting, or type "
+                    "a replacement draft: "
+                )
+            )
+            answer = self._read_fallback_line(
+                f"Draft retained: {safe}\n{follow_up}",
+                capabilities,
+            )
+            if not isinstance(answer, str):
+                raise TypeError("read_line must return a string")
+            answer = str.__str__(answer)
+            if "\r" in answer or "\n" in answer:
+                raise ValueError("read_line must return one line without CR or LF")
+            if answer:
+                line = answer
+                continue
+            if amended:
+                return line
+
+    def _run_fallback_reference_activation(
+        self,
+        origin: MainCommandControlState,
+        request: ReferenceActivationRequest,
+        capabilities: TerminalCapabilities,
+        bindings: ReferenceInputBindings,
+    ) -> MainCommandControlState:
+        """Run picker/viewer children through ordinary line callbacks only."""
+
+        active_request = request
+        if request.kind is ReferenceActivationKind.PICK:
+            picker = bindings.initialize_picker(
+                request.paths,
+                "Select a writing artifact to view",
+            )
+            picker_outcome = self._read_picker_fallback(
+                picker,
+                capabilities,
+                bindings.picker_fallback_transition,
+                bindings.picker_fallback_renderer,
+                transient=True,
+            )
+            if picker_outcome.kind is not ControlOutcomeKind.COMMIT:
+                return origin
+            assert picker_outcome.text is not None
+            try:
+                active_request = selected_reference_request(
+                    request,
+                    picker_outcome.text,
+                )
+            except ReferenceInputFailure as failure:
+                bindings.write_failure(failure.kind)
+                return origin
+
+        assert active_request.path is not None
+        try:
+            text = bindings.read_text(active_request.path)
+        except ReferenceInputFailure as failure:
+            bindings.write_failure(failure.kind)
+            return origin
+        if type(text) is not str:
+            raise TypeError("reference text reader must return a string")
+        try:
+            viewer = bindings.initialize_viewer(text, active_request.path)
+        except ValueError:
+            bindings.write_failure(ReferenceInputFailureKind.UNREADABLE)
+            return origin
+        try:
+            result = self._read_text_viewer_fallback(
+                viewer,
+                capabilities,
+                bindings.viewer_fallback_transition,
+                bindings.viewer_fallback_renderer,
+            )
+        finally:
+            dispose_text_viewer(viewer)
+        if result.kind is not TextViewerExitKind.SELECTED:
+            return origin
+        assert result.line_range is not None
+        try:
+            return replace_reference_range(
+                origin,
+                active_request,
+                *result.line_range,
+            )
+        except ReferenceInputFailure as failure:
+            bindings.write_failure(failure.kind)
+            return origin
 
     def read_picker(
         self,
@@ -1000,45 +1579,10 @@ class RawTerminalDriver:
             if not callable(collaborator):
                 raise TypeError(f"{name} must be callable")
 
-        capabilities = self.capabilities()
-        if not capabilities.raw_mode:
-            return self._read_picker_fallback(
-                state,
-                capabilities,
-                fallback_transition,
-                fallback_renderer,
-                transient=transient,
-            )
-        try:
-            configuration = _terminal_configuration(
-                self._input_stream,
-                self._output_stream,
-                termios_module=self._termios_provider(),
-                os_module=self._os_provider(),
-                width=capabilities.width,
-            )
-        except Exception:
-            return self._read_picker_fallback(
-                state,
-                capabilities,
-                fallback_transition,
-                fallback_renderer,
-                transient=transient,
-            )
-        if configuration is None:
-            return self._read_picker_fallback(
-                state,
-                capabilities,
-                fallback_transition,
-                fallback_renderer,
-                transient=transient,
-            )
-
-        try:
-            _activate_terminal(configuration)
-        except BaseException as setup_failure:
-            _restore_terminal_or_raise(configuration, setup_failure)
-            if isinstance(setup_failure, Exception):
+        with self._input_latch.input_operation():
+            observed_capabilities = self._observe_input_capabilities()
+            capabilities, configuration = self._prepare_input(observed_capabilities)
+            if configuration is None:
                 return self._read_picker_fallback(
                     state,
                     capabilities,
@@ -1046,6 +1590,33 @@ class RawTerminalDriver:
                     fallback_renderer,
                     transient=transient,
                 )
+            return self._read_live_picker_lifecycle(
+                state,
+                configuration,
+                capabilities,
+                transition,
+                viewport_projector,
+                viewport_renderer,
+                transient=transient,
+            )
+
+    def _read_live_picker_lifecycle(
+        self,
+        state: PickerControlState,
+        configuration: _TerminalConfiguration,
+        capabilities: TerminalCapabilities,
+        transition: _PickerTransition,
+        viewport_projector: _PickerViewportProjector,
+        viewport_renderer: _PickerViewportRenderer,
+        *,
+        transient: bool,
+    ) -> ControlOutcome:
+        """Own one selected-LIVE picker activation and exact restoration."""
+
+        try:
+            _activate_terminal(configuration)
+        except BaseException as setup_failure:
+            _restore_terminal_or_raise(configuration, setup_failure)
             raise
 
         display_state = _LiveEditorState()
@@ -1061,10 +1632,14 @@ class RawTerminalDriver:
                 viewport_projector,
                 viewport_renderer,
             )
-            if outcome.kind in {
-                ControlOutcomeKind.COMMIT,
-                ControlOutcomeKind.CANCEL,
-            } and not transient:
+            if (
+                outcome.kind
+                in {
+                    ControlOutcomeKind.COMMIT,
+                    ControlOutcomeKind.CANCEL,
+                }
+                and not transient
+            ):
                 display_state.rendered_cursor_row = self._redraw_live_picker(
                     state,
                     display_state,
@@ -1091,6 +1666,156 @@ class RawTerminalDriver:
         assert outcome is not None
         return outcome
 
+    def read_text_viewer(
+        self,
+        state: TextViewerState,
+        transition: _ViewerTransition,
+        fallback_transition: _ViewerFallbackTransition,
+        viewport_projector: _ViewerViewportProjector,
+        viewport_renderer: _ViewerViewportRenderer,
+        fallback_renderer: _ViewerFallbackRenderer,
+    ) -> TextViewerResult:
+        """Run one storage-free viewer through the sole terminal lifecycle."""
+
+        if type(state) is not TextViewerState:
+            raise TypeError("state must be a TextViewerState")
+        for name, collaborator in (
+            ("transition", transition),
+            ("fallback_transition", fallback_transition),
+            ("viewport_projector", viewport_projector),
+            ("viewport_renderer", viewport_renderer),
+            ("fallback_renderer", fallback_renderer),
+        ):
+            if not callable(collaborator):
+                raise TypeError(f"{name} must be callable")
+
+        with self._input_latch.input_operation():
+            observed_capabilities = self._observe_input_capabilities()
+            capabilities, configuration = self._prepare_input(observed_capabilities)
+            if configuration is None:
+                return self._read_text_viewer_fallback(
+                    state,
+                    capabilities,
+                    fallback_transition,
+                    fallback_renderer,
+                )
+            return self._read_live_text_viewer_lifecycle(
+                state,
+                configuration,
+                capabilities,
+                transition,
+                viewport_projector,
+                viewport_renderer,
+            )
+
+    def _read_live_text_viewer_lifecycle(
+        self,
+        state: TextViewerState,
+        configuration: _TerminalConfiguration,
+        capabilities: TerminalCapabilities,
+        transition: _ViewerTransition,
+        viewport_projector: _ViewerViewportProjector,
+        viewport_renderer: _ViewerViewportRenderer,
+    ) -> TextViewerResult:
+        """Own one selected-LIVE viewer screen and terminal lifecycle."""
+
+        outcome: TextViewerResult | None = None
+        active_failure: BaseException | None = None
+        screen_failure: BaseException | None = None
+        lifecycle_failure: BaseException | None = None
+        screen_cleanup_required = False
+        try:
+            try:
+                _activate_terminal(configuration)
+            except BaseException as failure:
+                lifecycle_failure = failure
+            else:
+                try:
+                    # Pair even a partial alternate-screen entry with one exit
+                    # attempt before the enclosing terminal restoration.
+                    screen_cleanup_required = True
+                    try:
+                        self._write_live_text(_VIEWER_SCREEN_ENTER)
+                        _state, outcome = self._read_live_text_viewer(
+                            state,
+                            configuration,
+                            capabilities,
+                            transition,
+                            viewport_projector,
+                            viewport_renderer,
+                        )
+                    except BaseException as failure:
+                        active_failure = failure
+                finally:
+                    if screen_cleanup_required:
+                        try:
+                            self._write_live_text(_VIEWER_SCREEN_EXIT)
+                        except BaseException as failure:
+                            screen_failure = failure
+        except BaseException as failure:
+            # This boundary covers interruption gaps between activation,
+            # alternate-screen cleanup, and the enclosing restoration.
+            lifecycle_failure = failure
+        finally:
+            restoration_context = screen_failure or lifecycle_failure or active_failure
+            _restore_terminal_or_raise(configuration, restoration_context)
+        if screen_failure is not None:
+            raise screen_failure
+        if lifecycle_failure is not None:
+            raise lifecycle_failure
+        if active_failure is not None:
+            raise active_failure
+        assert outcome is not None
+        return outcome
+
+    def _read_text_viewer_fallback(
+        self,
+        state: TextViewerState,
+        capabilities: TerminalCapabilities,
+        transition: _ViewerFallbackTransition,
+        renderer: _ViewerFallbackRenderer,
+    ) -> TextViewerResult:
+        """Read strict one-line range attempts without raw or ANSI controls."""
+
+        while True:
+            frame = renderer(state, capabilities)
+            if type(frame) is not RenderedInputFrame:
+                raise TypeError(
+                    "viewer fallback renderer must return a RenderedInputFrame"
+                )
+            if frame.width != capabilities.width:
+                raise ValueError(
+                    "rendered viewer fallback width must match capabilities"
+                )
+            try:
+                answer = self._read_fallback_line(
+                    frame.plain_text,
+                    capabilities,
+                )
+            except KeyboardInterrupt:
+                return TextViewerResult(
+                    TextViewerExitKind.INTERRUPTED,
+                )
+            except EOFError:
+                return TextViewerResult(TextViewerExitKind.EOF)
+            if not isinstance(answer, str):
+                raise TypeError("read_line must return a string")
+            answer = str.__str__(answer)
+            if "\r" in answer or "\n" in answer:
+                raise ValueError("read_line must return one line without CR or LF")
+            updated, outcome = transition(state, answer)
+            if type(updated) is not TextViewerState:
+                raise TypeError(
+                    "viewer fallback transition must return a TextViewerState"
+                )
+            if outcome is not None and type(outcome) is not TextViewerResult:
+                raise TypeError(
+                    "viewer fallback transition must return a TextViewerResult or None"
+                )
+            state = updated
+            if outcome is not None:
+                return outcome
+
     def _read_picker_fallback(
         self,
         state: PickerControlState,
@@ -1108,15 +1833,16 @@ class RawTerminalDriver:
         while True:
             frame = renderer(state, capabilities)
             if type(frame) is not RenderedInputFrame:
-                raise TypeError(
-                    "fallback_renderer must return a RenderedInputFrame"
-                )
+                raise TypeError("fallback_renderer must return a RenderedInputFrame")
             if frame.width != capabilities.width:
                 raise ValueError(
                     "rendered picker fallback width must match capabilities"
                 )
             try:
-                answer = self._fallback_read_line(frame.plain_text)
+                answer = self._read_fallback_line(
+                    frame.plain_text,
+                    capabilities,
+                )
             except KeyboardInterrupt:
                 return ControlOutcome(ControlOutcomeKind.INTERRUPT)
             except EOFError:
@@ -1125,25 +1851,23 @@ class RawTerminalDriver:
                 raise TypeError("read_line must return a string")
             answer = str.__str__(answer)
             if "\r" in answer or "\n" in answer:
-                raise ValueError(
-                    "read_line must return one line without CR or LF"
-                )
+                raise ValueError("read_line must return one line without CR or LF")
             updated, outcome = transition(state, answer)
             if type(updated) is not PickerControlState:
-                raise TypeError(
-                    "fallback_transition must return a PickerControlState"
-                )
+                raise TypeError("fallback_transition must return a PickerControlState")
             if type(outcome) is not ControlOutcome:
-                raise TypeError(
-                    "fallback_transition must return a ControlOutcome"
-                )
+                raise TypeError("fallback_transition must return a ControlOutcome")
             state = updated
             if outcome.kind is ControlOutcomeKind.REJECTED:
                 continue
-            if outcome.kind in {
-                ControlOutcomeKind.COMMIT,
-                ControlOutcomeKind.CANCEL,
-            } and not transient:
+            if (
+                outcome.kind
+                in {
+                    ControlOutcomeKind.COMMIT,
+                    ControlOutcomeKind.CANCEL,
+                }
+                and not transient
+            ):
                 final_frame = renderer(state, capabilities)
                 if type(final_frame) is not RenderedInputFrame:
                     raise TypeError(
@@ -1173,33 +1897,29 @@ class RawTerminalDriver:
                 history_line,
             )
             if type(updated_history) is not MainInputHistoryState:
-                raise TypeError(
-                    "history_append must return a MainInputHistoryState"
-                )
+                raise TypeError("history_append must return a MainInputHistoryState")
             self._history_state = updated_history
 
     def _read_control_line(
         self,
         prompt: str,
-        suggestion_provider: Callable[
-            [str], tuple[SlashCommandSuggestion, ...]
-        ],
+        suggestion_provider: Callable[[str], tuple[SlashCommandSuggestion, ...]],
         initial_state: _ControlState,
         transition: _ControlTransition,
         *,
+        configuration: _TerminalConfiguration,
         rendered_input: RenderedInputFrame | None = None,
-        known_width: int | None = None,
         live_capabilities: TerminalCapabilities | None = None,
         palette_projector: _PaletteProjector | None = None,
         palette_renderer: _PaletteRenderer | None = None,
+        reference_bindings: ReferenceInputBindings | None = None,
         transient: bool = False,
     ) -> str:
         """Read one exact buffer through one pure logical-state transition.
 
-        A capable POSIX terminal is placed in call-local noncanonical/no-echo
-        mode and restored after submission or every failure. Unsupported or
-        safely recoverable setup uses the borrowed fallback before consuming
-        input. Active failures propagate after cleanup; uncertain restoration
+        The already selected LIVE terminal is placed in call-local
+        noncanonical/no-echo mode and restored after submission or every
+        failure. Active failures propagate after cleanup; uncertain restoration
         raises a fatal fixed ``RuntimeError`` instead.
         """
 
@@ -1215,6 +1935,8 @@ class RawTerminalDriver:
             raise TypeError("initial_state must be an input control state")
         if not callable(transition):
             raise TypeError("transition must be callable")
+        if type(configuration) is not _TerminalConfiguration:
+            raise TypeError("configuration must be a _TerminalConfiguration")
         if type(transient) is not bool:
             raise TypeError("transient must be a bool")
         if (
@@ -1222,22 +1944,15 @@ class RawTerminalDriver:
             and type(rendered_input) is not RenderedInputFrame
         ):
             raise TypeError("rendered_input must be a RenderedInputFrame or None")
-        if known_width is not None and (
-            type(known_width) is not int or known_width <= 0
-        ):
-            raise ValueError("known_width must be a positive integer or None")
-        if rendered_input is not None and known_width is None:
-            raise ValueError("known_width is required with rendered_input")
-        if rendered_input is not None and rendered_input.width != known_width:
+        if rendered_input is not None and rendered_input.width != configuration.width:
             raise ValueError("rendered input and known width must match")
-        if live_capabilities is not None and type(
-            live_capabilities
-        ) is not TerminalCapabilities:
-            raise TypeError(
-                "live_capabilities must be a TerminalCapabilities or None"
-            )
+        if (
+            live_capabilities is not None
+            and type(live_capabilities) is not TerminalCapabilities
+        ):
+            raise TypeError("live_capabilities must be a TerminalCapabilities or None")
         if live_capabilities is not None and (
-            known_width is None or live_capabilities.width != known_width
+            live_capabilities.width != configuration.width
         ):
             raise ValueError("live capabilities and known width must match")
         palette_collaborators = (
@@ -1255,26 +1970,22 @@ class RawTerminalDriver:
             raise TypeError("palette_projector must be callable or None")
         if palette_renderer is not None and not callable(palette_renderer):
             raise TypeError("palette_renderer must be callable or None")
-
-        try:
-            configuration = _terminal_configuration(
-                self._input_stream,
-                self._output_stream,
-                termios_module=self._termios_provider(),
-                os_module=self._os_provider(),
-                width=known_width,
+        if (
+            reference_bindings is not None
+            and type(reference_bindings) is not ReferenceInputBindings
+        ):
+            raise TypeError(
+                "reference_bindings must be a ReferenceInputBindings or None"
             )
-        except Exception:
-            return self._fallback_read_line(prompt)
-        if configuration is None:
-            return self._fallback_read_line(prompt)
+        if reference_bindings is not None and live_capabilities is None:
+            raise ValueError(
+                "reference input requires live capabilities for capable input"
+            )
 
         try:
             _activate_terminal(configuration)
         except BaseException as setup_failure:
             _restore_terminal_or_raise(configuration, setup_failure)
-            if isinstance(setup_failure, Exception):
-                return self._fallback_read_line(prompt)
             raise
 
         display_state = _LiveEditorState()
@@ -1293,6 +2004,7 @@ class RawTerminalDriver:
                 live_capabilities,
                 palette_projector,
                 palette_renderer,
+                reference_bindings,
             )
             if transient:
                 self._clear_live_display(display_state, line_break=False)
@@ -1325,15 +2037,14 @@ class RawTerminalDriver:
         prompt: str,
         configuration: _TerminalConfiguration,
         display_state: _LiveEditorState,
-        suggestion_provider: Callable[
-            [str], tuple[SlashCommandSuggestion, ...]
-        ],
+        suggestion_provider: Callable[[str], tuple[SlashCommandSuggestion, ...]],
         initial_state: _ControlState,
         transition: _ControlTransition,
         rendered_input: RenderedInputFrame | None,
         live_capabilities: TerminalCapabilities | None,
         palette_projector: _PaletteProjector | None,
         palette_renderer: _PaletteRenderer | None,
+        reference_bindings: ReferenceInputBindings | None,
     ) -> tuple[str, LineInputState]:
         """Edit one code-point buffer until submit, interrupt, EOF, or failure.
 
@@ -1345,7 +2056,6 @@ class RawTerminalDriver:
         """
 
         control_state = initial_state
-        character_reader = _single_character_reader(self._input_stream)
         display_state.rendered_cursor_row = self._redraw_live_display(
             prompt,
             configuration.width,
@@ -1358,7 +2068,49 @@ class RawTerminalDriver:
             palette_renderer,
         )
         while True:
-            character = self._read_character(character_reader)
+            try:
+                character = self._read_character()
+            except EOFError:
+                display_state.escape_sequence = None
+                raise
+
+            configured_event = _configured_control_event(
+                character,
+                configuration,
+            )
+            if configured_event is not None:
+                control_state, outcome, changed = _apply_control_event(
+                    control_state,
+                    configured_event,
+                    transition,
+                )
+                control_state, outcome, reference_changed = (
+                    self._resolve_live_reference_outcome(
+                        control_state,
+                        outcome,
+                        configuration,
+                        display_state,
+                        live_capabilities,
+                        reference_bindings,
+                    )
+                )
+                changed = changed or reference_changed
+                completed = _completed_text_or_raise(outcome)
+                if completed is not None:
+                    return completed, _control_line_state(control_state)
+                if changed:
+                    display_state.rendered_cursor_row = self._redraw_live_display(
+                        prompt,
+                        configuration.width,
+                        display_state,
+                        control_state,
+                        suggestion_provider,
+                        rendered_input,
+                        live_capabilities,
+                        palette_projector,
+                        palette_renderer,
+                    )
+                continue
 
             if display_state.escape_sequence is not None:
                 event, reprocess = _consume_escape_character(
@@ -1371,6 +2123,17 @@ class RawTerminalDriver:
                         event,
                         transition,
                     )
+                    control_state, outcome, reference_changed = (
+                        self._resolve_live_reference_outcome(
+                            control_state,
+                            outcome,
+                            configuration,
+                            display_state,
+                            live_capabilities,
+                            reference_bindings,
+                        )
+                    )
+                    changed = changed or reference_changed
                     completed = _completed_text_or_raise(outcome)
                     if completed is not None:
                         return completed, _control_line_state(control_state)
@@ -1390,12 +2153,23 @@ class RawTerminalDriver:
                     continue
 
             if character == "\x1b":
-                if not _escape_input_is_ready(configuration.input_descriptor):
+                if not self._escape_continuation_is_ready(configuration):
                     control_state, outcome, changed = _apply_control_event(
                         control_state,
                         KeyEvent(KeyKind.ESCAPE),
                         transition,
                     )
+                    control_state, outcome, reference_changed = (
+                        self._resolve_live_reference_outcome(
+                            control_state,
+                            outcome,
+                            configuration,
+                            display_state,
+                            live_capabilities,
+                            reference_bindings,
+                        )
+                    )
+                    changed = changed or reference_changed
                     completed = _completed_text_or_raise(outcome)
                     if completed is not None:
                         return completed, _control_line_state(control_state)
@@ -1420,6 +2194,17 @@ class RawTerminalDriver:
                 event,
                 transition,
             )
+            control_state, outcome, reference_changed = (
+                self._resolve_live_reference_outcome(
+                    control_state,
+                    outcome,
+                    configuration,
+                    display_state,
+                    live_capabilities,
+                    reference_bindings,
+                )
+            )
+            changed = changed or reference_changed
             completed = _completed_text_or_raise(outcome)
             if completed is not None:
                 return completed, _control_line_state(control_state)
@@ -1436,6 +2221,127 @@ class RawTerminalDriver:
                     palette_renderer,
                 )
 
+    def _resolve_live_reference_outcome(
+        self,
+        state: _ControlState,
+        outcome: ControlOutcome
+        | ReferenceActivationRequest
+        | ReferenceInputFailure
+        | None,
+        configuration: _TerminalConfiguration,
+        display_state: _LiveEditorState,
+        capabilities: TerminalCapabilities | None,
+        bindings: ReferenceInputBindings | None,
+    ) -> tuple[_ControlState, ControlOutcome | None, bool]:
+        """Run one nested reference interaction inside the active input latch."""
+
+        if outcome is None or type(outcome) is ControlOutcome:
+            return state, outcome, False
+        if bindings is None or capabilities is None:
+            raise RuntimeError("reference activation requires live bindings")
+        if type(state) is not MainCommandControlState:
+            raise TypeError("reference activation requires main command state")
+        self._clear_live_display(display_state, line_break=False)
+        if type(outcome) is ReferenceInputFailure:
+            bindings.write_failure(outcome.kind)
+            return state, None, True
+        updated = self._run_live_reference_activation(
+            state,
+            outcome,
+            configuration,
+            display_state,
+            capabilities,
+            bindings,
+        )
+        return updated, None, True
+
+    def _run_live_reference_activation(
+        self,
+        origin: MainCommandControlState,
+        request: ReferenceActivationRequest,
+        configuration: _TerminalConfiguration,
+        display_state: _LiveEditorState,
+        capabilities: TerminalCapabilities,
+        bindings: ReferenceInputBindings,
+    ) -> MainCommandControlState:
+        """Run picker/viewer children without reacquiring raw mode or the latch."""
+
+        active_request = request
+        if request.kind is ReferenceActivationKind.PICK:
+            picker = bindings.initialize_picker(
+                request.paths,
+                "Select a writing artifact to view",
+            )
+            _picker_state, picker_outcome = self._read_live_picker(
+                picker,
+                configuration,
+                display_state,
+                capabilities,
+                bindings.picker_transition,
+                bindings.picker_viewport_projector,
+                bindings.picker_viewport_renderer,
+            )
+            self._clear_live_display(display_state, line_break=False)
+            if picker_outcome.kind is not ControlOutcomeKind.COMMIT:
+                return origin
+            assert picker_outcome.text is not None
+            try:
+                active_request = selected_reference_request(
+                    request,
+                    picker_outcome.text,
+                )
+            except ReferenceInputFailure as failure:
+                bindings.write_failure(failure.kind)
+                return origin
+
+        assert active_request.path is not None
+        try:
+            text = bindings.read_text(active_request.path)
+        except ReferenceInputFailure as failure:
+            bindings.write_failure(failure.kind)
+            return origin
+        if type(text) is not str:
+            raise TypeError("reference text reader must return a string")
+        try:
+            viewer = bindings.initialize_viewer(text, active_request.path)
+        except ValueError:
+            bindings.write_failure(ReferenceInputFailureKind.UNREADABLE)
+            return origin
+
+        viewer_result: TextViewerResult | None = None
+        screen_failure: BaseException | None = None
+        try:
+            self._write_live_text(_VIEWER_SCREEN_ENTER)
+            _viewer_state, viewer_result = self._read_live_text_viewer(
+                viewer,
+                configuration,
+                capabilities,
+                bindings.viewer_transition,
+                bindings.viewer_viewport_projector,
+                bindings.viewer_viewport_renderer,
+            )
+        finally:
+            try:
+                self._write_live_text(_VIEWER_SCREEN_EXIT)
+            except BaseException as failure:
+                screen_failure = failure
+            dispose_text_viewer(viewer)
+        if screen_failure is not None:
+            raise screen_failure
+        assert viewer_result is not None
+        if viewer_result.kind is not TextViewerExitKind.SELECTED:
+            return origin
+        assert viewer_result.line_range is not None
+        try:
+            return replace_reference_range(
+                origin,
+                active_request,
+                *viewer_result.line_range,
+            )
+        except ReferenceInputFailure as failure:
+            bindings.write_failure(failure.kind)
+            return origin
+
     def _read_live_picker(
         self,
         state: PickerControlState,
@@ -1448,7 +2354,6 @@ class RawTerminalDriver:
     ) -> tuple[PickerControlState, ControlOutcome]:
         """Drive one picker without fabricating an editable-line control."""
 
-        character_reader = _single_character_reader(self._input_stream)
         display_state.rendered_cursor_row = self._redraw_live_picker(
             state,
             display_state,
@@ -1458,11 +2363,36 @@ class RawTerminalDriver:
         )
         while True:
             try:
-                character = self._read_character(character_reader)
+                character = self._read_character()
             except KeyboardInterrupt:
                 return state, ControlOutcome(ControlOutcomeKind.INTERRUPT)
             except EOFError:
+                display_state.escape_sequence = None
                 return state, ControlOutcome(ControlOutcomeKind.EOF)
+
+            configured_event = _configured_control_event(
+                character,
+                configuration,
+            )
+            if configured_event is not None:
+                state, outcome, changed = _apply_picker_event(
+                    state,
+                    configured_event,
+                    transition,
+                )
+                if outcome is not None and (
+                    outcome.kind is not ControlOutcomeKind.REJECTED
+                ):
+                    return state, outcome
+                if changed:
+                    display_state.rendered_cursor_row = self._redraw_live_picker(
+                        state,
+                        display_state,
+                        capabilities,
+                        viewport_projector,
+                        viewport_renderer,
+                    )
+                continue
 
             if display_state.escape_sequence is not None:
                 event, reprocess = _consume_escape_character(
@@ -1480,20 +2410,24 @@ class RawTerminalDriver:
                     ):
                         return state, outcome
                     if changed:
-                        display_state.rendered_cursor_row = (
-                            self._redraw_live_picker(
-                                state,
-                                display_state,
-                                capabilities,
-                                viewport_projector,
-                                viewport_renderer,
-                            )
+                        display_state.rendered_cursor_row = self._redraw_live_picker(
+                            state,
+                            display_state,
+                            capabilities,
+                            viewport_projector,
+                            viewport_renderer,
                         )
                 if not reprocess:
                     continue
 
             if character == "\x1b":
-                if not _escape_input_is_ready(configuration.input_descriptor):
+                try:
+                    continuation_ready = self._escape_continuation_is_ready(
+                        configuration
+                    )
+                except KeyboardInterrupt:
+                    return state, ControlOutcome(ControlOutcomeKind.INTERRUPT)
+                if not continuation_ready:
                     state, outcome, changed = _apply_picker_event(
                         state,
                         KeyEvent(KeyKind.ESCAPE),
@@ -1504,14 +2438,12 @@ class RawTerminalDriver:
                     ):
                         return state, outcome
                     if changed:
-                        display_state.rendered_cursor_row = (
-                            self._redraw_live_picker(
-                                state,
-                                display_state,
-                                capabilities,
-                                viewport_projector,
-                                viewport_renderer,
-                            )
+                        display_state.rendered_cursor_row = self._redraw_live_picker(
+                            state,
+                            display_state,
+                            capabilities,
+                            viewport_projector,
+                            viewport_renderer,
                         )
                     continue
                 display_state.escape_sequence = character
@@ -1536,6 +2468,165 @@ class RawTerminalDriver:
                     viewport_renderer,
                 )
 
+    def _read_live_text_viewer(
+        self,
+        state: TextViewerState,
+        configuration: _TerminalConfiguration,
+        capabilities: TerminalCapabilities,
+        transition: _ViewerTransition,
+        viewport_projector: _ViewerViewportProjector,
+        viewport_renderer: _ViewerViewportRenderer,
+    ) -> tuple[TextViewerState, TextViewerResult]:
+        """Drive one viewer whose immutable state never enters another control."""
+
+        self._redraw_live_text_viewer(
+            state,
+            capabilities,
+            viewport_projector,
+            viewport_renderer,
+        )
+        escape_sequence: _EscapeSequenceState = None
+        while True:
+            try:
+                character = self._read_character()
+            except KeyboardInterrupt:
+                return state, TextViewerResult(TextViewerExitKind.INTERRUPTED)
+            except EOFError:
+                escape_sequence = None
+                return state, TextViewerResult(TextViewerExitKind.EOF)
+
+            configured_event = _configured_control_event(
+                character,
+                configuration,
+            )
+            if configured_event is not None:
+                state, outcome = _apply_viewer_event(
+                    state,
+                    configured_event,
+                    transition,
+                )
+                if outcome is not None:
+                    return state, outcome
+                self._redraw_live_text_viewer(
+                    state,
+                    capabilities,
+                    viewport_projector,
+                    viewport_renderer,
+                )
+                continue
+
+            if escape_sequence is not None:
+                escape_state = _LiveEditorState(escape_sequence=escape_sequence)
+                event, reprocess = _consume_escape_character(
+                    escape_state,
+                    character,
+                )
+                escape_sequence = escape_state.escape_sequence
+                if event is not None:
+                    state, outcome = _apply_viewer_event(state, event, transition)
+                    if outcome is not None:
+                        return state, outcome
+                    self._redraw_live_text_viewer(
+                        state,
+                        capabilities,
+                        viewport_projector,
+                        viewport_renderer,
+                    )
+                elif escape_sequence is None and not reprocess:
+                    # A complete unsupported escape key is a deterministic
+                    # no-op, but still forms one viewer interaction for resize
+                    # observation and repaint.
+                    self._redraw_live_text_viewer(
+                        state,
+                        capabilities,
+                        viewport_projector,
+                        viewport_renderer,
+                    )
+                if not reprocess:
+                    continue
+
+            if character == "\x1b":
+                try:
+                    escape_input_is_ready = self._escape_continuation_is_ready(
+                        configuration
+                    )
+                except KeyboardInterrupt:
+                    return state, TextViewerResult(
+                        TextViewerExitKind.INTERRUPTED,
+                    )
+                if not escape_input_is_ready:
+                    state, outcome = _apply_viewer_event(
+                        state,
+                        KeyEvent(KeyKind.ESCAPE),
+                        transition,
+                    )
+                    assert outcome is not None
+                    return state, outcome
+                escape_sequence = character
+                continue
+
+            event = _key_event(character, configuration)
+            state, outcome = _apply_viewer_event(state, event, transition)
+            if outcome is not None:
+                return state, outcome
+            # Re-observe both dimensions after every non-exit key, including
+            # clamped navigation and unrelated no-ops, so resize appears on the
+            # next viewer interaction without installing a signal handler.
+            self._redraw_live_text_viewer(
+                state,
+                capabilities,
+                viewport_projector,
+                viewport_renderer,
+            )
+
+    def _redraw_live_text_viewer(
+        self,
+        state: TextViewerState,
+        capabilities: TerminalCapabilities,
+        viewport_projector: _ViewerViewportProjector,
+        viewport_renderer: _ViewerViewportRenderer,
+    ) -> None:
+        """Replace the alternate-screen frame using freshly observed geometry."""
+
+        width, height = self._text_viewer_geometry(capabilities.width)
+        render_width = max(1, width - 1)
+        render_capabilities = _capabilities_with_width(
+            capabilities,
+            render_width,
+        )
+        viewport = viewport_projector(state, height)
+        if type(viewport) is not TextViewerViewport:
+            raise TypeError(
+                "viewer viewport projector must return a TextViewerViewport"
+            )
+        frame = viewport_renderer(viewport, render_capabilities)
+        if type(frame) is not RenderedFrame:
+            raise TypeError("viewer renderer must return a RenderedFrame")
+        if frame.width != render_width:
+            raise ValueError("rendered viewer width must match the live width")
+        if frame.line_count > height:
+            raise ValueError("rendered viewer height exceeds the live height")
+        self._write_live_text(f"{_VIEWER_SCREEN_REDRAW}{frame.text}")
+
+    def _text_viewer_geometry(self, fallback_width: int) -> tuple[int, int]:
+        """Observe bounded live columns and rows without retaining resize state."""
+
+        width = fallback_width
+        height = _DEFAULT_VIEWER_HEIGHT
+        try:
+            os_module = self._os_provider()
+            descriptor = _stream_descriptor(self._output_stream)
+            terminal_size = os_module.get_terminal_size(descriptor)
+            columns = terminal_size.columns
+            lines = terminal_size.lines
+            if type(columns) is int and columns > 0:
+                width = min(columns, 120)
+            if type(lines) is int and lines > 0:
+                height = min(lines, _MAX_VIEWER_HEIGHT)
+        except Exception:
+            pass
+        return width, height
+
     def _redraw_live_picker(
         self,
         state: PickerControlState,
@@ -1554,14 +2645,10 @@ class RawTerminalDriver:
         )
         viewport = viewport_projector(state)
         if type(viewport) is not PickerViewport:
-            raise TypeError(
-                "viewport_projector must return a PickerViewport"
-            )
+            raise TypeError("viewport_projector must return a PickerViewport")
         frame = viewport_renderer(viewport, render_capabilities)
         if type(frame) is not RenderedFrame:
-            raise TypeError(
-                "viewport_renderer must return a RenderedFrame"
-            )
+            raise TypeError("viewport_renderer must return a RenderedFrame")
         if frame.width != render_width:
             raise ValueError("rendered picker width must match the live width")
         payload = "".join(
@@ -1576,10 +2663,22 @@ class RawTerminalDriver:
         self._write_live_text(payload)
         return frame.line_count - 1
 
-    def _read_character(
+    def _escape_continuation_is_ready(
         self,
-        reader: Callable[[], object] | None = None,
-    ) -> str:
+        configuration: _TerminalConfiguration,
+    ) -> bool:
+        """Prefer decoded suffixes before the bounded descriptor wait."""
+
+        reader = self._input_latch.live_reader
+        if reader.has_pending_codepoint:
+            return True
+        try:
+            return _escape_input_is_ready(configuration.input_descriptor)
+        except KeyboardInterrupt:
+            self._input_latch.reset_after_interrupt()
+            raise
+
+    def _read_character(self) -> str:
         """Read one decoded code point from the borrowed active input stream.
 
         Physical EOF raises ``EOFError``. Invalid stream return shapes raise
@@ -1587,9 +2686,11 @@ class RawTerminalDriver:
         state and propagate the collaborator failure.
         """
 
-        character = (
-            self._input_stream.read(1) if reader is None else reader()
-        )
+        try:
+            character = self._input_latch.live_reader.read_character()
+        except KeyboardInterrupt:
+            self._input_latch.reset_after_interrupt()
+            raise
         if character == "":
             raise EOFError
         if not isinstance(character, str) or len(character) != 1:
@@ -1602,9 +2703,7 @@ class RawTerminalDriver:
         width: int,
         display_state: _LiveEditorState,
         control_state: _ControlState,
-        suggestion_provider: Callable[
-            [str], tuple[SlashCommandSuggestion, ...]
-        ],
+        suggestion_provider: Callable[[str], tuple[SlashCommandSuggestion, ...]],
         rendered_input: RenderedInputFrame | None,
         live_capabilities: TerminalCapabilities | None,
         palette_projector: _PaletteProjector | None,
@@ -1617,9 +2716,7 @@ class RawTerminalDriver:
         propagates for the owning read boundary to clear and restore resources.
         """
 
-        render_width = (
-            max(1, width - 1) if rendered_input is None else width
-        )
+        render_width = max(1, width - 1) if rendered_input is None else width
         line_state = _control_line_state(control_state)
         input_lines, cursor_row, cursor_column = _editor_input_lines(
             prompt,
@@ -1638,9 +2735,7 @@ class RawTerminalDriver:
                     "suggestion_provider must return SlashCommandSuggestion values"
                 )
             if suggestions:
-                panel_lines.extend(
-                    _wrap_editor_text(_SUGGESTION_HEADER, render_width)
-                )
+                panel_lines.extend(_wrap_editor_text(_SUGGESTION_HEADER, render_width))
                 for suggestion in suggestions:
                     panel_lines.extend(
                         _wrap_editor_text(suggestion.token, render_width)
@@ -1653,7 +2748,23 @@ class RawTerminalDriver:
                     "semantic palette projection requires MainCommandControlState"
                 )
             palette = palette_projector(control_state)
-            if palette is not None:
+            if palette is None:
+                suggestions = suggestion_provider(line_state.buffer)
+                if type(suggestions) is not tuple or any(
+                    type(item) is not SlashCommandSuggestion for item in suggestions
+                ):
+                    raise TypeError(
+                        "suggestion_provider must return SlashCommandSuggestion values"
+                    )
+                if suggestions:
+                    panel_lines.extend(
+                        _wrap_editor_text(_SUGGESTION_HEADER, render_width)
+                    )
+                    for suggestion in suggestions:
+                        panel_lines.extend(
+                            _wrap_editor_text(suggestion.token, render_width)
+                        )
+            else:
                 if type(palette) is not SuggestionPalette:
                     raise TypeError(
                         "palette_projector must return a SuggestionPalette or None"
@@ -1676,9 +2787,7 @@ class RawTerminalDriver:
 
         output_lines = [*input_lines, *panel_lines]
         move_to_top = _CURSOR_UP * display_state.rendered_cursor_row
-        move_to_cursor = _CURSOR_UP * (
-            len(output_lines) - 1 - cursor_row
-        )
+        move_to_cursor = _CURSOR_UP * (len(output_lines) - 1 - cursor_row)
         payload = "".join(
             (
                 _CARRIAGE_RETURN,
@@ -1709,9 +2818,7 @@ class RawTerminalDriver:
         owned by ``read_line``.
         """
 
-        render_width = (
-            max(1, width - 1) if rendered_input is None else width
-        )
+        render_width = max(1, width - 1) if rendered_input is None else width
         input_lines, _cursor_row, _cursor_column = _editor_input_lines(
             prompt,
             rendered_input,
@@ -1808,42 +2915,6 @@ def _require_startup_frame(
         raise TypeError("startup renderer must return a RenderedFrame")
     if frame.width != capabilities.width:
         raise ValueError("startup frame width must match current capabilities")
-
-
-def _single_character_reader(input_stream: TextIO) -> Callable[[], object]:
-    """Return one call-local code-point reader without terminal read-ahead.
-
-    ``TextIOWrapper.read(1)`` may prefetch an entire escape sequence into its
-    character buffer, which makes descriptor readiness incorrectly report a
-    standalone Escape. When its byte buffer offers ``read1``, this reader asks
-    for exactly one byte and incrementally restores the stream's configured
-    text decoding. Other stream collaborators keep their established
-    one-code-point ``read(1)`` contract.
-    """
-
-    byte_stream = getattr(input_stream, "buffer", None)
-    read_one_byte = getattr(byte_stream, "read1", None)
-    encoding = getattr(input_stream, "encoding", None)
-    if not callable(read_one_byte) or not isinstance(encoding, str) or not encoding:
-        return lambda: input_stream.read(1)
-    errors = getattr(input_stream, "errors", None)
-    if not isinstance(errors, str) or not errors:
-        errors = "strict"
-    decoder = codecs.getincrementaldecoder(encoding)(errors=errors)
-
-    def read_character() -> object:
-        while True:
-            chunk = read_one_byte(1)
-            if chunk == b"":
-                remainder = decoder.decode(b"", final=True)
-                return remainder if remainder else ""
-            if type(chunk) is not bytes or len(chunk) != 1:
-                raise TypeError("input byte stream read1(1) must return one byte")
-            character = decoder.decode(chunk, final=False)
-            if character:
-                return character
-
-    return read_character
 
 
 def detect_terminal_capabilities(
@@ -2000,9 +3071,7 @@ def _terminal_name_is_capable(value: object) -> bool:
     """Treat missing, blank, malformed, and dumb terminal names as uncertain."""
 
     return bool(
-        isinstance(value, str)
-        and value.strip()
-        and value.strip().casefold() != "dumb"
+        isinstance(value, str) and value.strip() and value.strip().casefold() != "dumb"
     )
 
 
@@ -2025,6 +3094,7 @@ def _terminal_configuration(
     termios_module: object | None,
     os_module: object,
     width: int | None = None,
+    decoder_spec: LiveDecoderSpec,
 ) -> _TerminalConfiguration | None:
     """Return a complete POSIX live-editor setup or ``None`` for fallback.
 
@@ -2052,8 +3122,14 @@ def _terminal_configuration(
     ):
         return None
 
+    if type(decoder_spec) is not LiveDecoderSpec:
+        raise TypeError("decoder_spec must be a LiveDecoderSpec")
     input_descriptor = _stream_descriptor(input_stream)
     output_descriptor = _stream_descriptor(output_stream)
+    disabled_control_byte = _disabled_control_byte(
+        input_descriptor,
+        os_module,
+    )
     original_attributes = termios_module.tcgetattr(input_descriptor)
     editor_attributes = list(original_attributes)
     editor_attributes[6] = list(original_attributes[6])
@@ -2063,10 +3139,14 @@ def _terminal_configuration(
     eof_character = _configured_control_character(
         original_attributes[6][termios_module.VEOF],
         "VEOF",
+        disabled_control_byte,
+        decoder_spec,
     )
     interrupt_character = _configured_control_character(
         original_attributes[6][termios_module.VINTR],
         "VINTR",
+        disabled_control_byte,
+        decoder_spec,
     )
     if width is None:
         columns = os_module.get_terminal_size(output_descriptor).columns
@@ -2083,11 +3163,13 @@ def _terminal_configuration(
         raise ValueError("width must be a positive integer or None")
     return _TerminalConfiguration(
         input_descriptor=input_descriptor,
+        output_descriptor=output_descriptor,
         original_attributes=original_attributes,
         editor_attributes=editor_attributes,
         width=resolved_width,
         eof_character=eof_character,
         interrupt_character=interrupt_character,
+        disabled_control_byte=disabled_control_byte,
         termios_module=termios_module,
     )
 
@@ -2109,20 +3191,56 @@ def _stream_descriptor(stream: TextIO) -> int:
     return descriptor
 
 
-def _configured_control_character(value: object, name: str) -> str:
-    """Decode one termios control character for active input comparison.
+def _disabled_control_byte(
+    input_descriptor: int,
+    os_module: object,
+) -> int:
+    """Resolve this terminal's platform-specific raw disabled-control byte."""
 
-    The returned code point is not displayed. Unsupported termios shapes raise
-    before mode activation so fallback can proceed without cleanup.
+    fpathconf = getattr(os_module, "fpathconf", None)
+    if not callable(fpathconf):
+        raise OSError("PC_VDISABLE is unavailable")
+    value = fpathconf(input_descriptor, "PC_VDISABLE")
+    if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 255:
+        raise ValueError("PC_VDISABLE must be one terminal control character")
+    return value
+
+
+def _configured_control_character(
+    value: object,
+    name: str,
+    disabled_byte: int,
+    decoder_spec: LiveDecoderSpec,
+) -> str | None:
+    """Normalize one termios control byte exactly like active stream input.
+
+    Raw disabled values become ``None`` before decoding. Enabled bytes must
+    decode to exactly one code point and encode back to the same byte under the
+    stream's byte-reader codec. Text-only collaborators retain their supplied
+    one-code-point semantics. Any uncertainty raises before mode activation.
     """
 
-    if isinstance(value, bytes) and len(value) == 1:
-        return value.decode("latin-1")
     if isinstance(value, str) and len(value) == 1:
-        return value
-    if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 255:
-        return chr(value)
-    raise ValueError(f"{name} must be one terminal control character")
+        return None if ord(value) == disabled_byte else value
+    if isinstance(value, bytes) and len(value) == 1:
+        raw_byte = value[0]
+    elif isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 255:
+        raw_byte = value
+    else:
+        raise ValueError(f"{name} must be one terminal control character")
+    if raw_byte == disabled_byte:
+        return None
+    if decoder_spec.encoding == "utf-8" and (
+        0x80 <= raw_byte <= 0xBF or 0xC2 <= raw_byte <= 0xF4
+    ):
+        raise ValueError(f"{name} is context-dependent in UTF-8 live input")
+
+    try:
+        return decoder_spec.decode_control_byte(raw_byte)
+    except ValueError as failure:
+        raise ValueError(
+            f"{name} is not one round-tripping stream-decoded code point"
+        ) from failure
 
 
 def _activate_terminal(configuration: _TerminalConfiguration) -> None:
@@ -2160,9 +3278,7 @@ def _restore_terminal_or_raise(
     termios_module = configuration.termios_module
     try:
         restore_mode = (
-            termios_module.TCSAFLUSH
-            if discard_input
-            else termios_module.TCSADRAIN
+            termios_module.TCSAFLUSH if discard_input else termios_module.TCSADRAIN
         )
         termios_module.tcsetattr(
             configuration.input_descriptor,
@@ -2173,8 +3289,7 @@ def _restore_terminal_or_raise(
         fatal = RuntimeError("interactive terminal restoration failed")
         if active_failure is not None:
             fatal.add_note(
-                "Restoration failed while another interactive input failure "
-                "was active."
+                "Restoration failed while another interactive input failure was active."
             )
         raise fatal from restoration_failure
 
@@ -2194,6 +3309,12 @@ def _consume_escape_character(
     sequence = state.escape_sequence
     assert sequence is not None
 
+    if sequence is _DISCARDING_ESCAPE_SEQUENCE:
+        if ord(character) < 0x20 or character == "\x7f" or "@" <= character <= "~":
+            state.escape_sequence = None
+        return None, False
+
+    assert type(sequence) is str
     if sequence == "\x1b":
         if character in {"[", "O"}:
             state.escape_sequence = sequence + character
@@ -2205,19 +3326,15 @@ def _consume_escape_character(
     state.escape_sequence = sequence
     if ord(character) < 0x20 or character == "\x7f":
         state.escape_sequence = None
-        return None, True
-
-    if sequence.startswith("\x1bO"):
-        state.escape_sequence = None
-        return _escape_event(sequence), False
+        return None, False
 
     if "@" <= character <= "~":
         state.escape_sequence = None
         return _escape_event(sequence), False
     if len(sequence) >= _MAX_ESCAPE_SEQUENCE_LENGTH:
-        # Keep consuming the unknown CSI until its final byte so no suffix can
-        # leak into the submitted buffer.
-        state.escape_sequence = "\x1b["
+        # Bound storage in a distinct discard state so a later valid-looking
+        # suffix cannot be reinterpreted as a new CSI or SS3 key.
+        state.escape_sequence = _DISCARDING_ESCAPE_SEQUENCE
     return None, False
 
 
@@ -2253,6 +3370,8 @@ def _escape_event(sequence: str) -> KeyEvent | None:
         "\x1b[8~": KeyKind.END,
         "\x1b[3~": KeyKind.DELETE,
         "\x1b[Z": KeyKind.SHIFT_TAB,
+        "\x1b[1;2A": KeyKind.SHIFT_UP,
+        "\x1b[1;2B": KeyKind.SHIFT_DOWN,
         "\x1bOA": KeyKind.UP,
         "\x1bOB": KeyKind.DOWN,
         "\x1bOC": KeyKind.RIGHT,
@@ -2272,12 +3391,18 @@ def _key_event(
 ) -> KeyEvent:
     """Normalize one non-escape terminal character without external effects."""
 
+    if (
+        configuration.interrupt_character is not None
+        and character == configuration.interrupt_character
+    ):
+        return KeyEvent(KeyKind.INTERRUPT)
+    if (
+        configuration.eof_character is not None
+        and character == configuration.eof_character
+    ):
+        return KeyEvent(KeyKind.EOF)
     if character in {"\r", "\n"}:
         return KeyEvent(KeyKind.ENTER)
-    if character == configuration.interrupt_character:
-        return KeyEvent(KeyKind.INTERRUPT)
-    if character == configuration.eof_character:
-        return KeyEvent(KeyKind.EOF)
     if character in {"\x08", "\x7f"}:
         return KeyEvent(KeyKind.BACKSPACE)
     if character == "\t":
@@ -2285,18 +3410,45 @@ def _key_event(
     return KeyEvent(KeyKind.TEXT, text=character)
 
 
+def _configured_control_event(
+    character: str,
+    configuration: _TerminalConfiguration,
+) -> KeyEvent | None:
+    """Prioritize VINTR, then VEOF, before every ordinary key role."""
+
+    if (
+        configuration.interrupt_character is not None
+        and character == configuration.interrupt_character
+    ):
+        return KeyEvent(KeyKind.INTERRUPT)
+    if (
+        configuration.eof_character is not None
+        and character == configuration.eof_character
+    ):
+        return KeyEvent(KeyKind.EOF)
+    return None
+
+
 def _apply_control_event(
     state: _ControlState,
     event: KeyEvent,
     transition: _ControlTransition,
-) -> tuple[_ControlState, ControlOutcome | None, bool]:
+) -> tuple[
+    _ControlState,
+    ControlOutcome | ReferenceActivationRequest | ReferenceInputFailure | None,
+    bool,
+]:
     """Apply one pure transition and report whether its complete state changed."""
 
     updated, outcome = transition(state, event)
     if type(updated) is not type(state):
         raise TypeError("transition must preserve the input control state type")
-    if outcome is not None and type(outcome) is not ControlOutcome:
-        raise TypeError("transition outcome must be a ControlOutcome or None")
+    if outcome is not None and type(outcome) not in {
+        ControlOutcome,
+        ReferenceActivationRequest,
+        ReferenceInputFailure,
+    }:
+        raise TypeError("transition outcome must be a supported input outcome or None")
     return updated, outcome, updated != state
 
 
@@ -2313,6 +3465,21 @@ def _apply_picker_event(
     if outcome is not None and type(outcome) is not ControlOutcome:
         raise TypeError("transition outcome must be a ControlOutcome or None")
     return updated, outcome, updated != state
+
+
+def _apply_viewer_event(
+    state: TextViewerState,
+    event: KeyEvent,
+    transition: _ViewerTransition,
+) -> tuple[TextViewerState, TextViewerResult | None]:
+    """Apply one pure viewer transition and validate its exact result shape."""
+
+    updated, outcome = transition(state, event)
+    if type(updated) is not TextViewerState:
+        raise TypeError("transition must return a TextViewerState")
+    if outcome is not None and type(outcome) is not TextViewerResult:
+        raise TypeError("transition outcome must be a TextViewerResult or None")
+    return updated, outcome
 
 
 def _control_line_state(state: _ControlState) -> LineInputState:
@@ -2348,6 +3515,77 @@ def _empty_command_completion(
     if type(cursor) is not int or cursor < 0 or cursor > len(buffer):
         raise ValueError("cursor must identify a buffer boundary")
     return None
+
+
+def _line_only_capabilities(
+    capabilities: TerminalCapabilities,
+) -> TerminalCapabilities:
+    """Preserve observed width/TTY facts while removing live ownership."""
+
+    if type(capabilities) is not TerminalCapabilities:
+        raise TypeError("capabilities must be a TerminalCapabilities")
+    return TerminalCapabilities(
+        CapabilityProfile.LINE,
+        capabilities.width,
+        input_tty=capabilities.input_tty,
+        output_tty=capabilities.output_tty,
+        raw_mode=False,
+        cursor_controls=False,
+        decorative_sgr=False,
+    )
+
+
+def _same_terminal_configuration(
+    baseline: _TerminalConfiguration,
+    current: _TerminalConfiguration,
+) -> bool:
+    """Compare persistent live identity while allowing kernel-local state."""
+
+    if (
+        baseline.input_descriptor != current.input_descriptor
+        or baseline.output_descriptor != current.output_descriptor
+        or baseline.eof_character != current.eof_character
+        or baseline.interrupt_character != current.interrupt_character
+        or baseline.disabled_control_byte != current.disabled_control_byte
+        or baseline.termios_module is not current.termios_module
+    ):
+        return False
+    try:
+        baseline_attributes = list(baseline.original_attributes)
+        current_attributes = list(current.original_attributes)
+        pending_input = getattr(baseline.termios_module, "PENDIN", 0)
+        if (
+            type(pending_input) is int
+            and pending_input > 0
+            and len(baseline_attributes) > 3
+            and len(current_attributes) > 3
+            and type(baseline_attributes[3]) is int
+            and type(current_attributes[3]) is int
+        ):
+            # POSIX may set PENDIN while bytes arrive during the call-local raw
+            # interval. It is transient line-discipline state, not a caller's
+            # terminal configuration change.
+            baseline_attributes[3] &= ~pending_input
+            current_attributes[3] &= ~pending_input
+        return baseline_attributes == current_attributes
+    except Exception:
+        return False
+
+
+def _same_live_capabilities(
+    baseline: TerminalCapabilities,
+    current: TerminalCapabilities,
+) -> bool:
+    """Compare selected live features while allowing viewport resize."""
+
+    return (
+        baseline.profile is current.profile
+        and baseline.input_tty is current.input_tty
+        and baseline.output_tty is current.output_tty
+        and baseline.raw_mode is current.raw_mode
+        and baseline.cursor_controls is current.cursor_controls
+        and baseline.decorative_sgr is current.decorative_sgr
+    )
 
 
 def _capabilities_with_width(
@@ -2435,7 +3673,7 @@ def _wrapped_rendered_input(
     if not dynamic_lines[0].startswith(plain_prompt):
         raise RuntimeError("rendered input prompt did not remain the first line")
     styled_dynamic_lines = [
-        f"{styled_lines[-1]}{dynamic_lines[0][len(plain_prompt):]}",
+        f"{styled_lines[-1]}{dynamic_lines[0][len(plain_prompt) :]}",
         *dynamic_lines[1:],
     ]
     context_count = len(styled_lines) - 1
