@@ -1906,6 +1906,8 @@ def _reference_projection_provider(
         probe = project_reference_input(buffer, cursor, scope)
         if probe is None:
             return None
+        if probe.failure is ReferenceInputFailureKind.INVALID:
+            return probe
         try:
             paths = paths_provider()
         except ReferenceInputFailure as failure:
