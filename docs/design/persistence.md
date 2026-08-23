@@ -213,15 +213,17 @@ referenced run may add its optional content-free operation ID to the result.
 
 Explicit-reference authorization has a separate durability boundary under
 `writing_artifacts/input_snapshots/`. For each nonempty operation, the
-repository publishes a schema-v1 manifest and `requested` event before reading
-the catalog or artifact content. Later operation and invocation events are
+repository publishes a schema-v2 manifest and `requested` event before reading
+artifact source content. Later operation and invocation events are
 create-only, canonically encoded records with contiguous sequences and
 contiguous invocation ordinals. A delivery event is durable before selected
 bytes leave the repository boundary. The same repository lease serializes
-these evidence writes with artifact reads and provenance revalidation.
+these evidence writes with source reads and filesystem-identity revalidation;
+it does not load the publication catalog or run transaction recovery.
 
 Durable evidence contains schema and operation/invocation identity,
-path/range, provenance, hashes, counts, correlation, states, checkpoints, and
+path/range, content-free filesystem source identity, hashes, counts,
+correlation, states, checkpoints, and
 fixed outcomes—not selected bytes, source/provider text, prompts, or results.
 The private invocation manifest also binds a capability identifier; the
 validated history returned to callers does not expose it. Captured and
@@ -230,10 +232,11 @@ object is never serialized or sent to a provider; its identifier remains
 repository-private and is absent from provider payloads and validated history.
 A backend-created read coordinator advances the existing invocation records:
 the exact full provider action precedes `delivered`, a structurally valid
-substantive result precedes `result_received`, and final provenance
+substantive result precedes `result_received`, and final source-identity
 revalidation precedes `accepted`. Selected text, provider payloads, and provider
-results never become evidence fields. A restart can validate history but cannot
-reconstruct or resume transient capabilities. An empty reference batch creates
+results never become evidence fields. Schema-v1 evidence cannot be reused or
+migrated to authorize or resume work. A restart can validate schema-v2 history
+but cannot reconstruct or resume transient capabilities. An empty reference batch creates
 neither evidence nor artifact I/O. These records are not part of the canonical
 writing-artifact catalog, completion, or picker namespace.
 

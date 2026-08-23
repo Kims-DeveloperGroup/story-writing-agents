@@ -140,7 +140,7 @@ cursor's text provider-bound.
 | Internal stage | User-visible meaning |
 | --- | --- |
 | Outer editing with immutable origin | The current draft, cursor, focus, and terminal mode are the restoration point. Nothing has been submitted. |
-| Catalog completion | `$` shows current eligible paths; Enter or Tab inserts `${path}` and stays in editing. |
+| Filesystem-source completion | `$` shows current safe canonical paths; Enter or Tab inserts `${path}` and stays in editing. |
 | Picker/viewer | `$${path}` or `$$` opens the independent viewer; Shift+Up/Down selects lines. The outer draft is unchanged until commit. |
 | Editing with amended draft | Viewer Enter inserts `${path}#Lx-Ly`; several indicators remain ordered. A later normal submit is still required. |
 | Restored origin | Escape, Ctrl-C, EOF, handled error, or invalid/stale selection returns the exact draft/cursor with no dispatch or history append. |
@@ -150,7 +150,7 @@ cursor's text provider-bound.
 Capable picker/viewer input shares the driver's irreversible `LIVE` latch;
 ordinary fallback shares its irreversible `FALLBACK` route and requires a
 second Enter after displaying the amended draft. Neither route creates a
-session transition. Catalog/viewer activity is not durable work history; only
+session transition. Source-list/viewer activity is not durable work history; only
 the later submitted prompt and content-free runtime evidence are recorded.
 See [Canonical artifact references](../guides/artifact-references.md) for exact
 controls and [Terminal safety](../operations/terminal-safety.md) for cleanup.

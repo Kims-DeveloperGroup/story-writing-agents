@@ -23,7 +23,7 @@
 > one unlisted terminal-owned rolling indicator on capable raw streams;
 > callback and incapable paths remain silent, and these waits emit no
 > `[routing]` or `[waiting]` record. In provider-bound prompt spans the installed
-> shell now uses `$`, `$${path}`, and `$$` to discover eligible artifacts and
+> shell now uses `$`, `$${path}`, and `$$` to discover current safe canonical files and
 > invoke the independent package-internal ranged viewer. The viewer remains an
 > unlisted supplied-text component rather than a public command or selection
 > API; downstream agent-read enforcement remains runtime-owned.
@@ -786,7 +786,7 @@ parser, provider, runtime, filesystem, storage, or network state.
 
 The controller binds three call-local collaborators to the terminal's main or
 composition input: a provider-text-span projection, a sorted current canonical
-path reader, and a bounded verified text reader. Nothing activates when the
+filesystem-path reader, and a bounded verified text reader. Nothing activates when the
 cursor is outside that span. Ordinary text, valid `@agent` and `/say` tails,
 and `/run` prompt remainders are eligible; command, option, identity, output,
 and every non-provider field are inert. `\$` is literal.
@@ -794,14 +794,17 @@ and every non-provider field are inert. `\$` is literal.
 The private pure activation layer recognizes only the cursor-active marker.
 `$` projects `Writing artifact selection [open]`, followed by
 `[controls] Up/Down selects; Enter/Tab inserts a whole-file reference.` Exact
-`$${path}` requests a direct viewer, and exact `$$` requests the catalog picker
+`$${path}` requests a direct viewer, and exact `$$` requests the source picker
 followed by a viewer. A case-sensitive path fragment after `$` filters the
 completion rows. No match projects the artifact-specific empty text; a truly
-empty eligible catalog projects the visible empty-catalog text plus a deferred
-failure that Enter or Tab surfaces through the established error writer. Enter
-or Tab on a catalog candidate replaces the marker with `${path}` without
+empty source list projects `No writing artifacts. Add a supported canonical
+core document or part-scoped Markdown manuscript. Consensus can also publish
+one.` plus a deferred `ReferenceInputFailureKind.EMPTY_SOURCES`
+(`empty_sources`) failure that Enter or Tab surfaces through the established
+error writer. Enter or Tab on a source candidate replaces the marker with
+`${path}` without
 submitting. Range selection replaces it with `${path}#Lx-Ly`. Several completed
-references remain ordered; each later activation receives a fresh catalog and
+references remain ordered; each later activation receives a fresh source list and
 text read.
 
 The immutable buffer/cursor at activation is the origin. A successful edit

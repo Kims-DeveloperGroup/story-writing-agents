@@ -29,18 +29,21 @@ The four files under `core_documents/` have separate jobs:
 - `character_sheets.md` holds character, relationship, and world continuity.
 - `narrative_rules.md` holds prose, viewpoint, tone, grammar, and format rules.
 
-They are absent until a unanimous consensus run publishes an agent-authored
-full-text update. Ask for outline, character/world, or narrative-rule changes
+Initialization does not create these files. They may first appear through a
+unanimous agent publication or an external/tool-managed filesystem write made
+while workspace processes are stopped. Ask for outline, character/world, or narrative-rule changes
 in the run prompt or supplied draft. The execution specialist first authors the
 candidate, the specialists audit it, and the lead may return complete changed
 core documents during finalization. Advisory conversation never writes them.
 
-Once published and unchanged, the plot specialist sees both outlines, the
+When a file is present and safe, the plot specialist sees both outlines, the
 character specialist sees character sheets, the execution specialist sees
 narrative rules, and the lead sees all four. Earlier manuscripts are not
-automatically added to later context. A manual edit remains on disk but stops
-that file from being eligible agent context until agent publication restores
-provenance for the current bytes.
+automatically added to later context. A manual edit changes the next immutable
+role definition and may be read as current context; it does not fabricate
+agent authorship, commit history, or publication provenance. Generic
+`Workspace` writes still reject canonical paths, so external edits must be made
+only after all workspace processes stop.
 
 ## Customize a role
 
@@ -91,6 +94,6 @@ initializes a directory.
 For the complete generated layout and exact storage schemas, use
 [Session storage](../reference/configuration/session-storage.md). For path and
 symlink guarantees, use [Filesystem safety](../operations/filesystem-safety.md).
-For the four exact core paths, part-scoped manuscript grammar, agent authorship,
-and eligibility states, use
+For the four exact core paths, part-scoped manuscript grammar, current-source
+rules, agent authorship, and publication states, use
 [Canonical writing artifacts](../reference/writing-artifacts.md).
