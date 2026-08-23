@@ -73,11 +73,21 @@ class AdvisoryProgressError(RuntimeError):
     """Mark a terminal-owned indicator failure for fatal controller cleanup."""
 
 
+class _DiscardingEscapeSequence:
+    """Identify bounded consumption of one overlong escape sequence."""
+
+    __slots__ = ()
+
+
+_DISCARDING_ESCAPE_SEQUENCE = _DiscardingEscapeSequence()
+_EscapeSequenceState: TypeAlias = str | _DiscardingEscapeSequence | None
+
+
 @dataclass(slots=True)
 class _LiveEditorState:
     """Retain only call-local escape decoding and redraw position."""
 
-    escape_sequence: str | None = None
+    escape_sequence: _EscapeSequenceState = None
     rendered_cursor_row: int = 0
 
 
@@ -1577,7 +1587,7 @@ class RawTerminalDriver:
             viewport_projector,
             viewport_renderer,
         )
-        escape_sequence: str | None = None
+        escape_sequence: _EscapeSequenceState = None
         while True:
             try:
                 character = self._read_character()
@@ -2351,6 +2361,16 @@ def _consume_escape_character(
     sequence = state.escape_sequence
     assert sequence is not None
 
+    if sequence is _DISCARDING_ESCAPE_SEQUENCE:
+        if (
+            ord(character) < 0x20
+            or character == "\x7f"
+            or "@" <= character <= "~"
+        ):
+            state.escape_sequence = None
+        return None, False
+
+    assert type(sequence) is str
     if sequence == "\x1b":
         if character in {"[", "O"}:
             state.escape_sequence = sequence + character
@@ -2368,9 +2388,9 @@ def _consume_escape_character(
         state.escape_sequence = None
         return _escape_event(sequence), False
     if len(sequence) >= _MAX_ESCAPE_SEQUENCE_LENGTH:
-        # Keep consuming the unknown CSI or SS3 sequence until its final byte
-        # so no suffix can leak into the submitted buffer.
-        state.escape_sequence = sequence[:2]
+        # Bound storage in a distinct discard state so a later valid-looking
+        # suffix cannot be reinterpreted as a new CSI or SS3 key.
+        state.escape_sequence = _DISCARDING_ESCAPE_SEQUENCE
     return None, False
 
 
