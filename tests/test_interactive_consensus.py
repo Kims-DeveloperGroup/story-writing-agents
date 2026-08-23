@@ -65,6 +65,7 @@ class ConsensusOutcome:
     failure_kind: DebateFailureKind | None = None
     tampered_progress: bool = False
     tampered_result: bool = False
+    reference_operation_id: str | None = None
 
 
 class ScriptedConsensusRuntime:
@@ -271,6 +272,7 @@ class ScriptedConsensusRuntime:
                 if outcome.status is DebateStatus.DEADLOCK
                 else None
             ),
+            reference_operation_id=outcome.reference_operation_id,
         )
         return (
             replace(result, session_id="foreign_session")
@@ -397,8 +399,8 @@ class InteractiveConsensusDispatchTests(InteractiveConversationTestCase):
             callbacks,
             _store,
         ) = self.prepared_selected_controller(
-            "/run inline prompt",
-            "/run --fresh isolated prompt",
+            "/run inline ${core_documents/global_outline.md}",
+            "/run --fresh isolated ${core_documents/character_sheets.md}",
             "/draft-file literal.md",
             "/run",
             "composed line one",
@@ -435,8 +437,8 @@ class InteractiveConsensusDispatchTests(InteractiveConversationTestCase):
         self.assertEqual(
             [call["payload"] for call in runtime.calls],
             [
-                "inline prompt",
-                "isolated prompt",
+                "inline ${core_documents/global_outline.md}",
+                "isolated ${core_documents/character_sheets.md}",
                 "exact loaded draft\r\n\x00",
                 "composed line one\n/send",
             ],
@@ -519,6 +521,23 @@ class InteractiveConsensusDispatchTests(InteractiveConversationTestCase):
 
 class InteractiveConsensusResultTests(InteractiveConversationTestCase):
     """Verify safe terminal mappings, recovery, and tamper rejection."""
+
+    def test_valid_reference_operation_identity_is_not_presented(self) -> None:
+        operation_id = "rr_07_session_" + "a" * 32
+        runtime = ScriptedConsensusRuntime(
+            ConsensusOutcome(reference_operation_id=operation_id)
+        )
+        (_workspace, _catalog, _entries, controller, _backend, callbacks, _store) = (
+            self.prepared_selected_controller(
+                "/run referenced",
+                "/quit",
+                runtime=runtime,  # type: ignore[arg-type]
+            )
+        )
+        self.assertEqual(controller.run_session_lobby(), 0)
+        rendered = "".join(callbacks.records)
+        self.assertIn("Consensus [completed]", rendered)
+        self.assertNotIn(operation_id, rendered)
 
     def test_all_terminal_mappings_are_safe_and_recover_to_the_prompt(self) -> None:
         failure_kinds = tuple(DebateFailureKind)
@@ -823,6 +842,12 @@ class InteractiveConsensusResultTests(InteractiveConversationTestCase):
         cases = (
             ConsensusOutcome(tampered_progress=True),
             ConsensusOutcome(tampered_result=True),
+            ConsensusOutcome(
+                reference_operation_id=(
+                    "rr_11_different_session_" + "a" * 32
+                )
+            ),
+            ConsensusOutcome(reference_operation_id="rr_malformed"),
         )
         for outcome in cases:
             with self.subTest(outcome=outcome):
@@ -853,6 +878,7 @@ class InteractiveConsensusResultTests(InteractiveConversationTestCase):
                     rendered,
                 )
                 self.assertNotIn("foreign_session", rendered)
+                self.assertNotIn("rr_", rendered)
                 self.assertNotIn("RAW_RESULT_SECRET", rendered)
 
 
