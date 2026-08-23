@@ -35,7 +35,11 @@
 > [terminal safety rules](../operations/terminal-safety.md) describe current
 > observable behavior. #162 adds one isolated package-internal supplied-text
 > viewer with pure range state, bounded rendering, strict line fallback, and a
-> sole-driver alternate-screen lifecycle. It has no installed-shell consumer.
+> sole-driver alternate-screen lifecycle. #164 installs its provider-bound
+> `$`/`$$` prompt-editing consumer. #160 separates current canonical
+> filesystem-source discovery from publication provenance and recovery. #209
+> adds the bounded startup welcome,
+> native provider-authentication gate, and global `/auth` workflow.
 
 This contract governs every human-facing interactive view and control in the
 installed shell. It preserves scrollback and the established command/runtime
@@ -47,8 +51,9 @@ provider-bound `$`/`$$` prompt editing without exporting it as a command.
 
 The words **must**, **must not**, and **may** below constrain the delivery
 issues. Requirements beyond the implemented #82, #83, #84, #85, #86, #79,
-#87, #94, #93, #105, #106, #111, #115, #119, #123, #126, #127, #142, #162, #164,
-and #73 slices do not describe current production behavior.
+#87, #94, #93, #105, #106, #111, #115, #119, #123, #126, #127, #142,
+#160, #162, #164, #209 provider OAuth initiative, and #73 slices do not describe
+current production behavior.
 
 ## Delivery status
 
@@ -62,7 +67,7 @@ and #73 slices do not describe current production behavior.
 | #86 composer/confirmation integration | Implemented: RUN/CHAT composition and yes/no confirmation build ordered semantic input views, render equivalent plain/fixed-ANSI projections at the active width, and use pure history-free controls. Established results, signatures, `/send`, `/cancel`, `/say`, defaults, Ctrl-C, EOF, callback cardinality, and controller/runtime behavior remain unchanged. |
 | #79 selectable completion | Implemented: capable main input projects canonical root, subcommand, and finite fixed-option candidates into a semantic palette. Up/Down moves its clamped highlight, Tab applies the highlighted candidate, Escape restores the first pre-completion snapshot when present and dismisses the exact state, and closed-palette Up/Down retains history behavior. Shift-Tab has no action. |
 | #87 picker foundation | Implemented: package-internal immutable picker/control/viewport state, pure initialization/reconciliation/live/fallback transitions, responsive live/full-list rendering, a dedicated history-free sole-driver lifecycle, and an unlisted resource-free adapter. #93 supplies its first installed consumer. |
-| #94 workspace Codex defaults | Implemented: the original slice added optional workspace fallback Codex model and reasoning values. The current closed seven-field system schema also contains Antigravity model/effort; new workspaces initialize both provider families to null, legacy files remain valid and byte-preserved, and each backend validates and snapshots effective invocation values at construction. |
+| #94 workspace Codex defaults | Implemented: the original slice added optional workspace fallback Codex model and reasoning values. The current closed eight-field system schema also contains Antigravity model/effort and nullable `default_backend`; new workspaces initialize provider fields to null, legacy files remain valid and byte-preserved, and each backend validates and snapshots effective invocation values at construction. |
 | #93 settings UI | Implemented: global alias-free `/settings` edits isolated current/pending snapshots of workspace defaults and per-agent provider, model, and reasoning choices through shared picker and prompt controls. Save validates an exact opening baseline and persona catalog, writes only changed configuration documents in deterministic order, and attempts reverse exact-byte rollback after a write failure. The workflow adds no supported public save API. |
 | #105 agent reply presentation | Implemented: direct, retrieval, transcript, and focused-history agent replies use a presentation-only strict JSON object/array projection with exact unchanged fallback cases and two-space Unicode-preserving output; stored/provider content remains unchanged, and the `AGENT` role uses bold terminal-default foreground styling without background detection. |
 | #106 transient settings UI | Implemented: settings picker and prompt reads clear capable transient rows, suppress duplicate fallback finals, and keep nested Escape silent. #142 later makes this lifecycle universal for capable submitted input. |
@@ -73,6 +78,8 @@ and #73 slices do not describe current production behavior.
 | #126 Enter completion and spacing | Implemented: at capable main prompts, Enter applies a highlighted suggestion without submitting and dismisses the palette so a second Enter submits; Enter and Tab add one ASCII trailing space only when the replaced token ends at the buffer end. |
 | #127 leading routed-agent suggestions | Implemented: the capable main prompt projects `@lead`, `@plot`, `@character`, and `@execution` for a cursor-active first leading token, using canonical preferred route aliases and the existing completion controls. |
 | #142 live resume choices and transient input | Implemented: interactive session and conversation selection use only `/session resume [NAME]` and `/conversation resume [ID]`; exact omitted commands show controller-owned choices before submission on capable streams when a disposable read yields eligible rows. A submitted omitted command uses the generic picker—live on a capable stream and numbered in fallback—only after its fresh read succeeds with eligible rows; empty and failed reads report without a picker. Dynamic-choice Enter submits an explicit identity directly. Every capable input read clears its complete live frame before returning and attempts the same cleanup on failure, while persistent semantic results remain in scrollback. |
+| #209 provider OAuth onboarding | Implemented: a four-frame accessible welcome precedes native Codex/Antigravity status and sign-in; startup hard-gates every distinct effective route, `/auth` exposes the same global workflow, settings authenticates before route assignment and Save, and absent-only workspace defaults preserve explicit routing. Provider output, URLs, accounts, tokens, credentials, and native persistence remain provider-owned. |
+| #160 canonical filesystem sources | Implemented: one private writing-artifact leaf discovers and captures safe current canonical filesystem sources independently of publication provenance and recovery. The repository remains the locking and evidence coordinator; the terminal receives only call-local source-list and verified-text callbacks. |
 | #162 independent ranged text viewer | Implemented package-internally: exact caller-supplied text, logical-line count, and complete fallback projection are bounded before terminal access; pure immutable state selects normalized one-based inclusive ranges; capable streams use one bounded alternate-screen lifecycle; and ordinary-line fallback accepts exact ASCII `START-END` or `/cancel` without truncating accepted content. One per-driver input latch now selects `LIVE` or `FALLBACK` permanently and preserves exact-byte decoding across all input routes. Results contain only an exit kind and optional range. No shell command, public API, artifact read, reference construction, composer restoration, or agent integration is added. |
 | #164 interactive artifact references | Implemented: the controller gates activation to attached/focused provider-bound spans, borrows fresh canonical-filesystem-path and verified-text callbacks, and restores exact origin state. The private activation leaf projects `$` completion, direct `$${path}` viewing, `$$` picker/viewer, ordered token replacement, and fixed content-free failures. The driver owns same-latch nested input and fallback second confirmation. Normal submission, parsing, runtime capture, and per-agent enforcement remain established downstream boundaries; no command, automation UI, public selection API, or export is added. |
 
@@ -94,10 +101,10 @@ signal-driven background loop, user-selectable themes, persistent history,
 fuzzy completion, and a full-screen composer are out of scope. #162's isolated
 viewer is the sole alternate-screen exception; it is a call-local supplied-text
 control, not a shell, composer, picker, settings, or general TUI mode. The
-narrow animated advisory/consensus indicator remains the sole animation
-exception: it is a terminal-owned, call-local visual aid for one capable
-operation, not a general animation mechanism. Rendering outside the viewer
-must not assume that earlier terminal rows can be revisited after an
+only purpose-bound motion is the four-frame startup welcome and the narrow
+advisory/consensus indicator. Both are terminal-owned, bounded, and
+capability-gated, not a general animation mechanism. Rendering outside the
+viewer must not assume that earlier terminal rows can be revisited after an
 interaction is committed.
 
 ## Closed semantic vocabulary
@@ -218,6 +225,8 @@ exactly one advisory awaitable, draws only on a capable raw stream, clears and
 redraws around persistent output, and joins both the operation and its
 call-local indicator task before returning. It does not add a semantic view,
 callback record, public API, or general animation facility.
+#209 adds an unlisted startup-presentation adapter and reuses the picker for
+provider status without adding a public terminal API or another raw owner.
 #162 adds a separate supplied-text viewer route. Its private model, controls,
 and renderer are pure. A dedicated input-lifecycle leaf owns the driver's
 irreversible live/fallback selection and persistent exact-byte decoder; the
@@ -491,8 +500,8 @@ the same content.
 > contracts.
 
 A leading slash automatically opens `SuggestionPalette` at a recognized
-grammar position. Root candidates are the 21 main-available command tokens in
-registry order. Help offers those 21 plus `/compose`, `/send`, and `/cancel`;
+grammar position. Root candidates are the 22 main-available command tokens in
+registry order. Help offers those 22 plus `/compose`, `/send`, and `/cancel`;
 agent-valued slash positions expose the four preferred prompt aliases `lead`,
 `plot`, `character`, and `execution` in route order. Other implemented finite
 positions expose their static subcommands or options. Runtime values such as
@@ -644,12 +653,12 @@ persistence, subprocess, storage, or network code.
 
 ### Persisted provider defaults
 
-> **Implemented:** `config/system_defaults.json` has a closed seven-field
+> **Implemented:** `config/system_defaults.json` has a closed eight-field
 > schema: required `language` and `persona`, optional `max_debate_rounds`, and
 > optional `codex_model`, `codex_reasoning_effort`, `antigravity_model`, and
-> `antigravity_effort`. New workspaces include null values for both provider
-> families; existing valid files with omitted optional fields remain valid and
-> initialization preserves their exact bytes.
+> `antigravity_effort`, plus nullable `default_backend`. New workspaces include
+> null values for both provider families; existing valid files with omitted
+> optional fields remain valid and initialization preserves their exact bytes.
 
 A non-null explicit `AgentBackend(model=...)` or CLI `--codex-model` wins over
 persisted Codex model values. Explicit `AgentBackend(antigravity_model=...,
@@ -663,6 +672,13 @@ surrogate character. Codex reasoning is null or exactly `minimal`, `low`,
 `medium`, or `high`. The complete system-default and agent-configuration pair
 is validated and snapshotted at backend construction; later saves apply only
 to the next backend.
+
+Provider routes resolve independently: live backend override, nullable
+per-agent route, nullable workspace `default_backend`, then Codex. Interactive
+authentication fills the workspace default only when it is missing, choosing
+an immediately newly authenticated provider, otherwise the sole authenticated
+provider, otherwise Codex when both are authenticated. Existing defaults and
+explicit agent routes are never rewritten by this policy.
 
 Every backend validates the complete persisted schema before applying explicit
 provider settings and snapshots effective values at construction. Provider
@@ -690,7 +706,7 @@ per-agent provider, model, and reasoning selections in
 and `persona`, optional `max_debate_rounds`, and the optional workspace Codex
 and Antigravity fallback model/effort values. Provider, active-provider model,
 and active-provider effort selection is per agent. A successful save writes
-the canonical seven-field system object and canonical seven-field entries for
+the canonical eight-field system object and canonical seven-field entries for
 each agent. The view preserves the inactive provider's settings and does not
 change identity, thread
 ownership, configuration precedence, or either implemented schema.
@@ -730,7 +746,7 @@ Cancel
 | Language | The picker candidates are exactly `KO`, `EN`, `JA`, `ZH`, `ES`, `FR`, `DE`, `PT`, `IT`, `RU`, in that order. A schema-valid existing value outside this UI catalog remains visible and may be preserved, but is not synthesized as a candidate. |
 | Persona | Candidates come only from the existing safe persona-template catalog. Duplicate identifiers resolve with the top-level template taking precedence over `alternative_templates`; the resulting identifiers are ordered lexically. The picker does not read, preview, create, or edit template content. |
 | Maximum debate rounds | A numeric `Prompt` accepts a pending nonnegative integer under the existing validation rule. Blank, negative, fractional, and nonnumeric values produce an inline error `Notice` and retain focus without changing the pending value. `0` remains valid and means audit-only consensus. |
-| Providers | A nested agent picker follows canonical `ROSTER` order, then a Provider/Model/Reasoning effort picker edits only that agent's pending `agent_configs` values. Codex and Antigravity are selectable; Codex is the default. Changing the route preserves the inactive provider's model/effort settings. `gemini` is not a selectable or valid backend. The UI neither invents providers nor changes roster identity. |
+| Providers | A nested agent picker follows canonical `ROSTER` order, then a Provider/Model/Reasoning effort picker edits only that agent's pending `agent_configs` values. Codex and Antigravity are selectable; nullable routes inherit the workspace default and final Codex fallback. A provider freshly authenticates before its route becomes pending. Changing the route preserves the inactive provider's model/effort settings. Legacy `gemini` is not a selectable or valid backend. The UI neither invents providers nor changes roster identity. |
 | Agent Model | A nested free-text `Prompt` uses the active provider's implemented safe-model validator; blank stores null and inherits that provider's workspace system model. It performs no network lookup and does not offer a model catalog. |
 | Agent Reasoning effort | A nested picker offers Inherit plus `minimal`, `low`, `medium`, `high`, and `xhigh` for Codex, or Inherit plus `low`, `medium`, and `high` for Antigravity. Inherit uses the active provider's workspace system value, then the provider default. The UI does not add a Codex reasoning CLI flag. |
 
@@ -755,12 +771,17 @@ one control is focused:
   invalid Enter leaves the prompt focused with a trusted validation notice.
   Escape restores its prior pending value.
 - Enter on Save opens a transient `Save settings?` picker with highlighted YES
-  and NO choices plus the changed-only Current/Pending context. YES proceeds
-  to validate both complete pending snapshots and re-read both persisted
-  documents and the persona catalog before any write. NO or nested Escape
-  returns to the top-level picker. Any exact-byte or catalog change from the validated
-  opening baseline fails closed with no write. A valid, unchanged baseline
-  crosses the sole mutation boundary: each changed file is replaced atomically
+  and NO choices plus the changed-only Current/Pending context. YES first
+  freshly gates each distinct effective provider outside the candidate
+  transaction; authentication may separately establish and rebase a missing
+  workspace default. A stale or failed state returns to settings without
+  writing the pending candidate files. NO or nested Escape returns to the
+  top-level picker. After authentication succeeds, Save validates the complete
+  pending snapshots and re-reads both persisted documents and the persona
+  catalog. Any exact-byte or catalog change from the current opening or rebased
+  baseline fails closed before a candidate write. A valid authenticated
+  baseline then crosses the sole settings-candidate mutation boundary: each
+  changed file is replaced atomically
   in system-then-agent order, and any write failure triggers best-effort
   reverse-order rollback to the exact original bytes of every attempted target,
   including the target that reported failure. Success reports `completed`.
@@ -789,7 +810,9 @@ Session and explicit overrides remain live and higher precedence. Save does not
 mutate an existing provider thread or current identity. The view manages no
 credentials, provider network access, model catalog, provider implementation,
 persona file editing, theme, key binding,
-or automatic save.
+or automatic save. Authentication can separately persist a missing workspace
+default before route assignment or Save; that completed default remains durable
+if pending settings later cancel.
 
 The same current/pending labels, choice identity, validation meaning, disabled
 provider meaning, and Save/Cancel outcomes must remain visible in wide, narrow,
@@ -806,6 +829,58 @@ validation meaning, error, cancelled, or completed state. The settings view
 preserves scrollback and adds no alternate screen, mouse handling, animation,
 background loop, dependency, persistent draft, arbitrary form framework, or
 automatic save.
+
+### Provider authentication and startup ceremony
+
+> **Implemented by #209:** authentication is the first interactive gate after
+> workspace resolution and the welcome. It is private orchestration over the
+> existing semantic picker and terminal driver, not a public provider-auth API,
+> credential store, or new terminal component.
+
+The native command contract is closed: Codex status is `codex login status`
+and login is `codex login`; Antigravity invokes the resolved executable with
+`models` for status and with no arguments for sign-in. That executable defaults
+to `agy` and may be the supported `--antigravity-executable PATH` override, so
+the default vectors are `agy models` and bare `agy`. Status runs silently and
+bounded at the resolved workspace root. Login inherits the real terminal,
+process environment, and process group at that root. The runtime does not
+synthesize, inspect, capture, or persist provider output, account facts, URLs,
+tokens, credentials, or native persistence. A fresh post-login probe—not exit
+code or prior state—is the only authorization.
+
+The picker anatomy is one `Prompt`, two fixed `Choice` rows, and one fixed
+informational `Notice`. Each row carries a textual state independent of color:
+
+| Status | Picker meaning |
+| --- | --- |
+| Authenticated | Enabled and ready; selecting it performs no login. |
+| Unauthenticated | Enabled; selecting it opens native sign-in. |
+| Unavailable | Disabled with CLI installation guidance. |
+| Indeterminate | Enabled for a fresh selected-provider recheck. |
+
+Cancel, interrupt, and EOF remain typed picker outcomes. Startup Cancel
+keeps the gate open, while startup interrupt or EOF exits before CLI context,
+backend, controller, session, or story-provider work. Global no-argument
+`/auth` returns every picker outcome to the existing shell and preserves any
+established default; a process-level interrupt during native sign-in follows
+the shell's outer interruption cleanup. Settings authenticates before candidate
+mutation; Save gates each distinct effective provider before its file
+transaction.
+
+The welcome is exactly four fixed semantic frames. A capable POSIX ANSI
+terminal replaces them at 0.4-second intervals, a maximum 2.5 changes per
+second, and stops after the completed `Story Writing Agents` panel. Login
+guidance and result frames last 0.8 seconds each. Width is reobserved before
+every capable frame, the right margin is reserved, transient rows are cleared,
+SGR is reset, and captured termios is restored with type-ahead discard before
+native sign-in. The flow never uses the alternate screen.
+
+`NO_COLOR`, `STORY_REDUCED_MOTION`, callback, non-TTY, `TERM=dumb`, non-POSIX,
+incomplete termios, and uncertain-capability paths emit one meaningful static
+LF record per welcome/guidance/result event, with no sleep, ANSI, or flashing.
+Color never carries status or recovery meaning. Welcome and auth timing remain
+private constants behind `InteractiveStartupPresentation`; no public animation
+or configuration surface is added.
 
 ## Rendering and capability policy
 
@@ -1220,16 +1295,18 @@ callbacks, while the driver owns same-latch nested picker/viewer coordination.
 
 ### Implemented module-index delta
 
-The current [Python module index](../../PYTHON_MODULE_INDEX.md) records 54
-importable production units. The terminal/reference and provider/diagnostic
-deltas combine as follows:
+The reconciled [Python module index](../../PYTHON_MODULE_INDEX.md) records 56
+importable production units and 216 static import edges in an acyclic graph.
+The terminal/reference, provider/diagnostic, authentication, and
+filesystem-source deltas combine as follows:
 
 ```text
 pre-#164 parent inventory                 47
 private reference-activation leaf          +1
 provider-adapter and diagnostic modules    +5
-canonical filesystem-source adapter        +1
-current total                             54
+private provider-auth coordination modules +2
+private filesystem-source module           +1
+current total                             56
 ```
 
 `_reference_activation` adds only downward edges to `_model` and the public
@@ -1237,12 +1314,21 @@ current total                             54
 terminal and project-root public facades are unchanged. The five other modules
 are `provider_adapter`, `provider_process`, `codex_adapter`,
 `antigravity_adapter`, and `debug_log`; they do not change the terminal graph.
+The two authentication modules are private `provider_auth` and
+`interactive_auth`; they likewise do not change public exports.
 The additional `writing_artifacts.filesystem_sources` module owns
 catalog-independent canonical discovery and source capture beneath the existing
 repository facade.
 Earlier history, viewer, input-lifecycle, settings, writing-artifact, and runtime
 integration deltas remain recorded in the canonical index rather than
 recomputed here.
+
+That arithmetic is historical. The reconciled
+[Python module index](../../PYTHON_MODULE_INDEX.md) is the canonical current
+inventory: 56 importable production units, an acyclic graph, and private
+`provider_auth`, `interactive_auth`, and `filesystem_sources` modules. This design describes their
+user-visible terminal contract without duplicating or redefining module
+ownership, dependency direction, or public exports.
 
 ## Migration coverage
 
@@ -1263,9 +1349,14 @@ lifecycle without another module. #162 added three private viewer
 leaves plus the private input-lifecycle leaf while preserving the public and
 root facades. The lifecycle leaf owns the irreversible latch and persistent
 decoder; the driver remains the sole input consumer and terminal-resource
-owner. #164 added the private pure reference-activation leaf, preserved public
-exports, and lets the controller borrow source-list/text callbacks without moving
-repository ownership into the terminal.
+owner. #160 added private catalog-independent filesystem-source discovery and
+capture beneath the repository's lock and evidence coordination. #164 added
+the private pure reference-activation leaf, preserved public exports, and lets
+the controller borrow source-list/text callbacks without moving repository
+ownership into the terminal. The #209 provider OAuth initiative
+added private native-auth and interactive-auth coordination, startup
+presentation, global `/auth`, route/default gates, and settings integration.
+The current 56-unit inventory and 216 edges remain canonical in the module index.
 
 ### View groups
 
@@ -1283,6 +1374,7 @@ repository ownership into the terminal.
 | Consensus progress and summaries | `Panel`, `Section`, `Notice`, `Record`, `Field`, `Message` | Loading, debate identity, handoff/action metadata, agent messages, result/cancelled/completed/error | #83, #119 (implemented) |
 | Interactive errors and recovery hints | `Notice`, `Field` | Trusted code, redaction, error state, next action, no raw diagnostics; post-workspace application errors supply one fixed sanitized debug-log availability notice, while pre-workspace errors include no debug-log path | #83, #131 terminal seam, and #132 application wiring (implemented) |
 | Settings current/pending view | `Panel`, `Section`, `Field`, `Prompt`, `Picker`, `Notice` | Exact top-level order; changed-only Current/Pending confirmation context with `(Changed)` cues and explicit no-diff notice; nested Escape silent; transient cleanup and fallback honesty; disabled provider, validation, error, cancelled, and completed meaning; guarded two-file Save boundary | #93, #106, and #115 (implemented) |
+| Welcome and provider authentication | `Panel`, `Prompt`, `Picker`, `Choice`, `Notice` | Four bounded capable welcome frames; static accessibility fallback; four explicit provider states; disabled unavailable choice; transient guidance/result; no provider-controlled content | #209 (implemented) |
 
 ### Control groups
 
@@ -1299,6 +1391,7 @@ repository ownership into the terminal.
 | Artifact-reference activation | Private marker projection plus existing palette/picker/viewer controls | Provider-span-only `$` completion, direct `$${path}` viewer, `$$` picker/viewer, exact origin restoration, multiple ordered indicators, fixed content-free errors, and fallback second confirmation | #164 (implemented) |
 | Live omitted-resume choices | `SuggestionPalette`, `Picker`, `Prompt`, `Field` | Exact capable command only; controller-owned ordered rows/highlight/fresh validation; Up/Down preview; one-Enter explicit commit; Escape dismissal; Tab no-op; submitted omitted command uses a live capable or numbered fallback picker only after a successful fresh read returns eligible rows; empty/error short-circuit | #142 (implemented) |
 | Settings field and action navigation | `Panel`, `Prompt`, `Picker`, `Field`, `Notice` | Single focus; nested agent/provider and value pickers; transient text/numeric editors; explicit Save/Cancel; no write before guarded Save; universal capable cleanup and honest fallback visibility | #93, #106, #115, and #142 (implemented) |
+| Authentication and startup gate | `Picker`, `Choice`, `Notice` | Fresh probes; native-login handoff; initial/effective-route loops; absent-only default; `/auth`; settings assignment/Save; capable cleanup and no-delay static fallback | #209 (implemented) |
 
 Contextual non-main-prompt suggestions from completed issue #73 use the same
 unified driver without moving parser, runtime, or storage authority into the
@@ -1336,7 +1429,7 @@ commit/cancel/interrupt/EOF outcomes, exact numbered fallback, responsive
 plain/ANSI rendering, restoration, failure cleanup, and history/completion
 isolation. #93 covers its implemented settings interaction, persistence, and
 lifecycle snapshot contract. #94 covers the original five-key and legacy
-schema handling; current coverage also requires the seven-field system and
+schema handling; current coverage also requires the eight-field system and
 per-agent schemas, provider-specific safe model/effort validation,
 full-schema-first failure, precedence, backend-lifetime snapshots, exact
 fresh/resume invocation arguments, initialization preservation, and unchanged
@@ -1364,6 +1457,10 @@ suffix Escape handling, source/configuration drift and poison behavior,
 history-free capable subject presentation, next-key resize observation,
 alternate-screen and termios cleanup precedence, typed noncommit exits,
 repeat-open disposal, dependency isolation, and unchanged public exports.
+The #209 provider OAuth initiative covers exact native status/login vectors,
+fresh-status authority, initial and effective-route hard gates, absent-only
+default selection, global `/auth`, settings route/Save gates, inherited-terminal
+privacy, and the bounded/static startup presentation matrix.
 
 | Area | Required evidence |
 | --- | --- |
@@ -1378,7 +1475,8 @@ repeat-open disposal, dependency isolation, and unchanged public exports.
 | Picker and live resume choices | Highlight-versus-selection, disabled-skipping clamped navigation, exact resume ordering/highlights, Tab no-op and one-Enter dynamic commit, Escape cancel/dismissal, typed interrupt/EOF, empty/all-disabled/one/long lists, exact fallback acceptance/rejection, stable identity reconciliation and fresh controller validation, selected-outside-window summary, no synthetic final control frame, complete capable cleanup on every returned outcome/failure, honest fallback visibility, and resize on each live redraw. |
 | Permanent input lifecycle | Resource-free `UNDECIDED` construction; first-read irreversible `LIVE`/`FALLBACK`; sticky fallback and no post-live downgrade; stable source/decoder/configuration correlation; canonical ASCII/UTF-8/ISO-8859-1 plus built-in strict/surrogateescape admission; exact one-byte reads; fragmented code points; maximum four-code-point pending suffix before Escape readiness; clean and partial EOF; read/decode/shape poison; interrupt reset without mode change; synchronous reentry rejection; PENDIN-only tolerated configuration drift; capable history-free subject frames; and cross-prompt/viewer preservation without mixed wrapper/raw reads. |
 | Ranged text viewer | Exact `str`, display-name, strict-UTF-8, private 8 MiB source, exact 65,536-line and 16 MiB complete-fallback boundaries, initial-line, empty/final-LF validation before terminal access; ordinary and Shift+Arrow clamped selection including reversal; configured VINTR/VEOF raw-byte disable/decode/round-trip classification and priority; singleton/range commit; distinct cancel/interrupt/EOF; one row per logical line; safe CR/U+2028/control display; bounded-prefix plain/ANSI current and selected cues; wide/combining/ellipsis behavior; suffix-independent redraw work; bounded height and next-nonexit-key resize; exact untruncated `START-END` or `/cancel` fallback with reverse normalization and visible retry; content-free results; close-on-select/cancel, repeat-open disposal; and no workspace/artifact/runtime/controller dependencies. |
-| Settings | Two-snapshot current/pending separation; exact top-level field and canonical roster order; safe persona precedence and lexical order; numeric `0`, positive, blank, negative, fractional, and nonnumeric debate-round cases; selectable Codex/Antigravity routes with Codex default, inactive-provider setting preservation, and `gemini` rejection; provider-specific safe model text and blank/null inheritance; exact Codex and Antigravity effort enumerations including Codex `xhigh`; one focused control and deterministic focus return; nested and whole-panel cancellation; exact-byte and catalog conflict before writes; changed-only canonical system-then-agent save; per-file atomic replacement; failing-target-inclusive reverse exact-byte rollback and rollback uncertainty; pending retention; no write on open/edit/highlight/error/cancel; next-lifecycle-only application with higher live overrides; plain/ANSI/`NO_COLOR`/narrow/line fallback; hostile display content; and unchanged identity, thread, precedence, public, and machine contracts. |
+| Settings | Two-snapshot current/pending separation; exact top-level/language/effort/roster order; safe persona precedence and lexical order; numeric `0`, positive, blank, negative, fractional, and nonnumeric cases; selectable Codex/Antigravity routes with nullable agent/default fallback, authentication-before-assignment, inactive-provider setting preservation, and legacy `gemini` rejection; implemented provider-specific safe model text and blank/null provider default; exact Codex and Antigravity effort enumerations; fresh distinct-effective-provider Save gate outside the transaction; one focused control and deterministic focus return; nested and whole-panel cancellation; exact-byte and catalog conflict before writes; changed-only canonical system-then-agent save; per-file atomic replacement; failing-target-inclusive reverse exact-byte rollback and rollback uncertainty; pending retention; no candidate write on open/edit/highlight/error/cancel; durable completed auth/default writes; next-lifecycle-only application with higher live overrides; plain/ANSI/`NO_COLOR`/narrow/line fallback; hostile display content; and unchanged identity, thread, precedence, public, and machine contracts. |
+| Authentication startup | Exact Codex and resolved-executable Antigravity probes and logins; four states; disabled unavailable choice; login followed by fresh full refresh; no optimistic authorization; initial/effective-route hard gates; `/auth`; absent-only default policy; settings integration; inherited terminal/environment/root; no output/URL/account/token/credential capture; four 0.4-second welcome frames; 0.8-second transient notices; right-margin/resize safety; termios restoration; no alternate screen; static no-delay `NO_COLOR`/reduced-motion/callback/non-TTY/`TERM=dumb`/non-POSIX/uncertain fallbacks. |
 | Advisory progress | One four-glyph cycle only for capable raw advisory and consensus awaitables; `NO_COLOR` glyph preservation; clear/redraw around semantic writes; clear and task joining before result/cancel/error; silent callback/non-TTY/`TERM=dumb`/uncertain fallback; operation-error precedence; indicator-only internal-error mapping; no `[routing]`/`[waiting]` records or reusable animation API. |
 | Parser and mutation boundary | The exact visible committed main buffer reaches the established parser once; previews, recall, replacement, highlight, rerender, cancel, Ctrl-C, empty VEOF, and physical EOF cause no parser/runtime/storage call. |
 | Artifact-reference activation | Provider-bound ordinary/routed/`/say`/`/run` and composer spans only; escaped-dollar inertness; fresh sorted canonical-filesystem projection; `$` whole-file completion; explicit `$${path}` viewer; `$$` picker then viewer; multiple ordered indicators; exact marker replacement/cursor; capable same-read return; fallback second confirmation and repeated marker handling; empty/stale/unreadable/unavailable/invalid content-free failures; exact origin/focus/mode restoration; no submit/history/residue; listing-to-view stale detection; independent current runtime capture without viewer-byte reuse; and per-agent enforcement after later normal submission. |

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import textwrap
+import time
 import unicodedata
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import KW_ONLY, dataclass
@@ -32,7 +33,7 @@ from ._controls import (
     project_slash_suggestions,
     transition_composer_line,
     transition_confirmation_answer,
-    transition_main_input,
+    transition_main_input as transition_main_input,
     transition_main_command_input,
     transition_picker,
     transition_picker_fallback,
@@ -40,7 +41,7 @@ from ._controls import (
     transition_prompt_input,
 )
 from ._driver import (
-    AdvisoryProgressError,
+    AdvisoryProgressError as AdvisoryProgressError,
     RawTerminalDriver,
     ReferenceInputBindings,
 )
@@ -57,8 +58,8 @@ from ._model import (
     InputPromptView,
     ListView,
     MainCommandControlState,
-    MainInputControlState,
-    MainInputHistoryState,
+    MainInputControlState as MainInputControlState,
+    MainInputHistoryState as MainInputHistoryState,
     Message,
     Notice,
     Panel,
@@ -300,158 +301,158 @@ class InteractiveError:
                 raise TypeError(f"{name} must be a string or None")
 
 
-INTERACTIVE_ERROR_SPECS: Mapping[
-    InteractiveErrorCode, InteractiveErrorSpec
-] = MappingProxyType(
-    {
-        InteractiveErrorCode.TTY_REQUIRED: InteractiveErrorSpec(
-            "Interactive mode requires a terminal.",
-            "Use story run for non-interactive automation.",
-        ),
-        InteractiveErrorCode.WORKSPACE_NOT_INITIALIZED: InteractiveErrorSpec(
-            "No initialized story workspace was found.",
-            "Run story init PATH, then try again.",
-        ),
-        InteractiveErrorCode.WORKSPACE_INVALID: InteractiveErrorSpec(
-            "The story workspace is invalid.",
-            "Inspect the reported workspace file and repair it before retrying.",
-        ),
-        InteractiveErrorCode.WORKSPACE_UNSAFE: InteractiveErrorSpec(
-            "The requested workspace path is unsafe.",
-            "Use a path inside the initialized workspace.",
-        ),
-        InteractiveErrorCode.WORKSPACE_VERSION_UNSUPPORTED: InteractiveErrorSpec(
-            "This workspace uses an unsupported older session format.",
-            "Use a new workspace or follow the documented manual reset procedure.",
-        ),
-        InteractiveErrorCode.CONFIGURATION_INVALID: InteractiveErrorSpec(
-            "Runtime configuration is invalid.",
-            "Correct the reported configuration value and retry.",
-        ),
-        InteractiveErrorCode.COMMAND_INVALID: InteractiveErrorSpec(
-            "The interactive command is invalid.",
-            "Type /help to see valid command syntax.",
-        ),
-        InteractiveErrorCode.AGENT_INVALID: InteractiveErrorSpec(
-            "The requested agent is invalid.",
-            "Type /agents to see available agents.",
-        ),
-        InteractiveErrorCode.SESSION_INVALID: InteractiveErrorSpec(
-            "The story session identifier is invalid.",
-            "Use letters, digits, underscores, or hyphens in a safe session name.",
-        ),
-        InteractiveErrorCode.SESSION_EXISTS: InteractiveErrorSpec(
-            "The story session already exists.",
-            "Resume it or choose a different session name.",
-        ),
-        InteractiveErrorCode.SESSION_NOT_FOUND: InteractiveErrorSpec(
-            "The story session was not found.",
-            "List sessions or create a new one.",
-        ),
-        InteractiveErrorCode.SESSION_NOT_ATTACHED: InteractiveErrorSpec(
-            "No story session is attached to this shell.",
-            "Create or resume a session before using this command.",
-        ),
-        InteractiveErrorCode.SESSION_PAUSED: InteractiveErrorSpec(
-            "The story session is paused.",
-            "Resume the session to make it ready before provider work.",
-        ),
-        InteractiveErrorCode.SESSION_ACCESS_BLOCKED: InteractiveErrorSpec(
-            "Story-session access is held by another live local process.",
-            "Wait for that process to release access, then resume the session.",
-        ),
-        InteractiveErrorCode.SESSION_OWNERSHIP_UNKNOWN: InteractiveErrorSpec(
-            "Story-session access ownership cannot be verified.",
-            "Do not remove the claim; inspect recovery guidance before retrying.",
-        ),
-        InteractiveErrorCode.CONVERSATION_REQUIRED: InteractiveErrorSpec(
-            "No conversation has current focus.",
-            "Create or choose a conversation first.",
-        ),
-        InteractiveErrorCode.CONVERSATION_INVALID: InteractiveErrorSpec(
-            "The conversation input is invalid.",
-            (
-                "Provide a valid subject or a full or unique ID prefix of at "
-                "least 12 characters."
+INTERACTIVE_ERROR_SPECS: Mapping[InteractiveErrorCode, InteractiveErrorSpec] = (
+    MappingProxyType(
+        {
+            InteractiveErrorCode.TTY_REQUIRED: InteractiveErrorSpec(
+                "Interactive mode requires a terminal.",
+                "Use story run for non-interactive automation.",
             ),
-        ),
-        InteractiveErrorCode.CONVERSATION_NOT_FOUND: InteractiveErrorSpec(
-            "No matching conversation was found.",
-            "Use `/conversation list [--all] [QUERY]` to find an ID.",
-        ),
-        InteractiveErrorCode.CONVERSATION_AMBIGUOUS: InteractiveErrorSpec(
-            "The conversation ID prefix is ambiguous.",
-            "Use a longer prefix or the full ID.",
-        ),
-        InteractiveErrorCode.CONVERSATION_ARCHIVED: InteractiveErrorSpec(
-            "The conversation is archived.",
-            "Choose an active conversation or create a new one.",
-        ),
-        InteractiveErrorCode.CONVERSATION_CREATE_FAILED: InteractiveErrorSpec(
-            "A unique conversation ID could not be created.",
-            "Try creating the conversation again.",
-        ),
-        InteractiveErrorCode.TRANSCRIPT_INVALID: InteractiveErrorSpec(
-            "The conversation transcript is invalid.",
-            "Inspect and repair the reported transcript before retrying.",
-        ),
-        InteractiveErrorCode.RETRIEVAL_INVALID: InteractiveErrorSpec(
-            "The agent returned an invalid retrieval action.",
-            "Start a new turn; if this repeats, check provider compatibility.",
-        ),
-        InteractiveErrorCode.RETRIEVAL_BUDGET_EXHAUSTED: InteractiveErrorSpec(
-            "The conversation retrieval budget was exhausted.",
-            "Ask a narrower question or use /search and /transcript directly.",
-        ),
-        InteractiveErrorCode.PROVIDER_PREFLIGHT_FAILED: InteractiveErrorSpec(
-            "Provider preflight failed.",
-            "Check the provider executable, login, model, and configuration.",
-        ),
-        InteractiveErrorCode.PROVIDER_EXITED: InteractiveErrorSpec(
-            "The provider process exited unsuccessfully.",
-            "Review the sanitized diagnostic and retry when the provider is ready.",
-        ),
-        InteractiveErrorCode.PROVIDER_TIMED_OUT: InteractiveErrorSpec(
-            "The provider operation timed out.",
-            "Retry or increase the configured provider timeout.",
-        ),
-        InteractiveErrorCode.PROVIDER_PROTOCOL_ERROR: InteractiveErrorSpec(
-            "The provider returned an invalid response.",
-            "Retry; if it repeats, inspect the sanitized diagnostic.",
-        ),
-        InteractiveErrorCode.DRAFT_INPUT_INVALID: InteractiveErrorSpec(
-            "The draft input is invalid.",
-            "Provide one readable strict-UTF-8 draft and retry.",
-        ),
-        InteractiveErrorCode.CONSENSUS_DEADLOCK: InteractiveErrorSpec(
-            "The consensus run ended in deadlock.",
-            "Revise the instruction and start a new run.",
-        ),
-        InteractiveErrorCode.CONSENSUS_FAILED: InteractiveErrorSpec(
-            "The consensus run failed.",
-            "Fix the reported cause and start a new run.",
-        ),
-        InteractiveErrorCode.ARTIFACT_CONFLICT: InteractiveErrorSpec(
-            "An output artifact already exists.",
-            "Choose a new output name; existing artifacts are not overwritten.",
-        ),
-        InteractiveErrorCode.OPERATION_CANCELLED: InteractiveErrorSpec(
-            "The operation was cancelled.",
-            "The current session remains available; start again when ready.",
-        ),
-        InteractiveErrorCode.OPERATION_INTERRUPTED: InteractiveErrorSpec(
-            "The operation was interrupted.",
-            "Inspect preserved state before starting a new operation.",
-        ),
-        InteractiveErrorCode.CLEANUP_FAILED: InteractiveErrorSpec(
-            "Cleanup did not complete.",
-            "Inspect retained temporary or access-claim state before retrying.",
-        ),
-        InteractiveErrorCode.INTERNAL_ERROR: InteractiveErrorSpec(
-            "An internal error occurred.",
-            "Retry once; if it repeats, report the internal_error code.",
-        ),
-    }
+            InteractiveErrorCode.WORKSPACE_NOT_INITIALIZED: InteractiveErrorSpec(
+                "No initialized story workspace was found.",
+                "Run story init PATH, then try again.",
+            ),
+            InteractiveErrorCode.WORKSPACE_INVALID: InteractiveErrorSpec(
+                "The story workspace is invalid.",
+                "Inspect the reported workspace file and repair it before retrying.",
+            ),
+            InteractiveErrorCode.WORKSPACE_UNSAFE: InteractiveErrorSpec(
+                "The requested workspace path is unsafe.",
+                "Use a path inside the initialized workspace.",
+            ),
+            InteractiveErrorCode.WORKSPACE_VERSION_UNSUPPORTED: InteractiveErrorSpec(
+                "This workspace uses an unsupported older session format.",
+                "Use a new workspace or follow the documented manual reset procedure.",
+            ),
+            InteractiveErrorCode.CONFIGURATION_INVALID: InteractiveErrorSpec(
+                "Runtime configuration is invalid.",
+                "Correct the reported configuration value and retry.",
+            ),
+            InteractiveErrorCode.COMMAND_INVALID: InteractiveErrorSpec(
+                "The interactive command is invalid.",
+                "Type /help to see valid command syntax.",
+            ),
+            InteractiveErrorCode.AGENT_INVALID: InteractiveErrorSpec(
+                "The requested agent is invalid.",
+                "Type /agents to see available agents.",
+            ),
+            InteractiveErrorCode.SESSION_INVALID: InteractiveErrorSpec(
+                "The story session identifier is invalid.",
+                "Use letters, digits, underscores, or hyphens in a safe session name.",
+            ),
+            InteractiveErrorCode.SESSION_EXISTS: InteractiveErrorSpec(
+                "The story session already exists.",
+                "Resume it or choose a different session name.",
+            ),
+            InteractiveErrorCode.SESSION_NOT_FOUND: InteractiveErrorSpec(
+                "The story session was not found.",
+                "List sessions or create a new one.",
+            ),
+            InteractiveErrorCode.SESSION_NOT_ATTACHED: InteractiveErrorSpec(
+                "No story session is attached to this shell.",
+                "Create or resume a session before using this command.",
+            ),
+            InteractiveErrorCode.SESSION_PAUSED: InteractiveErrorSpec(
+                "The story session is paused.",
+                "Resume the session to make it ready before provider work.",
+            ),
+            InteractiveErrorCode.SESSION_ACCESS_BLOCKED: InteractiveErrorSpec(
+                "Story-session access is held by another live local process.",
+                "Wait for that process to release access, then resume the session.",
+            ),
+            InteractiveErrorCode.SESSION_OWNERSHIP_UNKNOWN: InteractiveErrorSpec(
+                "Story-session access ownership cannot be verified.",
+                "Do not remove the claim; inspect recovery guidance before retrying.",
+            ),
+            InteractiveErrorCode.CONVERSATION_REQUIRED: InteractiveErrorSpec(
+                "No conversation has current focus.",
+                "Create or choose a conversation first.",
+            ),
+            InteractiveErrorCode.CONVERSATION_INVALID: InteractiveErrorSpec(
+                "The conversation input is invalid.",
+                (
+                    "Provide a valid subject or a full or unique ID prefix of at "
+                    "least 12 characters."
+                ),
+            ),
+            InteractiveErrorCode.CONVERSATION_NOT_FOUND: InteractiveErrorSpec(
+                "No matching conversation was found.",
+                "Use `/conversation list [--all] [QUERY]` to find an ID.",
+            ),
+            InteractiveErrorCode.CONVERSATION_AMBIGUOUS: InteractiveErrorSpec(
+                "The conversation ID prefix is ambiguous.",
+                "Use a longer prefix or the full ID.",
+            ),
+            InteractiveErrorCode.CONVERSATION_ARCHIVED: InteractiveErrorSpec(
+                "The conversation is archived.",
+                "Choose an active conversation or create a new one.",
+            ),
+            InteractiveErrorCode.CONVERSATION_CREATE_FAILED: InteractiveErrorSpec(
+                "A unique conversation ID could not be created.",
+                "Try creating the conversation again.",
+            ),
+            InteractiveErrorCode.TRANSCRIPT_INVALID: InteractiveErrorSpec(
+                "The conversation transcript is invalid.",
+                "Inspect and repair the reported transcript before retrying.",
+            ),
+            InteractiveErrorCode.RETRIEVAL_INVALID: InteractiveErrorSpec(
+                "The agent returned an invalid retrieval action.",
+                "Start a new turn; if this repeats, check provider compatibility.",
+            ),
+            InteractiveErrorCode.RETRIEVAL_BUDGET_EXHAUSTED: InteractiveErrorSpec(
+                "The conversation retrieval budget was exhausted.",
+                "Ask a narrower question or use /search and /transcript directly.",
+            ),
+            InteractiveErrorCode.PROVIDER_PREFLIGHT_FAILED: InteractiveErrorSpec(
+                "Provider preflight failed.",
+                "Check the provider executable, login, model, and configuration.",
+            ),
+            InteractiveErrorCode.PROVIDER_EXITED: InteractiveErrorSpec(
+                "The provider process exited unsuccessfully.",
+                "Review the sanitized diagnostic and retry when the provider is ready.",
+            ),
+            InteractiveErrorCode.PROVIDER_TIMED_OUT: InteractiveErrorSpec(
+                "The provider operation timed out.",
+                "Retry or increase the configured provider timeout.",
+            ),
+            InteractiveErrorCode.PROVIDER_PROTOCOL_ERROR: InteractiveErrorSpec(
+                "The provider returned an invalid response.",
+                "Retry; if it repeats, inspect the sanitized diagnostic.",
+            ),
+            InteractiveErrorCode.DRAFT_INPUT_INVALID: InteractiveErrorSpec(
+                "The draft input is invalid.",
+                "Provide one readable strict-UTF-8 draft and retry.",
+            ),
+            InteractiveErrorCode.CONSENSUS_DEADLOCK: InteractiveErrorSpec(
+                "The consensus run ended in deadlock.",
+                "Revise the instruction and start a new run.",
+            ),
+            InteractiveErrorCode.CONSENSUS_FAILED: InteractiveErrorSpec(
+                "The consensus run failed.",
+                "Fix the reported cause and start a new run.",
+            ),
+            InteractiveErrorCode.ARTIFACT_CONFLICT: InteractiveErrorSpec(
+                "An output artifact already exists.",
+                "Choose a new output name; existing artifacts are not overwritten.",
+            ),
+            InteractiveErrorCode.OPERATION_CANCELLED: InteractiveErrorSpec(
+                "The operation was cancelled.",
+                "The current session remains available; start again when ready.",
+            ),
+            InteractiveErrorCode.OPERATION_INTERRUPTED: InteractiveErrorSpec(
+                "The operation was interrupted.",
+                "Inspect preserved state before starting a new operation.",
+            ),
+            InteractiveErrorCode.CLEANUP_FAILED: InteractiveErrorSpec(
+                "Cleanup did not complete.",
+                "Inspect retained temporary or access-claim state before retrying.",
+            ),
+            InteractiveErrorCode.INTERNAL_ERROR: InteractiveErrorSpec(
+                "An internal error occurred.",
+                "Retry once; if it repeats, report the internal_error code.",
+            ),
+        }
+    )
 )
 
 
@@ -467,6 +468,50 @@ _SUMMARY_LIMIT = 512
 _HINT_LIMIT = 256
 _REDACTION = "<redacted>"
 _MAIN_PROMPT_EXCLUSIONS = frozenset({"/compose", "/send", "/cancel"})
+_STARTUP_WELCOME_FRAMES: tuple[Component, ...] = (
+    Notice(
+        "Story.",
+        label="welcome",
+        role=SemanticRole.INFO,
+        state=ViewState.LOADING,
+    ),
+    Panel(
+        "Story Writing",
+        (
+            Notice(
+                "A shared creative workspace is opening.",
+                role=SemanticRole.INFO,
+                state=ViewState.LOADING,
+            ),
+        ),
+        state=ViewState.LOADING,
+    ),
+    Panel(
+        "Story Writing Agents",
+        (
+            Notice(
+                "Four roles. One shared story workspace.",
+                role=SemanticRole.EMPHASIS,
+                state=ViewState.LOADING,
+            ),
+        ),
+        state=ViewState.LOADING,
+    ),
+    Panel(
+        "Story Writing Agents",
+        (
+            Notice(
+                "Four roles. One shared story workspace.",
+                role=SemanticRole.EMPHASIS,
+            ),
+            Notice(
+                "Provider access will be checked before the story session starts.",
+                role=SemanticRole.INFO,
+            ),
+        ),
+        state=ViewState.COMPLETED,
+    ),
+)
 _ARTIFACT_REFERENCE_GUIDANCE = (
     "Artifact references require an attached session and focused conversation. "
     "In provider-bound prompts, $ chooses a whole-file reference; $$ then "
@@ -487,6 +532,9 @@ class InteractiveTerminal:
         "_main_read_line",
         "_picker_read",
         "_prompt_read",
+        "_startup_notice",
+        "_startup_result_notice",
+        "_startup_welcome",
         "_text_viewer_read",
         "_advisory_progress",
         "_debate_progress",
@@ -523,9 +571,7 @@ class InteractiveTerminal:
         if width < 20:
             raise ValueError("width must be at least 20")
         self._read_line = read_line
-        self._main_read_line = (
-            read_line if main_read_line is None else main_read_line
-        )
+        self._main_read_line = read_line if main_read_line is None else main_read_line
         self._main_choice_read_line = (
             lambda prompt, _choice_provider: self._main_read_line(prompt)
         )
@@ -541,6 +587,13 @@ class InteractiveTerminal:
         self._confirmation_read_line = _plain_input_reader(read_line, width)
         self._picker_read = _plain_picker_reader(read_line, write_text, width)
         self._prompt_read = _plain_prompt_reader(read_line, width)
+        self._startup_welcome = lambda _sleeper: self._write_component(
+            _STARTUP_WELCOME_FRAMES[-1]
+        )
+        self._startup_notice = lambda notice, _sleeper: self._write_component(notice)
+        self._startup_result_notice = (
+            lambda notice, _sleeper: self._write_startup_result_notice(notice)
+        )
         self._text_viewer_read = _plain_text_viewer_reader(read_line, width)
         self._advisory_progress = _plain_advisory_progress
         self._debate_progress = _plain_debate_progress
@@ -671,9 +724,7 @@ class InteractiveTerminal:
                 f"Target: {alias}. Use /send to submit or /cancel to discard."
             )
         else:
-            introduction = (
-                "Consensus run. Use /send to submit or /cancel to discard."
-            )
+            introduction = "Consensus run. Use /send to submit or /cancel to discard."
         self._write_component(
             Notice(
                 introduction,
@@ -687,9 +738,7 @@ class InteractiveTerminal:
         while True:
             try:
                 line = _validated_input_line(
-                    read_input(
-                        _composer_input_view(mode, alias, state)
-                    )
+                    read_input(_composer_input_view(mode, alias, state))
                 )
             except KeyboardInterrupt:
                 return self._record_discarded_composition(
@@ -820,9 +869,7 @@ class InteractiveTerminal:
             )
         items.append(Notice(_ARTIFACT_REFERENCE_GUIDANCE))
         items.append(
-            Notice(
-                "Type /help for commands; /quit releases access without pausing."
-            )
+            Notice("Type /help for commands; /quit releases access without pausing.")
         )
         self._write_component(Panel("Story chat", tuple(items)))
 
@@ -908,11 +955,7 @@ class InteractiveTerminal:
                     Field("Focus", focus),
                     Field("Subject", safe_subject),
                 ),
-                role=(
-                    SemanticRole.MUTED
-                    if archived
-                    else SemanticRole.DEFAULT
-                ),
+                role=(SemanticRole.MUTED if archived else SemanticRole.DEFAULT),
                 state=ViewState.COMPLETED,
             )
         )
@@ -946,12 +989,8 @@ class InteractiveTerminal:
                 conversation_subject,
             )
         )
-        safe_match_kind = _inline_text(
-            _strict_required_text("match_kind", match_kind)
-        )
-        safe_snippet = _inline_text(
-            _strict_required_text("snippet", snippet)
-        )
+        safe_match_kind = _inline_text(_strict_required_text("match_kind", match_kind))
+        safe_snippet = _inline_text(_strict_required_text("snippet", snippet))
         if type(archived) is not bool:
             raise TypeError("archived must be a bool")
 
@@ -994,11 +1033,7 @@ class InteractiveTerminal:
                     Field("Citation", citation),
                     Field("Snippet", safe_snippet),
                 ),
-                role=(
-                    SemanticRole.MUTED
-                    if archived
-                    else SemanticRole.DEFAULT
-                ),
+                role=(SemanticRole.MUTED if archived else SemanticRole.DEFAULT),
                 state=ViewState.COMPLETED,
             )
         )
@@ -1029,9 +1064,7 @@ class InteractiveTerminal:
         safe_turn_id = _strict_safe_identifier("turn_id", turn_id)
         safe_kind = _inline_text(_strict_required_text("kind", kind))
         safe_sender = _inline_text(_strict_required_text("sender", sender))
-        safe_recipient = _inline_text(
-            _strict_required_text("recipient", recipient)
-        )
+        safe_recipient = _inline_text(_strict_required_text("recipient", recipient))
         safe_content = sanitize_terminal_text(
             _strict_nonempty_terminal_content(content)
         )
@@ -1327,6 +1360,12 @@ class InteractiveTerminal:
         frame = render_component(component, self._capability_provider())
         self._write_text(f"{frame.text}\n")
 
+    def _write_startup_result_notice(self, notice: Notice) -> None:
+        """Establish a fresh callback boundary before one static result."""
+
+        self._write_text("\n")
+        self._write_component(notice)
+
 
 class InteractiveSemanticOutput:
     """Retain only one terminal's package-internal semantic write capability."""
@@ -1344,6 +1383,54 @@ class InteractiveSemanticOutput:
         """Delegate one closed semantic component to exactly one terminal write."""
 
         self._write(component)
+
+
+class InteractiveStartupPresentation:
+    """Bind the fixed welcome and auth-notice presentation lifecycle."""
+
+    __slots__ = ("_show_notice", "_show_result", "_show_welcome", "_sleeper")
+
+    def __init__(
+        self,
+        terminal: InteractiveTerminal,
+        *,
+        sleeper: Callable[[float], object] = time.sleep,
+    ) -> None:
+        """Retain only terminal-owned startup callbacks and injected timing."""
+
+        if not isinstance(terminal, InteractiveTerminal):
+            raise TypeError("terminal must be an InteractiveTerminal")
+        if not callable(sleeper):
+            raise TypeError("sleeper must be callable")
+        self._show_welcome: Callable[[Callable[[float], object]], None] = (
+            terminal._startup_welcome
+        )
+        self._show_notice: Callable[[Notice, Callable[[float], object]], None] = (
+            terminal._startup_notice
+        )
+        self._show_result: Callable[[Notice, Callable[[float], object]], None] = (
+            terminal._startup_result_notice
+        )
+        self._sleeper = sleeper
+
+    def show_welcome(self) -> None:
+        """Run the fixed bounded ceremony or one meaningful static rendering."""
+
+        self._show_welcome(self._sleeper)
+
+    def show_notice(self, notice: Notice) -> None:
+        """Show one bounded auth notice and clear any capable live frame."""
+
+        if type(notice) is not Notice:
+            raise TypeError("notice must be a Notice")
+        self._show_notice(notice, self._sleeper)
+
+    def show_result(self, notice: Notice) -> None:
+        """Reclaim a fresh line, then show and clear one auth result."""
+
+        if type(notice) is not Notice:
+            raise TypeError("notice must be a Notice")
+        self._show_result(notice, self._sleeper)
 
 
 class InteractiveMainInput:
@@ -1374,9 +1461,7 @@ class InteractiveMainInput:
         self._reference_scope_provider: (
             Callable[[str, int], ReferenceInputScope | None] | None
         ) = None
-        self._reference_paths_provider: (
-            Callable[[], tuple[str, ...]] | None
-        ) = None
+        self._reference_paths_provider: Callable[[], tuple[str, ...]] | None = None
         self._reference_text_reader: Callable[[str], str] | None = None
 
     def read_main(
@@ -1400,9 +1485,7 @@ class InteractiveMainInput:
     def read_main_with_references(
         self,
         choice_provider: Callable[[str, int], Picker | None],
-        reference_scope_provider: Callable[
-            [str, int], ReferenceInputScope | None
-        ],
+        reference_scope_provider: Callable[[str, int], ReferenceInputScope | None],
         reference_paths_provider: Callable[[], tuple[str, ...]],
         reference_text_reader: Callable[[str], str],
         *,
@@ -1502,9 +1585,7 @@ class InteractiveCompositionInput:
         mode: ComposeMode,
         *,
         agent_id: str | None = None,
-        reference_scope_provider: Callable[
-            [str, int], ReferenceInputScope | None
-        ],
+        reference_scope_provider: Callable[[str, int], ReferenceInputScope | None],
         reference_paths_provider: Callable[[], tuple[str, ...]],
         reference_text_reader: Callable[[str], str],
     ) -> TerminalAction:
@@ -1584,9 +1665,7 @@ class InteractivePromptInput:
 
         if not isinstance(terminal, InteractiveTerminal):
             raise TypeError("terminal must be an InteractiveTerminal")
-        self._read: Callable[[InputPromptView], ControlOutcome] = (
-            terminal._prompt_read
-        )
+        self._read: Callable[[InputPromptView], ControlOutcome] = terminal._prompt_read
 
     def read_prompt(
         self,
@@ -1825,10 +1904,14 @@ def _plain_picker_reader(
             )
             if outcome.kind is ControlOutcomeKind.REJECTED:
                 continue
-            if outcome.kind in {
-                ControlOutcomeKind.COMMIT,
-                ControlOutcomeKind.CANCEL,
-            } and not transient:
+            if (
+                outcome.kind
+                in {
+                    ControlOutcomeKind.COMMIT,
+                    ControlOutcomeKind.CANCEL,
+                }
+                and not transient
+            ):
                 final_frame = render_picker_fallback(
                     picker_state,
                     capabilities,
@@ -2034,12 +2117,9 @@ def read_main_command_line(
     driver: RawTerminalDriver,
     prompt: str,
     *,
-    choice_provider: Callable[
-        [str, int], Picker | None
-    ] | None = None,
-    reference_scope_provider: Callable[
-        [str, int], ReferenceInputScope | None
-    ] | None = None,
+    choice_provider: Callable[[str, int], Picker | None] | None = None,
+    reference_scope_provider: Callable[[str, int], ReferenceInputScope | None]
+    | None = None,
     reference_paths_provider: Callable[[], tuple[str, ...]] | None = None,
     reference_text_reader: Callable[[str], str] | None = None,
     reference_failure_writer: (
@@ -2094,11 +2174,7 @@ def read_main_command_line(
             if projected_reference is not None:
                 active_pickers.clear()
                 return projected_reference.completion
-        picker = (
-            None
-            if choice_provider is None
-            else choice_provider(buffer, cursor)
-        )
+        picker = None if choice_provider is None else choice_provider(buffer, cursor)
         if picker is None:
             active_pickers.clear()
             return _main_command_completion(buffer, cursor)
@@ -2211,9 +2287,7 @@ def build_stream_terminal(
             reference_failure_writer=(
                 None
                 if scope is None
-                else lambda kind: terminal.write_error(
-                    _reference_input_error(kind)
-                )
+                else lambda kind: terminal.write_error(_reference_input_error(kind))
             ),
         )
     )
@@ -2239,6 +2313,7 @@ def build_stream_terminal(
         _empty_slash_suggestions,
         transient=True,
     )
+
     def read_picker(state, *, transient=True):
         if type(transient) is not bool:
             raise TypeError("transient must be a bool")
@@ -2260,6 +2335,23 @@ def build_stream_terminal(
 
     terminal._picker_read = read_picker
     terminal._prompt_read = read_prompt
+    terminal._startup_welcome = lambda sleeper: driver.run_startup_welcome(
+        lambda index, current: render_component(
+            _STARTUP_WELCOME_FRAMES[index],
+            current,
+        ),
+        sleeper,
+    )
+    terminal._startup_notice = lambda notice, sleeper: driver.run_startup_notice(
+        lambda current: render_component(notice, current),
+        sleeper,
+    )
+    terminal._startup_result_notice = (
+        lambda notice, sleeper: driver.run_startup_result_notice(
+            lambda current: render_component(notice, current),
+            sleeper,
+        )
+    )
     terminal._text_viewer_read = lambda state: driver.read_text_viewer(
         state,
         transition_text_viewer,
@@ -2293,9 +2385,7 @@ def _safe_identifier(name: str, value: object) -> str:
     if not isinstance(value, str):
         raise TypeError(f"{name} must be a string")
     if _SAFE_IDENTIFIER.fullmatch(value) is None:
-        raise ValueError(
-            f"{name} must match [A-Za-z0-9][A-Za-z0-9_-]{{0,63}}"
-        )
+        raise ValueError(f"{name} must match [A-Za-z0-9][A-Za-z0-9_-]{{0,63}}")
     return value
 
 

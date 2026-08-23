@@ -18,19 +18,31 @@ and write a manuscript only after all three voting specialists agree.
 
 ## Quick start
 
-Codex is the default provider. Install and authenticate its CLI for real story
-runs:
+Install the Codex CLI for the final fallback route used by real story runs:
 
 ```bash
 npm install -g @openai/codex
 rehash
-codex login
 ```
 
-Alternatively, set `CODEX_API_KEY` in the process environment; credentials are
-not stored in the story workspace. To route one or more agents through
-Antigravity instead, install and authenticate the `agy` executable as described
-in [Use Antigravity agents](docs/guides/antigravity.md).
+To route through Antigravity, install the `agy` executable as described in
+[Use Antigravity agents](docs/guides/antigravity.md). On each interactive
+`story` launch, the runtime checks both native CLIs and opens the selected CLI's
+own sign-in flow when you choose an unauthenticated provider. Its exact native
+commands are:
+
+| Provider | Status check | Sign-in |
+| --- | --- | --- |
+| Codex | `codex login status` | `codex login` |
+| Antigravity | `EXECUTABLE models` | `EXECUTABLE` with no arguments |
+
+For Antigravity, `EXECUTABLE` is `agy` by default or the resolved
+`--antigravity-executable PATH` override supported by `story chat`.
+
+The sign-in process inherits the real terminal and environment at the resolved
+workspace root and may open a provider-controlled browser. The runtime does not
+read provider output, account details, OAuth URLs, tokens, credentials, or the
+provider's native credential storage.
 
 Install in a standard-library virtual environment or Conda; do not nest a `venv` inside active Conda.
 
@@ -54,6 +66,12 @@ cd ./my-story
 story smoke
 story
 ```
+
+After the welcome, authentication is the first interactive gate. At least one
+provider must pass a fresh native status check, and every distinct provider
+selected by the effective agent routes must pass again before the runtime
+constructs a story backend or session controller. Press Ctrl-C or send EOF to
+leave without starting the shell; cancelling the picker keeps the gate open.
 
 At `story[lobby]>`, create a session and focus a subject conversation:
 
@@ -99,7 +117,7 @@ story run --output part-01/opening.md --prompt 'Draft the opening.'
 - [Documentation index](docs/INDEX.md) routes each task, contract, design topic, and operational concern.
 - [Workspace guide](docs/guides/workspaces.md) explains the editable project files.
 - [Writing artifacts](docs/reference/writing-artifacts.md) separates current canonical filesystem sources from publication provenance and recovery.
-- [Antigravity guide](docs/guides/antigravity.md) covers `agy` setup, routing, safety, sessions, and provider-free verification.
+- [Antigravity guide](docs/guides/antigravity.md) covers `agy` setup, authentication, routing, safety, sessions, and provider-free verification.
 - [Story sessions](docs/guides/story-sessions.md) shows shell management, conversation reads, retrieval, and consensus.
 - [Session lifecycle](docs/design/session-lifecycle.md) maps internal state to commands, output, errors, and next actions.
 - [Consensus-run guide](docs/guides/consensus-runs.md) covers prompts, drafts, outputs, and round limits.
@@ -109,7 +127,8 @@ story run --output part-01/opening.md --prompt 'Draft the opening.'
 
 <a id="backends"></a>
 
-`AgentBackend` coordinates Codex and Antigravity; Codex remains the default.
+`AgentBackend` coordinates Codex and Antigravity. Route precedence is a CLI
+override, explicit agent route, persisted workspace default, then Codex.
 The only supported backend names are `codex` and `antigravity`; legacy
 `gemini` configuration is rejected with migration guidance.
 `StoryRuntime` owns consensus, advisory sequencing, and retrieval authorization. See the [system design](docs/design/overview.md).

@@ -25,13 +25,13 @@ operation. See the
 
 `session_lifecycle` owns immutable provider-neutral lifecycle facts and pure
 readiness, with no resource or I/O. `AgentBackend` retains manifests, access
-claims, prompt staging, routes, processes, and threads. It owns private
-active-call retention, exact staging retirement, and the optional
-provider-enforced reference prelude supplied through the provider-neutral
-read-action boundary; a `BoundAgent` is the immutable handle for one definition
-and binding, not the runtime selection owner. Codex and Antigravity adapters are
-implemented; Codex remains the default. The obsolete backend name `gemini` is
-rejected with guidance to use `antigravity`.
+claims, routes, active-call retention, and provider-neutral thread and
+read-action coordination. Provider adapters own bindings, staging, and
+provider-native state; `provider_process` owns subprocess resources. A
+`BoundAgent` is the immutable handle for one definition and binding, not the
+runtime selection owner. Codex and Antigravity adapters are implemented; the
+workspace default precedes the final Codex fallback. The obsolete backend name
+`gemini` is rejected with guidance to use `antigravity`.
 
 Provider threads are partitioned by story session, backend, and agent.
 Antigravity adds a stable provider-native state root isolated by session, agent,

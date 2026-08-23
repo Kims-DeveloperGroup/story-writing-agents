@@ -2,8 +2,9 @@
 
 > **Availability:** bare `story` and `story chat` open the TTY shell for session
 > and conversation management, persistent settings, advisory/local reads, and
-> focused-context consensus. Provider-bound prompt text accepts inline
-> `${path}` and `${path}#Lx-Ly` canonical artifact references. In eligible
+> focused-context consensus after native provider authentication succeeds.
+> Provider-bound prompt text accepts inline `${path}` and `${path}#Lx-Ly`
+> canonical artifact references. In eligible
 > interactive prompt spans, `$`, `$${path}`, and `$$` discover and attach them
 > without submitting.
 
@@ -132,11 +133,63 @@ retention limits are in
 [Privacy](../operations/privacy-and-provider.md#workspace-debug-log-privacy)
 and [Session storage](configuration/session-storage.md#runtime-debug-log-storage).
 
+<a id="interactive-provider-authentication"></a>
+
+## Interactive provider authentication
+
+Bare `story` and `story chat` authenticate before constructing the CLI context,
+`AgentBackend`, controller, or session lifecycle. After workspace resolution
+and the welcome, the runtime launches only these native commands without a
+shell:
+
+| Provider | Silent bounded status probe | Inherited-terminal sign-in |
+| --- | --- | --- |
+| Codex | `codex login status` | `codex login` |
+| Antigravity | `EXECUTABLE models` | `EXECUTABLE` with no arguments |
+
+For Antigravity, `EXECUTABLE` is `agy` by default or the resolved
+`--antigravity-executable PATH` value on `story chat`.
+
+Status probes run at the resolved workspace root with null stdin/stdout/stderr.
+Exit `0` is authenticated, exit `1` is unauthenticated, a missing executable is
+unavailable, and timeout or any other result is indeterminate. Unavailable
+choices are disabled; authenticated choices need no sign-in; unauthenticated
+choices start native sign-in; indeterminate choices trigger another status
+check. After sign-in, both providers are refreshed. Only a fresh exact
+authenticated result authorizes use—neither prior state nor the sign-in exit
+code does.
+
+If neither provider is authenticated, the startup picker remains the hard gate.
+Cancel returns to that gate; Ctrl-C or EOF exits normally without constructing
+the story runtime. Once at least one provider authenticates, a missing workspace
+`default_backend` is persisted from the provider authenticated by that immediate
+interaction, otherwise the sole authenticated provider, otherwise Codex when
+both are authenticated. An existing default is never replaced.
+
+Effective routes then resolve in this order: repeatable CLI override, explicit
+per-agent route, workspace default, Codex. Each distinct effective provider
+must pass a fresh gate before startup continues; explicit routes are never
+rewritten. `init`, `run`, `smoke`, help, malformed invocation, standalone
+lifecycle commands, and non-TTY rejection do not open this interactive gate.
+
+Inside the shell, global no-argument `/auth` refreshes both states and opens the
+same picker without story-provider work. Cancellation returns to the shell and
+keeps any already established default. A newly completed authentication can
+durably fill a missing default, but never replaces an existing default or an
+explicit route.
+
+Native sign-in inherits stdin, stdout, stderr, environment, process group, and
+the resolved workspace root and may open a provider-controlled browser. The
+runtime neither synthesizes nor captures URLs, provider output, account facts,
+tokens, credentials, or native credential persistence. See
+[privacy](../operations/privacy-and-provider.md#native-authentication-boundary)
+and [recovery](../operations/recovery-and-limitations.md#authentication-recovery).
+
 ## Provider routes and invocation settings
 
 Every installed command that constructs an `AgentBackend` validates and
-snapshots both the workspace system defaults and per-agent configuration. Codex
-is the default route. The repeatable `--backend AGENT=BACKEND` accepts canonical
+snapshots both the workspace system defaults and per-agent configuration. The
+repeatable `--backend AGENT=BACKEND` accepts canonical
 agent IDs and exactly `codex` or `antigravity`; it changes only that backend
 instance. Duplicate agents are rejected. `gemini` is rejected with fixed
 migration guidance to use `antigravity`.
@@ -162,7 +215,8 @@ story chat draft \
 ```
 
 Other agents retain their persisted routes. Bare `story` has none of these
-options and uses the persisted configuration, `codex` fallback, and `agy`
+options and uses the persisted configuration, workspace default, `codex`
+fallback, and `agy`
 executable default. Standalone lifecycle commands likewise have no provider
 options, so a configured Antigravity route requires `agy` on `PATH`.
 
@@ -195,6 +249,13 @@ attempts the same cleanup before propagating. Persistent semantic
 orientation, validation, cancellation, discard, error, and result records are
 written after that boundary and remain visible. Conversation-subject input is
 always an ordinary read.
+
+After workspace resolution, a capable POSIX terminal shows a bounded four-frame
+welcome at 0.4-second intervals, then the authentication gate. Sign-in guidance
+and its sanitized result are each transient for 0.8 seconds. `NO_COLOR`,
+`STORY_REDUCED_MOTION`, non-POSIX, `TERM=dumb`, callback, or uncertain
+capability uses one static meaningful record with no delay, ANSI, or flashing.
+See the exact [terminal startup contract](interactive-terminal.md#startup-welcome-and-authentication).
 
 Main prompts project canonical root, subcommand, and finite fixed-option
 candidates into a selectable semantic palette. Opening highlights the first
@@ -231,7 +292,7 @@ completion-only Enter, Escape dismissal, cancel, interrupt, EOF, and input
 failure add nothing.
 
 Main matching is exact and case-sensitive at the cursor, with ASCII space/tab
-token boundaries. Root offers 21 main-available registry tokens, help offers 24
+token boundaries. Root offers 22 main-available registry tokens, help offers 25
 including the composition-only commands, and agent-valued positions offer the
 four preferred prompt aliases—`lead`, `plot`, `character`, and `execution`—in
 route order. The parser still accepts all ten declared route aliases; runtime
@@ -299,8 +360,9 @@ This adds no `/compose`, standalone artifact command, public viewer API, or
 noninteractive picker. `story run` scripts must quote literal `${...}` prompt
 text so the invoking shell does not expand `$`.
 
-`/settings` is alias-free, takes no argument, and is available with or without
-an attached session. It edits isolated Current and Pending snapshots for
+`/auth` and `/settings` are alias-free, take no argument, and are available with
+or without an attached session. `/auth` follows the authentication contract
+above. `/settings` edits isolated Current and Pending snapshots for
 Language, Persona, Maximum debate rounds, and Providers through a six-choice
 editor in this order: those four fields, Save, Cancel. `Providers` opens a
 nested canonical-agent picker, then a Provider/Model/Reasoning effort picker;
@@ -312,23 +374,33 @@ the parent silently without a Current/Pending snapshot or cancellation record.
 Save and Cancel each open a transient yes/no confirmation with a changed-only
 Current/Pending context: only differing fields appear in both sections, each
 with a `(Changed)` cue, while no differences show `No pending settings changes.`
-`yes`/`y` commits the requested action; `no`/`n`, blank, or nested Escape
-returns to the settings picker, and invalid confirmation input retries. Top-
+YES commits the requested action; NO or nested Escape returns to the settings
+picker, and invalid fallback input retries. Top-
 level Escape, Ctrl-C, or EOF cancels the whole workflow without writing. The
 submitted `/settings` line has already been cleared with the capable main frame;
 its history entry remains. Ordinary-line fallback leaves its printed input
 visible, with the same history semantics. `/cancel` is literal model text in the
 free-text prompt.
 
-Save validates the complete pending pair, then rejects any exact-byte change to
-either configuration document or any persona-catalog change since opening.
+Choosing a provider starts authentication before changing that agent's pending
+route. A failed or cancelled authentication leaves the route candidate
+unchanged; a newly established missing workspace default is a separate durable
+write and remains even if the pending settings workflow later cancels.
+
+After Save confirmation, the controller freshly gates each distinct effective
+provider once before entering the configuration transaction. A stale,
+unavailable, unauthenticated, indeterminate, failed, cancelled, or interrupted
+status prevents Save. Authentication/default writes already completed remain
+durable. Save then validates the complete pending pair and rejects any
+exact-byte change to either configuration document or any persona-catalog
+change since opening.
 Only changed documents are canonically replaced, in system-defaults then
 agent-configs order. A write failure attempts reverse-order restoration of
 every attempted target, including the failing target; rollback uncertainty is
 reported separately. Success returns to the main prompt and applies to the next
 shell/backend construction only. It does not refresh the active backend or
-runtime, call a provider, alter session/explicit overrides, or add credentials,
-model discovery, or automatic save.
+runtime, invoke a story-model turn, alter session/explicit overrides, or add
+credentials, model discovery, or automatic save.
 
 On capable real-CLI streams, orientation/current context, `/status`, `/inspect`,
 central errors/recovery, and accepted management, advisory, retrieval, and
@@ -357,7 +429,7 @@ TTY guard still rejects non-TTY shell entry before this point. An underlying
 operation failure takes precedence over a simultaneous indicator failure;
 indicator-only failures use the existing internal-error path after cleanup.
 
-`/help [COMMAND]` (`/?`), `/status`, `/settings`, and `/session list` are global.
+`/help [COMMAND]` (`/?`), `/status`, `/auth`, `/settings`, and `/session list` are global.
 Session grammar is `/session list | create NAME | resume [NAME] | pause`. Explicit
 `story chat SESSION` creates an absent session or resumes a persisted session.
 Bare entry resumes a ready default and asks for confirmation before resuming a

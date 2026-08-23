@@ -18,10 +18,17 @@
   artifacts. See [Canonical writing artifacts](reference/writing-artifacts.md).
 
 - **Backend and provider.** The backend manages local routing/sessions and calls
-  an external model provider. Codex is the default; Antigravity is also
+  an external model provider. Codex is the final fallback; Antigravity is also
   supported through `agy`. See
   [Prompts and provider](design/prompts-and-provider.md) and the
   [Antigravity guide](guides/antigravity.md).
+
+- **Provider authentication state and workspace default.** A fresh native probe
+  yields authenticated, unauthenticated, unavailable, or indeterminate. Only
+  authenticated authorizes a route. Nullable agent routes inherit the persisted
+  workspace default and then Codex; interactive onboarding fills the default
+  only when missing. See the
+  [CLI authentication contract](reference/cli.md#interactive-provider-authentication).
 
 - **Blackboard.** Public append-only debate history: input, candidates, reviews,
   repairs, errors, and commit metadata. See [Persistence](design/persistence.md).

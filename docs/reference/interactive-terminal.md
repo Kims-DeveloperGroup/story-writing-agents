@@ -10,8 +10,9 @@
 > composition and yes/no confirmation use semantic input views, and composer
 > lifecycle records use semantic notices. A generic single-select picker
 > foundation and a cancellable prompt seam are implemented behind unlisted
-> package-internal adapters. `/settings` consumes both without changing the
-> supported public terminal API; exact omitted `/session resume` and
+> package-internal adapters. Provider authentication and `/settings` consume
+> the picker without changing the supported public terminal API; exact omitted
+> `/session resume` and
 > `/conversation resume` receive controller-owned main choices on capable
 > streams. Highlighted Enter submits an explicit identity and bypasses the
 > picker. Submitting the omitted command performs a fresh choice read; a
@@ -22,8 +23,11 @@
 > consensus turns additionally use
 > one unlisted terminal-owned rolling indicator on capable raw streams;
 > callback and incapable paths remain silent, and these waits emit no
-> `[routing]` or `[waiting]` record. In provider-bound prompt spans the installed
-> shell now uses `$`, `$${path}`, and `$$` to discover current safe canonical files and
+> `[routing]` or `[waiting]` record. The same driver owns a private bounded
+> startup welcome and transient authentication guidance lifecycle.
+> In provider-bound prompt spans the installed
+> shell now uses `$`, `$${path}`, and `$$` to discover current safe canonical
+> filesystem sources and
 > invoke the independent package-internal ranged viewer. The viewer remains an
 > unlisted supplied-text component rather than a public command or selection
 > API; downstream agent-read enforcement remains runtime-owned.
@@ -102,10 +106,11 @@ generic picker, and cancellable-line seams.
 semantic `Picker` remains a `Component`. None of these additions changes public
 `__all__`, root exports, or supported signatures.
 
-The facade also binds unlisted `InteractiveAdvisoryProgress` and
-`InteractiveDebateProgress` for advisory and consensus awaitable lifecycles.
-They are package-internal and do not expose the driver, renderer, glyphs,
-cursor controls, or a public animation API.
+The facade also binds unlisted `InteractiveStartupPresentation`,
+`InteractiveAdvisoryProgress`, and `InteractiveDebateProgress` for startup
+presentation and advisory/consensus awaitable lifecycles.
+They are package-internal and do not expose the driver, renderer, timing,
+glyphs, cursor controls, or a public animation API.
 
 The facade additionally binds the unlisted `InteractiveTextViewer`,
 `TextViewerExitKind`, and `TextViewerResult` identities. They expose one
@@ -136,6 +141,12 @@ read_prompt(prompt: Prompt, *,
             context: tuple[Panel | Section | Field | Notice, ...] = (),
             transient: bool = True) -> ControlOutcome
 
+InteractiveStartupPresentation(terminal: InteractiveTerminal, *,
+                               sleeper: Callable[[float], object] = time.sleep) -> None
+show_welcome() -> None
+show_notice(notice: Notice) -> None
+show_result(notice: Notice) -> None
+
 InteractiveAdvisoryProgress(terminal: InteractiveTerminal) -> None
 run(operation: Awaitable[object]) -> object  # async, package-internal
 
@@ -158,7 +169,8 @@ the final LF; failures propagate without a retry. The main-input adapter binds
 a call-local choice provider; the picker adapter likewise binds only the
 terminal's picker reader without observing capabilities or acquiring I/O. The
 controller supplies disposable session/conversation snapshots to the main
-adapter and uses the picker/prompt adapters for settings and for submitted
+adapter and uses the picker/prompt adapters for provider authentication,
+settings, and submitted
 omitted resume commands whose fresh reads return eligible rows; none is public
 API. The input adapters validate the
 `transient`
@@ -167,6 +179,49 @@ universal transient lifecycle; callers cannot request a persistent final
 control frame. `InteractiveAdvisoryProgress` and
 `InteractiveDebateProgress` are also unlisted and bind one call-local async
 operation to the terminal's indicator without changing the supported public API.
+
+<a id="startup-welcome-and-authentication"></a>
+
+## Startup welcome and authentication
+
+The real stream terminal uses four fixed semantic welcome frames:
+`Story.`, `Story Writing`, `Story Writing Agents`, and the completed
+`Story Writing Agents` panel that says provider access will be checked. On a
+capable POSIX terminal, the driver replaces those frames at 0.4-second
+intervals—2.5 changes per second, below the three-flashes-per-second limit—and
+then finishes below the final frame. The sequence is bounded to four frames and
+never enters the alternate screen.
+
+Capable startup animation requires known ANSI, raw mode, cursor controls,
+decorative SGR, and no `STORY_REDUCED_MOTION` environment entry. `NO_COLOR`,
+reduced motion, callback construction, `TERM=dumb`, non-TTY, non-POSIX,
+incomplete termios support, or uncertain capability renders only the meaningful
+final frame as one static LF-terminated plain record, with no sleep, ANSI, or
+flashing. `STORY_REDUCED_MOTION` is an opt-in presence check; its value is not
+parsed.
+
+The driver reobserves width before each capable frame and reserves the rightmost
+column so wrapping and clearing stay inside the current terminal. It disables
+echo/canonical input only under a guarded presentation, reads no input, clears
+only its confirmed transient rows, and restores the original termios with input
+discard before any native login inherits the terminal. It uses carriage return,
+cursor-up, clear-to-end, and local SGR reset only; no provider or dynamic text
+becomes terminal control.
+
+The authentication picker labels Codex and Antigravity with explicit textual
+states. Authenticated and unauthenticated choices are enabled, unavailable is
+disabled with installation guidance, and indeterminate remains enabled for a
+recheck. Highlight and current selection remain separate, and the generic
+picker's cancellation, interrupt, EOF, capable cleanup, and numbered fallback
+contracts apply.
+
+Before native sign-in, one fixed sanitized loading notice is shown for at most
+0.8 seconds on the capable path and cleared. After the provider process returns,
+the driver first establishes a fresh output-line boundary, then shows one fixed
+success or recovery result for at most 0.8 seconds and clears it. Static paths
+emit each meaningful notice once with LF and no delay. Provider output, account
+facts, URLs, return codes, tokens, and credentials are never interpolated into
+these components.
 
 | Enum | Exact values |
 | --- | --- |
@@ -282,7 +337,8 @@ four generic-status call sites; the controller also has no generic
 input views and use pure history-free controls as documented below. Selectable
 main-command palettes and finite fixed options are available on capable main
 reads. The generic picker and cancellable-prompt foundations remain available
-only through unlisted internal seams. `/settings` consumes both. A submitted
+only through unlisted internal seams. Provider authentication and `/settings`
+consume the picker. A submitted
 omitted `/session resume` or `/conversation resume` uses the picker only after
 a successful fresh read returns eligible rows; empty and failed reads
 short-circuit before picker input.
@@ -470,7 +526,7 @@ described below. A root `/` opens with its first candidate highlighted. Compact
 registry order (not output layout):
 
 ```text
-/say /to /agent /agents /language /persona /reset /settings /run /draft-file /session
+/say /to /agent /agents /auth /language /persona /reset /settings /run /draft-file /session
 /conversation /search /transcript /inspect /history /status /help /? /quit /exit
 ```
 
@@ -481,8 +537,8 @@ order derived from each `AGENT_ROUTES` entry's `prompt_alias`:
 @lead @plot @character @execution
 ```
 
-Exact case-sensitive prefixes filter in stable order. Root provides the 21
-tokens above; help provides 24 including `/compose`, `/send`, and `/cancel`;
+Exact case-sensitive prefixes filter in stable order. Root provides the 22
+tokens above; help provides 25 including `/compose`, `/send`, and `/cancel`;
 agent-valued slash positions provide the four preferred prompt aliases `lead`,
 `plot`, `character`, and `execution` in the same route order. The parser still
 accepts all ten declared route aliases for slash and routed-message input;
@@ -682,8 +738,9 @@ None of those terminal results adds a final confirmation notice.
 
 ## Generic internal picker foundation
 
-This foundation is package-internal. `/settings` and the post-submit controller
-path for omitted `/session resume` or `/conversation resume` consume it through
+This foundation is package-internal. Provider authentication, `/settings`, and
+the post-submit controller path for omitted `/session resume` or
+`/conversation resume` consume it through
 the unlisted terminal facade adapter. Capable pre-Enter resume choices reuse the
 main palette described above; only their dynamic Enter commit becomes explicit
 and bypasses the picker. Submitting the omitted buffer instead performs a fresh

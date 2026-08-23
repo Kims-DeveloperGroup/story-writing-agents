@@ -36,6 +36,7 @@ EXPECTED_SUGGESTIONS = (
     "/to",
     "/agent",
     "/agents",
+    "/auth",
     "/language",
     "/persona",
     "/reset",
@@ -381,7 +382,7 @@ class SuggestionContractTests(unittest.TestCase):
 
     def test_matching_uses_the_exact_case_sensitive_whole_buffer_prefix(self) -> None:
         cases = {
-            "/a": ("/agent", "/agents"),
+            "/a": ("/agent", "/agents", "/auth"),
             "/agent": ("/agent", "/agents"),
             "/agents": ("/agents",),
             "/he": ("/help",),

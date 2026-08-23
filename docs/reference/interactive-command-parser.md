@@ -23,16 +23,16 @@ parse_interactive_line(line: str) -> InteractiveAction
 ```
 
 Actions, metadata, and parser are package exports; routes are module-supported.
-`SETTINGS` and its registry row are additive supported parser surface, including
-through the existing root-facade exports. Export names/order and the terminal
-supported surface remain unchanged.
+`AUTH`, `SETTINGS`, and their registry rows are additive supported parser
+surface, including through the existing root-facade exports. Export names/order
+and the terminal supported surface remain unchanged.
 
 `ActionKind` values:
 
 ```text
 ignored message routed_message set_target list_agents compose send cancel
-run run_fresh draft_file search transcript inspect history status set_language
-    set_persona reset settings session_list session_create session_open session_pause
+run run_fresh draft_file search transcript inspect history status auth settings
+set_language set_persona reset session_list session_create session_open session_pause
 conversation_new conversation_list conversation_list_all conversation_use
 conversation_subject conversation_archive help quit parse_error
 ```
@@ -61,7 +61,7 @@ only the four preferred prompt aliases—`lead`, `plot`, `character`, and
 | Group | Canonical registry rows |
 | --- | --- |
 | Conversation | `/compose`; `/send`; `/cancel`; `/say TEXT` |
-| Agents | `/to NAME`; `/agents`; `/language LANG`; `/persona AGENT NAME`; `/reset`; `/settings` |
+| Agents | `/to NAME`; `/agents`; `/auth`; `/language LANG`; `/persona AGENT NAME`; `/reset`; `/settings` |
 | Consensus | `/run [--fresh] [--output PART/PATH.md] [PROMPT]`; `/draft-file PATH` |
 | Sessions | `/session list \| create NAME \| resume [NAME] \| pause` |
 | Conversations | `/conversation new [SUBJECT] \| list [--all] [QUERY] \| resume [ID] \| subject SUBJECT \| archive [ID]` |
@@ -70,8 +70,11 @@ only the four preferred prompt aliases—`lead`, `plot`, `character`, and
 
 `/agent`, `/?`, and `/exit` alias `/to`, `/help`, and `/quit`. Flags describe
 possible provider/artifact use, not shell gates. Parsing performs no I/O.
-`/settings` is provider-free and has `may_write_artifacts=True` because an
-explicit Save may replace configuration documents.
+`/auth` has `may_call_provider=True` because it invokes native authentication
+commands, and `may_write_artifacts=True` because fresh authentication may fill
+a missing workspace default. `/settings` has both flags: provider selection and
+Save can authenticate, while default establishment or an explicit Save can
+replace configuration documents.
 
 For `/run`, `--output` must be first, or immediately after `--fresh`. The parser
 recognizes only ASCII space or tab between `--output`, its `PART/PATH.md`, and
@@ -116,13 +119,13 @@ positions are:
 
 | Position | Ordered replacements |
 | --- | --- |
-| Root command | The 21 main-available canonical commands and aliases in registry order; standalone `/compose`, `/send`, and `/cancel` are excluded. |
+| Root command | The 22 main-available canonical commands and aliases in registry order; standalone `/compose`, `/send`, and `/cancel` are excluded. |
 | `/session` | `list`, `create`, `resume`, `pause` |
 | `/conversation` | `new`, `list`, `resume`, `subject`, `archive` |
 | `/to`, `/agent`, `/persona` agent | The four preferred prompt aliases—`lead`, `plot`, `character`, and `execution`—in route order. Other accepted aliases remain parser-compatible but are not duplicated as completion candidates. |
 | `/run` option | `--fresh` |
 | `/conversation list` option | `--all` |
-| `/help`, `/?` command | The 21 root replacements plus `/compose`, `/send`, and `/cancel` in registry order. |
+| `/help`, `/?` command | The 22 root replacements plus `/compose`, `/send`, and `/cancel` in registry order. |
 | `/inspect` argument | `last` |
 | `/transcript ID [COUNT]` option | `--from` |
 
@@ -179,9 +182,12 @@ Identity resolution, archive status, and storage are not parser concerns.
 optional leading slash. Omission requests full grouped help; otherwise the
 action carries the canonical command.
 
-`/status`, `/reset`, and alias-free `/settings` take no argument. `/settings`
-returns the additive `settings` action and is global; its interactive editing,
-validation, and persistence are controller/settings concerns. `/language ARG`
+`/status`, `/reset`, alias-free `/auth`, and alias-free `/settings` take no
+argument. `/auth` returns the `auth` action and is global; native status,
+sign-in, default persistence, and cancellation are controller/auth concerns.
+`/settings` returns the `settings` action and is global; its interactive
+editing, authentication, validation, and persistence are controller/settings
+concerns. `/language ARG`
 takes one control-free token; `/persona AGENT ARG` takes a route alias and
 token, returning the canonical ID. `/history [COUNT]` takes an optional positive
 ASCII integer; omission means all. `/inspect [ID|last]` takes at most one

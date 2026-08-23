@@ -73,14 +73,16 @@ from pathlib import Path
 
 LOG_PATH = Path(os.environ["STORY_PTY_CODEX_LOG"])
 CONTROL_PATH = Path(os.environ["STORY_PTY_CODEX_CONTROL"])
+AUTH_LOG_PATH = Path(os.environ["STORY_PTY_AUTH_LOG"])
+AUTH_STATE_PATH = Path(os.environ["STORY_PTY_AUTH_STATE"])
 
 
-def append_record(value):
+def append_record(value, *, path=LOG_PATH):
     """Append one locked, complete UTF-8 JSONL record."""
 
     payload = (json.dumps(value, ensure_ascii=False) + "\n").encode("utf-8")
     descriptor = os.open(
-        LOG_PATH,
+        path,
         os.O_WRONLY | os.O_CREAT | os.O_APPEND,
         0o600,
     )
@@ -107,6 +109,39 @@ signal.signal(signal.SIGINT, signal.SIG_IGN)
 signal.signal(signal.SIGTERM, terminate)
 
 argv = sys.argv[1:]
+if argv in (["login", "status"], ["login"]):
+    state = json.loads(AUTH_STATE_PATH.read_text(encoding="utf-8"))
+    operation = "probe" if argv == ["login", "status"] else "login"
+    append_record(
+        {
+            "provider": "codex",
+            "operation": operation,
+            "argv": argv,
+            "cwd": os.getcwd(),
+            "stdin_tty": sys.stdin.isatty(),
+            "stdout_tty": sys.stdout.isatty(),
+            "stderr_tty": sys.stderr.isatty(),
+            "environment_marker": os.environ.get("STORY_PTY_AUTH_ENV_MARKER"),
+        },
+        path=AUTH_LOG_PATH,
+    )
+    if operation == "probe":
+        raise SystemExit(
+            0
+            if state["codex"] == "authenticated"
+            else 1
+            if state["codex"] == "unauthenticated"
+            else 7
+        )
+    if state.get("codex_login") == "authenticate":
+        state["codex"] = "authenticated"
+        AUTH_STATE_PATH.write_text(
+            json.dumps(state, separators=(",", ":")),
+            encoding="utf-8",
+        )
+    sys.stdout.write("FAKE_CODEX_NATIVE_LOGIN\n")
+    raise SystemExit(int(state.get("codex_login_returncode", 0)))
+
 payload = json.loads(sys.stdin.read())
 control = json.loads(CONTROL_PATH.read_text(encoding="utf-8"))
 append_record(
@@ -216,6 +251,75 @@ if "resume" not in argv:
             }
         )
     )
+'''
+
+
+_FAKE_AGY = r'''#!/usr/bin/env python3
+"""Deterministic local Antigravity auth stand-in used only by PTY tests."""
+
+import fcntl
+import json
+import os
+import sys
+from pathlib import Path
+
+
+AUTH_LOG_PATH = Path(os.environ["STORY_PTY_AUTH_LOG"])
+AUTH_STATE_PATH = Path(os.environ["STORY_PTY_AUTH_STATE"])
+
+
+def append_record(value):
+    payload = (json.dumps(value, ensure_ascii=False) + "\n").encode("utf-8")
+    descriptor = os.open(
+        AUTH_LOG_PATH,
+        os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+        0o600,
+    )
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        remaining = memoryview(payload)
+        while remaining:
+            written = os.write(descriptor, remaining)
+            if written == 0:
+                raise OSError("fake auth log write made no progress")
+            remaining = remaining[written:]
+    finally:
+        os.close(descriptor)
+
+
+argv = sys.argv[1:]
+if argv not in ([], ["models"]):
+    raise SystemExit(64)
+state = json.loads(AUTH_STATE_PATH.read_text(encoding="utf-8"))
+operation = "probe" if argv == ["models"] else "login"
+append_record(
+    {
+        "provider": "antigravity",
+        "operation": operation,
+        "argv": argv,
+        "cwd": os.getcwd(),
+        "stdin_tty": sys.stdin.isatty(),
+        "stdout_tty": sys.stdout.isatty(),
+        "stderr_tty": sys.stderr.isatty(),
+        "environment_marker": os.environ.get("STORY_PTY_AUTH_ENV_MARKER"),
+    }
+)
+if operation == "probe":
+    raise SystemExit(
+        0
+        if state["antigravity"] == "authenticated"
+        else 1
+        if state["antigravity"] == "unauthenticated"
+        else 7
+    )
+if state.get("antigravity_login") == "authenticate":
+    state["antigravity"] = "authenticated"
+    AUTH_STATE_PATH.write_text(
+        json.dumps(state, separators=(",", ":")),
+        encoding="utf-8",
+    )
+sys.stdout.write("FAKE_AGY_NATIVE_LOGIN\n")
+raise SystemExit(int(state.get("antigravity_login_returncode", 0)))
 '''
 
 
@@ -572,11 +676,36 @@ class InteractiveCliPtyTests(unittest.TestCase):
         self.fake_directory = self.temporary_root / "provider-bin"
         self.fake_directory.mkdir()
         self.fake_executable = self.fake_directory / "codex"
-        self.fake_executable.write_text(_FAKE_CODEX, encoding="utf-8")
+        self.fake_executable.write_text(
+            _FAKE_CODEX.replace(
+                "#!/usr/bin/env python3",
+                f"#!{sys.executable}",
+                1,
+            ),
+            encoding="utf-8",
+        )
         self.fake_executable.chmod(0o755)
+        self.fake_antigravity_executable = self.fake_directory / "agy"
+        self.fake_antigravity_executable.write_text(
+            _FAKE_AGY.replace(
+                "#!/usr/bin/env python3",
+                f"#!{sys.executable}",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        self.fake_antigravity_executable.chmod(0o755)
         self.provider_log = self.temporary_root / "provider.jsonl"
         self.provider_control = self.temporary_root / "provider-control.json"
         self.provider_control.write_text('{"mode":"auto"}', encoding="utf-8")
+        self.auth_log = self.temporary_root / "provider-auth.jsonl"
+        self.auth_state = self.temporary_root / "provider-auth-state.json"
+        self._set_auth_state(
+            codex="authenticated",
+            antigravity="authenticated",
+            codex_login="authenticate",
+            antigravity_login="authenticate",
+        )
         self._processes: list[PtyCliProcess] = []
         self.addCleanup(self._close_processes)
 
@@ -594,17 +723,45 @@ class InteractiveCliPtyTests(unittest.TestCase):
             {
                 "PYTHONPATH": str(_SOURCE_ROOT),
                 "PYTHONDONTWRITEBYTECODE": "1",
-                "PATH": os.pathsep.join(
-                    (str(self.fake_directory), environment.get("PATH", ""))
-                ),
+                "PATH": str(self.fake_directory),
                 "NO_COLOR": "1",
                 "TERM": "dumb",
+                "STORY_REDUCED_MOTION": "1",
                 "STORY_PTY_CODEX_LOG": str(self.provider_log),
                 "STORY_PTY_CODEX_CONTROL": str(self.provider_control),
+                "STORY_PTY_AUTH_LOG": str(self.auth_log),
+                "STORY_PTY_AUTH_STATE": str(self.auth_state),
+                "STORY_PTY_AUTH_ENV_MARKER": "inherited-auth-environment",
                 "CODEX_API_KEY": "PTY_TEST_CREDENTIAL_MUST_NOT_APPEAR",
             }
         )
         return environment
+
+    def _set_auth_state(self, **values: object) -> None:
+        """Replace every fake native-auth result without invoking a provider."""
+
+        current: dict[str, object] = {}
+        if self.auth_state.exists():
+            current = json.loads(self.auth_state.read_text(encoding="utf-8"))
+        current.update(values)
+        self.auth_state.write_text(
+            json.dumps(current, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
+
+    def _auth_records(self) -> list[dict[str, Any]]:
+        """Read the auth-only log without conflating story-provider work."""
+
+        if not self.auth_log.exists():
+            return []
+        assert fcntl is not None, "POSIX PTY tests require fcntl"
+        with self.auth_log.open("r", encoding="utf-8") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
+            return [
+                json.loads(line)
+                for line in handle.read().splitlines()
+                if line
+            ]
 
     def _set_provider_control(self, **values: object) -> None:
         """Replace the fake provider's next-invocation behavior."""
@@ -659,6 +816,40 @@ class InteractiveCliPtyTests(unittest.TestCase):
             if process.process.poll() is not None:
                 raise AssertionError(
                     "CLI exited before fake-provider readiness; "
+                    f"captured={process.normalized_text!r}"
+                )
+
+    def _wait_for_auth_record(
+        self,
+        process: PtyCliProcess,
+        predicate: Callable[[dict[str, Any]], bool],
+        *,
+        after_count: int = 0,
+        timeout: float = _PROCESS_DEADLINE_SECONDS,
+    ) -> dict[str, Any]:
+        """Wait on auth-only readiness while continuously draining the PTY."""
+
+        deadline = time.monotonic() + timeout
+        while True:
+            for record in self._auth_records()[after_count:]:
+                if predicate(record):
+                    return record
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise AssertionError(
+                    "fake auth command did not publish the expected record"
+                )
+            readable, _, _ = select.select(
+                (process.master_fd,),
+                (),
+                (),
+                min(remaining, 0.02),
+            )
+            if readable:
+                process._read_available_terminal_bytes()
+            if process.process.poll() is not None:
+                raise AssertionError(
+                    "CLI exited before fake-auth readiness; "
                     f"captured={process.normalized_text!r}"
                 )
 
@@ -726,6 +917,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
         environment_overrides: Mapping[str, str] | None = None,
         terminal_columns: int = 80,
         decorative_color: bool = False,
+        reduced_motion: bool = True,
     ) -> PtyCliProcess:
         """Spawn the package entry with independently configurable terminal streams."""
 
@@ -737,6 +929,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
             environment_overrides=environment_overrides,
             terminal_columns=terminal_columns,
             decorative_color=decorative_color,
+            reduced_motion=reduced_motion,
         )
 
     def _spawn_python(
@@ -746,6 +939,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
         terminal_columns: int = 80,
         environment_overrides: Mapping[str, str] | None = None,
         decorative_color: bool = False,
+        reduced_motion: bool = True,
     ) -> PtyCliProcess:
         """Spawn one source-backed package integration probe on a real PTY."""
 
@@ -755,6 +949,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
             environment_overrides=environment_overrides,
             terminal_columns=terminal_columns,
             decorative_color=decorative_color,
+            reduced_motion=reduced_motion,
         )
 
     def _spawn_command(
@@ -767,6 +962,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
         environment_overrides: Mapping[str, str] | None = None,
         terminal_columns: int = 80,
         decorative_color: bool = False,
+        reduced_motion: bool = True,
     ) -> PtyCliProcess:
         """Spawn an exact child command with independently configurable streams."""
 
@@ -815,6 +1011,8 @@ class InteractiveCliPtyTests(unittest.TestCase):
             environment.update(environment_overrides)
         if decorative_color:
             environment.pop("NO_COLOR", None)
+        if not reduced_motion:
+            environment.pop("STORY_REDUCED_MOTION", None)
         try:
             process = subprocess.Popen(
                 command,
@@ -1799,13 +1997,13 @@ print(
         for event_name in ("escape", "interrupt", "eof"):
             for attempt in range(3):
                 with self.subTest(event=event_name, attempt=attempt):
-                    before = _durable_tree(self.workspace.root)
                     process = self._spawn_cli(
                         (),
                         environment_overrides={"TERM": "xterm-256color"},
                         terminal_columns=30,
                     )
                     process.wait_for_text("story[lobby]> ")
+                    before = _durable_tree(self.workspace.root)
                     mark = process.output_mark()
                     process.send_text("/settings\n\n")
                     process.wait_for_text(
@@ -1887,6 +2085,284 @@ print(
             process.original_terminal_attributes,
         )
 
+    def test_startup_hard_gate_exits_without_runtime_artifacts_on_interrupt(
+        self,
+    ) -> None:
+        """Keep every runtime artifact behind a fresh native-auth hard gate."""
+
+        self._set_auth_state(
+            codex="unauthenticated",
+            antigravity="indeterminate",
+        )
+        before = _durable_tree(self.workspace.root)
+        process = self._spawn_cli(())
+        process.wait_for_text("Provider authentication")
+
+        self.assertFalse(self.provider_log.exists())
+        self.assertEqual(_durable_tree(self.workspace.root), before)
+        self.assertEqual(
+            [
+                (record["provider"], record["operation"], record["argv"])
+                for record in self._auth_records()
+            ],
+            [
+                ("codex", "probe", ["login", "status"]),
+                ("antigravity", "probe", ["models"]),
+            ],
+        )
+
+        process.send_interrupt()
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(_durable_tree(self.workspace.root), before)
+        self.assertFalse(self.provider_log.exists())
+        self.assertNotIn(
+            "PTY_TEST_CREDENTIAL_MUST_NOT_APPEAR",
+            process.normalized_text,
+        )
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
+    def test_native_codex_login_inherits_tty_root_environment_and_reprobes(
+        self,
+    ) -> None:
+        """Exercise one exact native login from a descendant workspace path."""
+
+        self._set_auth_state(
+            codex="unauthenticated",
+            antigravity="indeterminate",
+        )
+        descendant = self.workspace.root / "nested" / "deeper"
+        descendant.mkdir(parents=True)
+        process = self._spawn_cli((), cwd=descendant)
+        process.wait_for_text("Provider authentication")
+        process.send_line("1")
+        process.wait_for_text("FAKE_CODEX_NATIVE_LOGIN")
+        process.wait_for_text("story[lobby]> ")
+
+        records = self._auth_records()
+        login_index = next(
+            index
+            for index, record in enumerate(records)
+            if record["provider"] == "codex" and record["operation"] == "login"
+        )
+        login = records[login_index]
+        self.assertEqual(login["argv"], ["login"])
+        self.assertEqual(login["cwd"], str(self.workspace.root))
+        self.assertEqual(
+            (
+                login["stdin_tty"],
+                login["stdout_tty"],
+                login["stderr_tty"],
+            ),
+            (True, True, True),
+        )
+        self.assertEqual(
+            login["environment_marker"],
+            "inherited-auth-environment",
+        )
+        self.assertTrue(
+            any(
+                later["provider"] == "codex"
+                and later["operation"] == "probe"
+                for later in records[login_index + 1 :]
+            )
+        )
+        for record in records:
+            if record["operation"] == "probe":
+                self.assertEqual(
+                    (
+                        record["stdin_tty"],
+                        record["stdout_tty"],
+                        record["stderr_tty"],
+                    ),
+                    (False, False, False),
+                )
+                self.assertEqual(record["cwd"], str(self.workspace.root))
+
+        process.send_line("/quit")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(
+            self.workspace.read_json("config/system_defaults.json")[
+                "default_backend"
+            ],
+            "codex",
+        )
+        self.assertFalse(self.provider_log.exists())
+        self.assertNotIn(
+            "PTY_TEST_CREDENTIAL_MUST_NOT_APPEAR",
+            process.normalized_text,
+        )
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
+    def test_mixed_effective_routes_require_bare_antigravity_login(
+        self,
+    ) -> None:
+        """Gate a distinct effective Antigravity route before backend creation."""
+
+        agent_configs = self.workspace.read_json("config/agent_configs.json")
+        agent_configs["plot_architect"]["backend"] = "antigravity"
+        self.workspace.write_json("config/agent_configs.json", agent_configs)
+        self._set_auth_state(
+            codex="authenticated",
+            antigravity="unauthenticated",
+        )
+
+        process = self._spawn_cli(())
+        process.wait_for_text("Provider authentication")
+        self.assertFalse(self.provider_log.exists())
+        process.send_line("2")
+        process.wait_for_text("FAKE_AGY_NATIVE_LOGIN")
+        process.wait_for_text("story[lobby]> ")
+
+        logins = [
+            record
+            for record in self._auth_records()
+            if record["operation"] == "login"
+        ]
+        self.assertEqual(len(logins), 1)
+        self.assertEqual(logins[0]["provider"], "antigravity")
+        self.assertEqual(logins[0]["argv"], [])
+        self.assertEqual(logins[0]["cwd"], str(self.workspace.root))
+        self.assertEqual(
+            (
+                logins[0]["stdin_tty"],
+                logins[0]["stdout_tty"],
+                logins[0]["stderr_tty"],
+            ),
+            (True, True, True),
+        )
+        self.assertEqual(
+            logins[0]["environment_marker"],
+            "inherited-auth-environment",
+        )
+        self.assertFalse(self.provider_log.exists())
+
+        process.send_line("/quit")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(
+            self.workspace.read_json("config/system_defaults.json")[
+                "default_backend"
+            ],
+            "codex",
+        )
+        self.assertEqual(
+            self.workspace.read_json("config/agent_configs.json")[
+                "plot_architect"
+            ]["backend"],
+            "antigravity",
+        )
+        self.assertFalse(self.provider_log.exists())
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
+    def test_auth_command_and_settings_save_use_fresh_native_status(
+        self,
+    ) -> None:
+        """Reprobe `/auth` and Settings Save instead of trusting startup state."""
+
+        process = self._spawn_cli(())
+        process.wait_for_text("story[lobby]> ")
+
+        self._set_auth_state(antigravity="unauthenticated")
+        auth_mark = process.output_mark()
+        process.send_line("/auth")
+        process.wait_for_text("Provider authentication", after=auth_mark)
+        process.send_line("2")
+        process.wait_for_text("FAKE_AGY_NATIVE_LOGIN", after=auth_mark)
+        process.wait_for_text("story[lobby]> ", after=auth_mark)
+
+        settings_mark = process.output_mark()
+        process.send_line("/settings")
+        process.wait_for_text("6. [available] Cancel", after=settings_mark)
+        self._set_auth_state(codex="unauthenticated")
+        process.send_line("5")
+        process.wait_for_text("Save settings?", after=settings_mark)
+        process.send_line("1")
+        process.wait_for_text("Provider authentication", after=settings_mark)
+        process.send_line("1")
+        process.wait_for_text("FAKE_CODEX_NATIVE_LOGIN", after=settings_mark)
+        process.wait_for_text("Settings saved", after=settings_mark)
+        process.wait_for_text("story[lobby]> ", after=settings_mark)
+
+        logins = [
+            record
+            for record in self._auth_records()
+            if record["operation"] == "login"
+        ]
+        self.assertEqual(
+            [
+                (record["provider"], record["argv"])
+                for record in logins
+            ],
+            [
+                ("antigravity", []),
+                ("codex", ["login"]),
+            ],
+        )
+        self.assertTrue(
+            all(record["cwd"] == str(self.workspace.root) for record in logins)
+        )
+        self.assertFalse(self.provider_log.exists())
+
+        process.send_line("/quit")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(
+            self.workspace.read_json("config/system_defaults.json")[
+                "default_backend"
+            ],
+            "codex",
+        )
+        self.assertNotIn(
+            "PTY_TEST_CREDENTIAL_MUST_NOT_APPEAR",
+            process.normalized_text,
+        )
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
+    def test_capable_startup_animates_four_frames_without_alternate_screen(
+        self,
+    ) -> None:
+        """Render the bounded capable welcome and restore the inherited PTY."""
+
+        process = self._spawn_cli(
+            (),
+            environment_overrides={"TERM": "xterm-256color"},
+            decorative_color=True,
+            reduced_motion=False,
+        )
+        process.wait_for_text("story[lobby]> ")
+        capture = process.normalized_text
+        self.assertIn("Story.", capture)
+        self.assertIn("Story Writing", capture)
+        self.assertIn("Story Writing Agents", capture)
+        self.assertIn(
+            "Provider access will be checked before the story session starts.",
+            capture,
+        )
+        self.assertIn(b"\x1b[", process.raw_bytes)
+        self.assertNotIn(b"\x1b[?1049", process.raw_bytes)
+        self.assertFalse(self.provider_log.exists())
+
+        process.send_text("/quit\n\n")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertNotIn(
+            "PTY_TEST_CREDENTIAL_MUST_NOT_APPEAR",
+            process.normalized_text,
+        )
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
     def test_bare_entry_creates_session_then_quit_releases_only_access(
         self,
     ) -> None:
@@ -1922,13 +2398,13 @@ print(
     def test_capable_main_editor_previews_edits_clears_and_restores(self) -> None:
         """Exercise live suggestions and exact PTY cleanup without side effects."""
 
-        before = _durable_tree(self.workspace.root)
         process = self._spawn_cli(
             (),
             environment_overrides={"TERM": "xterm-256color"},
             terminal_columns=20,
         )
         process.wait_for_text("story[lobby]> ")
+        before = _durable_tree(self.workspace.root)
         assert termios is not None
         active_attributes = termios.tcgetattr(process.master_fd)
         self.assertFalse(active_attributes[3] & termios.ICANON)
@@ -2926,13 +3402,13 @@ print("RESULT=" + json.dumps({
     ) -> None:
         """Exercise real CLI history without persistence or cleanup drift."""
 
-        before = _durable_tree(self.workspace.root)
         process = self._spawn_cli(
             (),
             environment_overrides={"TERM": "xterm-256color"},
             terminal_columns=80,
         )
         process.wait_for_text("story[lobby]> ")
+        before = _durable_tree(self.workspace.root)
 
         status_mark = process.output_mark()
         process.send_text("/status\n\n")
@@ -3010,7 +3486,6 @@ print("RESULT=" + json.dumps({
     def test_main_completion_navigates_tabs_closes_palette_and_commits(self) -> None:
         """Exercise selectable ANSI completion through the real public CLI."""
 
-        before = _durable_tree(self.workspace.root)
         process = self._spawn_cli(
             (),
             environment_overrides={"TERM": "xterm-256color"},
@@ -3018,6 +3493,7 @@ print("RESULT=" + json.dumps({
             terminal_columns=40,
         )
         process.wait_for_text("story[lobby]> ")
+        before = _durable_tree(self.workspace.root)
 
         mark = process.output_mark()
         process.send_text("/")
@@ -3048,13 +3524,13 @@ print("RESULT=" + json.dumps({
     def test_main_completion_no_color_narrow_empty_and_interrupt_cleanup(self) -> None:
         """Keep narrow palettes legible without decorative SGR on a real PTY."""
 
-        before = _durable_tree(self.workspace.root)
         process = self._spawn_cli(
             (),
             environment_overrides={"TERM": "xterm-256color", "NO_COLOR": "1"},
             terminal_columns=18,
         )
         process.wait_for_text("story[lobby]> ")
+        before = _durable_tree(self.workspace.root)
         mark = process.output_mark()
         process.send_text("/s")
         process.wait_for_text("Suggestions [open", after=mark)
@@ -4048,11 +4524,11 @@ print(
         """Deliver configured VEOF at main input and prove detach-only cleanup."""
 
         selected = self._seed_default_session()
-        before = _durable_tree_without_access(self.workspace.root)
         process = self._spawn_cli(
             ("chat", "alpha", "--workspace", str(self.workspace.root))
         )
         process.wait_for_text("story[alpha:lead]> ")
+        before = _durable_tree_without_access(self.workspace.root)
         process.send_eof()
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
         self.assertEqual(_durable_tree_without_access(self.workspace.root), before)
@@ -4473,11 +4949,11 @@ asyncio.run(main())
                     content=f"answer {ordinal} " + ("a" * 4096),
                 )
             )
-        before = _durable_tree_without_access(self.workspace.root)
         process = self._spawn_cli(
             ("chat", "alpha", "--workspace", str(self.workspace.root))
         )
         process.wait_for_text("story[alpha:lead]> ")
+        before = _durable_tree_without_access(self.workspace.root)
         mark = process.output_mark()
         process.send_line("/history 24")
         process.wait_for_text("History (1/24) [completed]", after=mark)
@@ -4541,9 +5017,8 @@ asyncio.run(main())
             ("chat", "alpha", "--workspace", str(self.workspace.root)),
             environment_overrides={"PATH": str(empty_path)},
         )
-        process.wait_for_text("[error provider_preflight_failed]")
-        process.wait_for_text("story[lobby]> ")
-        process.send_text("/quit\n\n")
+        process.wait_for_text("Provider authentication")
+        process.send_interrupt()
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
         self.assertEqual(_durable_tree(self.workspace.root), before)
         self.assertFalse(self.provider_log.exists())

@@ -8,6 +8,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 > focused-conversation consensus. It also provides global help and lifecycle
 > status, attached directives and safe inspection, focused history, and
 > controller-boundary cancellation for active operations and local reads.
+> A native authentication gate precedes interactive runtime construction.
 > Inline `${path}` and `${path}#Lx-Ly` references are active in provider-bound
 > prompts. In those shell spans, `$` discovers current safe canonical files, `$${path}`
 > opens one in the independent ranged viewer, and `$$` opens a picker before
@@ -19,6 +20,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 | --- | --- |
 | Initialize a workspace; run or inspect a debate | Installed CLI and Python API |
 | Configure Codex or Antigravity per agent | Persistent JSON or shell `/settings`; one-process CLI overrides for `story chat` and `story run` |
+| Check or complete native provider authentication | Interactive startup gate or global shell `/auth`; [exact commands and routing invariant](reference/cli.md#interactive-provider-authentication) |
 | Create, reopen, or pause a provider session | Installed CLI and Python API |
 | Open the TTY shell; list, create, resume, switch, or pause sessions | Bare `story` or `story chat` |
 | Show registry help or shell status | Global in the installed shell |
@@ -85,6 +87,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 
 - [Overview](design/overview.md)
 - [Interactive CLI design system contract](design/interactive-cli-design-system.md)
+- [Canonical Python module inventory (56 production units)](../PYTHON_MODULE_INDEX.md)
 - [Prompts and provider boundary](design/prompts-and-provider.md)
 - [Session lifecycle](design/session-lifecycle.md)
 - [Consensus workflow](design/consensus-workflow.md)
@@ -96,3 +99,4 @@ Use this index to find one canonical answer instead of searching a long manual.
 - [Privacy, provider exposure, and runtime debug logs](operations/privacy-and-provider.md)
 - [Terminal display safety](operations/terminal-safety.md)
 - [Recovery and limitations](operations/recovery-and-limitations.md)
+- [Provider authentication recovery](operations/recovery-and-limitations.md#authentication-recovery)

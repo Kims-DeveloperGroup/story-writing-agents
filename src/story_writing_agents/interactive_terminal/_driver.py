@@ -66,12 +66,17 @@ _CARRIAGE_RETURN = "\r"
 _CLEAR_TO_END = "\x1b[J"
 _CURSOR_UP = "\x1b[A"
 _CURSOR_RIGHT = "\x1b[C"
+_SGR_RESET = "\x1b[0m"
 _DEFAULT_TERMINAL_WIDTH = 80
 _MAX_ESCAPE_SEQUENCE_LENGTH = 64
 _ESCAPE_LOOKAHEAD_SECONDS = 0.05
 _DEFAULT_TERMIOS = object()
 _PROGRESS_FRAME_COUNT = 4
 _PROGRESS_INTERVAL_SECONDS = 0.08
+_STARTUP_WELCOME_FRAME_COUNT = 4
+_STARTUP_WELCOME_INTERVAL_SECONDS = 0.4
+_STARTUP_NOTICE_DURATION_SECONDS = 0.8
+_REDUCED_MOTION_ENVIRONMENT_KEY = "STORY_REDUCED_MOTION"
 _DEFAULT_VIEWER_HEIGHT = 24
 _MAX_VIEWER_HEIGHT = 200
 _VIEWER_SCREEN_ENTER = "\x1b[?1049h\x1b[2J\x1b[H"
@@ -102,6 +107,14 @@ class _LiveEditorState:
     rendered_cursor_row: int = 0
 
 
+@dataclass(slots=True)
+class _StartupFrameState:
+    """Track one displayed or attempted startup frame for exact cleanup."""
+
+    physical_line_count: int = 0
+    cursor_below_frame: bool = False
+
+
 @dataclass(frozen=True, slots=True)
 class _TerminalConfiguration:
     """Capture one validated POSIX terminal mode and its exact restoration."""
@@ -128,10 +141,7 @@ _ControlTransition: TypeAlias = Callable[
     [_ControlState, KeyEvent],
     tuple[
         _ControlState,
-        ControlOutcome
-        | ReferenceActivationRequest
-        | ReferenceInputFailure
-        | None,
+        ControlOutcome | ReferenceActivationRequest | ReferenceInputFailure | None,
     ],
 ]
 _LineTransition: TypeAlias = Callable[
@@ -171,9 +181,7 @@ _PickerFallbackTransition: TypeAlias = Callable[
     [PickerControlState, str],
     tuple[PickerControlState, ControlOutcome],
 ]
-_PickerViewportProjector: TypeAlias = Callable[
-    [PickerControlState], PickerViewport
-]
+_PickerViewportProjector: TypeAlias = Callable[[PickerControlState], PickerViewport]
 _PickerViewportRenderer: TypeAlias = Callable[
     [PickerViewport, TerminalCapabilities], RenderedFrame
 ]
@@ -322,9 +330,7 @@ class RawTerminalDriver:
             raise TypeError("prompt must be a string")
         with self._input_latch.input_operation():
             observed_capabilities = self._observe_input_capabilities()
-            capabilities, configuration = self._prepare_input(
-                observed_capabilities
-            )
+            capabilities, configuration = self._prepare_input(observed_capabilities)
             if configuration is None:
                 return self._read_fallback_line(prompt, capabilities)
             return self._read_control_line(
@@ -370,9 +376,7 @@ class RawTerminalDriver:
         """Draw the current fixed indicator frame at the cursor cell."""
 
         frame_renderer = (
-            self._progress_renderer
-            if frame_renderer is None
-            else frame_renderer
+            self._progress_renderer if frame_renderer is None else frame_renderer
         )
         if not callable(frame_renderer):
             raise TypeError("frame_renderer must be callable")
@@ -416,9 +420,7 @@ class RawTerminalDriver:
             ) from exc
 
         operation_task = asyncio.ensure_future(operation)
-        progress_task = asyncio.create_task(
-            self._run_progress_frames(frame_renderer)
-        )
+        progress_task = asyncio.create_task(self._run_progress_frames(frame_renderer))
         operation_failure: BaseException | None = None
         progress_failure: BaseException | None = None
         result: _T | None = None
@@ -516,9 +518,7 @@ class RawTerminalDriver:
 
         while True:
             await asyncio.sleep(_PROGRESS_INTERVAL_SECONDS)
-            self._progress_frame = (
-                self._progress_frame + 1
-            ) % _PROGRESS_FRAME_COUNT
+            self._progress_frame = (self._progress_frame + 1) % _PROGRESS_FRAME_COUNT
             self._draw_progress_frame(frame_renderer)
 
     def capabilities(self) -> TerminalCapabilities:
@@ -539,6 +539,382 @@ class RawTerminalDriver:
             os_module=os_module,
         )
 
+    def run_startup_welcome(
+        self,
+        frame_renderer: Callable[[int, TerminalCapabilities], RenderedFrame],
+        sleeper: Callable[[float], object],
+    ) -> None:
+        """Render one bounded startup sequence without selecting input mode."""
+
+        if not callable(frame_renderer):
+            raise TypeError("frame_renderer must be callable")
+        if not callable(sleeper):
+            raise TypeError("sleeper must be callable")
+        with self._input_latch.input_operation():
+            base_capabilities = self._observe_input_capabilities()
+            configuration = (
+                self._startup_terminal_configuration(base_capabilities)
+                if self._startup_animation_is_safe(base_capabilities)
+                else None
+            )
+            if configuration is None or not self._run_guarded_startup_presentation(
+                configuration,
+                lambda: self._run_startup_welcome_frames(
+                    frame_renderer,
+                    sleeper,
+                    base_capabilities,
+                ),
+            ):
+                static_capabilities = _static_startup_capabilities(base_capabilities)
+                final_frame = _startup_frame(
+                    frame_renderer,
+                    _STARTUP_WELCOME_FRAME_COUNT - 1,
+                    static_capabilities,
+                )
+                self._write_raw_text(f"{final_frame.text}\n")
+        return
+
+    def _run_startup_welcome_frames(
+        self,
+        frame_renderer: Callable[[int, TerminalCapabilities], RenderedFrame],
+        sleeper: Callable[[float], object],
+        base_capabilities: TerminalCapabilities,
+    ) -> None:
+        """Render and clean only the guarded capable welcome frames."""
+
+        live_state = _StartupFrameState()
+        active_failure: BaseException | None = None
+        try:
+            for index in range(_STARTUP_WELCOME_FRAME_COUNT):
+                render_capabilities = self._startup_render_capabilities(
+                    base_capabilities
+                )
+                frame = _startup_frame(
+                    frame_renderer,
+                    index,
+                    render_capabilities,
+                )
+                self._replace_startup_frame(frame, live_state)
+                if index < _STARTUP_WELCOME_FRAME_COUNT - 1:
+                    sleeper(_STARTUP_WELCOME_INTERVAL_SECONDS)
+            self._finish_startup_frame(live_state)
+            live_state = _StartupFrameState()
+        except BaseException as failure:
+            active_failure = failure
+        if live_state.physical_line_count:
+            try:
+                self._clear_startup_state(live_state)
+            except BaseException as cleanup_failure:
+                if active_failure is None:
+                    active_failure = cleanup_failure
+        if active_failure is not None:
+            raise active_failure
+
+    def run_startup_notice(
+        self,
+        frame_renderer: Callable[[TerminalCapabilities], RenderedFrame],
+        sleeper: Callable[[float], object],
+    ) -> None:
+        """Show then clear one auth notice only when transient display is safe."""
+
+        self._run_startup_notice(
+            frame_renderer,
+            sleeper,
+            result_boundary=False,
+        )
+
+    def _run_startup_notice(
+        self,
+        frame_renderer: Callable[[TerminalCapabilities], RenderedFrame],
+        sleeper: Callable[[float], object],
+        *,
+        result_boundary: bool,
+    ) -> None:
+        """Choose one guarded or static purpose-bound notice lifecycle."""
+
+        if not callable(frame_renderer):
+            raise TypeError("frame_renderer must be callable")
+        if not callable(sleeper):
+            raise TypeError("sleeper must be callable")
+        if type(result_boundary) is not bool:
+            raise TypeError("result_boundary must be a bool")
+        with self._input_latch.input_operation():
+            base_capabilities = self._observe_input_capabilities()
+            configuration = (
+                self._startup_terminal_configuration(base_capabilities)
+                if self._startup_animation_is_safe(base_capabilities)
+                else None
+            )
+            if configuration is None or not self._run_guarded_startup_presentation(
+                configuration,
+                lambda: self._run_startup_notice_frame(
+                    frame_renderer,
+                    sleeper,
+                    base_capabilities,
+                    result_boundary=result_boundary,
+                ),
+            ):
+                static_capabilities = _static_startup_capabilities(base_capabilities)
+                frame = frame_renderer(static_capabilities)
+                _require_startup_frame(frame, static_capabilities)
+                if result_boundary:
+                    self._write_raw_text("\n")
+                self._write_raw_text(f"{frame.text}\n")
+
+    def _run_startup_notice_frame(
+        self,
+        frame_renderer: Callable[[TerminalCapabilities], RenderedFrame],
+        sleeper: Callable[[float], object],
+        base_capabilities: TerminalCapabilities,
+        *,
+        result_boundary: bool,
+    ) -> None:
+        """Render and clean only one guarded capable startup notice."""
+
+        if result_boundary:
+            self._write_raw_text(f"{_CARRIAGE_RETURN}\n")
+        render_capabilities = self._startup_render_capabilities(base_capabilities)
+        frame = frame_renderer(render_capabilities)
+        _require_startup_frame(frame, render_capabilities)
+
+        live_state = _StartupFrameState()
+        active_failure: BaseException | None = None
+        try:
+            self._replace_startup_frame(frame, live_state)
+            sleeper(_STARTUP_NOTICE_DURATION_SECONDS)
+        except BaseException as failure:
+            active_failure = failure
+        if live_state.physical_line_count:
+            try:
+                self._clear_startup_state(live_state)
+            except BaseException as cleanup_failure:
+                if active_failure is None:
+                    active_failure = cleanup_failure
+        if active_failure is not None:
+            raise active_failure
+
+    def _startup_terminal_configuration(
+        self,
+        capabilities: TerminalCapabilities,
+    ) -> _TerminalConfiguration | None:
+        """Preflight one guard without selecting the permanent input mode."""
+
+        mode = self._input_latch.mode
+        if mode is TerminalInputMode.FALLBACK:
+            return None
+        try:
+            termios_module = self._termios_provider()
+            if not _startup_input_discard_is_supported(termios_module):
+                raise ValueError("startup input discard is unavailable")
+            decoder_spec = inspect_live_decoder_spec(self._input_stream)
+            if decoder_spec is None:
+                raise ValueError("startup input requires a byte reader")
+            configuration = _terminal_configuration(
+                self._input_stream,
+                self._output_stream,
+                termios_module=termios_module,
+                os_module=self._os_provider(),
+                width=capabilities.width,
+                decoder_spec=decoder_spec,
+            )
+            if configuration is None:
+                raise ValueError("startup terminal configuration is unavailable")
+            if configuration.width != capabilities.width:
+                raise ValueError("startup terminal geometry changed during preflight")
+            if mode is TerminalInputMode.LIVE:
+                baseline_capabilities = self._live_capabilities
+                if baseline_capabilities is None or not _same_live_capabilities(
+                    baseline_capabilities,
+                    capabilities,
+                ):
+                    raise RuntimeError("live terminal capability changed")
+                self._input_latch.require_live(decoder_spec)
+                baseline_configuration = self._live_configuration
+                if baseline_configuration is None or not _same_terminal_configuration(
+                    baseline_configuration,
+                    configuration,
+                ):
+                    raise RuntimeError("live terminal configuration changed")
+            return configuration
+        except Exception as failure:
+            if mode is TerminalInputMode.LIVE:
+                raise RuntimeError(
+                    "live terminal startup presentation preflight failed"
+                ) from failure
+            return None
+
+    def _run_guarded_startup_presentation(
+        self,
+        configuration: _TerminalConfiguration,
+        operation: Callable[[], None],
+    ) -> bool:
+        """Run one bounded presentation with no echo or retained type-ahead."""
+
+        try:
+            _activate_terminal(configuration)
+        except BaseException as setup_failure:
+            _restore_terminal_or_raise(configuration, setup_failure)
+            if (
+                isinstance(setup_failure, Exception)
+                and self._input_latch.mode is not TerminalInputMode.LIVE
+            ):
+                return False
+            raise
+
+        active_failure: BaseException | None = None
+        try:
+            operation()
+        except BaseException as failure:
+            active_failure = failure
+        _restore_terminal_or_raise(
+            configuration,
+            active_failure,
+            discard_input=True,
+        )
+        if active_failure is not None:
+            raise active_failure
+        return True
+
+    def run_startup_result_notice(
+        self,
+        frame_renderer: Callable[[TerminalCapabilities], RenderedFrame],
+        sleeper: Callable[[float], object],
+    ) -> None:
+        """Establish a fresh provider-output boundary before one result."""
+
+        if not callable(frame_renderer):
+            raise TypeError("frame_renderer must be callable")
+        if not callable(sleeper):
+            raise TypeError("sleeper must be callable")
+        self._run_startup_notice(
+            frame_renderer,
+            sleeper,
+            result_boundary=True,
+        )
+
+    def _startup_animation_is_safe(
+        self,
+        capabilities: TerminalCapabilities,
+    ) -> bool:
+        """Require known ANSI cursor support and no reduced-motion request."""
+
+        if (
+            capabilities.profile is not CapabilityProfile.ANSI
+            or not capabilities.raw_mode
+            or not capabilities.cursor_controls
+            or not capabilities.decorative_sgr
+        ):
+            return False
+        try:
+            os_module = self._os_provider()
+            environment = getattr(os_module, "environ", {})
+            return _REDUCED_MOTION_ENVIRONMENT_KEY not in environment
+        except Exception:
+            return False
+
+    def _replace_startup_frame(
+        self,
+        frame: RenderedFrame,
+        state: _StartupFrameState,
+    ) -> None:
+        """Replace one purpose-bound startup frame without claiming the screen."""
+
+        if type(state) is not _StartupFrameState:
+            raise TypeError("state must be a _StartupFrameState")
+        if state.physical_line_count:
+            self._clear_startup_state(state)
+        self._write_startup_frame(frame, state)
+
+    def _write_startup_frame(
+        self,
+        frame: RenderedFrame,
+        state: _StartupFrameState,
+    ) -> None:
+        """Write one frame and retain only collaborator-confirmed progress."""
+
+        if type(state) is not _StartupFrameState:
+            raise TypeError("state must be a _StartupFrameState")
+        # A raised write exposes no trustworthy progress. Leave cleanup
+        # unarmed so an unknown partial write cannot erase preceding output.
+        written = self._output_stream.write(frame.text)
+        if written is None:
+            state.physical_line_count = frame.line_count
+        elif type(written) is int and 0 <= written <= len(frame.text):
+            if written:
+                state.physical_line_count = frame.text[:written].count("\n") + 1
+            if written != len(frame.text):
+                raise OSError("interactive terminal write was incomplete")
+        else:
+            raise OSError("interactive terminal write was incomplete")
+        self._output_stream.flush()
+
+    def _finish_startup_frame(self, state: _StartupFrameState) -> None:
+        """Advance below the final welcome with confirmed cursor progress."""
+
+        if type(state) is not _StartupFrameState:
+            raise TypeError("state must be a _StartupFrameState")
+        try:
+            written = self._output_stream.write("\n")
+        except BaseException:
+            state.physical_line_count = 0
+            state.cursor_below_frame = False
+            raise
+        if written is None or type(written) is int and written == 1:
+            state.cursor_below_frame = True
+        else:
+            raise OSError("interactive terminal write was incomplete")
+        self._output_stream.flush()
+
+    def _startup_render_capabilities(
+        self,
+        base_capabilities: TerminalCapabilities,
+    ) -> TerminalCapabilities:
+        """Reobserve width and reserve one column from live startup output."""
+
+        observed_width = self.capabilities().width
+        return _capabilities_with_width(
+            base_capabilities,
+            max(1, observed_width - 1),
+        )
+
+    def _clear_startup_state(self, state: _StartupFrameState) -> None:
+        """Clear an attempted frame using its stored write-time geometry."""
+
+        if type(state) is not _StartupFrameState:
+            raise TypeError("state must be a _StartupFrameState")
+        if not state.physical_line_count:
+            return
+        self._clear_startup_frame(
+            state.physical_line_count,
+            cursor_below_frame=state.cursor_below_frame,
+        )
+        state.physical_line_count = 0
+        state.cursor_below_frame = False
+
+    def _clear_startup_frame(
+        self,
+        line_count: int,
+        *,
+        cursor_below_frame: bool = False,
+    ) -> None:
+        """Clear one complete call-local startup frame without leaving a row."""
+
+        if type(line_count) is not int or line_count <= 0:
+            raise ValueError("line_count must be positive")
+        if type(cursor_below_frame) is not bool:
+            raise TypeError("cursor_below_frame must be a bool")
+        self._write_raw_text(
+            "".join(
+                (
+                    _SGR_RESET,
+                    _CARRIAGE_RETURN,
+                    _CURSOR_UP * (line_count if cursor_below_frame else line_count - 1),
+                    _CARRIAGE_RETURN,
+                    _CLEAR_TO_END,
+                )
+            )
+        )
+
     def _observe_input_capabilities(self) -> TerminalCapabilities:
         """Observe capabilities without selecting or consuming an input source."""
 
@@ -554,9 +930,7 @@ class RawTerminalDriver:
         """Preflight or revalidate without consuming input or mutating output."""
 
         if type(observed_capabilities) is not TerminalCapabilities:
-            raise TypeError(
-                "observed_capabilities must be a TerminalCapabilities"
-            )
+            raise TypeError("observed_capabilities must be a TerminalCapabilities")
         mode = self._input_latch.mode
         if mode is TerminalInputMode.FALLBACK:
             assert self._fallback_capabilities is not None
@@ -625,9 +999,7 @@ class RawTerminalDriver:
     def read_live_line(
         self,
         prompt: str,
-        suggestion_provider: Callable[
-            [str], tuple[SlashCommandSuggestion, ...]
-        ],
+        suggestion_provider: Callable[[str], tuple[SlashCommandSuggestion, ...]],
     ) -> str:
         """Read one history-free Unicode buffer with a preview provider."""
 
@@ -637,9 +1009,7 @@ class RawTerminalDriver:
             raise TypeError("suggestion_provider must be callable")
         with self._input_latch.input_operation():
             observed_capabilities = self._observe_input_capabilities()
-            capabilities, configuration = self._prepare_input(
-                observed_capabilities
-            )
+            capabilities, configuration = self._prepare_input(observed_capabilities)
             if configuration is None:
                 return self._read_fallback_line(prompt, capabilities)
             return self._read_control_line(
@@ -654,9 +1024,7 @@ class RawTerminalDriver:
         self,
         view: InputPromptView,
         renderer: _InputRenderer,
-        suggestion_provider: Callable[
-            [str], tuple[SlashCommandSuggestion, ...]
-        ],
+        suggestion_provider: Callable[[str], tuple[SlashCommandSuggestion, ...]],
         *,
         transient: bool = False,
     ) -> str:
@@ -677,12 +1045,8 @@ class RawTerminalDriver:
             if type(rendered_input) is not RenderedInputFrame:
                 raise TypeError("renderer must return a RenderedInputFrame")
             if rendered_input.width != observed_capabilities.width:
-                raise ValueError(
-                    "rendered input width must match current capabilities"
-                )
-            capabilities, configuration = self._prepare_input(
-                observed_capabilities
-            )
+                raise ValueError("rendered input width must match current capabilities")
+            capabilities, configuration = self._prepare_input(observed_capabilities)
             if configuration is None:
                 return self._read_fallback_line(
                     rendered_input.plain_text,
@@ -723,12 +1087,8 @@ class RawTerminalDriver:
             if type(rendered_input) is not RenderedInputFrame:
                 raise TypeError("renderer must return a RenderedInputFrame")
             if rendered_input.width != observed_capabilities.width:
-                raise ValueError(
-                    "rendered input width must match current capabilities"
-                )
-            capabilities, configuration = self._prepare_input(
-                observed_capabilities
-            )
+                raise ValueError("rendered input width must match current capabilities")
+            capabilities, configuration = self._prepare_input(observed_capabilities)
             try:
                 line = (
                     self._read_control_line(
@@ -764,9 +1124,7 @@ class RawTerminalDriver:
     def read_main_line(
         self,
         prompt: str,
-        suggestion_provider: Callable[
-            [str], tuple[SlashCommandSuggestion, ...]
-        ],
+        suggestion_provider: Callable[[str], tuple[SlashCommandSuggestion, ...]],
     ) -> str:
         """Read one main line and retain its successful exact nonblank commit.
 
@@ -787,9 +1145,7 @@ class RawTerminalDriver:
             event: KeyEvent,
         ) -> tuple[_ControlState, ControlOutcome | None]:
             if type(state) is not MainCommandControlState:
-                raise TypeError(
-                    "main transition requires MainCommandControlState"
-                )
+                raise TypeError("main transition requires MainCommandControlState")
             return self._main_transition(
                 state,
                 event,
@@ -799,9 +1155,7 @@ class RawTerminalDriver:
 
         with self._input_latch.input_operation():
             observed_capabilities = self._observe_input_capabilities()
-            capabilities, configuration = self._prepare_input(
-                observed_capabilities
-            )
+            capabilities, configuration = self._prepare_input(observed_capabilities)
             line = (
                 self._read_control_line(
                     prompt,
@@ -873,9 +1227,10 @@ class RawTerminalDriver:
         ):
             if not callable(collaborator):
                 raise TypeError(f"{name} must be callable")
-        if reference_bindings is not None and type(
-            reference_bindings
-        ) is not ReferenceInputBindings:
+        if (
+            reference_bindings is not None
+            and type(reference_bindings) is not ReferenceInputBindings
+        ):
             raise TypeError(
                 "reference_bindings must be a ReferenceInputBindings or None"
             )
@@ -885,19 +1240,16 @@ class RawTerminalDriver:
             event: KeyEvent,
         ) -> tuple[
             _ControlState,
-            ControlOutcome
-            | ReferenceActivationRequest
-            | ReferenceInputFailure
-            | None,
+            ControlOutcome | ReferenceActivationRequest | ReferenceInputFailure | None,
         ]:
             if type(state) is not MainCommandControlState:
                 raise TypeError(
                     "main command transition requires MainCommandControlState"
                 )
-            if (
-                reference_bindings is not None
-                and event.kind in {KeyKind.ENTER, KeyKind.TAB}
-            ):
+            if reference_bindings is not None and event.kind in {
+                KeyKind.ENTER,
+                KeyKind.TAB,
+            }:
                 line = state.main_input.line_state
                 projection = reference_bindings.projection_provider(
                     line.buffer,
@@ -917,9 +1269,7 @@ class RawTerminalDriver:
 
         with self._input_latch.input_operation():
             observed_capabilities = self._observe_input_capabilities()
-            capabilities, configuration = self._prepare_input(
-                observed_capabilities
-            )
+            capabilities, configuration = self._prepare_input(observed_capabilities)
             line = (
                 self._read_control_line(
                     prompt,
@@ -951,9 +1301,7 @@ class RawTerminalDriver:
         self,
         view: InputPromptView,
         renderer: _InputRenderer,
-        suggestion_provider: Callable[
-            [str], tuple[SlashCommandSuggestion, ...]
-        ],
+        suggestion_provider: Callable[[str], tuple[SlashCommandSuggestion, ...]],
         completion_provider: _CompletionProvider,
         palette_projector: _PaletteProjector,
         palette_renderer: _PaletteRenderer,
@@ -981,10 +1329,7 @@ class RawTerminalDriver:
             event: KeyEvent,
         ) -> tuple[
             _ControlState,
-            ControlOutcome
-            | ReferenceActivationRequest
-            | ReferenceInputFailure
-            | None,
+            ControlOutcome | ReferenceActivationRequest | ReferenceInputFailure | None,
         ]:
             if type(state) is not MainCommandControlState:
                 raise TypeError(
@@ -1014,12 +1359,8 @@ class RawTerminalDriver:
             if type(rendered_input) is not RenderedInputFrame:
                 raise TypeError("renderer must return a RenderedInputFrame")
             if rendered_input.width != observed_capabilities.width:
-                raise ValueError(
-                    "rendered input width must match current capabilities"
-                )
-            capabilities, configuration = self._prepare_input(
-                observed_capabilities
-            )
+                raise ValueError("rendered input width must match current capabilities")
+            capabilities, configuration = self._prepare_input(observed_capabilities)
             if configuration is None:
                 return self._read_reference_fallback(
                     rendered_input.plain_text,
@@ -1240,9 +1581,7 @@ class RawTerminalDriver:
 
         with self._input_latch.input_operation():
             observed_capabilities = self._observe_input_capabilities()
-            capabilities, configuration = self._prepare_input(
-                observed_capabilities
-            )
+            capabilities, configuration = self._prepare_input(observed_capabilities)
             if configuration is None:
                 return self._read_picker_fallback(
                     state,
@@ -1293,10 +1632,14 @@ class RawTerminalDriver:
                 viewport_projector,
                 viewport_renderer,
             )
-            if outcome.kind in {
-                ControlOutcomeKind.COMMIT,
-                ControlOutcomeKind.CANCEL,
-            } and not transient:
+            if (
+                outcome.kind
+                in {
+                    ControlOutcomeKind.COMMIT,
+                    ControlOutcomeKind.CANCEL,
+                }
+                and not transient
+            ):
                 display_state.rendered_cursor_row = self._redraw_live_picker(
                     state,
                     display_state,
@@ -1348,9 +1691,7 @@ class RawTerminalDriver:
 
         with self._input_latch.input_operation():
             observed_capabilities = self._observe_input_capabilities()
-            capabilities, configuration = self._prepare_input(
-                observed_capabilities
-            )
+            capabilities, configuration = self._prepare_input(observed_capabilities)
             if configuration is None:
                 return self._read_text_viewer_fallback(
                     state,
@@ -1416,9 +1757,7 @@ class RawTerminalDriver:
             # alternate-screen cleanup, and the enclosing restoration.
             lifecycle_failure = failure
         finally:
-            restoration_context = (
-                screen_failure or lifecycle_failure or active_failure
-            )
+            restoration_context = screen_failure or lifecycle_failure or active_failure
             _restore_terminal_or_raise(configuration, restoration_context)
         if screen_failure is not None:
             raise screen_failure
@@ -1494,9 +1833,7 @@ class RawTerminalDriver:
         while True:
             frame = renderer(state, capabilities)
             if type(frame) is not RenderedInputFrame:
-                raise TypeError(
-                    "fallback_renderer must return a RenderedInputFrame"
-                )
+                raise TypeError("fallback_renderer must return a RenderedInputFrame")
             if frame.width != capabilities.width:
                 raise ValueError(
                     "rendered picker fallback width must match capabilities"
@@ -1514,25 +1851,23 @@ class RawTerminalDriver:
                 raise TypeError("read_line must return a string")
             answer = str.__str__(answer)
             if "\r" in answer or "\n" in answer:
-                raise ValueError(
-                    "read_line must return one line without CR or LF"
-                )
+                raise ValueError("read_line must return one line without CR or LF")
             updated, outcome = transition(state, answer)
             if type(updated) is not PickerControlState:
-                raise TypeError(
-                    "fallback_transition must return a PickerControlState"
-                )
+                raise TypeError("fallback_transition must return a PickerControlState")
             if type(outcome) is not ControlOutcome:
-                raise TypeError(
-                    "fallback_transition must return a ControlOutcome"
-                )
+                raise TypeError("fallback_transition must return a ControlOutcome")
             state = updated
             if outcome.kind is ControlOutcomeKind.REJECTED:
                 continue
-            if outcome.kind in {
-                ControlOutcomeKind.COMMIT,
-                ControlOutcomeKind.CANCEL,
-            } and not transient:
+            if (
+                outcome.kind
+                in {
+                    ControlOutcomeKind.COMMIT,
+                    ControlOutcomeKind.CANCEL,
+                }
+                and not transient
+            ):
                 final_frame = renderer(state, capabilities)
                 if type(final_frame) is not RenderedInputFrame:
                     raise TypeError(
@@ -1562,17 +1897,13 @@ class RawTerminalDriver:
                 history_line,
             )
             if type(updated_history) is not MainInputHistoryState:
-                raise TypeError(
-                    "history_append must return a MainInputHistoryState"
-                )
+                raise TypeError("history_append must return a MainInputHistoryState")
             self._history_state = updated_history
 
     def _read_control_line(
         self,
         prompt: str,
-        suggestion_provider: Callable[
-            [str], tuple[SlashCommandSuggestion, ...]
-        ],
+        suggestion_provider: Callable[[str], tuple[SlashCommandSuggestion, ...]],
         initial_state: _ControlState,
         transition: _ControlTransition,
         *,
@@ -1613,17 +1944,13 @@ class RawTerminalDriver:
             and type(rendered_input) is not RenderedInputFrame
         ):
             raise TypeError("rendered_input must be a RenderedInputFrame or None")
-        if (
-            rendered_input is not None
-            and rendered_input.width != configuration.width
-        ):
+        if rendered_input is not None and rendered_input.width != configuration.width:
             raise ValueError("rendered input and known width must match")
-        if live_capabilities is not None and type(
-            live_capabilities
-        ) is not TerminalCapabilities:
-            raise TypeError(
-                "live_capabilities must be a TerminalCapabilities or None"
-            )
+        if (
+            live_capabilities is not None
+            and type(live_capabilities) is not TerminalCapabilities
+        ):
+            raise TypeError("live_capabilities must be a TerminalCapabilities or None")
         if live_capabilities is not None and (
             live_capabilities.width != configuration.width
         ):
@@ -1643,9 +1970,10 @@ class RawTerminalDriver:
             raise TypeError("palette_projector must be callable or None")
         if palette_renderer is not None and not callable(palette_renderer):
             raise TypeError("palette_renderer must be callable or None")
-        if reference_bindings is not None and type(
-            reference_bindings
-        ) is not ReferenceInputBindings:
+        if (
+            reference_bindings is not None
+            and type(reference_bindings) is not ReferenceInputBindings
+        ):
             raise TypeError(
                 "reference_bindings must be a ReferenceInputBindings or None"
             )
@@ -1709,9 +2037,7 @@ class RawTerminalDriver:
         prompt: str,
         configuration: _TerminalConfiguration,
         display_state: _LiveEditorState,
-        suggestion_provider: Callable[
-            [str], tuple[SlashCommandSuggestion, ...]
-        ],
+        suggestion_provider: Callable[[str], tuple[SlashCommandSuggestion, ...]],
         initial_state: _ControlState,
         transition: _ControlTransition,
         rendered_input: RenderedInputFrame | None,
@@ -2084,14 +2410,12 @@ class RawTerminalDriver:
                     ):
                         return state, outcome
                     if changed:
-                        display_state.rendered_cursor_row = (
-                            self._redraw_live_picker(
-                                state,
-                                display_state,
-                                capabilities,
-                                viewport_projector,
-                                viewport_renderer,
-                            )
+                        display_state.rendered_cursor_row = self._redraw_live_picker(
+                            state,
+                            display_state,
+                            capabilities,
+                            viewport_projector,
+                            viewport_renderer,
                         )
                 if not reprocess:
                     continue
@@ -2114,14 +2438,12 @@ class RawTerminalDriver:
                     ):
                         return state, outcome
                     if changed:
-                        display_state.rendered_cursor_row = (
-                            self._redraw_live_picker(
-                                state,
-                                display_state,
-                                capabilities,
-                                viewport_projector,
-                                viewport_renderer,
-                            )
+                        display_state.rendered_cursor_row = self._redraw_live_picker(
+                            state,
+                            display_state,
+                            capabilities,
+                            viewport_projector,
+                            viewport_renderer,
                         )
                     continue
                 display_state.escape_sequence = character
@@ -2323,14 +2645,10 @@ class RawTerminalDriver:
         )
         viewport = viewport_projector(state)
         if type(viewport) is not PickerViewport:
-            raise TypeError(
-                "viewport_projector must return a PickerViewport"
-            )
+            raise TypeError("viewport_projector must return a PickerViewport")
         frame = viewport_renderer(viewport, render_capabilities)
         if type(frame) is not RenderedFrame:
-            raise TypeError(
-                "viewport_renderer must return a RenderedFrame"
-            )
+            raise TypeError("viewport_renderer must return a RenderedFrame")
         if frame.width != render_width:
             raise ValueError("rendered picker width must match the live width")
         payload = "".join(
@@ -2385,9 +2703,7 @@ class RawTerminalDriver:
         width: int,
         display_state: _LiveEditorState,
         control_state: _ControlState,
-        suggestion_provider: Callable[
-            [str], tuple[SlashCommandSuggestion, ...]
-        ],
+        suggestion_provider: Callable[[str], tuple[SlashCommandSuggestion, ...]],
         rendered_input: RenderedInputFrame | None,
         live_capabilities: TerminalCapabilities | None,
         palette_projector: _PaletteProjector | None,
@@ -2400,9 +2716,7 @@ class RawTerminalDriver:
         propagates for the owning read boundary to clear and restore resources.
         """
 
-        render_width = (
-            max(1, width - 1) if rendered_input is None else width
-        )
+        render_width = max(1, width - 1) if rendered_input is None else width
         line_state = _control_line_state(control_state)
         input_lines, cursor_row, cursor_column = _editor_input_lines(
             prompt,
@@ -2421,9 +2735,7 @@ class RawTerminalDriver:
                     "suggestion_provider must return SlashCommandSuggestion values"
                 )
             if suggestions:
-                panel_lines.extend(
-                    _wrap_editor_text(_SUGGESTION_HEADER, render_width)
-                )
+                panel_lines.extend(_wrap_editor_text(_SUGGESTION_HEADER, render_width))
                 for suggestion in suggestions:
                     panel_lines.extend(
                         _wrap_editor_text(suggestion.token, render_width)
@@ -2439,8 +2751,7 @@ class RawTerminalDriver:
             if palette is None:
                 suggestions = suggestion_provider(line_state.buffer)
                 if type(suggestions) is not tuple or any(
-                    type(item) is not SlashCommandSuggestion
-                    for item in suggestions
+                    type(item) is not SlashCommandSuggestion for item in suggestions
                 ):
                     raise TypeError(
                         "suggestion_provider must return SlashCommandSuggestion values"
@@ -2476,9 +2787,7 @@ class RawTerminalDriver:
 
         output_lines = [*input_lines, *panel_lines]
         move_to_top = _CURSOR_UP * display_state.rendered_cursor_row
-        move_to_cursor = _CURSOR_UP * (
-            len(output_lines) - 1 - cursor_row
-        )
+        move_to_cursor = _CURSOR_UP * (len(output_lines) - 1 - cursor_row)
         payload = "".join(
             (
                 _CARRIAGE_RETURN,
@@ -2509,9 +2818,7 @@ class RawTerminalDriver:
         owned by ``read_line``.
         """
 
-        render_width = (
-            max(1, width - 1) if rendered_input is None else width
-        )
+        render_width = max(1, width - 1) if rendered_input is None else width
         input_lines, _cursor_row, _cursor_column = _editor_input_lines(
             prompt,
             rendered_input,
@@ -2568,6 +2875,46 @@ class RawTerminalDriver:
         """
 
         self.write_text(text)
+
+
+def _startup_frame(
+    renderer: Callable[[int, TerminalCapabilities], RenderedFrame],
+    index: int,
+    capabilities: TerminalCapabilities,
+) -> RenderedFrame:
+    """Render and validate one frame from the fixed startup vocabulary."""
+
+    frame = renderer(index, capabilities)
+    _require_startup_frame(frame, capabilities)
+    return frame
+
+
+def _static_startup_capabilities(
+    capabilities: TerminalCapabilities,
+) -> TerminalCapabilities:
+    """Remove styling and cursor authority from one startup fallback profile."""
+
+    return TerminalCapabilities(
+        CapabilityProfile.LINE,
+        capabilities.width,
+        input_tty=capabilities.input_tty,
+        output_tty=capabilities.output_tty,
+        raw_mode=False,
+        cursor_controls=False,
+        decorative_sgr=False,
+    )
+
+
+def _require_startup_frame(
+    frame: object,
+    capabilities: TerminalCapabilities,
+) -> None:
+    """Require startup rendering to retain the currently observed width."""
+
+    if type(frame) is not RenderedFrame:
+        raise TypeError("startup renderer must return a RenderedFrame")
+    if frame.width != capabilities.width:
+        raise ValueError("startup frame width must match current capabilities")
 
 
 def detect_terminal_capabilities(
@@ -2724,10 +3071,20 @@ def _terminal_name_is_capable(value: object) -> bool:
     """Treat missing, blank, malformed, and dumb terminal names as uncertain."""
 
     return bool(
-        isinstance(value, str)
-        and value.strip()
-        and value.strip().casefold() != "dumb"
+        isinstance(value, str) and value.strip() and value.strip().casefold() != "dumb"
     )
+
+
+def _startup_input_discard_is_supported(termios_module: object | None) -> bool:
+    """Require atomic restore-and-discard support before any startup delay."""
+
+    if not _termios_interface_is_available(termios_module):
+        return False
+    try:
+        flush_mode = getattr(termios_module, "TCSAFLUSH", None)
+    except Exception:
+        return False
+    return isinstance(flush_mode, int) and not isinstance(flush_mode, bool)
 
 
 def _terminal_configuration(
@@ -2844,11 +3201,7 @@ def _disabled_control_byte(
     if not callable(fpathconf):
         raise OSError("PC_VDISABLE is unavailable")
     value = fpathconf(input_descriptor, "PC_VDISABLE")
-    if (
-        not isinstance(value, int)
-        or isinstance(value, bool)
-        or not 0 <= value <= 255
-    ):
+    if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 255:
         raise ValueError("PC_VDISABLE must be one terminal control character")
     return value
 
@@ -2871,11 +3224,7 @@ def _configured_control_character(
         return None if ord(value) == disabled_byte else value
     if isinstance(value, bytes) and len(value) == 1:
         raw_byte = value[0]
-    elif (
-        isinstance(value, int)
-        and not isinstance(value, bool)
-        and 0 <= value <= 255
-    ):
+    elif isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 255:
         raw_byte = value
     else:
         raise ValueError(f"{name} must be one terminal control character")
@@ -2884,9 +3233,7 @@ def _configured_control_character(
     if decoder_spec.encoding == "utf-8" and (
         0x80 <= raw_byte <= 0xBF or 0xC2 <= raw_byte <= 0xF4
     ):
-        raise ValueError(
-            f"{name} is context-dependent in UTF-8 live input"
-        )
+        raise ValueError(f"{name} is context-dependent in UTF-8 live input")
 
     try:
         return decoder_spec.decode_control_byte(raw_byte)
@@ -2914,27 +3261,35 @@ def _activate_terminal(configuration: _TerminalConfiguration) -> None:
 def _restore_terminal_or_raise(
     configuration: _TerminalConfiguration,
     active_failure: BaseException | None,
+    *,
+    discard_input: bool = False,
 ) -> None:
     """Restore exact captured attributes or raise fatal cleanup uncertainty.
 
     Restoration is attempted once for normal, setup-failure, and active-failure
-    paths. Its failure takes precedence over ``active_failure`` and is exposed
-    only through fixed local diagnostics; no stream is closed here.
+    paths. Startup presentation may atomically discard only input accumulated
+    under its bounded no-echo guard. Restoration failure takes precedence over
+    ``active_failure`` and is exposed only through fixed local diagnostics; no
+    stream is closed here.
     """
 
+    if type(discard_input) is not bool:
+        raise TypeError("discard_input must be a bool")
     termios_module = configuration.termios_module
     try:
+        restore_mode = (
+            termios_module.TCSAFLUSH if discard_input else termios_module.TCSADRAIN
+        )
         termios_module.tcsetattr(
             configuration.input_descriptor,
-            termios_module.TCSADRAIN,
+            restore_mode,
             configuration.original_attributes,
         )
     except BaseException as restoration_failure:
         fatal = RuntimeError("interactive terminal restoration failed")
         if active_failure is not None:
             fatal.add_note(
-                "Restoration failed while another interactive input failure "
-                "was active."
+                "Restoration failed while another interactive input failure was active."
             )
         raise fatal from restoration_failure
 
@@ -2955,11 +3310,7 @@ def _consume_escape_character(
     assert sequence is not None
 
     if sequence is _DISCARDING_ESCAPE_SEQUENCE:
-        if (
-            ord(character) < 0x20
-            or character == "\x7f"
-            or "@" <= character <= "~"
-        ):
+        if ord(character) < 0x20 or character == "\x7f" or "@" <= character <= "~":
             state.escape_sequence = None
         return None, False
 
@@ -3097,9 +3448,7 @@ def _apply_control_event(
         ReferenceActivationRequest,
         ReferenceInputFailure,
     }:
-        raise TypeError(
-            "transition outcome must be a supported input outcome or None"
-        )
+        raise TypeError("transition outcome must be a supported input outcome or None")
     return updated, outcome, updated != state
 
 
@@ -3324,7 +3673,7 @@ def _wrapped_rendered_input(
     if not dynamic_lines[0].startswith(plain_prompt):
         raise RuntimeError("rendered input prompt did not remain the first line")
     styled_dynamic_lines = [
-        f"{styled_lines[-1]}{dynamic_lines[0][len(plain_prompt):]}",
+        f"{styled_lines[-1]}{dynamic_lines[0][len(plain_prompt) :]}",
         *dynamic_lines[1:],
     ]
     context_count = len(styled_lines) - 1

@@ -17,7 +17,7 @@ from .cli_context import (
     resolve_workspace,
     save_default_session,
 )
-from .config import ConfigManager
+from .config import ConfigurationSnapshot, ConfigManager
 from .debug_log import (
     DebugComponent,
     DebugOperation,
@@ -33,7 +33,18 @@ from .errors import (
     WorkspaceSecurityError,
     WorkspaceVersionUnsupportedError,
 )
+from .interactive_auth import (
+    InteractiveAuthCoordinator,
+    InteractiveAuthResult,
+    InteractiveAuthResultKind,
+    select_default_provider,
+)
 from .interactive_controller import InteractiveController
+from .interactive_settings import (
+    SettingsError,
+    SettingsErrorKind,
+    establish_default_backend,
+)
 from .interactive_terminal import (
     InteractiveError,
     InteractiveErrorCode,
@@ -42,6 +53,7 @@ from .interactive_terminal import (
 )
 from .models import DebateStatus
 from .orchestrator import StoryRuntime
+from .provider_auth import ProviderAuthService, ProviderAuthSnapshot
 from .run_inputs import read_draft_file
 from .session_lifecycle import (
     SessionAccessState,
@@ -265,6 +277,16 @@ def _parse_positive_timeout_seconds(value: object) -> float:
     if not math.isfinite(timeout) or timeout <= 0:
         raise ConfigurationError("Codex timeout must be a positive number")
     return timeout
+
+
+def _validate_antigravity_executable(value: object) -> str:
+    """Return one nonempty NUL-free executable before workspace access."""
+
+    if not isinstance(value, str) or not value or "\x00" in value:
+        raise ConfigurationError(
+            "Antigravity executable must be non-empty NUL-free text"
+        )
+    return value
 
 
 def _resolve_run_input(arguments: argparse.Namespace) -> tuple[str, str]:
@@ -501,6 +523,118 @@ def _classify_interactive_configuration_failure(
     return InteractiveError(code)
 
 
+def _classify_interactive_gate_failure(
+    failure: Exception,
+) -> InteractiveError:
+    """Map auth-gate configuration persistence to fixed startup codes."""
+
+    if isinstance(failure, SettingsError):
+        if failure.kind in {
+            SettingsErrorKind.VALIDATION,
+            SettingsErrorKind.CONFLICT,
+        }:
+            code = InteractiveErrorCode.CONFIGURATION_INVALID
+        else:
+            code = InteractiveErrorCode.WORKSPACE_INVALID
+        return InteractiveError(code)
+    return _classify_interactive_configuration_failure(failure)
+
+
+def _newly_authenticated_provider(
+    before: ProviderAuthSnapshot,
+    result: InteractiveAuthResult,
+    after: ProviderAuthSnapshot,
+) -> str | None:
+    """Return the exact provider whose explicit interaction gained auth."""
+
+    provider = result.provider
+    if (
+        result.kind is InteractiveAuthResultKind.AUTHENTICATED
+        and provider is not None
+        and not before.is_authenticated(provider)
+        and after.is_authenticated(provider)
+    ):
+        return provider
+    return None
+
+
+def _authenticate_initial_provider(
+    coordinator: InteractiveAuthCoordinator,
+) -> tuple[ProviderAuthSnapshot, str | None] | None:
+    """Remain in the explicit auth picker until one provider authenticates.
+
+    ``None`` represents only explicit interrupt or EOF. Picker cancellation and
+    every nonauthenticated result receive a fresh full probe and stay gated.
+    """
+
+    snapshot = coordinator.probe_all()
+    newly_authenticated: str | None = None
+    while not snapshot.any_authenticated:
+        before = snapshot
+        result = coordinator.run(snapshot)
+        if result.kind in {
+            InteractiveAuthResultKind.INTERRUPT,
+            InteractiveAuthResultKind.EOF,
+        }:
+            return None
+        snapshot = coordinator.probe_all()
+        newly_authenticated = _newly_authenticated_provider(
+            before,
+            result,
+            snapshot,
+        )
+    return snapshot, newly_authenticated
+
+
+def _effective_interactive_providers(
+    manager: ConfigManager,
+    snapshot: ConfigurationSnapshot,
+    backend_overrides: dict[str, str],
+) -> tuple[str, ...]:
+    """Resolve all roster routes and return distinct providers in roster order."""
+
+    providers: list[str] = []
+    for agent_id in ROSTER:
+        provider = manager.resolve_from_snapshot(
+            snapshot,
+            agent_id,
+            backend_overrides=backend_overrides,
+        ).backend
+        if provider not in providers:
+            providers.append(provider)
+    return tuple(providers)
+
+
+def _authenticate_effective_providers(
+    coordinator: InteractiveAuthCoordinator,
+    providers: tuple[str, ...],
+) -> bool:
+    """Freshly hard-gate every effective provider until auth or explicit exit."""
+
+    snapshot = coordinator.probe_all()
+    while True:
+        provider = next(
+            (
+                candidate
+                for candidate in providers
+                if not snapshot.is_authenticated(candidate)
+            ),
+            None,
+        )
+        if provider is None:
+            return True
+        result = coordinator.run(
+            snapshot,
+            selected_provider=provider,
+        )
+        if result.kind in {
+            InteractiveAuthResultKind.INTERRUPT,
+            InteractiveAuthResultKind.EOF,
+        }:
+            return False
+        snapshot = coordinator.probe_all()
+
+
 def _close_unstarted_interactive_backend(backend: AgentBackend) -> bool:
     """Close a backend not transferred to a controller; report safe failure.
 
@@ -522,14 +656,13 @@ def _close_unstarted_interactive_backend(backend: AgentBackend) -> bool:
 def _run_interactive_cli(arguments: argparse.Namespace) -> int:
     """Construct and transfer one guarded interactive session-lobby lifecycle.
 
-    Both streams are checked before input, option validation, workspace/context
-    access, or backend construction. The adapter constructs one unified
-    stream-backed terminal whose sole raw driver provides contextual main and
-    composition live editing while retaining the existing ``input`` callback
-    for unsupported fallback; subject and confirmation reads stay line-
-    oriented. Setup failures are rendered safely on stderr. Once
-    ``run_session_lobby`` is called, the controller owns backend cleanup;
-    before that transfer this adapter closes any constructed backend.
+    Both streams are checked before input, option validation, workspace access,
+    or backend construction. All interactive values validate before workspace
+    discovery. One workspace-bound authentication coordinator then owns the
+    welcome and hard gates for initial and effective providers. Configuration,
+    context, backend, and controller construction remain ordered behind those
+    gates. Once ``run_session_lobby`` is called, the controller owns backend
+    cleanup; before that transfer this adapter closes any constructed backend.
     """
 
     if not _interactive_streams_are_terminals():
@@ -560,6 +693,20 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
     try:
         backend_overrides = _parse_backend_overrides(backend_values)
         timeout_seconds = _parse_positive_timeout_seconds(timeout_value)
+        if requested_session is not None:
+            requested_session = Workspace.validate_identifier(
+                requested_session
+            )
+        model = ConfigManager.validate_codex_model(model)
+        antigravity_model = ConfigManager.validate_antigravity_model(
+            antigravity_model
+        )
+        antigravity_effort = ConfigManager.validate_antigravity_effort(
+            antigravity_effort
+        )
+        antigravity_executable = _validate_antigravity_executable(
+            antigravity_executable
+        )
     except Exception as exc:
         _write_interactive_cli_error(
             _classify_interactive_configuration_failure(exc)
@@ -585,6 +732,123 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
     )
 
     try:
+        terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
+    except Exception as exc:
+        _record_cli_error(debug_log, DebugOperation.CLI_COMMAND, exc)
+        _write_interactive_cli_error(
+            InteractiveError(InteractiveErrorCode.INTERNAL_ERROR),
+            debug_log_available=True,
+        )
+        return 2
+
+    try:
+        auth_service = ProviderAuthService(
+            workspace.root,
+            antigravity_executable=antigravity_executable,
+        )
+        auth_coordinator = InteractiveAuthCoordinator(
+            auth_service,
+            terminal,
+        )
+    except Exception as exc:
+        _record_cli_error(debug_log, DebugOperation.CONFIGURATION, exc)
+        _write_interactive_cli_error(
+            _classify_interactive_configuration_failure(exc),
+            debug_log_available=True,
+        )
+        return 2
+
+    try:
+        auth_coordinator.show_welcome()
+        initial_auth = _authenticate_initial_provider(auth_coordinator)
+    except KeyboardInterrupt:
+        _trace_cli(
+            debug_log,
+            DebugOperation.CLI_COMMAND,
+            DebugPhase.CANCELLED,
+            outcome=DebugOutcome.INTERRUPTED,
+        )
+        return 0
+    except Exception as exc:
+        _record_cli_error(debug_log, DebugOperation.CONFIGURATION, exc)
+        _write_interactive_cli_error(
+            _classify_interactive_configuration_failure(exc),
+            debug_log_available=True,
+        )
+        return 2
+    if initial_auth is None:
+        _trace_cli(
+            debug_log,
+            DebugOperation.CLI_COMMAND,
+            DebugPhase.CANCELLED,
+            outcome=DebugOutcome.INTERRUPTED,
+        )
+        return 0
+
+    snapshot, newly_authenticated = initial_auth
+    try:
+        default_provider = select_default_provider(
+            snapshot,
+            newly_authenticated_provider=newly_authenticated,
+        )
+        if default_provider is None:
+            raise RuntimeError(
+                "authenticated startup snapshot has no default provider"
+            )
+        establish_default_backend(workspace, default_provider)
+        manager = ConfigManager(workspace)
+        configuration = manager.load_configuration_snapshot()
+        effective_providers = _effective_interactive_providers(
+            manager,
+            configuration,
+            backend_overrides,
+        )
+    except KeyboardInterrupt:
+        _trace_cli(
+            debug_log,
+            DebugOperation.CLI_COMMAND,
+            DebugPhase.CANCELLED,
+            outcome=DebugOutcome.INTERRUPTED,
+        )
+        return 0
+    except Exception as exc:
+        _record_cli_error(debug_log, DebugOperation.CONFIGURATION, exc)
+        _write_interactive_cli_error(
+            _classify_interactive_gate_failure(exc),
+            debug_log_available=True,
+        )
+        return 2
+
+    try:
+        gate_ready = _authenticate_effective_providers(
+            auth_coordinator,
+            effective_providers,
+        )
+    except KeyboardInterrupt:
+        _trace_cli(
+            debug_log,
+            DebugOperation.CLI_COMMAND,
+            DebugPhase.CANCELLED,
+            outcome=DebugOutcome.INTERRUPTED,
+        )
+        return 0
+    except Exception as exc:
+        _record_cli_error(debug_log, DebugOperation.CONFIGURATION, exc)
+        _write_interactive_cli_error(
+            _classify_interactive_configuration_failure(exc),
+            debug_log_available=True,
+        )
+        return 2
+    if not gate_ready:
+        _trace_cli(
+            debug_log,
+            DebugOperation.CLI_COMMAND,
+            DebugPhase.CANCELLED,
+            outcome=DebugOutcome.INTERRUPTED,
+        )
+        return 0
+
+    try:
         cli_context = load_cli_context(workspace)
     except Exception as exc:
         _record_cli_error(debug_log, DebugOperation.CLI_CONTEXT, exc)
@@ -599,16 +863,6 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
         DebugPhase.SUCCEEDED,
         outcome=DebugOutcome.COMPLETED,
     )
-
-    try:
-        terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
-    except Exception as exc:
-        _record_cli_error(debug_log, DebugOperation.CLI_COMMAND, exc)
-        _write_interactive_cli_error(
-            InteractiveError(InteractiveErrorCode.INTERNAL_ERROR),
-            debug_log_available=True,
-        )
-        return 2
 
     try:
         backend = AgentBackend(
@@ -634,6 +888,7 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
             cli_context,
             backend,
             terminal,
+            auth_coordinator=auth_coordinator,
         )
     except Exception as exc:
         _record_cli_error(debug_log, DebugOperation.CLI_COMMAND, exc)

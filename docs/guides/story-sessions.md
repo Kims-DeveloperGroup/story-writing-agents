@@ -111,8 +111,14 @@ echoed input remain visible. See the
 
 ## Edit persistent settings
 
-`/settings` is global, alias-free, provider-free, and works in the lobby or
-while attached. It shows separate Current and Pending values for Language,
+Global no-argument `/auth` refreshes native Codex and Antigravity status and
+opens the provider picker in either the lobby or an attached session. It may run
+native sign-in and durably establish a missing workspace default, but it does
+not send story content to a model. Cancellation returns to the shell and keeps
+any default already established.
+
+`/settings` is global, alias-free, and works in the lobby or while attached. It
+shows separate Current and Pending values for Language,
 Persona, Maximum debate rounds, and Providers. The top-level choices are those
 four rows followed by Save and Cancel. Choose Providers to select an agent in
 canonical roster order, then choose Provider, Model, or Reasoning effort for
@@ -130,13 +136,20 @@ and `/cancel` is literal model text rather than a command.
 Language offers `KO`, `EN`, `JA`, `ZH`, `ES`, `FR`, `DE`, `PT`, `IT`, and `RU`.
 Persona uses the safe lexical template catalog. Debate rounds accept a
 nonnegative ASCII integer, including audit-only `0`. Providers are edited per
-agent in roster order: Codex is the default, and Antigravity is also available.
+agent in roster order: Codex and Antigravity are available, with the workspace
+default and final Codex fallback used by nullable agent routes.
 Model accepts exact safe text or blank to inherit the active provider's
 workspace system model. Codex effort offers Inherit, `minimal`, `low`,
 `medium`, `high`, and `xhigh`; Antigravity effort offers Inherit, `low`,
 `medium`, and `high`. Inherit uses the active provider's workspace system
 value, then its provider default. The legacy backend name `gemini` is rejected;
 use `antigravity`.
+
+Selecting a provider freshly authenticates it before changing that pending
+route. Save freshly gates every distinct effective provider before the guarded
+file update; a stale or failed status prevents Save. A default established by
+completed authentication is durable even if the remaining settings edit is
+cancelled.
 
 Save fails closed if either configuration file or the persona catalog changed
 after opening. A successful save affects only the next shell/backend

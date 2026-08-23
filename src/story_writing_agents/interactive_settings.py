@@ -232,6 +232,94 @@ def update_agent_backend(
     )
 
 
+def establish_default_backend(workspace: Workspace, backend: str) -> bool:
+    """Persist a valid missing default and report whether a write occurred.
+
+    Authentication remains the caller's responsibility. An existing default
+    returns ``False`` without modifying either configuration document.
+    """
+
+    _require_workspace(workspace)
+    validated = ConfigManager.validate_backend(backend)
+    assert validated is not None
+    state = load_settings_state(workspace)
+    if state.pending.system_defaults.default_backend is not None:
+        return False
+    pending = _with_system_defaults(
+        state,
+        replace(
+            state.pending.system_defaults,
+            default_backend=validated,
+        ),
+    )
+    save_settings_state(workspace, pending)
+    return True
+
+
+def establish_settings_default_backend(
+    workspace: Workspace,
+    state: SettingsState,
+    backend: str,
+) -> SettingsState:
+    """Persist a missing default and safely rebase one open settings edit.
+
+    Only the opening baseline's default is changed for the durable write. The
+    original exact bytes and persona catalog are conflict-checked first, then
+    the resulting canonical default-only baseline is verified exactly before
+    every pending edit is replayed onto it.
+    """
+
+    _require_workspace(workspace)
+    _require_state(state)
+    validated = ConfigManager.validate_backend(backend)
+    assert validated is not None
+    baseline_configuration = state.baseline.configuration
+    if baseline_configuration.system_defaults.default_backend is not None:
+        return state
+    if state.pending.system_defaults.default_backend is not None:
+        raise SettingsError(SettingsErrorKind.CONFLICT)
+
+    persisted_defaults = replace(
+        baseline_configuration.system_defaults,
+        default_backend=validated,
+    )
+    persisted_configuration = ConfigurationSnapshot(
+        persisted_defaults,
+        baseline_configuration.agent_configs,
+    )
+    expected_system_bytes = _canonical_json(
+        _system_value(persisted_defaults)
+    ).encode("utf-8")
+    save_settings_state(
+        workspace,
+        SettingsState(state.baseline, persisted_configuration),
+    )
+
+    try:
+        fresh = load_settings_state(workspace)
+    except Exception as exc:
+        raise SettingsError(SettingsErrorKind.CONFLICT) from exc
+    if (
+        fresh.baseline.system_defaults_bytes != expected_system_bytes
+        or (
+            fresh.baseline.agent_configs_bytes
+            != state.baseline.agent_configs_bytes
+        )
+        or fresh.baseline.persona_catalog != state.baseline.persona_catalog
+        or fresh.baseline.configuration != persisted_configuration
+    ):
+        raise SettingsError(SettingsErrorKind.CONFLICT)
+
+    rebased_pending = ConfigurationSnapshot(
+        replace(
+            state.pending.system_defaults,
+            default_backend=validated,
+        ),
+        state.pending.agent_configs,
+    )
+    return SettingsState(fresh.baseline, rebased_pending)
+
+
 def update_agent_codex_model(
     state: SettingsState,
     agent_id: str,
@@ -488,6 +576,7 @@ def _system_value(defaults: SystemDefaults) -> dict[str, Any]:
         "codex_reasoning_effort": defaults.codex_reasoning_effort,
         "antigravity_model": defaults.antigravity_model,
         "antigravity_effort": defaults.antigravity_effort,
+        "default_backend": defaults.default_backend,
     }
 
 

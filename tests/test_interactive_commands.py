@@ -80,6 +80,7 @@ COMMAND_NAMES = {
     "to": "/to",
     "agent": "/to",
     "agents": "/agents",
+    "auth": "/auth",
     "language": "/language",
     "persona": "/persona",
     "reset": "/reset",
@@ -144,6 +145,7 @@ ACTION_RULES = {
     ActionKind.INSPECT: ({"argument"}, set()),
     ActionKind.HISTORY: ({"count"}, set()),
     ActionKind.STATUS: (set(), set()),
+    ActionKind.AUTH: (set(), set()),
     ActionKind.SETTINGS: (set(), set()),
     ActionKind.SET_LANGUAGE: ({"argument"}, {"argument"}),
     ActionKind.SET_PERSONA: (
@@ -255,6 +257,7 @@ class ActionContractTests(unittest.TestCase):
             "INSPECT": "inspect",
             "HISTORY": "history",
             "STATUS": "status",
+            "AUTH": "auth",
             "SETTINGS": "settings",
             "SET_LANGUAGE": "set_language",
             "SET_PERSONA": "set_persona",
@@ -432,7 +435,7 @@ class ActionContractTests(unittest.TestCase):
 
 
 class CommandRegistryTests(unittest.TestCase):
-    def test_registry_is_the_exact_ordered_twenty_one_row_contract(self) -> None:
+    def test_registry_is_the_exact_ordered_twenty_two_row_contract(self) -> None:
         expected = (
             CommandSpec("Conversation", "/compose", (), False, False, "/compose"),
             CommandSpec("Conversation", "/send", (), False, False, "/send"),
@@ -454,6 +457,7 @@ class CommandRegistryTests(unittest.TestCase):
                 "/to plot",
             ),
             CommandSpec("Agents", "/agents", (), False, False, "/agents"),
+            CommandSpec("Agents", "/auth", (), True, True, "/auth"),
             CommandSpec(
                 "Agents",
                 "/language LANG",
@@ -475,7 +479,7 @@ class CommandRegistryTests(unittest.TestCase):
                 "Agents",
                 "/settings",
                 (),
-                False,
+                True,
                 True,
                 "/settings",
             ),
@@ -579,7 +583,7 @@ class CommandRegistryTests(unittest.TestCase):
                 for name, spec in zip(canonical, COMMANDS)
                 if spec.may_call_provider
             },
-            {"/say", "/run", "/draft-file"},
+            {"/say", "/auth", "/settings", "/run", "/draft-file"},
         )
         self.assertEqual(
             {
@@ -587,20 +591,22 @@ class CommandRegistryTests(unittest.TestCase):
                 for name, spec in zip(canonical, COMMANDS)
                 if spec.may_write_artifacts
             },
-            {"/settings", "/run", "/draft-file"},
+            {"/auth", "/settings", "/run", "/draft-file"},
         )
         settings = next(
             spec for spec in COMMANDS if spec.syntax == "/settings"
         )
-        self.assertFalse(settings.may_call_provider)
+        self.assertTrue(settings.may_call_provider)
         self.assertTrue(settings.may_write_artifacts)
         self.assertTrue(
             all(
                 not spec.may_write_artifacts or spec.may_call_provider
                 for spec in COMMANDS
-                if spec is not settings
             )
         )
+        auth = next(spec for spec in COMMANDS if spec.syntax == "/auth")
+        self.assertTrue(auth.may_call_provider)
+        self.assertTrue(auth.may_write_artifacts)
         self.assertNotIn("message", canonical)
         self.assertNotIn("routed_message", canonical)
 
@@ -689,6 +695,7 @@ class SuccessfulParsingTests(unittest.TestCase):
             ),
             ("/history 20", InteractiveAction(ActionKind.HISTORY, count=20)),
             ("/status", InteractiveAction(ActionKind.STATUS)),
+            ("/auth", InteractiveAction(ActionKind.AUTH)),
             ("/settings", InteractiveAction(ActionKind.SETTINGS)),
             (
                 "/language ko-KR",
@@ -1227,6 +1234,7 @@ class InvalidInputTests(ParserAssertions, unittest.TestCase):
             "/send",
             "/cancel",
             "/status",
+            "/auth",
             "/reset",
             "/settings",
             "/session list",
@@ -1651,6 +1659,7 @@ class CommandCompletionProjectionTests(unittest.TestCase):
         "/to",
         "/agent",
         "/agents",
+        "/auth",
         "/language",
         "/persona",
         "/reset",

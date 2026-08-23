@@ -19,6 +19,7 @@ from types import SimpleNamespace
 from typing import get_args
 from unittest import mock
 
+import story_writing_agents
 from story_writing_agents import interactive_line_editor as editor_facade
 from story_writing_agents import interactive_terminal as terminal_facade
 from story_writing_agents.interactive_line_editor import (
@@ -34,6 +35,7 @@ from story_writing_agents.interactive_terminal import (
     InteractiveErrorSpec,
     InteractiveMainInput,
     InteractivePromptInput,
+    InteractiveStartupPresentation,
     InteractiveTerminal,
     TerminalAction,
     TerminalActionKind,
@@ -199,6 +201,75 @@ class CompleteTermios:
         raise AssertionError(
             f"unexpected attribute write to {descriptor}: {when}, {attributes!r}"
         )
+
+
+class StartupStream(io.StringIO):
+    """Provide a real string buffer with deterministic TTY identity."""
+
+    def __init__(self, value: str = "", *, descriptor: int) -> None:
+        super().__init__(value)
+        self.descriptor = descriptor
+        self.read_calls = 0
+        self.buffer = self
+
+    @property
+    def encoding(self) -> str:
+        return "utf-8"
+
+    @property
+    def errors(self) -> str:
+        return "strict"
+
+    def isatty(self) -> bool:
+        return True
+
+    def fileno(self) -> int:
+        return self.descriptor
+
+    def read(self, size: int = -1) -> str:
+        self.read_calls += 1
+        return super().read(size)
+
+    def read1(self, size: int) -> bytes:
+        raise AssertionError(f"startup unexpectedly read {size} input bytes")
+
+
+class StartupTermios:
+    """Record capable startup activation and atomic discard restoration."""
+
+    ECHO = 0x01
+    ICANON = 0x02
+    TCSADRAIN = 3
+    TCSANOW = 4
+    TCSAFLUSH = 5
+    VEOF = 0
+    VINTR = 1
+    VMIN = 2
+    VTIME = 3
+
+    def __init__(self) -> None:
+        self.original = [0, 0, 0, self.ECHO | self.ICANON, 0, 0, [4, 3, 0, 0]]
+        self.calls: list[tuple[int, int, list[object]]] = []
+        self.restore_failure: BaseException | None = None
+
+    def tcgetattr(self, descriptor: int) -> list[object]:
+        if descriptor != 7:
+            raise AssertionError(f"unexpected startup descriptor: {descriptor}")
+        copied = list(self.original)
+        copied[6] = list(self.original[6])  # type: ignore[arg-type]
+        return copied
+
+    def tcsetattr(
+        self,
+        descriptor: int,
+        when: int,
+        attributes: list[object],
+    ) -> None:
+        copied = list(attributes)
+        copied[6] = list(attributes[6])  # type: ignore[arg-type]
+        self.calls.append((descriptor, when, copied))
+        if when == self.TCSAFLUSH and self.restore_failure is not None:
+            raise self.restore_failure
 
 
 def fake_os(
@@ -1874,6 +1945,200 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             "\\x1b[C",
         ):
             self.assertNotIn(duplicated_primitive, source)
+
+
+class StartupPresentationFoundationTests(unittest.TestCase):
+    """Lock welcome/auth presentation timing, profiles, and restoration."""
+
+    @staticmethod
+    def make_driver(
+        *,
+        environment: dict[str, str] | None = None,
+        termios_value: object | None = None,
+    ) -> tuple[RawTerminalDriver, StartupStream, StartupStream, object]:
+        """Build one capable deterministic startup driver and its collaborators."""
+
+        input_stream = StartupStream("queued-type-ahead", descriptor=7)
+        output_stream = StartupStream(descriptor=8)
+        selected_termios = termios_value or StartupTermios()
+        os_module = SimpleNamespace(
+            name="posix",
+            environ={"TERM": "xterm-256color"}
+            if environment is None
+            else environment,
+            get_terminal_size=lambda descriptor: os.terminal_size((80, 24)),
+            fpathconf=lambda descriptor, name: 0,
+        )
+        driver = RawTerminalDriver(
+            lambda _prompt: "fallback",
+            input_stream,
+            output_stream,
+            transition_line_input,
+            transition_main_input,
+            append_main_input_history,
+            termios_provider=lambda: selected_termios,
+            os_provider=lambda: os_module,
+        )
+        return driver, input_stream, output_stream, selected_termios
+
+    @staticmethod
+    def frame(index: int, current: TerminalCapabilities) -> RenderedFrame:
+        return RenderedFrame(
+            f"welcome-{index}-{current.profile.value}",
+            current.width,
+            1,
+        )
+
+    def test_capable_welcome_has_four_frames_point_four_cadence_and_discard(
+        self,
+    ) -> None:
+        driver, input_stream, output_stream, selected_termios = self.make_driver()
+        sleeps: list[float] = []
+        driver.run_startup_welcome(self.frame, sleeps.append)
+
+        rendered = output_stream.getvalue()
+        self.assertEqual(sleeps, [0.4, 0.4, 0.4])
+        positions = tuple(rendered.index(f"welcome-{index}-ansi") for index in range(4))
+        self.assertEqual(positions, tuple(sorted(positions)))
+        self.assertTrue(rendered.endswith("\n"))
+        self.assertNotIn("\x1b[?1049", rendered)
+        self.assertEqual(input_stream.read_calls, 0)
+        self.assertEqual(input_stream.getvalue(), "queued-type-ahead")
+        self.assertIsInstance(selected_termios, StartupTermios)
+        self.assertEqual(
+            [call[1] for call in selected_termios.calls],
+            [selected_termios.TCSANOW, selected_termios.TCSAFLUSH],
+        )
+        activated = selected_termios.calls[0][2]
+        self.assertEqual(
+            activated[3] & (selected_termios.ICANON | selected_termios.ECHO),
+            0,
+        )
+        self.assertEqual(selected_termios.calls[-1][2], selected_termios.original)
+
+    def test_notices_are_bounded_cleared_and_result_owns_a_fresh_boundary(
+        self,
+    ) -> None:
+        driver, _input_stream, output_stream, selected_termios = self.make_driver()
+        sleeps: list[float] = []
+
+        def render_notice(current: TerminalCapabilities) -> RenderedFrame:
+            return RenderedFrame(
+                f"auth-notice-{current.profile.value}",
+                current.width,
+                1,
+            )
+
+        driver.run_startup_notice(render_notice, sleeps.append)
+        mark = len(output_stream.getvalue())
+        driver.run_startup_result_notice(render_notice, sleeps.append)
+        self.assertEqual(sleeps, [0.8, 0.8])
+        self.assertIn("auth-notice-ansi", output_stream.getvalue())
+        self.assertTrue(output_stream.getvalue()[mark:].startswith("\r\n"))
+        self.assertNotIn("\x1b[?1049", output_stream.getvalue())
+        self.assertEqual(
+            [call[1] for call in selected_termios.calls],
+            [
+                selected_termios.TCSANOW,
+                selected_termios.TCSAFLUSH,
+                selected_termios.TCSANOW,
+                selected_termios.TCSAFLUSH,
+            ],
+        )
+
+    def test_static_profiles_render_once_without_delay_or_terminal_mutation(
+        self,
+    ) -> None:
+        cases = (
+            ("reduced", {"TERM": "xterm", "STORY_REDUCED_MOTION": "1"}, StartupTermios()),
+            ("dumb", {"TERM": "dumb"}, StartupTermios()),
+            ("no-color", {"TERM": "xterm", "NO_COLOR": "1"}, StartupTermios()),
+            ("no-flush", {"TERM": "xterm"}, CompleteTermios),
+            ("uncertain", {}, StartupTermios()),
+        )
+        for label, environment, termios_value in cases:
+            with self.subTest(label=label):
+                driver, input_stream, output_stream, selected_termios = self.make_driver(
+                    environment=environment,
+                    termios_value=termios_value,
+                )
+                sleeps: list[float] = []
+                driver.run_startup_welcome(self.frame, sleeps.append)
+                rendered = output_stream.getvalue()
+                self.assertEqual(rendered.count("welcome-3-"), 1)
+                self.assertNotIn("welcome-0-", rendered)
+                self.assertEqual(sleeps, [])
+                self.assertEqual(input_stream.read_calls, 0)
+                self.assertNotIn("\x1b[", rendered)
+                if isinstance(selected_termios, StartupTermios):
+                    self.assertEqual(selected_termios.calls, [])
+
+    def test_callback_presentation_is_static_private_and_sleep_free(self) -> None:
+        records: list[str] = []
+        sleeper = mock.Mock(side_effect=AssertionError("callback presentation slept"))
+        terminal = InteractiveTerminal(lambda _prompt: "", records.append, width=60)
+        presentation = InteractiveStartupPresentation(terminal, sleeper=sleeper)
+        presentation.show_welcome()
+        presentation.show_notice(
+            Notice(
+                "Opening native sign-in.",
+                label="authentication",
+                state=ViewState.LOADING,
+            )
+        )
+        presentation.show_result(
+            Notice(
+                "Authentication succeeded.",
+                label="authentication",
+                role=SemanticRole.SUCCESS,
+                state=ViewState.COMPLETED,
+            )
+        )
+        sleeper.assert_not_called()
+        rendered = "".join(records)
+        self.assertIn("Story Writing Agents", rendered)
+        self.assertIn("Opening native sign-in.", rendered)
+        self.assertIn("Authentication succeeded.", rendered)
+        self.assertIn("\n\n", rendered)
+        self.assertNotIn("\x1b[", rendered)
+        self.assertNotIn("InteractiveStartupPresentation", terminal_facade.__all__)
+        self.assertNotIn("InteractiveStartupPresentation", story_writing_agents.__all__)
+
+    def test_controls_restore_and_restoration_failure_has_precedence(self) -> None:
+        for control in (KeyboardInterrupt("interrupt"), SystemExit("exit")):
+            with self.subTest(control=type(control).__name__):
+                driver, input_stream, output_stream, selected_termios = self.make_driver()
+
+                def stop(_seconds: float) -> None:
+                    raise control
+
+                with self.assertRaises(type(control)) as raised:
+                    driver.run_startup_welcome(self.frame, stop)
+                self.assertIs(raised.exception, control)
+                self.assertEqual(input_stream.read_calls, 0)
+                self.assertEqual(
+                    [call[1] for call in selected_termios.calls],
+                    [selected_termios.TCSANOW, selected_termios.TCSAFLUSH],
+                )
+                self.assertIn("welcome-0-ansi", output_stream.getvalue())
+                self.assertNotIn("\x1b[?1049", output_stream.getvalue())
+
+        driver, _input_stream, _output_stream, selected_termios = self.make_driver()
+        selected_termios.restore_failure = OSError("private restoration detail")
+        active = KeyboardInterrupt("primary control")
+        with self.assertRaisesRegex(RuntimeError, "restoration failed") as raised:
+            driver.run_startup_welcome(
+                self.frame,
+                lambda _seconds: (_ for _ in ()).throw(active),
+            )
+        self.assertIs(raised.exception.__cause__, selected_termios.restore_failure)
+        self.assertTrue(
+            any(
+                "another interactive input failure" in note
+                for note in raised.exception.__notes__
+            )
+        )
+        self.assertNotIn("private restoration detail", str(raised.exception))
 
 
 class PackageBoundaryFoundationTests(unittest.TestCase):

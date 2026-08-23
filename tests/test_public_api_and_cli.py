@@ -61,6 +61,15 @@ from story_writing_agents.interactive_terminal import (
 )
 from story_writing_agents import interactive_terminal as terminal_module
 from story_writing_agents.interactive_terminal._render import render_plain
+from story_writing_agents.interactive_auth import (
+    InteractiveAuthResult,
+    InteractiveAuthResultKind,
+)
+from story_writing_agents.provider_auth import (
+    ProviderAuthSnapshot,
+    ProviderAuthState,
+    ProviderAuthStatus,
+)
 from story_writing_agents.workspace import DEFAULT_AGENT_PROMPTS
 
 from tests.helpers import initialized_workspace
@@ -84,6 +93,133 @@ class TtyStringIO(io.StringIO):
 
         self.readline_calls += 1
         return super().readline(*args, **kwargs)
+
+
+def authenticated_provider_snapshot() -> ProviderAuthSnapshot:
+    """Return a deterministic two-provider authorization fixture."""
+
+    return ProviderAuthSnapshot(
+        (
+            ProviderAuthStatus("codex", ProviderAuthState.AUTHENTICATED),
+            ProviderAuthStatus(
+                "antigravity",
+                ProviderAuthState.AUTHENTICATED,
+            ),
+        )
+    )
+
+
+def provider_snapshot(
+    codex: ProviderAuthState,
+    antigravity: ProviderAuthState,
+) -> ProviderAuthSnapshot:
+    """Return one ordered snapshot for CLI gate matrices."""
+
+    return ProviderAuthSnapshot(
+        (
+            ProviderAuthStatus("codex", codex),
+            ProviderAuthStatus("antigravity", antigravity),
+        )
+    )
+
+
+def provider_result(
+    current: ProviderAuthSnapshot,
+    provider: str,
+) -> InteractiveAuthResult:
+    """Return a correlated provider result from one typed snapshot."""
+
+    selected = current.status_for(provider)
+    return InteractiveAuthResult(
+        (
+            InteractiveAuthResultKind.AUTHENTICATED
+            if selected.authenticated
+            else InteractiveAuthResultKind.NOT_AUTHENTICATED
+        ),
+        current,
+        provider=provider,
+        status=selected,
+    )
+
+
+class FailClosedCliAuthService:
+    """Prevent every unit CLI test from reaching an installed executable."""
+
+    def __init__(self, workspace_root: Path, **kwargs: object) -> None:
+        self.workspace_root = workspace_root
+        self.kwargs = kwargs
+
+    def probe(self, provider: str) -> ProviderAuthStatus:
+        raise AssertionError(f"CLI fixture made an unexpected native probe: {provider}")
+
+    def probe_all(self) -> ProviderAuthSnapshot:
+        raise AssertionError("CLI fixture made an unexpected native aggregate probe")
+
+    def login(self, provider: str) -> object:
+        raise AssertionError(f"CLI fixture made an unexpected native login: {provider}")
+
+
+class AuthenticatedCliCoordinator:
+    """Authorize startup deterministically without I/O, sleeps, or subprocesses."""
+
+    def __init__(self, auth_service: object, terminal: object) -> None:
+        if not isinstance(auth_service, FailClosedCliAuthService):
+            raise AssertionError("CLI auth fixture received an unknown service")
+        self.auth_service = auth_service
+        self.terminal = terminal
+        self.snapshot = authenticated_provider_snapshot()
+        self.events: list[str] = []
+
+    def show_welcome(self) -> None:
+        self.events.append("welcome")
+
+    def probe_all(self) -> ProviderAuthSnapshot:
+        self.events.append("probe_all")
+        return self.snapshot
+
+    def run(self, *args: object, **kwargs: object) -> object:
+        raise AssertionError("fully authenticated CLI fixture opened the auth picker")
+
+
+class ScriptedCliCoordinator:
+    """Supply exact startup snapshots/results while recording gate order."""
+
+    def __init__(
+        self,
+        events: list[tuple[str, object | None]],
+        *,
+        snapshots: tuple[object, ...],
+        results: tuple[object, ...] = (),
+    ) -> None:
+        self.events = events
+        self.snapshots = list(snapshots)
+        self.results = list(results)
+
+    def show_welcome(self) -> None:
+        self.events.append(("welcome", None))
+
+    def probe_all(self) -> ProviderAuthSnapshot:
+        self.events.append(("probe_all", None))
+        if not self.snapshots:
+            raise AssertionError("unexpected CLI auth probe")
+        value = self.snapshots.pop(0)
+        if isinstance(value, BaseException):
+            raise value
+        return value  # type: ignore[return-value]
+
+    def run(
+        self,
+        current: ProviderAuthSnapshot,
+        *,
+        selected_provider: str | None = None,
+    ) -> InteractiveAuthResult:
+        self.events.append(("run", selected_provider))
+        if not self.results:
+            raise AssertionError("unexpected CLI auth picker")
+        value = self.results.pop(0)
+        if isinstance(value, BaseException):
+            raise value
+        return value  # type: ignore[return-value]
 
 
 def expected_interactive_error(
@@ -895,6 +1031,30 @@ class PersistenceValidationTests(unittest.TestCase):
 
 
 class CliTests(unittest.TestCase):
+    def setUp(self) -> None:
+        """Install fail-closed native-auth doubles before every CLI invocation."""
+
+        self.provider_auth_factory = mock.Mock(
+            side_effect=FailClosedCliAuthService,
+        )
+        self.auth_coordinator_factory = mock.Mock(
+            side_effect=AuthenticatedCliCoordinator,
+        )
+        self.auth_service_patcher = mock.patch.object(
+            cli_module,
+            "ProviderAuthService",
+            self.provider_auth_factory,
+        )
+        self.auth_coordinator_patcher = mock.patch.object(
+            cli_module,
+            "InteractiveAuthCoordinator",
+            self.auth_coordinator_factory,
+        )
+        self.auth_service_patcher.start()
+        self.auth_coordinator_patcher.start()
+        self.addCleanup(self.auth_coordinator_patcher.stop)
+        self.addCleanup(self.auth_service_patcher.stop)
+
     def test_module_help_lists_public_commands(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
         environment = os.environ.copy()
@@ -1585,6 +1745,400 @@ class CliTests(unittest.TestCase):
                 backend_value.close.assert_not_called()
                 self.assertEqual(stdout.getvalue(), "")
                 self.assertEqual(stderr.getvalue(), "")
+
+    def test_interactive_startup_orders_every_gate_before_runtime_artifacts(
+        self,
+    ) -> None:
+        workspace = initialized_workspace(self)
+        events: list[tuple[str, object | None]] = []
+        both = authenticated_provider_snapshot()
+        coordinator = ScriptedCliCoordinator(
+            events,
+            snapshots=(both, both),
+        )
+        auth_service = object()
+        terminal = InteractiveTerminal(lambda _prompt: "", lambda _text: None)
+        backend = mock.Mock()
+        controller = mock.Mock()
+        controller.run_session_lobby.return_value = 7
+        stdin = TtyStringIO(is_terminal=True)
+        stdout = TtyStringIO(is_terminal=True)
+        stderr = io.StringIO()
+
+        original_validate_executable = cli_module._validate_antigravity_executable
+        original_establish = cli_module.establish_default_backend
+        original_load_snapshot = (
+            cli_module.ConfigManager.load_configuration_snapshot
+        )
+        original_routes = cli_module._effective_interactive_providers
+
+        def validate_executable(value: object) -> str:
+            events.append(("validation", value))
+            return original_validate_executable(value)
+
+        def establish(current_workspace: Workspace, provider: str) -> bool:
+            events.append(("default", provider))
+            return original_establish(current_workspace, provider)
+
+        def load_snapshot(manager: object) -> object:
+            events.append(("snapshot", None))
+            return original_load_snapshot(manager)  # type: ignore[arg-type]
+
+        def routes(*args: object, **kwargs: object) -> tuple[str, ...]:
+            events.append(("routes", None))
+            return original_routes(*args, **kwargs)  # type: ignore[arg-type]
+
+        def controller_factory(*args: object, **kwargs: object) -> object:
+            events.append(("controller", None))
+            self.assertIs(kwargs["auth_coordinator"], coordinator)
+            return controller
+
+        def run_lobby(*, requested_session: str | None = None) -> int:
+            events.append(("lobby", requested_session))
+            return 7
+
+        controller.run_session_lobby.side_effect = run_lobby
+
+        with (
+            mock.patch.object(sys, "stdin", stdin),
+            mock.patch.object(sys, "stdout", stdout),
+            mock.patch.object(sys, "stderr", stderr),
+            mock.patch.object(
+                cli_module,
+                "_validate_antigravity_executable",
+                side_effect=validate_executable,
+            ),
+            mock.patch.object(
+                cli_module,
+                "resolve_workspace",
+                side_effect=lambda option: (
+                    events.append(("workspace", option)) or workspace
+                ),
+            ),
+            mock.patch.object(
+                cli_module,
+                "build_stream_terminal",
+                side_effect=lambda *args: (
+                    events.append(("terminal", None)) or terminal
+                ),
+            ),
+            mock.patch.object(
+                cli_module,
+                "ProviderAuthService",
+                side_effect=lambda *args, **kwargs: (
+                    events.append(("auth_service", args[0])) or auth_service
+                ),
+            ),
+            mock.patch.object(
+                cli_module,
+                "InteractiveAuthCoordinator",
+                side_effect=lambda service, current_terminal: (
+                    self.assertIs(service, auth_service)
+                    or self.assertIs(current_terminal, terminal)
+                    or events.append(("auth_coordinator", None))
+                    or coordinator
+                ),
+            ),
+            mock.patch.object(
+                cli_module,
+                "establish_default_backend",
+                side_effect=establish,
+            ),
+            mock.patch.object(
+                cli_module.ConfigManager,
+                "load_configuration_snapshot",
+                autospec=True,
+                side_effect=load_snapshot,
+            ),
+            mock.patch.object(
+                cli_module,
+                "_effective_interactive_providers",
+                side_effect=routes,
+            ),
+            mock.patch.object(
+                cli_module,
+                "load_cli_context",
+                side_effect=lambda current: (
+                    events.append(("context", None)) or CliContext()
+                ),
+            ),
+            mock.patch.object(
+                cli_module,
+                "AgentBackend",
+                side_effect=lambda *args, **kwargs: (
+                    events.append(("backend", None)) or backend
+                ),
+            ),
+            mock.patch.object(
+                cli_module,
+                "InteractiveController",
+                side_effect=controller_factory,
+            ),
+        ):
+            self.assertEqual(
+                main(
+                    [
+                        "chat",
+                        "chapter_one",
+                        "--workspace",
+                        str(workspace.root),
+                    ]
+                ),
+                7,
+            )
+
+        self.assertEqual(
+            [name for name, _value in events],
+            [
+                "validation",
+                "workspace",
+                "terminal",
+                "auth_service",
+                "auth_coordinator",
+                "welcome",
+                "probe_all",
+                "default",
+                "snapshot",
+                "routes",
+                "probe_all",
+                "context",
+                "backend",
+                "controller",
+                "lobby",
+            ],
+        )
+        self.assertEqual(events[3][1], workspace.root)
+        backend.close.assert_not_called()
+        self.assertEqual(stderr.getvalue(), "")
+
+    def test_every_interactive_argument_failure_precedes_workspace_and_auth(
+        self,
+    ) -> None:
+        cases = (
+            ["chat", "--backend", "invalid-secret"],
+            ["chat", "--codex-timeout", "0"],
+            ["chat", "bad/name"],
+            ["chat", "--codex-model", "bad\x00model"],
+            ["chat", "--antigravity-executable", ""],
+            ["chat", "--antigravity-model", "bad\x00model"],
+            ["chat", "--antigravity-effort", "xhigh"],
+        )
+        for arguments in cases:
+            with self.subTest(arguments=arguments):
+                stdin = TtyStringIO(is_terminal=True)
+                stdout = TtyStringIO(is_terminal=True)
+                stderr = io.StringIO()
+                with (
+                    mock.patch.object(sys, "stdin", stdin),
+                    mock.patch.object(sys, "stdout", stdout),
+                    mock.patch.object(sys, "stderr", stderr),
+                    mock.patch.object(cli_module, "resolve_workspace") as resolve,
+                    mock.patch.object(cli_module, "ProviderAuthService") as auth,
+                    mock.patch.object(cli_module, "AgentBackend") as backend,
+                ):
+                    self.assertEqual(main(arguments), 2)
+                resolve.assert_not_called()
+                auth.assert_not_called()
+                backend.assert_not_called()
+                self.assertEqual(stdout.getvalue(), "")
+                self.assertNotIn("secret", stderr.getvalue())
+
+    def test_auth_controls_exit_without_context_backend_or_session_artifacts(
+        self,
+    ) -> None:
+        for kind in (
+            InteractiveAuthResultKind.INTERRUPT,
+            InteractiveAuthResultKind.EOF,
+        ):
+            with self.subTest(kind=kind):
+                workspace = initialized_workspace(self)
+                system_before = workspace.path(
+                    "config/system_defaults.json"
+                ).read_bytes()
+                agent_before = workspace.path(
+                    "config/agent_configs.json"
+                ).read_bytes()
+                none = provider_snapshot(
+                    ProviderAuthState.UNAUTHENTICATED,
+                    ProviderAuthState.UNAVAILABLE,
+                )
+                events: list[tuple[str, object | None]] = []
+                coordinator = ScriptedCliCoordinator(
+                    events,
+                    snapshots=(none,),
+                    results=(InteractiveAuthResult(kind, none),),
+                )
+                stdin = TtyStringIO(is_terminal=True)
+                stdout = TtyStringIO(is_terminal=True)
+                stderr = io.StringIO()
+                terminal = InteractiveTerminal(lambda _prompt: "", lambda _text: None)
+                with (
+                    mock.patch.object(sys, "stdin", stdin),
+                    mock.patch.object(sys, "stdout", stdout),
+                    mock.patch.object(sys, "stderr", stderr),
+                    mock.patch.object(
+                        cli_module,
+                        "resolve_workspace",
+                        return_value=workspace,
+                    ),
+                    mock.patch.object(
+                        cli_module,
+                        "build_stream_terminal",
+                        return_value=terminal,
+                    ),
+                    mock.patch.object(
+                        cli_module,
+                        "ProviderAuthService",
+                        return_value=object(),
+                    ),
+                    mock.patch.object(
+                        cli_module,
+                        "InteractiveAuthCoordinator",
+                        return_value=coordinator,
+                    ),
+                    mock.patch.object(cli_module, "load_cli_context") as context,
+                    mock.patch.object(cli_module, "AgentBackend") as backend,
+                    mock.patch.object(
+                        cli_module,
+                        "InteractiveController",
+                    ) as controller,
+                ):
+                    self.assertEqual(main(["chat"]), 0)
+                context.assert_not_called()
+                backend.assert_not_called()
+                controller.assert_not_called()
+                self.assertEqual(
+                    workspace.path("config/system_defaults.json").read_bytes(),
+                    system_before,
+                )
+                self.assertEqual(
+                    workspace.path("config/agent_configs.json").read_bytes(),
+                    agent_before,
+                )
+                self.assertFalse(
+                    tuple(
+                        workspace.path(
+                            "agent_states/orchestrator_state/provider_sessions"
+                        ).glob("*.json")
+                    )
+                )
+                self.assertEqual(
+                    [name for name, _value in events],
+                    ["welcome", "probe_all", "run"],
+                )
+
+    def test_mixed_effective_routes_are_freshly_gated_once_before_backend(
+        self,
+    ) -> None:
+        workspace = initialized_workspace(self)
+        system = workspace.read_json("config/system_defaults.json")
+        system["default_backend"] = "codex"
+        workspace.write_json("config/system_defaults.json", system)
+        agents = workspace.read_json("config/agent_configs.json")
+        agents[PLOT_ARCHITECT]["backend"] = "antigravity"
+        workspace.write_json("config/agent_configs.json", agents)
+        both = authenticated_provider_snapshot()
+        codex_only = provider_snapshot(
+            ProviderAuthState.AUTHENTICATED,
+            ProviderAuthState.UNAUTHENTICATED,
+        )
+        events: list[tuple[str, object | None]] = []
+        coordinator = ScriptedCliCoordinator(
+            events,
+            snapshots=(both, codex_only, both),
+            results=(provider_result(both, "antigravity"),),
+        )
+        controller = mock.Mock()
+        controller.run_session_lobby.return_value = 0
+        terminal = InteractiveTerminal(lambda _prompt: "", lambda _text: None)
+        stdin = TtyStringIO(is_terminal=True)
+        stdout = TtyStringIO(is_terminal=True)
+        with (
+            mock.patch.object(sys, "stdin", stdin),
+            mock.patch.object(sys, "stdout", stdout),
+            mock.patch.object(cli_module, "resolve_workspace", return_value=workspace),
+            mock.patch.object(
+                cli_module,
+                "build_stream_terminal",
+                return_value=terminal,
+            ),
+            mock.patch.object(cli_module, "ProviderAuthService", return_value=object()),
+            mock.patch.object(
+                cli_module,
+                "InteractiveAuthCoordinator",
+                return_value=coordinator,
+            ),
+            mock.patch.object(
+                cli_module,
+                "load_cli_context",
+                side_effect=lambda current: (
+                    events.append(("context", None)) or CliContext()
+                ),
+            ),
+            mock.patch.object(
+                cli_module,
+                "AgentBackend",
+                side_effect=lambda *args, **kwargs: (
+                    events.append(("backend", None)) or mock.Mock()
+                ),
+            ),
+            mock.patch.object(
+                cli_module,
+                "InteractiveController",
+                return_value=controller,
+            ),
+        ):
+            self.assertEqual(main(["chat", "--workspace", str(workspace.root)]), 0)
+        self.assertEqual(
+            events,
+            [
+                ("welcome", None),
+                ("probe_all", None),
+                ("probe_all", None),
+                ("run", "antigravity"),
+                ("probe_all", None),
+                ("context", None),
+                ("backend", None),
+            ],
+        )
+
+    def test_noninteractive_and_non_tty_forms_never_construct_auth(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace_path = root / "workspace"
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                self.assertEqual(main(["init", str(workspace_path)]), 0)
+            self.provider_auth_factory.assert_not_called()
+            self.auth_coordinator_factory.assert_not_called()
+
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(
+                    main(
+                        [
+                            "run",
+                            "--workspace",
+                            str(workspace_path),
+                            "--output",
+                            "part-01/no-auth.md",
+                        ]
+                    ),
+                    2,
+                )
+            self.provider_auth_factory.assert_not_called()
+            self.auth_coordinator_factory.assert_not_called()
+
+        stdin = TtyStringIO(is_terminal=False)
+        stdout = TtyStringIO(is_terminal=True)
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(sys, "stdin", stdin),
+            mock.patch.object(sys, "stdout", stdout),
+            mock.patch.object(sys, "stderr", stderr),
+        ):
+            self.assertEqual(main([]), 2)
+        self.provider_auth_factory.assert_not_called()
+        self.auth_coordinator_factory.assert_not_called()
 
     def test_run_passes_separate_antigravity_options_without_provider_work(
         self,

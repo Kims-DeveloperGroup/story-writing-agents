@@ -91,6 +91,40 @@ uncertain-capability paths await the operation silently and emit no indicator.
 The installed CLI's earlier TTY guard still rejects non-TTY shell entry before
 this component fallback can be used.
 
+## Startup presentation and native sign-in handoff
+
+Startup uses a separate bounded policy from the advisory indicator. Only a
+capable POSIX ANSI terminal with decorative SGR and no
+`STORY_REDUCED_MOTION` entry receives the four fixed welcome frames. The three
+changes are 0.4 seconds apart, or 2.5 per second, and therefore do not exceed
+three flashes per second. Native sign-in guidance and result notices each use
+one fixed 0.8-second capable frame. There is no alternate screen, general
+animation service, signal loop, or unbounded repetition.
+
+`NO_COLOR`, reduced motion, callback construction, non-TTY, `TERM=dumb`,
+non-POSIX, incomplete termios, or uncertain capability emits only the
+meaningful final welcome or notice once as plain LF output. Those paths do not
+sleep, emit ANSI, flash, acquire raw mode, or claim transient cleanup. Unlike
+the advisory indicator, `NO_COLOR` intentionally selects this static startup
+fallback because the startup ceremony requires decorative SGR as part of its
+capability proof.
+
+Every capable frame reobserves width and reserves one right-margin column. The
+driver disables echo and canonical input only while it owns the frame, accepts
+no input, clears only confirmed rows, resets SGR, discards type-ahead, and
+restores the exact captured terminal attributes before launching `codex login`
+or the resolved Antigravity executable with no arguments (bare `agy` by
+default). Native login then inherits the normal terminal directly. A
+failure or process control still attempts frame cleanup and restoration;
+uncertain restoration remains fatal rather than handing a damaged terminal to
+the provider.
+
+All welcome and authentication copy is closed, semantic, and sanitized.
+Provider output, account details, OAuth URLs, tokens, credentials, login return
+codes, and executable diagnostics never enter a startup frame. See the
+[terminal reference](../reference/interactive-terminal.md#startup-welcome-and-authentication)
+and [native authentication privacy boundary](privacy-and-provider.md#native-authentication-boundary).
+
 ## Safe display boundary
 
 `sanitize_terminal_text()` preserves ordinary Unicode, Markdown characters,
@@ -415,8 +449,9 @@ setup passes that plain projection to the fallback reader once. A capable live
 read uses the trusted fixed-theme projection and keeps its renderer, buffer,
 cursor, and preview state call-local. Confirmation supplies no suggestions.
 
-`/settings` uses the same renderer and sole driver for one top-level or nested
-picker at a time and for context-free history-free text/numeric prompts. Picker
+Provider authentication and `/settings` use the same renderer and sole driver
+for one picker at a time; settings also uses context-free history-free
+text/numeric prompts. Picker
 Escape returns from a nested editor or
 cancels at top level according to controller-owned focus. Prompt Escape returns
 from the nested editor; Ctrl-C and EOF cancel the whole workflow. Nested
@@ -427,8 +462,8 @@ silently without a snapshot or cancellation record. Save and Cancel each open a
 transient yes/no confirmation. Its context shows only changed Current/Pending
 fields and marks
 each displayed value `(Changed)`, and shows `No pending settings changes.` when
-there is no diff. `yes`/`y` commits the requested action; `no`/`n`, blank, or
-nested Escape returns to the settings picker; invalid input retries with a
+there is no diff. Committed YES proceeds; committed NO or nested Escape returns
+to the settings picker; invalid fallback input retries with a
 trusted notice. Top-level cancellation does not claim a snapshot that was not
 rendered.
 

@@ -127,11 +127,12 @@ DEFAULT_SYSTEM_CONFIG: dict[str, Any] = {
     "codex_reasoning_effort": None,
     "antigravity_model": None,
     "antigravity_effort": None,
+    "default_backend": None,
 }
 
 DEFAULT_AGENT_CONFIGS: dict[str, dict[str, str | None]] = {
     agent_id: {
-        "backend": "codex",
+        "backend": None,
         "language": None,
         "persona": None,
         "codex_model": None,

@@ -1,8 +1,8 @@
 # Backend and session API
 
 > **Availability:** `AgentBackend`, `BoundAgent`, the exact lifecycle API, and
-> pure lifecycle contracts are implemented for Codex and Antigravity. Codex is
-> the default provider.
+> pure lifecycle contracts are implemented for Codex and Antigravity. The
+> workspace default precedes the final Codex fallback.
 
 Key terms: **binding**—agent/provider pairing; **manifest**—durable session and
 thread state; **access claim**—temporary exclusive process ownership;
@@ -37,8 +37,9 @@ For Antigravity, the executable defaults to `agy`. Constructor model and effort
 have precedence over per-agent `antigravity_model`/`antigravity_effort`, then
 workspace values, then provider defaults. Effort is `None`, `low`, `medium`, or
 `high`. Timeout is positive and bounds both adapters. Overrides map canonical
-agents to exactly `codex` or `antigravity`; omitted routes use Codex. `gemini`
-raises `backend 'gemini' is no longer supported; use 'antigravity'`. A bound
+agents to exactly `codex` or `antigravity`; omitted routes use workspace
+`default_backend`, then Codex. Legacy `gemini` raises
+`backend 'gemini' is no longer supported; use 'antigravity'`. A bound
 agent exposes `backend`, `definition`, `vendor`, and `staging_directory`.
 Provider calls require ready access already held by the backend. Runtime owns
 transcripts and retrieval authorization; backend owns provider metadata,
@@ -99,11 +100,12 @@ ordinal sequence. `StoryRuntime` owns those values and allocates each
 invocation with attempt `1`; another agent, phase, replacement, or operation
 cannot reuse prior evidence.
 
-Construction first validates the complete seven-field
+Construction first validates the complete eight-field
 `config/system_defaults.json` object and closed per-agent objects in
 `config/agent_configs.json`, even when non-null constructor model/effort values
 would override persisted fields. Optional fields and canonical agents may be
-absent; validation still produces a complete roster snapshot. It then snapshots
+absent; nullable routes and `default_backend` still produce a complete roster
+snapshot through the final Codex fallback. It then snapshots
 provider routes and resolved per-agent model/effort values for that backend's
 lifetime. Editing either file does not refresh an active backend, existing
 binding, provider thread, fingerprint, or request payload; the next backend
