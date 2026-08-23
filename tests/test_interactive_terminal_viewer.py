@@ -910,7 +910,7 @@ class ViewerDriverTests(unittest.TestCase):
                 self.assertEqual(rendered.count("\x1b[?1049h"), 1)
                 self.assertEqual(rendered.count("\x1b[?1049l"), 1)
 
-    def test_parameterized_ss3_is_one_unsupported_viewer_interaction(self) -> None:
+    def test_control_terminated_and_parameterized_sequences_are_unsupported(self) -> None:
         state = initialize_text_viewer("one\ntwo", display_name="x")
 
         def run(
@@ -950,6 +950,18 @@ class ViewerDriverTests(unittest.TestCase):
         self.assertEqual(malformed_events, [KeyEvent(KeyKind.ENTER)])
         self.assertNotIn(KeyEvent(KeyKind.TEXT, text="A"), malformed_events)
         self.assertEqual(malformed_renders, 2)
+
+        for introducer in ("\x1b[", "\x1bO"):
+            with self.subTest(introducer=repr(introducer)):
+                selected, events, renders = run(
+                    introducer + "\n\x1b[1;2B\n"
+                )
+                self.assertEqual(selected.line_range, (1, 2))
+                self.assertEqual(
+                    events,
+                    [KeyEvent(KeyKind.SHIFT_DOWN), KeyEvent(KeyKind.ENTER)],
+                )
+                self.assertEqual(renders, 3)
 
         valid, valid_events, valid_renders = run("\x1bOB\x1bOA\n")
         self.assertEqual(valid.line_range, (1, 1))
@@ -1416,6 +1428,39 @@ class ViewerDriverTests(unittest.TestCase):
                 self.assertEqual(rendered.count("\x1b[?1049h"), 1)
                 self.assertEqual(rendered.count("\x1b[?1049l"), 1)
                 self.assertEqual(events.count("termios.restore"), 1)
+
+    def test_configured_controls_precede_pending_escape_sequences(self) -> None:
+        for introducer in ("\x1b[", "\x1bO"):
+            for label, character, expected in (
+                ("vintr", "\x03", TextViewerExitKind.INTERRUPTED),
+                ("veof", "\x04", TextViewerExitKind.EOF),
+            ):
+                with self.subTest(
+                    introducer=repr(introducer),
+                    control=label,
+                ):
+                    driver, _input, output, fallback, termios, events = _driver(
+                        introducer + character
+                    )
+                    termios.original[6][termios.VINTR] = b"\x03"  # type: ignore[index]
+                    termios.original[6][termios.VEOF] = b"\x04"  # type: ignore[index]
+                    with mock.patch.object(
+                        driver_module,
+                        "_escape_input_is_ready",
+                        return_value=True,
+                    ) as readiness:
+                        result = _read(
+                            driver,
+                            initialize_text_viewer("one\ntwo", display_name="x"),
+                        )
+                    self.assertEqual(result, TextViewerResult(expected))
+                    readiness.assert_called_once_with(7)
+                    fallback.assert_not_called()
+                    self.assertEqual(events.count("input.read"), 3)
+                    rendered = "".join(output.records)
+                    self.assertEqual(rendered.count("\x1b[?1049h"), 1)
+                    self.assertEqual(rendered.count("\x1b[?1049l"), 1)
+                    self.assertEqual(events.count("termios.restore"), 1)
 
     def test_live_shift_sequences_resize_every_nonexit_and_restore_screen_once(self) -> None:
         driver, _input, output, fallback, termios, events = _driver(

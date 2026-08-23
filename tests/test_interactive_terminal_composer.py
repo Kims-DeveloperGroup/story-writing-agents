@@ -848,6 +848,37 @@ class SemanticInputDriverTests(unittest.TestCase):
                     [termios_double.TCSANOW, termios_double.TCSADRAIN],
                 )
 
+    def test_post_introducer_escape_does_not_cancel_cancellable_prompt(self) -> None:
+        view = InputPromptView((), Prompt("prompt>"))
+        for introducer in ("\x1b[", "\x1bO"):
+            with self.subTest(introducer=repr(introducer)):
+                driver, _input, output, fallback, termios_double, _size = _driver(
+                    "typed" + introducer + "\x1b\n"
+                )
+                with mock.patch.object(
+                    driver_module,
+                    "_escape_input_is_ready",
+                    return_value=True,
+                ) as readiness:
+                    outcome = driver.read_prompt(
+                        view,
+                        render_input_prompt,
+                        _controls.transition_prompt_input,
+                        transient=True,
+                    )
+                self.assertEqual(
+                    outcome,
+                    ControlOutcome(ControlOutcomeKind.COMMIT, text="typed"),
+                )
+                readiness.assert_called_once_with(7)
+                self.assertNotIn("[cancelled]", "".join(output.records))
+                fallback.assert_not_called()
+                self.assertEqual(driver._history_state, MainInputHistoryState())
+                self.assertEqual(
+                    [when for _fd, when, _attrs in termios_double.set_calls],
+                    [termios_double.TCSANOW, termios_double.TCSADRAIN],
+                )
+
     def test_subject_read_line_live_clears_and_fallback_stays_ordinary(self) -> None:
         driver, _input, output, fallback, termios_double, _size = _driver(
             "Harbor subject\n"

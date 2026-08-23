@@ -975,6 +975,29 @@ class RenderingFoundationTests(unittest.TestCase):
 
 
 class CapabilityAndDriverFoundationTests(unittest.TestCase):
+    def test_escape_reducer_discards_post_introducer_c0_and_del(self) -> None:
+        for introducer in ("\x1b[", "\x1bO"):
+            for value in (*range(0x20), 0x7F):
+                with self.subTest(
+                    introducer=repr(introducer),
+                    terminator=hex(value),
+                ):
+                    state = _driver._LiveEditorState(
+                        escape_sequence=introducer,
+                    )
+                    self.assertEqual(
+                        _driver._consume_escape_character(state, chr(value)),
+                        (None, False),
+                    )
+                    self.assertIsNone(state.escape_sequence)
+
+        bare_escape = _driver._LiveEditorState(escape_sequence="\x1b")
+        self.assertEqual(
+            _driver._consume_escape_character(bare_escape, "x"),
+            (KeyEvent(KeyKind.ESCAPE), True),
+        )
+        self.assertIsNone(bare_escape.escape_sequence)
+
     def test_capabilities_observe_streams_independently_and_select_profiles(
         self,
     ) -> None:

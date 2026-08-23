@@ -942,6 +942,36 @@ class CompletionDriverTests(unittest.TestCase):
             self.assertEqual(self.read(driver), "/x")
         fallback.assert_not_called()
 
+    def test_post_introducer_controls_never_become_main_line_actions(self) -> None:
+        cases = (
+            ("enter", "", "\n", "typed\n", "typed"),
+            ("tab", "/s", "\t", "\n\n", "/say "),
+            ("backspace", "ab", "\x08", "\n", "ab"),
+            ("delete", "ab", "\x7f", "\n", "ab"),
+        )
+        for introducer in ("\x1b[", "\x1bO"):
+            for label, prefix, terminator, suffix, expected in cases:
+                with self.subTest(
+                    introducer=repr(introducer),
+                    control=label,
+                ):
+                    driver, input_stream, _output, fallback, _termios, _os = (
+                        make_driver(prefix + introducer + terminator + suffix)
+                    )
+                    with mock.patch.object(
+                        _driver._select,
+                        "select",
+                        side_effect=lambda r, w, x, _t: (r, w, x),
+                    ) as readiness:
+                        self.assertEqual(self.read(driver), expected)
+                    readiness.assert_called_once_with((7,), (), (), 0.05)
+                    fallback.assert_not_called()
+                    self.assertEqual(input_stream.reads, [])
+                    self.assertEqual(
+                        driver._history_state,
+                        MainInputHistoryState((expected,)),
+                    )
+
     def test_parameterized_ss3_and_bounded_unknown_sequences_never_leak_suffix(
         self,
     ) -> None:

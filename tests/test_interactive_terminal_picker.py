@@ -1129,7 +1129,7 @@ class PickerDriverTests(unittest.TestCase):
         for forbidden in ("\x1b[?1049", "\x1b[2J", "\x1b[3J", "\x1b]", "\x1b[M"):
             self.assertNotIn(forbidden, rendered)
 
-    def test_parameterized_ss3_is_discarded_while_valid_ss3_arrows_remain(self) -> None:
+    def test_control_terminated_and_parameterized_sequences_are_discarded(self) -> None:
         state = initialize_picker(
             Picker(
                 Prompt("Choose"),
@@ -1173,6 +1173,21 @@ class PickerDriverTests(unittest.TestCase):
         )
         self.assertEqual(malformed_events, [KeyEvent(KeyKind.ENTER)])
         self.assertNotIn(KeyEvent(KeyKind.TEXT, text="A"), malformed_events)
+
+        for introducer, down in (
+            ("\x1b[", "\x1b[B"),
+            ("\x1bO", "\x1bOB"),
+        ):
+            with self.subTest(introducer=repr(introducer)):
+                outcome, events = run(introducer + "\n" + down + "\n")
+                self.assertEqual(
+                    outcome,
+                    ControlOutcome(ControlOutcomeKind.COMMIT, text="two"),
+                )
+                self.assertEqual(
+                    events,
+                    [KeyEvent(KeyKind.DOWN), KeyEvent(KeyKind.ENTER)],
+                )
 
         valid, valid_events = run("\x1bOB\x1bOA\n")
         self.assertEqual(
