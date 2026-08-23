@@ -2,9 +2,9 @@
 
 > **Availability:** these rules protect shell live editing, migrated semantic
 > output, established package-supported terminal records, and the unlisted
-> supplied-text ranged viewer. The viewer has no installed-shell command or
-> supported public API. These rules do not make scrollback or process memory
-> private.
+> supplied-text ranged viewer. Provider-bound `$`/`$$` editing now invokes that
+> private viewer through the controller, without adding a standalone command or
+> public API. These rules do not make scrollback or process memory private.
 
 Key terms: **TTY guard**—check for interactive streams; **typed error**—trusted
 public code instead of exception prose; **display escaping**—showing a control
@@ -472,6 +472,34 @@ If the output channel itself fails, the driver can only attempt the erase; it
 does not claim terminal bytes it could not write. Attribute restoration is
 still attempted, and uncertainty about restoration remains fatal.
 
+<a id="artifact-reference-input-boundary"></a>
+
+## Artifact-reference input boundary
+
+Reference discovery is admitted only for the controller-projected
+provider-bound span. The private activation layer scans one cursor-active,
+unescaped marker and emits only pure completion/request/failure values. It
+cannot read a catalog or artifact. The controller borrows a fresh sorted
+eligible-path callback and bounded verified-text callback for that input call;
+the driver clears both in `finally`.
+
+Capable picker and viewer input run under the same admitted source, decoder,
+raw-mode lifetime, and irreversible `LIVE` latch as their originating input.
+They cannot start a parallel read or switch to fallback after live activation.
+`FALLBACK` uses numbered ordinary input and a second confirmation before an
+amended draft can be submitted. No route treats catalog completion or viewer
+selection as Enter for the outer prompt.
+
+The complete preactivation buffer, cursor, focus, and input mode are immutable
+restoration facts. Every cancel, Ctrl-C, EOF, invalid/stale selection, repository
+error, or nested operational failure restores them or raises cleanup failure;
+none appends history, dispatches a command, calls a provider, or leaves a
+marker result behind. A successful replacement changes only the marker span.
+Fresh catalog and verified reads make unsafe listing-to-view drift fail closed.
+Later submission independently captures and revalidates the then-current
+artifact; it never trusts or reuses displayed bytes. Fixed error output is
+content-free and never echoes a path or artifact body.
+
 <a id="ranged-text-viewer-boundary"></a>
 
 ## Ranged-text viewer boundary
@@ -483,8 +511,8 @@ sanitized-fallback capacity, display metadata, LF-derived line count, and
 optional one-based initial line before the terminal can be inspected. It has no
 workspace, writing-artifact, repository, runtime, backend, provider,
 controller, parser, or composer dependency. The separate artifact-reference
-limit remains authoritative for later integration; that caller must apply it
-before handing verified text to this viewer.
+limit remains authoritative; the controller caller applies it before handing
+verified text to this viewer.
 
 Up/Down and Shift+Up/Down are pure operations over immutable active/anchor
 state. Enter returns only normalized inclusive line numbers. Escape, Ctrl-C,
@@ -529,8 +557,8 @@ disposal only. Python objects, streams, emulators, multiplexers, scrollback,
 and process memory may retain copies, so this is not secure erasure. Selection
 and cancellation both close the independent viewer after resource restoration,
 so the user is not left in viewer mode. #162 returns only the content-free
-typed result; #164 must restore the exact originating composer buffer/cursor
-and attach the path/range indicator. See the
+typed result; the #164 controller caller restores the exact originating
+buffer/cursor and attaches the path/range indicator. See the
 [exact viewer contract](../reference/interactive-terminal.md#independent-ranged-text-viewer)
 and [viewer recovery guidance](recovery-and-limitations.md#ranged-text-viewer-exits-and-recovery).
 

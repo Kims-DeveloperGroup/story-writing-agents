@@ -138,6 +138,25 @@ for slash-prefixed replacement, so `/help ru` can become `/help /run`.
 Completion replaces input only; the terminal alone decides when the final
 visible buffer is submitted to this parser once.
 
+## Provider-text span projection and `$` activation
+
+`project_provider_text_span(buffer, cursor)` is another pure package-level
+projection. It returns only the cursor-active text that may reach a provider:
+the whole ordinary buffer, the tail after a valid `@agent` route or `/say`, or
+the `/run` prompt remainder after recognized `--fresh` and `--output` fields.
+It returns `None` for management commands, identities, output paths, options,
+invalid routes, and a cursor outside the provider span. It performs no catalog
+read, reference parse, authorization, or mutation.
+
+The installed controller combines that projection with current attachment and
+conversation focus before giving the terminal call-local artifact callbacks.
+The terminal may then treat `$`, `$${path}`, or `$$` as an editing activation
+inside the projected span. Completion or range selection changes the visible
+buffer but does not call `parse_interactive_line()` or submit. Cancellation and
+failure restore the exact origin. Only a later normal Enter sends the final
+visible buffer through this parser once; the runtime then parses `${...}`
+indicators. `$` is therefore never a submitted shell command.
+
 ## Search and transcript grammar
 
 `/search QUERY` removes exactly one ASCII delimiter and preserves the remaining

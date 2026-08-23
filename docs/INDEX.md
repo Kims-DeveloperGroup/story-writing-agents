@@ -9,9 +9,9 @@ Use this index to find one canonical answer instead of searching a long manual.
 > status, attached directives and safe inspection, focused history, and
 > controller-boundary cancellation for active operations and local reads.
 > Inline `${path}` and `${path}#Lx-Ly` references are active in provider-bound
-> prompts. An independent supplied-text ranged viewer exists only as an
-> unlisted internal terminal component; `$`/`$$` discovery and selection do not
-> invoke it yet.
+> prompts. In those shell spans, `$` discovers eligible artifacts, `$${path}`
+> opens one in the independent ranged viewer, and `$$` opens a picker before
+> viewing. These are editing controls, not commands or automation UI.
 
 ## Availability matrix
 
@@ -34,7 +34,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 | Run consensus with included, fresh, or draft-file input | Focused active shell conversation; noninteractive CLI and Python API remain available |
 | Publish and identify canonical agent-produced writing artifacts | Every unanimous consensus run; exact paths and eligibility in the writing-artifact reference |
 | Require agents to read canonical artifacts | Inline `${path}` and `${path}#Lx-Ly` in provider-bound conversation, retrieval, and consensus prompts; ordered multi-reference batches and per-invocation read enforcement are active. |
-| Select an inclusive range in supplied text | Package-internal terminal component only; no supported shell command or public API. `$`, `$${file}`, `$$`, artifact discovery, viewer-driven reference construction, and composer restoration remain unavailable pending #164. |
+| Discover a canonical artifact or select an inclusive range | Provider-bound shell prompt spans use `$`, `$${path}`, or `$$`; completion/viewer return to the exact draft without submission. The viewer remains package-internal, with no standalone command, public selection API, or automation UI. |
 | Cancel active advisory/consensus work or partial local rendering | Installed shell; process-level PTY verified on supported POSIX. [Delivery and platform scope](operations/recovery-and-limitations.md#posix-pty-boundary) |
 | Show one focused transcript snapshot and context accounting | Attached shell `/history`; active focus required |
 | Standalone artifact commands | Not implemented in the shell |

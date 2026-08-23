@@ -4,8 +4,9 @@
 > turns with optional bounded retrieval, context-aware debates, and compatible
 > threads are implemented. `StoryRuntime` now turns inline canonical reference
 > indicators into one repository operation and supplies a fresh authorized
-> coordinator to every addressed provider invocation. `$`/`$$` artifact
-> discovery and viewer-driven attachment remain unavailable.
+> coordinator to every addressed provider invocation. In provider-bound shell
+> prompt spans, `$`/`$$` discovery and viewer-driven attachment construct those
+> same indicators before normal submission.
 
 Key terms: **definition**—stable context for one role; **fingerprint**—its
 hash-derived identity; **binding**—the provider object for a definition;

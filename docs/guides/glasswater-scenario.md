@@ -40,6 +40,36 @@ How should Mara react without risking another diver?
 
 `@plot` is one-shot; `/to character` changes agent focus for later ordinary text.
 
+## Ground a modification without leaving the prompt
+
+After the baseline run, begin this routed turn and type the final `$`:
+
+```text
+@plot Check the established bell rule against $
+```
+
+The capable shell lists only current canonical outputs. Choose
+`core_documents/narrative_rules.md` and press Enter or Tab; completion replaces
+only `$`, leaves the turn unsubmitted, and produces:
+
+```text
+@plot Check the established bell rule against ${core_documents/narrative_rules.md}
+```
+
+To ground the same request in selected manuscript lines, add `$$`, choose the
+part-scoped planning manuscript, use Shift+Up/Down in the independent viewer,
+and press Enter. The resulting second indicator remains after the first in the
+same prompt. Escape or Ctrl-C instead restores the exact draft and cursor. In
+ordinary-line fallback, select numbered entries and type exact `START-END`,
+then press Enter once more to submit the amended draft.
+
+Only normal submission dispatches the routed turn. The plot agent must then
+read the complete ordered batch before its proposal can be accepted; it does
+not write a core document. Use a referenced `/run` when all story agents should
+debate and author an approved replacement. Catalog/viewer activity creates no
+work-history entry; the submitted indicators enter the conversation, and the
+runtime keeps only content-free per-agent read evidence.
+
 ## Create subject B and inspect memory
 
 ```text

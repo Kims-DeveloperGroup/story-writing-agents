@@ -82,9 +82,10 @@ Canonical artifact value contracts live in
 reference values, the subpackage exports content-free authorization, operation
 history/state, read-request/action, `ReferenceOperationFailure`, and parser
 contracts. Filesystem-backed `WritingArtifactRepository`, content-bearing read
-results, private capabilities, and runtime coordinators remain internal. This
-boundary supports inline runtime references but no standalone artifact command
-or `$`/`$$` file-reference UI. See
+results, private capabilities, runtime coordinators, the ranged viewer, and
+interactive activation values remain internal. The installed controller uses
+that private UI boundary for `$`/`$$` prompt editing without adding a public
+selection API or standalone artifact command. See
 [Canonical writing artifacts](writing-artifacts.md).
 
 ## Enum values

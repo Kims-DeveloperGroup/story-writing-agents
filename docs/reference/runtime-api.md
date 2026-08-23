@@ -1,7 +1,8 @@
 # Runtime API
 
 > **Availability:** `StoryRuntime` provides unchanged one-step and additive
-> bounded-retrieval turns, plus context-aware debates.
+> bounded-retrieval turns, plus context-aware debates. Interactive `$`/`$$`
+> discovery is a controller/terminal workflow and adds no runtime method.
 
 Key terms: **context-omitted run**—no `conversation_context`; **included
 snapshot**—one transcript window reused for a debate; **progress
@@ -41,6 +42,10 @@ both conversation methods, `inspect_debate()`, and `inspect_debate_context()`.
 `RuntimeSession` also exposes session-scoped
 `inspect_reference_operation(operation_id)`: an operation ID from another
 session raises `ValueError`. `Runtime` and `Session` are exact aliases.
+
+Interactive completion and range selection feed the existing methods the same
+literal `${path}` and `${path}#Lx-Ly` text a Python caller supplies directly.
+The viewer is not exported and no public artifact-selection result was added.
 
 Binding resource management is internal and adds no API. For each canonical
 agent, the runtime keeps at most one current binding at quiescence. Concurrent

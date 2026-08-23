@@ -6,9 +6,9 @@
 > reference directives and exposes the repository authorization, read-action,
 > and evidence values described below. `StoryRuntime` captures inline
 > `${path}` and `${path}#Lx-Ly` indicators and gives every addressed provider
-> invocation a fresh private coordinator. Standalone artifact commands,
-> interactive `$`/`$$` discovery and viewer attachment, and reference-specific
-> shell diagnostics remain unavailable.
+> invocation a fresh private coordinator. In provider-bound shell prompt spans,
+> `$` lists eligible artifacts and `$${path}` or `$$` opens the independent
+> ranged viewer. No standalone artifact command or public selection API exists.
 
 This reference uses **writing artifact** only for agent-produced story output.
 Transcripts, discussion logs, provider state, agent state, configuration, role
@@ -57,7 +57,8 @@ directory; the second is the user-selected part ID.
 > **Availability:** the pure parser remains I/O-free, while `StoryRuntime` uses
 > its result to authorize and enforce inline references for provider-bound
 > operations. Parsing alone is not proof of an eligible read. Shell completion,
-> a picker, and ranged-viewer attachment remain #164 work.
+> picker, and ranged-viewer attachment are terminal/controller concerns and
+> construct the same content-free indicators before this parser runs.
 
 One directive is a content-free indicator containing either a canonical path
 or that path followed by a one-based inclusive line range:
@@ -83,7 +84,9 @@ directives. For repeated directives naming the same path:
 - adjacent or disjoint ranges remain valid and retain their original order, so
   `#L1-L2` followed by `#L3-L5` is accepted.
 
-Unescaped `$$` is reserved and rejected. Every unescaped `${` begins a
+Unescaped `$$` is reserved and rejected if it reaches this runtime parser. The
+interactive terminal consumes an active `$$` picker marker before submission;
+it never becomes a command. Every unescaped `${` begins a
 directive and must have a closing brace, a nonempty whitespace-free canonical
 path, and any range that begins with `#L` must be complete. Lowercase `#l`,
 zero or leading-zero bounds, reversed ranges, extra range markers, and a
@@ -140,15 +143,16 @@ original input, compute the provider-text escape projection, and inspect
 ordered canonical path/range indicators. This parser API alone does not
 establish artifact eligibility, read content, supply it to a provider, or
 require an agent read. Runtime entry points add those authorization and
-provider steps for `${...}`; `$` and `$$` remain reserved for #164.
+provider steps for `${...}`. Interactive `$`/`$$` activation occurs before
+parser submission and adds no parser I/O or state.
 
 ## Authorized reads and lifecycle evidence
 
 > **Availability:** `StoryRuntime` integrates repository authorization,
 > transient delivery, durable content-free evidence, and exact provider read
-> enforcement for inline references. `$`/`$$` discovery, picker/viewer
-> selection, composer attachment, and reference-specific shell diagnostics
-> remain #164 work.
+> enforcement for inline references. The shell can construct those indicators
+> through `$` catalog completion and `$${path}`/`$$` ranged viewing; evidence
+> and provider enforcement remain runtime-owned.
 
 The `${canonical/path.md}` and `${canonical/path.md}#Lx-Ly` values remain
 content-free indicators. A caller holding `WritingArtifactRepository` can use
@@ -292,8 +296,9 @@ For example:
 
 ### Inline explicit-reference scenarios
 
-These indicators are executable prompt text now; the later #164 interface will
-construct the same path/range values through discovery and the ranged viewer.
+These indicators are executable prompt text. The interactive interface can
+construct the same path/range values through discovery and the ranged viewer;
+automation and Python callers supply them directly.
 
 - Outline review: `@plot Compare ${core_documents/global_outline.md} and ${manuscript/part-01/scenes/opening.md}#L40-L65, then propose the smallest outline adjustment.`
   The plot architect must request both references in that order before its
