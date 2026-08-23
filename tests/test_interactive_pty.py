@@ -221,6 +221,60 @@ if "resume" not in argv:
 '''
 
 
+_REFERENCE_PROBE_PREAMBLE = r'''
+import json
+import sys
+
+from story_writing_agents import PLOT_ARCHITECT
+from story_writing_agents.interactive_commands import (
+    parse_interactive_line,
+    project_provider_text_span,
+)
+from story_writing_agents.interactive_terminal import (
+    ComposeMode,
+    InteractiveCompositionInput,
+    InteractiveMainInput,
+    build_stream_terminal,
+)
+from story_writing_agents.interactive_terminal._reference_activation import (
+    ReferenceInputScope,
+)
+
+PATHS = (
+    "core_documents/character_sheets.md",
+    "core_documents/global_outline.md",
+    "core_documents/narrative_rules.md",
+)
+CONTENTS = {
+    PATHS[0]: "character one\ncharacter two\ncharacter three\n",
+    PATHS[1]: "outline one\noutline two\noutline three\noutline four\n",
+    PATHS[2]: "rule one\nrule two\nrule three\n",
+}
+catalog_calls = []
+read_calls = []
+
+def main_scope(buffer, cursor):
+    span = project_provider_text_span(buffer, cursor)
+    return None if span is None else ReferenceInputScope(span.start, span.end)
+
+def composition_scope(buffer, cursor):
+    return ReferenceInputScope(0, len(buffer))
+
+def paths():
+    catalog_calls.append("list")
+    return PATHS
+
+def text(selected):
+    read_calls.append(selected)
+    return CONTENTS[selected]
+
+terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
+main = InteractiveMainInput(terminal)
+composition = InteractiveCompositionInput(terminal)
+choices = lambda _buffer, _cursor: None
+'''
+
+
 def _control_character_byte(value: object, *, label: str) -> bytes:
     """Return one configured termios control character as a single byte."""
 
@@ -2022,6 +2076,330 @@ print("RESULT=" + json.dumps({
         self.assertEqual(result["after_second"][1], 1)
         self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 1)
         self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 1)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+        self.assertFalse(self.provider_log.exists())
+
+    def test_reference_routes_picker_reverse_range_and_repeated_insertions(self) -> None:
+        """Drive every inline route and two edits through real nested input."""
+
+        source = _REFERENCE_PROBE_PREAMBLE + r'''
+results = []
+for _attempt in range(3):
+    results.append(main.read_main_with_references(
+        choices,
+        main_scope,
+        paths,
+        text,
+        session_id="session",
+        agent_id=PLOT_ARCHITECT,
+    ).text)
+parsed = [parse_interactive_line(line) for line in results]
+print("RESULT=" + json.dumps({
+    "results": results,
+    "parsed": [
+        [action.kind.value, action.text, action.agent_id]
+        for action in parsed
+    ],
+    "catalog_calls": len(catalog_calls),
+    "read_calls": read_calls,
+}, separators=(",", ":")))
+'''
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=64,
+        )
+        character, outline, rules = (
+            "core_documents/character_sheets.md",
+            "core_documents/global_outline.md",
+            "core_documents/narrative_rules.md",
+        )
+
+        process.wait_for_text("story[session:plot]>")
+        second_prompt_mark = process.output_mark()
+        process.send_text(
+            "@plot compare $$\n"
+            "\x1b[B\n"
+            "\x1b[B\x1b[B\x1b[1;2A\x1b[1;2A\n"
+            f" and $${{{rules}}}\n\x1b[B\n\n"
+        )
+        process.wait_for_text(f"[viewer] {outline}")
+        process.wait_for_text(f"[viewer] {rules}")
+        process.wait_for_text(
+            "story[session:plot]>",
+            after=second_prompt_mark,
+        )
+
+        third_prompt_mark = process.output_mark()
+        process.send_text(f"/say cite $${{{character}}}\n\n\n")
+        process.wait_for_text(f"[viewer] {character}")
+        process.wait_for_text(
+            "story[session:plot]>",
+            after=third_prompt_mark,
+        )
+        process.send_text(f"/run use $${{{outline}}}\n\x1b[B\n\n")
+        process.wait_for_text('RESULT={"results":')
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+
+        match = re.search(r"RESULT=(\{[^\r\n]+\})", process.normalized_text)
+        self.assertIsNotNone(match, process.normalized_text)
+        assert match is not None
+        result = json.loads(match.group(1))
+        self.assertEqual(
+            result["results"],
+            [
+                (
+                    f"@plot compare ${{{outline}}}#L1-L3 and "
+                    f"${{{rules}}}#L2-L2"
+                ),
+                f"/say cite ${{{character}}}#L1-L1",
+                f"/run use ${{{outline}}}#L2-L2",
+            ],
+        )
+        self.assertGreater(result["catalog_calls"], 0)
+        self.assertEqual(
+            result["parsed"],
+            [
+                [
+                    "routed_message",
+                    (
+                        f"compare ${{{outline}}}#L1-L3 and "
+                        f"${{{rules}}}#L2-L2"
+                    ),
+                    "plot_architect",
+                ],
+                ["message", f"cite ${{{character}}}#L1-L1", None],
+                ["run", f"use ${{{outline}}}#L2-L2", None],
+            ],
+        )
+        self.assertEqual(
+            result["read_calls"],
+            [outline, rules, character, outline],
+        )
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 4)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 4)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+        self.assertFalse(self.provider_log.exists())
+
+    def test_reference_run_and_internal_chat_composers_restore_and_send_exactly(
+        self,
+    ) -> None:
+        """Use reference-aware RUN and internal CHAT composers over one PTY."""
+
+        source = _REFERENCE_PROBE_PREAMBLE + r'''
+run = composition.compose(
+    ComposeMode.RUN,
+    reference_scope_provider=composition_scope,
+    reference_paths_provider=paths,
+    reference_text_reader=text,
+)
+chat = composition.compose(
+    ComposeMode.CHAT,
+    agent_id=PLOT_ARCHITECT,
+    reference_scope_provider=composition_scope,
+    reference_paths_provider=paths,
+    reference_text_reader=text,
+)
+print("RESULT=" + json.dumps({
+    "run": [run.kind.value, run.text, run.line_count, run.character_count],
+    "chat": [chat.kind.value, chat.text, chat.line_count, chat.character_count],
+    "read_calls": read_calls,
+}, separators=(",", ":")))
+'''
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=64,
+        )
+        character = "core_documents/character_sheets.md"
+        outline = "core_documents/global_outline.md"
+
+        process.wait_for_text("compose[run:1]>")
+        run_mark = process.output_mark()
+        process.send_text(f"run $${{{outline}}}\n\x1b[B\n\n")
+        process.wait_for_text("compose[run:2]>", after=run_mark)
+        process.send_line("/send")
+
+        process.wait_for_text("compose[chat:plot:1]>")
+        chat_mark = process.output_mark()
+        process.send_text(f"chat $${{{character}}}\n\x1b[1;2B\n\n")
+        process.wait_for_text("compose[chat:plot:2]>", after=chat_mark)
+        process.send_line("/send")
+        process.wait_for_text('RESULT={"run":')
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+
+        match = re.search(r"RESULT=(\{[^\r\n]+\})", process.normalized_text)
+        self.assertIsNotNone(match, process.normalized_text)
+        assert match is not None
+        result = json.loads(match.group(1))
+        run_text = f"run ${{{outline}}}#L2-L2"
+        chat_text = f"chat ${{{character}}}#L1-L2"
+        self.assertEqual(
+            result,
+            {
+                "run": ["send", run_text, 1, len(run_text)],
+                "chat": ["send", chat_text, 1, len(chat_text)],
+                "read_calls": [outline, character],
+            },
+        )
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 2)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 2)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+        self.assertFalse(self.provider_log.exists())
+
+    def test_reference_nested_cancel_vintr_and_veof_restore_originating_drafts(
+        self,
+    ) -> None:
+        """Return three nested exits to the same live draft and next prompt."""
+
+        source = _REFERENCE_PROBE_PREAMBLE + r'''
+results = []
+for _attempt in range(3):
+    results.append(main.read_main_with_references(
+        choices,
+        main_scope,
+        paths,
+        text,
+        session_id="session",
+        agent_id=PLOT_ARCHITECT,
+    ).text)
+print("RESULT=" + json.dumps({
+    "results": results,
+    "read_calls": read_calls,
+}, separators=(",", ":")))
+'''
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=56,
+        )
+        path = "core_documents/global_outline.md"
+        marker = f"$${{{path}}}"
+        labels = ("cancel", "interrupt", "eof")
+
+        for index, label in enumerate(labels):
+            prompt_mark = process.output_mark()
+            process.wait_for_text("story[session:plot]>", after=prompt_mark)
+            process.send_line(f"{label} {marker}")
+            process.wait_for_text(f"[viewer] {path}", after=prompt_mark)
+            exit_mark = process.output_mark()
+            if label == "cancel":
+                process.send_text("\x1b")
+            elif label == "interrupt":
+                process.send_interrupt()
+            else:
+                process.send_eof()
+            process.wait_for_text("\x1b[?1049l", after=exit_mark)
+            process.send_bytes(
+                (b"\x7f" * len(marker))
+                + f"retained-{index}\n".encode("utf-8")
+            )
+
+        process.wait_for_text('RESULT={"results":')
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        match = re.search(r"RESULT=(\{[^\r\n]+\})", process.normalized_text)
+        self.assertIsNotNone(match, process.normalized_text)
+        assert match is not None
+        result = json.loads(match.group(1))
+        self.assertEqual(
+            result,
+            {
+                "results": [
+                    "cancel retained-0",
+                    "interrupt retained-1",
+                    "eof retained-2",
+                ],
+                "read_calls": [path, path, path],
+            },
+        )
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 3)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 3)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+        self.assertFalse(self.provider_log.exists())
+
+    def test_reference_dumb_fallback_reverses_then_requires_confirmation(
+        self,
+    ) -> None:
+        """Keep fallback canonical, visible, ANSI-free, and explicitly confirmed."""
+
+        source = _REFERENCE_PROBE_PREAMBLE + r'''
+first = main.read_main_with_references(
+    choices,
+    main_scope,
+    paths,
+    text,
+    session_id="session",
+    agent_id=PLOT_ARCHITECT,
+)
+before_second = [len(catalog_calls), len(read_calls)]
+second = main.read_main_with_references(
+    choices,
+    main_scope,
+    paths,
+    text,
+    session_id="session",
+    agent_id=PLOT_ARCHITECT,
+)
+print("RESULT=" + json.dumps({
+    "first": first.text,
+    "second": second.text,
+    "before_second": before_second,
+    "after_second": [len(catalog_calls), len(read_calls)],
+    "read_calls": read_calls,
+}, separators=(",", ":")))
+'''
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "dumb"},
+            terminal_columns=56,
+        )
+        path = "core_documents/global_outline.md"
+        process.wait_for_text("story[session:plot]>")
+        assert termios is not None
+        fallback_attributes = termios.tcgetattr(process.master_fd)
+        self.assertTrue(fallback_attributes[3] & termios.ICANON)
+        self.assertTrue(fallback_attributes[3] & termios.ECHO)
+
+        process.send_line(f"fallback $${{{path}}}")
+        process.wait_for_text(f"[viewer] {path}")
+        process.wait_for_text("Select START-END or /cancel:")
+        process.send_line("3-1")
+        expected = f"fallback ${{{path}}}#L1-L3"
+        process.wait_for_text(f"Draft retained: {expected}")
+        process.wait_for_text("Press Enter to submit it")
+        second_prompt_mark = process.output_mark()
+        process.send_line("")
+        process.wait_for_text(
+            "story[session:plot]>",
+            after=second_prompt_mark,
+        )
+        process.send_line("/status $")
+        process.wait_for_text('RESULT={"first":')
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+
+        match = re.search(r"RESULT=(\{[^\r\n]+\})", process.normalized_text)
+        self.assertIsNotNone(match, process.normalized_text)
+        assert match is not None
+        result = json.loads(match.group(1))
+        self.assertEqual(result["first"], expected)
+        self.assertEqual(result["second"], "/status $")
+        self.assertEqual(result["before_second"], result["after_second"])
+        self.assertEqual(result["read_calls"], [path])
+        self.assertNotIn("\x1b", process.normalized_text)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 0)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 0)
         self.assertEqual(
             process.final_terminal_attributes,
             process.original_terminal_attributes,
