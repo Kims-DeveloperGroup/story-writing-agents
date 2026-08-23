@@ -1129,6 +1129,65 @@ class PickerDriverTests(unittest.TestCase):
         for forbidden in ("\x1b[?1049", "\x1b[2J", "\x1b[3J", "\x1b]", "\x1b[M"):
             self.assertNotIn(forbidden, rendered)
 
+    def test_parameterized_ss3_is_discarded_while_valid_ss3_arrows_remain(self) -> None:
+        state = initialize_picker(
+            Picker(
+                Prompt("Choose"),
+                (Choice("one", "One"), Choice("two", "Two")),
+            )
+        )
+
+        def run(characters: str) -> tuple[ControlOutcome, list[KeyEvent]]:
+            driver, _input, _output, fallback, _termios, _sizes = _driver(
+                characters
+            )
+            seen: list[KeyEvent] = []
+
+            def observe(
+                current: PickerControlState,
+                event: KeyEvent,
+            ) -> tuple[PickerControlState, ControlOutcome | None]:
+                seen.append(event)
+                return transition_picker(current, event)
+
+            with mock.patch.object(
+                driver_module._select,
+                "select",
+                side_effect=lambda r, w, x, _t: (r, w, x),
+            ):
+                outcome = driver.read_picker(
+                    state,
+                    observe,
+                    transition_picker_fallback,
+                    project_picker_viewport,
+                    render_picker_viewport,
+                    render_picker_fallback,
+                )
+            fallback.assert_not_called()
+            return outcome, seen
+
+        malformed, malformed_events = run("\x1bO1A\n")
+        self.assertEqual(
+            malformed,
+            ControlOutcome(ControlOutcomeKind.COMMIT, text="one"),
+        )
+        self.assertEqual(malformed_events, [KeyEvent(KeyKind.ENTER)])
+        self.assertNotIn(KeyEvent(KeyKind.TEXT, text="A"), malformed_events)
+
+        valid, valid_events = run("\x1bOB\x1bOA\n")
+        self.assertEqual(
+            valid,
+            ControlOutcome(ControlOutcomeKind.COMMIT, text="one"),
+        )
+        self.assertEqual(
+            valid_events,
+            [
+                KeyEvent(KeyKind.DOWN),
+                KeyEvent(KeyKind.UP),
+                KeyEvent(KeyKind.ENTER),
+            ],
+        )
+
     def test_noop_keys_do_not_redraw_and_each_real_redraw_observes_width(self) -> None:
         state = initialize_picker(
             Picker(

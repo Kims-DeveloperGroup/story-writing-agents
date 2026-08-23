@@ -194,6 +194,10 @@ class DecoderAdmissionTests(unittest.TestCase):
         strict = _spec(_ByteBackedInput(encoding="latin-1"))
         escaped = _spec(_ByteBackedInput(errors="surrogateescape"))
         self.assertEqual(strict.decode_control_byte(0xE9), "é")
+        self.assertEqual(
+            tuple(strict.decode_control_byte(value) for value in range(256)),
+            tuple(chr(value) for value in range(256)),
+        )
         self.assertEqual(escaped.decode_control_byte(0xFF), "\udcff")
         for invalid in (-1, 256, True, "3"):
             with self.subTest(invalid=invalid):
@@ -312,8 +316,13 @@ class LiveCharacterReaderTests(unittest.TestCase):
         self.assertIs(second.exception, first.exception)
 
     def test_malformed_byte_shapes_poison_without_normalization(self) -> None:
-        for malformed in (b"two", "x", bytearray(b"x"), None):
-            with self.subTest(malformed=type(malformed).__name__):
+        for malformed in (b"two", "x", bytearray(b"x"), bytearray(), None):
+            with self.subTest(
+                malformed_type=type(malformed).__name__,
+                malformed_length=(
+                    len(malformed) if hasattr(malformed, "__len__") else None
+                ),
+            ):
                 stream = _ByteBackedInput(malformed)
                 reader = LiveCharacterReader(_spec(stream))
                 with self.assertRaisesRegex(
@@ -324,6 +333,7 @@ class LiveCharacterReaderTests(unittest.TestCase):
                 with self.assertRaises(TypeError) as second:
                     reader.read_character()
                 self.assertIs(second.exception, first.exception)
+                self.assertEqual(stream.calls, [("read1", 1)])
 
 
 class InputLatchAndDriverTests(unittest.TestCase):

@@ -418,6 +418,41 @@ class ViewerModelContractTests(unittest.TestCase):
         self.assertEqual(pickle.loads(pickle.dumps(result)), result)
         self.assertEqual(state.selection, (1, 2))
 
+    def test_viewport_capacity_and_canonical_projection_are_exact(self) -> None:
+        def viewport(height: int, count: int) -> TextViewerViewport:
+            return TextViewerViewport(
+                "x",
+                3,
+                height,
+                1,
+                tuple(str(value) for value in range(1, count + 1)),
+                1,
+                None,
+                None,
+            )
+
+        for height in (1, 2, 3):
+            with self.subTest(height=height, accepted=1):
+                self.assertEqual(len(viewport(height, 1).lines), 1)
+            with self.subTest(height=height, rejected=2):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "viewport lines must fit inside the frame height",
+                ):
+                    viewport(height, 2)
+        self.assertEqual(len(viewport(4, 2).lines), 2)
+        with self.assertRaisesRegex(
+            ValueError,
+            "viewport lines must fit inside the frame height",
+        ):
+            viewport(4, 3)
+
+        state = initialize_text_viewer("1\n2\n3\n4\n5", display_name="x")
+        for height, expected in ((1, 1), (2, 1), (3, 1), (4, 2), (5, 3)):
+            with self.subTest(projected_height=height):
+                projected = project_text_viewer_viewport(state, height)
+                self.assertEqual(len(projected.lines), expected)
+
     def test_lf_only_derivation_and_utf8_boundary_are_exact(self) -> None:
         self.assertEqual(TextViewerDocument("", "x").lines, ())
         self.assertEqual(TextViewerDocument("a\n", "x").lines, ("a",))
@@ -816,6 +851,117 @@ class ViewerDriverTests(unittest.TestCase):
                 rendered = "".join(output.records)
                 self.assertEqual(rendered.count("\x1b[?1049h"), 1)
                 self.assertEqual(rendered.count("\x1b[?1049l"), 1)
+
+    def test_utf8_context_dependent_controls_fallback_before_live_mutation(self) -> None:
+        controls = (0x80, 0xBF, 0xC2, 0xC3, 0xA9, 0xF4)
+        for control_name in ("VINTR", "VEOF"):
+            for value in controls:
+                with self.subTest(control=control_name, value=hex(value)):
+                    arguments = (
+                        {"vintr": bytes((value,))}
+                        if control_name == "VINTR"
+                        else {"veof": bytes((value,))}
+                    )
+                    driver, input_stream, output, fallback, _termios, events = (
+                        _codec_driver(
+                            b"",
+                            encoding="utf-8",
+                            errors="surrogateescape",
+                            **arguments,
+                        )
+                    )
+                    result = _read(
+                        driver,
+                        initialize_text_viewer("one", display_name="x"),
+                    )
+                    self.assertEqual(result.line_range, (1, 1))
+                    fallback.assert_called_once()
+                    self.assertEqual(input_stream.read_calls, 0)
+                    self.assertEqual(events.count("os.fpathconf"), 1)
+                    self.assertEqual(events.count("termios.get"), 1)
+                    self.assertNotIn("termios.activate", events)
+                    self.assertEqual(output.records, [])
+
+    def test_utf8_surrogateescape_safe_control_edges_remain_live(self) -> None:
+        for value in (0x03, 0xC0, 0xC1, 0xF5, 0xFF):
+            with self.subTest(value=hex(value)):
+                raw = bytes((value,))
+                driver, input_stream, output, fallback, _termios, events = (
+                    _codec_driver(
+                        raw,
+                        encoding="utf-8",
+                        errors="surrogateescape",
+                        vintr=raw,
+                    )
+                )
+                result = _read(
+                    driver,
+                    initialize_text_viewer("one", display_name="x"),
+                )
+                self.assertEqual(
+                    result,
+                    TextViewerResult(TextViewerExitKind.INTERRUPTED),
+                )
+                self.assertEqual(input_stream.read_calls, 1)
+                fallback.assert_not_called()
+                self.assertEqual(events.count("termios.activate"), 1)
+                self.assertEqual(events.count("termios.restore"), 1)
+                rendered = "".join(output.records)
+                self.assertEqual(rendered.count("\x1b[?1049h"), 1)
+                self.assertEqual(rendered.count("\x1b[?1049l"), 1)
+
+    def test_parameterized_ss3_is_one_unsupported_viewer_interaction(self) -> None:
+        state = initialize_text_viewer("one\ntwo", display_name="x")
+
+        def run(
+            characters: str,
+        ) -> tuple[TextViewerResult, list[KeyEvent], int]:
+            driver, _input, _output, fallback, _termios, _events = _driver(
+                characters
+            )
+            seen: list[KeyEvent] = []
+            renderer = mock.Mock(wraps=render_text_viewer)
+
+            def observe(
+                current: TextViewerState,
+                event: KeyEvent,
+            ) -> tuple[TextViewerState, TextViewerResult | None]:
+                seen.append(event)
+                return transition_text_viewer(current, event)
+
+            with mock.patch.object(
+                driver_module,
+                "_escape_input_is_ready",
+                return_value=True,
+            ):
+                result = driver.read_text_viewer(
+                    state,
+                    observe,
+                    transition_text_viewer_fallback,
+                    project_text_viewer_viewport,
+                    renderer,
+                    render_text_viewer_fallback,
+                )
+            fallback.assert_not_called()
+            return result, seen, renderer.call_count
+
+        malformed, malformed_events, malformed_renders = run("\x1bO1A\n")
+        self.assertEqual(malformed.line_range, (1, 1))
+        self.assertEqual(malformed_events, [KeyEvent(KeyKind.ENTER)])
+        self.assertNotIn(KeyEvent(KeyKind.TEXT, text="A"), malformed_events)
+        self.assertEqual(malformed_renders, 2)
+
+        valid, valid_events, valid_renders = run("\x1bOB\x1bOA\n")
+        self.assertEqual(valid.line_range, (1, 1))
+        self.assertEqual(
+            valid_events,
+            [
+                KeyEvent(KeyKind.DOWN),
+                KeyEvent(KeyKind.UP),
+                KeyEvent(KeyKind.ENTER),
+            ],
+        )
+        self.assertEqual(valid_renders, 3)
 
     def test_unsupported_byte_codec_matrix_falls_back_before_live_seams(self) -> None:
         encodings = (

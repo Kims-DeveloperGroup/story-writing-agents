@@ -942,6 +942,32 @@ class CompletionDriverTests(unittest.TestCase):
             self.assertEqual(self.read(driver), "/x")
         fallback.assert_not_called()
 
+    def test_parameterized_ss3_and_bounded_unknown_sequences_never_leak_suffix(
+        self,
+    ) -> None:
+        sequences = (
+            "\x1bO1A",
+            "\x1bO" + "1" * 61 + "A",
+            "\x1bO" + "1" * 62 + "A",
+            "\x1b[" + "1" * 61 + "A",
+            "\x1b[" + "1" * 62 + "A",
+        )
+        for sequence in sequences:
+            with self.subTest(sequence_length=len(sequence)):
+                driver, _input, output, fallback, _termios, _os = make_driver(
+                    sequence + "\n"
+                )
+                with mock.patch.object(
+                    _driver._select,
+                    "select",
+                    side_effect=lambda r, w, x, _t: (r, w, x),
+                ) as readiness:
+                    self.assertEqual(self.read(driver), "")
+                readiness.assert_called_once_with((7,), (), (), 0.05)
+                fallback.assert_not_called()
+                self.assertEqual(driver._history_state, MainInputHistoryState())
+                self.assertEqual(len(output.records), 2)
+
     def test_shift_tab_and_unknown_sequences_are_noops_without_extra_redraw(
         self,
     ) -> None:
