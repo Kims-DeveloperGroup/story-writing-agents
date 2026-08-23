@@ -1,8 +1,10 @@
 # Terminal display safety
 
 > **Availability:** these rules protect shell live editing, migrated semantic
-> output, and established package-supported terminal records. They do not make
-> scrollback private.
+> output, established package-supported terminal records, and the unlisted
+> supplied-text ranged viewer. The viewer has no installed-shell command or
+> supported public API. These rules do not make scrollback or process memory
+> private.
 
 Key terms: **TTY guard**—check for interactive streams; **typed error**—trusted
 public code instead of exception prose; **display escaping**—showing a control
@@ -37,34 +39,49 @@ driver owns one isolated bounded main-command history store alongside its raw
 resources. The callback-only `InteractiveTerminal` and controller own no
 history. Construction still performs no I/O, and the store is never persisted.
 
-Capability observation evaluates input and output independently. Live raw mode
-requires a complete POSIX `termios` interface, a nonempty non-`dumb` `TERM`,
-capable input and output TTY descriptors, a readable input, a writable/flushable
-output, and reliable size access. Missing, non-TTY, `TERM=dumb`, non-POSIX, or
-uncertain capability selects safe ordinary-line fallback without raw mode or
-cursor controls. This component fallback does not bypass the installed CLI's
-earlier two-stream TTY guard.
+Capability observation evaluates input and output independently. While input is
+`UNDECIDED`, live raw mode requires a complete POSIX `termios` interface, a
+nonempty non-`dumb` `TERM`, capable input and output TTY descriptors, a readable
+input, a writable/flushable output, and reliable size access. Missing, non-TTY,
+`TERM=dumb`, non-POSIX, or uncertain capability makes that first input use and
+permanently select safe ordinary-line `FALLBACK` without raw mode or cursor
+controls. This component fallback does not bypass the installed CLI's earlier
+two-stream TTY guard.
 
 A successful ordinary-line fallback main read is eligible for the same
 driver-local history store. The fallback itself provides no component-owned
-live Up/Down navigation; if a later read on that driver becomes capable, its
-live editor can recall the earlier commit.
+live Up/Down navigation, and the same driver never upgrades from `FALLBACK` to
+`LIVE`. The entry remains in that process-local store, but users cannot recall
+it through that driver's fallback input UI.
 
 The output descriptor supplies width. During capability observation, a missing,
 failing, nonpositive, or invalid result falls back to 80 columns; a reliable
 result is capped at 120. Live-input setup rechecks size before raw activation: a
-missing or failing query selects ordinary-line fallback, while a returned
-nonpositive or invalid column count uses 80. Capability observation and
-live-input setup repeat on the next operation, so resize is noticed without a
-signal loop. Semantic rendering also asks for current capabilities on its next
-render. Composer/confirmation input and composer lifecycle notices therefore
-use the current capability width on their next render. The internal live
-picker observes capability and width on every redraw and limits its contiguous
-viewport to seven choices; its line fallback renders the complete list.
+missing or failing query selects ordinary-line fallback only from
+`UNDECIDED`, while a returned nonpositive or invalid column count uses 80. An
+already-`LIVE` driver repeats capability, configuration, and geometry
+validation before each new input operation; resize is accepted and observed,
+while unsafe drift or setup failure raises rather than downgrading to fallback.
+An already-`FALLBACK` driver reuses its retained line-only input capabilities
+and does not probe for a live upgrade. Independently, semantic output rendering
+asks for current output capabilities on its next render; that can update record
+width without changing the input mode. Composer/confirmation live input uses
+the revalidated `LIVE` width, fallback input keeps its retained line-only
+profile, and composer lifecycle notices use the freshly observed semantic-
+output width. The internal live picker observes capability and width on every
+redraw and limits its contiguous viewport to seven choices; its line fallback
+renders the complete list.
 
 The internal profiles are fixed ANSI, capable plain, and line fallback. Presence
 of `NO_COLOR` disables decorative SGR only; it does not disable safe functional
 cursor controls on an otherwise capable terminal. There is no public theme API.
+
+The internal viewer uses those same capability facts but has a distinct
+interaction. A capable stream uses raw input and one alternate screen; an
+incapable or safely unavailable pre-activation setup uses the complete numbered
+line fallback. The driver observes bounded output width and height before the
+first viewer frame and after every nonexit key. It installs no `SIGWINCH`
+handler or background resize loop, and it never hides or shows the cursor.
 
 For one advisory turn, the same capability result also gates the narrow
 terminal-owned progress indicator. A capable raw stream may show the fixed
@@ -100,6 +117,27 @@ and notices before measurement or styling. Opaque choice identities never
 enter rendered text. A selected choice outside the live viewport is summarized
 only by its ordinal and sanitized label; line fallback renders every numbered
 choice and ends with its focused prompt space without a final LF.
+
+Viewer validation precedes capability inspection and terminal I/O. Supplied
+text and its one-line display name must be exact strict-UTF-8 `str` values; text
+is limited by a private terminal-local 8 MiB UTF-8 capacity and 65,536
+LF-derived logical lines, and an optional initial line must identify a derived
+line. The line count is rejected before splitting or materializing the line
+tuple. A separate complete sanitized fallback projection is limited to 16 MiB
+UTF-8, including display metadata, numbered records, separators, notices, and
+prompt; exact limits are accepted. Escape expansion can therefore reject an
+otherwise valid source. All of these checks precede callbacks, reads, writes,
+capability inspection, and raw-terminal work. LF alone separates logical lines,
+empty text has zero, and one final LF adds no extra line. CR, U+2028, and other
+controls remain content and render as visible escapes.
+
+In live mode, each logical line uses one physical row and is clipped with a
+Unicode-cell-aware ellipsis rather than wrapped. Sanitization and measurement
+scan only the width-relevant prefix plus a fixed 256-source-code-point
+allowance, so an unseen multi-MiB suffix or a leading zero-width combining run
+cannot impose unbounded work on every redraw. In line fallback, every accepted
+sanitized character is emitted without width clipping; long records wrap
+naturally in terminal scrollback.
 
 Transcript content follows a stricter primitive boundary: it must be an exact
 nonempty string, but whitespace-only content is valid. Sanitization makes
@@ -138,6 +176,11 @@ emits no background, dim, blink, OSC, query, or cursor sequence. Removing those
 allowed decorative sequences yields the exact
 plain structure.
 
+The separate viewer renderer keeps the same safety order and may additionally
+use fixed inverse SGR 7 for selected rows, including a fixed bold/inverse/cyan
+combination for the active selected row. Its plain `>` and `*` markers retain
+the same current/selection meaning when all viewer decoration is removed.
+
 The controller constructs semantic components only from trusted roles/states
 and validated facts. Its unlisted `InteractiveSemanticOutput` adapter acquires
 no resource when constructed and performs exactly one render and one callback
@@ -150,8 +193,9 @@ is interrupted after completed rows, those callbacks remain visible, one
 cancellation record follows, and no unrendered row or trailing result, hint, or
 context component is written.
 
-The live driver separately emits only fixed carriage-return, cursor-up/right,
-and clear-to-end controls for functional editing. During the one advisory
+For ordinary live editors, pickers, prompts, and the advisory indicator, the
+driver emits only fixed carriage-return, cursor-up/right, and clear-to-end
+controls for functional editing. During the one advisory
 indicator lifecycle it may also emit the fixed-cell carriage-return and
 clear-to-end sequence, clearing before persistent output and redrawing while
 the joined operation is pending. Semantic input context and its focused prompt
@@ -159,6 +203,11 @@ arrive as one trusted fixed-theme projection; the dynamic buffer and suggestion
 text are sanitized separately before redraw, with embedded LF visible. No
 untrusted text becomes ANSI. Emulators, multiplexers, remote sessions, and
 scrollback may still retain or transform display.
+
+The ranged viewer is the sole separate control vocabulary: fixed
+alternate-screen enter, home-and-clear redraw, and alternate-screen exit
+sequences surround only sanitized, bounded renderer output. Caller text and
+display metadata can never supply these functional sequences.
 
 ## Advisory progress boundary
 
@@ -201,17 +250,50 @@ transcript-invalid input from workspace state. The terminal never classifies
 exceptions. Shell and access-claim consequences belong to
 [Recovery](recovery-and-limitations.md).
 
+<a id="permanent-input-ownership"></a>
+
+## Permanent input ownership
+
+Each stream-backed driver owns one resource-free input latch. The input-side
+state and its external meaning are:
+
+| State | Internal boundary | User-visible behavior |
+| --- | --- | --- |
+| `UNDECIDED` | Construction has not consumed input or committed a source. Inspection alone does not read, wait, print, or mutate the terminal. | No terminal change. |
+| `LIVE` | The first actual read admitted one exact byte source, decoder, controls, and terminal configuration. The same source-correlated decoder serves all later input routes. | Capable main, subject, composition, confirmation, prompt, and picker reads use transient cleared frames; the viewer uses an alternate screen. |
+| `FALLBACK` | The first actual read entered the ordinary callback because live input could not be safely established. | All later input remains ordinary line-oriented output, so prompts, typed input, and viewer attempts stay visible. |
+
+The first transition is irreversible. `LIVE` cannot downgrade after setup,
+capability, decoder, source, or configuration failure, and `FALLBACK` cannot
+upgrade if the environment later becomes capable. This makes one component the
+only byte consumer and prevents bytes already decoded into a `TextIOWrapper`
+queue from disappearing when a later interaction reads its raw buffer.
+External concurrent reads, or mixing another wrapper/raw reader with this
+driver, are unsupported.
+
+Before selecting `LIVE`, decoder preflight admits only registry-canonical
+ASCII, UTF-8, or ISO-8859-1 with the resolved built-in `strict` or
+`surrogateescape` handler. The retained incremental reader consumes exactly one
+byte at a time, preserves fragmented code points across interaction boundaries,
+and holds at most four decoded code points. Pending decoded input is consumed
+before the fixed 50 ms Escape readiness check. Clean EOF remains stable;
+partial/malformed EOF and read, decode, or result-shape failures poison later
+reads. `KeyboardInterrupt` alone resets incomplete decoder/pending state while
+leaving `LIVE` selected. Synchronous reentry is rejected and poisons the
+reader.
+
 <a id="live-editor-boundary"></a>
 
 ## Live-editor boundary
 
 Live mode requires POSIX `termios`, capable TTY streams/descriptors and size,
 and nonempty, non-`dumb` `TERM`. Missing capability switches to the existing
-reader before editor I/O or terminal mutation. At this component boundary,
-that includes `TERM=dumb`, non-TTY, and non-POSIX cases; their ordinary
-line-input fallback shows no suggestion panel. The installed CLI's earlier
-dual-TTY guard still exits before editor construction. Recoverable activation
-failure restores first, then falls back.
+reader only while the latch is `UNDECIDED`, before editor I/O or terminal
+mutation. At this component boundary, that includes `TERM=dumb`, non-TTY, and
+non-POSIX cases; their ordinary line-input fallback shows no suggestion panel.
+The installed CLI's earlier dual-TTY guard still exits before editor
+construction. Once `LIVE` is selected, activation failure is cleaned up and
+raised rather than starting a fallback read.
 
 One unified driver instance is the sole owner of raw terminal resources. The
 terminal supplies canonical static completion, a call-local controller choice
@@ -222,17 +304,34 @@ supply pure transitions and live/fallback renderers to the same driver. Every
 collaborator is call-local; the driver retains no provider, renderer, catalog,
 or operation mode. Main, composition, confirmation, picker, and prompt reads are
 routed explicitly without inspecting prompt text. Conversation-subject input
-always remains on the ordinary reader. The standalone line-editor compatibility
-facade delegates to this same main reader and driver implementation.
+remains history- and completion-free but uses a cleared capable frame after
+`LIVE` selection and the ordinary callback after `FALLBACK`. The standalone
+line-editor compatibility facade delegates to this same main reader and driver
+implementation.
 
 An active read disables canonical input and echo, keeps a Unicode code-point
 buffer, and supports insertion, Left/Right, Home/End, Backspace/Delete, Enter,
-and configured VINTR/VEOF. The sole reader incrementally decodes one byte at a
-time when a byte buffer is available, so split UTF-8 remains one text event.
-After Escape it waits through `select()` for descriptor readiness for a fixed
-50 milliseconds, preserves established CSI and SS3 key mappings, and
-reprocesses an ordinary following code point after emitting standalone Escape.
-It creates no second reader, thread, or sleep loop.
+and configured VINTR/VEOF. Its persistent exact-byte reader keeps split UTF-8
+as one text event even when bytes arrive across calls. After Escape it consumes
+any pending decoded suffix first, then waits through `select()` for descriptor
+readiness for a fixed 50 milliseconds, preserves established CSI and SS3 key
+mappings, and reprocesses an ordinary following code point after emitting
+standalone Escape. It creates no second reader, thread, or sleep loop.
+
+Malformed CSI (`Escape` + `[`) and SS3 (`Escape` + `O`) input is also bounded.
+If a sequence reaches exactly 64 decoded code points—the two-code-point
+introducer plus 62 non-final code points—the driver replaces the accumulated
+sequence with an identity-only discard state. It retains none of the overlong
+payload or arbitrary following tail. The discard consumes input until the first
+ANSI final code point (`@` through `~`) or an unconfigured C0/DEL control, and
+consumes that terminator without reinterpreting it or a valid-looking suffix as
+a new key. The next ordinary input starts cleanly and is handled normally.
+
+Configured VINTR and VEOF are classified before pending or overlong escape
+input, and physical EOF keeps its typed outcome. For users, the malformed
+sequence is inert: it cannot move or anchor a viewer range, recall history,
+open or apply completion, delete text, or commit either the viewer selection or
+main input. A following genuine navigation, editing, or commit key still works.
 
 On main input, closed-palette Up/Down navigates the driver's history. An open
 palette instead owns Up/Down highlight movement, Tab completion, and Escape
@@ -250,10 +349,36 @@ state.
 Enter submits when no highlighted static completion is open; VEOF submits
 nonempty text or returns EOF when empty; VINTR returns interrupt.
 
+Every input route, including the ranged viewer, uses the same admitted live
+source and decoder. On the first input call, every other or unknown codec,
+including ISO-2022 variants, HZ, UTF-7, UTF-8-SIG, and
+`raw-unicode-escape`, selects permanent ordinary fallback before
+`PC_VDISABLE`, control attributes, byte reads, termios activation, screen
+entry, or live-terminal output. This is a positive allow-policy, not a deny-list
+of those examples.
+
+Within an allowed byte codec, each configured VINTR/VEOF raw byte is first
+compared with `PC_VDISABLE`. An enabled byte must then decode to exactly one
+code point and encode back to the exact byte under the stream's encoding and
+error policy. UTF-8 `surrogateescape` controls can remain live; strict
+incomplete bytes, lossy handlers, and incompatible mappings select ordinary
+fallback only while the latch is `UNDECIDED`; after `LIVE`, changed mappings
+are drift errors. Text-only collaborators keep their supplied one-code-point
+control semantics. Within a live viewer event,
+configured VINTR has priority over VEOF, and both precede ordinary key
+meanings.
+
+Before each later live operation, the driver revalidates the exact byte source,
+decoder specification, live capability features, and terminal configuration.
+Width and height may change normally, and local-flag drift limited to `PENDIN`
+is tolerated because platforms may change that flag asynchronously. Other
+source, decoder, capability, or terminal-configuration drift fails the
+operation without changing `LIVE` or invoking the fallback callback.
+
 A complete live frame comprises every row and terminal cell drawn for one
 capable input read: semantic context and prompt, editable buffer, suggestions or
-choices, validation, and redraws. Before any capable main, composition,
-confirmation, picker, or prompt read returns on submit/commit, cancel,
+choices, validation, and redraws. Before any capable main, subject,
+composition, confirmation, picker, or prompt read returns on submit/commit, cancel,
 interrupt, or EOF—or propagates a read, render, write, flush, or decode
 failure—the driver attempts to clear that entire frame and restore all captured
 attributes. A successful live main commit is appended only after cleanup and
@@ -314,9 +439,10 @@ returns one line.
 The internal picker has its own safe fallback grammar: exact `/cancel`, blank
 for the current enabled highlight, or an in-range enabled ASCII decimal ordinal
 without a leading zero. Every other line is rejected and rerendered with one
-exact validation notice. Callback, non-TTY, `TERM=dumb`, non-POSIX, uncertain
-capability, and recovered activation paths use this full numbered fallback; it
-does not acquire raw input or expose choice identities. See the exact
+exact validation notice. A permanently fallback driver, or a first input call
+with non-TTY, `TERM=dumb`, non-POSIX, or uncertain capability, uses this full
+numbered fallback; it does not acquire raw input or expose choice identities.
+See the exact
 [picker contract](../reference/interactive-terminal.md#generic-internal-picker-foundation).
 For every submitted omitted resume, the main reader records the omitted command
 whether its fresh choice read opens a picker, reports empty, or reports an
@@ -346,6 +472,68 @@ If the output channel itself fails, the driver can only attempt the erase; it
 does not claim terminal bytes it could not write. Attribute restoration is
 still attempted, and uncertainty about restoration remains fatal.
 
+<a id="ranged-text-viewer-boundary"></a>
+
+## Ranged-text viewer boundary
+
+The package-internal viewer accepts supplied text, not a path or artifact
+repository. Its adapter validates exact input types, strict UTF-8, the private
+8 MiB source capacity, the 65,536 logical-line capacity, the complete 16 MiB
+sanitized-fallback capacity, display metadata, LF-derived line count, and
+optional one-based initial line before the terminal can be inspected. It has no
+workspace, writing-artifact, repository, runtime, backend, provider,
+controller, parser, or composer dependency. The separate artifact-reference
+limit remains authoritative for later integration; that caller must apply it
+before handing verified text to this viewer.
+
+Up/Down and Shift+Up/Down are pure operations over immutable active/anchor
+state. Enter returns only normalized inclusive line numbers. Escape, Ctrl-C,
+and EOF return separate content-free noncommit kinds. No result contains the
+source, display name, path, reference, viewport, terminal, or composer state.
+An empty document cannot commit.
+
+The capable lifecycle has one resource owner and one cleanup order:
+
+1. The driver revalidates the retained `LIVE` source, decoder, controls, and
+   terminal configuration, then activates raw mode.
+2. It enters the alternate screen once and draws only fixed controls plus safe
+   bounded renderer output.
+3. A typed outcome or operational failure ends the interaction.
+4. It attempts alternate-screen exit once, then termios restoration once.
+5. The adapter drops every viewer-local value in `finally`.
+
+Once `LIVE` is selected, setup, read, render, write, flush, decode, or
+collaborator failure never opens a second line-fallback interaction. Raw mode
+and alternate-screen entry/exit are exactly paired, including partial setup,
+and captured termios is restored exactly once. A termios restoration failure
+takes precedence over screen-exit failure; screen-exit failure takes precedence
+over the active failure. Cursor visibility is untouched, so cleanup neither
+emits cursor-hide nor cursor-show controls. The viewer installs no signal
+handler or retained timer; resize is observed on the next input key and the
+50 ms Escape wait is one descriptor check. If an output failure prevents an
+exit sequence from reaching the terminal, cleanup can only report the failure;
+it cannot claim that the earlier screen bytes were reversed.
+
+An already selected `FALLBACK` driver, or an `UNDECIDED` driver's first input
+when capability or safe preflight is unavailable, prints the complete numbered
+sanitized document without width clipping and accepts only exact ASCII positive
+`START-END` or `/cancel`. Long lines wrap naturally; accepted fallback content
+is never silently truncated. Reversed endpoints normalize. Invalid, empty,
+spaced, signed, leading-zero, non-ASCII, or out-of-range input gets a visible
+fixed retry. It uses no ANSI, raw mode, cursor movement, or alternate screen,
+and cannot erase printed input.
+
+Every open receives a new caller document and optional initial line; no viewer
+state can resume. Dropping the call-local immutable values is lifecycle
+disposal only. Python objects, streams, emulators, multiplexers, scrollback,
+and process memory may retain copies, so this is not secure erasure. Selection
+and cancellation both close the independent viewer after resource restoration,
+so the user is not left in viewer mode. #162 returns only the content-free
+typed result; #164 must restore the exact originating composer buffer/cursor
+and attach the path/range indicator. See the
+[exact viewer contract](../reference/interactive-terminal.md#independent-ranged-text-viewer)
+and [viewer recovery guidance](recovery-and-limitations.md#ranged-text-viewer-exits-and-recovery).
+
 ## Other input and process-local state
 
 Escaping does not change a returned `TerminalAction`. Composition keeps exact
@@ -369,8 +557,10 @@ mutate the store.
 The store
 has no filesystem, environment, transcript, configuration, provider-session,
 or user-history-file representation and ends with its driver instance. The
-component stores no search index or story transcript. Command-looking content
-and replies are never reparsed or executed.
+component stores no search index or story transcript. Viewer text, display
+metadata, selection, viewport, and geometry are likewise never added to this
+store and are dropped after each viewer call. Command-looking content and
+replies are never reparsed or executed.
 
 Terminal errors are presentation-only, not transcript `runtime_error` events.
 Stored runtime diagnostics use separate redaction and a 4096-character cap;

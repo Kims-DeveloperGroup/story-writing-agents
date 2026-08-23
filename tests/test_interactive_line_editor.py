@@ -65,10 +65,16 @@ class ScriptedInput:
         is_terminal: bool = True,
         descriptor: object = 7,
     ) -> None:
-        self.reads = list(reads)
+        self.reads = [
+            value.encode("utf-8") if isinstance(value, str) else value
+            for value in reads
+        ]
         self.is_terminal = is_terminal
         self.descriptor = descriptor
         self.read_calls = 0
+        self.encoding = "utf-8"
+        self.errors = "strict"
+        self.buffer = self
 
     def isatty(self) -> bool:
         """Return the configured terminal flag."""
@@ -81,13 +87,18 @@ class ScriptedInput:
         return self.descriptor
 
     def read(self, size: int) -> object:
-        """Return one scripted read value or physical EOF."""
+        """Reject accidental text reads from the live byte path."""
+
+        raise AssertionError(f"unexpected text read of {size}")
+
+    def read1(self, size: int) -> object:
+        """Return one scripted byte value or physical EOF."""
 
         if size != 1:
             raise AssertionError(f"unexpected read size: {size}")
         self.read_calls += 1
         if not self.reads:
-            return ""
+            return b""
         value = self.reads.pop(0)
         if isinstance(value, BaseException):
             raise value
@@ -194,6 +205,14 @@ class FakeTermios:
             raise self.restoration_failure
 
 
+def _fake_fpathconf(descriptor: int, name: str) -> int:
+    """Return one validated deterministic POSIX disabled-control sentinel."""
+
+    if descriptor != 7 or name != "PC_VDISABLE":
+        raise AssertionError((descriptor, name))
+    return 0
+
+
 @contextlib.contextmanager
 def capable_terminal(
     termios_double: FakeTermios,
@@ -205,6 +224,11 @@ def capable_terminal(
     with (
         mock.patch.object(editor_module, "_termios", termios_double),
         mock.patch.object(editor_module.os, "name", "posix"),
+        mock.patch.object(
+            editor_module.os,
+            "fpathconf",
+            side_effect=_fake_fpathconf,
+        ),
         mock.patch.dict(os.environ, {"TERM": "xterm-256color"}),
         mock.patch.object(
             editor_module.os,
@@ -236,7 +260,9 @@ def make_editor(
 ]:
     """Build one editor with code-point input and an observable fallback."""
 
-    input_stream = ScriptedInput(*characters)
+    input_stream = ScriptedInput(
+        *(bytes((value,)) for value in characters.encode("utf-8"))
+    )
     output_stream = output or RecordingOutput()
     fallback = mock.Mock(return_value="fallback")
     editor = InteractiveMainLineEditor(
@@ -598,7 +624,7 @@ class LiveEditingTests(unittest.TestCase):
             self.assertEqual(editor.read_line("story[lobby]> "), "aXYd")
 
         fallback.assert_not_called()
-        self.assertEqual(input_stream.read_calls, len(characters))
+        self.assertEqual(input_stream.read_calls, len(characters.encode("utf-8")))
         self.assertEqual(
             tuple(call[1] for call in termios_double.set_calls),
             (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
@@ -946,26 +972,32 @@ class CapabilityAndFailureTests(unittest.TestCase):
                 "get_terminal_size",
                 side_effect=OSError("size unavailable"),
             ),
+            mock.patch.object(
+                editor_module.os,
+                "fpathconf",
+                side_effect=_fake_fpathconf,
+            ),
         ):
-            self.assertEqual(editor.read_line("p> "), "")
-        fallback.assert_not_called()
-        self.assertEqual(input_stream.read_calls, 1)
-        self.assertTrue(output.records)
+            self.assertEqual(editor.read_line("p> "), "fallback")
+        fallback.assert_called_once_with("p> ")
+        self.assertEqual(input_stream.read_calls, 0)
+        self.assertEqual(output.records, [])
 
-    def test_recoverable_activation_failure_restores_then_uses_fallback(self) -> None:
+    def test_activation_failure_restores_without_switching_to_fallback(self) -> None:
         editor, input_stream, output, fallback = make_editor("unused")
         termios_double = FakeTermios()
         termios_double.activation_failure = OSError("activation failed")
 
         with capable_terminal(termios_double):
-            self.assertEqual(editor.read_line("p> "), "fallback")
+            with self.assertRaisesRegex(OSError, "^activation failed$"):
+                editor.read_line("p> ")
 
-        fallback.assert_called_once_with("p> ")
+        fallback.assert_not_called()
         self.assertEqual(input_stream.read_calls, 0)
         self.assertEqual(output.records, [])
         self.assertEqual(
             editor._driver._history_state,
-            MainInputHistoryState(("fallback",)),
+            MainInputHistoryState(),
         )
         self.assertEqual(
             tuple(call[1] for call in termios_double.set_calls),
@@ -1108,7 +1140,7 @@ class CapabilityAndFailureTests(unittest.TestCase):
         self.assertEqual(failed._driver._history_state, MainInputHistoryState())
         failed_fallback.assert_not_called()
 
-    def test_fallback_hostile_string_returns_original_then_recalls_base_text(
+    def test_fallback_hostile_string_returns_original_and_mode_stays_fallback(
         self,
     ) -> None:
         class HostileString(str):
@@ -1121,7 +1153,7 @@ class CapabilityAndFailureTests(unittest.TestCase):
         value = HostileString("  /unknown 🌊  ")
         input_stream = ScriptedInput(*"\x1b[A\n", is_terminal=False)
         output = RecordingOutput()
-        fallback = mock.Mock(return_value=value)
+        fallback = mock.Mock(side_effect=(value, "second"))
         editor = InteractiveMainLineEditor(
             fallback,
             input_stream,  # type: ignore[arg-type]
@@ -1138,14 +1170,17 @@ class CapabilityAndFailureTests(unittest.TestCase):
 
         input_stream.is_terminal = True
         with capable_terminal(termios_double):
-            recalled = editor.read_line("live> ")
-        self.assertIs(type(recalled), str)
-        self.assertEqual(recalled, "  /unknown 🌊  ")
+            second = editor.read_line("still-fallback> ")
+        self.assertEqual(second, "second")
         self.assertEqual(
             editor._driver._history_state,
-            MainInputHistoryState(("  /unknown 🌊  ", "  /unknown 🌊  ")),
+            MainInputHistoryState(("  /unknown 🌊  ", "second")),
         )
-        fallback.assert_called_once_with("fallback> ")
+        self.assertEqual(
+            fallback.call_args_list,
+            [mock.call("fallback> "), mock.call("still-fallback> ")],
+        )
+        self.assertEqual(input_stream.read_calls, 0)
 
     def test_non_exception_activation_failure_restores_and_propagates(self) -> None:
         editor, input_stream, output, fallback = make_editor("unused")
@@ -1257,11 +1292,10 @@ class CapabilityAndFailureTests(unittest.TestCase):
         termios_double.activation_failure = OSError("activation failed")
         provider = mock.Mock(wraps=composition_slash_command_suggestions)
         with capable_terminal(termios_double):
-            self.assertEqual(
-                bind_suggestion_reader(editor, provider)("compose> "),
-                "fallback",
-            )
+            with self.assertRaisesRegex(OSError, "^activation failed$"):
+                bind_suggestion_reader(editor, provider)("compose> ")
         provider.assert_not_called()
+        fallback.assert_not_called()
         self.assertEqual(input_stream.read_calls, 0)
         self.assertEqual(output.records, [])
 

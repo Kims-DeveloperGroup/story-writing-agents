@@ -124,7 +124,7 @@ def _long_state() -> PickerControlState:
 
 
 class _ScriptedInput:
-    """Expose exact code-point reads and observable terminal capabilities."""
+    """Expose exact UTF-8 byte reads and observable terminal capabilities."""
 
     def __init__(
         self,
@@ -133,12 +133,15 @@ class _ScriptedInput:
         terminal: bool = True,
         malformed: object | None = None,
     ) -> None:
-        self.characters = list(characters)
+        self.characters = list(characters.encode("utf-8"))
         self.terminal = terminal
         self.malformed = malformed
         self.read_calls = 0
         self.tty_calls = 0
         self.fileno_calls = 0
+        self.encoding = "utf-8"
+        self.errors = "strict"
+        self.buffer = self
 
     def isatty(self) -> bool:
         self.tty_calls += 1
@@ -149,12 +152,15 @@ class _ScriptedInput:
         return 7
 
     def read(self, size: int) -> object:
+        raise AssertionError(f"text read must not run for byte input: {size}")
+
+    def read1(self, size: int) -> object:
         if size != 1:
             raise AssertionError(f"unexpected read size: {size}")
         self.read_calls += 1
         if self.malformed is not None:
             return self.malformed
-        return self.characters.pop(0) if self.characters else ""
+        return bytes((self.characters.pop(0),)) if self.characters else b""
 
 
 class _RecordingOutput:
@@ -274,10 +280,16 @@ def _driver(
         width = widths[min(len(size_calls) - 1, len(widths) - 1)]
         return os.terminal_size((width, 24))
 
+    def fpathconf(descriptor: int, name: str) -> int:
+        if descriptor != 7 or name != "PC_VDISABLE":
+            raise AssertionError((descriptor, name))
+        return 0
+
     os_double = SimpleNamespace(
         name=os_name,
         environ=environment,
         get_terminal_size=get_terminal_size,
+        fpathconf=fpathconf,
     )
     driver = RawTerminalDriver(
         fallback_read,
@@ -1100,7 +1112,7 @@ class PickerDriverTests(unittest.TestCase):
         )
         readiness.assert_called_once_with((7,), (), (), 0.05)
         fallback.assert_not_called()
-        self.assertEqual(size_calls, [8, 8, 8, 8])
+        self.assertEqual(size_calls, [8, 8, 8, 8, 8])
         self.assertEqual(
             [when for _fd, when, _attributes in termios_double.set_calls],
             [termios_double.TCSANOW, termios_double.TCSADRAIN],
@@ -1117,6 +1129,131 @@ class PickerDriverTests(unittest.TestCase):
         for forbidden in ("\x1b[?1049", "\x1b[2J", "\x1b[3J", "\x1b]", "\x1b[M"):
             self.assertNotIn(forbidden, rendered)
 
+    def test_control_terminated_and_parameterized_sequences_are_discarded(self) -> None:
+        state = initialize_picker(
+            Picker(
+                Prompt("Choose"),
+                (Choice("one", "One"), Choice("two", "Two")),
+            )
+        )
+
+        def run(characters: str) -> tuple[ControlOutcome, list[KeyEvent]]:
+            driver, _input, _output, fallback, _termios, _sizes = _driver(
+                characters
+            )
+            seen: list[KeyEvent] = []
+
+            def observe(
+                current: PickerControlState,
+                event: KeyEvent,
+            ) -> tuple[PickerControlState, ControlOutcome | None]:
+                seen.append(event)
+                return transition_picker(current, event)
+
+            with mock.patch.object(
+                driver_module._select,
+                "select",
+                side_effect=lambda r, w, x, _t: (r, w, x),
+            ):
+                outcome = driver.read_picker(
+                    state,
+                    observe,
+                    transition_picker_fallback,
+                    project_picker_viewport,
+                    render_picker_viewport,
+                    render_picker_fallback,
+                )
+            fallback.assert_not_called()
+            return outcome, seen
+
+        malformed, malformed_events = run("\x1bO1A\n")
+        self.assertEqual(
+            malformed,
+            ControlOutcome(ControlOutcomeKind.COMMIT, text="one"),
+        )
+        self.assertEqual(malformed_events, [KeyEvent(KeyKind.ENTER)])
+        self.assertNotIn(KeyEvent(KeyKind.TEXT, text="A"), malformed_events)
+
+        for introducer, down in (
+            ("\x1b[", "\x1b[B"),
+            ("\x1bO", "\x1bOB"),
+        ):
+            with self.subTest(introducer=repr(introducer)):
+                outcome, events = run(introducer + "\n" + down + "\n")
+                self.assertEqual(
+                    outcome,
+                    ControlOutcome(ControlOutcomeKind.COMMIT, text="two"),
+                )
+                self.assertEqual(
+                    events,
+                    [KeyEvent(KeyKind.DOWN), KeyEvent(KeyKind.ENTER)],
+                )
+
+        valid, valid_events = run("\x1bOB\x1bOA\n")
+        self.assertEqual(
+            valid,
+            ControlOutcome(ControlOutcomeKind.COMMIT, text="one"),
+        )
+        self.assertEqual(
+            valid_events,
+            [
+                KeyEvent(KeyKind.DOWN),
+                KeyEvent(KeyKind.UP),
+                KeyEvent(KeyKind.ENTER),
+            ],
+        )
+
+    def test_overlong_down_suffix_is_discarded_before_real_down(self) -> None:
+        state = initialize_picker(
+            Picker(
+                Prompt("Choose"),
+                (
+                    Choice("one", "One"),
+                    Choice("two", "Two"),
+                    Choice("three", "Three"),
+                ),
+            )
+        )
+        for introducer in ("\x1b[", "\x1bO"):
+            with self.subTest(introducer=repr(introducer)):
+                characters = introducer + "1" * 62 + "B\x1b[B\n"
+                driver, input_stream, _output, fallback, _termios, _sizes = (
+                    _driver(characters)
+                )
+                seen: list[KeyEvent] = []
+
+                def observe(
+                    current: PickerControlState,
+                    event: KeyEvent,
+                ) -> tuple[PickerControlState, ControlOutcome | None]:
+                    seen.append(event)
+                    return transition_picker(current, event)
+
+                with mock.patch.object(
+                    driver_module._select,
+                    "select",
+                    side_effect=lambda r, w, x, _t: (r, w, x),
+                ) as readiness:
+                    outcome = driver.read_picker(
+                        state,
+                        observe,
+                        transition_picker_fallback,
+                        project_picker_viewport,
+                        render_picker_viewport,
+                        render_picker_fallback,
+                    )
+                self.assertEqual(
+                    outcome,
+                    ControlOutcome(ControlOutcomeKind.COMMIT, text="two"),
+                )
+                self.assertEqual(
+                    seen,
+                    [KeyEvent(KeyKind.DOWN), KeyEvent(KeyKind.ENTER)],
+                )
+                self.assertEqual(readiness.call_count, 2)
+                self.assertEqual(input_stream.characters, [])
+                fallback.assert_not_called()
+
     def test_noop_keys_do_not_redraw_and_each_real_redraw_observes_width(self) -> None:
         state = initialize_picker(
             Picker(
@@ -1126,7 +1263,7 @@ class PickerDriverTests(unittest.TestCase):
         )
         driver, _input, output, fallback, termios_double, size_calls = _driver(
             "x\x1b[B\x1b[A\n",
-            widths=(80, 40, 20, 120, 120),
+            widths=(80, 80, 40, 20, 120, 120),
         )
         renderer = mock.Mock(wraps=render_picker_viewport)
         projector = mock.Mock(wraps=project_picker_viewport)
@@ -1145,7 +1282,7 @@ class PickerDriverTests(unittest.TestCase):
             )
         self.assertEqual(outcome.text, "one")
         self.assertEqual(readiness.call_count, 2)
-        self.assertEqual(size_calls, [8, 8, 8, 8, 8])
+        self.assertEqual(size_calls, [8, 8, 8, 8, 8, 8])
         self.assertEqual(
             [call.args[1].width for call in renderer.call_args_list],
             [39, 19, 119, 119],
@@ -1169,6 +1306,8 @@ class PickerDriverTests(unittest.TestCase):
         )
         cases = (
             ("\x1b", (((), (), ()),), ControlOutcomeKind.CANCEL, "[cancelled]"),
+            ("\x1b[", (((7,), (), ()),), ControlOutcomeKind.EOF, None),
+            ("\x1bO", (((7,), (), ()),), ControlOutcomeKind.EOF, None),
             ("\x03", (), ControlOutcomeKind.INTERRUPT, None),
             ("\x04", (), ControlOutcomeKind.EOF, None),
             ("", (), ControlOutcomeKind.EOF, None),
@@ -1502,7 +1641,10 @@ class PickerDriverTests(unittest.TestCase):
             "unused",
             malformed_input=object(),
         )
-        with self.assertRaisesRegex(TypeError, "input reader must return one character"):
+        with self.assertRaisesRegex(
+            TypeError,
+            "live input byte reader must return exactly one byte",
+        ):
             _read_picker(driver, state)
         fallback.assert_not_called()
         self.assertEqual(
@@ -1529,7 +1671,7 @@ class PickerDriverTests(unittest.TestCase):
         fallback.assert_not_called()
         self.assertNotIn("[completed]", "".join(output.records))
 
-    def test_activation_failure_restores_then_uses_fallback_once(self) -> None:
+    def test_activation_failure_restores_without_switching_to_fallback(self) -> None:
         termios_double = _FakeTermios()
         termios_double.activation_failure = OSError("activate failed")
         fallback = mock.Mock(return_value="1")
@@ -1538,19 +1680,20 @@ class PickerDriverTests(unittest.TestCase):
             fallback=fallback,
             termios_double=termios_double,
         )
-        outcome = _read_picker(
-            driver,
-            initialize_picker(Picker(Prompt("Choose"), (Choice("one", "One"),))),
-        )
-        self.assertEqual(outcome.text, "one")
-        fallback.assert_called_once()
+        with self.assertRaisesRegex(OSError, "^activate failed$"):
+            _read_picker(
+                driver,
+                initialize_picker(
+                    Picker(Prompt("Choose"), (Choice("one", "One"),))
+                ),
+            )
+        fallback.assert_not_called()
         self.assertEqual(input_stream.read_calls, 0)
         self.assertEqual(
             [when for _fd, when, _attrs in termios_double.set_calls],
             [termios_double.TCSANOW, termios_double.TCSADRAIN],
         )
-        self.assertEqual(len(output.records), 1)
-        self.assertIn("[completed]", output.records[0])
+        self.assertEqual(output.records, [])
 
 
 class PickerAdapterCompatibilityTests(unittest.TestCase):

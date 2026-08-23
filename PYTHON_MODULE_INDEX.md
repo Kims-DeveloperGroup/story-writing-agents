@@ -16,7 +16,7 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 38.
+Importable production units indexed: 42.
 
 ## Current Dependency Direction
 
@@ -66,9 +66,18 @@ interactive_terminal._core -> agents/interactive_commands
                            -> interactive_terminal._driver
                            -> interactive_terminal._model
                            -> interactive_terminal._render
+                           -> interactive_terminal._viewer_controls
+                           -> interactive_terminal._viewer_model
+                           -> interactive_terminal._viewer_render
 interactive_terminal._controls -> interactive_terminal._model
-interactive_terminal._driver -> interactive_terminal._model
+interactive_terminal._driver -> interactive_terminal._input_lifecycle
+                             -> interactive_terminal._model
+                             -> interactive_terminal._viewer_model
 interactive_terminal._render -> interactive_terminal._model
+interactive_terminal._viewer_controls -> interactive_terminal._model
+                                      -> interactive_terminal._viewer_model
+interactive_terminal._viewer_render -> interactive_terminal._model
+                                    -> interactive_terminal._viewer_model
 story_writing_agents facade -> interactive_commands
                             -> conversation_retrieval -> agents/conversation_search
                             |                          -> conversations/errors
@@ -303,10 +312,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   unified stream-backed terminal through its package-internal factory after a
   stdin/stdout TTY guard; constructs the interactive controller; and runs the
   async event loop. The factory binds main and composition previews plus
-  semantic confirmation input explicitly through one terminal driver, which
-  retains the existing `input` callback as its unsupported-terminal fallback;
-  subject input remains an ordinary read, while composition and confirmation
-  use history-free semantic input. The controller owns interactive backend
+  semantic confirmation input explicitly through one terminal driver, whose
+  first actual input irreversibly selects its capable live byte source or the
+  existing `input` callback. Capable subject, composition, and confirmation
+  reads are history-free; an incapable first read permanently retains ordinary
+  callback input. The controller owns interactive backend
   cleanup after its session-lobby run begins, while the CLI closes a backend if
   construction fails before that ownership transfer.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
@@ -868,12 +878,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   driver but contains no raw-mode, key-decoding, cursor, width, write, flush, or
   restoration implementation. Construction performs no stream access or
   terminal mutation. That driver owns one bounded process-local main-input
-  history store for the editor lifetime; public `read_line` records successful
-  exact nonblank commits, while the internal binding supplies a provider to a
-  history-free contextual read without retaining it. On a capable stream, the
-  public main-line route clears its complete live frame before `read_line`
-  returns; ordinary-line fallback retains its printed prompt and input. The
-  unified driver preserves exact fallback, selectable-palette, editing,
+  history store and one irreversible live-or-fallback input selection for the
+  editor lifetime; public `read_line` records successful exact nonblank
+  commits, while the internal binding supplies a provider to a history-free
+  contextual read without retaining it. On a capable first input, the public
+  main-line route clears its complete live frame before `read_line` returns;
+  ordinary-line fallback retains its printed prompt and input and remains the
+  source for all later reads on that driver. The unified driver preserves
+  selectable-palette, editing,
   interrupt, EOF, output-failure, and restoration behavior. The history is not
   persisted, and the facade performs no provider, filesystem, persistence,
   subprocess, network, or import-time operational side effect.
@@ -960,9 +972,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   bindings provide the shared selectable main-command control and driver
   adapters without exposing a terminal leaf. Public
   construction adapts `read_line` to deterministic plain semantic composition
-  and confirmation prompts, while internal construction binds distinct
-  ordinary, history-aware main, and history-free semantic composition and
-  confirmation readers without prompt inspection. Unlisted
+  and confirmation prompts, while internal stream construction binds
+  history-aware main plus history-free subject, composition, and confirmation
+  readers to one driver's irreversible capable-live or ordinary-fallback input
+  selection without prompt inspection. Unlisted
   `InteractivePickerInput`, `Choice`, `Picker`, `Prompt`, `ControlOutcome`, and
   `ControlOutcomeKind` bindings provide one resource-free generic picker input
   boundary without exposing opaque choice identities, terminal leaves, or a
@@ -970,7 +983,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   resource-free semantic cancellable-line capability for nested settings input;
   callback and stream factories respectively provide deterministic plain and
   sole-driver-backed implementations without changing the exact public
-  `__all__`. The installed main, composition, confirmation, picker, and
+  `__all__`. The installed main, subject, composition, confirmation, picker, and
   cancellable-prompt routes enforce one submitted-input lifecycle: each
   complete capable live frame clears before return and cleanup is attempted on
   failure, while callback and line fallback retain printed prompts and input
@@ -984,6 +997,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   while stream construction injects the pure fixed-glyph renderer into the sole
   driver. They do not expand the public `__all__` or expose terminal leaves to
   the controller.
+  Unlisted package-internal `InteractiveTextViewer`, `TextViewerExitKind`, and
+  `TextViewerResult` bind one storage-free supplied-text viewer. Each read
+  returns only a typed noncommit outcome or one one-based inclusive tuple; it
+  exposes no text, display metadata, viewport, terminal, composer, repository,
+  or reference state. These bindings remain absent from the exact public
+  `__all__` and project-root facade.
 - **Direct internal dependencies:** `interactive_terminal._core`.
 - **State, resources, and side effects:** Owns no terminal resource or mutable
   process state. Import deterministically canonicalizes supported public object
@@ -996,6 +1015,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_interactive_terminal_composer.py`,
   `tests/test_interactive_terminal_history.py`,
   `tests/test_interactive_terminal_picker.py`,
+  `tests/test_interactive_terminal_viewer.py`,
   `tests/test_interactive_terminal_views.py`, `tests/test_interactive_pty.py`,
   `docs/design/overview.md`,
   `docs/reference/interactive-terminal.md`,
@@ -1009,7 +1029,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:** `src/story_writing_agents/interactive_terminal/_model.py`
 - **Responsibility:** Define immutable semantic terminal contracts.
 - **Supported surface:** Package-internal semantic roles, explicit view states,
-  capability profiles, normalized keys, control outcomes, terminal
+  capability profiles, normalized keys including dedicated Shift+Up and
+  Shift+Down viewer events, control outcomes, terminal
   capabilities, line-input state, immutable `ComposerState`, bounded
   `MainInputHistoryState`, correlated `MainInputControlState`,
   `SlashCommandSuggestion`, internal `CommandCompletionCandidate`,
@@ -1045,6 +1066,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_interactive_terminal_composer.py`,
   `tests/test_interactive_terminal_history.py`,
   `tests/test_interactive_terminal_picker.py`,
+  `tests/test_interactive_terminal_viewer.py`,
   `tests/test_interactive_terminal_views.py`, and
   `docs/design/interactive-cli-design-system.md`; focused component, renderer,
   control, capability, and compatibility coverage belongs to the interactive
@@ -1140,6 +1162,127 @@ every intermediate arrow. The current runtime graph is acyclic.
   `docs/operations/terminal-safety.md`; focused rich/plain/narrow/wide coverage
   belongs to the interactive terminal test suites.
 
+### `story_writing_agents.interactive_terminal._input_lifecycle`
+
+- **Source:** `src/story_writing_agents/interactive_terminal/_input_lifecycle.py`
+- **Responsibility:** Own irreversible terminal input selection and ordered
+  live character decoding.
+- **Supported surface:** Package-internal `TerminalInputMode`, immutable
+  `LiveDecoderSpec`, `inspect_live_decoder_spec`, `LiveCharacterReader`, and
+  `TerminalInputLatch`. Decoder inspection admits only registry-canonical
+  ASCII, UTF-8, or ISO-8859-1 byte sources whose resolved error-handler callable
+  is the built-in `strict` or `surrogateescape` handler. The latch selects
+  `LIVE` or `FALLBACK` once, rejects switching and decoder-source drift, and
+  provides one synchronous input-operation exclusion boundary. A live reader
+  retains one incremental decoder, reads exactly one byte at a time, exposes
+  pending decoded suffix state for Escape lookahead, and returns one code point
+  at a time from a maximum four-code-point queue.
+- **Direct internal dependencies:** None.
+- **State, resources, and side effects:** Construction and decoder inspection
+  perform no input read, output, descriptor wait, terminal mutation, or
+  callback invocation. A selected live reader borrows the exact byte-read
+  callable for the driver lifetime; clean EOF remains stable, strict incomplete
+  EOF and read/decode/shape failures poison later reads. The latch exposes the
+  exact driver-invoked `KeyboardInterrupt` reset that clears only incomplete
+  decoder and pending-suffix state without changing the selected mode. The
+  latch owns no stream closure, termios, descriptor,
+  readiness/select, key, Escape/CSI, cursor, screen, filesystem, provider,
+  runtime, or import-time resource.
+- **Primary verification/documentation:**
+  `tests/test_interactive_terminal_input_lifecycle.py`,
+  `tests/test_interactive_terminal_completion.py`,
+  `tests/test_interactive_terminal_foundation.py`,
+  `tests/test_interactive_terminal_viewer.py`, and
+  `tests/test_interactive_pty.py`; `docs/reference/interactive-terminal.md`,
+  `docs/design/interactive-cli-design-system.md`, and
+  `docs/operations/terminal-safety.md`.
+
+### `story_writing_agents.interactive_terminal._viewer_model`
+
+- **Source:** `src/story_writing_agents/interactive_terminal/_viewer_model.py`
+- **Responsibility:** Define immutable ranged-text viewer contracts.
+- **Supported surface:** Package-internal frozen/slotted `TextViewerDocument`,
+  `TextViewerState`, `TextViewerViewport`, `TextViewerExitKind`,
+  `TextViewerNotice`, and `TextViewerResult`, plus the package-private disposal
+  lifecycle marker. Documents validate exact strict-UTF-8 supplied text and
+  one-line display metadata, enforce the private 8 MiB source capacity, reject
+  more than 65,536 LF-derived logical lines before splitting or tuple
+  materialization, and prove the complete sanitized fallback projection is at
+  most 16 MiB UTF-8 before capability, terminal, or callback I/O. Accepted
+  documents retain their LF-derived logical lines in an immutable tuple. Empty
+  state and viewport values require the exact fixed empty-document notice and
+  no active, anchor, selection, or projected line, while nonempty values reject
+  that notice. Empty fallback capacity accounts for its exact fixed projection,
+  accepting the 16 MiB boundary and rejecting the first excess byte. Results
+  contain only an exit kind and an optional normalized one-based inclusive
+  tuple.
+- **Direct internal dependencies:** None.
+- **State, resources, and side effects:** Immutable call-local values and pure
+  correlation validation only. The module owns no stream, terminal mode,
+  renderer, callback, filesystem, catalog, repository, runtime, provider,
+  controller, parser, composer, or persistent resource and performs no I/O.
+- **Primary verification/documentation:**
+  `tests/test_interactive_terminal_viewer.py`,
+  `tests/test_interactive_terminal_foundation.py`,
+  `docs/reference/interactive-terminal.md`,
+  `docs/design/interactive-cli-design-system.md`, and
+  `docs/operations/recovery-and-limitations.md`.
+
+### `story_writing_agents.interactive_terminal._viewer_controls`
+
+- **Source:** `src/story_writing_agents/interactive_terminal/_viewer_controls.py`
+- **Responsibility:** Apply pure ranged-text viewer transitions.
+- **Supported surface:** Package-internal `initialize_text_viewer`,
+  `transition_text_viewer`, `transition_text_viewer_fallback`, and
+  `project_text_viewer_viewport`. Ordinary Up/Down clears the anchor and moves
+  one clamped line; Shift+Up/Down fixes the current anchor and moves the active
+  end through extension, contraction, and reversal. Enter selects a singleton
+  or normalized anchored range, while Escape, interrupt, and EOF remain typed
+  noncommit outcomes. Fallback accepts only exact ASCII positive `START-END`
+  or `/cancel`, normalizes reverse endpoints, rejects unbounded numeric text
+  before integer conversion, and retains a fixed retry notice.
+- **Direct internal dependencies:** `interactive_terminal._model` and
+  `interactive_terminal._viewer_model`.
+- **State, resources, and side effects:** Pure immutable initialization,
+  transition, and bounded contiguous viewport projection only. The module
+  retains no state and owns no I/O, terminal, filesystem, provider, runtime,
+  controller, parser, composer, or external resource.
+- **Primary verification/documentation:**
+  `tests/test_interactive_terminal_viewer.py`,
+  `tests/test_interactive_terminal_foundation.py`,
+  `docs/reference/interactive-terminal.md`, and
+  `docs/design/interactive-cli-design-system.md`.
+
+### `story_writing_agents.interactive_terminal._viewer_render`
+
+- **Source:** `src/story_writing_agents/interactive_terminal/_viewer_render.py`
+- **Responsibility:** Render ranged-text viewer frames safely.
+- **Supported surface:** Package-internal `render_text_viewer` and
+  `render_text_viewer_fallback`. Live rendering emits one physical row per
+  logical source line within the projected height, deterministic one-based line
+  numbers and plain current/selected cues, fixed optional SGR, and cell-aware
+  ellipsis clipping without wrap or horizontal control. Each live row uses one
+  bounded sanitize-and-clip pass over at most its width plus 256 source code
+  points. Fallback renders every complete sanitized, un-clipped numbered
+  logical line and the exact ASCII range prompt without ANSI or raw controls;
+  long fallback lines may wrap naturally in ordinary scrollback.
+- **Direct internal dependencies:** `interactive_terminal._model` and
+  `interactive_terminal._viewer_model`.
+- **State, resources, and side effects:** Pure projections only. Caller
+  metadata and content are visibly sanitized before styling; CR, Unicode line
+  separators, controls, surrogates, combining marks, and wide characters cannot
+  inject terminal controls. Live output remains one clipped physical row per
+  projected logical line with width-bounded source work. Complete plain
+  fallback output is intentionally un-clipped and may wrap in the borrowed
+  ordinary reader's scrollback. The module writes no stream and owns no
+  terminal, filesystem, runtime, or storage state.
+- **Primary verification/documentation:**
+  `tests/test_interactive_terminal_viewer.py`,
+  `tests/test_interactive_terminal_foundation.py`,
+  `docs/reference/interactive-terminal.md`,
+  `docs/design/interactive-cli-design-system.md`, and
+  `docs/operations/terminal-safety.md`.
+
 ### `story_writing_agents.interactive_terminal._driver`
 
 - **Source:** `src/story_writing_agents/interactive_terminal/_driver.py`
@@ -1152,14 +1295,33 @@ every intermediate arrow. The current runtime graph is acyclic.
   `read_main_command_line` performs selectable history-aware main editing,
   `read_live_line` remains the history-free contextual compatibility route,
   `read_input_line` accepts an injected trusted semantic renderer for
-  history-free composition and confirmation, and `read_line` preserves ordinary
-  fallback. Supported package-internal `read_prompt` accepts an injected
+  history-free composition and confirmation, and `read_line` uses the same
+  history-free capable route for stream-backed subject input. The first actual
+  driver input irreversibly selects live byte input or ordinary callback
+  fallback for every later input method. Supported package-internal
+  `read_prompt` accepts an injected
   trusted semantic renderer and pure transition for one cancellable, history-
   free settings line; exact Escape cancels in raw or line-fallback mode, and
   interrupt and EOF remain distinct outcomes. Supported package-internal
   `read_picker` accepts pure call-local
   transitions, viewport projection, and live/fallback renderers for a dedicated
-  generic single-select lifecycle that does not reuse editable-line state. The
+  generic single-select lifecycle that does not reuse editable-line state.
+  Package-internal `read_text_viewer` accepts only an immutable supplied-text
+  state plus pure transition/projection/render collaborators. It decodes real
+  CSI Shift+Up/Down, returns a content-free `TextViewerResult`, uses exact ASCII
+  range fallback when raw capability is absent, and never discovers or reads a
+  file. For byte-backed streams it resolves the declared encoding through the
+  public codec registry and admits live raw mode only for canonical `ascii`,
+  `utf-8`, or `iso8859-1`, including their registry aliases. Every other or
+  unknown codec or non-built-in decoder error handler selects fallback before
+  `PC_VDISABLE`, configured-control
+  inspection, byte reads, live output, termios mutation, or screen mutation.
+  Within an admitted codec, raw VINTR/VEOF values are compared with
+  `PC_VDISABLE` before decoding; each enabled control must decode to one code
+  point and round-trip to the same byte. Disabled controls remain absent, and
+  incompatible, incomplete, or lossy mappings select fallback. Viewer VINTR
+  has priority over VEOF and both precede ordinary key
+  meanings. The
   driver provides one-write output, redraws on the full immutable main-command
   or picker control state, and normalizes established editing and picker keys.
   Installed stream-terminal main, composition, confirmation, picker, and
@@ -1179,7 +1341,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   capable stream joins the operation with one indicator task. Internal
   `AdvisoryProgressError` distinguishes indicator failure from provider failure
   for controller cleanup.
-- **Direct internal dependencies:** `interactive_terminal._model`.
+- **Direct internal dependencies:** `interactive_terminal._input_lifecycle`,
+  `interactive_terminal._model`, and
+  `interactive_terminal._viewer_model`.
 - **State, resources, and side effects:** Sole owner of borrowed input/output
   streams, independent capability checks, detected width, normalized physical
   keys, raw POSIX attributes, functional cursor controls, live redraw writes,
@@ -1189,17 +1353,41 @@ every intermediate arrow. The current runtime graph is acyclic.
   after the ordinary reader returns, while an eligible live commit is appended
   once only after complete-frame clearing and exact restoration. Static
   completion-only Enter and outcomes without an accepted line append nothing.
-  The same read loop owns
-  call-local one-byte
-  incremental decoding and the fixed 50-millisecond Escape readiness lookahead,
-  so available ordinary bytes are reprocessed without a second reader or sleep
-  loop. Completion, prompt-control, and palette collaborators are call-local and
-  retain no prompt mode. Composition, confirmation, and ordinary reads
-  never navigate or mutate that store. Cancellable prompt and picker input
+  The driver retains one private input-lifecycle latch: the first actual input
+  chooses LIVE or FALLBACK permanently. LIVE revalidates the selected
+  capability, terminal configuration, and exact decoder source on every later
+  read; degradation or drift is operational failure rather than a fallback
+  switch. FALLBACK never later performs termios, byte, or readiness input. The
+  lifecycle unit owns the persistent one-byte incremental decoder, stable clean
+  EOF, poisoning, interrupt reset, reentrancy exclusion, and bounded decoded
+  suffix; the driver owns the fixed 50-millisecond Escape readiness select and
+  checks that suffix before waiting. It ignores transient POSIX `PENDIN` when
+  comparing otherwise exact terminal attributes. Only canonical ASCII, UTF-8,
+  and ISO-8859-1 plus aliases and resolved built-in strict or surrogateescape
+  handlers proceed to disabled-control inspection and the exact enabled
+  VINTR/VEOF one-code-point/one-byte round-trip check; every other or unknown
+  codec or handler selects permanent ordinary fallback before control
+  inspection, byte input, live output, or terminal/screen mutation. Available
+  decoded suffixes are reprocessed without a second reader or sleep loop.
+  Completion, prompt-control, and palette
+  collaborators are call-local and retain no prompt mode. Composition,
+  confirmation, and history-free subject reads never navigate or mutate that
+  store. Cancellable prompt and picker input
   likewise never consult or mutate history or completion state; their live
   paths reuse the sole driver's decoding, raw-mode, cursor, write, flush, and
   restoration lifecycle. Picker input observes width again for each redraw,
-  and its safe line fallback renders the complete numbered choices. Semantic
+  and its safe line fallback renders the complete numbered choices. Viewer
+  input owns one call-local alternate-screen lifecycle but never hides or shows
+  the cursor: it validates before capability inspection, observes bounded width
+  and height before the first frame and after every non-exit key, enters raw
+  mode and alternate screen once, exits that screen once, restores captured
+  termios once, and retains no geometry, text, range, or screen state afterward.
+  A resize while idle is reflected on the next viewer interaction without a
+  signal handler. Before the first input, pre-activation uncertainty may select
+  permanent line fallback; after LIVE selection, failures propagate after
+  cleanup with termios restoration taking precedence over screen cleanup and
+  the active failure. Viewer fallback
+  uses no ANSI, raw mode, or alternate screen. Semantic
   input resolves capability and
   width once per read, uses the plain projection for fallback and cursor
   measurement, and emits the trusted styled projection only on its live path.
@@ -1210,18 +1398,22 @@ every intermediate arrow. The current runtime graph is acyclic.
   clearing and redrawing the indicator, cancels and joins the peer task after a
   worker or operation failure, and clears all indicator state before returning.
   It creates no OS thread or import-time task. Missing, uncertain, non-TTY,
-  non-POSIX, or `TERM=dumb` capability safely uses ordinary line input, while
-  `NO_COLOR` affects decorative SGR only.
+  non-POSIX, or `TERM=dumb` capability on the first input safely selects
+  permanent ordinary line input, while `NO_COLOR` affects decorative SGR only.
+  Construction remains resource-free.
 - **Primary verification/documentation:**
   `tests/test_interactive_line_editor.py`,
+  `tests/test_interactive_terminal_input_lifecycle.py`,
   `tests/test_interactive_terminal_completion.py`,
   `tests/test_interactive_terminal_foundation.py`,
   `tests/test_interactive_terminal_composer.py`,
   `tests/test_interactive_terminal_history.py`,
   `tests/test_interactive_terminal_picker.py`,
+  `tests/test_interactive_terminal_viewer.py`,
   `tests/test_interactive_pty.py`,
-  `docs/design/interactive-cli-design-system.md`, and
-  `docs/operations/terminal-safety.md`.
+  `docs/design/interactive-cli-design-system.md`,
+  `docs/operations/terminal-safety.md`, and
+  `docs/operations/recovery-and-limitations.md`.
 
 ### `story_writing_agents.interactive_terminal._core`
 
@@ -1273,13 +1465,22 @@ every intermediate arrow. The current runtime graph is acyclic.
   callback and stream construction bind it to plain or driver-owned input
   without adding a component kind or raw resource owner. The picker and prompt
   adapters validate a retained transient flag but always select the universal
-  submitted-input lifecycle. The real stream factory binds main, composition,
+  submitted-input lifecycle. Resource-free `InteractiveTextViewer` validates
+  and initializes one supplied text before invoking a bound reader, returns
+  only a typed inclusive range or noncommit outcome, and crosses the explicit
+  disposal marker in `finally`. Callback construction binds its strict
+  complete-text line fallback; stream construction binds the same pure state,
+  control, viewport, and rendering seams to the sole driver's dedicated raw and
+  alternate-screen lifecycle. It retains no viewer state and imports no
+  workspace, artifact, runtime, provider, controller, parser, or composer code.
+  The real stream factory binds main, composition,
   confirmation, picker, and cancellable-prompt reads to that lifecycle: the
   driver clears the complete capable live frame before return and attempts the
   same cleanup on failure, while callback and line fallback retain printed
   prompts and input and emit no synthetic `completed` or `cancelled` control
-  frame. Conversation-subject input remains ordinary. Persistent semantic
-  records are unchanged. Resource-free `InteractiveAdvisoryProgress` and
+  frame. Stream-backed conversation-subject input shares the driver's capable
+  history-free route; callback construction remains ordinary. Persistent
+  semantic records are unchanged. Resource-free `InteractiveAdvisoryProgress` and
   `InteractiveDebateProgress` bind the terminal's advisory and consensus
   awaitable wrappers: callback construction remains visually silent, and stream
   construction injects the pure fixed-glyph renderer into the sole driver
@@ -1287,19 +1488,26 @@ every intermediate arrow. The current runtime graph is acyclic.
   class and facade exports remain unchanged.
 - **Direct internal dependencies:** `agents`, `interactive_commands`,
   `interactive_terminal._controls`, `interactive_terminal._driver`,
-  `interactive_terminal._model`, and `interactive_terminal._render`.
+  `interactive_terminal._model`, `interactive_terminal._render`,
+  `interactive_terminal._viewer_controls`,
+  `interactive_terminal._viewer_model`, and
+  `interactive_terminal._viewer_render`.
 - **State, resources, and side effects:** Callback-constructed instances retain
   borrowed synchronous read/write callbacks, deterministic plain capabilities,
   and an explicit width but inspect no stream and acquire no resource.
   Stream-factory instances delegate all raw terminal state, width detection,
-  keys, writes, flushes, restoration, readiness, incremental decoding, and the
-  bounded process-local main-input history store, plus advisory indicator task
-  and cleanup to one driver. Main completion, call-local choice, palette, and
+  keys, writes, flushes, restoration, readiness, irreversible input-source
+  selection, persistent incremental decoding, and the bounded process-local
+  main-input history store, plus advisory indicator task and cleanup to one
+  driver. Main completion, call-local choice, palette, and
   composition providers plus semantic
   input renderers are selected per call and never retained by that driver;
   composition, confirmation, cancellable prompt, and picker input are history-
-  free, while subject input remains ordinary. Callback-constructed terminals
-  and the core itself own no history.
+  free. Viewer text, display metadata, selection, and viewport state likewise
+  remain call-local and are dropped after every return or raise. Capable
+  stream-backed subject input is history-free live input; callback-constructed
+  subject input remains ordinary. Callback-constructed terminals and the core
+  itself own no history.
   The semantic adapter retains only the
   terminal's bound component capability and acquires no stream or raw resource.
   There is no runtime, filesystem, persistence, subprocess, network, or
@@ -1310,11 +1518,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_interactive_terminal_foundation.py`,
   `tests/test_interactive_terminal_composer.py`,
   `tests/test_interactive_terminal_picker.py`,
+  `tests/test_interactive_terminal_viewer.py`,
   `tests/test_interactive_terminal_views.py`, `tests/test_interactive_pty.py`,
   `docs/design/overview.md`,
   `docs/reference/interactive-terminal.md`,
-  `docs/design/interactive-cli-design-system.md`, and
-  `docs/operations/terminal-safety.md`.
+  `docs/design/interactive-cli-design-system.md`,
+  `docs/operations/terminal-safety.md`, and
+  `docs/operations/recovery-and-limitations.md`.
 
 ### `story_writing_agents.models`
 
@@ -1840,8 +2050,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   existing public `ActionKind` identities and values. The
   `interactive_terminal` package keeps its established public facade while
   `_core` consumes public `COMMANDS` and `AGENT_ROUTES` metadata plus canonical
-  display names to coordinate safe presentation and explicit ordinary, main,
-  composition, and confirmation reader routing. `_model`, `_controls`, and
+  display names to coordinate safe presentation and explicit callback, main,
+  subject, composition, and confirmation reader routing. `_model`, `_controls`, and
   `_render` remain pure. `_render` alone recognizes complete strict JSON
   object/array agent replies for two-space Unicode-preserving presentation and
   owns the bold terminal-default `AGENT` decoration; terminal `_core` and
@@ -1850,8 +2060,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   alone owns raw streams, capabilities,
   functional cursor
   controls, width, key decoding, writes, flushes, restoration, and one bounded
-  process-local main-input history store, fixed 50-millisecond Escape readiness
-  lookahead, and call-local incremental decoder. For advisory progress it also
+  process-local main-input history store. `_input_lifecycle` owns the driver's
+  irreversible LIVE/FALLBACK latch, exact decoder specification, persistent
+  one-byte decoder, bounded decoded suffix, stable EOF, poisoning, interrupt
+  reset, and synchronous input exclusion; `_driver` retains the fixed
+  50-millisecond Escape readiness select and checks decoded suffixes first. For
+  advisory progress it also
   exclusively owns the active glyph state, operation/animation task joining,
   cursor clear/redraw writes, and cleanup; `_render` supplies only the pure
   injected four-glyph projection, and incapable or callback terminals remain
@@ -1861,16 +2075,18 @@ every intermediate arrow. The current runtime graph is acyclic.
   reads history-free. Cancellable settings prompt input is also history- and
   completion-free: `_controls` owns its pure Escape outcome, `_core` binds the
   resource-free facade adapter, and the sole driver owns its raw/fallback input
-  and restoration. The real stream factory binds main, composition,
-  confirmation, picker, and cancellable-prompt reads to one submitted-input
-  lifecycle: the driver clears each complete capable live frame before submit,
+  and restoration. The real stream factory binds main, subject, composition,
+  confirmation, picker, and cancellable-prompt reads to one irreversible input
+  source and submitted-input lifecycle: the driver clears each complete capable
+  live frame before submit,
   commit, cancel, interrupt, or EOF returns and attempts the same cleanup on
   failure before restoration. Static completion-only Enter keeps the main read
   open, so it triggers neither frame cleanup nor history append. Eligible main
   submissions append once after capable cleanup and restoration or after an
   ordinary fallback reader returns. Callback and line fallback retain printed
   prompts and input and emit no synthetic `completed` or `cancelled` control
-  frame; conversation-subject input remains ordinary. Persistent semantic
+  frame; capable stream-backed conversation-subject input is history-free live
+  input, while callback construction remains ordinary. Persistent semantic
   output written after the input boundary remains in scrollback. Explicit Save
   and Cancel confirmations alone carry the controller-owned changed-only
   Current/Pending context, including plain-text changed cues and any invalid-
@@ -1904,6 +2120,25 @@ every intermediate arrow. The current runtime graph is acyclic.
   writer; the controller owns none. The controller still receives only
   completed terminal outcomes, alone passes exact lines to the parser once, and
   neither it nor parser or storage code owns or persists command history.
+- The ranged text viewer remains wholly inside `interactive_terminal`:
+  `_viewer_model` owns immutable LF-derived document/state/viewport/result
+  values, the private terminal-local 8 MiB source and 65,536-line capacities,
+  exact empty-state/viewport correlation, and a complete 16 MiB sanitized-
+  fallback budget with exact empty-projection accounting independent from the
+  writing-artifact reference limit; `_viewer_controls` owns pure anchored and
+  fallback transitions; `_viewer_render` owns width-plus-256 bounded live-row
+  clipping and complete un-clipped plain fallback projection;
+  `_input_lifecycle` owns canonical ASCII/UTF-8/ISO-8859-1 and built-in
+  strict/surrogateescape admission plus persistent ordered decoding; and the
+  existing `_driver` owns keys, exact configured-control classification,
+  geometry, streams, raw mode, alternate screen, readiness, cleanup, and
+  next-interaction resize observation.
+  `_core` binds one stateless unlisted facade adapter and drops its call-local
+  state in `finally`.
+  No terminal unit discovers files or imports workspace, artifact repository,
+  runtime, backend, controller, parser, or composer ownership. The viewer does
+  not implement `$`, `$${file}`, or `$$`, artifact eligibility, ordered
+  references, provider context, or composer restoration.
 - `interactive_controller` is the stable one-class import boundary and owns no
   shell state or resource. Its `_core` owns interactive shell action mapping,
   current in-memory attachment, current-focus conversation and sticky-target state,
