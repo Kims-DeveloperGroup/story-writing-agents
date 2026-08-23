@@ -21,6 +21,7 @@ from ..interactive_commands import (
 )
 from ._controls import (
     append_main_input_history,
+    completion_candidate_matches,
     initialize_picker,
     main_command_uses_choices,
     project_main_choice_completion,
@@ -1948,6 +1949,7 @@ def _reference_input_bindings(
 
     return ReferenceInputBindings(
         projection_provider,
+        completion_candidate_matches,
         text_reader,
         failure_writer,
         _reference_picker_state,

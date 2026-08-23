@@ -204,6 +204,7 @@ class ReferenceInputBindings:
     """Bind one call-local reference UI without owning its resources."""
 
     projection_provider: Callable[[str, int], ReferenceInputProjection | None]
+    completion_candidate_matches: Callable[[str, str], bool]
     read_text: Callable[[str], str]
     write_failure: Callable[[ReferenceInputFailureKind], None]
     initialize_picker: Callable[[tuple[str, ...], str], PickerControlState]
@@ -1053,7 +1054,10 @@ class RawTerminalDriver:
                 replacements = tuple(
                     candidate.replacement
                     for candidate in completion.candidates
-                    if candidate.replacement.startswith(prefix)
+                    if bindings.completion_candidate_matches(
+                        candidate.replacement,
+                        prefix,
+                    )
                 )
                 if not replacements:
                     bindings.write_failure(ReferenceInputFailureKind.INVALID)
