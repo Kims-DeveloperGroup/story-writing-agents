@@ -1178,15 +1178,16 @@ document, selection, or geometry after return.
 
 ### Implemented module-index delta
 
-The current [Python module index](../../PYTHON_MODULE_INDEX.md) records 41
-importable production units after the writing-artifact package and #162 viewer
-modules:
+The current [Python module index](../../PYTHON_MODULE_INDEX.md) records 42
+importable production units after the writing-artifact package and #162's
+three viewer leaves plus one input-lifecycle leaf:
 
 ```text
 historical post-#93 total                33
 writing-artifact package growth          +5
-private ranged-viewer modules             +3
-current total                             41
+private ranged-viewer leaves              +3
+private input-lifecycle leaf               +1
+current total                             42
 ```
 
 The terminal's pre-viewer six entries are the package plus `_model`,
@@ -1198,8 +1199,9 @@ responsibilities and tests to existing entries without adding an importable
 unit or dependency edge. #93 adds only `interactive_settings` and its approved
 controller-to-settings and settings-to-agents/config/errors/workspace edges.
 The current writing-artifact inventory raises that historical 33-unit baseline
-to 38; `_viewer_model`, `_viewer_controls`, and `_viewer_render` then raise it
-to 41. Controller policy leaves still consume only facade error contracts.
+to 38. `_viewer_model`, `_viewer_controls`, and `_viewer_render` add three
+viewer leaves, while `_input_lifecycle` adds the fourth #162 unit, for a current
+total of 42. Controller policy leaves still consume only facade error contracts.
 
 ## Migration coverage
 
@@ -1215,9 +1217,11 @@ existing workspace, configuration, and backend units without changing that
 graph. #93 installs `/settings` and historically brought the graph to 33 units.
 #142 adds controller-owned dynamic resume choices and a universal capable-input
 cleanup lifecycle without another module. Later writing-artifact packaging
-brings the current base to 38. #162 adds three private viewer leaves for 41
-units, preserves the public and root facades, and introduces only downward
-terminal-internal edges.
+brings the current base to 38. #162 adds three private viewer leaves plus the
+private input-lifecycle leaf for 42 units, preserves the public and root
+facades, and introduces only downward terminal-internal edges. The lifecycle
+leaf owns the irreversible latch and persistent decoder; the driver remains the
+sole input consumer and terminal-resource owner.
 
 ### View groups
 
