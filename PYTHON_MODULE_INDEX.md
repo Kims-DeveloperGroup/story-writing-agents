@@ -16,7 +16,7 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 46.
+Importable production units indexed: 47.
 
 ## Current Dependency Direction
 
@@ -36,6 +36,7 @@ __main__ -> cli -> interactive_controller -> interactive_controller._core
                  |               -> agents/backend/config/conversations/directives
                  |               -> errors/models/session_lifecycle/workspace
                  |               -> writing_artifacts/writing_artifacts.repository
+                 |               -> writing_artifacts.runtime_references
                  -> backend -> config/conversation_retrieval/workspace/models/errors/agents
                  |          -> session_lifecycle/writing_artifacts.read_actions
                  -> cli_context -> workspace/errors/agents
@@ -91,6 +92,8 @@ writing_artifacts -> writing_artifacts.authorization/catalog/directives/read_act
 writing_artifacts.authorization -> writing_artifacts.catalog/references
 writing_artifacts.directives -> writing_artifacts.references
 writing_artifacts.read_actions -> writing_artifacts.authorization/references
+writing_artifacts.runtime_references -> writing_artifacts.authorization/directives
+                                     -> writing_artifacts.read_actions/references/repository
 writing_artifacts.references -> writing_artifacts.catalog
 writing_artifacts._reference_evidence -> writing_artifacts._storage/authorization
 writing_artifacts.repository -> agents/errors/writing_artifacts._reference_evidence
@@ -422,7 +425,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ConversationRetrievalSearchItem`, `ConversationRetrievalSearchObservation`,
   `ConversationRetrievalSource`, `ConversationRetrievalTranscriptEvent`, and
   `serialize_conversation_retrieval_observation`. The package facade exports
-  every listed name except the serializer.
+  every listed name except the serializer. `ConversationRetrievalResult`
+  carries an additive optional, content-free `reference_operation_id`; its
+  default remains `None`, and construction validates any supplied safe
+  identity without importing artifact-runtime ownership.
 - **Direct internal dependencies:** `agents`, `conversation_search`,
   `conversations`, and `errors`.
 - **State, resources, and side effects:** Frozen, slotted contracts, immutable
@@ -681,7 +687,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   value has an explicit text cue and warning role, and an unchanged candidate
   contains only an explicit no-changes notice without empty sections. NO or
   nested Escape returns to the settings menu, while interrupt or EOF preserves
-  whole-flow cancellation.
+  whole-flow cancellation. Provider-bound routes pass the submitted text
+  unchanged to `StoryRuntime`; the controller consumes only the resulting
+  optional content-free reference-operation identity. It maps malformed
+  directives and structured `ReferenceOperationFailure` codes to fixed safe
+  interactive errors without presenting exception prose or reading artifact
+  content itself.
 - **Direct internal dependencies:** `agents`, `backend`, `cli_context`,
   `conversation_retrieval`, `conversation_search`, `conversations`, `errors`,
   `interactive_commands`, `interactive_controller._conversation_policy`,
@@ -734,6 +745,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   changes durable state, releases access, and returns to the lobby. Quit, EOF,
   and final cleanup release access without pausing. Persisted conversation
   defaults remain distinct from the in-memory current focus.
+  Reference parsing, capture, provider-read enforcement, durable evidence, and
+  operation finalization remain below the controller boundary; it owns no
+  reference-operation state or artifact bytes.
   The controller also performs
   catalog create/list/get/rename/archive and compensating unarchive calls,
   persists session and conversation defaults through `cli_context`, applies
@@ -859,8 +873,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   reconstruct exact immutable contracts, consume only a previous event or
   immutable progress tuple, and return canonical typed facts. Debate and
   context inspection validators return the whitelisted fact contracts without
-  flattening presentation text; the module never renders, appends, retains, or
-  calls the runtime.
+  flattening presentation text. Debate inspection and retrieval-result
+  validation accept an additive optional reference-operation identity only
+  when it has the exact content-free
+  `rr_<two-hex-length>_<session>_<32-lowercase-hex>` form for the inspected
+  session, and preserve it in the canonical result. The
+  module never renders, appends, retains, or calls the runtime.
 - **Direct internal dependencies:** `conversation_retrieval`,
   `conversation_search`, `errors`, `interactive_terminal`, `models`, and
   `workspace`.
@@ -1562,6 +1580,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ConversationRequest`, `ConversationReply`, `ConversationResult`, and
   `DebateResult`. `AgentRequest` carries an optional canonical
   `conversation_context` field without changing context-free construction.
+  `ConversationResult` and `DebateResult` each carry an additive optional,
+  validated, content-free `reference_operation_id`; its default is `None`, and
+  `DebateResult.to_dict()` omits the key in that default no-reference case.
 - **Direct internal dependencies:** `agents`, `conversations`, and `errors`.
 - **State, resources, and side effects:** Value contracts own no process state;
   `PromptFileReference.from_path` performs one verified capture for ordinary
@@ -1584,11 +1605,17 @@ every intermediate arrow. The current runtime graph is acyclic.
   synchronous progress sink, context-aware `run_prompt()` and `run_draft()`
   with required `output_path=PART/PATH.md`,
   and the separate strict `inspect_debate_context()` accessor on both forms,
-  plus compatibility aliases `Runtime` and `Session`.
+  plus `inspect_reference_operation()` on both forms and compatibility aliases
+  `Runtime` and `Session`. The session-bound accessor rejects operation
+  identities outside its embedded session scope. Existing provider-bound
+  method signatures consume inline artifact-reference directives without new
+  parameters, and their result contracts expose an optional content-free
+  reference-operation identity.
 - **Direct internal dependencies:** `agents`, `backend`, `config`,
   `conversation_retrieval`, `conversation_search`, `directives`,
   `conversations`, `errors`, `models`, `prompts`, `session_lifecycle`, and
-  `workspace`; plus `writing_artifacts` and `writing_artifacts.repository`.
+  `workspace`; plus `writing_artifacts`, `writing_artifacts.repository`, and
+  `writing_artifacts.runtime_references`.
 - **State, resources, and side effects:** Retains an injected or default
   `ConversationEventStore` collaborator and owns each canonical agent's newest
   desired fingerprint, at most one current binding, same-fingerprint shielded
@@ -1605,7 +1632,19 @@ every intermediate arrow. The current runtime graph is acyclic.
   runtime code never reaches into backend collections. Debate invocation,
   ordinary conversation, and retrieval each retain their exact binding from
   acquisition through the provider call and release it in `finally` on success,
-  failure, or cancellation. A backend-bound runtime retains that backend's
+  failure, or cancellation. Each provider-bound conversation, retrieval, and
+  debate input is parsed and, when references are present, captured once by one
+  call-local runtime-reference operation. Durable conversation and debate
+  input records retain its exact source text, while provider requests and
+  messages receive only its projected provider text. Every provider attempt,
+  debate phase, and round receives a fresh ordinally correlated read
+  invocation; the operation accepts only after all invocations are terminal
+  and the repository revalidates, and terminates on cancellation, provider
+  failure, or workflow failure. The runtime coordinator retains only a
+  call-local lock, pending-invocation map, ordinal, and generated identities;
+  the repository alone owns filesystem capture and persistent evidence, while
+  the backend remains the mandatory read-action consumer. A backend-bound
+  runtime retains that backend's
   immutable persisted configuration snapshot for its lifetime, shares it with
   prompt assembly, and uses its round limit; session runtime overrides and
   explicit call overrides remain live and higher precedence. Backend-free
@@ -1749,6 +1788,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   and retrieval activity, trusted in-memory nonpersistent retrieval progress,
   an immutable included-context sidecar, debate and agent state, a result, and
   a provenance-backed part-scoped manuscript; verifies core-document bytes.
+  Its provider-free no-reference conversation, retrieval, and debate paths
+  assert that result operation identities remain `None`, and that the persisted
+  debate result omits the optional identity key.
   Its provider-free backend
   implements the exact lifecycle hooks and returns correlated ready/access
   facts so runtime preparation exercises the canonical contract. Temporary
@@ -1787,7 +1829,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   sidecars use an exact identity-bound version-1 schema, require a non-null
   canonical snapshot for included mode and a null snapshot for fresh mode,
   reject malformed or colliding files, and return `None` when absent for legacy
-  debates. A
+  debates. Persisted debate results may carry one validated content-free
+  `reference_operation_id`; omission is canonical for `None` and no-reference
+  runs. Workspace owns only that result serialization and never the reference
+  evidence or artifact content. A
   guarded process-wide weak lock registry serializes operations per
   workspace/session/conversation. The fixed initialized topology includes
   `agent_states/orchestrator_state/conversation_defaults`; new workspaces also
@@ -1817,14 +1862,15 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:** `src/story_writing_agents/writing_artifacts/__init__.py`
 - **Responsibility:** Provide the side-effect-free canonical writing-artifact
   value facade.
-- **Supported surface:** Exactly the names in `__all__`: canonical core and
+- **Supported surface:** Exactly 30 names in `__all__`: canonical core and
   resource-limit constants; `ArtifactKind`, `ArtifactCatalogEntry`,
   `ArtifactCatalog`, `ArtifactContentSnapshot`, `ArtifactLineRange`, and
   `ArtifactReference`; immutable `ArtifactReferenceBatch` and its
   `ArtifactReferenceDirectiveError`; content-free
   `AuthorizedArtifactReference`, `ReferenceAuthorizationErrorCode`,
-  `ReferenceAuthorizationError`, `ReferenceOperationManifest`,
-  `ReferenceOperationState`, `ReferenceInvocationCorrelation`,
+  `ReferenceAuthorizationError`, `ReferenceOperationFailure`,
+  `ReferenceOperationManifest`, `ReferenceOperationState`,
+  `ReferenceInvocationCorrelation`,
   `ReferenceInvocationState`, `ReferenceEvidence`, and
   `ReferenceOperationHistory`; content-free `ReferenceReadActionKind`,
   `ReferenceReadRequest`, and `ReferenceReadAction`; plus
@@ -1919,10 +1965,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   contracts and their call-local content lifetime.
 - **Supported surface:** Package-supported content-free
   `ReferenceAuthorizationErrorCode`, `ReferenceAuthorizationError`,
+  `ReferenceOperationFailure`,
   `AuthorizedArtifactReference`, `ReferenceOperationManifest`,
   `ReferenceOperationState`, `ReferenceInvocationCorrelation`,
   `ReferenceInvocationState`, `ReferenceEvidence`, and
   `ReferenceOperationHistory`, all re-exported by the writing-artifact facade.
+  `ReferenceOperationFailure` exposes only its validated operation identity and
+  authorization error code; it never incorporates artifact content or provider
+  exception text.
   A public invocation correlation carries a positive contiguous ordinal,
   canonical operation/invocation/agent/phase identities, an optional
   nonnegative round number, and a positive attempt; capability identity is not
@@ -1991,6 +2041,37 @@ every intermediate arrow. The current runtime graph is acyclic.
   `docs/reference/writing-artifacts.md`,
   `docs/operations/privacy-and-provider.md`, and
   `docs/operations/recovery-and-limitations.md`.
+
+### `story_writing_agents.writing_artifacts.runtime_references`
+
+- **Source:**
+  `src/story_writing_agents/writing_artifacts/runtime_references.py`
+- **Responsibility:** Coordinate one call-local top-level runtime artifact-
+  reference operation across parse-once projection, repository capture,
+  correlated provider invocations, and terminal finalization.
+- **Supported surface:** Package-internal `RuntimeReferenceOperation`,
+  `prepare_runtime_reference_operation`, and
+  `reference_operation_belongs_to_session`; none is re-exported by the
+  writing-artifact or project-root facade. Preparation preserves exact source
+  and provider-text projections and uses a no-operation-ID fast path when no
+  references exist. Each referenced provider attempt receives a fresh
+  contiguous ordinal, UUID-backed invocation identity, and attempt value 1.
+  Successful completion requires no pending invocation before repository
+  finalization; failures terminate unfinished invocations and return one safe,
+  structured `ReferenceOperationFailure`.
+- **Direct internal dependencies:** `writing_artifacts.authorization`,
+  `writing_artifacts.directives`, `writing_artifacts.read_actions`,
+  `writing_artifacts.references`, and `writing_artifacts.repository`.
+- **State, resources, and side effects:** One operation owns only a call-local
+  reentrant lock, pending-invocation map, next ordinal, generated identities,
+  immutable source/provider projections, and a borrowed concrete repository.
+  It owns no filesystem, persistent-evidence, provider, process, or terminal
+  resource; repository calls remain the only operational effects. Importing
+  the module performs no I/O.
+- **Primary verification/documentation:** Production inventory and clean-import
+  checks in `tests/test_interactive_controller.py` and
+  `tests/test_session_lifecycle.py`; orchestration consumers are recorded in
+  `docs/design/overview.md` and `docs/operations/recovery-and-limitations.md`.
 
 ### `story_writing_agents.writing_artifacts._reference_evidence`
 
@@ -2222,9 +2303,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   result receipt and revalidation. One operation snapshot never refreshes and
   every provider attempt retains an independent correlation and capability.
   Evidence and inspection never carry artifact bytes, source/provider text,
-  prompts, or diagnostics. Top-level runtime/controller propagation and
-  operation finalization, `$`/`$$` UI, viewer, and composer behavior remain
-  absent from this implementation.
+  prompts, or diagnostics. `writing_artifacts.runtime_references` now owns one
+  call-local top-level coordinator: the orchestrator parses and captures once,
+  preserves source text in durable conversation/debate input, projects only
+  provider text to backend calls, allocates a fresh correlation per provider
+  attempt, and finalizes or terminates through the repository. The backend
+  remains only the mandatory `read_actions` consumer, and the repository alone
+  persists evidence. Controller error mapping and content-free result/inspection
+  identities do not move reference bytes above those boundaries. `$`/`$$`
+  shell attachment UI and composer integration remain absent, while the
+  supplied-text terminal viewer remains independent.
 
 - Canonical core context crosses the repository/provider boundary only as an
   `ArtifactContentSnapshot` converted to an immutable `PromptFileReference`.
@@ -2528,12 +2616,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   complete repeated-call loop and every handler invocation. Thus `invoke`,
   `converse`, and `converse_with_retrieval` cannot interleave one provider
   thread even when operations target different conversations.
-- Existing `ConversationRequest`, `ConversationReply`, `ConversationResult`,
-  `BoundAgent.converse`, and positional runtime/session `converse` contracts are
-  unchanged. Retrieval uses separate additive request/reply/result/action types
-  and methods. Existing debate and one-step provider payloads remain unchanged;
-  provider-private thread history remains scoped by session, backend, and agent
-  and can therefore span conversations.
+- Existing `ConversationRequest`, `ConversationReply`, `BoundAgent.converse`,
+  and positional runtime/session provider-bound method signatures remain
+  unchanged. `ConversationResult`, `ConversationRetrievalResult`, and
+  `DebateResult` add an optional content-free `reference_operation_id` whose
+  `None` default preserves no-reference construction and serialized debate
+  shape. Retrieval keeps its separate additive request/reply/action types and
+  methods. No-reference provider payloads remain unchanged; referenced inputs
+  retain their source tokens in durable input records while only the projected
+  text reaches provider calls. Provider-private thread history remains scoped
+  by session, backend, and agent and can therefore span conversations.
 - `session_lifecycle` owns only the immutable provider-neutral durable/access
   facts, their invariants, and the pure provider-readiness query. `AgentBackend`
   owns V2 manifest, claim, claim-token, guard, liveness classification,
