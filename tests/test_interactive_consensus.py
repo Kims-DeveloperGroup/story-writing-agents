@@ -282,12 +282,13 @@ class ScriptedConsensusRuntime:
 
 
 def file_bytes(workspace: Workspace) -> dict[str, bytes]:
-    """Snapshot durable files while ignoring transient timestamps."""
+    """Snapshot domain files while ignoring diagnostic artifacts."""
 
     return {
         path.relative_to(workspace.root).as_posix(): path.read_bytes()
         for path in sorted(workspace.root.rglob("*"))
         if path.is_file()
+        and "debug_logs" not in path.relative_to(workspace.root).parts
     }
 
 

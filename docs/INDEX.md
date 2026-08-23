@@ -18,6 +18,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 | Capability | Available through |
 | --- | --- |
 | Initialize a workspace; run or inspect a debate | Installed CLI and Python API |
+| Configure Codex or Antigravity per agent | Persistent JSON or shell `/settings`; one-process CLI overrides for `story chat` and `story run` |
 | Create, reopen, or pause a provider session | Installed CLI and Python API |
 | Open the TTY shell; list, create, resume, switch, or pause sessions | Bare `story` or `story chat` |
 | Show registry help or shell status | Global in the installed shell |
@@ -37,6 +38,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 | Discover a canonical artifact or select an inclusive range | Provider-bound shell prompt spans use `$`, `$${path}`, or `$$`; completion/viewer return to the exact draft without submission. The viewer remains package-internal, with no standalone command, public selection API, or automation UI. |
 | Cancel active advisory/consensus work or partial local rendering | Installed shell; process-level PTY verified on supported POSIX. [Delivery and platform scope](operations/recovery-and-limitations.md#posix-pty-boundary) |
 | Show one focused transcript snapshot and context accounting | Attached shell `/history`; active focus required |
+| Locate bounded runtime diagnostics and exact failure hints | Workspace `debug_logs/runtime.jsonl`; [CLI output](reference/cli.md#runtime-debug-logs) and [privacy boundary](operations/privacy-and-provider.md#workspace-debug-log-privacy) |
 | Standalone artifact commands | Not implemented in the shell |
 
 ## Start and concepts
@@ -53,6 +55,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 - [Story sessions and subject conversations](guides/story-sessions.md)
 - [Glasswater interactive end-to-end journey](guides/glasswater-scenario.md)
 - [Provider-free smoke test](guides/smoke-test.md)
+- [Antigravity setup, routing, and safety](guides/antigravity.md)
 - [Consensus runs](guides/consensus-runs.md)
 - [Directives](guides/directives.md)
 - [Inspection and recovery](guides/inspection-and-recovery.md)
@@ -90,6 +93,6 @@ Use this index to find one canonical answer instead of searching a long manual.
 ## Operations
 
 - [Filesystem safety](operations/filesystem-safety.md)
-- [Privacy and provider exposure](operations/privacy-and-provider.md)
+- [Privacy, provider exposure, and runtime debug logs](operations/privacy-and-provider.md)
 - [Terminal display safety](operations/terminal-safety.md)
 - [Recovery and limitations](operations/recovery-and-limitations.md)

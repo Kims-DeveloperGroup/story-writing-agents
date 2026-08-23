@@ -62,7 +62,7 @@ and #73 slices do not describe current production behavior.
 | #86 composer/confirmation integration | Implemented: RUN/CHAT composition and yes/no confirmation build ordered semantic input views, render equivalent plain/fixed-ANSI projections at the active width, and use pure history-free controls. Established results, signatures, `/send`, `/cancel`, `/say`, defaults, Ctrl-C, EOF, callback cardinality, and controller/runtime behavior remain unchanged. |
 | #79 selectable completion | Implemented: capable main input projects canonical root, subcommand, and finite fixed-option candidates into a semantic palette. Up/Down moves its clamped highlight, Tab applies the highlighted candidate, Escape restores the first pre-completion snapshot when present and dismisses the exact state, and closed-palette Up/Down retains history behavior. Shift-Tab has no action. |
 | #87 picker foundation | Implemented: package-internal immutable picker/control/viewport state, pure initialization/reconciliation/live/fallback transitions, responsive live/full-list rendering, a dedicated history-free sole-driver lifecycle, and an unlisted resource-free adapter. #93 supplies its first installed consumer. |
-| #94 workspace Codex defaults | Implemented: the closed system-default schema accepts optional workspace fallback Codex model and reasoning values, new workspaces initialize both to null, legacy files remain valid and byte-preserved, and each backend validates and snapshots effective invocation values at construction. |
+| #94 workspace Codex defaults | Implemented: the original slice added optional workspace fallback Codex model and reasoning values. The current closed seven-field system schema also contains Antigravity model/effort; new workspaces initialize both provider families to null, legacy files remain valid and byte-preserved, and each backend validates and snapshots effective invocation values at construction. |
 | #93 settings UI | Implemented: global alias-free `/settings` edits isolated current/pending snapshots of workspace defaults and per-agent provider, model, and reasoning choices through shared picker and prompt controls. Save validates an exact opening baseline and persona catalog, writes only changed configuration documents in deterministic order, and attempts reverse exact-byte rollback after a write failure. The workflow adds no supported public save API. |
 | #105 agent reply presentation | Implemented: direct, retrieval, transcript, and focused-history agent replies use a presentation-only strict JSON object/array projection with exact unchanged fallback cases and two-space Unicode-preserving output; stored/provider content remains unchanged, and the `AGENT` role uses bold terminal-default foreground styling without background detection. |
 | #106 transient settings UI | Implemented: settings picker and prompt reads clear capable transient rows, suppress duplicate fallback finals, and keep nested Escape silent. #142 later makes this lifecycle universal for capable submitted input. |
@@ -175,6 +175,18 @@ the first active line as anchor and moves the active end, so extension,
 contraction, reversal, and boundary clamping remain deterministic. Its terminal
 results are exactly `selected`, `cancelled`, `interrupted`, and `eof`; an
 operational failure is raised after cleanup, not represented as another result.
+
+The controller's outer cleanup boundary is separate from these handled command
+states. It attempts Runner close, known-access release, backend close, and state
+clearing in order even after a stage fails. An uncaught body process control
+wins; otherwise the first cleanup process control propagates, unchanged with its
+traceback, after later stages finish. Runner state remains only when its close
+was interrupted by process control; attachment, focus, and memory always clear.
+With no retained process control, ordinary cleanup failure returns `2` and
+attempts one nonduplicated `cleanup_failed`. A diagnostic process control cannot
+replace an already retained body or cleanup winner. A Ctrl-C or cancellation
+already handled by a command remains a normal `cancelled` or recovery result
+rather than entering this arbitration.
 
 ## Input ownership and transition boundary
 
@@ -630,45 +642,44 @@ exceptional live outcomes. Picker reads never consult or mutate main history or
 completion state, parse a command, or call runtime, provider, filesystem,
 persistence, subprocess, storage, or network code.
 
-### Persisted Codex defaults
+### Persisted provider defaults
 
-> **Implemented by #94:** `config/system_defaults.json` has a closed five-key
-> schema: required `language` and `persona`, optional
-> `max_debate_rounds`, and optional `codex_model` and
-> `codex_reasoning_effort`. New workspaces include null Codex values; existing
-> valid three-key files remain valid and initialization preserves their exact
-> bytes.
+> **Implemented:** `config/system_defaults.json` has a closed seven-field
+> schema: required `language` and `persona`, optional `max_debate_rounds`, and
+> optional `codex_model`, `codex_reasoning_effort`, `antigravity_model`, and
+> `antigravity_effort`. New workspaces include null values for both provider
+> families; existing valid files with omitted optional fields remain valid and
+> initialization preserves their exact bytes.
 
 A non-null explicit `AgentBackend(model=...)` or CLI `--codex-model` wins over
-all persisted model values. Otherwise each agent's optional values in
-`config/agent_configs.json` inherit the corresponding workspace system default
-and then the provider default. No reasoning CLI or constructor override is
-added. Model text is preserved without trimming or catalog lookup and must be
+persisted Codex model values. Explicit `AgentBackend(antigravity_model=...,
+antigravity_effort=...)` or the matching CLI flags win for Antigravity.
+Otherwise each agent's provider-specific values in `config/agent_configs.json`
+inherit the corresponding workspace system value and then the provider
+default. Model text is preserved without trimming or catalog lookup and must be
 nonempty, not start with `-`, and contain no Unicode control, format, or
-surrogate character. Reasoning is null or exactly `minimal`, `low`, `medium`,
-`high`, or `xhigh`; actual `xhigh` support is model/provider-dependent. The
-complete system-default and agent-configuration pair is validated and
-snapshotted at backend construction; later saves apply only to the next
-backend.
+surrogate character. Codex reasoning is null or exactly `minimal`, `low`,
+`medium`, `high`, or `xhigh`; Antigravity effort is null or exactly `low`,
+`medium`, or `high`. The complete system-default and agent-configuration pair
+is validated and snapshotted at backend construction; later saves apply only
+to the next backend.
 
-Every backend validates the complete persisted schema before applying an
-explicit model and snapshots both effective values at construction. The
-optional `--model MODEL` and
-`--config model_reasoning_effort="LEVEL"` Codex arguments occur in that order
-immediately after `exec` and before any `resume` marker. They do not alter
-agent definitions, fingerprints, bindings, provider-thread identity, lifecycle
-artifacts, or request payloads. Editing the file affects only the next backend
-construction. #94 itself added no save API, `/settings` route, or
-active-backend refresh; #93 adds the internal interactive workflow while
-preserving those public and lifecycle boundaries.
+Every backend validates the complete persisted schema before applying explicit
+provider settings and snapshots effective values at construction. Provider
+arguments do not alter agent definitions, fingerprints, bindings,
+provider-thread identity, lifecycle artifacts, or request payloads. Editing a
+configuration file affects only the next backend construction. #94 itself
+added no save API, `/settings` route, or active-backend refresh; #93 adds the
+internal interactive workflow while preserving those public and lifecycle
+boundaries.
 
 ### Settings panel
 
 > **Implemented by #93:** global alias-free `/settings` provides this
 > interaction and guarded persistence workflow without adding a supported
 > settings/save object API. #87 supplies the generic internal picker foundation,
-> and #94 supplies the validated workspace Codex fallback model/reasoning
-> fields.
+> and the configuration layer supplies validated workspace fallback
+> model/effort fields for Codex and Antigravity.
 
 The settings view edits two persistent documents through validated Current and
 Pending configuration snapshots: the `config/system_defaults.json` defaults
@@ -677,9 +688,11 @@ described by
 per-agent provider, model, and reasoning selections in
 `config/agent_configs.json`. The system snapshot contains required `language`
 and `persona`, optional `max_debate_rounds`, and the optional workspace Codex
-fallback model/reasoning values. Provider, model, and reasoning selection is
-per agent. A successful save writes the canonical five-key system object and
-the canonical agent object. The view does not change identity, thread
+and Antigravity fallback model/effort values. Provider, active-provider model,
+and active-provider effort selection is per agent. A successful save writes
+the canonical seven-field system object and canonical seven-field entries for
+each agent. The view preserves the inactive provider's settings and does not
+change identity, thread
 ownership, configuration precedence, or either implemented schema.
 
 The presentation uses one `Panel` with `Section`, `Field`, and `Notice` values,
@@ -717,9 +730,9 @@ Cancel
 | Language | The picker candidates are exactly `KO`, `EN`, `JA`, `ZH`, `ES`, `FR`, `DE`, `PT`, `IT`, `RU`, in that order. A schema-valid existing value outside this UI catalog remains visible and may be preserved, but is not synthesized as a candidate. |
 | Persona | Candidates come only from the existing safe persona-template catalog. Duplicate identifiers resolve with the top-level template taking precedence over `alternative_templates`; the resulting identifiers are ordered lexically. The picker does not read, preview, create, or edit template content. |
 | Maximum debate rounds | A numeric `Prompt` accepts a pending nonnegative integer under the existing validation rule. Blank, negative, fractional, and nonnumeric values produce an inline error `Notice` and retain focus without changing the pending value. `0` remains valid and means audit-only consensus. |
-| Providers | A nested agent picker follows canonical `ROSTER` order, then a Provider/Model/Reasoning effort picker edits only that agent's pending `agent_configs` values. Codex is enabled. Reserved Gemini is visible but disabled for new selection; a pre-existing Gemini value remains visible and may be preserved or changed to Codex for remediation. The UI neither invents providers nor changes roster identity. |
-| Agent Model | A nested free-text `Prompt` uses the implemented safe-model validator; blank stores null and inherits the workspace system model. It performs no network lookup and does not offer a model catalog. |
-| Agent Reasoning effort | A nested picker offers Inherit, `minimal`, `low`, `medium`, `high`, and `xhigh`; Inherit uses the workspace system reasoning value, then the provider default. The UI does not add a CLI reasoning flag. |
+| Providers | A nested agent picker follows canonical `ROSTER` order, then a Provider/Model/Reasoning effort picker edits only that agent's pending `agent_configs` values. Codex and Antigravity are selectable; Codex is the default. Changing the route preserves the inactive provider's model/effort settings. `gemini` is not a selectable or valid backend. The UI neither invents providers nor changes roster identity. |
+| Agent Model | A nested free-text `Prompt` uses the active provider's implemented safe-model validator; blank stores null and inherits that provider's workspace system model. It performs no network lookup and does not offer a model catalog. |
+| Agent Reasoning effort | A nested picker offers Inherit plus `minimal`, `low`, `medium`, `high`, and `xhigh` for Codex, or Inherit plus `low`, `medium`, and `high` for Antigravity. Inherit uses the active provider's workspace system value, then the provider default. The UI does not add a Codex reasoning CLI flag. |
 
 Opening the panel reads and validates both current snapshots. Failure to read or
 validate either snapshot, or to enumerate the safe persona catalog, reports
@@ -961,15 +974,27 @@ slice lands; #83 and #84 have changed their migrated output groups in that
 permitted way, and #123 adds splitter lines to every semantic `Panel`. Exact
 interactive and callback text therefore changes for those components, while
 component ordering, one-component/one-write callback cardinality, interaction,
-runtime behavior, and public Python contracts remain unchanged. The following
-contracts may not change as a side effect.
+runtime behavior, and established public Python calls remain compatible. The
+only later additive public seam is the optional `write_error()` debug-log path
+described below. The following contracts may not otherwise change as a side
+effect.
 
 ### Machine-facing CLI
 
 The noninteractive `init`, `smoke`, `session`, `directive`, `inspect`, and `run`
-commands remain unstyled. Their stdout/stderr bytes, JSON schemas, key and
-record ordering, and exit behavior must not change. Interactive capability,
-width, color, or `NO_COLOR` settings must not affect them.
+commands remain unstyled. Their success stdout, JSON schemas, key and record
+ordering, and exit behavior remain unchanged. Except for implicit temporary
+smoke, after CLI workspace initialization or discovery succeeds, a caught
+noninteractive exception preserves its established first stderr line and adds
+the fixed second line:
+`Debug log (if available, workspace-relative): debug_logs/runtime.jsonl`.
+This boundary is independent of diagnostic-handle acquisition or file
+existence. Initialization and discovery failures remain hint-free. Returned
+domain outcomes do not add the hint: smoke
+invariant exit `1` and run deadlock/failed-result exits `3`/`4` retain their
+established JSON. Argparse and other pre-workspace failures add no debug-log
+hint. Interactive capability, width, color, or `NO_COLOR` settings must not
+affect these contracts.
 
 ### `interactive_terminal` public Python surface
 
@@ -1025,6 +1050,14 @@ remain compatible. In particular, callback construction remains:
 InteractiveTerminal(read_line, write_text, *, width=80, main_read_line=None)
 ```
 
+`write_error()` alone adds the optional keyword-only
+`debug_log_path: str | None = None`. Omission preserves the exact established
+two-notice panel and existing callback behavior. Supplied nonblank, one-line,
+strict-UTF-8 display text adds one sanitized third notice labelled `debug log`;
+the terminal does not resolve or retain it. After workspace resolution, the
+installed CLI and controller supply the fixed workspace-relative availability
+notice. Pre-workspace errors omit the keyword and include no debug-log path.
+
 Construction validates and retains borrowed callbacks but performs no stream
 inspection, output, raw-mode change, capability query, resource acquisition,
 or history persistence. Existing constructor validation remains exact:
@@ -1054,15 +1087,16 @@ writes exactly one component.
 `RenderedInputFrame` contracts. Those types remain outside the package facade,
 root facade, public `__all__`, and closed `Component` union;
 `ControlOutcomeKind.REJECTED` is likewise internal. The established public
-result types, constructor, and method signatures remain exact.
+result types and constructor remain exact, and existing method calls remain
+compatible.
 
 #79 adds package-private completion candidates/projections and main palette
 state plus the unlisted facade bindings `transition_main_command_input` and
 `read_main_command_line`. The model values are not `Component` members; only
 their projected existing `SuggestionPalette` is rendered. These names remain
 outside public `__all__` and the root facade. The established parser,
-`InteractiveTerminal`, and line-editor public results and signatures remain
-exact.
+`InteractiveTerminal`, and line-editor public results and established calls
+remain compatible.
 
 #87 adds package-private `PickerControlState` and `PickerViewport` contracts
 alongside the existing semantic `Picker`, plus the unlisted facade identities
@@ -1119,7 +1153,7 @@ boundary. Responsibility and dependency direction are fixed as follows:
 | Unit | Responsibility |
 | --- | --- |
 | `interactive_settings` | Package-internal immutable opening baseline and pending configuration, safe lexical persona catalog, validation, exact stale-state detection, changed-only canonical persistence, and reverse exact-byte rollback. It has no terminal, controller, runtime, backend, or parser dependency and no facade export. |
-| `interactive_terminal.__init__` | Compatibility facade with the exact existing public surface plus package-internal stream construction, semantic output, picker, cancellable-prompt, and supplied-text viewer seams. It owns no import-time resource or state. |
+| `interactive_terminal.__init__` | Compatibility facade with the exact existing public surface, including the additive optional `write_error()` debug-log-path keyword, plus package-internal stream construction, semantic output, picker, cancellable-prompt, and supplied-text viewer seams. It owns no import-time resource or state. |
 | `interactive_terminal._model` | Immutable semantic components, bounded main-history/control state, static and controller-owned main-choice palette state, composer and picker control state, bounded picker viewport, semantic input/render frames, key/focus values including Shift+Up/Down, and transition/render results. No I/O. |
 | `interactive_terminal._controls` | Pure established line-input, main-command/history, dynamic main-choice, composer-line, confirmation-answer, cancellable-prompt, and picker transitions; bounded history; completion/choice projection; picker initialization/reconciliation, disabled-skipping live navigation, exact fallback grammar, and viewport selection. |
 | `interactive_terminal._render` | Pure safe responsive output and semantic input renderers for plain and fixed ANSI profiles, including bounded live and complete-list fallback picker projections and the strict JSON agent-reply presentation projection. It sanitizes dynamic content before styling and returns render data without writing. |
@@ -1186,21 +1220,25 @@ callbacks, while the driver owns same-latch nested picker/viewer coordination.
 
 ### Implemented module-index delta
 
-The current [Python module index](../../PYTHON_MODULE_INDEX.md) records 48
-importable production units. The #164 structural delta is one private pure
-activation leaf:
+The current [Python module index](../../PYTHON_MODULE_INDEX.md) records 53
+importable production units. The terminal/reference and provider/diagnostic
+deltas combine as follows:
 
 ```text
-pre-#164 total                            47
+pre-#164 parent inventory                 47
 private reference-activation leaf          +1
-current total                             48
+provider-adapter and diagnostic modules    +5
+current total                             53
 ```
 
 `_reference_activation` adds only downward edges to `_model` and the public
 `writing_artifacts` facade; `_core` and `_driver` consume it. The controller,
-terminal and project-root public facades are unchanged. Earlier history,
-viewer, input-lifecycle, settings, writing-artifact, and runtime integration
-deltas remain recorded in the canonical index rather than recomputed here.
+terminal and project-root public facades are unchanged. The five other modules
+are `provider_adapter`, `provider_process`, `codex_adapter`,
+`antigravity_adapter`, and `debug_log`; they do not change the terminal graph.
+Earlier history, viewer, input-lifecycle, settings, writing-artifact, and runtime
+integration deltas remain recorded in the canonical index rather than
+recomputed here.
 
 ## Migration coverage
 
@@ -1211,15 +1249,17 @@ responsibility, #85 delivered main-command history, and #86 delivered semantic
 composer/confirmation controls within the existing driver/control boundary.
 #79 delivered selectable main-command completion within that same boundary.
 #87 delivered the generic package-internal picker foundation within the same
-boundary. #94 delivered persisted Codex model/reasoning defaults through the
-existing workspace, configuration, and backend units without changing that
-graph. #93 installs `/settings` and historically brought the graph to 33 units.
-#142 adds controller-owned dynamic resume choices and a universal capable-input
-cleanup lifecycle without another module. #162 adds three private viewer
+boundary. #94 delivered the initial persisted Codex model/reasoning defaults
+through the existing workspace, configuration, and backend units without
+changing that graph; the current schema extends those same settings paths with
+Antigravity model/effort. #93 installed `/settings`, added one internal settings
+module, and historically brought the graph to 33 units. #142 added
+controller-owned dynamic resume choices and a universal capable-input cleanup
+lifecycle without another module. #162 added three private viewer
 leaves plus the private input-lifecycle leaf while preserving the public and
 root facades. The lifecycle leaf owns the irreversible latch and persistent
 decoder; the driver remains the sole input consumer and terminal-resource
-owner. #164 adds the private pure reference-activation leaf, preserves public
+owner. #164 added the private pure reference-activation leaf, preserved public
 exports, and lets the controller borrow catalog/text callbacks without moving
 repository ownership into the terminal.
 
@@ -1237,7 +1277,7 @@ repository ownership into the terminal.
 | Advisory turns | `Message`, `Notice`, `Field` | Operation result, cancelled/completed/error; optional capable-only indicator during advisory/consensus wait; no `[routing]`/`[waiting]` record | #83 and #111 (implemented) |
 | Retrieval progress and summaries | `Notice`, `Record`, `ListView`, `Field` | Loading, citations/context accounting, result/error/cancelled | #83 (implemented accepted views) |
 | Consensus progress and summaries | `Panel`, `Section`, `Notice`, `Record`, `Field`, `Message` | Loading, debate identity, handoff/action metadata, agent messages, result/cancelled/completed/error | #83, #119 (implemented) |
-| Interactive errors and recovery hints | `Notice`, `Field` | Trusted code, redaction, error state, next action, no raw diagnostics | #83 (implemented) |
+| Interactive errors and recovery hints | `Notice`, `Field` | Trusted code, redaction, error state, next action, no raw diagnostics; post-workspace application errors supply one fixed sanitized debug-log availability notice, while pre-workspace errors include no debug-log path | #83, #131 terminal seam, and #132 application wiring (implemented) |
 | Settings current/pending view | `Panel`, `Section`, `Field`, `Prompt`, `Picker`, `Notice` | Exact top-level order; changed-only Current/Pending confirmation context with `(Changed)` cues and explicit no-diff notice; nested Escape silent; transient cleanup and fallback honesty; disabled provider, validation, error, cancelled, and completed meaning; guarded two-file Save boundary | #93, #106, and #115 (implemented) |
 
 ### Control groups
@@ -1291,11 +1331,12 @@ disabled-skipping bounded navigation, independent selection/highlight,
 commit/cancel/interrupt/EOF outcomes, exact numbered fallback, responsive
 plain/ANSI rendering, restoration, failure cleanup, and history/completion
 isolation. #93 covers its implemented settings interaction, persistence, and
-lifecycle snapshot contract. #94 covers exact five-key and legacy schema
-handling, safe model and fixed reasoning validation, full-schema-first failure,
-model precedence, backend-lifetime snapshots, exact fresh/resume invocation
-arguments, initialization preservation, and unchanged definition/thread/public
-contracts.
+lifecycle snapshot contract. #94 covers the original five-key and legacy
+schema handling; current coverage also requires the seven-field system and
+per-agent schemas, provider-specific safe model/effort validation,
+full-schema-first failure, precedence, backend-lifetime snapshots, exact
+fresh/resume invocation arguments, initialization preservation, and unchanged
+definition/thread/public contracts.
 Issue #119 extends the same output boundary with per-phase handoff/action
 metadata and a dedicated semantic `Panel` titled `Agent saying` for new agent
 messages in each phase.
@@ -1333,14 +1374,14 @@ repeat-open disposal, dependency isolation, and unchanged public exports.
 | Picker and live resume choices | Highlight-versus-selection, disabled-skipping clamped navigation, exact resume ordering/highlights, Tab no-op and one-Enter dynamic commit, Escape cancel/dismissal, typed interrupt/EOF, empty/all-disabled/one/long lists, exact fallback acceptance/rejection, stable identity reconciliation and fresh controller validation, selected-outside-window summary, no synthetic final control frame, complete capable cleanup on every returned outcome/failure, honest fallback visibility, and resize on each live redraw. |
 | Permanent input lifecycle | Resource-free `UNDECIDED` construction; first-read irreversible `LIVE`/`FALLBACK`; sticky fallback and no post-live downgrade; stable source/decoder/configuration correlation; canonical ASCII/UTF-8/ISO-8859-1 plus built-in strict/surrogateescape admission; exact one-byte reads; fragmented code points; maximum four-code-point pending suffix before Escape readiness; clean and partial EOF; read/decode/shape poison; interrupt reset without mode change; synchronous reentry rejection; PENDIN-only tolerated configuration drift; capable history-free subject frames; and cross-prompt/viewer preservation without mixed wrapper/raw reads. |
 | Ranged text viewer | Exact `str`, display-name, strict-UTF-8, private 8 MiB source, exact 65,536-line and 16 MiB complete-fallback boundaries, initial-line, empty/final-LF validation before terminal access; ordinary and Shift+Arrow clamped selection including reversal; configured VINTR/VEOF raw-byte disable/decode/round-trip classification and priority; singleton/range commit; distinct cancel/interrupt/EOF; one row per logical line; safe CR/U+2028/control display; bounded-prefix plain/ANSI current and selected cues; wide/combining/ellipsis behavior; suffix-independent redraw work; bounded height and next-nonexit-key resize; exact untruncated `START-END` or `/cancel` fallback with reverse normalization and visible retry; content-free results; close-on-select/cancel, repeat-open disposal; and no workspace/artifact/runtime/controller dependencies. |
-| Settings | Two-snapshot current/pending separation; exact top-level/language/reasoning/roster order; safe persona precedence and lexical order; numeric `0`, positive, blank, negative, fractional, and nonnumeric cases; Codex-enabled/reserved-Gemini-disabled provider behavior including preservation/remediation; implemented safe model text and blank/null provider default; exact reasoning enumeration with model/provider-dependent `xhigh` support; one focused control and deterministic focus return; nested and whole-panel cancellation; exact-byte and catalog conflict before writes; changed-only canonical system-then-agent save; per-file atomic replacement; failing-target-inclusive reverse exact-byte rollback and rollback uncertainty; pending retention; no write on open/edit/highlight/error/cancel; next-lifecycle-only application with higher live overrides; plain/ANSI/`NO_COLOR`/narrow/line fallback; hostile display content; and unchanged identity, thread, precedence, public, and machine contracts. |
+| Settings | Two-snapshot current/pending separation; exact top-level field and canonical roster order; safe persona precedence and lexical order; numeric `0`, positive, blank, negative, fractional, and nonnumeric debate-round cases; selectable Codex/Antigravity routes with Codex default, inactive-provider setting preservation, and `gemini` rejection; provider-specific safe model text and blank/null inheritance; exact Codex and Antigravity effort enumerations including Codex `xhigh`; one focused control and deterministic focus return; nested and whole-panel cancellation; exact-byte and catalog conflict before writes; changed-only canonical system-then-agent save; per-file atomic replacement; failing-target-inclusive reverse exact-byte rollback and rollback uncertainty; pending retention; no write on open/edit/highlight/error/cancel; next-lifecycle-only application with higher live overrides; plain/ANSI/`NO_COLOR`/narrow/line fallback; hostile display content; and unchanged identity, thread, precedence, public, and machine contracts. |
 | Advisory progress | One four-glyph cycle only for capable raw advisory and consensus awaitables; `NO_COLOR` glyph preservation; clear/redraw around semantic writes; clear and task joining before result/cancel/error; silent callback/non-TTY/`TERM=dumb`/uncertain fallback; operation-error precedence; indicator-only internal-error mapping; no `[routing]`/`[waiting]` records or reusable animation API. |
 | Parser and mutation boundary | The exact visible committed main buffer reaches the established parser once; previews, recall, replacement, highlight, rerender, cancel, Ctrl-C, empty VEOF, and physical EOF cause no parser/runtime/storage call. |
 | Artifact-reference activation | Provider-bound ordinary/routed/`/say`/`/run` and composer spans only; escaped-dollar inertness; fresh eligible catalog projection; `$` whole-file completion; explicit `$${path}` viewer; `$$` picker then viewer; multiple ordered indicators; exact marker replacement/cursor; capable same-read return; fallback second confirmation and repeated marker handling; empty/stale/unreadable/unavailable/invalid content-free failures; exact origin/focus/mode restoration; no submit/history/residue; listing-to-view stale detection; independent current runtime capture without viewer-byte reuse; and per-agent enforcement after later normal submission. |
 | Composer/confirmation | Ordered semantic input facts and focused prompt; equivalent width-aware plain/ANSI rendering; fallback-once and trusted-live routing; exact `/send`, `/cancel`, `/say`, yes/no/default, invalid retry, Ctrl-C, and EOF results; semantic composer events and hint cardinality; history isolation; reserved-key no-ops; no full-screen or persistent state. |
-| Restoration | Complete-frame cleanup for every capable main/subject/composition/confirmation/picker/prompt submit, commit, cancellation, Escape return, EOF, Ctrl-C, setup failure, read/write/flush failure, and render error; viewer alternate-screen entry/exit pairing and one termios restoration on every live outcome/failure; restoration-over-screen-over-active failure precedence; no fallback after `LIVE`; cursor visibility untouched; completion-only Enter remains inside the live read; restoration uncertainty is fatal. |
-| Public compatibility | Exact exports and order, enum values, dataclass fields/defaults/options, signatures, exceptions, object/class identity, canonical modules, facade imports, callback construction, and no constructor resource acquisition. |
-| Noninteractive regression | Golden byte/schema/order/exit checks for `init`, `smoke`, `session`, `directive`, `inspect`, and `run`, with no SGR under any environment. |
+| Restoration | Complete-frame cleanup for every capable main/subject/composition/confirmation/picker/prompt submit, commit, cancellation, Escape return, EOF, Ctrl-C, setup failure, read/write/flush failure, and render error; viewer alternate-screen entry/exit pairing and raw-attribute restoration on every live outcome/failure; restoration-over-screen-over-active failure precedence; no fallback after `LIVE`; cursor visibility untouched; completion-only Enter remains inside the live read; restoration uncertainty is fatal. |
+| Public compatibility | Exact exports and order, enum values, dataclass fields/defaults/options, established-call-compatible signatures including exact validation/default behavior for the additive `write_error()` keyword, exceptions, object/class identity, canonical modules, facade imports, callback construction, and no constructor resource acquisition. |
+| Noninteractive regression | Golden byte/schema/order/exit checks for `init`, `smoke`, `session`, `directive`, `inspect`, and `run`, including the exact caught-exception hint after successful CLI workspace entry regardless of diagnostic-handle availability, no hint for argparse, initialization/discovery or other pre-workspace failures, implicit smoke, smoke invariant exit `1`, or run domain exits `3`/`4`, unchanged success output, and no SGR under any environment. |
 
 Process-level POSIX PTY coverage remains required for the real raw-mode and
 restoration boundary. Viewer PTY coverage includes real Shift+Arrow bytes,

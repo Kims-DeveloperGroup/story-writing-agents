@@ -65,6 +65,13 @@ from .conversations import (
     validate_conversation_context_window,
 )
 from .directives import apply_directive as persist_directive
+from .debug_log import (
+    DebugComponent,
+    DebugOperation,
+    DebugOutcome,
+    DebugPhase,
+    WorkspaceDebugLog,
+)
 from .errors import (
     BackendProtocolError,
     ConfigurationError,
@@ -1066,6 +1073,7 @@ class StoryRuntime:
         self.workspace = (
             workspace if isinstance(workspace, Workspace) else Workspace(workspace)
         )
+        self._debug_log = WorkspaceDebugLog(self.workspace)
         self.backend = backend
         self.artifacts = WritingArtifactRepository(self.workspace.root)
         self.conversation_event_store = (
@@ -1102,12 +1110,100 @@ class StoryRuntime:
         self._binding_lock = asyncio.Lock()
         self._conversation_locks: dict[tuple[str, str], asyncio.Lock] = {}
 
+    def _trace_debug(
+        self,
+        operation: DebugOperation,
+        phase: DebugPhase,
+        *,
+        session_id: str | None = None,
+        conversation_id: str | None = None,
+        debate_id: str | None = None,
+        agent_id: str | None = None,
+        outcome: DebugOutcome | None = None,
+    ) -> None:
+        """Record a trace without allowing diagnostics to alter behavior."""
+
+        try:
+            self._debug_log.trace(
+                component=DebugComponent.RUNTIME,
+                operation=operation,
+                phase=phase,
+                session_id=session_id,
+                conversation_id=conversation_id,
+                debate_id=debate_id,
+                agent_id=agent_id,
+                outcome=outcome,
+            )
+        except BaseException:
+            pass
+
+    def _record_debug_error(
+        self,
+        operation: DebugOperation,
+        failure: BaseException,
+        *,
+        session_id: str | None = None,
+        conversation_id: str | None = None,
+        debate_id: str | None = None,
+        agent_id: str | None = None,
+        phase: DebugPhase = DebugPhase.FAILED,
+        outcome: DebugOutcome = DebugOutcome.FAILED,
+    ) -> None:
+        """Record a runtime failure without allowing diagnostics to replace it."""
+
+        if (
+            phase is DebugPhase.FAILED
+            and outcome is DebugOutcome.FAILED
+            and isinstance(
+                failure,
+                (asyncio.CancelledError, KeyboardInterrupt, SystemExit),
+            )
+        ):
+            phase = DebugPhase.CANCELLED
+            outcome = DebugOutcome.INTERRUPTED
+        try:
+            self._debug_log.error(
+                DebugComponent.RUNTIME,
+                operation,
+                failure,
+                phase=phase,
+                session_id=session_id,
+                conversation_id=conversation_id,
+                debate_id=debate_id,
+                agent_id=agent_id,
+                outcome=outcome,
+            )
+        except BaseException:
+            pass
+
     def session(self, session_id: str) -> RuntimeSession:
         self.workspace.validate_identifier(session_id)
         return RuntimeSession(self, session_id)
 
     def apply_directive(self, session_id: str, text: str) -> dict[str, object]:
-        return persist_directive(self.workspace, session_id, text)
+        try:
+            result = persist_directive(self.workspace, session_id, text)
+        except (KeyboardInterrupt, SystemExit) as exc:
+            self._record_debug_error(
+                DebugOperation.DIRECTIVE,
+                exc,
+                session_id=session_id,
+            )
+            raise
+        except Exception as exc:
+            self._record_debug_error(
+                DebugOperation.DIRECTIVE,
+                exc,
+                session_id=session_id,
+            )
+            raise
+        self._trace_debug(
+            DebugOperation.DIRECTIVE,
+            DebugPhase.SUCCEEDED,
+            session_id=session_id,
+            outcome=DebugOutcome.COMPLETED,
+        )
+        return result
 
     def set_runtime_overrides(
         self,
@@ -1116,17 +1212,85 @@ class StoryRuntime:
     ) -> dict[str, Any]:
         """Replace one session's overrides only after complete validation."""
 
-        validated = self.config.validate_runtime_overrides(overrides)
-        self.workspace.save_session_overrides(session_id, validated)
+        try:
+            validated = self.config.validate_runtime_overrides(overrides)
+            self.workspace.save_session_overrides(session_id, validated)
+        except (KeyboardInterrupt, SystemExit) as exc:
+            self._record_debug_error(
+                DebugOperation.CONFIGURATION,
+                exc,
+                session_id=session_id,
+            )
+            raise
+        except Exception as exc:
+            self._record_debug_error(
+                DebugOperation.CONFIGURATION,
+                exc,
+                session_id=session_id,
+            )
+            raise
+        self._trace_debug(
+            DebugOperation.CONFIGURATION,
+            DebugPhase.SUCCEEDED,
+            session_id=session_id,
+            outcome=DebugOutcome.COMPLETED,
+        )
         return validated
 
     def inspect_session(self, session_id: str) -> dict[str, Any]:
-        return self.workspace.inspect_session(session_id)
+        try:
+            result = self.workspace.inspect_session(session_id)
+        except (KeyboardInterrupt, SystemExit) as exc:
+            self._record_debug_error(
+                DebugOperation.INSPECTION,
+                exc,
+                session_id=session_id,
+            )
+            raise
+        except Exception as exc:
+            self._record_debug_error(
+                DebugOperation.INSPECTION,
+                exc,
+                session_id=session_id,
+            )
+            raise
+        self._trace_debug(
+            DebugOperation.INSPECTION,
+            DebugPhase.OBSERVED,
+            session_id=session_id,
+            outcome=DebugOutcome.COMPLETED,
+        )
+        return result
 
     def inspect_debate(
         self, session_id: str, debate_id: str
     ) -> dict[str, Any]:
-        return self.workspace.inspect_debate(session_id, debate_id)
+        try:
+            result = self.workspace.inspect_debate(session_id, debate_id)
+        except (KeyboardInterrupt, SystemExit) as exc:
+            self._record_debug_error(
+                DebugOperation.INSPECTION,
+                exc,
+                session_id=session_id,
+                debate_id=debate_id,
+            )
+            raise
+        except Exception as exc:
+            self._record_debug_error(
+                DebugOperation.INSPECTION,
+                exc,
+                session_id=session_id,
+                debate_id=debate_id,
+            )
+            raise
+        self._trace_debug(
+            DebugOperation.INSPECTION,
+            DebugPhase.OBSERVED,
+            session_id=session_id,
+            debate_id=debate_id,
+            outcome=DebugOutcome.COMPLETED,
+        )
+        return result
 
     def inspect_debate_context(
         self,
@@ -1135,7 +1299,32 @@ class StoryRuntime:
     ) -> dict[str, Any] | None:
         """Return a strict context sidecar or ``None`` without mutating state."""
 
-        return self.workspace.inspect_debate_context(session_id, debate_id)
+        try:
+            result = self.workspace.inspect_debate_context(session_id, debate_id)
+        except (KeyboardInterrupt, SystemExit) as exc:
+            self._record_debug_error(
+                DebugOperation.INSPECTION,
+                exc,
+                session_id=session_id,
+                debate_id=debate_id,
+            )
+            raise
+        except Exception as exc:
+            self._record_debug_error(
+                DebugOperation.INSPECTION,
+                exc,
+                session_id=session_id,
+                debate_id=debate_id,
+            )
+            raise
+        self._trace_debug(
+            DebugOperation.INSPECTION,
+            DebugPhase.OBSERVED,
+            session_id=session_id,
+            debate_id=debate_id,
+            outcome=DebugOutcome.COMPLETED,
+        )
+        return result
 
     def inspect_reference_operation(
         self,
@@ -1245,6 +1434,13 @@ class StoryRuntime:
                     kind=ConversationEventKind.USER_MESSAGE,
                     content=reference_operation.source_text,
                 )
+                self._trace_debug(
+                    DebugOperation.ADVISORY_TURN,
+                    DebugPhase.STARTED,
+                    session_id=session,
+                    conversation_id=conversation,
+                    agent_id=agent,
+                )
                 self._append_conversation_event(append, user_event)
             except BaseException as exc:
                 await self._release_bound_agent_use(bound_agent)
@@ -1253,6 +1449,13 @@ class StoryRuntime:
                     self._reference_failure_code(exc),
                 )
                 reference_failure = reference_operation.failure(exc)
+                self._record_debug_error(
+                    DebugOperation.ADVISORY_TURN,
+                    reference_failure or exc,
+                    session_id=session,
+                    conversation_id=conversation,
+                    agent_id=agent,
+                )
                 if reference_failure is not None:
                     raise reference_failure from exc
                 raise
@@ -1303,8 +1506,26 @@ class StoryRuntime:
                     self._append_conversation_event(append, cancellation)
                 except BaseException:
                     pass
+                self._record_debug_error(
+                    DebugOperation.ADVISORY_TURN,
+                    cancellation_error,
+                    session_id=session,
+                    conversation_id=conversation,
+                    agent_id=agent,
+                    phase=DebugPhase.CANCELLED,
+                    outcome=DebugOutcome.INTERRUPTED,
+                )
                 if reference_failure is not None:
                     raise cancellation_error from reference_failure
+                raise
+            except (KeyboardInterrupt, SystemExit) as interruption:
+                self._record_debug_error(
+                    DebugOperation.ADVISORY_TURN,
+                    interruption,
+                    session_id=session,
+                    conversation_id=conversation,
+                    agent_id=agent,
+                )
                 raise
             except Exception as exc:
                 reference_failure = reference_operation.failure(
@@ -1328,9 +1549,23 @@ class StoryRuntime:
                 try:
                     self._append_conversation_event(append, failure)
                 except Exception as persistence_exc:
+                    self._record_debug_error(
+                        DebugOperation.ADVISORY_TURN,
+                        persistence_exc,
+                        session_id=session,
+                        conversation_id=conversation,
+                        agent_id=agent,
+                    )
                     if reference_failure is not None:
                         raise reference_failure from persistence_exc
                     raise persistence_exc from exc
+                self._record_debug_error(
+                    DebugOperation.ADVISORY_TURN,
+                    visible_failure,
+                    session_id=session,
+                    conversation_id=conversation,
+                    agent_id=agent,
+                )
                 if reference_failure is not None:
                     raise reference_failure from exc
                 raise
@@ -1339,9 +1574,24 @@ class StoryRuntime:
                 self._append_conversation_event(append, reply_event)
             except Exception as exc:
                 reference_failure = reference_operation.failure(exc)
+                self._record_debug_error(
+                    DebugOperation.ADVISORY_TURN,
+                    reference_failure or exc,
+                    session_id=session,
+                    conversation_id=conversation,
+                    agent_id=agent,
+                )
                 if reference_failure is not None:
                     raise reference_failure from exc
                 raise
+            self._trace_debug(
+                DebugOperation.ADVISORY_TURN,
+                DebugPhase.SUCCEEDED,
+                session_id=session,
+                conversation_id=conversation,
+                agent_id=agent,
+                outcome=DebugOutcome.COMPLETED,
+            )
             return result
 
     async def converse_with_retrieval(
@@ -1477,6 +1727,13 @@ class StoryRuntime:
                     kind=ConversationEventKind.USER_MESSAGE,
                     content=reference_operation.source_text,
                 )
+                self._trace_debug(
+                    DebugOperation.RETRIEVAL_TURN,
+                    DebugPhase.STARTED,
+                    session_id=session,
+                    conversation_id=conversation,
+                    agent_id=agent,
+                )
                 self._append_conversation_event(append, user_event)
             except BaseException as exc:
                 await self._release_bound_agent_use(bound_agent)
@@ -1485,6 +1742,13 @@ class StoryRuntime:
                     self._reference_failure_code(exc),
                 )
                 reference_failure = reference_operation.failure(exc)
+                self._record_debug_error(
+                    DebugOperation.RETRIEVAL_TURN,
+                    reference_failure or exc,
+                    session_id=session,
+                    conversation_id=conversation,
+                    agent_id=agent,
+                )
                 if reference_failure is not None:
                     raise reference_failure from exc
                 raise
@@ -1537,8 +1801,26 @@ class StoryRuntime:
                     self._append_conversation_event(append, cancellation)
                 except BaseException:
                     pass
+                self._record_debug_error(
+                    DebugOperation.RETRIEVAL_TURN,
+                    cancellation_error,
+                    session_id=session,
+                    conversation_id=conversation,
+                    agent_id=agent,
+                    phase=DebugPhase.CANCELLED,
+                    outcome=DebugOutcome.INTERRUPTED,
+                )
                 if reference_failure is not None:
                     raise cancellation_error from reference_failure
+                raise
+            except (KeyboardInterrupt, SystemExit) as interruption:
+                self._record_debug_error(
+                    DebugOperation.RETRIEVAL_TURN,
+                    interruption,
+                    session_id=session,
+                    conversation_id=conversation,
+                    agent_id=agent,
+                )
                 raise
             except Exception as exc:
                 reference_failure = reference_operation.failure(
@@ -1565,9 +1847,23 @@ class StoryRuntime:
                 try:
                     self._append_conversation_event(append, failure)
                 except Exception as persistence_exc:
+                    self._record_debug_error(
+                        DebugOperation.RETRIEVAL_TURN,
+                        persistence_exc,
+                        session_id=session,
+                        conversation_id=conversation,
+                        agent_id=agent,
+                    )
                     if reference_failure is not None:
                         raise reference_failure from persistence_exc
                     raise persistence_exc from exc
+                self._record_debug_error(
+                    DebugOperation.RETRIEVAL_TURN,
+                    visible_failure,
+                    session_id=session,
+                    conversation_id=conversation,
+                    agent_id=agent,
+                )
                 if reference_failure is not None:
                     raise reference_failure from exc
                 raise
@@ -1576,9 +1872,24 @@ class StoryRuntime:
                 self._append_conversation_event(append, reply_event)
             except Exception as exc:
                 reference_failure = reference_operation.failure(exc)
+                self._record_debug_error(
+                    DebugOperation.RETRIEVAL_TURN,
+                    reference_failure or exc,
+                    session_id=session,
+                    conversation_id=conversation,
+                    agent_id=agent,
+                )
                 if reference_failure is not None:
                     raise reference_failure from exc
                 raise
+            self._trace_debug(
+                DebugOperation.RETRIEVAL_TURN,
+                DebugPhase.SUCCEEDED,
+                session_id=session,
+                conversation_id=conversation,
+                agent_id=agent,
+                outcome=DebugOutcome.COMPLETED,
+            )
             return result
 
     async def run_prompt(
@@ -1698,6 +2009,12 @@ class StoryRuntime:
             conversation_context
         )
         progress = _ProgressEmitter(self._validate_progress_sink(progress_sink))
+        self._trace_debug(
+            DebugOperation.CONSENSUS_RUN,
+            DebugPhase.STARTED,
+            session_id=session,
+            debate_id=debate,
+        )
 
         context_snapshot: ConversationContextWindow | None = None
         if (
@@ -1705,26 +2022,35 @@ class StoryRuntime:
             and context_request.mode is DebateContextMode.INCLUDED
         ):
             try:
-                read_context = self._conversation_store_method("read_context")
                 try:
-                    captured = read_context(
-                        session,
-                        context_request.conversation_id,
-                    )
-                except WorkspaceFormatError as exc:
+                    read_context = self._conversation_store_method("read_context")
+                    try:
+                        captured = read_context(
+                            session,
+                            context_request.conversation_id,
+                        )
+                    except WorkspaceFormatError as exc:
+                        raise ValueError(
+                            "conversation context capture is invalid"
+                        ) from exc
+                    self._reject_async_result(captured, operation="read_context")
+                except BackendProtocolError as exc:
                     raise ValueError(
-                        "conversation context capture is invalid"
+                        "conversation context capture must be synchronous"
                     ) from exc
-                self._reject_async_result(captured, operation="read_context")
-            except BackendProtocolError as exc:
-                raise ValueError(
-                    "conversation context capture must be synchronous"
-                ) from exc
-            context_snapshot = validate_conversation_context_window(
-                captured,
-                session_id=session,
-                conversation_id=context_request.conversation_id,
-            )
+                context_snapshot = validate_conversation_context_window(
+                    captured,
+                    session_id=session,
+                    conversation_id=context_request.conversation_id,
+                )
+            except BaseException as exc:
+                self._record_debug_error(
+                    DebugOperation.CONSENSUS_RUN,
+                    exc,
+                    session_id=session,
+                    debate_id=debate,
+                )
+                raise
 
         reference_operation = prepare_runtime_reference_operation(
             self.artifacts,
@@ -1736,10 +2062,15 @@ class StoryRuntime:
             self._acquire_ready_session_access(session)
         except BaseException as exc:
             reference_failure = reference_operation.failure(exc)
+            self._record_debug_error(
+                DebugOperation.CONSENSUS_RUN,
+                reference_failure or exc,
+                session_id=session,
+                debate_id=debate,
+            )
             if reference_failure is not None:
                 raise reference_failure from exc
             raise
-
         reservation_token = uuid.uuid4().hex
         try:
             self.workspace.reserve_debate(
@@ -1750,6 +2081,12 @@ class StoryRuntime:
             )
         except BaseException as exc:
             reference_failure = reference_operation.failure(exc)
+            self._record_debug_error(
+                DebugOperation.CONSENSUS_RUN,
+                reference_failure or exc,
+                session_id=session,
+                debate_id=debate,
+            )
             if reference_failure is not None:
                 raise reference_failure from exc
             raise
@@ -1777,6 +2114,12 @@ class StoryRuntime:
                 except Exception:
                     pass
                 reference_failure = reference_operation.failure(exc)
+                self._record_debug_error(
+                    DebugOperation.CONSENSUS_RUN,
+                    reference_failure or exc,
+                    session_id=session,
+                    debate_id=debate,
+                )
                 if reference_failure is not None:
                     raise reference_failure from exc
                 raise
@@ -1834,8 +2177,24 @@ class StoryRuntime:
                         )
                     )
                 except ProgressObserverError as observer_error:
+                    self._record_debug_error(
+                        DebugOperation.CONSENSUS_RUN,
+                        cancellation,
+                        session_id=session,
+                        debate_id=debate,
+                        phase=DebugPhase.CANCELLED,
+                        outcome=DebugOutcome.INTERRUPTED,
+                    )
                     raise cancellation from observer_error
             reference_failure = reference_operation.failure(cancellation)
+            self._record_debug_error(
+                DebugOperation.CONSENSUS_RUN,
+                cancellation,
+                session_id=session,
+                debate_id=debate,
+                phase=DebugPhase.CANCELLED,
+                outcome=DebugOutcome.INTERRUPTED,
+            )
             if reference_failure is not None:
                 raise cancellation from reference_failure
             raise
@@ -1855,6 +2214,13 @@ class StoryRuntime:
                 except Exception:
                     pass
             reference_failure = reference_operation.failure(exc)
+            self._record_debug_error(
+                DebugOperation.CONSENSUS_RUN,
+                reference_failure or exc,
+                session_id=session,
+                debate_id=debate,
+                outcome=DebugOutcome.INTERRUPTED,
+            )
             if reference_failure is not None:
                 raise reference_failure from exc
             raise
@@ -1874,6 +2240,12 @@ class StoryRuntime:
                 )
             except Exception:
                 pass
+            self._record_debug_error(
+                DebugOperation.CONSENSUS_RUN,
+                visible_failure,
+                session_id=session,
+                debate_id=debate,
+            )
             if reference_failure is not None:
                 raise reference_failure from exc
             raise
@@ -3969,6 +4341,22 @@ class StoryRuntime:
                     failure_kind=failure_kind,
                 )
             )
+        outcome = {
+            DebateStatus.CONSENSUS: DebugOutcome.CONSENSUS,
+            DebateStatus.DEADLOCK: DebugOutcome.DEADLOCK,
+            DebateStatus.FAILED: DebugOutcome.FAILED,
+        }[status]
+        self._trace_debug(
+            DebugOperation.CONSENSUS_RUN,
+            (
+                DebugPhase.SUCCEEDED
+                if status in {DebateStatus.CONSENSUS, DebateStatus.DEADLOCK}
+                else DebugPhase.FAILED
+            ),
+            session_id=session,
+            debate_id=debate,
+            outcome=outcome,
+        )
         return result
 
     @staticmethod

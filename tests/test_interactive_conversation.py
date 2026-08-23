@@ -241,6 +241,10 @@ def _error_record(code: InteractiveErrorCode) -> str:
                 state=terminal_module.ViewState.ERROR,
             ),
             terminal_module.Notice(spec.hint, label="hint"),
+            terminal_module.Notice(
+                "If available, workspace-relative: debug_logs/runtime.jsonl",
+                label="debug log",
+            ),
         ),
         state=terminal_module.ViewState.ERROR,
     )

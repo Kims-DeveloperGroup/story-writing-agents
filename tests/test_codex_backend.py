@@ -16,7 +16,7 @@ import warnings
 import weakref
 from dataclasses import MISSING, FrozenInstanceError, fields, replace
 from pathlib import Path
-from typing import get_type_hints
+from typing import Any, get_type_hints
 from unittest import mock
 
 from story_writing_agents import (
@@ -80,6 +80,10 @@ from story_writing_agents.errors import (
     SessionNotFoundError,
     WorkspaceFormatError,
 )
+from story_writing_agents.debug_log import (
+    DEBUG_LOG_RELATIVE_PATH,
+    WorkspaceDebugLog,
+)
 from story_writing_agents.prompts import PromptAssembler
 from story_writing_agents.orchestrator import StoryRuntime
 from story_writing_agents.writing_artifacts.repository import (
@@ -97,6 +101,15 @@ from story_writing_agents.writing_artifacts import (
     ReferenceReadAction,
     ReferenceReadActionKind,
     ReferenceReadRequest,
+)
+from story_writing_agents.provider_adapter import (
+    ProviderInvocationError,
+    ProviderResult,
+)
+from story_writing_agents.provider_process import (
+    ProcessRequest,
+    run_process,
+    stop_process,
 )
 
 from tests.helpers import all_manuscripts, core_snapshot, initialized_workspace
@@ -151,6 +164,12 @@ if mode == "sleep" or (substantive_sleep and not reference_prelude):
     time.sleep(30)
 if mode == "delay":
     time.sleep(0.25)
+if mode == "nonzero_invalid_stderr":
+    os.write(
+        sys.stderr.fileno(),
+        b"PRIVATE_INVALID_UTF8_STDERR\\xff\\xfe\\x80\\n",
+    )
+    raise SystemExit(7)
 if mode == "nonzero" or (
     os.environ.get("STORY_FAKE_CODEX_FAIL_SUBSTANTIVE") == "1"
     and not reference_prelude
@@ -317,6 +336,37 @@ def _tree_snapshot(root: Path) -> dict[str, bytes | None]:
         )
         for path in sorted(root.rglob("*"))
     }
+
+
+def _workspace_debug_records(workspace: Any) -> list[dict[str, object]]:
+    """Read the complete diagnostic log for one initialized workspace."""
+
+    path = workspace.path(DEBUG_LOG_RELATIVE_PATH)
+    if not path.exists():
+        return []
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+    ]
+
+
+def _debug_signature(record: dict[str, object]) -> tuple[object, ...]:
+    """Project one diagnostic record to its exact content-safe contract."""
+
+    exception = record.get("exception")
+    return (
+        record.get("schema_version"),
+        record.get("level"),
+        record.get("component"),
+        record.get("operation"),
+        record.get("phase"),
+        record.get("outcome"),
+        record.get("session_id"),
+        record.get("debate_id"),
+        record.get("conversation_id"),
+        record.get("agent_id"),
+        exception.get("type") if isinstance(exception, dict) else None,
+    )
 
 
 def _conversation_request(
@@ -897,6 +947,68 @@ class CodexBackendDefaultsTests(unittest.TestCase):
                     str(caught.exception),
                     "Codex model must be safe non-empty text or None",
                 )
+                self.assertIsInstance(
+                    caught.exception.__cause__,
+                    ConfigurationError,
+                )
+
+    def test_constructor_validation_diagnostics_are_fixed_and_provider_safe(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "codex_model",
+                {"model": "-PRIVATE_CODEX_MODEL"},
+                "Codex model must be safe non-empty text or None",
+                "PRIVATE_CODEX_MODEL",
+            ),
+            (
+                "antigravity_model",
+                {"antigravity_model": "-PRIVATE_ANTIGRAVITY_MODEL"},
+                "Antigravity model must be safe non-empty text or None",
+                "PRIVATE_ANTIGRAVITY_MODEL",
+            ),
+            (
+                "antigravity_effort",
+                {"antigravity_effort": "PRIVATE_ANTIGRAVITY_EFFORT"},
+                "Antigravity effort must be None or one of: low, medium, high",
+                "PRIVATE_ANTIGRAVITY_EFFORT",
+            ),
+        )
+        for label, keywords, diagnostic, private in cases:
+            with self.subTest(label=label):
+                mark = len(_workspace_debug_records(self.workspace))
+                with self.assertRaises(ValueError) as caught:
+                    AgentBackend(self.workspace, **keywords)  # type: ignore[arg-type]
+
+                self.assertEqual(str(caught.exception), diagnostic)
+                self.assertIsInstance(caught.exception.__cause__, ConfigurationError)
+                records = [
+                    record
+                    for record in _workspace_debug_records(self.workspace)[mark:]
+                    if record["component"] == "backend"
+                    and record["operation"] == "configuration"
+                ]
+                self.assertEqual(
+                    [_debug_signature(record) for record in records],
+                    [
+                        (
+                            1, "trace", "backend", "configuration", "started",
+                            None, None, None, None, None, None,
+                        ),
+                        (
+                            1, "error", "backend", "configuration", "failed",
+                            "failed", None, None, None, None,
+                            "builtins.ValueError",
+                        ),
+                    ],
+                )
+                self.assertNotIn(
+                    private,
+                    self.workspace.path(DEBUG_LOG_RELATIVE_PATH).read_text(
+                        encoding="utf-8"
+                    ),
+                )
 
     def test_full_persisted_schema_precedes_explicit_model_validation(self) -> None:
         expected_effort = (
@@ -941,7 +1053,7 @@ class CodexBackendDefaultsTests(unittest.TestCase):
             AgentBackend(self.workspace, model="-invalid-explicit")
         self.assertEqual(
             str(caught.exception),
-            "backend must be one of: codex, gemini",
+            "backend must be one of: codex, antigravity",
         )
 
     def test_backend_runtime_and_prompts_share_one_snapshot_until_next_lifecycle(
@@ -982,15 +1094,19 @@ class CodexBackendDefaultsTests(unittest.TestCase):
                 "max_debate_rounds": 0,
                 "codex_model": "next-model",
                 "codex_reasoning_effort": "high",
+                "antigravity_model": "next-antigravity-model",
+                "antigravity_effort": "medium",
             }
         )
         self.workspace.write_json("config/system_defaults.json", defaults)
         agents = self.workspace.read_json("config/agent_configs.json")
         agents[PLOT_ARCHITECT].update(
             {
-                "backend": "gemini",
+                "backend": "antigravity",
                 "language": "FR",
                 "persona": replacement_persona,
+                "antigravity_model": "agent-antigravity-model",
+                "antigravity_effort": "high",
             }
         )
         self.workspace.write_json("config/agent_configs.json", agents)
@@ -1023,12 +1139,31 @@ class CodexBackendDefaultsTests(unittest.TestCase):
         self.addCleanup(next_backend.close)
         self.assertEqual(next_backend.model, "next-model")
         self.assertEqual(next_backend._codex_reasoning_effort, "high")
-        with self.assertRaises(ConfigurationError) as caught:
-            next_backend.validate_provider_configuration("snapshot_session")
         self.assertEqual(
-            str(caught.exception),
-            "agent backend is not implemented: gemini",
+            next_backend._antigravity_adapter.invocation_settings(
+                PLOT_ARCHITECT
+            ),
+            ("agent-antigravity-model", "high"),
         )
+        with (
+            mock.patch.object(
+                next_backend._antigravity_adapter,
+                "executable_available",
+                return_value=True,
+            ) as executable_available,
+            mock.patch.object(
+                next_backend._antigravity_adapter,
+                "headless_capabilities_available",
+                return_value=True,
+            ) as headless_capabilities_available,
+        ):
+            self.assertTrue(
+                next_backend.validate_provider_configuration(
+                    "snapshot_session"
+                )
+            )
+        executable_available.assert_called_once_with()
+        headless_capabilities_available.assert_called_once_with()
 
     def test_optional_model_and_reasoning_argv_are_exact_for_fresh_and_resume(
         self,
@@ -1184,6 +1319,15 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             agent_id=agent_id,
         )
 
+    def antigravity_definition(self, agent_id: str = PLOT_ARCHITECT):
+        return PromptAssembler(
+            self.workspace,
+            backend_overrides={agent_id: "antigravity"},
+        ).build_definition(
+            session_id="definition_session",
+            agent_id=agent_id,
+        )
+
     def request(
         self,
         *,
@@ -1244,6 +1388,131 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
 
     def provider_invocations(self) -> list[dict[str, object]]:
         return [item for item in self.invocations() if "payload" in item]
+
+    def provider_debug_records(
+        self,
+        *,
+        session_id: str,
+        correlation_field: str,
+        correlation_id: str,
+    ) -> list[dict[str, object]]:
+        """Return provider diagnostics for one exact public correlation."""
+
+        return [
+            record
+            for record in _workspace_debug_records(self.workspace)
+            if record["component"] == "backend"
+            and record["operation"] == "provider_invocation"
+            and record.get("session_id") == session_id
+            and record.get(correlation_field) == correlation_id
+        ]
+
+    def assert_provider_terminal_records(
+        self,
+        records: list[dict[str, object]],
+        *,
+        session_id: str,
+        correlation_field: str,
+        correlation_id: str,
+        terminal_phase: str,
+        outcome: str,
+        exception_type: type[BaseException] | None,
+    ) -> None:
+        """Assert one exact provider STARTED row and its terminal."""
+
+        debate_id = correlation_id if correlation_field == "debate_id" else None
+        conversation_id = (
+            correlation_id if correlation_field == "conversation_id" else None
+        )
+        exception_name = (
+            None
+            if exception_type is None
+            else f"{exception_type.__module__}.{exception_type.__qualname__}"
+        )
+        self.assertEqual(
+            [_debug_signature(record) for record in records],
+            [
+                (
+                    1, "trace", "backend", "provider_invocation", "started",
+                    None, session_id, debate_id, conversation_id,
+                    PLOT_ARCHITECT, None,
+                ),
+                (
+                    1,
+                    "trace" if exception_type is None else "error",
+                    "backend",
+                    "provider_invocation",
+                    terminal_phase,
+                    outcome,
+                    session_id,
+                    debate_id,
+                    conversation_id,
+                    PLOT_ARCHITECT,
+                    exception_name,
+                ),
+            ],
+        )
+        if exception_type is not None:
+            self.assertEqual(
+                set(records[1]["exception"]),  # type: ignore[arg-type]
+                {"type", "frames", "frames_truncated"},
+            )
+
+    def assert_interrupted_provider_records(
+        self,
+        records: list[dict[str, object]],
+        *,
+        session_id: str,
+        correlation_field: str,
+        correlation_id: str,
+        exception_type: type[BaseException],
+    ) -> None:
+        """Assert one STARTED and one correlated interrupted terminal row."""
+
+        self.assertEqual(len(records), 2)
+        expected_common = {
+            "schema_version": 1,
+            "component": "backend",
+            "operation": "provider_invocation",
+            "session_id": session_id,
+            correlation_field: correlation_id,
+            "agent_id": PLOT_ARCHITECT,
+        }
+        self.assertEqual(
+            {
+                key: value
+                for key, value in records[0].items()
+                if key != "timestamp"
+            },
+            {
+                **expected_common,
+                "level": "trace",
+                "phase": "started",
+            },
+        )
+        exception = records[1]["exception"]
+        self.assertIs(type(exception), dict)
+        self.assertEqual(
+            {
+                key: value
+                for key, value in records[1].items()
+                if key not in {"timestamp", "exception"}
+            },
+            {
+                **expected_common,
+                "level": "error",
+                "phase": "cancelled",
+                "outcome": "interrupted",
+            },
+        )
+        self.assertEqual(
+            set(exception),  # type: ignore[arg-type]
+            {"type", "frames", "frames_truncated"},
+        )
+        self.assertEqual(
+            exception["type"],  # type: ignore[index]
+            f"builtins.{exception_type.__name__}",
+        )
 
     def thread(self, session_id: str) -> dict[str, object]:
         manifest = self.workspace.read_json(
@@ -1546,6 +1815,94 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             with self.subTest(content=content[:32]):
                 self.assertIn(content, staged)
 
+    async def test_adapter_selected_bind_records_exact_lifecycle_terminals(
+        self,
+    ) -> None:
+        """Trace the selected adapter for successful and failed vendor binds."""
+
+        for vendor in ("codex", "antigravity"):
+            for outcome in ("success", "failure"):
+                with self.subTest(vendor=vendor, outcome=outcome):
+                    backend = AgentBackend(
+                        self.workspace,
+                        executable=str(self.executable),
+                    )
+                    self.addCleanup(backend.close)
+                    definition = (
+                        self.definition()
+                        if vendor == "codex"
+                        else self.antigravity_definition()
+                    )
+                    selected = backend._adapters[vendor]
+                    other = backend._adapters[
+                        "antigravity" if vendor == "codex" else "codex"
+                    ]
+                    mark = len(_workspace_debug_records(self.workspace))
+                    private = f"PRIVATE_{vendor.upper()}_BIND_FAILURE"
+                    failure = ValueError(private)
+                    selected_patch = (
+                        mock.patch.object(selected, "bind", wraps=selected.bind)
+                        if outcome == "success"
+                        else mock.patch.object(
+                            selected,
+                            "bind",
+                            side_effect=failure,
+                        )
+                    )
+                    with (
+                        selected_patch as selected_bind,
+                        mock.patch.object(
+                            other,
+                            "bind",
+                            wraps=other.bind,
+                        ) as other_bind,
+                    ):
+                        if outcome == "success":
+                            bound = await backend.bind(definition)
+                            self.assertEqual(bound.vendor, vendor)
+                        else:
+                            with self.assertRaises(ValueError) as raised:
+                                await backend.bind(definition)
+                            self.assertIs(raised.exception, failure)
+
+                    selected_bind.assert_called_once_with(definition)
+                    other_bind.assert_not_called()
+                    records = [
+                        record
+                        for record in _workspace_debug_records(self.workspace)[mark:]
+                        if record["component"] == "backend"
+                        and record["operation"] == "backend_lifecycle"
+                    ]
+                    if outcome == "success":
+                        terminal = (
+                            1, "trace", "backend", "backend_lifecycle",
+                            "succeeded", "ready", None, None, None,
+                            PLOT_ARCHITECT, None,
+                        )
+                    else:
+                        terminal = (
+                            1, "error", "backend", "backend_lifecycle",
+                            "failed", "failed", None, None, None,
+                            PLOT_ARCHITECT, "builtins.ValueError",
+                        )
+                        self.assertNotIn(
+                            private,
+                            self.workspace.path(DEBUG_LOG_RELATIVE_PATH).read_text(
+                                encoding="utf-8"
+                            ),
+                        )
+                    self.assertEqual(
+                        [_debug_signature(record) for record in records],
+                        [
+                            (
+                                1, "trace", "backend", "backend_lifecycle",
+                                "started", None, None, None, None,
+                                PLOT_ARCHITECT, None,
+                            ),
+                            terminal,
+                        ],
+                    )
+
     async def test_backend_defaults_snapshot_refresh_and_thread_identity_are_exact(
         self,
     ) -> None:
@@ -1653,6 +2010,11 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured_stderr.getvalue(), "")
         self.assertNotIn(model, str(caught.exception))
         self.assertNotIn(effort, str(caught.exception))
+        raw_debug_log = self.workspace.path(
+            DEBUG_LOG_RELATIVE_PATH
+        ).read_text(encoding="utf-8")
+        self.assertNotIn(model, raw_debug_log)
+        self.assertNotIn(effort, raw_debug_log)
         argv = self.provider_invocations()[0]["argv"]
         start = argv.index("exec")
         self.assertEqual(
@@ -1666,6 +2028,606 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 "--json",
             ),
         )
+
+    async def test_diagnostic_failure_does_not_replace_provider_failure_or_taint(
+        self,
+    ) -> None:
+        """Preserve the provider error and thread safety when logging fails."""
+
+        session_id = "diagnostic_failure"
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        backend.create_session_with_access(session_id)
+        bound = await backend.bind(self.definition())
+        captured_stderr = io.StringIO()
+        with (
+            mock.patch.dict(os.environ, {"STORY_FAKE_CODEX_MODE": "nonzero"}),
+            mock.patch.object(
+                WorkspaceDebugLog,
+                "error",
+                side_effect=SystemExit("diagnostic failure"),
+            ) as debug_error,
+            contextlib.redirect_stderr(captured_stderr),
+            self.assertRaises(BackendProtocolError) as caught,
+        ):
+            await bound.invoke(self.request(session_id=session_id))
+
+        self.assertEqual(str(caught.exception), "Codex CLI exited with status 7")
+        self.assertEqual(captured_stderr.getvalue(), "")
+        self.assertTrue(debug_error.called)
+        manifest = self.workspace.read_json(
+            "agent_states/orchestrator_state/provider_sessions/"
+            f"{session_id}.json"
+        )
+        self.assertEqual(manifest["provider_threads"], {})
+
+    async def test_antigravity_public_operations_use_provider_neutral_diagnostics(
+        self,
+    ) -> None:
+        """Trace every public Antigravity operation without provider I/O."""
+
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        bound = await backend.bind(self.antigravity_definition())
+        operations = (
+            ("invoke", "_invoke_provider", "debate_id"),
+            ("converse", "_converse_provider", "conversation_id"),
+            (
+                "retrieval",
+                "_converse_with_retrieval_provider",
+                "conversation_id",
+            ),
+        )
+        terminals = (
+            ("success", "succeeded", "completed"),
+            ("failure", "failed", "failed"),
+            ("cancellation", "cancelled", "interrupted"),
+        )
+        for operation, seam, correlation_field in operations:
+            for terminal, phase, outcome in terminals:
+                with self.subTest(operation=operation, terminal=terminal):
+                    session_id = f"antigravity_{operation}_{terminal}"
+                    correlation_id = f"{operation}_{terminal}_correlation"
+                    story_marker = f"PRIVATE_{operation.upper()}_{terminal.upper()}"
+                    backend.create_session_with_access(session_id)
+                    handler = _RecordingRetrievalHandler()
+                    if operation == "invoke":
+                        request: object = replace(
+                            self.request(
+                                session_id=session_id,
+                                debate_id=correlation_id,
+                            ),
+                            user_payload=story_marker,
+                        )
+                        expected: object = AgentReply.candidate(
+                            "r0",
+                            "provider result",
+                        )
+                    elif operation == "converse":
+                        request = self.conversation_request(
+                            session_id=session_id,
+                            conversation_id=correlation_id,
+                            content=story_marker,
+                        )
+                        expected = ConversationReply(
+                            session_id,
+                            correlation_id,
+                            request.turn_id,
+                            "provider result",
+                        )
+                    else:
+                        request = self.retrieval_request(
+                            session_id=session_id,
+                            conversation_id=correlation_id,
+                            content=story_marker,
+                        )
+                        expected = ConversationRetrievalReply(
+                            session_id=session_id,
+                            conversation_id=correlation_id,
+                            turn_id=request.turn_id,
+                            content="provider result",
+                            sources=(),
+                        )
+
+                    failure: BaseException | None
+                    if terminal == "failure":
+                        failure = BackendProtocolError(
+                            f"PRIVATE_{operation.upper()}_PROVIDER_FAILURE"
+                        )
+                    elif terminal == "cancellation":
+                        failure = asyncio.CancelledError(
+                            f"PRIVATE_{operation.upper()}_PROVIDER_CANCEL"
+                        )
+                    else:
+                        failure = None
+                    provider_call = mock.AsyncMock(
+                        return_value=expected,
+                        side_effect=failure,
+                    )
+                    with mock.patch.object(backend, seam, new=provider_call):
+                        if failure is None:
+                            if operation == "invoke":
+                                actual = await bound.invoke(request)  # type: ignore[arg-type]
+                            elif operation == "converse":
+                                actual = await bound.converse(request)  # type: ignore[arg-type]
+                            else:
+                                actual = await bound.converse_with_retrieval(
+                                    request,  # type: ignore[arg-type]
+                                    handler,
+                                )
+                            self.assertEqual(actual, expected)
+                        else:
+                            with self.assertRaises(type(failure)) as raised:
+                                if operation == "invoke":
+                                    await bound.invoke(request)  # type: ignore[arg-type]
+                                elif operation == "converse":
+                                    await bound.converse(request)  # type: ignore[arg-type]
+                                else:
+                                    await bound.converse_with_retrieval(
+                                        request,  # type: ignore[arg-type]
+                                        handler,
+                                    )
+                            self.assertIs(raised.exception, failure)
+
+                    provider_call.assert_awaited_once()
+                    provider_args = provider_call.await_args.args
+                    self.assertIs(provider_args[0], bound)
+                    self.assertEqual(provider_args[1], request)
+                    if operation == "retrieval":
+                        self.assertEqual(len(provider_args), 3)
+                        self.assertTrue(callable(provider_args[2]))
+                    else:
+                        self.assertEqual(len(provider_args), 2)
+                    self.assertEqual(handler.actions, [])
+                    lock = backend._thread_lock(
+                        session_id,
+                        "antigravity",
+                        PLOT_ARCHITECT,
+                    )
+                    self.assertFalse(lock.locked())
+                    records = self.provider_debug_records(
+                        session_id=session_id,
+                        correlation_field=correlation_field,
+                        correlation_id=correlation_id,
+                    )
+                    self.assert_provider_terminal_records(
+                        records,
+                        session_id=session_id,
+                        correlation_field=correlation_field,
+                        correlation_id=correlation_id,
+                        terminal_phase=phase,
+                        outcome=outcome,
+                        exception_type=None if failure is None else type(failure),
+                    )
+                    raw = self.workspace.path(DEBUG_LOG_RELATIVE_PATH).read_text(
+                        encoding="utf-8"
+                    )
+                    self.assertNotIn(story_marker, raw)
+                    if failure is not None:
+                        self.assertNotIn(str(failure), raw)
+
+    async def test_bound_agent_control_failures_emit_interrupted_terminal_records(
+        self,
+    ) -> None:
+        """Trace both control-flow failures at every bound provider operation."""
+
+        operations = (
+            ("invoke", "_invoke_codex", "debate_id"),
+            ("converse", "_converse_codex", "conversation_id"),
+            (
+                "retrieval",
+                "_converse_with_retrieval_codex",
+                "conversation_id",
+            ),
+        )
+        for ordinal, (operation, seam, correlation_field) in enumerate(
+            operations,
+            start=1,
+        ):
+            for exception_type in (KeyboardInterrupt, SystemExit):
+                with self.subTest(
+                    operation=operation,
+                    exception_type=exception_type.__name__,
+                ):
+                    suffix = exception_type.__name__.lower()
+                    session_id = f"control_{operation}_{suffix}"
+                    correlation_id = f"correlation_{ordinal}_{suffix}"
+                    story_marker = f"PRIVATE_STORY_{operation}_{suffix}"
+                    failure_marker = f"PRIVATE_FAILURE_{operation}_{suffix}"
+                    failure = exception_type(failure_marker)
+                    original_cause = failure.__cause__
+                    original_context = failure.__context__
+                    backend = AgentBackend(
+                        self.workspace,
+                        executable=str(self.executable),
+                    )
+                    self.addCleanup(backend.close)
+                    backend.create_session_with_access(session_id)
+                    bound = await backend.bind(self.definition())
+                    handler = _RecordingRetrievalHandler()
+                    if operation == "invoke":
+                        request: object = replace(
+                            self.request(
+                                session_id=session_id,
+                                debate_id=correlation_id,
+                            ),
+                            user_payload=story_marker,
+                        )
+                    elif operation == "converse":
+                        request = self.conversation_request(
+                            session_id=session_id,
+                            conversation_id=correlation_id,
+                            content=story_marker,
+                        )
+                    else:
+                        request = self.retrieval_request(
+                            session_id=session_id,
+                            conversation_id=correlation_id,
+                            content=story_marker,
+                        )
+
+                    with (
+                        mock.patch.object(
+                            backend,
+                            seam,
+                            side_effect=failure,
+                        ) as provider_call,
+                        self.assertRaises(exception_type) as raised,
+                    ):
+                        if operation == "invoke":
+                            await bound.invoke(request)  # type: ignore[arg-type]
+                        elif operation == "converse":
+                            await bound.converse(request)  # type: ignore[arg-type]
+                        else:
+                            await bound.converse_with_retrieval(
+                                request,  # type: ignore[arg-type]
+                                handler,
+                            )
+
+                    self.assertIs(raised.exception, failure)
+                    self.assertIs(type(raised.exception), exception_type)
+                    self.assertEqual(str(raised.exception), failure_marker)
+                    self.assertIs(failure.__cause__, original_cause)
+                    self.assertIs(failure.__context__, original_context)
+                    provider_call.assert_awaited_once()
+                    self.assertEqual(handler.actions, [])
+                    lock = backend._thread_lock(
+                        session_id,
+                        bound.vendor,
+                        bound.definition.agent_id,
+                    )
+                    self.assertFalse(lock.locked())
+                    manifest = self.workspace.read_json(
+                        "agent_states/orchestrator_state/provider_sessions/"
+                        f"{session_id}.json"
+                    )
+                    self.assertEqual(manifest["provider_threads"], {})
+                    records = self.provider_debug_records(
+                        session_id=session_id,
+                        correlation_field=correlation_field,
+                        correlation_id=correlation_id,
+                    )
+                    self.assert_interrupted_provider_records(
+                        records,
+                        session_id=session_id,
+                        correlation_field=correlation_field,
+                        correlation_id=correlation_id,
+                        exception_type=exception_type,
+                    )
+                    raw_debug_log = self.workspace.path(
+                        DEBUG_LOG_RELATIVE_PATH
+                    ).read_text(encoding="utf-8")
+                    for private in (
+                        story_marker,
+                        failure_marker,
+                        str(self.workspace.root),
+                        str(bound.staging_directory),
+                    ):
+                        self.assertNotIn(private, raw_debug_log)
+
+    async def test_retrieval_handler_control_failures_taint_and_trace_interruption(
+        self,
+    ) -> None:
+        """Keep pending retrieval taint while tracing handler interruptions."""
+
+        for ordinal, exception_type in enumerate(
+            (KeyboardInterrupt, SystemExit),
+            start=1,
+        ):
+            with self.subTest(exception_type=exception_type.__name__):
+                suffix = exception_type.__name__.lower()
+                session_id = f"handler_control_{suffix}"
+                conversation_id = f"handler_conversation_{ordinal}"
+                story_marker = f"PRIVATE_HANDLER_STORY_{suffix}"
+                failure_marker = f"PRIVATE_HANDLER_FAILURE_{suffix}"
+                failure = exception_type(failure_marker)
+                original_cause = failure.__cause__
+                original_context = failure.__context__
+                backend = AgentBackend(
+                    self.workspace,
+                    executable=str(self.executable),
+                )
+                self.addCleanup(backend.close)
+                backend.create_session_with_access(session_id)
+                bound = await backend.bind(self.definition())
+                request = self.retrieval_request(
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                    content=story_marker,
+                )
+                search = _retrieval_action_json(
+                    request,
+                    kind=ConversationRetrievalActionKind.SEARCH_CONVERSATIONS,
+                    action_index=1,
+                    query="Needle source",
+                )
+                handler = _RaisingRetrievalHandler(failure)
+
+                with (
+                    mock.patch.dict(
+                        os.environ,
+                        {"STORY_FAKE_CODEX_OUTPUTS": json.dumps((search,))},
+                    ),
+                    self.assertRaises(exception_type) as raised,
+                ):
+                    await bound.converse_with_retrieval(request, handler)
+
+                self.assertIs(raised.exception, failure)
+                self.assertEqual(str(raised.exception), failure_marker)
+                self.assertIs(failure.__cause__, original_cause)
+                self.assertIs(failure.__context__, original_context)
+                self.assertEqual(handler.calls, 1)
+                self.assertIs(self.thread(session_id)["tainted"], True)
+                self.assertFalse(
+                    backend._thread_lock(
+                        session_id,
+                        bound.vendor,
+                        bound.definition.agent_id,
+                    ).locked()
+                )
+                records = self.provider_debug_records(
+                    session_id=session_id,
+                    correlation_field="conversation_id",
+                    correlation_id=conversation_id,
+                )
+                self.assert_interrupted_provider_records(
+                    records,
+                    session_id=session_id,
+                    correlation_field="conversation_id",
+                    correlation_id=conversation_id,
+                    exception_type=exception_type,
+                )
+                raw_debug_log = self.workspace.path(
+                    DEBUG_LOG_RELATIVE_PATH
+                ).read_text(encoding="utf-8")
+                for private in (
+                    story_marker,
+                    failure_marker,
+                    str(self.workspace.root),
+                    str(bound.staging_directory),
+                ):
+                    self.assertNotIn(private, raw_debug_log)
+
+    async def test_debug_sink_control_failures_preserve_bound_interruptions(
+        self,
+    ) -> None:
+        """Prevent diagnostic control flow from replacing bound-agent failures."""
+
+        cases = (
+            ("invoke", KeyboardInterrupt, SystemExit, "debate_id"),
+            ("converse", SystemExit, KeyboardInterrupt, "conversation_id"),
+            ("retrieval", KeyboardInterrupt, SystemExit, "conversation_id"),
+        )
+        seams = {
+            "invoke": "_invoke_codex",
+            "converse": "_converse_codex",
+        }
+        for ordinal, (
+            operation,
+            application_type,
+            sink_type,
+            correlation_field,
+        ) in enumerate(cases, start=1):
+            with self.subTest(
+                operation=operation,
+                application_type=application_type.__name__,
+                sink_type=sink_type.__name__,
+            ):
+                session_id = f"sink_control_{operation}"
+                correlation_id = f"sink_correlation_{ordinal}"
+                story_marker = f"PRIVATE_SINK_STORY_{operation}"
+                application_marker = f"PRIVATE_APPLICATION_{operation}"
+                sink_marker = f"PRIVATE_DIAGNOSTIC_{operation}"
+                application_failure = application_type(application_marker)
+                sink_failure = sink_type(sink_marker)
+                original_cause = application_failure.__cause__
+                original_context = application_failure.__context__
+                backend = AgentBackend(
+                    self.workspace,
+                    executable=str(self.executable),
+                )
+                self.addCleanup(backend.close)
+                backend.create_session_with_access(session_id)
+                bound = await backend.bind(self.definition())
+                handler: object = _RecordingRetrievalHandler()
+                provider_patch: contextlib.AbstractContextManager[object]
+                if operation == "invoke":
+                    request: object = replace(
+                        self.request(
+                            session_id=session_id,
+                            debate_id=correlation_id,
+                        ),
+                        user_payload=story_marker,
+                    )
+                    provider_patch = mock.patch.object(
+                        backend,
+                        seams[operation],
+                        side_effect=application_failure,
+                    )
+                elif operation == "converse":
+                    request = self.conversation_request(
+                        session_id=session_id,
+                        conversation_id=correlation_id,
+                        content=story_marker,
+                    )
+                    provider_patch = mock.patch.object(
+                        backend,
+                        seams[operation],
+                        side_effect=application_failure,
+                    )
+                else:
+                    request = self.retrieval_request(
+                        session_id=session_id,
+                        conversation_id=correlation_id,
+                        content=story_marker,
+                    )
+                    search = _retrieval_action_json(
+                        request,
+                        kind=ConversationRetrievalActionKind.SEARCH_CONVERSATIONS,
+                        action_index=1,
+                        query="Needle source",
+                    )
+                    handler = _RaisingRetrievalHandler(application_failure)
+                    provider_patch = mock.patch.dict(
+                        os.environ,
+                        {"STORY_FAKE_CODEX_OUTPUTS": json.dumps((search,))},
+                    )
+
+                with (
+                    provider_patch,
+                    mock.patch.object(
+                        WorkspaceDebugLog,
+                        "error",
+                        side_effect=sink_failure,
+                    ) as debug_error,
+                    self.assertRaises(application_type) as raised,
+                ):
+                    if operation == "invoke":
+                        await bound.invoke(request)  # type: ignore[arg-type]
+                    elif operation == "converse":
+                        await bound.converse(request)  # type: ignore[arg-type]
+                    else:
+                        await bound.converse_with_retrieval(
+                            request,  # type: ignore[arg-type]
+                            handler,  # type: ignore[arg-type]
+                        )
+
+                self.assertIs(raised.exception, application_failure)
+                self.assertEqual(str(raised.exception), application_marker)
+                self.assertIs(application_failure.__cause__, original_cause)
+                self.assertIs(application_failure.__context__, original_context)
+                debug_error.assert_called_once()
+                self.assertIs(debug_error.call_args.args[2], application_failure)
+                self.assertEqual(debug_error.call_args.args[0].value, "backend")
+                self.assertEqual(
+                    debug_error.call_args.args[1].value,
+                    "provider_invocation",
+                )
+                self.assertEqual(
+                    debug_error.call_args.kwargs["phase"].value,
+                    "cancelled",
+                )
+                self.assertEqual(
+                    debug_error.call_args.kwargs["outcome"].value,
+                    "interrupted",
+                )
+                self.assertEqual(
+                    debug_error.call_args.kwargs["session_id"],
+                    session_id,
+                )
+                self.assertEqual(
+                    debug_error.call_args.kwargs[correlation_field],
+                    correlation_id,
+                )
+                self.assertEqual(
+                    debug_error.call_args.kwargs["agent_id"],
+                    PLOT_ARCHITECT,
+                )
+                records = self.provider_debug_records(
+                    session_id=session_id,
+                    correlation_field=correlation_field,
+                    correlation_id=correlation_id,
+                )
+                self.assertEqual(len(records), 1)
+                self.assertEqual(
+                    {
+                        key: value
+                        for key, value in records[0].items()
+                        if key != "timestamp"
+                    },
+                    {
+                        "schema_version": 1,
+                        "level": "trace",
+                        "component": "backend",
+                        "operation": "provider_invocation",
+                        "phase": "started",
+                        "session_id": session_id,
+                        correlation_field: correlation_id,
+                        "agent_id": PLOT_ARCHITECT,
+                    },
+                )
+                self.assertFalse(
+                    backend._thread_lock(
+                        session_id,
+                        bound.vendor,
+                        bound.definition.agent_id,
+                    ).locked()
+                )
+                if operation == "retrieval":
+                    self.assertEqual(handler.calls, 1)  # type: ignore[attr-defined]
+                    self.assertIs(self.thread(session_id)["tainted"], True)
+                else:
+                    manifest = self.workspace.read_json(
+                        "agent_states/orchestrator_state/provider_sessions/"
+                        f"{session_id}.json"
+                    )
+                    self.assertEqual(manifest["provider_threads"], {})
+                raw_debug_log = self.workspace.path(
+                    DEBUG_LOG_RELATIVE_PATH
+                ).read_text(encoding="utf-8")
+                for private in (
+                    story_marker,
+                    application_marker,
+                    sink_marker,
+                    str(self.workspace.root),
+                    str(bound.staging_directory),
+                ):
+                    self.assertNotIn(private, raw_debug_log)
+
+    async def test_trace_failure_preserves_provider_result_taint_and_cleanup(
+        self,
+    ) -> None:
+        """Keep successful backend lifecycle and provider behavior trace-independent."""
+
+        session_id = "trace_failure"
+        with mock.patch.object(
+            WorkspaceDebugLog,
+            "trace",
+            side_effect=SystemExit("diagnostic trace failure"),
+        ) as trace:
+            backend = AgentBackend(
+                self.workspace,
+                executable=str(self.executable),
+            )
+            self.addCleanup(backend.close)
+            created = backend.create_session_with_access(session_id)
+            bound = await backend.bind(self.definition())
+            reply = await bound.invoke(self.request(session_id=session_id))
+            backend.close()
+
+        self.assertEqual(created.access_state, SessionAccessState.HELD_HERE)
+        self.assertEqual(reply.content, "generated candidate")
+        self.assertGreater(trace.call_count, 0)
+        thread = self.thread(session_id)
+        self.assertIs(thread["tainted"], False)
+        self.assertFalse(
+            self.workspace.path(
+                "agent_states/orchestrator_state/provider_sessions/"
+                f"{session_id}.access.json"
+            ).exists()
+        )
+        self.assertEqual(backend._access_claim_tokens, {})
+        self.assertEqual(backend._staging_directories, set())
 
     async def test_debate_context_is_the_only_additive_payload_field(self) -> None:
         session_id = "debate_context_session"
@@ -2392,6 +3354,180 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     )
                 )
 
+    async def test_structured_decode_failures_taint_existing_thread_once(
+        self,
+    ) -> None:
+        session_id = "decode_taint_session"
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        backend.create_session_with_access(session_id)
+        definition = self.definition()
+        bound = await backend.bind(definition)
+        failures: tuple[tuple[str, BaseException], ...] = (
+            (
+                "json",
+                json.JSONDecodeError("malformed provider response", "x", 0),
+            ),
+            (
+                "unicode",
+                UnicodeDecodeError(
+                    "utf-8",
+                    b"\xff",
+                    0,
+                    1,
+                    "invalid provider response",
+                ),
+            ),
+            (
+                "protocol",
+                BackendProtocolError(
+                    "Codex conversation response has an invalid schema"
+                ),
+            ),
+        )
+
+        for index, (label, failure) in enumerate(failures):
+            with self.subTest(failure=label):
+                thread_id = f"decode-thread-{index}"
+                backend._store_thread(
+                    session_id,
+                    definition,
+                    thread_id,
+                    tainted=False,
+                )
+                invoke = mock.AsyncMock(
+                    return_value=ProviderResult(
+                        thread_id=thread_id,
+                        response_text="provider response",
+                    )
+                )
+
+                def fail_decode(_text: str) -> ConversationReply:
+                    raise failure
+
+                with (
+                    mock.patch.object(backend._codex_adapter, "invoke", invoke),
+                    mock.patch.object(
+                        backend,
+                        "_taint_thread",
+                        wraps=backend._taint_thread,
+                    ) as taint,
+                    mock.patch.object(
+                        backend,
+                        "_write_manifest",
+                        wraps=backend._write_manifest,
+                    ) as write_manifest,
+                    mock.patch.object(
+                        backend,
+                        "_store_thread",
+                        wraps=backend._store_thread,
+                    ) as store_thread,
+                ):
+                    with self.assertRaises(BackendProtocolError) as caught:
+                        await backend._invoke_provider_structured(
+                            bound,
+                            session_id=session_id,
+                            schema={},
+                            payload={},
+                            decode=fail_decode,
+                        )
+
+                invoke.assert_awaited_once()
+                taint.assert_called_once_with(session_id, definition)
+                write_manifest.assert_called_once()
+                store_thread.assert_not_called()
+                self.assertIs(self.thread(session_id)["tainted"], True)
+                if type(failure) is BackendProtocolError:
+                    self.assertIs(caught.exception, failure)
+                    self.assertIsNone(caught.exception.__cause__)
+                else:
+                    self.assertIs(type(caught.exception), BackendProtocolError)
+                    self.assertEqual(
+                        str(caught.exception),
+                        "Codex CLI returned malformed structured output",
+                    )
+                    self.assertIs(caught.exception.__cause__, failure)
+
+    async def test_provider_invocation_error_preserves_adapter_cause_and_taint(
+        self,
+    ) -> None:
+        session_id = "provider_error_chain_session"
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        backend.create_session_with_access(session_id)
+        definition = self.definition()
+        bound = await backend.bind(definition)
+        unchained = ProviderInvocationError(
+            "safe unchained provider failure",
+            taint_existing_thread=False,
+        )
+        underlying = OSError("underlying provider failure")
+        chained = ProviderInvocationError(
+            "safe chained provider failure",
+            taint_existing_thread=True,
+        )
+        chained.__cause__ = underlying
+        cases = (
+            ("unchained", unchained, None, False),
+            ("chained", chained, underlying, True),
+        )
+
+        for index, (label, provider_error, expected_cause, should_taint) in enumerate(
+            cases
+        ):
+            with self.subTest(error=label):
+                thread_id = f"provider-error-thread-{index}"
+                backend._store_thread(
+                    session_id,
+                    definition,
+                    thread_id,
+                    tainted=False,
+                )
+                invoke = mock.AsyncMock(side_effect=provider_error)
+                decode = mock.Mock()
+                with (
+                    mock.patch.object(backend._codex_adapter, "invoke", invoke),
+                    mock.patch.object(
+                        backend,
+                        "_taint_thread",
+                        wraps=backend._taint_thread,
+                    ) as taint,
+                    mock.patch.object(
+                        backend,
+                        "_write_manifest",
+                        wraps=backend._write_manifest,
+                    ) as write_manifest,
+                    mock.patch.object(
+                        backend,
+                        "_store_thread",
+                        wraps=backend._store_thread,
+                    ) as store_thread,
+                ):
+                    with self.assertRaises(BackendProtocolError) as caught:
+                        await backend._invoke_provider_structured(
+                            bound,
+                            session_id=session_id,
+                            schema={},
+                            payload={},
+                            decode=decode,
+                        )
+
+                self.assertIs(type(caught.exception), BackendProtocolError)
+                self.assertEqual(str(caught.exception), provider_error.diagnostic)
+                self.assertIs(caught.exception.__cause__, expected_cause)
+                self.assertIsNot(caught.exception.__cause__, provider_error)
+                self.assertIsNone(caught.exception.__context__)
+                invoke.assert_awaited_once()
+                decode.assert_not_called()
+                store_thread.assert_not_called()
+                self.assertIs(self.thread(session_id)["tainted"], should_taint)
+                if should_taint:
+                    taint.assert_called_once_with(session_id, definition)
+                    write_manifest.assert_called_once()
+                else:
+                    taint.assert_not_called()
+                    write_manifest.assert_not_called()
+
     async def test_conversation_provider_failures_taint_without_story_mutation(
         self,
     ) -> None:
@@ -2544,6 +3680,81 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(sensitive, diagnostic)
         for control in ("\x00", "\x1b", "\x7f"):
             self.assertNotIn(control, diagnostic)
+
+        debug_path = self.workspace.path(DEBUG_LOG_RELATIVE_PATH)
+        raw_debug_log = debug_path.read_text(encoding="utf-8")
+        records = [json.loads(line) for line in raw_debug_log.splitlines()]
+        failure = next(
+            record
+            for record in reversed(records)
+            if record["component"] == "backend"
+            and record["operation"] == "provider_invocation"
+            and record["level"] == "error"
+        )
+        self.assertEqual(
+            {
+                key: value
+                for key, value in failure.items()
+                if key not in {"timestamp", "exception"}
+            },
+            {
+                "schema_version": 1,
+                "level": "error",
+                "component": "backend",
+                "operation": "provider_invocation",
+                "phase": "failed",
+                "session_id": session_id,
+                "conversation_id": request.conversation_id,
+                "agent_id": self.definition().agent_id,
+                "outcome": "failed",
+            },
+        )
+        self.assertEqual(
+            set(failure["exception"]),
+            {"type", "frames", "frames_truncated"},
+        )
+        for sensitive in (
+            "CURRENT_SECRET",
+            "CONTEXT_SECRET",
+            "REPLY_SECRET",
+            "simulated provider failure",
+            str(bound.staging_directory),
+            str(self.workspace.root),
+        ):
+            self.assertNotIn(sensitive, raw_debug_log)
+
+    async def test_invalid_utf8_provider_stderr_is_never_decoded_or_persisted(
+        self,
+    ) -> None:
+        """Drain arbitrary stderr bytes without exposing or decoding them."""
+
+        session_id = "invalid_stderr"
+        marker = b"PRIVATE_INVALID_UTF8_STDERR"
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        backend.create_session_with_access(session_id)
+        bound = await backend.bind(self.definition())
+        captured_stderr = io.StringIO()
+
+        with (
+            mock.patch.dict(
+                os.environ,
+                {"STORY_FAKE_CODEX_MODE": "nonzero_invalid_stderr"},
+            ),
+            contextlib.redirect_stderr(captured_stderr),
+            self.assertRaises(BackendProtocolError) as caught,
+        ):
+            await bound.converse(
+                self.conversation_request(session_id=session_id)
+            )
+
+        self.assertEqual(str(caught.exception), "Codex CLI exited with status 7")
+        self.assertEqual(captured_stderr.getvalue(), "")
+        raw_debug_log = self.workspace.path(
+            DEBUG_LOG_RELATIVE_PATH
+        ).read_bytes()
+        self.assertNotIn(marker, raw_debug_log)
+        self.assertNotIn(b"\xff", raw_debug_log)
 
     async def test_debate_nonzero_exit_uses_fixed_stderr_free_error(self) -> None:
         """Exclude debate stderr and request values from fixed errors."""
@@ -2791,6 +4002,72 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             any(item.get("terminated") is True for item in self.invocations())
         )
 
+    async def test_unexpected_communication_failure_stops_process_and_propagates(
+        self,
+    ) -> None:
+        events: list[str] = []
+        failure = BrokenPipeError("provider communication failed")
+        communication = asyncio.Future()
+        communication.set_exception(failure)
+        first_wait = asyncio.Future()
+        final_wait = asyncio.Future()
+        final_wait.set_result(None)
+        cleanup_waits: list[asyncio.Future[object]] = []
+        timeouts: list[float] = []
+        process = mock.Mock(returncode=None)
+        process.communicate.side_effect = (
+            lambda data: events.append("communicate") or communication
+        )
+        process.terminate.side_effect = lambda: events.append("terminate")
+        process.kill.side_effect = lambda: events.append("kill")
+        waits = iter((first_wait, final_wait))
+
+        def wait():
+            events.append("wait")
+            return next(waits)
+
+        process.wait.side_effect = wait
+
+        async def create_process(*command, **launch_options):
+            events.append("launch")
+            return process
+
+        async def wait_for(awaitable, *, timeout):
+            timeouts.append(timeout)
+            if awaitable is communication:
+                self.assertEqual(timeout, 5)
+                return await awaitable
+            cleanup_waits.append(awaitable)
+            self.assertEqual(timeout, 2)
+            if awaitable is first_wait:
+                awaitable.cancel()
+                raise TimeoutError
+            self.assertIs(awaitable, final_wait)
+            raise TimeoutError
+
+        with self.assertRaises(BrokenPipeError) as caught:
+            await run_process(
+                ProcessRequest(
+                    command=("provider",),
+                    stdin=b"payload",
+                    timeout_seconds=5,
+                ),
+                create_process=create_process,
+                wait_for=wait_for,
+            )
+
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(
+            events,
+            ["launch", "communicate", "terminate", "wait", "kill", "wait"],
+        )
+        self.assertEqual(cleanup_waits, [first_wait, final_wait])
+        self.assertEqual(timeouts, [5, 2, 2])
+        process.communicate.assert_called_once_with(b"payload")
+        process.terminate.assert_called_once_with()
+        process.kill.assert_called_once_with()
+        self.assertEqual(process.wait.call_count, 2)
+
     async def test_process_stop_escalates_from_terminate_to_kill(self) -> None:
         events: list[str] = []
         first_wait = asyncio.Future()
@@ -2807,24 +4084,76 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
 
         process.wait.side_effect = wait
 
-        async def time_out(awaitable, *, timeout):
-            self.assertEqual(timeout, 2)
-            awaitable.cancel()
-            raise TimeoutError
+        bounded_waits: list[asyncio.Future[object]] = []
+        timeouts: list[float] = []
 
-        with mock.patch(
-            "story_writing_agents.backend.asyncio.wait_for",
-            new=time_out,
-        ):
-            await AgentBackend._stop_process(process)
+        async def timeout_then_reap(awaitable, *, timeout):
+            bounded_waits.append(awaitable)
+            timeouts.append(timeout)
+            self.assertEqual(timeout, 2)
+            if awaitable is first_wait:
+                awaitable.cancel()
+                raise TimeoutError
+            self.assertIs(awaitable, final_wait)
+            return await awaitable
+
+        await stop_process(process, wait_for=timeout_then_reap)
 
         self.assertEqual(events, ["terminate", "wait", "kill", "wait"])
+        self.assertEqual(bounded_waits, [first_wait, final_wait])
+        self.assertEqual(timeouts, [2, 2])
+        process.terminate.assert_called_once_with()
+        process.kill.assert_called_once_with()
+        self.assertEqual(process.wait.call_count, 2)
+
+    async def test_process_stop_returns_after_bounded_post_kill_timeout(
+        self,
+    ) -> None:
+        events: list[str] = []
+        first_wait = asyncio.Future()
+        final_wait = asyncio.Future()
+        final_wait.set_result(None)
+        process = mock.Mock(returncode=None)
+        process.terminate.side_effect = lambda: events.append("terminate")
+        process.kill.side_effect = lambda: events.append("kill")
+        waits = iter((first_wait, final_wait))
+
+        def wait():
+            events.append("wait")
+            return next(waits)
+
+        process.wait.side_effect = wait
+        bounded_waits: list[asyncio.Future[object]] = []
+        timeouts: list[float] = []
+
+        async def time_out(awaitable, *, timeout):
+            bounded_waits.append(awaitable)
+            timeouts.append(timeout)
+            self.assertEqual(timeout, 2)
+            if awaitable is first_wait:
+                awaitable.cancel()
+            raise TimeoutError
+
+        await stop_process(process, wait_for=time_out)
+
+        self.assertEqual(events, ["terminate", "wait", "kill", "wait"])
+        self.assertEqual(bounded_waits, [first_wait, final_wait])
+        self.assertEqual(timeouts, [2, 2])
+        process.terminate.assert_called_once_with()
+        process.kill.assert_called_once_with()
+        self.assertEqual(process.wait.call_count, 2)
 
     async def test_unsupported_vendor_fails_during_binding(self) -> None:
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        with self.assertRaisesRegex(ConfigurationError, "not implemented"):
-            await backend.bind(replace(self.definition(), backend="gemini"))
+        with self.assertRaises(ConfigurationError) as caught:
+            await backend.bind(
+                replace(self.definition(), backend="unsupported-provider")
+            )
+        self.assertEqual(
+            str(caught.exception),
+            "agent backend is not implemented: unsupported-provider",
+        )
 
     async def test_unsafe_persisted_thread_id_is_never_used_as_an_option(
         self,
@@ -3526,9 +4855,12 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             _bound: BoundAgent,
             request: ConversationRetrievalRequest,
             _handler: object,
+            *,
+            reference_read: object | None = None,
         ) -> ConversationRetrievalReply:
             """Hold the retrieval operation inside the shared thread lock."""
 
+            self.assertIsNone(reference_read)
             trace.append("retrieval_enter")
             entered.set()
             await release.wait()
@@ -3544,9 +4876,12 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         async def conversation_call(
             _bound: BoundAgent,
             request: ConversationRequest,
+            *,
+            reference_read: object | None = None,
         ) -> ConversationReply:
             """Record legacy conversation entry after lock acquisition."""
 
+            self.assertIsNone(reference_read)
             trace.append("conversation_enter")
             return ConversationReply(
                 request.session_id,
@@ -3558,9 +4893,12 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         async def invoke_call(
             _bound: BoundAgent,
             request: AgentRequest,
+            *,
+            reference_read: object | None = None,
         ) -> AgentReply:
             """Record debate entry after lock acquisition."""
 
+            self.assertIsNone(reference_read)
             trace.append("invoke_enter")
             return AgentReply.candidate(request.revision_id, "candidate")
 
@@ -3681,7 +5019,11 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 entered = asyncio.Event()
                 proceed = asyncio.Event()
 
-                async def provider(*args: object) -> object:
+                async def provider(
+                    *args: object,
+                    reference_read: object | None = None,
+                ) -> object:
+                    self.assertIsNone(reference_read)
                     entered.set()
                     await proceed.wait()
                     if label == "invoke":
@@ -3765,7 +5107,11 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     entered = asyncio.Event()
                     proceed = asyncio.Event()
 
-                    async def provider(*_args: object) -> object:
+                    async def provider(
+                        *_args: object,
+                        reference_read: object | None = None,
+                    ) -> object:
+                        self.assertIsNone(reference_read)
                         entered.set()
                         await proceed.wait()
                         raise RuntimeError("provider failed")
@@ -3832,7 +5178,11 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         entered = asyncio.Event()
         proceed = asyncio.Event()
 
-        async def provider(*_args: object) -> AgentReply:
+        async def provider(
+            *_args: object,
+            reference_read: object | None = None,
+        ) -> AgentReply:
+            self.assertIsNone(reference_read)
             entered.set()
             await proceed.wait()
             return AgentReply.candidate("r0", "candidate")
@@ -3840,10 +5190,10 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         with (
             mock.patch.object(backend, "_invoke_codex", side_effect=provider),
             mock.patch.object(
-                backend,
-                "_discard_staging_directory",
-                wraps=backend._discard_staging_directory,
-            ) as discard,
+                backend._codex_adapter,
+                "release",
+                wraps=backend._codex_adapter.release,
+            ) as release_binding,
             mock.patch.object(
                 backend,
                 "_release_access_claim",
@@ -3877,11 +5227,17 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(backend._access_claim_tokens, {})
         self.assertFalse(active_staging.exists())
         self.assertEqual(
-            [call.args[0] for call in discard.call_args_list].count(active_staging),
+            [
+                call.args[0].staging_directory
+                for call in release_binding.call_args_list
+            ].count(active_staging),
             1,
         )
         self.assertEqual(
-            [call.args[0] for call in discard.call_args_list].count(idle_staging),
+            [
+                call.args[0].staging_directory
+                for call in release_binding.call_args_list
+            ].count(idle_staging),
             1,
         )
         self.assertEqual(release_access.call_count, 1)
@@ -3949,7 +5305,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     return original_read(reference)
 
                 staged: list[Path] = []
-                original_stage = backend._stage_codex_definition
+                original_stage = backend._codex_adapter.stage_definition
 
                 def stage(value: object) -> Path:
                     directory = original_stage(value)  # type: ignore[arg-type]
@@ -3964,8 +5320,8 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                         side_effect=read,
                     ),
                     mock.patch.object(
-                        backend,
-                        "_stage_codex_definition",
+                        backend._codex_adapter,
+                        "stage_definition",
                         side_effect=stage,
                     ),
                     self.assertRaises(type(failure)),
@@ -3989,7 +5345,10 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         async def approve(
             _bound: BoundAgent,
             request: AgentRequest,
+            *,
+            reference_read: object | None = None,
         ) -> AgentReply:
+            self.assertIsNone(reference_read)
             return AgentReply.approval(request.revision_id)
 
         with mock.patch.object(backend, "_invoke_codex", side_effect=approve):
@@ -4582,6 +5941,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                             reference_read=invocation,
                         )
                 elif case == "unsupported":
+                    expected = ReferenceAuthorizationErrorCode.PROVIDER_FAILURE
                     unsupported = BoundAgent(
                         backend,
                         replace(self.definition(), backend="gemini"),
@@ -4633,6 +5993,128 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 authorization.close()
                 backend.close()
 
+    async def test_reference_read_adapter_resolution_failures_terminate_once(
+        self,
+    ) -> None:
+        """Retire conversation/retrieval coordinators without an adapter."""
+
+        operations = (
+            ("conversation", "conversation"),
+            ("retrieval", "conversation_retrieval"),
+        )
+        for operation, phase in operations:
+            for resolution in ("unsupported", "missing"):
+                with self.subTest(operation=operation, resolution=resolution):
+                    self.log_path.unlink(missing_ok=True)
+                    session_id = f"reference_{operation}_{resolution}"
+                    operation_id = f"adapter_operation_{operation}_{resolution}"
+                    backend = AgentBackend(
+                        self.workspace,
+                        executable=str(self.executable),
+                    )
+                    backend.create_session_with_access(session_id)
+                    bound = await backend.bind(self.definition())
+                    call_bound = bound
+                    vendor = "codex"
+                    if resolution == "unsupported":
+                        vendor = "gemini"
+                        call_bound = BoundAgent(
+                            backend,
+                            replace(self.definition(), backend=vendor),
+                            bound.staging_directory,
+                        )
+                    repository, authorization, invocation = (
+                        self.reference_invocation(
+                            operation_id=operation_id,
+                            invocation_id=(
+                                f"adapter_invocation_{operation}_{resolution}"
+                            ),
+                            phase=phase,
+                            round_number=None,
+                        )
+                    )
+                    handler = _RecordingRetrievalHandler()
+                    removed_adapter = None
+                    if resolution == "missing":
+                        removed_adapter = backend._adapters.pop(vendor)
+
+                    resolved_failure = None
+                    real_adapter_for = backend._adapter_for
+
+                    def resolve_adapter(adapter_vendor: str):
+                        nonlocal resolved_failure
+                        try:
+                            return real_adapter_for(adapter_vendor)
+                        except ConfigurationError as exc:
+                            resolved_failure = exc
+                            raise
+
+                    try:
+                        with (
+                            mock.patch.object(
+                                backend,
+                                "_adapter_for",
+                                side_effect=resolve_adapter,
+                            ) as adapter_for,
+                            self.assertRaises(ConfigurationError) as raised,
+                        ):
+                            if operation == "conversation":
+                                await call_bound.converse(
+                                    self.conversation_request(
+                                        session_id=session_id,
+                                    ),
+                                    reference_read=invocation,
+                                )
+                            else:
+                                await call_bound.converse_with_retrieval(
+                                    self.retrieval_request(
+                                        session_id=session_id,
+                                    ),
+                                    handler,
+                                    reference_read=invocation,
+                                )
+                    finally:
+                        if removed_adapter is not None:
+                            backend._adapters[vendor] = removed_adapter
+
+                    adapter_for.assert_called_once_with(vendor)
+                    self.assertIs(raised.exception, resolved_failure)
+                    self.assertEqual(
+                        str(raised.exception),
+                        f"agent backend is not implemented: {vendor}",
+                    )
+                    self.assertIsNone(raised.exception.__cause__)
+                    self.assertIsNone(raised.exception.__context__)
+                    self.assertEqual(self.provider_invocations(), [])
+                    self.assertEqual(handler.actions, [])
+                    history = repository.inspect_reference_operation(operation_id)
+                    assert history is not None
+                    events = history.invocation_events[0]
+                    self.assertEqual(
+                        tuple(event.invocation_state for event in events),
+                        (
+                            ReferenceInvocationState.AUTHORIZED,
+                            ReferenceInvocationState.TERMINATED,
+                        ),
+                    )
+                    self.assertIs(
+                        events[-1].outcome,
+                        ReferenceAuthorizationErrorCode.PROVIDER_FAILURE,
+                    )
+                    lock = backend._thread_lock(
+                        session_id,
+                        vendor,
+                        PLOT_ARCHITECT,
+                    )
+                    self.assertFalse(lock.locked())
+                    self.assertIn(bound, backend._bound_agents)
+                    self.assertTrue(bound.staging_directory.exists())
+
+                    authorization.close()
+                    backend.close()
+                    self.assertEqual(backend._bound_agents, set())
+                    self.assertFalse(bound.staging_directory.exists())
+
 
 class ConcreteBackendCliTests(unittest.TestCase):
     def test_repeatable_backend_overrides_and_codex_defaults(self) -> None:
@@ -4645,7 +6127,7 @@ class ConcreteBackendCliTests(unittest.TestCase):
                 "--backend",
                 "plot_architect=codex",
                 "--backend",
-                "character_custodian=gemini",
+                "character_custodian=antigravity",
                 "--draft",
                 "draft",
                 "--output",
@@ -4656,11 +6138,20 @@ class ConcreteBackendCliTests(unittest.TestCase):
             _parse_backend_overrides(arguments.backend),
             {
                 PLOT_ARCHITECT: "codex",
-                CHARACTER_CUSTODIAN: "gemini",
+                CHARACTER_CUSTODIAN: "antigravity",
             },
         )
         self.assertIsNone(arguments.codex_model)
+        self.assertEqual(arguments.antigravity_executable, "agy")
+        self.assertIsNone(arguments.antigravity_model)
+        self.assertIsNone(arguments.antigravity_effort)
         self.assertEqual(arguments.codex_timeout, 300)
+        with self.assertRaises(ConfigurationError) as caught:
+            _parse_backend_overrides(["plot_architect=gemini"])
+        self.assertEqual(
+            str(caught.exception),
+            "backend 'gemini' is no longer supported; use 'antigravity'",
+        )
         with self.assertRaisesRegex(ConfigurationError, "duplicate"):
             _parse_backend_overrides(
                 ["plot_architect=codex", "plot_architect=codex"]

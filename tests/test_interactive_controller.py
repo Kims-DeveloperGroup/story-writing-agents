@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import inspect
+import json
 import os
 import socket
 import subprocess
@@ -168,7 +169,7 @@ class ScriptedTerminalCallbacks:
 
 
 def _tree_snapshot(root: Path) -> dict[str, tuple[bytes, int, int]]:
-    """Capture file bytes, mode, and timestamp to detect silent rewrites."""
+    """Capture non-diagnostic files to detect silent domain rewrites."""
 
     return {
         str(path.relative_to(root)): (
@@ -178,6 +179,7 @@ def _tree_snapshot(root: Path) -> dict[str, tuple[bytes, int, int]]:
         )
         for path in sorted(root.rglob("*"))
         if path.is_file()
+        and "debug_logs" not in path.relative_to(root).parts
     }
 
 
@@ -213,6 +215,10 @@ def _error_record(code: InteractiveErrorCode, *, width: int = 80) -> str:
                 state=terminal_module.ViewState.ERROR,
             ),
             terminal_module.Notice(spec.hint, label="hint"),
+            terminal_module.Notice(
+                "If available, workspace-relative: debug_logs/runtime.jsonl",
+                label="debug log",
+            ),
         ),
         state=terminal_module.ViewState.ERROR,
     )
@@ -681,6 +687,83 @@ class ControllerContractTests(ControllerTestCase):
                 controller.run_session_lobby()
             close.assert_called_once_with()
 
+    def test_diagnostic_error_failure_preserves_status_output_and_cleanup(
+        self,
+    ) -> None:
+        """Keep the controller contract when its diagnostic sink fails fatally."""
+
+        workspace = self.make_workspace()
+        original_failure = RuntimeError("PRIVATE_TRANSCRIPT_ERROR")
+        controller, backend, callbacks = self.make_controller(
+            workspace,
+            original_failure,
+        )
+        failed_log = mock.Mock()
+        failed_log.error.side_effect = SystemExit("diagnostic sink failed")
+        controller._debug_log = failed_log
+
+        with mock.patch.object(
+            backend,
+            "close",
+            wraps=backend.close,
+        ) as close:
+            self.assertEqual(controller.run_session_lobby(), 2)
+
+        close.assert_called_once_with()
+        failed_log.error.assert_called_once()
+        self.assertIs(failed_log.error.call_args.args[2], original_failure)
+        self.assertEqual(
+            callbacks.records[-1],
+            _error_record(InteractiveErrorCode.INTERNAL_ERROR),
+        )
+        self.assertNotIn(
+            "PRIVATE_TRANSCRIPT_ERROR",
+            "".join(callbacks.records),
+        )
+        self.assertIsNone(controller._runner)
+        self.assertIsNone(controller._attached_session_id)
+        self.assertIsNone(controller._focused_conversation)
+        self.assertIsNone(controller._conversation_memory_service)
+
+    def test_trace_failure_preserves_rejected_and_success_output_and_cleanup(
+        self,
+    ) -> None:
+        """Keep handled errors and normal exit independent of fatal traces."""
+
+        workspace = self.make_workspace()
+        controller, backend, callbacks = self.make_controller(
+            workspace,
+            "/search PRIVATE_TRACE_SEARCH",
+            "/quit",
+        )
+        failed_log = mock.Mock()
+        failed_log.trace.side_effect = KeyboardInterrupt(
+            "diagnostic trace failure"
+        )
+        controller._debug_log = failed_log
+
+        with mock.patch.object(
+            backend,
+            "close",
+            wraps=backend.close,
+        ) as close:
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        close.assert_called_once_with()
+        self.assertGreater(failed_log.trace.call_count, 0)
+        self.assertEqual(
+            callbacks.records.count(
+                _error_record(InteractiveErrorCode.SESSION_NOT_ATTACHED)
+            ),
+            1,
+        )
+        self.assertNotIn("PRIVATE_TRACE_SEARCH", "".join(callbacks.records))
+        self.assertNotIn("diagnostic trace failure", "".join(callbacks.records))
+        self.assertIsNone(controller._runner)
+        self.assertIsNone(controller._attached_session_id)
+        self.assertIsNone(controller._focused_conversation)
+        self.assertIsNone(controller._conversation_memory_service)
+
     def test_runtime_inspection_facts_are_exact_frozen_internal_contracts(
         self,
     ) -> None:
@@ -860,6 +943,7 @@ class ControllerContractTests(ControllerTestCase):
                 "conversation_retrieval",
                 "conversation_search",
                 "conversations",
+                "debug_log",
                 "errors",
                 "interactive_commands",
                 "interactive_settings",
@@ -1142,7 +1226,7 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 48)
+        self.assertEqual(len(modules), 53)
 
     def test_reference_callbacks_are_scoped_fresh_bounded_and_content_free(
         self,
@@ -2090,6 +2174,63 @@ class ControllerConversationStartupTests(ControllerTestCase):
 class ControllerCommandTests(ControllerTestCase):
     """Verify global commands and intentionally unavailable shell domains."""
 
+    def test_handled_error_then_success_has_independent_terminal_records(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        controller, _backend, callbacks = self.make_controller(
+            workspace,
+            "/search PRIVATE_SEARCH_TEXT",
+            "/help",
+            "/quit",
+        )
+
+        self.assertEqual(controller.run_session_lobby(), 0)
+
+        self.assertEqual(
+            callbacks.records.count(
+                _error_record(InteractiveErrorCode.SESSION_NOT_ATTACHED)
+            ),
+            1,
+        )
+        raw = workspace.path("debug_logs/runtime.jsonl").read_text(
+            encoding="utf-8"
+        )
+        records = [
+            record
+            for record in (json.loads(line) for line in raw.splitlines())
+            if record["component"] == "interactive_controller"
+            and record["operation"] == "interactive_command"
+        ]
+        self.assertEqual(
+            [
+                (
+                    record["level"],
+                    record["phase"],
+                    record.get("outcome"),
+                )
+                for record in records
+            ],
+            [
+                ("trace", "started", None),
+                ("trace", "failed", "rejected"),
+                ("trace", "started", None),
+                ("trace", "succeeded", "completed"),
+                ("trace", "started", None),
+                ("trace", "succeeded", "completed"),
+            ],
+        )
+        for record in records:
+            self.assertNotIn("session_id", record)
+            self.assertNotIn("conversation_id", record)
+            self.assertNotIn("agent_id", record)
+        for prohibited in (
+            "PRIVATE_SEARCH_TEXT",
+            "/search",
+            str(workspace.root),
+        ):
+            self.assertNotIn(prohibited, raw)
+
     def test_help_parser_interrupt_and_unsupported_domains_are_nonmutating(
         self,
     ) -> None:
@@ -2880,10 +3021,21 @@ class ControllerSettingsTests(ControllerTestCase):
                 values.extend(
                     (
                         (f"{display_name} Provider", agent.backend or "codex (default)"),
-                        (f"{display_name} Model", agent.codex_model or "inherit"),
                         (
-                            f"{display_name} Reasoning",
+                            f"{display_name} Codex model",
+                            agent.codex_model or "inherit",
+                        ),
+                        (
+                            f"{display_name} Codex reasoning",
                             agent.codex_reasoning_effort or "inherit",
+                        ),
+                        (
+                            f"{display_name} Antigravity model",
+                            agent.antigravity_model or "inherit",
+                        ),
+                        (
+                            f"{display_name} Antigravity effort",
+                            agent.antigravity_effort or "inherit",
                         ),
                     )
                 )
@@ -2953,6 +3105,25 @@ class ControllerSettingsTests(ControllerTestCase):
                 ),
                 state=terminal_module.ViewState.OPEN,
             ),
+        )
+
+        changed = settings_module.update_agent_codex_model(
+            state,
+            PLOT_ARCHITECT,
+            "codex-model",
+        )
+        changed = settings_module.update_agent_antigravity_model(
+            changed,
+            PLOT_ARCHITECT,
+            "agy-model",
+        )
+        panel = InteractiveController._settings_panel(changed)
+        self.assertEqual(panel, self.expected_panel(changed))
+        rendered = render_plain(panel, width=120).text
+        self.assertIn("Plot & Structure Architect Codex model", rendered)
+        self.assertIn(
+            "Plot & Structure Architect Antigravity model",
+            rendered,
         )
 
     def test_settings_open_is_exact_six_item_provider_free_snapshot(self) -> None:
@@ -3157,7 +3328,13 @@ class ControllerSettingsTests(ControllerTestCase):
     def test_settings_edit_save_isolated_candidate_and_literal_cancel_text(self) -> None:
         workspace = self.make_workspace()
         agent_configs = workspace.read_json("config/agent_configs.json")
-        agent_configs[PLOT_ARCHITECT]["backend"] = "gemini"
+        agent_configs[PLOT_ARCHITECT].update(
+            {
+                "backend": "antigravity",
+                "antigravity_model": "inactive-agy-model",
+                "antigravity_effort": "medium",
+            }
+        )
         workspace.write_json("config/agent_configs.json", agent_configs)
         before = _tree_snapshot(workspace.root)
         controller, _backend, callbacks = self.make_controller(
@@ -3221,6 +3398,14 @@ class ControllerSettingsTests(ControllerTestCase):
             "xhigh",
         )
         self.assertEqual(
+            configured.agent_configs[PLOT_ARCHITECT].antigravity_model,
+            "inactive-agy-model",
+        )
+        self.assertEqual(
+            configured.agent_configs[PLOT_ARCHITECT].antigravity_effort,
+            "medium",
+        )
+        self.assertEqual(
             configured.agent_configs[PLOT_ARCHITECT].backend,
             "codex",
         )
@@ -3237,10 +3422,11 @@ class ControllerSettingsTests(ControllerTestCase):
             ),
             1,
         )
-        self.assertNotIn(
-            "Gemini — Current saved provider; choose Codex to remediate. "
-            "(disabled: Provider is not implemented.)",
-            rendered,
+        self.assertTrue(
+            any(
+                "Choose Codex or Antigravity." in prompt
+                for prompt in callbacks.prompts
+            )
         )
         self.assertGreaterEqual(
             sum("Choose a setting to edit" in prompt for prompt in callbacks.prompts),
@@ -3249,6 +3435,86 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertNotIn("Inherit", rendered)
         self.assertNotIn("Settings cancelled", rendered)
         self.assertEqual(callbacks.reads, [])
+
+    def test_antigravity_settings_edit_active_fields_and_preserve_codex(self) -> None:
+        workspace = self.make_workspace()
+        agent_configs = workspace.read_json("config/agent_configs.json")
+        agent_configs[PLOT_ARCHITECT].update(
+            {
+                "codex_model": "inactive-codex-model",
+                "codex_reasoning_effort": "xhigh",
+            }
+        )
+        workspace.write_json("config/agent_configs.json", agent_configs)
+        controller, _backend, callbacks = self.make_controller(
+            workspace,
+            "/settings",
+            "4",
+            "2",
+            "1",
+            "2",
+            "4",
+            "2",
+            "2",
+            "-unsafe",
+            "agy-model",
+            "4",
+            "2",
+            "3",
+            "4",
+            "5",
+            "1",
+            "/quit",
+            terminal_width=160,
+        )
+
+        with (
+            mock.patch.object(subprocess, "Popen") as popen,
+            mock.patch.object(subprocess, "run") as run,
+            mock.patch.object(socket, "create_connection") as connect,
+        ):
+            self.assertEqual(controller.run_session_lobby(), 0)
+        popen.assert_not_called()
+        run.assert_not_called()
+        connect.assert_not_called()
+
+        agent = settings_module.load_settings_state(
+            workspace
+        ).pending.agent_configs[PLOT_ARCHITECT]
+        self.assertEqual(
+            (
+                agent.backend,
+                agent.antigravity_model,
+                agent.antigravity_effort,
+                agent.codex_model,
+                agent.codex_reasoning_effort,
+            ),
+            (
+                "antigravity",
+                "agy-model",
+                "high",
+                "inactive-codex-model",
+                "xhigh",
+            ),
+        )
+        effort_prompt = next(
+            prompt
+            for prompt in callbacks.prompts
+            if "Antigravity effort [Plot & Structure Architect]" in prompt
+        )
+        self.assertIn("[available] low", effort_prompt)
+        self.assertIn("[available] medium", effort_prompt)
+        self.assertIn("[available] high", effort_prompt)
+        self.assertNotIn("minimal", effort_prompt)
+        self.assertNotIn("xhigh", effort_prompt)
+        rendered = "".join(callbacks.records)
+        self.assertIn(
+            "[validation] Antigravity model must be safe nonempty text, "
+            "or blank to inherit.\n",
+            rendered,
+        )
+        self.assertIn("Antigravity model", rendered)
+        self.assertIn("[saved] Settings saved", rendered)
 
     def test_nested_escape_returns_but_interrupt_and_eof_cancel_all(self) -> None:
         scenarios = (

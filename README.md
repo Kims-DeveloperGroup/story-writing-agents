@@ -6,7 +6,7 @@ Four fixed roles work from editable project documents, audit the same revision,
 and write a manuscript only after all three voting specialists agree.
 
 > **Available now:** workspace setup, directives, consensus, inspection,
-> persistent Codex sessions, a provider-free smoke test, and a TTY shell. The
+> persistent Codex and Antigravity sessions, a provider-free smoke test, and a TTY shell. The
 > shell provides lifecycle status, conversation work, retrieval, and consensus.
 > Inline canonical artifact references are available in provider-bound prompts.
 > In those prompt spans, `$` lists eligible artifacts, `$${path}` opens one in
@@ -15,7 +15,8 @@ and write a manuscript only after all three voting specialists agree.
 
 ## Quick start
 
-Install and authenticate the Codex CLI for real story runs:
+Codex is the default provider. Install and authenticate its CLI for real story
+runs:
 
 ```bash
 npm install -g @openai/codex
@@ -23,7 +24,10 @@ rehash
 codex login
 ```
 
-Alternatively, set `CODEX_API_KEY` in the process environment; credentials are not stored in the story workspace.
+Alternatively, set `CODEX_API_KEY` in the process environment; credentials are
+not stored in the story workspace. To route one or more agents through
+Antigravity instead, install and authenticate the `agy` executable as described
+in [Use Antigravity agents](docs/guides/antigravity.md).
 
 Install in a standard-library virtual environment or Conda; do not nest a `venv` inside active Conda.
 
@@ -34,7 +38,9 @@ python -m pip install --editable .
 rehash
 ```
 
-`story` and `story-writing-agents` are exact aliases. Smoke uses synthetic data without Codex, credential reads, a terminal, subprocesses, apps, web, or network.
+`story` and `story-writing-agents` are exact aliases. Smoke uses synthetic data
+without Codex or Antigravity, credential reads, a terminal, subprocesses, apps,
+web, or network.
 It validates conversation persistence/routing, exact search, cited retrieval, fresh-runtime continuity, and included-context consensus; a pass includes `"provider_tested":false`.
 
 Create a workspace, run the provider-free check, and enter the primary human workflow:
@@ -90,6 +96,7 @@ story run --output part-01/opening.md --prompt 'Draft the opening.'
 - [Documentation index](docs/INDEX.md) routes each task, contract, design topic, and operational concern.
 - [Workspace guide](docs/guides/workspaces.md) explains the editable project files.
 - [Writing artifacts](docs/reference/writing-artifacts.md) defines the exact produced-output paths, provenance states, and recovery behavior.
+- [Antigravity guide](docs/guides/antigravity.md) covers `agy` setup, routing, safety, sessions, and provider-free verification.
 - [Story sessions](docs/guides/story-sessions.md) shows shell management, conversation reads, retrieval, and consensus.
 - [Session lifecycle](docs/design/session-lifecycle.md) maps internal state to commands, output, errors, and next actions.
 - [Consensus-run guide](docs/guides/consensus-runs.md) covers prompts, drafts, outputs, and round limits.
@@ -99,7 +106,9 @@ story run --output part-01/opening.md --prompt 'Draft the opening.'
 
 <a id="backends"></a>
 
-`AgentBackend` coordinates providers. Codex is implemented; reserved `gemini` configuration fails preflight.
+`AgentBackend` coordinates Codex and Antigravity; Codex remains the default.
+The only supported backend names are `codex` and `antigravity`; legacy
+`gemini` configuration is rejected with migration guidance.
 `StoryRuntime` owns consensus, advisory sequencing, and retrieval authorization. See the [system design](docs/design/overview.md).
 
 <a id="minimal-python-api"></a>
@@ -116,7 +125,11 @@ For Python integrations, start with the [runtime API](docs/reference/runtime-api
 - Writing-artifact publication is journaled and catalog-last, and rolls forward
   on the next artifact access after an interruption. It is not one transaction
   with debate logs, lifecycle state, or result files.
-- Smoke's explicit workspace is not read-only and retains plaintext diagnostics; abrupt termination can interrupt cleanup. A pass does not validate provider/model, terminal behavior, integration, or story quality. See the [smoke guide](docs/guides/smoke-test.md).
+- Smoke's explicit workspace is not read-only and retains bounded plaintext
+  diagnostics when they can be written; abrupt termination can interrupt
+  cleanup. A pass does not validate provider/model, terminal behavior,
+  integration, or story quality. See the
+  [smoke guide](docs/guides/smoke-test.md).
 - The interactive shell accepts one advisory line; `/run --output PART/PATH.md`
   without prompt text owns multiline composition. Bare `/run` first prompts for
   that required output. Process-level PTY tests verify TTY gating and VINTR/VEOF delivery

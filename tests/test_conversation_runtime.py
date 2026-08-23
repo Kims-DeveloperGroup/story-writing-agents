@@ -10,6 +10,7 @@ import unicodedata
 import unittest
 import uuid
 from collections.abc import Awaitable, Callable
+from contextlib import ExitStack
 from dataclasses import MISSING, FrozenInstanceError, fields, replace
 from pathlib import Path
 from typing import Any
@@ -26,10 +27,17 @@ from story_writing_agents import (
     ConversationEvent,
     ConversationEventAppend,
     ConversationEventKind,
+    ConversationMemoryService,
     ConversationNotFoundError,
     ConversationReply,
     ConversationRequest,
+    ConversationRetrievalActionHandler,
+    ConversationRetrievalActionKind,
+    ConversationRetrievalAnswerAction,
+    ConversationRetrievalReply,
+    ConversationRetrievalRequest,
     ConversationResult,
+    ConversationSearchScope,
     FilesystemConversationCatalog,
     FilesystemConversationEventStore,
     PLOT_ARCHITECT,
@@ -42,7 +50,15 @@ from story_writing_agents import (
     Workspace,
     WorkspaceFormatError,
 )
+from story_writing_agents import orchestrator as orchestrator_module
 from story_writing_agents.agents import CORE_DOCUMENTS
+from story_writing_agents.debug_log import (
+    DebugComponent,
+    DebugOperation,
+    DebugOutcome,
+    DebugPhase,
+    WorkspaceDebugLog,
+)
 
 from tests.conversation_event_store_contract import (
     InMemoryConversationEventStore,
@@ -130,7 +146,19 @@ def _tree_snapshot(root: Path) -> dict[str, bytes | None]:
             None if path.is_dir() else path.read_bytes()
         )
         for path in sorted(root.rglob("*"))
+        if "debug_logs" not in path.relative_to(root).parts
     }
+
+
+def _traceback_contains(traceback: object, expected: object) -> bool:
+    """Return whether one traceback chain retains an exact injected node."""
+
+    current = traceback
+    while current is not None:
+        if current is expected:
+            return True
+        current = current.tb_next  # type: ignore[union-attr]
+    return False
 
 
 def _changed_paths(
@@ -149,6 +177,22 @@ def _transcript_path(session_id: str, conversation_id: str) -> str:
         f"discussion_logs/{session_id}/interactive/conversations/"
         f"{conversation_id}/transcript.jsonl"
     )
+
+
+def _runtime_operation_records(
+    workspace: Workspace,
+    operation: str,
+) -> tuple[str, list[dict[str, object]]]:
+    """Read one operation's exact runtime records and raw privacy surface."""
+
+    raw = workspace.path("debug_logs/runtime.jsonl").read_text(encoding="utf-8")
+    records = [
+        record
+        for record in (json.loads(line) for line in raw.splitlines())
+        if record["component"] == "runtime"
+        and record["operation"] == operation
+    ]
+    return raw, records
 
 
 ConversationHandler = Callable[
@@ -182,6 +226,34 @@ class _ConversationBoundAgent:
             raise result
         return result
 
+    async def converse_with_retrieval(
+        self,
+        request: ConversationRetrievalRequest,
+        handler: ConversationRetrievalActionHandler,
+    ) -> ConversationRetrievalReply:
+        """Return one handler-authorized direct answer without memory access."""
+
+        if request.agent_id != self.definition.agent_id:
+            raise AssertionError("retrieval used the wrong bound agent")
+        self.backend.trace.append("converse_with_retrieval")
+        self.backend.retrieval_requests.append(request)
+        if self.backend.retrieval_failure is not None:
+            raise self.backend.retrieval_failure
+        reply = handler.handle_conversation_retrieval_action(
+            ConversationRetrievalAnswerAction(
+                kind=ConversationRetrievalActionKind.ANSWER,
+                session_id=request.session_id,
+                conversation_id=request.conversation_id,
+                turn_id=request.turn_id,
+                action_index=1,
+                content="retrieval reply",
+                citation_ids=(),
+            )
+        )
+        if type(reply) is not ConversationRetrievalReply:
+            raise AssertionError("direct retrieval answer did not return a reply")
+        return reply
+
 
 class _ConversationBackend:
     def __init__(
@@ -191,6 +263,7 @@ class _ConversationBackend:
         trace: list[str] | None = None,
         configuration_error: BaseException | None = None,
         bind_error: BaseException | None = None,
+        retrieval_failure: BaseException | None = None,
         bind_hook: Callable[[AgentDefinition], None] | None = None,
         bound_factory: Callable[
             [_ConversationBackend, AgentDefinition], object
@@ -200,6 +273,7 @@ class _ConversationBackend:
         self.trace = trace if trace is not None else []
         self.configuration_error = configuration_error
         self.bind_error = bind_error
+        self.retrieval_failure = retrieval_failure
         self.bind_hook = bind_hook
         self.bound_factory = bound_factory or _ConversationBoundAgent
         self.lifecycle_sessions: list[str] = []
@@ -207,6 +281,7 @@ class _ConversationBackend:
         self.definitions: list[AgentDefinition] = []
         self.bindings: list[object] = []
         self.requests: list[ConversationRequest] = []
+        self.retrieval_requests: list[ConversationRetrievalRequest] = []
 
     @staticmethod
     def _default_handler(request: ConversationRequest) -> ConversationReply:
@@ -319,6 +394,11 @@ class _MissingConverseBound:
         raise AssertionError
 
 
+class _UnusedConversationSearch:
+    def search(self, *_args: object) -> object:
+        raise AssertionError("direct retrieval answer must not search memory")
+
+
 class _SynchronousConverseBound:
     async def invoke(self, request: object) -> object:
         raise AssertionError
@@ -380,6 +460,41 @@ class _ConversationRuntimeCase(unittest.IsolatedAsyncioTestCase):
                 text,  # type: ignore[arg-type]
             )
         return raised.exception
+
+    def assert_failed_operation_records(
+        self,
+        workspace: Workspace,
+        *,
+        operation: str,
+        session_id: str,
+        conversation_id: str,
+        prohibited: tuple[str, ...],
+        terminal_phase: str = "failed",
+        terminal_outcome: str = "failed",
+    ) -> None:
+        """Require one started record and one content-free terminal error."""
+
+        raw, records = _runtime_operation_records(workspace, operation)
+        self.assertEqual(
+            [
+                (record["level"], record["phase"], record.get("outcome"))
+                for record in records
+            ],
+            [
+                ("trace", "started", None),
+                ("error", terminal_phase, terminal_outcome),
+            ],
+        )
+        for record in records:
+            self.assertEqual(record["session_id"], session_id)
+            self.assertEqual(record["conversation_id"], conversation_id)
+            self.assertEqual(record["agent_id"], PLOT_ARCHITECT)
+        self.assertEqual(
+            [record["level"] for record in records if record["phase"] != "started"],
+            ["error"],
+        )
+        for value in prohibited + (str(workspace.root),):
+            self.assertNotIn(value, raw)
 
 
 class ConversationResultContractTests(unittest.TestCase):
@@ -1418,7 +1533,586 @@ class ConversationRuntimePreflightTests(_ConversationRuntimeCase):
                 )
 
 
+class RuntimeSynchronousDiagnosticTests(unittest.TestCase):
+    def test_process_controls_preserve_sync_operation_and_diagnostic_contracts(
+        self,
+    ) -> None:
+        """Record interrupted sync calls without replacing their exact controls."""
+
+        operations = (
+            ("apply_directive", DebugOperation.DIRECTIVE),
+            ("set_runtime_overrides", DebugOperation.CONFIGURATION),
+            ("inspect_session", DebugOperation.INSPECTION),
+            ("inspect_debate", DebugOperation.INSPECTION),
+            ("inspect_debate_context", DebugOperation.INSPECTION),
+        )
+        controls = (
+            (KeyboardInterrupt, SystemExit),
+            (SystemExit, KeyboardInterrupt),
+        )
+        for operation_name, debug_operation in operations:
+            for control_type, sink_control_type in controls:
+                with self.subTest(
+                    operation=operation_name,
+                    control=control_type.__name__,
+                ):
+                    self._assert_sync_process_control(
+                        operation_name,
+                        debug_operation,
+                        control_type,
+                        sink_control_type,
+                    )
+
+    def _assert_sync_process_control(
+        self,
+        operation_name: str,
+        debug_operation: DebugOperation,
+        control_type: type[BaseException],
+        sink_control_type: type[BaseException],
+    ) -> None:
+        """Exercise one synchronous boundary and its opposite-control sink."""
+
+        workspace = initialized_workspace(self)
+        runtime = StoryRuntime(workspace)
+        before = _tree_snapshot(workspace.root)
+        control = control_type(f"PRIVATE_{operation_name.upper()}_CONTROL")
+        sink_control = sink_control_type(
+            f"PRIVATE_{operation_name.upper()}_SINK_CONTROL"
+        )
+        originating_tracebacks: list[object] = []
+        originating_causes: list[BaseException | None] = []
+        originating_contexts: list[BaseException | None] = []
+
+        def interrupt_underlying(*_args: object, **_kwargs: object) -> None:
+            try:
+                raise control
+            except BaseException as raised:
+                originating_tracebacks.append(raised.__traceback__)
+                originating_causes.append(raised.__cause__)
+                originating_contexts.append(raised.__context__)
+                raise
+
+        debate_id: str | None = None
+        if operation_name == "apply_directive":
+            underlying_patch = mock.patch.object(
+                orchestrator_module,
+                "persist_directive",
+                side_effect=interrupt_underlying,
+            )
+            invoke = lambda: runtime.apply_directive(
+                "session_a",
+                "[SYS: LANG=EN]",
+            )
+            expected_underlying_args = (
+                workspace,
+                "session_a",
+                "[SYS: LANG=EN]",
+            )
+        elif operation_name == "set_runtime_overrides":
+            underlying_patch = mock.patch.object(
+                runtime.workspace,
+                "save_session_overrides",
+                side_effect=interrupt_underlying,
+            )
+            invoke = lambda: runtime.set_runtime_overrides(
+                "session_a",
+                {"language": "EN"},
+            )
+            expected_underlying_args = (
+                "session_a",
+                {"language": "EN", "persona": None, "agents": {}},
+            )
+        elif operation_name == "inspect_session":
+            underlying_patch = mock.patch.object(
+                runtime.workspace,
+                "inspect_session",
+                side_effect=interrupt_underlying,
+            )
+            invoke = lambda: runtime.inspect_session("session_a")
+            expected_underlying_args = ("session_a",)
+        elif operation_name == "inspect_debate":
+            debate_id = "debate_a"
+            underlying_patch = mock.patch.object(
+                runtime.workspace,
+                "inspect_debate",
+                side_effect=interrupt_underlying,
+            )
+            invoke = lambda: runtime.inspect_debate("session_a", "debate_a")
+            expected_underlying_args = ("session_a", "debate_a")
+        else:
+            debate_id = "debate_a"
+            underlying_patch = mock.patch.object(
+                runtime.workspace,
+                "inspect_debate_context",
+                side_effect=interrupt_underlying,
+            )
+            invoke = lambda: runtime.inspect_debate_context(
+                "session_a",
+                "debate_a",
+            )
+            expected_underlying_args = ("session_a", "debate_a")
+
+        real_debug_error = runtime._debug_log.error
+
+        def record_then_interrupt_sink(
+            *args: object,
+            **kwargs: object,
+        ) -> None:
+            real_debug_error(*args, **kwargs)  # type: ignore[arg-type]
+            raise sink_control
+
+        caught: BaseException | None = None
+        with (
+            underlying_patch as underlying,
+            mock.patch.object(
+                WorkspaceDebugLog,
+                "error",
+                side_effect=record_then_interrupt_sink,
+            ) as debug_error,
+        ):
+            try:
+                invoke()
+            except BaseException as raised:
+                caught = raised
+
+        self.assertIs(caught, control)
+        self.assertEqual(len(originating_tracebacks), 1)
+        self.assertTrue(
+            _traceback_contains(caught.__traceback__, originating_tracebacks[0])
+        )
+        self.assertIs(caught.__cause__, originating_causes[0])
+        self.assertIs(caught.__context__, originating_contexts[0])
+        underlying.assert_called_once_with(*expected_underlying_args)
+        debug_error.assert_called_once()
+        self.assertEqual(
+            debug_error.call_args.args,
+            (DebugComponent.RUNTIME, debug_operation, control),
+        )
+        self.assertEqual(
+            debug_error.call_args.kwargs,
+            {
+                "phase": DebugPhase.CANCELLED,
+                "session_id": "session_a",
+                "conversation_id": None,
+                "debate_id": debate_id,
+                "agent_id": None,
+                "outcome": DebugOutcome.INTERRUPTED,
+            },
+        )
+        self.assertEqual(_tree_snapshot(workspace.root), before)
+
+        raw, records = _runtime_operation_records(
+            workspace,
+            debug_operation.value,
+        )
+        self.assertEqual(len(records), 1)
+        record = records[0]
+        self.assertEqual(
+            (
+                record["level"],
+                record["component"],
+                record["operation"],
+                record["phase"],
+                record["outcome"],
+                record["session_id"],
+                record.get("debate_id"),
+            ),
+            (
+                "error",
+                "runtime",
+                debug_operation.value,
+                "cancelled",
+                "interrupted",
+                "session_a",
+                debate_id,
+            ),
+        )
+        for prohibited in (
+            str(control),
+            str(sink_control),
+            str(workspace.root),
+        ):
+            self.assertNotIn(prohibited, raw)
+
+
 class ConversationRuntimeFailureTests(_ConversationRuntimeCase):
+    async def assert_provider_control_flow_guard(
+        self,
+        operation: str,
+        provider_failure: BaseException,
+        *,
+        diagnostic_failure: BaseException | None = None,
+    ) -> None:
+        """Require one interrupted record and the established crash remainder."""
+
+        marker = f"{operation.upper()}_{type(provider_failure).__name__}"
+        workspace, catalog, memory, conversation_id = self.memory_fixture(
+            subject=f"PRIVATE_{marker}_SUBJECT"
+        )
+        trace: list[str] = []
+        store = _TracingStore(memory, trace=trace)
+        advisory_handler = (
+            (lambda _request, failure=provider_failure: failure)
+            if operation == "advisory"
+            else None
+        )
+        backend = _ConversationBackend(
+            advisory_handler,
+            trace=trace,
+            retrieval_failure=(
+                provider_failure if operation == "retrieval" else None
+            ),
+        )
+        runtime = StoryRuntime(
+            workspace,
+            backend,  # type: ignore[arg-type]
+            conversation_event_store=store,
+        )
+        private_input = f"PRIVATE_{marker}_INPUT"
+        failure_message = str(provider_failure)
+        memory_service = ConversationMemoryService(
+            ConversationSearchScope("session_a"),
+            catalog,
+            memory,
+            search=_UnusedConversationSearch(),  # type: ignore[arg-type]
+        )
+
+        with ExitStack() as stack:
+            debug_error = (
+                stack.enter_context(
+                    mock.patch.object(
+                        WorkspaceDebugLog,
+                        "error",
+                        side_effect=diagnostic_failure,
+                    )
+                )
+                if diagnostic_failure is not None
+                else None
+            )
+            raised = stack.enter_context(
+                self.assertRaises(type(provider_failure))
+            )
+            if operation == "advisory":
+                await runtime.converse(
+                    "session_a",
+                    conversation_id,
+                    PLOT_ARCHITECT,
+                    private_input,
+                )
+            else:
+                await runtime.converse_with_retrieval(
+                    "session_a",
+                    conversation_id,
+                    PLOT_ARCHITECT,
+                    private_input,
+                    memory_service=memory_service,
+                )
+
+        self.assertIs(raised.exception, provider_failure)
+        self.assertIs(type(raised.exception), type(provider_failure))
+        self.assertEqual(str(raised.exception), failure_message)
+        self.assertIsNone(raised.exception.__cause__)
+        self.assertIsNone(raised.exception.__context__)
+        self.assertEqual(
+            trace,
+            [
+                "read_context",
+                "validate_provider_configuration",
+                "get_session_lifecycle",
+                "acquire_session_access",
+                "get_session_lifecycle",
+                "bind",
+                "append:user_message",
+                (
+                    "converse"
+                    if operation == "advisory"
+                    else "converse_with_retrieval"
+                ),
+            ],
+        )
+        self.assertEqual(
+            len(
+                backend.requests
+                if operation == "advisory"
+                else backend.retrieval_requests
+            ),
+            1,
+        )
+        self.assertEqual(
+            len(
+                backend.retrieval_requests
+                if operation == "advisory"
+                else backend.requests
+            ),
+            0,
+        )
+        self.assertEqual(
+            tuple(event.kind for event in store.append_calls),
+            (ConversationEventKind.USER_MESSAGE,),
+        )
+        events = memory.read("session_a", conversation_id)
+        self.assertEqual(
+            tuple(event.kind for event in events),
+            (ConversationEventKind.USER_MESSAGE,),
+        )
+        self.assertEqual(events[0].content, private_input)
+        self.assertNotIn(
+            ConversationEventKind.RUNTIME_ERROR,
+            (event.kind for event in store.append_calls),
+        )
+        prohibited = (
+            f"PRIVATE_{marker}_SUBJECT",
+            private_input,
+            failure_message,
+        )
+        if diagnostic_failure is None:
+            self.assert_failed_operation_records(
+                workspace,
+                operation=f"{operation}_turn",
+                session_id="session_a",
+                conversation_id=conversation_id,
+                prohibited=prohibited,
+                terminal_phase="cancelled",
+                terminal_outcome="interrupted",
+            )
+        else:
+            assert debug_error is not None
+            debug_error.assert_called_once()
+            self.assertIs(debug_error.call_args.args[2], provider_failure)
+            raw, records = _runtime_operation_records(
+                workspace,
+                f"{operation}_turn",
+            )
+            self.assertEqual(
+                [(record["level"], record["phase"]) for record in records],
+                [("trace", "started")],
+            )
+            for value in prohibited + (
+                str(diagnostic_failure),
+                str(workspace.root),
+            ):
+                self.assertNotIn(value, raw)
+
+    async def test_provider_base_exceptions_record_interrupted_crash_remainder(
+        self,
+    ) -> None:
+        for operation in ("advisory", "retrieval"):
+            for provider_failure in (
+                KeyboardInterrupt("PRIVATE_PROVIDER_INTERRUPT"),
+                SystemExit("PRIVATE_PROVIDER_EXIT"),
+            ):
+                with self.subTest(
+                    operation=operation,
+                    failure=type(provider_failure).__name__,
+                ):
+                    await self.assert_provider_control_flow_guard(
+                        operation,
+                        provider_failure,
+                    )
+
+    async def test_provider_base_exceptions_survive_diagnostic_sink_failure(
+        self,
+    ) -> None:
+        for operation in ("advisory", "retrieval"):
+            for provider_failure, diagnostic_failure in (
+                (
+                    KeyboardInterrupt("PRIVATE_PROVIDER_INTERRUPT"),
+                    SystemExit("PRIVATE_DIAGNOSTIC_EXIT"),
+                ),
+                (
+                    SystemExit("PRIVATE_PROVIDER_EXIT"),
+                    KeyboardInterrupt("PRIVATE_DIAGNOSTIC_INTERRUPT"),
+                ),
+            ):
+                with self.subTest(
+                    operation=operation,
+                    failure=type(provider_failure).__name__,
+                ):
+                    await self.assert_provider_control_flow_guard(
+                        operation,
+                        provider_failure,
+                        diagnostic_failure=diagnostic_failure,
+                    )
+
+    async def assert_append_guard(
+        self,
+        operation: str,
+        failed_kind: ConversationEventKind,
+        *,
+        diagnostic_failure: BaseException | None = None,
+    ) -> None:
+        """Exercise one append guard with exact ordering and transcript state."""
+
+        marker = operation.upper()
+        workspace, catalog, memory, conversation_id = self.memory_fixture(
+            subject=f"PRIVATE_{marker}_SUBJECT"
+        )
+        trace: list[str] = []
+        failure = WorkspaceFormatError(
+            f"PRIVATE_{marker}_{failed_kind.value}_FAILURE"
+        )
+        failure_message = str(failure)
+
+        def fail_selected(event: ConversationEventAppend) -> object:
+            return failure if event.kind is failed_kind else _DELEGATE
+
+        store = _TracingStore(memory, trace=trace, append_hook=fail_selected)
+        backend = _ConversationBackend(trace=trace)
+        runtime = StoryRuntime(
+            workspace,
+            backend,  # type: ignore[arg-type]
+            conversation_event_store=store,
+        )
+        private_input = f"PRIVATE_{marker}_INPUT"
+        memory_service = ConversationMemoryService(
+            ConversationSearchScope("session_a"),
+            catalog,
+            memory,
+            search=_UnusedConversationSearch(),  # type: ignore[arg-type]
+        )
+        with ExitStack() as stack:
+            debug_error = (
+                stack.enter_context(
+                    mock.patch.object(
+                        WorkspaceDebugLog,
+                        "error",
+                        side_effect=diagnostic_failure,
+                    )
+                )
+                if diagnostic_failure is not None
+                else None
+            )
+            raised = stack.enter_context(
+                self.assertRaises(WorkspaceFormatError)
+            )
+            if operation == "advisory":
+                await runtime.converse(
+                    "session_a",
+                    conversation_id,
+                    PLOT_ARCHITECT,
+                    private_input,
+                )
+            else:
+                await runtime.converse_with_retrieval(
+                    "session_a",
+                    conversation_id,
+                    PLOT_ARCHITECT,
+                    private_input,
+                    memory_service=memory_service,
+                )
+
+        self.assertIs(raised.exception, failure)
+        self.assertIs(type(raised.exception), WorkspaceFormatError)
+        self.assertEqual(str(raised.exception), failure_message)
+        self.assertIsNone(raised.exception.__cause__)
+        self.assertIsNone(raised.exception.__context__)
+        expected_trace = [
+            "read_context",
+            "validate_provider_configuration",
+            "get_session_lifecycle",
+            "acquire_session_access",
+            "get_session_lifecycle",
+            "bind",
+            "append:user_message",
+        ]
+        expected_events: tuple[ConversationEventKind, ...] = ()
+        expected_requests = 0
+        if failed_kind is ConversationEventKind.AGENT_REPLY:
+            expected_trace.extend(
+                (
+                    "converse"
+                    if operation == "advisory"
+                    else "converse_with_retrieval",
+                    "append:agent_reply",
+                )
+            )
+            expected_events = (ConversationEventKind.USER_MESSAGE,)
+            expected_requests = 1
+        self.assertEqual(trace, expected_trace)
+        self.assertEqual(
+            len(
+                backend.requests
+                if operation == "advisory"
+                else backend.retrieval_requests
+            ),
+            expected_requests,
+        )
+        self.assertEqual(
+            tuple(
+                event.kind
+                for event in memory.read("session_a", conversation_id)
+            ),
+            expected_events,
+        )
+        self.assertNotIn(
+            ConversationEventKind.RUNTIME_ERROR,
+            (event.kind for event in store.append_calls),
+        )
+        prohibited = (
+            f"PRIVATE_{marker}_SUBJECT",
+            private_input,
+            failure_message,
+        )
+        if diagnostic_failure is None:
+            self.assert_failed_operation_records(
+                workspace,
+                operation=f"{operation}_turn",
+                session_id="session_a",
+                conversation_id=conversation_id,
+                prohibited=prohibited,
+            )
+        else:
+            assert debug_error is not None
+            debug_error.assert_called_once()
+            self.assertIs(debug_error.call_args.args[2], failure)
+            raw, records = _runtime_operation_records(
+                workspace,
+                f"{operation}_turn",
+            )
+            self.assertEqual(
+                [(record["level"], record["phase"]) for record in records],
+                [("trace", "started")],
+            )
+            for value in prohibited + (str(workspace.root),):
+                self.assertNotIn(value, raw)
+
+    async def test_advisory_append_failures_record_one_terminal_error(self) -> None:
+        for failed_kind in (
+            ConversationEventKind.USER_MESSAGE,
+            ConversationEventKind.AGENT_REPLY,
+        ):
+            with self.subTest(failed_kind=failed_kind.value):
+                await self.assert_append_guard("advisory", failed_kind)
+
+    async def test_retrieval_append_failures_record_one_terminal_error(self) -> None:
+        for failed_kind in (
+            ConversationEventKind.USER_MESSAGE,
+            ConversationEventKind.AGENT_REPLY,
+        ):
+            with self.subTest(failed_kind=failed_kind.value):
+                await self.assert_append_guard("retrieval", failed_kind)
+
+    async def test_append_failure_survives_diagnostic_control_flow(self) -> None:
+        cases = (
+            (
+                "advisory",
+                ConversationEventKind.USER_MESSAGE,
+                KeyboardInterrupt("diagnostic interrupt"),
+            ),
+            (
+                "retrieval",
+                ConversationEventKind.AGENT_REPLY,
+                SystemExit("diagnostic exit"),
+            ),
+        )
+        for operation, failed_kind, diagnostic_failure in cases:
+            with self.subTest(operation=operation, failed_kind=failed_kind.value):
+                await self.assert_append_guard(
+                    operation,
+                    failed_kind,
+                    diagnostic_failure=diagnostic_failure,
+                )
+
     async def test_provider_exceptions_record_error_and_reraise_original(self) -> None:
         for provider_error in (
             RuntimeError("provider unavailable"),
@@ -1454,6 +2148,110 @@ class ConversationRuntimeFailureTests(_ConversationRuntimeCase):
                     events[1].content,
                     f"{type(provider_error).__name__}: {provider_error}",
                 )
+                raw_debug_log = workspace.path(
+                    "debug_logs/runtime.jsonl"
+                ).read_text(encoding="utf-8")
+                record = next(
+                    item
+                    for item in reversed(
+                        [
+                            json.loads(line)
+                            for line in raw_debug_log.splitlines()
+                        ]
+                    )
+                    if item["component"] == "runtime"
+                    and item["operation"] == "advisory_turn"
+                    and item["level"] == "error"
+                )
+                self.assertEqual(record["phase"], "failed")
+                self.assertEqual(record["session_id"], "session_a")
+                self.assertEqual(record["conversation_id"], conversation_id)
+                self.assertEqual(record["agent_id"], PLOT_ARCHITECT)
+                self.assertEqual(record["outcome"], "failed")
+                for prohibited in (
+                    "durable question",
+                    "Runtime conversation",
+                    str(provider_error),
+                    str(workspace.root),
+                ):
+                    self.assertNotIn(prohibited, raw_debug_log)
+
+    async def test_diagnostic_failure_preserves_runtime_error_and_transcript(
+        self,
+    ) -> None:
+        workspace, _, memory, conversation_id = self.memory_fixture()
+        provider_error = RuntimeError("PRIVATE_PROVIDER_FAILURE")
+        backend = _ConversationBackend(lambda _request: provider_error)
+        runtime = StoryRuntime(
+            workspace,
+            backend,  # type: ignore[arg-type]
+            conversation_event_store=memory,
+        )
+        with (
+            mock.patch.object(
+                WorkspaceDebugLog,
+                "error",
+                side_effect=KeyboardInterrupt("diagnostic failure"),
+            ) as debug_error,
+            self.assertRaises(RuntimeError) as raised,
+        ):
+            await runtime.converse(
+                "session_a",
+                conversation_id,
+                PLOT_ARCHITECT,
+                "PRIVATE_QUESTION",
+            )
+
+        self.assertIs(raised.exception, provider_error)
+        self.assertTrue(debug_error.called)
+        events = memory.read("session_a", conversation_id)
+        self.assertEqual(
+            tuple(event.kind for event in events),
+            (
+                ConversationEventKind.USER_MESSAGE,
+                ConversationEventKind.RUNTIME_ERROR,
+            ),
+        )
+        self.assertEqual(
+            events[-1].content,
+            "RuntimeError: PRIVATE_PROVIDER_FAILURE",
+        )
+
+    async def test_trace_failure_preserves_advisory_result_and_transcript(
+        self,
+    ) -> None:
+        """Keep a successful direct advisory turn independent of trace output."""
+
+        workspace, _, memory, conversation_id = self.memory_fixture()
+        backend = _ConversationBackend()
+        runtime = StoryRuntime(
+            workspace,
+            backend,  # type: ignore[arg-type]
+            conversation_event_store=memory,
+        )
+        with mock.patch.object(
+            WorkspaceDebugLog,
+            "trace",
+            side_effect=SystemExit("diagnostic trace failure"),
+        ) as trace:
+            result = await runtime.converse(
+                "session_a",
+                conversation_id,
+                PLOT_ARCHITECT,
+                "PRIVATE_ADVISORY_QUESTION",
+            )
+
+        self.assertEqual(result.content, "reply to PRIVATE_ADVISORY_QUESTION")
+        self.assertGreater(trace.call_count, 0)
+        events = memory.read("session_a", conversation_id)
+        self.assertEqual(
+            tuple(event.kind for event in events),
+            (
+                ConversationEventKind.USER_MESSAGE,
+                ConversationEventKind.AGENT_REPLY,
+            ),
+        )
+        self.assertEqual(events[-1].content, result.content)
 
     async def test_reply_type_validation_and_correlation_record_one_error(self) -> None:
         class DerivedReply(ConversationReply):
@@ -1950,43 +2748,6 @@ class ConversationRuntimeCancellationTests(_ConversationRuntimeCase):
                     ),
                     (ConversationEventKind.USER_MESSAGE,),
                 )
-
-    async def test_base_exceptions_leave_crash_remainder(self) -> None:
-        for provider_failure in (
-            KeyboardInterrupt("provider interrupted"),
-            SystemExit("provider exited"),
-        ):
-            workspace, _, memory, conversation_id = self.memory_fixture()
-            store = _TracingStore(memory)
-            backend = _ConversationBackend(
-                lambda request, failure=provider_failure: failure
-            )
-            runtime = StoryRuntime(
-                workspace,
-                backend,  # type: ignore[arg-type]
-                conversation_event_store=store,
-            )
-            with self.subTest(failure=type(provider_failure).__name__):
-                with self.assertRaises(type(provider_failure)) as raised:
-                    await runtime.converse(
-                        "session_a",
-                        conversation_id,
-                        PLOT_ARCHITECT,
-                        "crash remainder",
-                    )
-                self.assertIs(raised.exception, provider_failure)
-                self.assertEqual(
-                    tuple(event.kind for event in store.append_calls),
-                    (ConversationEventKind.USER_MESSAGE,),
-                )
-                self.assertEqual(
-                    tuple(
-                        event.kind
-                        for event in memory.read("session_a", conversation_id)
-                    ),
-                    (ConversationEventKind.USER_MESSAGE,),
-                )
-
 
 class ConversationRuntimeArtifactTests(_ConversationRuntimeCase):
     async def test_success_and_failure_only_change_addressed_transcript(self) -> None:

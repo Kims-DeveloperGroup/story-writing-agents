@@ -2,9 +2,10 @@
 
 > **Availability:** filesystem persistence covers configuration, sessions,
 > conversations, debates, optional debate-context sidecars, canonical writing
-> artifacts, and content-free explicit-reference authorization evidence.
-> `StoryRuntime` now creates and finalizes that evidence for inline referenced
-> operations; Python callers can inspect it by operation ID.
+> artifacts, content-free explicit-reference authorization evidence, and
+> bounded runtime debug-log infrastructure. `StoryRuntime` creates and
+> finalizes reference evidence for inline referenced operations; Python callers
+> can inspect it by operation ID.
 
 Key terms: **blackboard**—public debate JSONL; **sidecar**—context stored apart
 from established debate records; **create-only**—never replaces an existing
@@ -20,11 +21,126 @@ The workspace uses separate inspectable files rather than a database:
 | Provider manifest and access claim | `AgentBackend` |
 | Session/conversation defaults | CLI context helpers |
 | Conversation metadata and transcript | Catalog and event-store adapters |
+| Bounded runtime diagnostics | Internal `debug_log` writer |
 | Retrieval actions, observations, progress, sources | Process/terminal only |
 | Current conversation and agent focus | Controller memory only |
 | Canonical writing artifacts and provenance | `WritingArtifactRepository` |
 | Explicit-reference operation and invocation evidence | `WritingArtifactRepository`; content-free create-only records |
 | Explicit-reference selected content | Transient repository/backend carriers and one immediate provider payload; no workspace evidence field |
+
+<a id="workspace-runtime-debug-log"></a>
+
+## Workspace runtime debug log
+
+The internal diagnostics writer appends compact, ASCII-safe schema-v1 JSONL.
+Every record has `schema_version`, a writer-owned UTC `timestamp`, and fixed
+`level`, `component`, `operation`, and `phase` values. It may add an `outcome`
+from its fixed taxonomy and exact validated `session_id`, `conversation_id`,
+`debate_id`, or canonical `agent_id`; absent optional fields are omitted rather
+than written as `null`.
+
+An error record additionally has an `exception` object with only `type`,
+`frames`, and `frames_truncated`. A frame has only a safe module name, function
+name, and positive line number. The writer keeps the nearest 32 frames and uses
+fixed replacements for unsafe type, module, or function names. It does not
+accept a caller timestamp, message, path, traceback text, or arbitrary detail
+or payload mapping.
+
+`Workspace` owns canonical-root resolution, containment, no-symlink checks, its
+per-instance meaningful root identity, package-internal root open/reverification
+helpers, and the `debug_logs/` scaffold declaration. An existing directory binds
+at construction; a specifically missing root remains pending for one valid
+`initialize()` attempt; any other unavailable identity never silently rebinds
+on that instance. Invalid `overwrite_prompts` input raises `TypeError` before
+I/O without consuming the pending attempt. The first valid attempt becomes
+terminal before capability checks or mutation and preflights the full required
+descriptor-relative directory and atomic-file capability set. It creates
+missing canonical-root components beneath opened parent descriptors, verifies
+the opened final root against its named identity, and retains that root
+descriptor across every topology and default write.
+
+Pending child directories and file parents are traversed relative to the
+retained root without following names. File writes stage exclusive temporary
+regular files and verify both the temporary and installed identities.
+Create-only installation preserves existing non-symlink entries without
+replacement; prompt overwrite remains limited to the four canonical role
+prompts. After all writes, the canonical root is rewalked and matched to the
+retained identity. Successful identity is recorded only after the retained
+descriptor closes.
+
+The first `OSError`, `KeyboardInterrupt`, or `SystemExit` propagates unchanged,
+with an active body failure taking precedence over cleanup failure. Safely
+created components and intended partial data on the retained root are not
+rolled back. After any failure before complete writes, rewalk, and cleanup,
+later `initialize()` calls reject with the established identity-unavailable
+`OSError` before root or child I/O and never retry. Calls after success and roots
+that existed at construction retain their established pathname behavior. A new
+`Workspace` makes its own construction-time identity probe.
+
+An existing directory whose construction-time probe is unavailable or
+nonmeaningful follows the established, separate limitation: normal
+pathname-based initialization may still create its scaffold, but that instance
+never gains a diagnostic root identity and diagnostic storage fails closed.
+Those helpers are not project-root exports.
+
+For each supported storage attempt, the internal writer owns the lifetimes of
+the root, debug-directory, guard, and active-log descriptors. It creates or opens
+the debug directory relative to the verified root, performs leaf operations
+relative to the verified child, tracks expected rotation absences/inodes, and
+owns this schema plus lazy leaf creation, single-link regular-file validation,
+active/backup size validation, append, best-effort exact-inode rollback,
+rotation, and cleanup. An unavailable or replaced root, or a platform without
+the required safe descriptor-relative primitives, drops the record instead of
+using a weaker fallback. Constructing the internal writer remains
+filesystem-I/O-free.
+`StoryRuntime` construction only retains that I/O-free handle and emits nothing.
+`AgentBackend` begins emitting only after the complete configuration snapshot
+loads successfully; CLI, controller, and smoke emission starts only after
+workspace resolution or initialization.
+
+Only package-internal diagnostic storage consults the retained root identity.
+Ordinary `Workspace` domain I/O remains pathname-based and may observe a real
+directory installed later at the same root path. It is not an identity-pinned
+filesystem snapshot or a transaction across operations.
+
+Explicit CLI smoke initializes and retains one identity-bearing `Workspace`,
+then passes that exact instance to `run_smoke`. The workflow treats a supplied
+workspace as caller-owned and borrows it. Every fresh workspace-bound catalog,
+event store, runtime, and memory service inside the workflow also borrows that
+instance; service freshness never rebinds workspace identity.
+Implicit smoke creates, initializes, and removes its own temporary `Workspace`.
+The smoke contract accepts a `Workspace` or `None`, so the CLI does not
+reconstruct the explicit workspace from a path for handoff or post-run
+diagnostics. CLI and smoke diagnostic-handle acquisition and every submission
+have separate `BaseException` guards. After CLI initialization or discovery
+succeeds, hint eligibility is recorded before optional handle acquisition; that
+eligibility, not handle presence or record success, controls a later fixed
+failure hint. A replaced or unavailable bound root can therefore omit a record,
+but cannot redirect diagnostics or change the smoke report, stderr, exception,
+or exit.
+
+The low-level writer attempts cleanup for every independently acquired
+descriptor and lock and drops ordinary `Exception` failures. An original body
+`KeyboardInterrupt` or `SystemExit` takes precedence; otherwise the first
+cleanup process-control failure propagates after later cleanup attempts. Each of
+the five consumers adds a private `BaseException` guard around submissions, so
+diagnostic failure or an absent record cannot replace established results,
+exceptions, cancellation, persistence, cleanup, output, or exits.
+Explicit smoke retains best-effort records; implicit smoke removes them with its
+temporary workspace.
+
+For the five synchronous provider-free `StoryRuntime` methods—directive
+application, runtime-override saving, and session, debate, or context
+inspection—a successful directive or configuration operation attempts
+`succeeded`/`completed`, while successful inspection attempts
+`observed`/`completed`. An ordinary underlying `Exception` attempts
+`failed`/`failed`. `KeyboardInterrupt` or `SystemExit` instead attempts
+`cancelled`/`interrupted`, then is bare-reraised unchanged; diagnostic failure
+cannot replace that control.
+
+Storage paths and retention are in [Session storage](../reference/configuration/session-storage.md#runtime-debug-log-storage),
+failure guarantees in [Filesystem safety](../operations/filesystem-safety.md#debug-log-filesystem-safety),
+and excluded content in [Privacy](../operations/privacy-and-provider.md#workspace-debug-log-privacy).
 
 <a id="debate-context-sidecar"></a>
 
@@ -88,8 +204,9 @@ Creation occurs after debate reservation and before initiation or provider
 work. The file is strict UTF-8 JSON, identity-bound to its path, rejects
 missing, extra, or duplicate keys, and is never overwritten. A collision raises
 `DebateExistsError`. `Workspace.inspect_debate_context()` and the matching
-runtime methods are read-only; this sidecar does not itself change
-debate/session inspection, logs, result JSON, or `DebateResult`. A separate
+runtime methods are read-only for debate/session state; runtime wrappers may
+append a bounded operational debug record. The sidecar itself does not change
+inspection JSON, debate logs, result JSON, or `DebateResult`; a separate
 referenced run may add its optional content-free operation ID to the result.
 
 ## Durability boundaries
@@ -176,12 +293,18 @@ recoverable artifact journal alongside an incomplete non-artifact operation.
 Exact artifact paths, eligibility, recovery positions, and user responses are in
 [Canonical writing artifacts](../reference/writing-artifacts.md).
 
-One-step and retrieval turns append exactly one user event before provider work,
-then one reply or sanitized runtime error. Retrieval adds no control, source,
-sidecar, catalog, default, debate, state, or artifact record; compatible
-provider-thread metadata may update. Hard interruption can leave an unmatched
-user event, which later context excludes. Consensus snapshots never append the
-transcript.
+One-step and retrieval turns append exactly one user event before provider work.
+Success appends one reply; ordinary failures attempt one sanitized runtime error,
+and `asyncio.CancelledError` attempts its fixed runtime error. Provider
+`KeyboardInterrupt` or `SystemExit` appends no transcript outcome: the runtime
+instead attempts a separate `cancelled`/`interrupted` operational record and
+re-raises the identical exception without automatic retry. The unmatched user
+event remains visible to full transcript reads and is excluded from later context.
+Retrieval actions and observations add no control, source, sidecar, catalog,
+default, debate, state, or canonical-artifact publication; compatible
+provider-thread metadata may update. A referenced top-level turn separately
+adds the content-free operation and invocation evidence described above.
+Consensus snapshots never append the transcript.
 
 The canonical path tree is in [Session storage](../reference/configuration/session-storage.md).
 Accessor signatures are in [Workspace API](../reference/workspace-api.md),

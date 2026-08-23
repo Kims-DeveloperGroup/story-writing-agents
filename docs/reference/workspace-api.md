@@ -31,13 +31,74 @@ Workspace.save_session_overrides(session_id: str, overrides: Mapping[str, Any]) 
 
 Initialization creates missing scaffold and normally preserves existing files.
 With `overwrite_prompts=True`, it replaces exactly the four canonical role
-prompts and preserves all other existing content. Initialization creates the
-`core_documents/` directory but no core-document templates or manuscript.
+prompts and preserves all other existing content. The option must be a boolean;
+invalid input raises `TypeError` before any I/O and does not consume a pending
+instance's one initialization attempt.
 
-The workspace root is resolved once. Public path operations accept only safely
-contained workspace-relative paths with no absolute path, `..`, or symlink
-component. Text is strict UTF-8. JSON readers reject malformed structures where
-the consuming contract performs schema validation.
+Initialization creates the `core_documents/` directory but no core-document
+templates or manuscript.
+
+Construction resolves the workspace root once and may make a nonmutating
+filesystem identity probe; it retains no open descriptor. An existing canonical
+directory with meaningful positive device and inode values binds immediately. A
+specifically missing root remains pending for the first valid `initialize()`
+call. That call terminalizes the pending state before checking filesystem
+capabilities or mutating anything. It preflights the required safe
+descriptor-relative directory and atomic-file primitives, then walks the
+canonical root from an opened filesystem anchor. Each missing component is
+created relative to its opened parent and opened without following its name.
+The final root descriptor is identity-checked and retained for all topology and
+default writes.
+
+Those writes walk only beneath the retained descriptor and install verified
+temporary regular files through held parent descriptors. Create-only entries
+leave existing non-symlink targets unchanged and do not replace a competing
+target; `overwrite_prompts=True` uses atomic replacement only for the four
+canonical role prompts. Each installed target must identify the staged file.
+After all writes, initialization rewalks the canonical root without following
+component names, matches it to the retained identity, and closes the retained
+descriptor. Only then does the instance record success. Replacing an ancestor
+or root after the initial comparison therefore cannot redirect the scaffold or
+establish a usable diagnostic identity at another location.
+
+The original `OSError`, `KeyboardInterrupt`, or `SystemExit` from the first valid
+attempt propagates unchanged, including failures during root creation, file
+installation, identity verification, child/default work, or final descriptor
+cleanup. Cleanup does not replace an active body failure. Safely created root
+components and intended partial data on the retained root are not rolled back.
+If any step before complete success fails, every later `initialize()` call
+rejects with the established identity-unavailable `OSError` before root
+creation, stat or bind, child creation, or default writes; it does not retry or
+repeat the original error. Repeated calls after success retain their established
+pathname-based preserve-existing and optional prompt-overwrite behavior.
+Constructing a new `Workspace` performs a new identity probe, so callers should
+inspect and repair a failed root path first.
+
+This lifecycle changes no public signature, successful return value, or
+initialized file content.
+
+If safe creation primitives are unavailable, the first valid attempt raises
+`OSError` before mutation. This is a fail-closed capability requirement, not a
+promise that missing-root initialization works on every platform.
+
+An existing directory whose construction-time probe is unavailable or
+nonmeaningful is the established exception to the initialization requirement:
+normal pathname-based initialization may still create its scaffold, while
+diagnostic storage remains unavailable for that instance. It also never
+silently rebinds.
+
+Package-internal, non-root-exported helpers open and reverify that bound root for
+diagnostic storage. Replacing the root does not make an existing `Workspace`
+follow the replacement for logging; the diagnostic record is dropped without a
+fallback path. These helpers add no public signature, and this identity does not
+apply to normal `Workspace` methods. Those methods remain pathname-based and may
+read or write a real directory installed later at the same root path; callers
+cannot use one instance as an identity-pinned filesystem snapshot or a
+transaction across operations. Public path operations retain their established
+contract: they accept only safely contained workspace-relative paths with no
+absolute path, `..`, or symlink component.
+Text is strict UTF-8. JSON readers reject malformed structures where the
+consuming contract performs schema validation.
 
 `Workspace.read_text()` is a raw, safely contained UTF-8 read. It does not
 classify canonical paths, check artifact provenance, or make bytes eligible for

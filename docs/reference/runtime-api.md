@@ -72,6 +72,48 @@ runtime validates the unanimous result and persists the exact returned bytes.
 An advisory conversation call cannot publish. A manuscript revision must use a
 new output path because manuscript targets are create-only.
 
+## Runtime diagnostic side effect
+
+`StoryRuntime` construction retains an I/O-free workspace-bound debug writer
+but emits no record and creates no diagnostic file or guard. Later instrumented
+operations best-effort record fixed configuration, directive, inspection,
+advisory, retrieval, consensus, completion, cancellation, and safe failure
+facts after they reach their emission boundary; rejected calls are not promised
+a record.
+
+Runtime-private submission guards catch diagnostic `BaseException`, including
+`KeyboardInterrupt` and `SystemExit`. Constructor and public method signatures,
+return values, raised exceptions, cancellation, transcript ordering,
+persistence, and artifact behavior remain unchanged when diagnostics succeed or
+fail.
+
+For the synchronous provider-free `apply_directive()`,
+`set_runtime_overrides()`, `inspect_session()`, `inspect_debate()`, and
+`inspect_debate_context()` methods, successful directive and configuration
+operations attempt `succeeded`/`completed`; successful inspections attempt
+`observed`/`completed`. An ordinary underlying `Exception` attempts
+`failed`/`failed`. An underlying `KeyboardInterrupt` or `SystemExit` instead
+attempts `cancelled`/`interrupted`, then the method bare-reraises the identical
+control with its traceback. A diagnostic failure is swallowed. These direct
+Python calls do not translate process control into a return value or status,
+retry, append transcript output, or print a CLI hint.
+
+After the advisory or retrieval user event is durable, a provider
+`KeyboardInterrupt` or `SystemExit` makes exactly one runtime-component error
+submission for `advisory_turn` or `retrieval_turn` with phase `cancelled` and
+outcome `interrupted`. The runtime re-raises the identical exception. It appends
+no transcript `runtime_error`, performs no automatic retry, and leaves the user
+event unmatched and therefore excluded from later context. Failure of this
+diagnostic submission cannot replace the exception or alter transcript and
+cleanup behavior.
+
+Consequently, `inspect_session()`, `inspect_debate()`, and
+`inspect_debate_context()` remain read-only for session/debate state but may
+append a bounded operational record. There is no public logger parameter,
+configuration switch, telemetry service, or package-root debug-log export. See
+[debug-log privacy](../operations/privacy-and-provider.md#workspace-debug-log-privacy)
+and [storage](configuration/session-storage.md#runtime-debug-log-storage).
+
 ## Debate context
 
 ```python

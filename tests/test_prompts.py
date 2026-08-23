@@ -137,7 +137,11 @@ class PromptAssemblerTests(unittest.TestCase):
         )
         configs = self.workspace.read_json("config/agent_configs.json")
         configs[PLOT_ARCHITECT].update(
-            {"backend": "gemini", "language": "FR", "persona": replacement}
+            {
+                "backend": "antigravity",
+                "language": "FR",
+                "persona": replacement,
+            }
         )
         self.workspace.write_json("config/agent_configs.json", configs)
 
@@ -178,7 +182,7 @@ class PromptAssemblerTests(unittest.TestCase):
                 next_lifecycle.language,
                 next_lifecycle.persona_file.path.name,
             ),
-            ("gemini", "FR", "replacement_persona.md"),
+            ("antigravity", "FR", "replacement_persona.md"),
         )
         with self.assertRaisesRegex(TypeError, "ConfigurationSnapshot"):
             PromptAssembler(  # type: ignore[arg-type]

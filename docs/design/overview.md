@@ -7,7 +7,8 @@
 > supported public API.
 
 Key terms: **controller**—owner of interactive transition order;
-**adapter**—provider-neutral implementation; **scope**—what a service may read;
+**adapter**—provider-specific process/protocol implementation;
+**scope**—what a service may read;
 **default**—persisted fallback; **focus**—current process-local scope.
 
 `story-writing-agents` separates workflow, provider invocation, terminal
@@ -28,13 +29,25 @@ claims, prompt staging, routes, processes, and threads. It owns private
 active-call retention, exact staging retirement, and the optional
 provider-enforced reference prelude supplied through the provider-neutral
 read-action boundary; a `BoundAgent` is the immutable handle for one definition
-and is not the runtime selection owner. Codex is implemented; Gemini fails
-preflight.
+and binding, not the runtime selection owner. Codex and Antigravity adapters are
+implemented; Codex remains the default. The obsolete backend name `gemini` is
+rejected with guidance to use `antigravity`.
+
+Provider threads are partitioned by story session, backend, and agent.
+Antigravity adds a stable provider-native state root isolated by session, agent,
+and definition fingerprint. Closing a backend preserves thread references and
+Antigravity-native state; taint or a changed definition starts a fresh provider
+conversation without deleting prior data. See the
+[Backend/session contract](../reference/backend-and-sessions.md) and
+[Antigravity guide](../guides/antigravity.md).
 
 `Workspace` owns generic path-safe persistence, inspection, and atomic
-replacement. The `writing_artifacts` package owns the stricter canonical-output
-grammar, provenance, publication, and recovery boundary; generic workspace
-writes never manufacture artifact provenance. See
+replacement. Its retained root identity is a narrower internal
+diagnostic-storage seam; ordinary domain I/O remains pathname-based and may
+observe a real-directory replacement at the same root path. The
+`writing_artifacts` package owns the stricter canonical-output grammar,
+provenance, publication, and recovery boundary; generic workspace writes never
+manufacture artifact provenance. See
 [Filesystem safety](../operations/filesystem-safety.md).
 
 ## Writing-artifact ownership
@@ -60,6 +73,29 @@ than baseline core context.
 The interactive controller validates required manuscript output grammar but
 does not own storage or provenance. Exact user-visible states are in
 [Canonical writing artifacts](../reference/writing-artifacts.md).
+
+The internal `debug_log` module borrows that containment boundary and owns its
+own safe event schema, per-workspace process serialization, independent
+cross-process guard, append rollback, and bounded rotation. It has no
+project-root export. Constructing its workspace-bound handle performs no I/O;
+`StoryRuntime` construction emits nothing, `AgentBackend` starts only after its
+complete configuration snapshot loads, and CLI, controller, and smoke emission
+starts only after workspace resolution or initialization succeeds.
+
+The low-level writer suppresses ordinary `Exception` failures. The five
+consumers—CLI, backend, runtime, controller, and smoke—submit only fixed facts
+through private guards that also catch diagnostic `BaseException`. Thus
+`debug_log` alone owns schema, files, locks, append rollback, and rotation, while
+a diagnostic `KeyboardInterrupt` or `SystemExit` cannot replace application
+results, exceptions, cancellation, cleanup, output, or exit behavior. Implicit
+smoke owns and removes its temporary `Workspace`. Explicit CLI smoke initializes
+and retains one identity-bearing `Workspace`; smoke and all fresh workspace-bound
+services borrow that same instance, and the CLI does not resolve the path again
+for handoff or post-run diagnostics. CLI and smoke logger-handle acquisition and
+submissions are independently guarded, so root replacement can omit a record
+but cannot redirect it or change the report, stderr, exception, or exit. The CLI
+records post-workspace hint eligibility separately from its optional handle, so
+a later eligible hint can appear when no diagnostic file exists.
 
 ## Fixed collaboration model
 
@@ -95,11 +131,25 @@ The facade re-exports the core's same class;
 shell behavior and project-root exports are unchanged. Only the core retains
 collaborators and mutable process state.
 
+On session-lobby exit, the core attempts each applicable stage once in this
+order: Runner close, known-access release, backend close, then in-memory state
+clearing. An uncaught body `KeyboardInterrupt` or `SystemExit` wins; otherwise
+the first cleanup process control wins after every later stage runs. The same
+exception object and traceback propagate. The Runner reference remains only
+when its close was interrupted by process control; attachment, focus, and memory
+always clear and the controller closes. With no retained process control,
+ordinary cleanup failure returns `2` and attempts one nonduplicated
+`cleanup_failed` display. A diagnostic process control cannot replace an already
+retained body or cleanup winner. This outer-boundary arbitration does not
+reclassify a Ctrl-C or cancellation already handled by a command.
+
 The supported terminal import remains
 `from story_writing_agents.interactive_terminal import InteractiveTerminal`.
-Its package facade preserves the exact existing public objects and signatures;
-package leaves are internal. The CLI calls one package-internal factory to
-construct a stream-backed terminal around one `RawTerminalDriver`. The
+Its package facade preserves the exact existing public objects and established
+call compatibility; `write_error()` alone adds the optional keyword-only
+`debug_log_path=None` presentation seam. Package leaves are internal. The CLI
+calls one package-internal factory to construct a stream-backed terminal around
+one `RawTerminalDriver`. The
 standalone line-editor facade delegates to that same driver implementation and
 contains no second raw-terminal lifecycle. Each constructed stream terminal or
 standalone editor has one isolated 100-entry process-local main-command store;

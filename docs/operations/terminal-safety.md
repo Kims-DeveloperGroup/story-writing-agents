@@ -241,9 +241,16 @@ Other failures use type/public state, never raw exception, token, or path text.
 raw, JSON, visible-escape, collapsed, and control-normalized variants; replaces
 longer variants first with `<redacted>`; reduces summary and hint to one line;
 caps them at 512 and 256 characters; then sanitizes and renders one semantic
-error panel containing the trusted code, summary, and hint. The panel remains
-one callback record. Redaction covers supplied variants, not unknown
-credentials.
+error panel containing the trusted code, summary, and hint. An additive
+`debug_log_path` keyword accepts only nonblank, one-line, strict-UTF-8 display
+text and adds one sanitized `[debug log]` notice. `None` preserves the exact
+two-notice panel. The value is call-local presentation input: the terminal does
+not resolve, read, write, or retain a filesystem path. The panel remains one
+callback record. Redaction covers supplied variants, not unknown credentials.
+After workspace resolution, installed CLI and controller errors supply the
+fixed text `If available, workspace-relative: debug_logs/runtime.jsonl`.
+Pre-workspace errors and direct callers that omit the keyword retain the exact
+two-notice panel.
 
 Conversation failures distinguish invalid, missing, ambiguous, archived, and
 transcript-invalid input from workspace state. The terminal never classifies
@@ -591,5 +598,8 @@ store and are dropped after each viewer call. Command-looking content and
 replies are never reparsed or executed.
 
 Terminal errors are presentation-only, not transcript `runtime_error` events.
-Stored runtime diagnostics use separate redaction and a 4096-character cap;
-see [Privacy](privacy-and-provider.md#runtime-error-diagnostics).
+Those transcript events use separate redaction and a 4,096-character cap. The
+bounded workspace debug log is a third, content-safe operational channel that
+does not store exception prose. See
+[Privacy](privacy-and-provider.md#runtime-error-diagnostics) and
+[workspace debug-log privacy](privacy-and-provider.md#workspace-debug-log-privacy).

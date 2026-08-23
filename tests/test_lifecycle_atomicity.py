@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import unittest
+from contextlib import ExitStack
+from pathlib import Path
 from unittest import mock
 
 from story_writing_agents import (
@@ -29,26 +32,36 @@ from story_writing_agents import (
     Workspace,
     WorkspaceFormatError,
 )
+from story_writing_agents.debug_log import WorkspaceDebugLog
 
 
 def lifecycle_file_snapshot(workspace: Workspace) -> dict[str, bytes]:
-    """Capture current files for exact pre-reservation mutation checks."""
+    """Capture domain files for exact pre-reservation mutation checks."""
 
     return {
         path.relative_to(workspace.root).as_posix(): path.read_bytes()
         for path in sorted(workspace.root.rglob("*"))
         if path.is_file()
+        and "debug_logs" not in path.relative_to(workspace.root).parts
     }
 
 
 class _ContextReadStore:
     """Record or fail the one synchronous debate context read."""
 
-    def __init__(self, outcome: object) -> None:
+    def __init__(
+        self,
+        outcome: object,
+        *,
+        trace: list[str] | None = None,
+    ) -> None:
         self.outcome = outcome
+        self.trace = trace
         self.calls: list[tuple[str, str]] = []
 
     def read_context(self, session_id: str, conversation_id: str) -> object:
+        if self.trace is not None:
+            self.trace.append("read_context")
         self.calls.append((session_id, conversation_id))
         if isinstance(self.outcome, BaseException):
             raise self.outcome
@@ -67,6 +80,38 @@ from tests.helpers import (
     core_snapshot,
     initialized_workspace,
 )
+
+
+class _TracingLifecycleBackend(ScriptedBackend):
+    """Record the exact access sequence and optionally fail acquisition."""
+
+    def __init__(
+        self,
+        trace: list[str],
+        *,
+        acquire_failure: BaseException | None = None,
+    ) -> None:
+        super().__init__(lambda request: AssertionError(request.phase))
+        self.trace = trace
+        self.acquire_failure = acquire_failure
+
+    def validate_provider_configuration(self, session_id: str) -> bool:
+        self.trace.append("validate_provider_configuration")
+        return super().validate_provider_configuration(session_id)
+
+    def get_session_lifecycle(self, session_id: str) -> SessionLifecycleState:
+        self.trace.append("get_session_lifecycle")
+        return super().get_session_lifecycle(session_id)
+
+    def acquire_session_access(self, session_id: str) -> SessionLifecycleState:
+        self.trace.append("acquire_session_access")
+        if self.acquire_failure is not None:
+            raise self.acquire_failure
+        return super().acquire_session_access(session_id)
+
+    def release_session_access(self, session_id: str) -> SessionLifecycleState:
+        self.trace.append("release_session_access")
+        return super().release_session_access(session_id)
 
 
 class _GatedApprovalBackend(BindingBackendMixin):
@@ -91,6 +136,65 @@ class _GatedApprovalBackend(BindingBackendMixin):
 
 
 class DebateReservationTests(unittest.IsolatedAsyncioTestCase):
+    def assert_consensus_failure_records(
+        self,
+        workspace: Workspace,
+        *,
+        session_id: str,
+        debate_id: str,
+        prohibited: tuple[str, ...],
+    ) -> None:
+        """Require one started record and one content-free terminal error."""
+
+        raw = workspace.path("debug_logs/runtime.jsonl").read_text(
+            encoding="utf-8"
+        )
+        records = [
+            record
+            for record in (json.loads(line) for line in raw.splitlines())
+            if record["component"] == "runtime"
+            and record["operation"] == "consensus_run"
+        ]
+        self.assertEqual(
+            [
+                (record["level"], record["phase"], record.get("outcome"))
+                for record in records
+            ],
+            [
+                ("trace", "started", None),
+                ("error", "failed", "failed"),
+            ],
+        )
+        for record in records:
+            self.assertEqual(record["session_id"], session_id)
+            self.assertEqual(record["debate_id"], debate_id)
+        self.assertEqual(
+            [record["level"] for record in records if record["phase"] != "started"],
+            ["error"],
+        )
+        for value in prohibited + (str(workspace.root),):
+            self.assertNotIn(value, raw)
+
+    def assert_no_debate_artifact(
+        self,
+        workspace: Workspace,
+        session_id: str,
+        debate_id: str,
+    ) -> None:
+        """Assert the failed reservation boundary left no durable debate file."""
+
+        for suffix in (
+            ".jsonl",
+            ".state.json",
+            ".result.json",
+            ".context.json",
+        ):
+            self.assertFalse(
+                workspace.path(
+                    f"discussion_logs/{session_id}/{debate_id}{suffix}"
+                ).exists()
+            )
+
     async def test_same_debate_is_atomically_owned_by_exactly_one_runtime(
         self,
     ) -> None:
@@ -286,6 +390,166 @@ class DebateReservationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events, [])
         self.assertEqual(backend.requests, [])
         self.assertEqual(lifecycle_file_snapshot(workspace), before)
+
+    async def assert_pre_reservation_guard(
+        self,
+        stage: str,
+        *,
+        diagnostic_failure: BaseException | None = None,
+    ) -> None:
+        """Exercise one guarded failure with exact ordering and no artifacts."""
+
+        workspace = initialized_workspace(self)
+        before = lifecycle_file_snapshot(workspace)
+        trace: list[str] = []
+        failures: dict[str, BaseException] = {
+            "access": RuntimeError("PRIVATE_ACCESS_FAILURE"),
+            "context": WorkspaceFormatError("PRIVATE_CONTEXT_FAILURE"),
+            "reservation": OSError("PRIVATE_RESERVATION_FAILURE"),
+        }
+        failure = failures[stage]
+        failure_message = str(failure)
+        backend = _TracingLifecycleBackend(
+            trace,
+            acquire_failure=failure if stage == "access" else None,
+        )
+        store = (
+            _ContextReadStore(failure, trace=trace)
+            if stage == "context"
+            else None
+        )
+        session_id = f"{stage}_guard_session"
+        debate_id = f"{stage}_guard_debate"
+        private_input = f"PRIVATE_{stage.upper()}_INPUT"
+        events: list[DebateProgressEvent] = []
+
+        def fail_reservation(*_args: object, **_kwargs: object) -> object:
+            trace.append("reserve_debate")
+            raise failure
+
+        reservation_patch = (
+            mock.patch.object(
+                workspace,
+                "reserve_debate",
+                side_effect=fail_reservation,
+            )
+            if stage == "reservation"
+            else mock.patch.object(
+                workspace,
+                "reserve_debate",
+                wraps=workspace.reserve_debate,
+            )
+        )
+        expected_type = ValueError if stage == "context" else type(failure)
+        with ExitStack() as stack:
+            reservation = stack.enter_context(reservation_patch)
+            transition = stack.enter_context(
+                mock.patch.object(
+                    workspace,
+                    "transition_debate",
+                    wraps=workspace.transition_debate,
+                )
+            )
+            debug_error = (
+                stack.enter_context(
+                    mock.patch.object(
+                        WorkspaceDebugLog,
+                        "error",
+                        side_effect=diagnostic_failure,
+                    )
+                )
+                if diagnostic_failure is not None
+                else None
+            )
+            raised = stack.enter_context(self.assertRaises(expected_type))
+            await StoryRuntime(
+                workspace,
+                backend,
+                conversation_event_store=store,  # type: ignore[arg-type]
+            ).run_draft(
+                session_id,
+                private_input,
+                output_path=f"part-01/guard-{stage}.md",
+                debate_id=debate_id,
+                conversation_context=(
+                    DebateContextRequest(
+                        conversation_id="context_guard_conversation",
+                        mode=DebateContextMode.INCLUDED,
+                    )
+                    if stage == "context"
+                    else None
+                ),
+                progress_sink=events.append,
+            )
+
+        if stage == "context":
+            self.assertIs(type(raised.exception), ValueError)
+            self.assertEqual(
+                str(raised.exception),
+                "conversation context capture is invalid",
+            )
+            self.assertIs(raised.exception.__cause__, failure)
+            self.assertIs(raised.exception.__context__, failure)
+            self.assertEqual(str(failure), failure_message)
+            self.assertIsNone(failure.__cause__)
+            self.assertIsNone(failure.__context__)
+            assert store is not None
+            self.assertEqual(
+                store.calls,
+                [(session_id, "context_guard_conversation")],
+            )
+        else:
+            self.assertIs(raised.exception, failure)
+            self.assertIs(type(raised.exception), type(failure))
+            self.assertEqual(str(raised.exception), failure_message)
+            self.assertIsNone(raised.exception.__cause__)
+            self.assertIsNone(raised.exception.__context__)
+
+        if stage == "context":
+            expected_trace = ["read_context"]
+        else:
+            expected_trace = [
+                "validate_provider_configuration",
+                "get_session_lifecycle",
+                "acquire_session_access",
+            ]
+            if stage == "reservation":
+                expected_trace.extend(
+                    ("get_session_lifecycle", "reserve_debate")
+                )
+        self.assertEqual(trace, expected_trace)
+        self.assertEqual(events, [])
+        self.assertEqual(backend.requests, [])
+        if stage == "reservation":
+            reservation.assert_called_once()
+        else:
+            reservation.assert_not_called()
+        transition.assert_not_called()
+        self.assert_no_debate_artifact(workspace, session_id, debate_id)
+        self.assertEqual(lifecycle_file_snapshot(workspace), before)
+
+        if diagnostic_failure is None:
+            self.assert_consensus_failure_records(
+                workspace,
+                session_id=session_id,
+                debate_id=debate_id,
+                prohibited=(private_input, failure_message),
+            )
+        else:
+            assert debug_error is not None
+            debug_error.assert_called_once()
+            self.assertIs(debug_error.call_args.args[2], raised.exception)
+
+    async def test_guarded_pre_reservation_failures_record_once(self) -> None:
+        for stage in ("access", "context", "reservation"):
+            with self.subTest(stage=stage):
+                await self.assert_pre_reservation_guard(stage)
+
+    async def test_reservation_failure_survives_diagnostic_system_exit(self) -> None:
+        await self.assert_pre_reservation_guard(
+            "reservation",
+            diagnostic_failure=SystemExit("diagnostic exit"),
+        )
 
     async def test_included_context_format_failure_is_normalized_before_reservation(
         self,

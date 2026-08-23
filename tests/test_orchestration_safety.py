@@ -36,12 +36,13 @@ from tests.helpers import (
 
 
 def workspace_file_snapshot(workspace) -> dict[str, bytes]:
-    """Capture every existing workspace file for preflight purity assertions."""
+    """Capture non-diagnostic workspace files for preflight purity assertions."""
 
     return {
         path.relative_to(workspace.root).as_posix(): path.read_bytes()
         for path in sorted(workspace.root.rglob("*"))
         if path.is_file()
+        and "debug_logs" not in path.relative_to(workspace.root).parts
     }
 
 

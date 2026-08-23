@@ -7,7 +7,6 @@ import tempfile
 import uuid
 from collections import Counter
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from .agents import (
@@ -42,6 +41,13 @@ from .conversation_search import (
     ConversationSearchMatchKind,
     ConversationSearchQuery,
     ConversationSearchScope,
+)
+from .debug_log import (
+    DebugComponent,
+    DebugOperation,
+    DebugOutcome,
+    DebugPhase,
+    WorkspaceDebugLog,
 )
 from .conversations import (
     ConversationContextWindow,
@@ -546,44 +552,89 @@ class _SmokeBoundAgent:
         return answer_outcome
 
 
-def run_smoke(workspace_path: str | Path | None = None) -> tuple[dict[str, Any], int]:
+def _trace_smoke(
+    debug_log: WorkspaceDebugLog | None,
+    operation: DebugOperation,
+    phase: DebugPhase,
+    *,
+    session_id: str | None = None,
+    debate_id: str | None = None,
+    outcome: DebugOutcome | None = None,
+) -> None:
+    """Record a smoke trace without allowing diagnostics to alter behavior."""
+
+    if debug_log is None:
+        return
+    try:
+        debug_log.trace(
+            component=DebugComponent.SMOKE,
+            operation=operation,
+            phase=phase,
+            session_id=session_id,
+            debate_id=debate_id,
+            outcome=outcome,
+        )
+    except BaseException:
+        pass
+
+
+def _create_smoke_debug_log(workspace: Workspace) -> WorkspaceDebugLog | None:
+    """Create one optional smoke logger without changing smoke behavior."""
+
+    try:
+        return WorkspaceDebugLog(workspace)
+    except BaseException:
+        return None
+
+
+def run_smoke(workspace: Workspace | None = None) -> tuple[dict[str, Any], int]:
     """Run one provider-free smoke and return its report plus exit code.
 
-    An omitted path creates and removes a temporary workspace; an explicit path
-    retains uniquely named diagnostics. Named invariant failures return code one,
-    while workspace, storage, protocol, and setup failures propagate to the CLI.
+    An omitted workspace creates and removes a temporary workspace; a supplied
+    initialized workspace is borrowed and retained. Named invariant failures
+    return code one, while workspace, storage, protocol, and setup failures
+    propagate to the CLI.
     """
 
-    if workspace_path is None:
+    if workspace is None:
         with tempfile.TemporaryDirectory(
             prefix="story-writing-agents-smoke-"
         ) as temporary:
+            temporary_workspace = initialize_workspace(temporary)
             return _run_provider_free_smoke_in_workspace(
-                Path(temporary),
+                temporary_workspace,
                 mode="temporary",
                 retained=False,
             )
+    if not isinstance(workspace, Workspace):
+        raise TypeError("workspace must be a Workspace or None")
     return _run_provider_free_smoke_in_workspace(
-        Path(workspace_path),
+        workspace,
         mode="persistent",
         retained=True,
     )
 
 
 def _run_provider_free_smoke_in_workspace(
-    workspace_path: Path,
+    workspace: Workspace,
     *,
     mode: str,
     retained: bool,
 ) -> tuple[dict[str, Any], int]:
-    """Initialize one workspace, run one event loop, and build a compact report.
+    """Use one initialized workspace to run an event loop and build a report.
 
     The supplied mode metadata is reported unchanged. The workflow mutates only
     normal smoke artifacts, returns code zero or one for named invariants, and
     lets all non-invariant failures propagate.
     """
 
-    workspace = initialize_workspace(workspace_path)
+    debug_log = _create_smoke_debug_log(workspace)
+    _trace_smoke(
+        debug_log,
+        DebugOperation.WORKSPACE_INITIALIZATION,
+        DebugPhase.SUCCEEDED,
+        outcome=DebugOutcome.READY,
+    )
     token = uuid.uuid4().hex
     session_id = f"smoke_session_{token}"
     debate_id = f"smoke_debate_{token}"
@@ -591,6 +642,13 @@ def _run_provider_free_smoke_in_workspace(
     manuscript_path = f"manuscript/{output_path}"
     completed_checks: list[str] = []
     result: DebateResult | None = None
+    _trace_smoke(
+        debug_log,
+        DebugOperation.CLI_COMMAND,
+        DebugPhase.STARTED,
+        session_id=session_id,
+        debate_id=debate_id,
+    )
 
     try:
         _verify_workspace_initialized(workspace)
@@ -600,7 +658,7 @@ def _run_provider_free_smoke_in_workspace(
             session_id,
             "[SYS: LANG=EN]",
         )
-        fresh_runtime = StoryRuntime(Workspace(workspace.root))
+        fresh_runtime = StoryRuntime(workspace)
         _verify_directive(fresh_runtime, session_id)
         completed_checks.append(_CHECK_NAMES[1])
 
@@ -658,6 +716,18 @@ def _run_provider_free_smoke_in_workspace(
         )
         completed_checks.append(_CHECK_NAMES[11])
     except _SmokeInvariantError as exc:
+        if debug_log is not None:
+            try:
+                debug_log.error(
+                    DebugComponent.SMOKE,
+                    DebugOperation.CLI_COMMAND,
+                    exc,
+                    session_id=session_id,
+                    debate_id=debate_id,
+                    outcome=DebugOutcome.FAILED,
+                )
+            except BaseException:
+                pass
         return (
             _report(
                 workspace=workspace,
@@ -672,7 +742,44 @@ def _run_provider_free_smoke_in_workspace(
             ),
             1,
         )
+    except BaseException as exc:
+        if debug_log is not None:
+            try:
+                debug_log.error(
+                    DebugComponent.SMOKE,
+                    DebugOperation.CLI_COMMAND,
+                    exc,
+                    phase=(
+                        DebugPhase.CANCELLED
+                        if isinstance(
+                            exc,
+                            (asyncio.CancelledError, KeyboardInterrupt, SystemExit),
+                        )
+                        else DebugPhase.FAILED
+                    ),
+                    session_id=session_id,
+                    debate_id=debate_id,
+                    outcome=(
+                        DebugOutcome.INTERRUPTED
+                        if isinstance(
+                            exc,
+                            (asyncio.CancelledError, KeyboardInterrupt, SystemExit),
+                        )
+                        else DebugOutcome.FAILED
+                    ),
+                )
+            except BaseException:
+                pass
+        raise
 
+    _trace_smoke(
+        debug_log,
+        DebugOperation.CLI_COMMAND,
+        DebugPhase.SUCCEEDED,
+        session_id=session_id,
+        debate_id=debate_id,
+        outcome=DebugOutcome.COMPLETED,
+    )
     return (
         _report(
             workspace=workspace,
@@ -766,16 +873,15 @@ async def _exercise_provider_free_conversation_and_consensus(
     )
     completed_checks.append(_CHECK_NAMES[4])
 
-    fresh_workspace = Workspace(workspace.root)
-    fresh_catalog = FilesystemConversationCatalog(fresh_workspace)
+    fresh_catalog = FilesystemConversationCatalog(workspace)
     fresh_store = FilesystemConversationEventStore(
-        fresh_workspace,
+        workspace,
         catalog=fresh_catalog,
     )
     fresh_backend = _SmokeBackend(session_id, debate_id)
     fresh_backend._binding_failed_check = _CHECK_NAMES[6]
     fresh_runtime = StoryRuntime(
-        fresh_workspace,
+        workspace,
         fresh_backend,
         conversation_event_store=fresh_store,
     )
@@ -818,7 +924,7 @@ async def _exercise_provider_free_conversation_and_consensus(
         source_events=source_events,
     )
     _verify_preconsensus_artifact_isolation(
-        fresh_workspace,
+        workspace,
         session_id=session_id,
         debate_id=debate_id,
         core_before=core_before,
@@ -1041,7 +1147,7 @@ def _verify_preconsensus_artifact_isolation(
     check name while workspace and filesystem failures propagate.
     """
 
-    runtime = StoryRuntime(Workspace(workspace.root))
+    runtime = StoryRuntime(workspace)
     _require(
         runtime.inspect_session(session_id)["debates"] == []
         and runtime.inspect_debate_context(session_id, debate_id) is None
@@ -1280,7 +1386,7 @@ def _verify_consensus_context(
 
     _require(bool(context.events), _CHECK_NAMES[7])
     conversation_id = context.events[0].conversation_id
-    sidecar = StoryRuntime(Workspace(workspace.root)).inspect_debate_context(
+    sidecar = StoryRuntime(workspace).inspect_debate_context(
         result.session_id,
         result.debate_id,
     )
@@ -1292,9 +1398,10 @@ def _verify_consensus_context(
         "retained_utf8_bytes": context.retained_utf8_bytes,
         "truncated": context.truncated,
     }
-    persisted_events = FilesystemConversationEventStore(
-        Workspace(workspace.root)
-    ).read(result.session_id, conversation_id)
+    persisted_events = FilesystemConversationEventStore(workspace).read(
+        result.session_id,
+        conversation_id,
+    )
     _require(
         len(backend.requests) == 10
         and all(
@@ -1325,6 +1432,7 @@ def _verify_workspace_initialized(workspace: Workspace) -> None:
     ready = all(
         workspace.path(relative).is_dir()
         for relative in WORKSPACE_DIRECTORIES
+        if relative != "debug_logs"
     ) and all(
         workspace.path(AGENT_SPECS[agent_id].system_prompt_file).is_file()
         for agent_id in ROSTER
@@ -1407,7 +1515,7 @@ def _verify_consensus(workspace: Workspace, result: DebateResult) -> None:
     invariant and workspace failures propagate.
     """
 
-    inspected = StoryRuntime(Workspace(workspace.root)).inspect_debate(
+    inspected = StoryRuntime(workspace).inspect_debate(
         result.session_id,
         result.debate_id,
     )

@@ -1,0 +1,2119 @@
+"""End-to-end Antigravity parity tests with a deterministic fake CLI."""
+
+from __future__ import annotations
+
+import asyncio
+import inspect
+import json
+import os
+import signal
+import sys
+import tempfile
+import time
+import unittest
+from dataclasses import replace
+from pathlib import Path
+from unittest import mock
+
+from story_writing_agents import (
+    AgentBackend,
+    AgentReply,
+    AgentRequest,
+    BackendProtocolError,
+    CHARACTER_CUSTODIAN,
+    ConversationContextWindow,
+    ConversationEventKind,
+    ConversationMemoryService,
+    ConversationReply,
+    ConversationRequest,
+    ConversationRetrievalAction,
+    ConversationRetrievalAnswerAction,
+    ConversationRetrievalObservation,
+    ConversationRetrievalReply,
+    ConversationRetrievalRequest,
+    ConversationRetrievalSearchAction,
+    ConversationRetrievalSearchObservation,
+    ConversationRetrievalSemanticError,
+    ConversationSearchScope,
+    DebateStatus,
+    FilesystemConversationCatalog,
+    FilesystemConversationEventStore,
+    PLOT_ARCHITECT,
+    Phase,
+    ROSTER,
+    SessionAccessState,
+    SessionDurableState,
+    SessionPausedError,
+    StoryRuntime,
+    Verdict,
+)
+from story_writing_agents.config import ConfigManager
+from story_writing_agents.prompts import PromptAssembler
+from story_writing_agents.provider_adapter import ProviderResult
+
+from tests.helpers import initialized_workspace
+
+
+_PROCESS_EXIT_HANDSHAKE_SECONDS = 2.0
+_PROCESS_TERMINATE_GRACE_SECONDS = 0.5
+_PROCESS_KILL_GRACE_SECONDS = 1.0
+_PROCESS_POLL_INTERVAL_SECONDS = 0.01
+
+
+_FAKE_AGY = r"""#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path
+import signal
+import sys
+import threading
+
+argv = sys.argv[1:]
+if "--help" in argv:
+    print("--conversation --disable-slash-commands --input-format --json-schema "
+          "--mode --output-format --print-timeout --project --sandbox")
+    raise SystemExit(0)
+
+mode = os.environ.get("STORY_FAKE_AGY_MODE", "ok")
+log_path = Path(os.environ["STORY_FAKE_AGY_LOG"])
+
+def option(name):
+    try:
+        return argv[argv.index(name) + 1]
+    except ValueError:
+        return None
+
+def append(value):
+    with log_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(value, ensure_ascii=False, separators=(",", ":")) + "\n")
+
+def emit(value):
+    print(json.dumps(value, ensure_ascii=False, separators=(",", ":")), flush=True)
+
+def matches_schema(value, specification):
+    if "anyOf" in specification:
+        return any(matches_schema(value, branch) for branch in specification["anyOf"])
+    expected_type = specification.get("type")
+    if isinstance(expected_type, list):
+        return any(
+            matches_schema(value, dict(specification, type=branch_type))
+            for branch_type in expected_type
+        )
+    if expected_type == "object":
+        if not isinstance(value, dict):
+            return False
+        properties = specification.get("properties", {})
+        if any(field not in value for field in specification.get("required", [])):
+            return False
+        if specification.get("additionalProperties") is False and not set(value) <= set(properties):
+            return False
+        return all(
+            field not in value or matches_schema(value[field], child)
+            for field, child in properties.items()
+        )
+    if expected_type == "array":
+        return isinstance(value, list) and all(
+            matches_schema(item, specification.get("items", {})) for item in value
+        )
+    if expected_type == "string":
+        if not isinstance(value, str):
+            return False
+        if "minLength" in specification and len(value) < specification["minLength"]:
+            return False
+    elif expected_type == "integer":
+        if isinstance(value, bool) or not isinstance(value, int):
+            return False
+        if "minimum" in specification and value < specification["minimum"]:
+            return False
+    elif expected_type == "boolean":
+        if not isinstance(value, bool):
+            return False
+    elif expected_type == "null":
+        if value is not None:
+            return False
+    if "enum" in specification and value not in specification["enum"]:
+        return False
+    return True
+
+raw_stdin = sys.stdin.buffer.read()
+stdin_text = raw_stdin.decode("utf-8", errors="strict")
+lines = stdin_text.splitlines()
+if len(lines) != 1:
+    raise SystemExit(80)
+user_event = json.loads(lines[0])
+if set(user_event) != {"event", "message"} or user_event["event"] != "user":
+    raise SystemExit(81)
+if set(user_event["message"]) != {"content"}:
+    raise SystemExit(82)
+payload = json.loads(user_event["message"]["content"])
+schema = json.loads(option("--json-schema"))
+provider_state = Path(next(value.split("=", 1)[1] for value in argv if value.startswith("--gemini_dir=")))
+resumed_id = option("--conversation")
+known_path = provider_state / ".fake-known-conversations.json"
+known_ids = set(json.loads(known_path.read_text(encoding="utf-8"))) if known_path.exists() else set()
+if resumed_id is None:
+    counter_path = provider_state / ".fake-counter"
+    counter = int(counter_path.read_text(encoding="ascii")) + 1 if counter_path.exists() else 1
+    counter_path.write_text(str(counter), encoding="ascii")
+    fingerprint = Path.cwd().parent.name[:8]
+    conversation_id = (
+        f"agy-{payload.get('session_id', 'session')}-"
+        f"{payload.get('agent_id', 'agent')}-{fingerprint}-{counter}"
+    )
+    known_ids.add(conversation_id)
+    known_path.write_text(
+        json.dumps(sorted(known_ids), separators=(",", ":")),
+        encoding="utf-8",
+    )
+    resume_known = True
+else:
+    conversation_id = resumed_id
+    resume_known = resumed_id in known_ids
+
+def terminated(_signum, _frame):
+    append({"terminated": True, "pid": os.getpid()})
+    raise SystemExit(143)
+
+if mode == "hang":
+    signal.signal(signal.SIGTERM, terminated)
+elif mode == "ignore_term":
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+
+append({
+    "argv": argv,
+    "cwd": str(Path.cwd()),
+    "provider_state": str(provider_state),
+    "stdin_event_count": len(lines),
+    "payload_keys": list(payload),
+    "session_id": payload.get("session_id"),
+    "agent_id": payload.get("agent_id"),
+    "phase": payload.get("phase"),
+    "revision_id": payload.get("revision_id"),
+    "conversation_id": payload.get("conversation_id"),
+    "turn_id": payload.get("turn_id"),
+    "retrieval_action_index": payload.get("retrieval", {}).get("action_index"),
+    "resumed_id": resumed_id,
+    "resume_known": resume_known,
+    "schema": schema,
+    "pid": os.getpid(),
+})
+
+fail_action = os.environ.get("STORY_FAKE_AGY_FAIL_ACTION")
+if (
+    fail_action is not None
+    and payload.get("retrieval", {}).get("action_index") != int(fail_action)
+):
+    mode = "ok"
+
+if mode == "nonzero":
+    print("CONFIDENTIAL_PROVIDER_STDERR", file=sys.stderr)
+    raise SystemExit(7)
+if not resume_known:
+    print("CONFIDENTIAL_UNKNOWN_CONVERSATION", file=sys.stderr)
+    raise SystemExit(84)
+if mode == "hang":
+    threading.Event().wait()
+if mode == "ignore_term":
+    threading.Event().wait()
+
+if "operation" in payload and payload["operation"] == "conversation_retrieval":
+    action_index = payload["retrieval"]["action_index"]
+    if action_index == 1:
+        output = {"action": {
+            "kind": "search_conversations",
+            "session_id": payload["session_id"],
+            "conversation_id": payload["conversation_id"],
+            "turn_id": payload["turn_id"],
+            "action_index": action_index,
+            "query": "bounded query",
+        }}
+    else:
+        output = {"action": {
+            "kind": "answer",
+            "session_id": payload["session_id"],
+            "conversation_id": payload["conversation_id"],
+            "turn_id": payload["turn_id"],
+            "action_index": action_index,
+            "content": "retrieval answer",
+            "citation_ids": [],
+        }}
+elif "conversation_id" in payload:
+    output = {
+        "session_id": payload["session_id"],
+        "conversation_id": payload["conversation_id"],
+        "turn_id": payload["turn_id"],
+        "content": "conversation answer",
+    }
+elif payload["phase"] == "audit":
+    output = {
+        "revision_id": payload["revision_id"],
+        "verdict": "approve",
+        "content": "",
+    }
+elif payload["phase"] == "finalize":
+    output = {
+        "revision_id": payload["revision_id"],
+        "core_updates": [{
+            "filename": "global_outline.md",
+            "content": "bounded outline update",
+        }],
+    }
+else:
+    output = {
+        "revision_id": payload["revision_id"],
+        "content": "reply-" + payload["phase"],
+    }
+
+if mode == "schema_result":
+    output = {"CONFIDENTIAL_PROVIDER_OUTPUT": True}
+elif mode == "empty_required_string":
+    output["content"] = ""
+elif mode == "debate_revision_mismatch":
+    output["revision_id"] = "other-revision"
+elif mode.startswith("direct_"):
+    output[mode.removeprefix("direct_")] = "other-identity"
+elif mode.startswith("retrieval_"):
+    field = mode.removeprefix("retrieval_")
+    if field == "action_index":
+        output["action"][field] += 1
+    else:
+        output["action"][field] = "other-identity"
+
+if mode != "schema_result" and not matches_schema(output, schema):
+    raise SystemExit(83)
+
+stream_id = conversation_id
+if mode == "unsafe_id":
+    stream_id = "--CONFIDENTIAL_PROVIDER_ID"
+elif mode == "mismatched_id":
+    stream_id = "different-conversation"
+
+if mode == "malformed":
+    sys.stdout.buffer.write(b'{"event":')
+    raise SystemExit(0)
+if mode == "invalid_utf8":
+    sys.stdout.buffer.write(b"\xff")
+    raise SystemExit(0)
+if mode == "envelope":
+    print("[]", flush=True)
+    raise SystemExit(0)
+if mode == "truncated":
+    emit({"event": "init", "conversation_id": stream_id, "init": {}})
+    raise SystemExit(0)
+
+init = {"event": "init", "conversation_id": stream_id, "init": {}}
+terminal = {
+    "conversation_id": stream_id,
+    "status": "FAILED_CONFIDENTIAL_STATUS" if mode == "non_success" else "SUCCESS",
+}
+if mode == "missing_id":
+    init.pop("conversation_id")
+    terminal.pop("conversation_id")
+if mode == "bad_output":
+    terminal["structured_output"] = ["CONFIDENTIAL_PROVIDER_OUTPUT"]
+elif mode == "text_fallback":
+    terminal["response"] = json.dumps(output, ensure_ascii=False, separators=(",", ":"))
+else:
+    terminal["structured_output"] = output
+
+emit(init)
+if mode == "unexpected":
+    emit({"event": "CONFIDENTIAL_UNEXPECTED_EVENT"})
+else:
+    emit({"event": "step_update", "step_update": {}})
+emit({"event": "result", "result": terminal})
+"""
+
+
+_WINDOWS_FAKE_AGY_LAUNCHER = r"""import ctypes
+from ctypes import wintypes
+import os
+import subprocess
+import sys
+
+
+JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
+SYNCHRONIZE = 0x00100000
+WAIT_OBJECT_0 = 0
+WAIT_FAILED = 0xFFFFFFFF
+INFINITE = 0xFFFFFFFF
+
+
+class _IO_COUNTERS(ctypes.Structure):
+    _fields_ = [
+        ("ReadOperationCount", ctypes.c_ulonglong),
+        ("WriteOperationCount", ctypes.c_ulonglong),
+        ("OtherOperationCount", ctypes.c_ulonglong),
+        ("ReadTransferCount", ctypes.c_ulonglong),
+        ("WriteTransferCount", ctypes.c_ulonglong),
+        ("OtherTransferCount", ctypes.c_ulonglong),
+    ]
+
+
+class _JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+    _fields_ = [
+        ("PerProcessUserTimeLimit", ctypes.c_longlong),
+        ("PerJobUserTimeLimit", ctypes.c_longlong),
+        ("LimitFlags", wintypes.DWORD),
+        ("MinimumWorkingSetSize", ctypes.c_size_t),
+        ("MaximumWorkingSetSize", ctypes.c_size_t),
+        ("ActiveProcessLimit", wintypes.DWORD),
+        ("Affinity", ctypes.c_size_t),
+        ("PriorityClass", wintypes.DWORD),
+        ("SchedulingClass", wintypes.DWORD),
+    ]
+
+
+class _JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+    _fields_ = [
+        ("BasicLimitInformation", _JOBOBJECT_BASIC_LIMIT_INFORMATION),
+        ("IoInfo", _IO_COUNTERS),
+        ("ProcessMemoryLimit", ctypes.c_size_t),
+        ("JobMemoryLimit", ctypes.c_size_t),
+        ("PeakProcessMemoryUsed", ctypes.c_size_t),
+        ("PeakJobMemoryUsed", ctypes.c_size_t),
+    ]
+
+
+def main():
+    if os.name != "nt":
+        raise RuntimeError("the fake Antigravity job launcher requires Windows")
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateJobObjectW.argtypes = (ctypes.c_void_p, wintypes.LPCWSTR)
+    kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel32.SetInformationJobObject.argtypes = (
+        wintypes.HANDLE,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+    )
+    kernel32.SetInformationJobObject.restype = wintypes.BOOL
+    kernel32.AssignProcessToJobObject.argtypes = (
+        wintypes.HANDLE,
+        wintypes.HANDLE,
+    )
+    kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+    kernel32.OpenProcess.argtypes = (
+        wintypes.DWORD,
+        wintypes.BOOL,
+        wintypes.DWORD,
+    )
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.WaitForMultipleObjects.argtypes = (
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.HANDLE),
+        wintypes.BOOL,
+        wintypes.DWORD,
+    )
+    kernel32.WaitForMultipleObjects.restype = wintypes.DWORD
+    kernel32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+    kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    job_handle = None
+    parent_handle = None
+    child = None
+    child_handle = None
+    child_assigned = False
+    cleanup_error = None
+    result = 1
+    try:
+        job_handle = kernel32.CreateJobObjectW(None, None)
+        if not job_handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+        limits = _JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not kernel32.SetInformationJobObject(
+            job_handle,
+            JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+            ctypes.byref(limits),
+            ctypes.sizeof(limits),
+        ):
+            raise ctypes.WinError(ctypes.get_last_error())
+
+        parent_handle = kernel32.OpenProcess(SYNCHRONIZE, False, os.getppid())
+        if not parent_handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+
+        child = subprocess.Popen([sys.executable, sys.argv[1], *sys.argv[2:]])
+        child_handle = wintypes.HANDLE(int(child._handle))
+        if not kernel32.AssignProcessToJobObject(job_handle, child_handle):
+            if child.poll() is None:
+                raise ctypes.WinError(ctypes.get_last_error())
+            result = child.wait()
+        else:
+            child_assigned = True
+            handles = (wintypes.HANDLE * 2)(parent_handle, child_handle)
+            wait_result = kernel32.WaitForMultipleObjects(
+                len(handles),
+                handles,
+                False,
+                INFINITE,
+            )
+            if wait_result == WAIT_OBJECT_0:
+                result = 143
+            elif wait_result == WAIT_OBJECT_0 + 1:
+                result = child.wait()
+            elif wait_result == WAIT_FAILED:
+                raise ctypes.WinError(ctypes.get_last_error())
+            else:
+                raise RuntimeError(f"unexpected process wait result: {wait_result}")
+    finally:
+        job_closed = True
+        try:
+            if job_handle:
+                if not kernel32.CloseHandle(job_handle):
+                    job_closed = False
+                    cleanup_error = ctypes.WinError(ctypes.get_last_error())
+                job_handle = None
+        finally:
+            try:
+                if child is not None:
+                    try:
+                        if child.poll() is None:
+                            if not child_assigned or not job_closed:
+                                child.kill()
+                            elif kernel32.WaitForSingleObject(child_handle, 5000) != 0:
+                                child.kill()
+                            child.wait()
+                    finally:
+                        child._handle.Close()
+            finally:
+                if parent_handle:
+                    if (
+                        not kernel32.CloseHandle(parent_handle)
+                        and cleanup_error is None
+                    ):
+                        cleanup_error = ctypes.WinError(ctypes.get_last_error())
+                    parent_handle = None
+    if cleanup_error is not None:
+        raise cleanup_error
+    return result
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+"""
+
+
+def _empty_context() -> ConversationContextWindow:
+    return ConversationContextWindow(
+        events=(),
+        total_complete_turns=0,
+        retained_turns=0,
+        omitted_turns=0,
+        retained_utf8_bytes=0,
+        truncated=False,
+    )
+
+
+class _RetrievalHandler:
+    """Return one empty search observation, then the provider answer."""
+
+    def __init__(self) -> None:
+        self.actions: list[ConversationRetrievalAction] = []
+
+    def handle_conversation_retrieval_action(
+        self,
+        action: ConversationRetrievalAction,
+    ) -> ConversationRetrievalObservation | ConversationRetrievalReply:
+        self.actions.append(action)
+        if type(action) is ConversationRetrievalSearchAction:
+            return ConversationRetrievalSearchObservation(
+                session_id=action.session_id,
+                conversation_id=action.conversation_id,
+                turn_id=action.turn_id,
+                action_index=action.action_index,
+                hits=(),
+                truncated=False,
+            )
+        assert type(action) is ConversationRetrievalAnswerAction
+        return ConversationRetrievalReply(
+            session_id=action.session_id,
+            conversation_id=action.conversation_id,
+            turn_id=action.turn_id,
+            content=action.content,
+            sources=(),
+        )
+
+
+class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
+    """Exercise Antigravity through the real shared backend/process boundary."""
+
+    def setUp(self) -> None:
+        self.workspace = initialized_workspace(self)
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.fake_directory = Path(temporary.name)
+        self.fake_script = self.fake_directory / "fake-agy.py"
+        self.fake_script.write_text(_FAKE_AGY, encoding="utf-8")
+        self.windows_launcher = self.fake_directory / "fake-agy-windows-launcher.py"
+        if os.name == "nt":
+            self.windows_launcher.write_text(
+                _WINDOWS_FAKE_AGY_LAUNCHER,
+                encoding="utf-8",
+            )
+            self.executable = self.fake_directory / "fake-agy.cmd"
+            self.executable.write_text(
+                f'@"{sys.executable}" "{self.windows_launcher}" '
+                f'"{self.fake_script}" %*\r\n'
+                "@exit /b %errorlevel%\r\n",
+                encoding="utf-8",
+            )
+        else:
+            self.executable = self.fake_script
+            self.executable.chmod(0o755)
+        self.log_path = self.fake_directory / "invocations.jsonl"
+        self.environment = mock.patch.dict(
+            os.environ,
+            {
+                "STORY_FAKE_AGY_LOG": str(self.log_path),
+                "STORY_FAKE_AGY_MODE": "ok",
+                "STORY_PRIVATE_CREDENTIAL": "CONFIDENTIAL_CREDENTIAL",
+            },
+        )
+        self.environment.start()
+        os.environ.pop("STORY_FAKE_AGY_FAIL_ACTION", None)
+        self.addCleanup(self.environment.stop)
+
+    def definition(self, agent_id: str = PLOT_ARCHITECT, *, backend: str = "antigravity"):
+        return PromptAssembler(
+            self.workspace,
+            backend_overrides={agent_id: backend},
+        ).build_definition(
+            session_id="definition-session",
+            agent_id=agent_id,
+        )
+
+    def backend(self, *, timeout_seconds: float = 4) -> AgentBackend:
+        backend = AgentBackend(
+            self.workspace,
+            executable=str(self.fake_directory / "unused-codex"),
+            antigravity_executable=str(self.executable),
+            timeout_seconds=timeout_seconds,
+        )
+        self.addCleanup(backend.close)
+        return backend
+
+    def request(
+        self,
+        *,
+        session_id: str,
+        debate_id: str,
+        phase: Phase,
+        agent_id: str = PLOT_ARCHITECT,
+        revision_id: str = "r0",
+    ) -> AgentRequest:
+        return AgentRequest(
+            session_id=session_id,
+            debate_id=debate_id,
+            agent_id=agent_id,
+            phase=phase,
+            round_number=0,
+            revision_id=revision_id,
+            task="PRIVATE_STORY_TASK",
+            user_payload="PRIVATE_STORY_PAYLOAD",
+            candidate_payload="PRIVATE_STORY_CANDIDATE",
+        )
+
+    def invocations(self) -> list[dict[str, object]]:
+        if not self.log_path.exists():
+            return []
+        snapshot = self.log_path.read_bytes()
+        return [
+            json.loads(record.decode("utf-8", errors="strict"))
+            for record in snapshot.split(b"\n")[:-1]
+            if record
+        ]
+
+    def provider_invocations(self) -> list[dict[str, object]]:
+        return [item for item in self.invocations() if "argv" in item]
+
+    def manifest(self, session_id: str) -> dict[str, object]:
+        return self.workspace.read_json(
+            "agent_states/orchestrator_state/provider_sessions/"
+            f"{session_id}.json"
+        )
+
+    async def wait_for_invocations(self, count: int) -> None:
+        """Wait only for the fake process readiness record, with a hard bound."""
+
+        for _ in range(200):
+            if len(self.provider_invocations()) >= count:
+                return
+            await asyncio.sleep(0.01)
+        self.fail(f"fake Antigravity did not record {count} invocations")
+
+    @staticmethod
+    def _process_is_running(pid: int) -> bool:
+        """Return whether one exact PID is still active on this platform."""
+
+        if os.name == "nt":
+            import ctypes
+            from ctypes import wintypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.OpenProcess.argtypes = (
+                wintypes.DWORD,
+                wintypes.BOOL,
+                wintypes.DWORD,
+            )
+            kernel32.OpenProcess.restype = wintypes.HANDLE
+            kernel32.GetExitCodeProcess.argtypes = (
+                wintypes.HANDLE,
+                ctypes.POINTER(wintypes.DWORD),
+            )
+            kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+            kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+            kernel32.CloseHandle.restype = wintypes.BOOL
+            handle = kernel32.OpenProcess(0x1000, False, pid)
+            if not handle:
+                error = ctypes.get_last_error()
+                if error == 87:
+                    return False
+                if error == 5:
+                    return True
+                raise OSError(error, "cannot inspect fake Antigravity process")
+            try:
+                exit_code = wintypes.DWORD()
+                if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                    return False
+                return exit_code.value == 259
+            finally:
+                kernel32.CloseHandle(handle)
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+
+    @classmethod
+    def _wait_for_process_exit(
+        cls,
+        pid: int,
+        *,
+        timeout_seconds: float,
+    ) -> bool:
+        """Poll one exact PID for a bounded process-cleanup handshake."""
+
+        deadline = time.monotonic() + timeout_seconds
+        while cls._process_is_running(pid):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            time.sleep(min(_PROCESS_POLL_INTERVAL_SECONDS, remaining))
+        return True
+
+    @staticmethod
+    def _hard_kill_process(pid: int) -> None:
+        """Force-stop one exact PID using the platform's hard-kill primitive."""
+
+        if os.name != "nt":
+            os.kill(pid, signal.SIGKILL)
+            return
+
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = (
+            wintypes.DWORD,
+            wintypes.BOOL,
+            wintypes.DWORD,
+        )
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.TerminateProcess.argtypes = (
+            wintypes.HANDLE,
+            wintypes.UINT,
+        )
+        kernel32.TerminateProcess.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        handle = kernel32.OpenProcess(0x0001, False, pid)
+        if not handle:
+            error = ctypes.get_last_error()
+            if error == 87:
+                return
+            raise OSError(error, "cannot open fake Antigravity process to kill")
+        try:
+            if not kernel32.TerminateProcess(handle, 137):
+                error = ctypes.get_last_error()
+                if error != 5:
+                    raise OSError(error, "cannot kill fake Antigravity process")
+        finally:
+            kernel32.CloseHandle(handle)
+
+    def assert_fake_process_stopped(self, pid: int) -> None:
+        """Allow bounded launcher cleanup, then fail after reaping an orphan."""
+
+        if self._wait_for_process_exit(
+            pid,
+            timeout_seconds=_PROCESS_EXIT_HANDSHAKE_SECONDS,
+        ):
+            return
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+        if not self._wait_for_process_exit(
+            pid,
+            timeout_seconds=_PROCESS_TERMINATE_GRACE_SECONDS,
+        ):
+            try:
+                self._hard_kill_process(pid)
+            except OSError:
+                pass
+            if not self._wait_for_process_exit(
+                pid,
+                timeout_seconds=_PROCESS_KILL_GRACE_SECONDS,
+            ):
+                self.fail(
+                    "fake Antigravity process remained active after emergency "
+                    f"hard-kill cleanup: {pid}"
+                )
+        self.fail(
+            "fake Antigravity process exceeded the 2-second cleanup handshake: "
+            f"{pid}"
+        )
+
+    def test_invocation_reader_ignores_incomplete_trailing_utf8_record(self) -> None:
+        complete = b'{"record":1}\n'
+        trailing = json.dumps(
+            {"record": "한"},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        multibyte = "한".encode("utf-8")
+        split_at = trailing.index(multibyte) + 1
+        self.log_path.write_bytes(complete + trailing[:split_at])
+
+        self.assertEqual(self.invocations(), [{"record": 1}])
+
+        with self.log_path.open("ab") as handle:
+            handle.write(trailing[split_at:] + b"\n")
+        self.assertEqual(
+            self.invocations(),
+            [{"record": 1}, {"record": "한"}],
+        )
+
+    def test_process_exit_handshake_is_bounded_and_hard_kill_is_strict(
+        self,
+    ) -> None:
+        with (
+            mock.patch.object(
+                type(self),
+                "_process_is_running",
+                side_effect=(True, True, False),
+            ) as is_running,
+            mock.patch.object(time, "sleep") as sleep,
+        ):
+            self.assertTrue(
+                self._wait_for_process_exit(123, timeout_seconds=1)
+            )
+        self.assertEqual(is_running.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+
+        with (
+            mock.patch.object(
+                type(self),
+                "_process_is_running",
+                return_value=True,
+            ),
+            mock.patch.object(time, "monotonic", side_effect=(0.0, 1.0)),
+            mock.patch.object(time, "sleep") as sleep,
+        ):
+            self.assertFalse(
+                self._wait_for_process_exit(123, timeout_seconds=0.5)
+            )
+        sleep.assert_not_called()
+
+        with (
+            mock.patch.object(
+                self,
+                "_wait_for_process_exit",
+                side_effect=(False, False, True),
+            ) as wait_for_exit,
+            mock.patch.object(os, "kill") as terminate,
+            mock.patch.object(self, "_hard_kill_process") as hard_kill,
+            self.assertRaisesRegex(AssertionError, "2-second cleanup handshake"),
+        ):
+            self.assert_fake_process_stopped(123)
+        self.assertEqual(wait_for_exit.call_count, 3)
+        terminate.assert_called_once_with(123, signal.SIGTERM)
+        hard_kill.assert_called_once_with(123)
+
+    def test_windows_cleanup_launcher_is_syntax_valid_and_selected_portably(
+        self,
+    ) -> None:
+        launcher_code = compile(
+            _WINDOWS_FAKE_AGY_LAUNCHER,
+            "fake-agy-windows-launcher.py",
+            "exec",
+        )
+        launcher_namespace = {"__name__": "fake_agy_windows_launcher"}
+        exec(launcher_code, launcher_namespace)
+        self.assertIn("main", launcher_namespace)
+
+        if os.name == "nt":
+            command = self.executable.read_text(encoding="utf-8")
+            self.assertTrue(self.windows_launcher.is_file())
+            self.assertEqual(
+                self.windows_launcher.read_text(encoding="utf-8"),
+                _WINDOWS_FAKE_AGY_LAUNCHER,
+            )
+            self.assertIn(str(self.windows_launcher), command)
+            self.assertIn(str(self.fake_script), command)
+        else:
+            self.assertEqual(self.executable, self.fake_script)
+            self.assertFalse(self.windows_launcher.exists())
+
+    async def test_all_phases_direct_and_retrieval_conversation_are_correlated(
+        self,
+    ) -> None:
+        session_id = "parity-session"
+        backend = self.backend()
+        backend.create_session_with_access(session_id)
+        bound = await backend.bind(self.definition())
+
+        phase_replies: dict[Phase, AgentReply] = {}
+        for phase in Phase:
+            phase_replies[phase] = await bound.invoke(
+                self.request(
+                    session_id=session_id,
+                    debate_id=f"debate-{phase.value}",
+                    phase=phase,
+                    revision_id=f"r-{phase.value}",
+                )
+            )
+
+        for phase in (Phase.DRAFT, Phase.PROPOSE_REVISION, Phase.SYNTHESIZE):
+            self.assertEqual(phase_replies[phase].content, f"reply-{phase.value}")
+        for phase, reply in phase_replies.items():
+            self.assertEqual(reply.revision_id, f"r-{phase.value}")
+        self.assertIs(phase_replies[Phase.AUDIT].verdict, Verdict.APPROVE)
+        self.assertEqual(
+            dict(phase_replies[Phase.FINALIZE].core_updates),
+            {"global_outline.md": "bounded outline update"},
+        )
+
+        conversation = ConversationRequest(
+            session_id=session_id,
+            conversation_id="conversation-one",
+            turn_id="turn-direct",
+            agent_id=PLOT_ARCHITECT,
+            content="PRIVATE_DIRECT_REQUEST",
+            context=_empty_context(),
+        )
+        self.assertEqual(
+            await bound.converse(conversation),
+            ConversationReply(
+                session_id,
+                "conversation-one",
+                "turn-direct",
+                "conversation answer",
+            ),
+        )
+
+        retrieval = ConversationRetrievalRequest(
+            session_id=session_id,
+            conversation_id="conversation-one",
+            turn_id="turn-retrieval",
+            agent_id=PLOT_ARCHITECT,
+            content="PRIVATE_RETRIEVAL_REQUEST",
+            context=_empty_context(),
+        )
+        handler = _RetrievalHandler()
+        retrieval_reply = await bound.converse_with_retrieval(retrieval, handler)
+        self.assertEqual(retrieval_reply.content, "retrieval answer")
+        self.assertEqual(
+            tuple(type(action) for action in handler.actions),
+            (ConversationRetrievalSearchAction, ConversationRetrievalAnswerAction),
+        )
+        self.assertEqual(
+            [action.action_index for action in handler.actions],
+            [1, 2],
+        )
+
+        invocations = self.invocations()
+        self.assertEqual(len(invocations), len(Phase) + 3)
+        self.assertIsNone(invocations[0]["resumed_id"])
+        thread_id = invocations[1]["resumed_id"]
+        self.assertIsInstance(thread_id, str)
+        self.assertTrue(
+            all(item["resumed_id"] == thread_id for item in invocations[1:])
+        )
+        phase_invocations = invocations[: len(Phase)]
+        self.assertEqual(
+            [
+                (
+                    item["session_id"],
+                    item["agent_id"],
+                    item["phase"],
+                    item["revision_id"],
+                )
+                for item in phase_invocations
+            ],
+            [
+                (
+                    session_id,
+                    PLOT_ARCHITECT,
+                    phase.value,
+                    f"r-{phase.value}",
+                )
+                for phase in Phase
+            ],
+        )
+        self.assertEqual(
+            [item["retrieval_action_index"] for item in invocations[-2:]],
+            [1, 2],
+        )
+        for item in invocations:
+            argv = item["argv"]
+            assert isinstance(argv, list)
+            command_text = "\0".join(argv)
+            self.assertEqual(item["stdin_event_count"], 1)
+            self.assertIn("--input-format", argv)
+            self.assertIn("stream-json", argv)
+            self.assertIn("--output-format", argv)
+            self.assertIn("--json-schema", argv)
+            self.assertIn("--sandbox", argv)
+            self.assertIn("--disable-slash-commands", argv)
+            self.assertTrue(
+                any(value.startswith("--gemini_dir=") for value in argv)
+            )
+            for secret in (
+                "PRIVATE_STORY_TASK",
+                "PRIVATE_STORY_PAYLOAD",
+                "PRIVATE_STORY_CANDIDATE",
+                "PRIVATE_DIRECT_REQUEST",
+                "PRIVATE_RETRIEVAL_REQUEST",
+                "CONFIDENTIAL_CREDENTIAL",
+            ):
+                self.assertNotIn(secret, command_text)
+            cwd = Path(item["cwd"])
+            provider_state = Path(item["provider_state"])
+            self.assertEqual(cwd.name, "workspace")
+            self.assertEqual(provider_state.name, "provider")
+            self.assertEqual(cwd.parent, provider_state.parent)
+            self.assertTrue(cwd.is_relative_to(self.workspace.root))
+            self.assertTrue(provider_state.is_relative_to(self.workspace.root))
+
+    async def test_only_provider_known_same_state_conversations_can_resume(
+        self,
+    ) -> None:
+        self.assertEqual(os.environ["STORY_FAKE_AGY_MODE"], "ok")
+        self.assertNotIn("STORY_FAKE_AGY_FAIL_ACTION", os.environ)
+        backend = self.backend()
+        bound = await backend.bind(self.definition())
+        sessions = (
+            "known-resume",
+            "foreign-resume",
+            "unknown-resume",
+        )
+        for session_id in sessions:
+            backend.create_session_with_access(session_id)
+            await bound.invoke(
+                self.request(
+                    session_id=session_id,
+                    debate_id="seed",
+                    phase=Phase.DRAFT,
+                )
+            )
+
+        await bound.invoke(
+            self.request(
+                session_id="known-resume",
+                debate_id="same-state",
+                phase=Phase.SYNTHESIZE,
+            )
+        )
+        same_state = self.provider_invocations()[-1]
+        self.assertIs(same_state["resume_known"], True)
+        known_thread_id = self.manifest("known-resume")["provider_threads"][
+            "antigravity:plot_architect"
+        ]["thread_id"]
+        self.assertEqual(same_state["resumed_id"], known_thread_id)
+
+        substitutions = (
+            ("foreign-resume", known_thread_id),
+            ("unknown-resume", "unknown-conversation"),
+        )
+        for session_id, substituted_thread_id in substitutions:
+            with self.subTest(session_id=session_id):
+                manifest = self.manifest(session_id)
+                manifest["provider_threads"]["antigravity:plot_architect"][
+                    "thread_id"
+                ] = substituted_thread_id
+                backend._write_manifest(session_id, manifest)
+                with self.assertRaises(BackendProtocolError) as caught:
+                    await bound.invoke(
+                        self.request(
+                            session_id=session_id,
+                            debate_id="rejected-resume",
+                            phase=Phase.DRAFT,
+                        )
+                    )
+                self.assertEqual(
+                    str(caught.exception),
+                    "Antigravity CLI exited with status 84",
+                )
+                rejected = self.provider_invocations()[-1]
+                self.assertEqual(rejected["resumed_id"], substituted_thread_id)
+                self.assertIs(rejected["resume_known"], False)
+                self.assertIs(
+                    self.manifest(session_id)["provider_threads"]
+                    ["antigravity:plot_architect"]["tainted"],
+                    True,
+                )
+
+    async def test_story_runtime_runs_consensus_and_persists_conversation(self) -> None:
+        loop = asyncio.get_running_loop()
+        prior_slow_callback_duration = loop.slow_callback_duration
+        loop.slow_callback_duration = 1
+        self.addCleanup(
+            setattr,
+            loop,
+            "slow_callback_duration",
+            prior_slow_callback_duration,
+        )
+        session_id = "runtime-session"
+        backend = AgentBackend(
+            self.workspace,
+            executable=str(self.fake_directory / "unused-codex"),
+            antigravity_executable=str(self.executable),
+            backend_overrides={agent_id: "antigravity" for agent_id in ROSTER},
+        )
+        self.addCleanup(backend.close)
+        backend.create_session_with_access(session_id)
+        runtime = StoryRuntime(self.workspace, backend)
+
+        result = await runtime.run_prompt(
+            session_id,
+            "PRIVATE_RUNTIME_PROMPT",
+            debate_id="runtime-debate",
+            output_path="part-01/runtime-result.md",
+        )
+        self.assertIs(result.status, DebateStatus.CONSENSUS)
+        self.assertEqual(result.final_candidate, "reply-draft")
+        self.assertEqual(
+            runtime.artifacts.read_text("manuscript/part-01/runtime-result.md"),
+            "reply-draft",
+        )
+        debate_calls = self.provider_invocations()
+        self.assertEqual(
+            [call["phase"] for call in debate_calls],
+            ["draft", "audit", "audit", "audit", "finalize"],
+        )
+        self.assertTrue(all(call["session_id"] == session_id for call in debate_calls))
+
+        metadata = FilesystemConversationCatalog(self.workspace).create(
+            session_id,
+            "bounded runtime subject",
+        )
+        conversation = await runtime.converse(
+            session_id,
+            metadata.conversation_id,
+            PLOT_ARCHITECT,
+            "PRIVATE_RUNTIME_CONVERSATION",
+        )
+        self.assertEqual(conversation.content, "conversation answer")
+        persisted = runtime.conversation_event_store.read(
+            session_id,
+            metadata.conversation_id,
+        )
+        self.assertEqual(
+            [event.kind for event in persisted],
+            [ConversationEventKind.USER_MESSAGE, ConversationEventKind.AGENT_REPLY],
+        )
+        self.assertEqual(
+            persisted[-1].content,
+            "conversation answer",
+        )
+        manifest = self.manifest(session_id)
+        self.assertTrue(
+            all(key.startswith("antigravity:") for key in manifest["provider_threads"])
+        )
+        for call in self.provider_invocations():
+            argv_text = "\0".join(call["argv"])
+            self.assertNotIn("PRIVATE_RUNTIME_PROMPT", argv_text)
+            self.assertNotIn("PRIVATE_RUNTIME_CONVERSATION", argv_text)
+
+    async def test_story_runtime_retrieval_persists_success_and_safe_failures(
+        self,
+    ) -> None:
+        loop = asyncio.get_running_loop()
+        prior_slow_callback_duration = loop.slow_callback_duration
+        loop.slow_callback_duration = 1
+        self.addCleanup(
+            setattr,
+            loop,
+            "slow_callback_duration",
+            prior_slow_callback_duration,
+        )
+        backend = AgentBackend(
+            self.workspace,
+            executable=str(self.fake_directory / "unused-codex"),
+            antigravity_executable=str(self.executable),
+            backend_overrides={agent_id: "antigravity" for agent_id in ROSTER},
+        )
+        self.addCleanup(backend.close)
+        catalog = FilesystemConversationCatalog(self.workspace)
+        store = FilesystemConversationEventStore(
+            self.workspace,
+            catalog=catalog,
+        )
+        runtime = StoryRuntime(
+            self.workspace,
+            backend,
+            conversation_event_store=store,
+        )
+
+        success_session = "runtime-retrieval-success"
+        backend.create_session_with_access(success_session)
+        selected = catalog.create(success_session, "retrieval success")
+        memory = ConversationMemoryService(
+            ConversationSearchScope(success_session),
+            catalog,
+            store,
+        )
+        result = await runtime.converse_with_retrieval(
+            success_session,
+            selected.conversation_id,
+            PLOT_ARCHITECT,
+            "PRIVATE_RUNTIME_RETRIEVAL",
+            memory_service=memory,
+        )
+        self.assertEqual(result.content, "retrieval answer")
+        self.assertEqual(result.sources, ())
+        success_events = store.read(success_session, selected.conversation_id)
+        self.assertEqual(
+            tuple(event.kind for event in success_events),
+            (
+                ConversationEventKind.USER_MESSAGE,
+                ConversationEventKind.AGENT_REPLY,
+            ),
+        )
+        self.assertEqual(
+            tuple(event.turn_id for event in success_events),
+            (result.turn_id, result.turn_id),
+        )
+        self.assertEqual(
+            [call["retrieval_action_index"] for call in self.provider_invocations()[-2:]],
+            [1, 2],
+        )
+        success_state = backend.get_session_lifecycle(success_session)
+        self.assertEqual(
+            (success_state.durable_state, success_state.access_state),
+            (SessionDurableState.READY, SessionAccessState.HELD_HERE),
+        )
+
+        mismatch_modes = (
+            "retrieval_session_id",
+            "retrieval_conversation_id",
+            "retrieval_turn_id",
+            "retrieval_action_index",
+        )
+        for index, mode in enumerate(mismatch_modes):
+            with self.subTest(mode=mode):
+                session_id = f"runtime-retrieval-failure-{index}"
+                backend.create_session_with_access(session_id)
+                failed_conversation = catalog.create(session_id, mode)
+                failed_memory = ConversationMemoryService(
+                    ConversationSearchScope(session_id),
+                    catalog,
+                    store,
+                )
+                with (
+                    mock.patch.dict(
+                        os.environ,
+                        {"STORY_FAKE_AGY_MODE": mode},
+                    ),
+                    self.assertRaises(ConversationRetrievalSemanticError) as caught,
+                ):
+                    await runtime.converse_with_retrieval(
+                        session_id,
+                        failed_conversation.conversation_id,
+                        PLOT_ARCHITECT,
+                        "PRIVATE_RUNTIME_RETRIEVAL_FAILURE",
+                        memory_service=failed_memory,
+                    )
+
+                self.assertEqual(
+                    str(caught.exception),
+                    "conversation retrieval semantic validation failed",
+                )
+                failure_events = store.read(
+                    session_id,
+                    failed_conversation.conversation_id,
+                )
+                self.assertEqual(
+                    tuple(event.kind for event in failure_events),
+                    (
+                        ConversationEventKind.USER_MESSAGE,
+                        ConversationEventKind.RUNTIME_ERROR,
+                    ),
+                )
+                self.assertEqual(
+                    failure_events[-1].content,
+                    "ConversationRetrievalSemanticError: conversation retrieval "
+                    "semantic validation failed",
+                )
+                self.assertNotIn("other-identity", failure_events[-1].content)
+                failed_state = backend.get_session_lifecycle(session_id)
+                self.assertEqual(
+                    (failed_state.durable_state, failed_state.access_state),
+                    (SessionDurableState.READY, SessionAccessState.HELD_HERE),
+                )
+                self.assertIs(
+                    self.manifest(session_id)["provider_threads"]
+                    ["antigravity:plot_architect"]["tainted"],
+                    True,
+                )
+
+        for call in self.provider_invocations():
+            argv_text = "\0".join(call["argv"])
+            self.assertNotIn("PRIVATE_RUNTIME_RETRIEVAL", argv_text)
+            self.assertNotIn("PRIVATE_RUNTIME_RETRIEVAL_FAILURE", argv_text)
+
+    async def test_v2_lifecycle_partitions_threads_and_retains_exact_resume(
+        self,
+    ) -> None:
+        backend = self.backend()
+        first_state = backend.create_session_with_access("story-one")
+        backend.create_session_with_access("story-two")
+        self.assertEqual(
+            (first_state.durable_state, first_state.access_state),
+            (SessionDurableState.READY, SessionAccessState.HELD_HERE),
+        )
+        plot = self.definition()
+        codex_plot = self.definition(backend="codex")
+        self.assertEqual(plot.backend, "antigravity")
+        self.assertEqual(codex_plot.backend, "codex")
+        self.assertNotEqual(plot.fingerprint, codex_plot.fingerprint)
+        character = self.definition(CHARACTER_CUSTODIAN)
+        plot_bound = await backend.bind(plot)
+        character_bound = await backend.bind(character)
+
+        first = await plot_bound.invoke(
+            self.request(
+                session_id="story-one",
+                debate_id="plot-first",
+                phase=Phase.DRAFT,
+            )
+        )
+        await plot_bound.invoke(
+            self.request(
+                session_id="story-one",
+                debate_id="plot-resume",
+                phase=Phase.SYNTHESIZE,
+            )
+        )
+        await character_bound.invoke(
+            self.request(
+                session_id="story-one",
+                debate_id="character-first",
+                phase=Phase.DRAFT,
+                agent_id=CHARACTER_CUSTODIAN,
+            )
+        )
+        await plot_bound.invoke(
+            self.request(
+                session_id="story-two",
+                debate_id="other-session",
+                phase=Phase.DRAFT,
+            )
+        )
+        self.assertEqual(first.content, "reply-draft")
+
+        calls = self.invocations()
+        self.assertEqual(
+            [call["resumed_id"] is not None for call in calls],
+            [False, True, False, False],
+        )
+        self.assertEqual(calls[0]["provider_state"], calls[1]["provider_state"])
+        self.assertEqual(
+            len({call["provider_state"] for call in calls}),
+            3,
+        )
+        self.assertNotEqual(calls[0]["provider_state"], calls[2]["provider_state"])
+        self.assertNotEqual(calls[0]["provider_state"], calls[3]["provider_state"])
+        self.assertNotEqual(calls[2]["provider_state"], calls[3]["provider_state"])
+        manifest = self.manifest("story-one")
+        self.assertEqual(manifest["schema_version"], 2)
+        self.assertEqual(manifest["durable_state"], "ready")
+        self.assertEqual(
+            set(manifest["provider_threads"]),
+            {
+                "antigravity:plot_architect",
+                "antigravity:character_custodian",
+            },
+        )
+        plot_thread = manifest["provider_threads"]["antigravity:plot_architect"]
+        self.assertEqual(
+            set(plot_thread),
+            {
+                "backend",
+                "agent_id",
+                "fingerprint",
+                "thread_id",
+                "tainted",
+                "updated_at",
+            },
+        )
+        self.assertEqual(plot_thread["backend"], "antigravity")
+        self.assertEqual(plot_thread["fingerprint"], plot.fingerprint)
+        self.assertIs(plot_thread["tainted"], False)
+
+        changed_plot = replace(plot, fingerprint="a" * 64)
+        changed_bound = await backend.bind(changed_plot)
+        old_thread_id = plot_thread["thread_id"]
+        await changed_bound.invoke(
+            self.request(
+                session_id="story-one",
+                debate_id="changed-fingerprint",
+                phase=Phase.DRAFT,
+            )
+        )
+        changed_thread = self.manifest("story-one")["provider_threads"][
+            "antigravity:plot_architect"
+        ]
+        self.assertEqual(changed_thread["fingerprint"], "a" * 64)
+        self.assertNotEqual(changed_thread["thread_id"], old_thread_id)
+        self.assertIsNone(self.invocations()[-1]["resumed_id"])
+
+        paused = backend.pause_session_and_release_access("story-one")
+        self.assertEqual(
+            (paused.durable_state, paused.access_state),
+            (SessionDurableState.PAUSED, SessionAccessState.CLAIMABLE),
+        )
+        self.assertFalse(
+            self.workspace.path(
+                "agent_states/orchestrator_state/provider_sessions/"
+                "story-one.access.json"
+            ).exists()
+        )
+        with self.assertRaises(SessionPausedError):
+            await changed_bound.invoke(
+                self.request(
+                    session_id="story-one",
+                    debate_id="paused",
+                    phase=Phase.DRAFT,
+                )
+            )
+        backend.close()
+
+        reopened_backend = self.backend()
+        reopened = reopened_backend.reopen_session_with_access("story-one")
+        self.assertEqual(
+            (reopened.durable_state, reopened.access_state),
+            (SessionDurableState.READY, SessionAccessState.HELD_HERE),
+        )
+        reopened_bound = await reopened_backend.bind(changed_plot)
+        await reopened_bound.invoke(
+            self.request(
+                session_id="story-one",
+                debate_id="after-reopen",
+                phase=Phase.DRAFT,
+            )
+        )
+        self.assertEqual(
+            self.invocations()[-1]["resumed_id"],
+            changed_thread["thread_id"],
+        )
+        reopened_backend.close()
+        with self.assertRaisesRegex(BackendProtocolError, "closed"):
+            await reopened_bound.invoke(
+                self.request(
+                    session_id="story-one",
+                    debate_id="closed",
+                    phase=Phase.DRAFT,
+                )
+            )
+
+    async def test_mixed_provider_dispatch_and_thread_locks_are_independent(
+        self,
+    ) -> None:
+        session_id = "mixed-session"
+        backend = self.backend()
+        backend.create_session_with_access(session_id)
+        antigravity_bound = await backend.bind(self.definition())
+        codex_definition = self.definition(backend="codex")
+        codex_bound = await backend.bind(codex_definition)
+
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        antigravity_calls = 0
+        antigravity_thread_ids: list[str | None] = []
+
+        async def gated_antigravity(_binding, invocation):
+            nonlocal antigravity_calls
+            antigravity_calls += 1
+            antigravity_thread_ids.append(invocation.thread_id)
+            if antigravity_calls == 1:
+                entered.set()
+                await release.wait()
+            return ProviderResult(
+                thread_id="agy-mixed-thread",
+                response_text=json.dumps(
+                    {
+                        "revision_id": invocation.payload["revision_id"],
+                        "content": "antigravity mixed reply",
+                    }
+                ),
+            )
+
+        codex_invoke = mock.AsyncMock(
+            return_value=ProviderResult(
+                thread_id="codex-mixed-thread",
+                response_text=(
+                    '{"revision_id":"r0","content":"codex mixed reply"}'
+                ),
+            )
+        )
+        with (
+            mock.patch.object(
+                backend._antigravity_adapter,
+                "invoke",
+                new=gated_antigravity,
+            ),
+            mock.patch.object(backend._codex_adapter, "invoke", codex_invoke),
+        ):
+            tasks: list[asyncio.Task[AgentReply]] = []
+            try:
+                first = asyncio.create_task(
+                    antigravity_bound.invoke(
+                        self.request(
+                            session_id=session_id,
+                            debate_id="agy-first",
+                            phase=Phase.DRAFT,
+                        )
+                    )
+                )
+                tasks.append(first)
+                await asyncio.wait_for(entered.wait(), timeout=1)
+                second = asyncio.create_task(
+                    antigravity_bound.invoke(
+                        self.request(
+                            session_id=session_id,
+                            debate_id="agy-second",
+                            phase=Phase.DRAFT,
+                        )
+                    )
+                )
+                tasks.append(second)
+                codex = asyncio.create_task(
+                    codex_bound.invoke(
+                        self.request(
+                            session_id=session_id,
+                            debate_id="codex-independent",
+                            phase=Phase.DRAFT,
+                        )
+                    )
+                )
+                tasks.append(codex)
+                codex_reply = await asyncio.wait_for(codex, timeout=1)
+                self.assertEqual(codex_reply.content, "codex mixed reply")
+                codex_invoke.assert_awaited_once()
+                codex_invocation = codex_invoke.await_args.args[1]
+                self.assertIsNone(codex_invocation.thread_id)
+                self.assertEqual(antigravity_calls, 1)
+            finally:
+                release.set()
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(*tasks, return_exceptions=True),
+                        timeout=1,
+                    )
+                except TimeoutError:
+                    for task in tasks:
+                        task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+            first_reply = first.result()
+            second_reply = second.result()
+
+        self.assertEqual(first_reply.content, "antigravity mixed reply")
+        self.assertEqual(second_reply.content, "antigravity mixed reply")
+        self.assertEqual(antigravity_calls, 2)
+        self.assertEqual(antigravity_thread_ids, [None, "agy-mixed-thread"])
+        manifest = self.manifest(session_id)
+        self.assertEqual(
+            set(manifest["provider_threads"]),
+            {
+                "antigravity:plot_architect",
+                "codex:plot_architect",
+            },
+        )
+        self.assertEqual(
+            manifest["provider_threads"]["antigravity:plot_architect"]
+            ["thread_id"],
+            "agy-mixed-thread",
+        )
+        self.assertEqual(
+            manifest["provider_threads"]["codex:plot_architect"]["thread_id"],
+            "codex-mixed-thread",
+        )
+        self.assertNotEqual(
+            backend._thread_lock(session_id, "antigravity", PLOT_ARCHITECT),
+            backend._thread_lock(session_id, "codex", PLOT_ARCHITECT),
+        )
+
+    def test_public_surface_and_provider_schema_remain_provider_neutral(self) -> None:
+        import story_writing_agents as facade
+
+        self.assertNotIn("AntigravityAdapter", facade.__all__)
+        self.assertFalse(hasattr(facade, "AntigravityAdapter"))
+        self.assertEqual(
+            tuple(inspect.signature(AgentBackend).parameters),
+            (
+                "workspace",
+                "executable",
+                "model",
+                "timeout_seconds",
+                "backend_overrides",
+                "antigravity_executable",
+                "antigravity_model",
+                "antigravity_effort",
+            ),
+        )
+        manager = ConfigManager(self.workspace)
+        self.assertEqual(manager.validate_backend("codex"), "codex")
+        self.assertEqual(
+            manager.validate_backend("antigravity"),
+            "antigravity",
+        )
+
+    async def test_schema_and_domain_identity_failures_taint_once(self) -> None:
+        session_id = "domain-identity"
+        backend = self.backend()
+        backend.create_session_with_access(session_id)
+        definition = self.definition()
+        bound = await backend.bind(definition)
+        await bound.invoke(
+            self.request(
+                session_id=session_id,
+                debate_id="seed",
+                phase=Phase.DRAFT,
+            )
+        )
+        cases = (
+            (
+                "empty minLength conversation content",
+                "empty_required_string",
+                "Antigravity CLI exited with status 83",
+                None,
+            ),
+            (
+                "debate revision",
+                "debate_revision_mismatch",
+                "Antigravity reply revision_id does not match its request",
+                Phase.DRAFT,
+            ),
+            (
+                "direct session",
+                "direct_session_id",
+                "Antigravity conversation reply session_id does not match its request",
+                None,
+            ),
+            (
+                "direct conversation",
+                "direct_conversation_id",
+                "Antigravity conversation reply conversation_id does not match its request",
+                None,
+            ),
+            (
+                "direct turn",
+                "direct_turn_id",
+                "Antigravity conversation reply turn_id does not match its request",
+                None,
+            ),
+        )
+        for index, (label, mode, diagnostic, phase) in enumerate(cases):
+            with self.subTest(label=label):
+                with (
+                    mock.patch.object(
+                        backend,
+                        "_taint_thread",
+                        wraps=backend._taint_thread,
+                    ) as taint,
+                    mock.patch.object(
+                        backend,
+                        "_write_manifest",
+                        wraps=backend._write_manifest,
+                    ) as write_manifest,
+                    mock.patch.dict(
+                        os.environ,
+                        {"STORY_FAKE_AGY_MODE": mode},
+                    ),
+                    self.assertRaises(BackendProtocolError) as caught,
+                ):
+                    if phase is None:
+                        await bound.converse(
+                            ConversationRequest(
+                                session_id=session_id,
+                                conversation_id="identity-conversation",
+                                turn_id=f"identity-turn-{index}",
+                                agent_id=PLOT_ARCHITECT,
+                                content="PRIVATE_IDENTITY_REQUEST",
+                                context=_empty_context(),
+                            )
+                        )
+                    else:
+                        await bound.invoke(
+                            self.request(
+                                session_id=session_id,
+                                debate_id=f"identity-debate-{index}",
+                                phase=phase,
+                                revision_id=f"identity-r{index}",
+                            )
+                )
+
+                self.assertEqual(str(caught.exception), diagnostic)
+                self.assertNotIn("other-", str(caught.exception))
+                if mode == "empty_required_string":
+                    failure_schema = self.provider_invocations()[-1]["schema"]
+                    self.assertEqual(
+                        failure_schema["properties"]["content"]["minLength"],
+                        1,
+                    )
+                taint.assert_called_once_with(session_id, definition)
+                write_manifest.assert_called_once()
+                self.assertIs(
+                    self.manifest(session_id)["provider_threads"]
+                    ["antigravity:plot_architect"]["tainted"],
+                    True,
+                )
+                await bound.invoke(
+                    self.request(
+                        session_id=session_id,
+                        debate_id=f"identity-recovery-{index}",
+                        phase=Phase.DRAFT,
+                        revision_id=f"recovery-r{index}",
+                    )
+                )
+                self.assertIsNone(self.provider_invocations()[-1]["resumed_id"])
+
+    async def test_protocol_failures_are_fixed_taint_once_and_restart_fresh(
+        self,
+    ) -> None:
+        cases = (
+            ("nonzero", "Antigravity CLI exited with status 7"),
+            (
+                "non_success",
+                "Antigravity CLI did not complete successfully",
+            ),
+            (
+                "malformed",
+                "Antigravity CLI emitted malformed JSONL at line 1",
+            ),
+            (
+                "invalid_utf8",
+                "Antigravity CLI event stream is not valid UTF-8",
+            ),
+            (
+                "envelope",
+                "Antigravity CLI emitted a non-object event at line 1",
+            ),
+            (
+                "truncated",
+                "Antigravity CLI returned a malformed event stream",
+            ),
+            (
+                "unexpected",
+                "Antigravity CLI returned a malformed event stream",
+            ),
+            (
+                "missing_id",
+                "Antigravity CLI returned an invalid conversation ID",
+            ),
+            (
+                "unsafe_id",
+                "Antigravity CLI returned an invalid conversation ID",
+            ),
+            (
+                "mismatched_id",
+                "Antigravity CLI returned an invalid conversation ID",
+            ),
+            (
+                "bad_output",
+                "Antigravity CLI returned malformed structured output",
+            ),
+            (
+                "schema_result",
+                "Antigravity candidate response has an invalid schema",
+            ),
+        )
+        backend = self.backend()
+        definition = self.definition()
+        bound = await backend.bind(definition)
+
+        for index, (mode, diagnostic) in enumerate(cases):
+            with self.subTest(mode=mode):
+                session_id = f"failure-{index}"
+                backend.create_session_with_access(session_id)
+                before = len(self.provider_invocations())
+                await bound.invoke(
+                    self.request(
+                        session_id=session_id,
+                        debate_id="seed",
+                        phase=Phase.DRAFT,
+                    )
+                )
+                seeded = self.manifest(session_id)["provider_threads"][
+                    "antigravity:plot_architect"
+                ]
+                with (
+                    mock.patch.object(
+                        backend,
+                        "_taint_thread",
+                        wraps=backend._taint_thread,
+                    ) as taint,
+                    mock.patch.object(
+                        backend,
+                        "_write_manifest",
+                        wraps=backend._write_manifest,
+                    ) as write_manifest,
+                    mock.patch.dict(
+                        os.environ,
+                        {"STORY_FAKE_AGY_MODE": mode},
+                    ),
+                    self.assertRaises(BackendProtocolError) as caught,
+                ):
+                    await bound.invoke(
+                        self.request(
+                            session_id=session_id,
+                            debate_id="failure",
+                            phase=Phase.DRAFT,
+                            revision_id="r1",
+                        )
+                    )
+
+                self.assertEqual(str(caught.exception), diagnostic)
+                taint.assert_called_once_with(session_id, definition)
+                write_manifest.assert_called_once()
+                external_error = str(caught.exception)
+                for confidential in (
+                    "CONFIDENTIAL_PROVIDER",
+                    "PRIVATE_STORY",
+                    "CONFIDENTIAL_CREDENTIAL",
+                    str(self.workspace.root),
+                    str(self.fake_directory),
+                ):
+                    self.assertNotIn(confidential, external_error)
+                failed = self.manifest(session_id)["provider_threads"][
+                    "antigravity:plot_architect"
+                ]
+                self.assertEqual(failed["thread_id"], seeded["thread_id"])
+                self.assertIs(failed["tainted"], True)
+
+                await bound.invoke(
+                    self.request(
+                        session_id=session_id,
+                        debate_id="recovery",
+                        phase=Phase.DRAFT,
+                        revision_id="r2",
+                    )
+                )
+                recovered = self.manifest(session_id)["provider_threads"][
+                    "antigravity:plot_architect"
+                ]
+                self.assertIs(recovered["tainted"], False)
+                self.assertNotEqual(recovered["thread_id"], seeded["thread_id"])
+                calls = self.provider_invocations()[before:]
+                self.assertEqual(
+                    [call["resumed_id"] is not None for call in calls],
+                    [False, True, False],
+                )
+
+    async def test_missing_executable_preserves_compatible_thread(self) -> None:
+        session_id = "missing-executable"
+        first = self.backend()
+        first.create_session_with_access(session_id)
+        definition = self.definition()
+        await (await first.bind(definition)).invoke(
+            self.request(
+                session_id=session_id,
+                debate_id="seed",
+                phase=Phase.DRAFT,
+            )
+        )
+        retained = self.manifest(session_id)["provider_threads"][
+            "antigravity:plot_architect"
+        ]
+        first.close()
+
+        missing = AgentBackend(
+            self.workspace,
+            executable=str(self.fake_directory / "unused-codex"),
+            antigravity_executable=str(self.fake_directory / "missing-agy"),
+        )
+        self.addCleanup(missing.close)
+        missing.acquire_session_access(session_id)
+        with self.assertRaises(BackendProtocolError) as caught:
+            await (await missing.bind(definition)).invoke(
+                self.request(
+                    session_id=session_id,
+                    debate_id="missing",
+                    phase=Phase.DRAFT,
+                )
+            )
+        self.assertEqual(
+            str(caught.exception),
+            "Antigravity CLI executable was not found",
+        )
+        self.assertEqual(
+            self.manifest(session_id)["provider_threads"]
+            ["antigravity:plot_architect"],
+            retained,
+        )
+
+    async def test_retrieval_failure_after_observation_taints_and_restarts(
+        self,
+    ) -> None:
+        session_id = "retrieval-failure"
+        backend = self.backend()
+        backend.create_session_with_access(session_id)
+        bound = await backend.bind(self.definition())
+        request = ConversationRetrievalRequest(
+            session_id=session_id,
+            conversation_id="conversation-one",
+            turn_id="turn-failure",
+            agent_id=PLOT_ARCHITECT,
+            content="PRIVATE_RETRIEVAL_FAILURE_REQUEST",
+            context=_empty_context(),
+        )
+        handler = _RetrievalHandler()
+        with (
+            mock.patch.dict(
+                os.environ,
+                {
+                    "STORY_FAKE_AGY_MODE": "nonzero",
+                    "STORY_FAKE_AGY_FAIL_ACTION": "2",
+                },
+            ),
+            self.assertRaises(BackendProtocolError) as caught,
+        ):
+            await bound.converse_with_retrieval(request, handler)
+
+        self.assertEqual(
+            str(caught.exception),
+            "Antigravity CLI exited with status 7",
+        )
+        self.assertEqual(
+            tuple(type(action) for action in handler.actions),
+            (ConversationRetrievalSearchAction,),
+        )
+        calls = self.provider_invocations()[-2:]
+        self.assertIsNone(calls[0]["resumed_id"])
+        self.assertIsNotNone(calls[1]["resumed_id"])
+        failed = self.manifest(session_id)["provider_threads"][
+            "antigravity:plot_architect"
+        ]
+        self.assertIs(failed["tainted"], True)
+
+        await bound.invoke(
+            self.request(
+                session_id=session_id,
+                debate_id="post-retrieval-restart",
+                phase=Phase.DRAFT,
+            )
+        )
+        self.assertIsNone(self.provider_invocations()[-1]["resumed_id"])
+        self.assertIs(
+            self.manifest(session_id)["provider_threads"]
+            ["antigravity:plot_architect"]["tainted"],
+            False,
+        )
+
+    async def test_cancellation_and_timeout_terminate_without_orphans(self) -> None:
+        posix_termination_marker = (
+            os.name != "nt" and hasattr(signal, "SIGTERM")
+        )
+
+        for label in ("cancellation", "timeout"):
+            with self.subTest(cleanup=label):
+                session_id = f"cleanup-{label}"
+                backend = self.backend(timeout_seconds=10)
+                backend.create_session_with_access(session_id)
+                definition = self.definition()
+                bound = await backend.bind(definition)
+                await bound.invoke(
+                    self.request(
+                        session_id=session_id,
+                        debate_id="seed",
+                        phase=Phase.DRAFT,
+                    )
+                )
+                ready_count = len(self.provider_invocations()) + 1
+
+                if label == "timeout":
+                    real_wait_for = asyncio.wait_for
+                    communication_pending = True
+
+                    async def timeout_after_ready(awaitable, *, timeout):
+                        nonlocal communication_pending
+                        if communication_pending:
+                            communication_pending = False
+                            communication = asyncio.ensure_future(awaitable)
+                            await self.wait_for_invocations(ready_count)
+                            return await real_wait_for(communication, timeout=0)
+                        return await real_wait_for(awaitable, timeout=timeout)
+
+                    wait_patch = mock.patch.object(
+                        backend._antigravity_adapter,
+                        "_wait_for",
+                        return_value=timeout_after_ready,
+                    )
+                else:
+                    wait_patch = mock.patch.object(
+                        backend._antigravity_adapter,
+                        "_wait_for",
+                        wraps=backend._antigravity_adapter._wait_for,
+                    )
+
+                with (
+                    mock.patch.dict(
+                        os.environ,
+                        {"STORY_FAKE_AGY_MODE": "hang"},
+                    ),
+                    wait_patch,
+                ):
+                    task = asyncio.create_task(
+                        bound.invoke(
+                            self.request(
+                                session_id=session_id,
+                                debate_id=label,
+                                phase=Phase.DRAFT,
+                                revision_id="r1",
+                            )
+                        )
+                    )
+                    if label == "cancellation":
+                        await self.wait_for_invocations(ready_count)
+                        task.cancel()
+                        with self.assertRaises(asyncio.CancelledError):
+                            await task
+                    else:
+                        with self.assertRaises(BackendProtocolError) as caught:
+                            await task
+                        self.assertEqual(
+                            str(caught.exception),
+                            "Antigravity CLI timed out after 10 seconds",
+                        )
+
+                invocation = self.provider_invocations()[ready_count - 1]
+                pid = invocation["pid"]
+                assert isinstance(pid, int)
+                if posix_termination_marker:
+                    termination = [
+                        item
+                        for item in self.invocations()
+                        if item.get("terminated") is True
+                        and item.get("pid") == pid
+                    ]
+                    self.assertEqual(len(termination), 1)
+                self.assert_fake_process_stopped(pid)
+                tainted = self.manifest(session_id)["provider_threads"][
+                    "antigravity:plot_architect"
+                ]
+                self.assertIs(tainted["tainted"], True)
+
+                await bound.invoke(
+                    self.request(
+                        session_id=session_id,
+                        debate_id="recovery",
+                        phase=Phase.DRAFT,
+                        revision_id="r2",
+                    )
+                )
+                self.assertIsNone(self.provider_invocations()[-1]["resumed_id"])
+                self.assertIs(
+                    self.manifest(session_id)["provider_threads"]
+                    ["antigravity:plot_architect"]["tainted"],
+                    False,
+                )
+
+    async def test_timeout_escalates_to_kill_when_terminate_is_ignored(self) -> None:
+        if (
+            os.name == "nt"
+            or not hasattr(signal, "SIGTERM")
+        ):
+            self.skipTest("POSIX signal process cleanup is unavailable")
+
+        session_id = "cleanup-kill"
+        backend = self.backend(timeout_seconds=6)
+        backend.create_session_with_access(session_id)
+        bound = await backend.bind(self.definition())
+        await bound.invoke(
+            self.request(
+                session_id=session_id,
+                debate_id="seed",
+                phase=Phase.DRAFT,
+            )
+        )
+        ready_count = len(self.provider_invocations()) + 1
+        real_wait_for = asyncio.wait_for
+        wait_calls = 0
+
+        async def force_both_timeouts(awaitable, *, timeout):
+            nonlocal wait_calls
+            wait_calls += 1
+            pending = asyncio.ensure_future(awaitable)
+            if wait_calls == 1:
+                await self.wait_for_invocations(ready_count)
+            if wait_calls <= 2:
+                try:
+                    return await real_wait_for(pending, timeout=0)
+                except TimeoutError:
+                    raise
+            return await real_wait_for(pending, timeout=timeout)
+
+        with (
+            mock.patch.dict(
+                os.environ,
+                {"STORY_FAKE_AGY_MODE": "ignore_term"},
+            ),
+            mock.patch.object(
+                backend._antigravity_adapter,
+                "_wait_for",
+                return_value=force_both_timeouts,
+            ),
+            self.assertRaises(BackendProtocolError) as caught,
+        ):
+            await bound.invoke(
+                self.request(
+                    session_id=session_id,
+                    debate_id="kill",
+                    phase=Phase.DRAFT,
+                    revision_id="r1",
+                )
+            )
+
+        self.assertEqual(
+            str(caught.exception),
+            "Antigravity CLI timed out after 6 seconds",
+        )
+        self.assertEqual(wait_calls, 3)
+        invocation = self.provider_invocations()[-1]
+        pid = invocation["pid"]
+        assert isinstance(pid, int)
+        self.assert_fake_process_stopped(pid)
+        self.assertFalse(
+            any(
+                item.get("terminated") is True and item.get("pid") == pid
+                for item in self.invocations()
+            )
+        )
+        self.assertIs(
+            self.manifest(session_id)["provider_threads"]
+            ["antigravity:plot_architect"]["tainted"],
+            True,
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

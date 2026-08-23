@@ -1181,11 +1181,14 @@ class InteractiveTerminal:
         error: InteractiveError,
         *,
         secrets: Iterable[str] = (),
+        debug_log_path: str | None = None,
     ) -> None:
-        """Render one typed, redacted, bounded error and actionable hint."""
+        """Render one typed, redacted error, hint, and optional debug-log path."""
 
         if not isinstance(error, InteractiveError):
             raise TypeError("error must be an InteractiveError")
+        if debug_log_path is not None:
+            _validate_default_message("debug_log_path", debug_log_path)
         spec = INTERACTIVE_ERROR_SPECS[error.code]
         variants = _redaction_variants(secrets)
         summary = _prepare_error_message(
@@ -1200,18 +1203,26 @@ class InteractiveTerminal:
             variants,
             _HINT_LIMIT,
         )
+        notices = [
+            Notice(
+                summary,
+                label=f"error {error.code.value}",
+                role=SemanticRole.ERROR,
+                state=ViewState.ERROR,
+            ),
+            Notice(hint, label="hint"),
+        ]
+        if debug_log_path is not None:
+            notices.append(
+                Notice(
+                    sanitize_terminal_text(debug_log_path),
+                    label="debug log",
+                )
+            )
         self._write_component(
             Panel(
                 "Interactive error",
-                (
-                    Notice(
-                        summary,
-                        label=f"error {error.code.value}",
-                        role=SemanticRole.ERROR,
-                        state=ViewState.ERROR,
-                    ),
-                    Notice(hint, label="hint"),
-                ),
+                tuple(notices),
                 state=ViewState.ERROR,
             )
         )

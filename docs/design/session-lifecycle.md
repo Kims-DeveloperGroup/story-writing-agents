@@ -97,7 +97,9 @@ end `ready` + `held_here`. Failure compensates only newly acquired access.
 `Default session`, `Current attachment`, `Default conversation`, `Current
 focus`, `Agent focus`, `Provider readiness`, `Next action`. `/session list`
 uses `Session`, `Durable state`, `Process access`, `Default session`, `Provider
-readiness`, `Next action`. Both are read-only and omit owner host, PID, and token.
+readiness`, `Next action`. Both are read-only for lifecycle/domain state and
+omit owner host, PID, and token; their workspace-aware execution may append a
+bounded operational debug record.
 `session_not_attached` gates attached commands;
 `workspace_version_unsupported` reports rejected V1 data.
 

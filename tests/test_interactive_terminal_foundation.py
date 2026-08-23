@@ -412,6 +412,7 @@ class PublicCompatibilityFoundationTests(unittest.TestCase):
             InteractiveTerminal.write_error: (
                 ("error", positional, required),
                 ("secrets", keyword, ()),
+                ("debug_log_path", keyword, None),
             ),
             terminal_facade.sanitize_terminal_text: (
                 ("text", positional, required),
