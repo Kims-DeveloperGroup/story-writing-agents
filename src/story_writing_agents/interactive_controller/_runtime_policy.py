@@ -651,6 +651,11 @@ def validate_conversation_retrieval_result(
         or canonical.agent_id != expected_agent_id
     ):
         raise ValueError("retrieval result identity does not match its turn")
+    if canonical.reference_operation_id is not None:
+        _validate_reference_operation_identifier(
+            canonical.reference_operation_id,
+            session_id=expected_session_id,
+        )
     if canonical.sources and not progress_events:
         raise ValueError("retrieval sources require completed search progress")
     if progress_events:
@@ -814,6 +819,11 @@ def validate_consensus_result(
         or type(result.core_updates) is not tuple
     ):
         raise ValueError("runtime consensus result is invalid")
+    if result.reference_operation_id is not None:
+        _validate_reference_operation_identifier(
+            result.reference_operation_id,
+            session_id=expected_session_id,
+        )
     expected_terminal = {
         DebateStatus.CONSENSUS: DebateProgressPhase.CONSENSUS,
         DebateStatus.DEADLOCK: DebateProgressPhase.DEADLOCK,
