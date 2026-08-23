@@ -232,6 +232,30 @@ def update_agent_backend(
     )
 
 
+def establish_default_backend(workspace: Workspace, backend: str) -> bool:
+    """Persist a valid missing default and report whether a write occurred.
+
+    Authentication remains the caller's responsibility. An existing default
+    returns ``False`` without modifying either configuration document.
+    """
+
+    _require_workspace(workspace)
+    validated = ConfigManager.validate_backend(backend)
+    assert validated is not None
+    state = load_settings_state(workspace)
+    if state.pending.system_defaults.default_backend is not None:
+        return False
+    pending = _with_system_defaults(
+        state,
+        replace(
+            state.pending.system_defaults,
+            default_backend=validated,
+        ),
+    )
+    save_settings_state(workspace, pending)
+    return True
+
+
 def update_agent_codex_model(
     state: SettingsState,
     agent_id: str,
@@ -488,6 +512,7 @@ def _system_value(defaults: SystemDefaults) -> dict[str, Any]:
         "codex_reasoning_effort": defaults.codex_reasoning_effort,
         "antigravity_model": defaults.antigravity_model,
         "antigravity_effort": defaults.antigravity_effort,
+        "default_backend": defaults.default_backend,
     }
 
 
