@@ -69,6 +69,13 @@ class _LiveEditorState:
     rendered_cursor_row: int = 0
 
 
+@dataclass(slots=True)
+class _StartupFrameState:
+    """Track one displayed or attempted startup frame for exact cleanup."""
+
+    frame: RenderedFrame | None = None
+
+
 @dataclass(frozen=True, slots=True)
 class _TerminalConfiguration:
     """Capture one validated POSIX terminal mode and its exact restoration."""
@@ -425,9 +432,9 @@ class RawTerminalDriver:
             raise TypeError("frame_renderer must be callable")
         if not callable(sleeper):
             raise TypeError("sleeper must be callable")
-        capabilities = self.capabilities()
-        if not self._startup_animation_is_safe(capabilities):
-            static_capabilities = _static_startup_capabilities(capabilities)
+        base_capabilities = self.capabilities()
+        if not self._startup_animation_is_safe(base_capabilities):
+            static_capabilities = _static_startup_capabilities(base_capabilities)
             final_frame = _startup_frame(
                 frame_renderer,
                 _STARTUP_WELCOME_FRAME_COUNT - 1,
@@ -436,21 +443,32 @@ class RawTerminalDriver:
             self._write_raw_text(f"{final_frame.text}\n")
             return
 
-        live_lines = 0
+        live_state = _StartupFrameState()
         active_failure: BaseException | None = None
         try:
             for index in range(_STARTUP_WELCOME_FRAME_COUNT):
-                frame = _startup_frame(frame_renderer, index, capabilities)
-                live_lines = self._replace_startup_frame(frame, live_lines)
+                observed_width, render_capabilities = (
+                    self._startup_render_capabilities(base_capabilities)
+                )
+                frame = _startup_frame(
+                    frame_renderer,
+                    index,
+                    render_capabilities,
+                )
+                self._replace_startup_frame(
+                    frame,
+                    live_state,
+                    observed_width=observed_width,
+                )
                 if index < _STARTUP_WELCOME_FRAME_COUNT - 1:
                     sleeper(_STARTUP_WELCOME_INTERVAL_SECONDS)
             self._write_raw_text("\n")
-            live_lines = 0
+            live_state.frame = None
         except BaseException as failure:
             active_failure = failure
-        if live_lines:
+        if live_state.frame is not None:
             try:
-                self._clear_startup_frame(live_lines)
+                self._clear_startup_state(live_state)
             except BaseException as cleanup_failure:
                 if active_failure is None:
                     active_failure = cleanup_failure
@@ -468,31 +486,52 @@ class RawTerminalDriver:
             raise TypeError("frame_renderer must be callable")
         if not callable(sleeper):
             raise TypeError("sleeper must be callable")
-        capabilities = self.capabilities()
-        if not self._startup_animation_is_safe(capabilities):
-            static_capabilities = _static_startup_capabilities(capabilities)
+        base_capabilities = self.capabilities()
+        if not self._startup_animation_is_safe(base_capabilities):
+            static_capabilities = _static_startup_capabilities(base_capabilities)
             frame = frame_renderer(static_capabilities)
             _require_startup_frame(frame, static_capabilities)
             self._write_raw_text(f"{frame.text}\n")
             return
-        frame = frame_renderer(capabilities)
-        _require_startup_frame(frame, capabilities)
+        observed_width, render_capabilities = self._startup_render_capabilities(
+            base_capabilities
+        )
+        frame = frame_renderer(render_capabilities)
+        _require_startup_frame(frame, render_capabilities)
 
-        live_lines = 0
+        live_state = _StartupFrameState()
         active_failure: BaseException | None = None
         try:
-            live_lines = self._replace_startup_frame(frame, live_lines)
+            self._replace_startup_frame(
+                frame,
+                live_state,
+                observed_width=observed_width,
+            )
             sleeper(_STARTUP_NOTICE_DURATION_SECONDS)
         except BaseException as failure:
             active_failure = failure
-        if live_lines:
+        if live_state.frame is not None:
             try:
-                self._clear_startup_frame(live_lines)
+                self._clear_startup_state(live_state)
             except BaseException as cleanup_failure:
                 if active_failure is None:
                     active_failure = cleanup_failure
         if active_failure is not None:
             raise active_failure
+
+    def run_startup_result_notice(
+        self,
+        frame_renderer: Callable[[TerminalCapabilities], RenderedFrame],
+        sleeper: Callable[[float], object],
+    ) -> None:
+        """Establish a fresh provider-output boundary before one result."""
+
+        if not callable(frame_renderer):
+            raise TypeError("frame_renderer must be callable")
+        if not callable(sleeper):
+            raise TypeError("sleeper must be callable")
+        self._write_raw_text("\n")
+        self.run_startup_notice(frame_renderer, sleeper)
 
     def _startup_animation_is_safe(
         self,
@@ -517,24 +556,50 @@ class RawTerminalDriver:
     def _replace_startup_frame(
         self,
         frame: RenderedFrame,
-        previous_lines: int,
-    ) -> int:
+        state: _StartupFrameState,
+        *,
+        observed_width: int,
+    ) -> None:
         """Replace one purpose-bound startup frame without claiming the screen."""
 
-        if type(previous_lines) is not int or previous_lines < 0:
-            raise ValueError("previous_lines must be a nonnegative integer")
-        payload = ""
-        if previous_lines:
-            payload = "".join(
-                (
-                    _CARRIAGE_RETURN,
-                    _CURSOR_UP * (previous_lines - 1),
-                    _CARRIAGE_RETURN,
-                    _CLEAR_TO_END,
-                )
+        if type(state) is not _StartupFrameState:
+            raise TypeError("state must be a _StartupFrameState")
+        if type(observed_width) is not int or observed_width <= 0:
+            raise ValueError("observed_width must be positive")
+        if state.frame is not None:
+            self._clear_startup_frame(
+                _startup_physical_line_count(state.frame, observed_width)
             )
-        self._write_raw_text(f"{payload}{frame.text}")
-        return frame.line_count
+            state.frame = None
+        state.frame = frame
+        self._write_raw_text(frame.text)
+
+    def _startup_render_capabilities(
+        self,
+        base_capabilities: TerminalCapabilities,
+    ) -> tuple[int, TerminalCapabilities]:
+        """Reobserve width and reserve one column from live startup output."""
+
+        observed_width = self.capabilities().width
+        return (
+            observed_width,
+            _capabilities_with_width(
+                base_capabilities,
+                max(1, observed_width - 1),
+            ),
+        )
+
+    def _clear_startup_state(self, state: _StartupFrameState) -> None:
+        """Clear an attempted frame using its freshly reflowed geometry."""
+
+        if type(state) is not _StartupFrameState:
+            raise TypeError("state must be a _StartupFrameState")
+        if state.frame is None:
+            return
+        observed_width = self.capabilities().width
+        line_count = _startup_physical_line_count(state.frame, observed_width)
+        self._clear_startup_frame(line_count)
+        state.frame = None
 
     def _clear_startup_frame(self, line_count: int) -> None:
         """Clear one complete call-local startup frame without leaving a row."""
@@ -1591,6 +1656,48 @@ def _require_startup_frame(
         raise TypeError("startup renderer must return a RenderedFrame")
     if frame.width != capabilities.width:
         raise ValueError("startup frame width must match current capabilities")
+
+
+def _startup_physical_line_count(
+    frame: RenderedFrame,
+    terminal_width: int,
+) -> int:
+    """Count current physical rows after one displayed frame reflows."""
+
+    if type(frame) is not RenderedFrame:
+        raise TypeError("frame must be a RenderedFrame")
+    if type(terminal_width) is not int or terminal_width <= 0:
+        raise ValueError("terminal_width must be positive")
+    return sum(
+        max(1, (width + terminal_width - 1) // terminal_width)
+        for width in (
+            _startup_display_width(line) for line in frame.text.split("\n")
+        )
+    )
+
+
+def _startup_display_width(text: str) -> int:
+    """Measure trusted rendered text while ignoring generated SGR controls."""
+
+    width = 0
+    index = 0
+    while index < len(text):
+        if text.startswith("\x1b[", index):
+            terminator = text.find("m", index + 2)
+            parameters = text[index + 2 : terminator]
+            if (
+                terminator >= 0
+                and parameters
+                and all(
+                    character.isdecimal() or character == ";"
+                    for character in parameters
+                )
+            ):
+                index = terminator + 1
+                continue
+        width += display_character_width(text[index])
+        index += 1
+    return width
 
 
 def _single_character_reader(input_stream: TextIO) -> Callable[[], object]:

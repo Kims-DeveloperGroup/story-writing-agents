@@ -184,7 +184,8 @@ class InteractiveAuthCoordinator:
             Prompt(
                 "Provider authentication",
                 instruction=(
-                    "Choose a provider. Escape or /cancel returns without signing in."
+                    "Choose a provider. The picker cancel action returns without "
+                    "signing in."
                 ),
             ),
             choices,
@@ -247,7 +248,7 @@ class InteractiveAuthCoordinator:
             raise ValueError("auth service returned a different provider")
         _require_status(login_result.status, provider)
         refreshed_snapshot = _snapshot_with_status(snapshot, login_result.status)
-        self._presentation.show_notice(_result_notice(login_result.status))
+        self._presentation.show_result(_result_notice(login_result.status))
         return _provider_result(refreshed_snapshot, login_result.status)
 
 

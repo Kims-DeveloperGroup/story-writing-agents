@@ -498,6 +498,7 @@ class InteractiveTerminal:
         "_picker_read",
         "_prompt_read",
         "_startup_notice",
+        "_startup_result_notice",
         "_startup_welcome",
         "_advisory_progress",
         "_debate_progress",
@@ -549,6 +550,9 @@ class InteractiveTerminal:
         )
         self._startup_notice = lambda notice, _sleeper: self._write_component(
             notice
+        )
+        self._startup_result_notice = (
+            lambda notice, _sleeper: self._write_startup_result_notice(notice)
         )
         self._advisory_progress = _plain_advisory_progress
         self._debate_progress = _plain_debate_progress
@@ -1309,6 +1313,12 @@ class InteractiveTerminal:
         frame = render_component(component, self._capability_provider())
         self._write_text(f"{frame.text}\n")
 
+    def _write_startup_result_notice(self, notice: Notice) -> None:
+        """Establish a fresh callback boundary before one static result."""
+
+        self._write_text("\n")
+        self._write_component(notice)
+
 
 class InteractiveSemanticOutput:
     """Retain only one terminal's package-internal semantic write capability."""
@@ -1331,7 +1341,7 @@ class InteractiveSemanticOutput:
 class InteractiveStartupPresentation:
     """Bind the fixed welcome and auth-notice presentation lifecycle."""
 
-    __slots__ = ("_show_notice", "_show_welcome", "_sleeper")
+    __slots__ = ("_show_notice", "_show_result", "_show_welcome", "_sleeper")
 
     def __init__(
         self,
@@ -1351,6 +1361,9 @@ class InteractiveStartupPresentation:
         self._show_notice: Callable[
             [Notice, Callable[[float], object]], None
         ] = terminal._startup_notice
+        self._show_result: Callable[
+            [Notice, Callable[[float], object]], None
+        ] = terminal._startup_result_notice
         self._sleeper = sleeper
 
     def show_welcome(self) -> None:
@@ -1364,6 +1377,13 @@ class InteractiveStartupPresentation:
         if type(notice) is not Notice:
             raise TypeError("notice must be a Notice")
         self._show_notice(notice, self._sleeper)
+
+    def show_result(self, notice: Notice) -> None:
+        """Reclaim a fresh line, then show and clear one auth result."""
+
+        if type(notice) is not Notice:
+            raise TypeError("notice must be a Notice")
+        self._show_result(notice, self._sleeper)
 
 
 class InteractiveMainInput:
@@ -1847,6 +1867,12 @@ def build_stream_terminal(
     terminal._startup_notice = lambda notice, sleeper: driver.run_startup_notice(
         lambda current: render_component(notice, current),
         sleeper,
+    )
+    terminal._startup_result_notice = (
+        lambda notice, sleeper: driver.run_startup_result_notice(
+            lambda current: render_component(notice, current),
+            sleeper,
+        )
     )
 
     async def run_advisory_progress(operation):
