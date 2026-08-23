@@ -16,6 +16,7 @@ from story_writing_agents import interactive_terminal as terminal_facade
 from story_writing_agents.interactive_terminal import _controls, _core, _driver, _model
 from story_writing_agents.interactive_terminal._controls import (
     append_main_input_history,
+    completion_candidate_matches,
     initialize_picker,
     main_command_uses_choices,
     project_main_choice_completion,
@@ -370,6 +371,33 @@ class CompletionControlTests(unittest.TestCase):
             )
             self.assertIsNone(outcome)
         return state
+
+    def test_completion_matcher_preserves_literal_slash_and_reference_rules(
+        self,
+    ) -> None:
+        reference = "${core_documents/global_outline.md}"
+        cases = (
+            (reference, "$", True),
+            (reference, "$c", True),
+            (reference, "$core_documents/", True),
+            (reference, "$core_documents/g", True),
+            (reference, "${core", True),
+            (reference, "$C", False),
+            (reference, "core_documents/", False),
+            (reference, "$$", False),
+            (reference, "$${core", False),
+            ("/status", "/st", True),
+            ("/status", "st", True),
+            ("/status", "St", False),
+            ("@plot", "@p", True),
+            ("@plot", "plot", False),
+        )
+        for replacement, prefix, expected in cases:
+            with self.subTest(replacement=replacement, prefix=prefix):
+                self.assertIs(
+                    completion_candidate_matches(replacement, prefix),
+                    expected,
+                )
 
     def test_initial_filter_highlight_clamp_and_palette_projection_are_exact(
         self,
@@ -883,6 +911,25 @@ class CompletionDriverTests(unittest.TestCase):
             render_component,
         )
 
+    def test_core_reference_bindings_inject_exact_matcher_and_validate_it(
+        self,
+    ) -> None:
+        bindings = _core._reference_input_bindings(
+            mock.Mock(return_value=None),
+            mock.Mock(return_value="text"),
+            mock.Mock(),
+        )
+
+        self.assertIs(
+            bindings.completion_candidate_matches,
+            completion_candidate_matches,
+        )
+        with self.assertRaisesRegex(
+            TypeError,
+            "^completion_candidate_matches must be callable$",
+        ):
+            replace(bindings, completion_candidate_matches=None)
+
     def test_reference_projection_invalid_probe_skips_catalog_io(self) -> None:
         invalid = ReferenceInputProjection(failure=ReferenceInputFailureKind.INVALID)
         for buffer in (
@@ -1099,6 +1146,139 @@ class CompletionDriverTests(unittest.TestCase):
                 fallback.assert_not_called()
                 self.assertEqual(os_module.observed_widths[:2], [8, 8])
 
+    def test_reference_live_fragments_filter_and_complete_without_submission(
+        self,
+    ) -> None:
+        character, outline, rules = (
+            "core_documents/character_sheets.md",
+            "core_documents/global_outline.md",
+            "core_documents/narrative_rules.md",
+        )
+        paths = (character, outline, rules)
+        tokens = tuple(f"${{{path}}}" for path in paths)
+        earlier = tokens[2]
+        contextual = f"keep {earlier} then $c suffix"
+        cases = (
+            ("$", "\t", f"{tokens[0]} ", tokens),
+            ("$c", "\n", f"{tokens[0]} ", tokens),
+            ("$core_documents/g", "\t", f"{tokens[1]} ", (tokens[1],)),
+            ("${core", "\n", f"{tokens[0]} ", tokens),
+            (
+                contextual,
+                "\x1b[D" * len(" suffix") + "\t",
+                f"keep {earlier} then {tokens[0]} suffix",
+                tokens[:2],
+            ),
+        )
+        for original, completion_input, expected, visible in cases:
+            with self.subTest(original=original):
+                driver, input_stream, output, fallback, termios, os_module = (
+                    make_driver(original + completion_input + "\x03")
+                )
+
+                def wide_size(descriptor: int) -> object:
+                    os_module.observed_widths.append(descriptor)
+                    return SimpleNamespace(columns=160, lines=24)
+
+                os_module.get_terminal_size = wide_size
+                history_append = mock.Mock(wraps=append_main_input_history)
+                driver._history_append = history_append
+                text_reader = mock.Mock(
+                    side_effect=AssertionError("completion must not read text")
+                )
+                failure_writer = mock.Mock()
+                with mock.patch.object(
+                    _driver._select,
+                    "select",
+                    side_effect=lambda readable, writable, exceptional, _timeout: (
+                        readable,
+                        writable,
+                        exceptional,
+                    ),
+                ):
+                    with self.assertRaises(KeyboardInterrupt):
+                        _core.read_main_command_line(
+                            driver,
+                            "main> ",
+                            reference_scope_provider=lambda buffer, _cursor: (
+                                ReferenceInputScope(0, len(buffer))
+                            ),
+                            reference_paths_provider=lambda: paths,
+                            reference_text_reader=text_reader,
+                            reference_failure_writer=failure_writer,
+                        )
+
+                active_frames = tuple(
+                    strip_decorative_sgr(record)
+                    for record in output.records
+                    if f"main> {original}" in strip_decorative_sgr(record)
+                    and "Suggestions [open]" in strip_decorative_sgr(record)
+                )
+                self.assertTrue(active_frames)
+                active = active_frames[-1]
+                suggestions = active.split("Suggestions [open]", 1)[1]
+                for token in tokens:
+                    if token in visible:
+                        self.assertIn(token, suggestions)
+                    else:
+                        self.assertNotIn(token, suggestions)
+                self.assertIn("[highlighted]", suggestions)
+                self.assertIn(
+                    f"main> {expected}",
+                    strip_decorative_sgr("".join(output.records)),
+                )
+                history_append.assert_not_called()
+                self.assertEqual(driver._history_state, MainInputHistoryState())
+                self.assertEqual(input_stream.reads, [])
+                text_reader.assert_not_called()
+                failure_writer.assert_not_called()
+                fallback.assert_not_called()
+                self.assertEqual(
+                    tuple(call[1] for call in termios.set_calls),
+                    (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
+                )
+
+        driver, _input, output, fallback, _termios, os_module = make_driver(
+            "$C\t\x03"
+        )
+        os_module.get_terminal_size = lambda _descriptor: SimpleNamespace(
+            columns=160,
+            lines=24,
+        )
+        history_append = mock.Mock(wraps=append_main_input_history)
+        driver._history_append = history_append
+        with mock.patch.object(
+            _driver._select,
+            "select",
+            side_effect=lambda readable, writable, exceptional, _timeout: (
+                readable,
+                writable,
+                exceptional,
+            ),
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                _core.read_main_command_line(
+                    driver,
+                    "main> ",
+                    reference_scope_provider=lambda buffer, _cursor: (
+                        ReferenceInputScope(0, len(buffer))
+                    ),
+                    reference_paths_provider=lambda: paths,
+                    reference_text_reader=mock.Mock(),
+                    reference_failure_writer=mock.Mock(),
+                )
+        unmatched = next(
+            strip_decorative_sgr(record)
+            for record in output.records
+            if "main> $C" in strip_decorative_sgr(record)
+            and "Suggestions [open]" in strip_decorative_sgr(record)
+        )
+        self.assertIn("[empty] No suggestions.", unmatched)
+        self.assertNotIn("[highlighted]", unmatched)
+        history_append.assert_not_called()
+        self.assertEqual(driver._history_state, MainInputHistoryState())
+        fallback.assert_not_called()
+
     def test_reference_fallback_retains_amendment_until_second_confirmation(
         self,
     ) -> None:
@@ -1278,18 +1458,19 @@ class CompletionDriverTests(unittest.TestCase):
     def test_reference_fallback_completion_uses_bounded_span_and_preserves_suffix(
         self,
     ) -> None:
-        original = "prefix $ suffix"
+        original = "prefix $c suffix"
         path = "core_documents/global_outline.md"
         token = f"${{{path}}}"
         position = "artifact-reference:7"
         projection = CommandCompletionProjection(
             position,
             7,
-            8,
+            9,
             (CommandCompletionCandidate(position, token),),
         )
-        self.assertTrue(token.startswith(original[projection.start : projection.end]))
-        self.assertFalse(token.startswith(original[projection.start :]))
+        prefix = original[projection.start : projection.end]
+        self.assertTrue(completion_candidate_matches(token, prefix))
+        self.assertFalse(token.startswith(prefix))
 
         driver, input_stream, output, fallback, termios, os_module = make_driver(
             "unused",
@@ -1333,6 +1514,74 @@ class CompletionDriverTests(unittest.TestCase):
                 f"Draft retained: {expected}\n"
                 "Press Enter to submit it, or type a replacement draft: "
             ),
+        )
+        self.assertNotIn(("read", 1), input_stream.calls)
+        self.assertEqual(output.records, [])
+        self.assertEqual(termios.set_calls, [])
+        self.assertEqual(os_module.observed_widths, [])
+
+    def test_reference_fallback_unmatched_fragment_reports_invalid_and_retries(
+        self,
+    ) -> None:
+        original = "prefix $C suffix"
+        replacement = "replacement draft"
+        path = "core_documents/global_outline.md"
+        token = f"${{{path}}}"
+        position = "artifact-reference:7"
+        projection = CommandCompletionProjection(
+            position,
+            7,
+            9,
+            (CommandCompletionCandidate(position, token),),
+        )
+        retry_prompt = (
+            f"Draft retained: {original}\n"
+            "Press Enter to retry the marker without submitting, or type "
+            "a replacement draft: "
+        )
+        driver, input_stream, output, fallback, termios, os_module = make_driver(
+            "unused",
+            terminal=False,
+        )
+        fallback.side_effect = (original, replacement)
+        projection_provider = mock.Mock(
+            side_effect=(ReferenceInputProjection(completion=projection), None)
+        )
+        failure_writer = mock.Mock()
+        bindings = _core._reference_input_bindings(
+            projection_provider,
+            mock.Mock(side_effect=AssertionError("viewer text read")),
+            failure_writer,
+        )
+        picker_factory = mock.Mock(wraps=bindings.initialize_picker)
+        bindings = replace(bindings, initialize_picker=picker_factory)
+
+        result = driver.read_reference_main_command_line(
+            "main> ",
+            _core._main_command_completion,
+            project_main_suggestion_palette,
+            render_component,
+            bindings,
+        )
+
+        self.assertEqual(result, replacement)
+        self.assertEqual(
+            driver._history_state,
+            MainInputHistoryState((replacement,)),
+        )
+        self.assertFalse(completion_candidate_matches(token, "$C"))
+        self.assertEqual(
+            projection_provider.call_args_list,
+            [
+                mock.call(original, len(original)),
+                mock.call(replacement, len(replacement)),
+            ],
+        )
+        failure_writer.assert_called_once_with(ReferenceInputFailureKind.INVALID)
+        picker_factory.assert_not_called()
+        self.assertEqual(
+            fallback.call_args_list,
+            [mock.call("main> "), mock.call(retry_prompt)],
         )
         self.assertNotIn(("read", 1), input_stream.calls)
         self.assertEqual(output.records, [])

@@ -1978,6 +1978,120 @@ print(
             process.original_terminal_attributes,
         )
 
+    def test_reference_fragment_completion_is_capable_and_provider_free(self) -> None:
+        """Complete typed $c, require explicit submission, and restore the PTY."""
+
+        source = _REFERENCE_PROBE_PREAMBLE + r'''
+result = main.read_main_with_references(
+    choices,
+    main_scope,
+    paths,
+    text,
+    session_id="session",
+    agent_id=PLOT_ARCHITECT,
+)
+print("RESULT=" + json.dumps({
+    "text": result.text,
+    "catalog_calls": len(catalog_calls),
+    "read_calls": read_calls,
+}, separators=(",", ":")))
+'''
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=80,
+        )
+        path = "core_documents/character_sheets.md"
+        token = f"${{{path}}}"
+        process.wait_for_text("story[session:plot]>")
+        preview_mark = process.output_mark()
+        process.send_text("typed $c")
+        preview = process.wait_for_text(token, after=preview_mark)
+        self.assertIn("[highlighted]", preview)
+        process.send_text("\t")
+        process.wait_for_text(f"typed {token} ", after=preview_mark)
+        self.assertNotIn('RESULT={"text":', process.text_after(preview_mark))
+        process.send_text("\n")
+        process.wait_for_text('RESULT={"text":')
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+
+        match = re.search(r"RESULT=(\{[^\r\n]+\})", process.normalized_text)
+        self.assertIsNotNone(match, process.normalized_text)
+        assert match is not None
+        result = json.loads(match.group(1))
+        self.assertEqual(result["text"], f"typed {token} ")
+        self.assertGreater(result["catalog_calls"], 0)
+        self.assertEqual(result["read_calls"], [])
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 0)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 0)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+        self.assertFalse(self.provider_log.exists())
+
+    def test_reference_fragment_completion_uses_dumb_fallback_confirmation(
+        self,
+    ) -> None:
+        """Filter $c to one numbered choice and retain explicit confirmation."""
+
+        source = _REFERENCE_PROBE_PREAMBLE + r'''
+PATHS = (PATHS[0],)
+result = main.read_main_with_references(
+    choices,
+    main_scope,
+    paths,
+    text,
+    session_id="session",
+    agent_id=PLOT_ARCHITECT,
+)
+print("RESULT=" + json.dumps({
+    "text": result.text,
+    "catalog_calls": len(catalog_calls),
+    "read_calls": read_calls,
+}, separators=(",", ":")))
+'''
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "dumb"},
+            terminal_columns=80,
+        )
+        path = "core_documents/character_sheets.md"
+        token = f"${{{path}}}"
+        process.wait_for_text("story[session:plot]>")
+        assert termios is not None
+        fallback_attributes = termios.tcgetattr(process.master_fd)
+        self.assertTrue(fallback_attributes[3] & termios.ICANON)
+        self.assertTrue(fallback_attributes[3] & termios.ECHO)
+
+        process.send_line("fallback $c")
+        picker = process.wait_for_text(f"1. [highlighted] {token}")
+        self.assertNotIn("2. [", picker)
+        process.send_line("1")
+        expected = f"fallback {token}"
+        process.wait_for_text(f"Draft retained: {expected}")
+        process.wait_for_text("Press Enter to submit it")
+        confirmation_mark = process.output_mark()
+        process.send_line("")
+        process.wait_for_text('RESULT={"text":', after=confirmation_mark)
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+
+        match = re.search(r"RESULT=(\{[^\r\n]+\})", process.normalized_text)
+        self.assertIsNotNone(match, process.normalized_text)
+        assert match is not None
+        result = json.loads(match.group(1))
+        self.assertEqual(result["text"], expected)
+        self.assertGreater(result["catalog_calls"], 0)
+        self.assertEqual(result["read_calls"], [])
+        self.assertNotIn("\x1b", process.normalized_text)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 0)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 0)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+        self.assertFalse(self.provider_log.exists())
+
     def test_reference_viewer_reuses_main_latch_and_ineligible_dollar_stays_literal(
         self,
     ) -> None:
