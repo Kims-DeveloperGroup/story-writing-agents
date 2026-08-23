@@ -483,7 +483,7 @@ at capable POSIX main prompts. A root `/` opens with its first candidate
 highlighted. Compact registry order (not output layout):
 
 ```text
-/say /to /agent /agents /language /persona /reset /settings /run /draft-file /session
+/say /to /agent /agents /auth /language /persona /reset /settings /run /draft-file /session
 /conversation /search /transcript /inspect /history /status /help /? /quit /exit
 ```
 

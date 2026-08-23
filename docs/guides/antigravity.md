@@ -2,13 +2,14 @@
 
 > **Availability:** Antigravity is implemented through the `agy` CLI for
 > debates, direct conversation, bounded retrieval, and persistent provider
-> conversations. Interactive onboarding uses bare `agy` for native sign-in;
-> Codex remains the final route fallback.
+> conversations. Interactive onboarding invokes the resolved Antigravity
+> executable without arguments for native sign-in; it defaults to `agy`. Codex
+> remains the final route fallback.
 
 Key terms: **backend name**—the configuration value `antigravity`;
-**executable**—the command `agy`; **provider conversation**—Antigravity's private
-history identified by a runtime-managed ID; **taint**—a marker that prevents
-continuing uncertain provider history.
+**executable**—the resolved Antigravity command, `agy` by default; **provider
+conversation**—Antigravity's private history identified by a runtime-managed
+ID; **taint**—a marker that prevents continuing uncertain provider history.
 
 ## Install and authenticate `agy`
 
@@ -22,19 +23,21 @@ command -v agy
 agy --version
 ```
 
-At interactive startup, the runtime silently executes `agy models` as the
-Antigravity status probe. Return code `0` means authenticated, `1` means
+At interactive startup, the runtime silently executes `agy models` by default
+as the Antigravity status probe. Return code `0` means authenticated, `1` means
 unauthenticated, a missing executable means unavailable, and other or timed-out
 results are indeterminate. Selecting an unauthenticated Antigravity entry runs
-bare `agy`; do not substitute another executable or add login arguments.
+the resolved executable without arguments: bare `agy` by default, or a
+supported `--antigravity-executable PATH` override invoked the same way. Do not
+substitute a Gemini command or add `login` or other sign-in arguments.
 
 The native sign-in inherits stdin, stdout, stderr, and the process environment
 and runs at the resolved story workspace root. It may open a
 provider-controlled browser. The runtime does not synthesize or inspect a URL,
 read provider output or account facts, capture tokens or credentials, or manage
 Antigravity's native credential persistence. After the native process ends,
-only a fresh `agy models` result can authorize Antigravity; the sign-in exit
-code and prior status are not authorization.
+only a fresh `models` probe from that resolved executable can authorize
+Antigravity; the sign-in exit code and prior status are not authorization.
 
 Keep credentials out of story configuration, prompts, drafts, filenames, and
 logs. Provider subprocesses inherit the story process environment, so treat
@@ -123,7 +126,8 @@ catalog or prove provider support.
 ## Capability preflight and fixed errors
 
 Interactive authentication and adapter capability preflight are separate.
-Authentication uses only `agy models` and bare `agy` as described above.
+Authentication invokes the resolved executable with `models` for status and no
+arguments for sign-in: `agy models` and bare `agy` by default.
 
 Before provider work, preflight resolves each executable required by the
 effective provider routes. For an Antigravity route it also runs a bounded,
@@ -223,9 +227,9 @@ agy --version
 agy --help
 ```
 
-`agy models` is the native authentication probe, not part of `story smoke` or
-the adapter capability check. Bare `agy` is the only sign-in command used by
-the interactive shell.
+The default native authentication probe is `agy models`; it is not part of
+`story smoke` or the adapter capability check. Sign-in invokes that resolved
+executable with no arguments.
 
 A real `story chat` or `story run` call is a live provider check. It may require
 credentials and network access, consume provider quota, transmit story content,
