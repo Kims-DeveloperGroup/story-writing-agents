@@ -44,6 +44,9 @@ from story_writing_agents.writing_artifacts import (
     manuscript_artifact_path,
 )
 from story_writing_agents.writing_artifacts import _storage as storage_module
+from story_writing_agents.writing_artifacts import (
+    filesystem_sources as filesystem_sources_module,
+)
 from story_writing_agents.writing_artifacts import repository as repository_module
 from story_writing_agents.writing_artifacts._storage import (
     ArtifactEntrySecurityError,
@@ -387,6 +390,32 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
                 revision_id="r0",
                 candidate_author_agent_id=EXECUTION_SPECIALIST,
             )
+
+    def test_source_adapter_delegates_full_content_validation_to_snapshot(
+        self,
+    ) -> None:
+        manuscript_path = "manuscript/part-01/manual.md"
+        content = b"\xffbefore\x00after"
+        target = self.root / manuscript_path
+        target.parent.mkdir(parents=True)
+        target.write_bytes(content)
+        sentinel = object()
+
+        with mock.patch.object(
+            filesystem_sources_module,
+            "ArtifactContentSnapshot",
+            return_value=sentinel,
+        ) as snapshot_type:
+            self.assertEqual(
+                self.repository.read_current((manuscript_path,)),
+                (sentinel,),
+            )
+
+        snapshot_type.assert_called_once()
+        source, observed_content = snapshot_type.call_args.args
+        self.assertEqual(source.path, manuscript_path)
+        self.assertEqual(source.source_utf8_bytes, len(content))
+        self.assertEqual(observed_content, content)
 
     def test_read_enforces_viewer_size_strict_utf8_and_nul_on_current_bytes(
         self,

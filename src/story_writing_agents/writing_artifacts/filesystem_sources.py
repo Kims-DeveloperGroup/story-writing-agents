@@ -87,14 +87,6 @@ class CanonicalArtifactFilesystem:
             max_bytes=effective_max_bytes,
         )
         content = captured.content
-        try:
-            decoded = content.decode("utf-8", errors="strict")
-        except UnicodeDecodeError as exc:
-            raise ArtifactSourceInvalidUtf8Error(
-                "artifact is not valid UTF-8"
-            ) from exc
-        if "\x00" in decoded:
-            raise ArtifactSourceNulError("artifact contains NUL")
         physical = captured.identity
         source = ArtifactSourceIdentity(
             path=path,
@@ -106,7 +98,16 @@ class CanonicalArtifactFilesystem:
             modified_ns=physical.modified_ns,
             changed_ns=physical.changed_ns,
         )
-        return ArtifactContentSnapshot(source, content)
+        try:
+            return ArtifactContentSnapshot(source, content)
+        except ValueError as exc:
+            if isinstance(exc.__cause__, UnicodeDecodeError):
+                raise ArtifactSourceInvalidUtf8Error(
+                    "artifact is not valid UTF-8"
+                ) from exc.__cause__
+            if b"\x00" in content:
+                raise ArtifactSourceNulError("artifact contains NUL") from None
+            raise
 
     def read_current(
         self,
