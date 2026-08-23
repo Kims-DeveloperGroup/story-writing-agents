@@ -1163,7 +1163,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   cycles, palette open/filter/highlight/clamp, static Tab/Enter completion and
   snapshot, dynamic Up/Down highlight and direct Enter commit, Escape
   restoration and latch, and the exact open-palette versus closed-history arrow
-  routing.
+  routing. Unlisted `completion_candidate_matches` is the single pure,
+  case-sensitive candidate predicate used by capable controls and injected
+  fallback: it preserves literal prefix matching and the existing omitted `/`
+  help-token match, permits only an omitted `{` after exactly one `$` for
+  canonical `${...}` candidates, and performs no `$$` normalization, fuzzy or
+  substring matching, or case folding.
   `transition_composer_line`
   applies exact `/send`, `/cancel`, `/say /send`, and `/say /cancel` semantics
   to immutable composer state, while `transition_confirmation_answer`
@@ -1363,10 +1368,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   `read_main_command_line` performs selectable history-aware main editing,
   while `read_reference_main_command_line` and `read_reference_input_line`
   accept private call-local activation bindings for main and RUN/CHAT input
-  without changing that established method signature. Enter or Tab activates a
-  correlated request before line completion or history mutation. A single `$`
-  stays in the completion vocabulary; `$$` opens the generic picker and then
-  the supplied-text viewer, while `$${path}` opens that viewer directly.
+  without changing that established method signature. Those bindings carry the
+  controls-owned completion predicate so capable controls and ordinary
+  fallback apply the same exact matching relation; the driver interprets no
+  artifact-reference prefix grammar and retains no matching collaborator.
+  Enter or Tab activates a correlated request before line completion or
+  history mutation. A single `$` stays in the completion vocabulary; `$$`
+  opens the generic picker and then the supplied-text viewer, while `$${path}`
+  opens that viewer directly.
   `read_live_line` remains the history-free contextual compatibility route,
   `read_input_line` accepts an injected trusted semantic renderer for
   history-free composition and confirmation, and `read_line` uses the same
@@ -1566,9 +1575,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   driver. The same coordinator combines command-owned provider scopes with the
   pure reference-activation projection and call-local catalog/read/fixed-error
   callbacks. It gives reference completion precedence only inside an eligible
-  span and binds the existing generic picker and supplied-text viewer controls
-  to driver-owned nested activation. Callback-constructed terminals preserve
-  their established ordinary behavior.
+  span, injects the controls-owned completion predicate into each call-local
+  `ReferenceInputBindings`, and binds the existing generic picker and
+  supplied-text viewer controls to driver-owned nested activation.
+  Callback-constructed terminals preserve their established ordinary behavior.
   The internal contextual factory preserves explicit ordinary/main/composition
   callback routing through deterministic plain semantic adapters, while the
   real stream factory binds the selectable main-command route, both preview
