@@ -2285,10 +2285,11 @@ class WorkspaceTests(unittest.TestCase):
                 "codex_reasoning_effort": None,
                 "antigravity_model": None,
                 "antigravity_effort": None,
+                "default_backend": None,
             },
         )
         expected_agent = {
-            "backend": "codex",
+            "backend": None,
             "language": None,
             "persona": None,
             "codex_model": None,
@@ -2311,6 +2312,7 @@ class WorkspaceTests(unittest.TestCase):
             '  "antigravity_model": null,\n'
             '  "codex_model": null,\n'
             '  "codex_reasoning_effort": null,\n'
+            '  "default_backend": null,\n'
             '  "language": "KO",\n'
             '  "max_debate_rounds": 1,\n'
             '  "persona": "default_kim_eun_hee"\n'
@@ -2895,11 +2897,10 @@ class ConfigurationCascadeTests(unittest.TestCase):
                 "codex_reasoning_effort",
                 "antigravity_model",
                 "antigravity_effort",
+                "default_backend",
             ),
         )
-        self.assertTrue(
-            all(field.default is None for field in model_fields[-4:])
-        )
+        self.assertTrue(all(field.default is None for field in model_fields[-5:]))
         legacy = SystemDefaults("KO", "global_persona", 1)
         self.assertEqual(
             legacy,
@@ -2911,6 +2912,7 @@ class ConfigurationCascadeTests(unittest.TestCase):
                 codex_reasoning_effort=None,
                 antigravity_model=None,
                 antigravity_effort=None,
+                default_backend=None,
             ),
         )
         self.assertFalse(hasattr(legacy, "__dict__"))
@@ -2940,6 +2942,50 @@ class ConfigurationCascadeTests(unittest.TestCase):
             pickle.loads(pickle.dumps(legacy_agent)),
             legacy_agent,
         )
+
+    def test_nullable_default_and_effective_provider_precedence_are_exact(
+        self,
+    ) -> None:
+        legacy = self.manager.load_configuration_snapshot()
+        self.assertIsNone(legacy.system_defaults.default_backend)
+        self.assertTrue(
+            all(config.backend is None for config in legacy.agent_configs.values())
+        )
+
+        cases = (
+            ("antigravity", "codex", "codex", "antigravity"),
+            (None, "codex", "antigravity", "codex"),
+            (None, None, "antigravity", "antigravity"),
+            (None, None, None, "codex"),
+        )
+        for override, agent_backend, default_backend, expected in cases:
+            with self.subTest(
+                override=override,
+                agent_backend=agent_backend,
+                default_backend=default_backend,
+            ):
+                configs = {agent_id: AgentConfig() for agent_id in ROSTER}
+                configs[PLOT_ARCHITECT] = AgentConfig(backend=agent_backend)
+                current = ConfigurationSnapshot(
+                    SystemDefaults(
+                        "KO",
+                        "global_persona",
+                        1,
+                        default_backend=default_backend,
+                    ),
+                    configs,
+                )
+                overrides = (
+                    None
+                    if override is None
+                    else {PLOT_ARCHITECT: override}
+                )
+                resolved = self.manager.resolve_from_snapshot(
+                    current,
+                    PLOT_ARCHITECT,
+                    backend_overrides=overrides,
+                )
+                self.assertEqual(resolved.backend, expected)
 
     def test_full_snapshot_is_exact_frozen_roster_complete_and_copy_isolated(
         self,

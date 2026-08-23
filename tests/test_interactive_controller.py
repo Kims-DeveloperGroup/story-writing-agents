@@ -34,6 +34,7 @@ from story_writing_agents.cli_context import (
     save_default_conversation,
     save_default_session,
 )
+from story_writing_agents.config import ConfigManager
 from story_writing_agents.conversation_search import (
     ConversationCitation,
     ConversationSearchHit,
@@ -70,6 +71,11 @@ from story_writing_agents.errors import (
 )
 from story_writing_agents.interactive_controller import InteractiveController
 from story_writing_agents.interactive_commands import ActionKind, InteractiveAction
+from story_writing_agents.interactive_auth import (
+    InteractiveAuthCoordinator,
+    InteractiveAuthResult,
+    InteractiveAuthResultKind,
+)
 from story_writing_agents.interactive_controller import (
     _conversation_policy as conversation_policy_module,
 )
@@ -86,6 +92,12 @@ from story_writing_agents.interactive_terminal import (
     InteractiveErrorCode,
     InteractiveTerminal,
 )
+from story_writing_agents.provider_auth import (
+    AUTH_PROVIDERS,
+    ProviderAuthSnapshot,
+    ProviderAuthState,
+    ProviderAuthStatus,
+)
 from story_writing_agents import interactive_terminal as terminal_module
 from story_writing_agents.interactive_terminal._render import render_plain
 from story_writing_agents.models import (
@@ -100,7 +112,6 @@ from story_writing_agents.session_lifecycle import (
     SessionLifecycleState,
 )
 from story_writing_agents.workspace import (
-    FilesystemConversationCatalog,
     Workspace,
 )
 
@@ -157,6 +168,104 @@ class ScriptedTerminalCallbacks:
         """Append one terminal-owned output record without transformation."""
 
         self.records.append(text)
+
+
+def _auth_snapshot(
+    codex: ProviderAuthState,
+    antigravity: ProviderAuthState,
+) -> ProviderAuthSnapshot:
+    """Build one exact ordered provider-auth snapshot."""
+
+    return ProviderAuthSnapshot(
+        (
+            ProviderAuthStatus("codex", codex),
+            ProviderAuthStatus("antigravity", antigravity),
+        )
+    )
+
+
+def _auth_result(
+    current: ProviderAuthSnapshot,
+    provider: str,
+) -> InteractiveAuthResult:
+    """Build one result correlated to the supplied provider status."""
+
+    selected = current.status_for(provider)
+    return InteractiveAuthResult(
+        (
+            InteractiveAuthResultKind.AUTHENTICATED
+            if selected.authenticated
+            else InteractiveAuthResultKind.NOT_AUTHENTICATED
+        ),
+        current,
+        provider=provider,
+        status=selected,
+    )
+
+
+class ScriptedAuthCoordinator:
+    """Record controller auth traffic without native commands or credentials."""
+
+    def __init__(
+        self,
+        *,
+        snapshots: tuple[object, ...],
+        results: tuple[object, ...] = (),
+    ) -> None:
+        self.snapshots = list(snapshots)
+        self.results = list(results)
+        self.events: list[tuple[str, object | None]] = []
+
+    def probe_all(self) -> ProviderAuthSnapshot:
+        self.events.append(("probe_all", None))
+        if not self.snapshots:
+            raise AssertionError("unexpected controller auth probe")
+        value = self.snapshots.pop(0)
+        if isinstance(value, BaseException):
+            raise value
+        return value  # type: ignore[return-value]
+
+    def choices(
+        self,
+        current: ProviderAuthSnapshot,
+        *,
+        selected_provider: str | None = None,
+    ) -> tuple[terminal_module.Choice, ...]:
+        self.events.append(("choices", selected_provider))
+        choices = []
+        for provider, label in zip(
+            AUTH_PROVIDERS,
+            ("Codex", "Antigravity"),
+            strict=True,
+        ):
+            selected = current.status_for(provider)
+            enabled = selected.state is not ProviderAuthState.UNAVAILABLE
+            choices.append(
+                terminal_module.Choice(
+                    provider,
+                    label,
+                    description=selected.state.value,
+                    enabled=enabled,
+                    disabled_reason=(
+                        None if enabled else "Install the provider CLI, then retry."
+                    ),
+                )
+            )
+        return tuple(choices)
+
+    def run(
+        self,
+        current: ProviderAuthSnapshot,
+        *,
+        selected_provider: str | None = None,
+    ) -> InteractiveAuthResult:
+        self.events.append(("run", selected_provider))
+        if not self.results:
+            raise AssertionError("unexpected controller auth picker")
+        value = self.results.pop(0)
+        if isinstance(value, BaseException):
+            raise value
+        return value  # type: ignore[return-value]
 
 
 def _tree_snapshot(root: Path) -> dict[str, tuple[bytes, int, int]]:
@@ -542,6 +651,7 @@ class ControllerTestCase(unittest.TestCase):
         context: CliContext | None = None,
         backend: AgentBackend | None = None,
         conversation_catalog: ConversationCatalog | None = None,
+        auth_coordinator: object | None = None,
         terminal_width: int = 80,
     ) -> tuple[
         InteractiveController,
@@ -558,11 +668,11 @@ class ControllerTestCase(unittest.TestCase):
             callbacks.write_text,
             width=terminal_width,
         )
-        controller_keywords = (
-            {}
-            if conversation_catalog is None
-            else {"conversation_catalog": conversation_catalog}
-        )
+        controller_keywords: dict[str, object] = {}
+        if conversation_catalog is not None:
+            controller_keywords["conversation_catalog"] = conversation_catalog
+        if auth_coordinator is not None:
+            controller_keywords["auth_coordinator"] = auth_coordinator
         return (
             InteractiveController(
                 workspace,
@@ -603,6 +713,7 @@ class ControllerContractTests(ControllerTestCase):
                 "backend",
                 "terminal",
                 "conversation_catalog",
+                "auth_coordinator",
             ),
         )
         self.assertTrue(
@@ -618,6 +729,9 @@ class ControllerContractTests(ControllerTestCase):
             inspect.Parameter.KEYWORD_ONLY,
         )
         self.assertIsNone(catalog_parameter.default)
+        auth_parameter = constructor.parameters["auth_coordinator"]
+        self.assertIs(auth_parameter.kind, inspect.Parameter.KEYWORD_ONLY)
+        self.assertIsNone(auth_parameter.default)
         self.assertEqual(
             get_type_hints(InteractiveController.__init__),
             {
@@ -626,6 +740,7 @@ class ControllerContractTests(ControllerTestCase):
                 "backend": AgentBackend,
                 "terminal": InteractiveTerminal,
                 "conversation_catalog": ConversationCatalog | None,
+                "auth_coordinator": InteractiveAuthCoordinator | None,
                 "return": type(None),
             },
         )
@@ -669,6 +784,14 @@ class ControllerContractTests(ControllerTestCase):
                 backend,
                 terminal,
                 conversation_catalog=object(),  # type: ignore[arg-type]
+            )
+        with self.assertRaisesRegex(TypeError, "auth_coordinator"):
+            InteractiveController(
+                workspace,
+                CliContext(),
+                backend,
+                terminal,
+                auth_coordinator=object(),  # type: ignore[arg-type]
             )
 
         with mock.patch.object(backend, "close", wraps=backend.close) as close:
@@ -936,6 +1059,7 @@ class ControllerContractTests(ControllerTestCase):
                 "conversations",
                 "debug_log",
                 "errors",
+                "interactive_auth",
                 "interactive_commands",
                 "interactive_settings",
                 "interactive_controller._conversation_policy",
@@ -1216,7 +1340,7 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 38)
+        self.assertEqual(len(modules), 40)
 
 
 class ControllerDebateVisibilityTests(ControllerTestCase):
@@ -2870,6 +2994,99 @@ class ControllerCommandTests(ControllerTestCase):
         )
 
 
+class ControllerAuthTests(ControllerTestCase):
+    """Verify live `/auth` behavior and durable missing-default policy."""
+
+    def test_auth_uses_live_status_and_new_authentication_wins_default(self) -> None:
+        workspace = self.make_workspace()
+        initial = _auth_snapshot(
+            ProviderAuthState.UNAUTHENTICATED,
+            ProviderAuthState.UNAUTHENTICATED,
+        )
+        refreshed = _auth_snapshot(
+            ProviderAuthState.UNAUTHENTICATED,
+            ProviderAuthState.AUTHENTICATED,
+        )
+        coordinator = ScriptedAuthCoordinator(
+            snapshots=(initial, refreshed),
+            results=(_auth_result(refreshed, "antigravity"),),
+        )
+        controller, backend, callbacks = self.make_controller(
+            workspace,
+            "/auth",
+            "/quit",
+            auth_coordinator=coordinator,
+            terminal_width=120,
+        )
+
+        with mock.patch.object(subprocess, "Popen") as popen:
+            self.assertEqual(controller.run_session_lobby(), 0)
+        popen.assert_not_called()
+        self.assertEqual(
+            coordinator.events,
+            [
+                ("probe_all", None),
+                ("run", None),
+                ("probe_all", None),
+            ],
+        )
+        defaults = ConfigManager(workspace).load_system_defaults()
+        self.assertEqual(defaults.default_backend, "antigravity")
+        self.assertTrue(backend._closed)
+        rendered = "".join(callbacks.records)
+        for secret in ("token=", "account@", "https://oauth"):
+            self.assertNotIn(secret, rendered)
+
+    def test_auth_cancel_keeps_an_already_established_live_default(self) -> None:
+        workspace = self.make_workspace()
+        both = _auth_snapshot(
+            ProviderAuthState.AUTHENTICATED,
+            ProviderAuthState.AUTHENTICATED,
+        )
+        coordinator = ScriptedAuthCoordinator(
+            snapshots=(both,),
+            results=(
+                InteractiveAuthResult(InteractiveAuthResultKind.CANCEL, both),
+            ),
+        )
+        controller, _backend, callbacks = self.make_controller(
+            workspace,
+            "/auth",
+            "/quit",
+            auth_coordinator=coordinator,
+            terminal_width=120,
+        )
+        self.assertEqual(controller.run_session_lobby(), 0)
+        self.assertEqual(
+            ConfigManager(workspace).load_system_defaults().default_backend,
+            "codex",
+        )
+        self.assertEqual(
+            coordinator.events,
+            [("probe_all", None), ("run", None)],
+        )
+        self.assertIn(
+            "Any authenticated workspace default already established was kept.",
+            "".join(callbacks.records),
+        )
+
+    def test_auth_without_coordinator_is_safe_nonmutating_and_compatible(self) -> None:
+        workspace = self.make_workspace()
+        before = _tree_snapshot(workspace.root)
+        controller, _backend, callbacks = self.make_controller(
+            workspace,
+            "/auth",
+            "/quit",
+            terminal_width=120,
+        )
+        self.assertEqual(controller.run_session_lobby(), 0)
+        self.assertEqual(_tree_snapshot(workspace.root), before)
+        self.assertIn(
+            "Provider authentication is unavailable in this shell.",
+            "".join(callbacks.records),
+        )
+
+
 class ControllerSettingsTests(ControllerTestCase):
     """Verify isolated settings UI, validation, persistence, and cancellation."""
 
@@ -2956,6 +3173,169 @@ class ControllerSettingsTests(ControllerTestCase):
             "Settings",
             items,
             state=terminal_module.ViewState.OPEN,
+        )
+
+    def test_provider_assignment_requires_fresh_auth_before_candidate_change(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        codex_only = _auth_snapshot(
+            ProviderAuthState.AUTHENTICATED,
+            ProviderAuthState.UNAUTHENTICATED,
+        )
+        both = _auth_snapshot(
+            ProviderAuthState.AUTHENTICATED,
+            ProviderAuthState.AUTHENTICATED,
+        )
+        coordinator = ScriptedAuthCoordinator(
+            snapshots=(codex_only, codex_only, both, both),
+            results=(_auth_result(both, "antigravity"),),
+        )
+        controller, _backend, callbacks = self.make_controller(
+            workspace,
+            "/settings",
+            "4",
+            "2",
+            "1",
+            "2",
+            "5",
+            "1",
+            "/quit",
+            auth_coordinator=coordinator,
+            terminal_width=160,
+        )
+        self.assertEqual(controller.run_session_lobby(), 0)
+
+        configuration = settings_module.load_settings_state(workspace).pending
+        self.assertEqual(configuration.system_defaults.default_backend, "codex")
+        self.assertEqual(
+            configuration.agent_configs[PLOT_ARCHITECT].backend,
+            "antigravity",
+        )
+        self.assertEqual(
+            coordinator.events,
+            [
+                ("probe_all", None),
+                ("choices", "codex"),
+                ("probe_all", None),
+                ("run", "antigravity"),
+                ("probe_all", None),
+                ("probe_all", None),
+            ],
+        )
+        self.assertIn("Settings saved", "".join(callbacks.records))
+
+    def test_failed_provider_auth_never_assigns_route_but_keeps_default(self) -> None:
+        workspace = self.make_workspace()
+        codex_only = _auth_snapshot(
+            ProviderAuthState.AUTHENTICATED,
+            ProviderAuthState.UNAUTHENTICATED,
+        )
+        coordinator = ScriptedAuthCoordinator(
+            snapshots=(codex_only, codex_only, codex_only),
+            results=(_auth_result(codex_only, "antigravity"),),
+        )
+        controller, _backend, callbacks = self.make_controller(
+            workspace,
+            "/settings",
+            "4",
+            "2",
+            "1",
+            "2",
+            "6",
+            "1",
+            "/quit",
+            auth_coordinator=coordinator,
+            terminal_width=160,
+        )
+        self.assertEqual(controller.run_session_lobby(), 0)
+
+        configuration = settings_module.load_settings_state(workspace).pending
+        self.assertEqual(configuration.system_defaults.default_backend, "codex")
+        self.assertIsNone(configuration.agent_configs[PLOT_ARCHITECT].backend)
+        rendered = "".join(callbacks.records)
+        self.assertIn(
+            "was not assigned because fresh authentication was not confirmed",
+            rendered,
+        )
+        self.assertIn("Settings cancelled", rendered)
+        self.assertNotIn("Settings saved", rendered)
+
+    def test_save_freshly_gates_each_distinct_effective_provider_once(self) -> None:
+        workspace = self.make_workspace()
+        settings_module.establish_default_backend(workspace, "codex")
+        state = settings_module.update_agent_backend(
+            settings_module.load_settings_state(workspace),
+            PLOT_ARCHITECT,
+            "antigravity",
+        )
+        settings_module.save_settings_state(workspace, state)
+        codex_only = _auth_snapshot(
+            ProviderAuthState.AUTHENTICATED,
+            ProviderAuthState.UNAUTHENTICATED,
+        )
+        both = _auth_snapshot(
+            ProviderAuthState.AUTHENTICATED,
+            ProviderAuthState.AUTHENTICATED,
+        )
+        coordinator = ScriptedAuthCoordinator(
+            snapshots=(codex_only, both),
+            results=(_auth_result(both, "antigravity"),),
+        )
+        controller, _backend, callbacks = self.make_controller(
+            workspace,
+            "/settings",
+            "5",
+            "1",
+            "/quit",
+            auth_coordinator=coordinator,
+            terminal_width=160,
+        )
+        self.assertEqual(controller.run_session_lobby(), 0)
+        self.assertEqual(
+            coordinator.events,
+            [
+                ("probe_all", None),
+                ("run", "antigravity"),
+                ("probe_all", None),
+            ],
+        )
+        self.assertIn("Settings saved", "".join(callbacks.records))
+
+        second_workspace = self.make_workspace()
+        settings_module.establish_default_backend(second_workspace, "codex")
+        state = settings_module.update_agent_backend(
+            settings_module.load_settings_state(second_workspace),
+            PLOT_ARCHITECT,
+            "antigravity",
+        )
+        settings_module.save_settings_state(second_workspace, state)
+        coordinator = ScriptedAuthCoordinator(
+            snapshots=(codex_only, codex_only),
+            results=(_auth_result(both, "antigravity"),),
+        )
+        controller, _backend, callbacks = self.make_controller(
+            second_workspace,
+            "/settings",
+            "5",
+            "1",
+            "6",
+            "1",
+            "/quit",
+            auth_coordinator=coordinator,
+            terminal_width=160,
+        )
+        self.assertEqual(controller.run_session_lobby(), 0)
+        rendered = "".join(callbacks.records)
+        self.assertIn("not authenticated", rendered)
+        self.assertNotIn("Settings saved", rendered)
+        self.assertEqual(
+            coordinator.events,
+            [
+                ("probe_all", None),
+                ("run", "antigravity"),
+                ("probe_all", None),
+            ],
         )
 
     def test_settings_panel_omits_empty_diff_sections(self) -> None:
