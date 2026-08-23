@@ -44,6 +44,7 @@ _CARRIAGE_RETURN = "\r"
 _CLEAR_TO_END = "\x1b[J"
 _CURSOR_UP = "\x1b[A"
 _CURSOR_RIGHT = "\x1b[C"
+_SGR_RESET = "\x1b[0m"
 _DEFAULT_TERMINAL_WIDTH = 80
 _MAX_ESCAPE_SEQUENCE_LENGTH = 64
 _ESCAPE_LOOKAHEAD_SECONDS = 0.05
@@ -705,7 +706,12 @@ class RawTerminalDriver:
 
         if type(state) is not _StartupFrameState:
             raise TypeError("state must be a _StartupFrameState")
-        written = self._output_stream.write("\n")
+        try:
+            written = self._output_stream.write("\n")
+        except BaseException:
+            state.physical_line_count = 0
+            state.cursor_below_frame = False
+            raise
         if written is None or type(written) is int and written == 1:
             state.cursor_below_frame = True
         else:
@@ -753,6 +759,7 @@ class RawTerminalDriver:
         self._write_raw_text(
             "".join(
                 (
+                    _SGR_RESET,
                     _CARRIAGE_RETURN,
                     _CURSOR_UP
                     * (line_count if cursor_below_frame else line_count - 1),
