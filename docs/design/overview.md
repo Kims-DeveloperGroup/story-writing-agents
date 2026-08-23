@@ -50,9 +50,12 @@ writes never manufacture artifact provenance. See
 The package has no controller, terminal, backend, orchestrator, or generic
 `Workspace` dependency. The backend imports only the provider-neutral
 `read_actions` boundary; the repository remains the sole owner of filesystem
-reads, revalidation, capabilities, and evidence. `StoryRuntime` owns when a
-unanimous result may call the repository; prompt assembly consumes only its
-current eligible core paths. It does not yet propagate explicit references.
+reads, revalidation, capabilities, and evidence. `StoryRuntime` parses and
+captures one ordered explicit-reference batch per operation, allocates a fresh
+coordinator for every addressed agent/phase, and accepts the operation only
+after final revalidation. Prompt assembly consumes only current eligible core
+paths; referenced selections are transient untrusted provider context rather
+than baseline core context.
 The interactive controller validates required manuscript output grammar but
 does not own storage or provenance. Exact user-visible states are in
 [Canonical writing artifacts](../reference/writing-artifacts.md).
@@ -151,9 +154,9 @@ available. It discovers and reads no file and constructs no artifact reference.
 The later #164 caller must list and securely read eligible artifacts through
 the writing-artifact boundary, enforce that boundary's separate limit, call
 the stateless viewer once per ordered selection, attach the path to returned
-line numbers, and restore the originating composer. #163 owns the mandatory
-per-agent read behavior. Until those integrations land, users cannot open the
-viewer from the shell.
+line numbers, and restore the originating composer. Mandatory per-agent reads
+already apply to directly typed inline indicators. Until #164 lands, users
+cannot open the viewer from the shell.
 
 Every capable main, subject, composition, confirmation, picker, or prompt read
 clears its complete live frame before returning on submit, commit, cancel, interrupt,

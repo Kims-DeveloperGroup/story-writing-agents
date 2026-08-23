@@ -3,8 +3,8 @@
 > **Availability:** these models are Python APIs. Debate requests can carry an
 > optional conversation snapshot; one-step and retrieval turns use separate,
 > compatible request families. Content-free explicit-reference read contracts
-> are available to internal/Python backend callers, but `StoryRuntime` and the
-> installed shell do not construct them yet.
+> are constructed by `StoryRuntime` for inline canonical references and remain
+> available as the internal/Python backend boundary.
 
 Key terms: **definition**—stable context bound to one agent; **request**—dynamic
 data for one provider call; **blackboard**—public debate messages;

@@ -2,10 +2,9 @@
 
 > **Availability:** filesystem persistence covers configuration, sessions,
 > conversations, debates, optional debate-context sidecars, canonical writing
-> artifacts, and content-free explicit-reference authorization evidence. The
-> #189 backend can drive that evidence for an internal/Python referenced
-> invocation. `StoryRuntime` and shell reference commands do not create or
-> expose the operation yet.
+> artifacts, and content-free explicit-reference authorization evidence.
+> `StoryRuntime` now creates and finalizes that evidence for inline referenced
+> operations; Python callers can inspect it by operation ID.
 
 Key terms: **blackboard**—public debate JSONL; **sidecar**—context stored apart
 from established debate records; **create-only**—never replaces an existing
@@ -89,8 +88,9 @@ Creation occurs after debate reservation and before initiation or provider
 work. The file is strict UTF-8 JSON, identity-bound to its path, rejects
 missing, extra, or duplicate keys, and is never overwritten. A collision raises
 `DebateExistsError`. `Workspace.inspect_debate_context()` and the matching
-runtime methods are read-only; existing debate/session inspection, logs, result
-JSON, and `DebateResult` remain unchanged.
+runtime methods are read-only; this sidecar does not itself change
+debate/session inspection, logs, result JSON, or `DebateResult`. A separate
+referenced run may add its optional content-free operation ID to the result.
 
 ## Durability boundaries
 

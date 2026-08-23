@@ -113,6 +113,12 @@ Scripts, pipelines, and other non-TTY callers must use noninteractive
 session and `--output PART/PATH.md` inputs in the [single automation example](guides/glasswater-scenario.md#use-one-explicit-automation-call-then-pause),
 then consult the exact [CLI contract](reference/cli.md#workspace-noninteractive-behavior-and-exits).
 
+Provider-bound prompt text may include inline `${canonical/path.md}` or
+`${canonical/path.md}#Lx-Ly` indicators. Quote noninteractive prompts so the
+shell does not expand `$`. See [Canonical artifact references](guides/artifact-references.md)
+for exact paths, multi-reference examples, agent read enforcement, and the
+still-pending `$`/`$$` discovery UI.
+
 Continue with [Workspaces](guides/workspaces.md), [Consensus runs](guides/consensus-runs.md),
 or the complete interactive [Glasswater journey](guides/glasswater-scenario.md).
 Exact grammar and exits live in the [CLI reference](reference/cli.md).
