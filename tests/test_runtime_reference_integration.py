@@ -69,7 +69,6 @@ from story_writing_agents.writing_artifacts import (
     ReferenceReadAction,
     ReferenceReadActionKind,
 )
-from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
 from story_writing_agents.writing_artifacts.runtime_references import (
     reference_operation_belongs_to_session,
 )
@@ -337,20 +336,16 @@ class RuntimeReferenceIntegrationTests(unittest.IsolatedAsyncioTestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.workspace = Workspace(temporary.name).initialize()
-        WritingArtifactRepository(self.workspace.root).commit_consensus(
-            output_path="part-01/reference-seed.md",
-            candidate=_MANUSCRIPT,
-            core_updates={
-                "global_outline.md": _OUTLINE,
-                "part_outlines.md": _PARTS,
-                "character_sheets.md": _CHARACTERS,
-                "narrative_rules.md": _RULES,
-            },
-            session_id="fixture_session",
-            debate_id="fixture_debate",
-            revision_id="r0",
-            candidate_author_agent_id=EXECUTION_SPECIALIST,
-        )
+        for path, content in (
+            ("core_documents/global_outline.md", _OUTLINE),
+            ("core_documents/part_outlines.md", _PARTS),
+            ("core_documents/character_sheets.md", _CHARACTERS),
+            ("core_documents/narrative_rules.md", _RULES),
+            ("manuscript/part-01/reference-seed.md", _MANUSCRIPT),
+        ):
+            target = self.workspace.path(path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
         self.catalog = FilesystemConversationCatalog(self.workspace)
         self.store = FilesystemConversationEventStore(
             self.workspace,

@@ -12,6 +12,7 @@ import sys
 import threading
 import unicodedata
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from uuid import uuid4
 
@@ -33,6 +34,25 @@ class ArtifactRootSecurityError(WorkspaceSecurityError):
 
 class ArtifactLeaseSecurityError(WorkspaceSecurityError):
     """The permanent repository lock identity is not stable."""
+
+
+@dataclass(frozen=True, slots=True)
+class SecureFileIdentity:
+    """Descriptor-verified physical identity for one unique regular file."""
+
+    device_id: int
+    inode: int
+    size: int
+    modified_ns: int
+    changed_ns: int
+
+
+@dataclass(frozen=True, slots=True)
+class SecureFileSnapshot:
+    """One stable descriptor read and its content-free physical identity."""
+
+    identity: SecureFileIdentity
+    content: bytes
 
 
 class SecureWorkspaceStorage:
@@ -338,7 +358,22 @@ class SecureWorkspaceStorage:
                 )
 
     @staticmethod
-    def _read_file(directory: int, name: str, *, max_bytes: int | None = None) -> bytes:
+    def _identity(value: os.stat_result) -> SecureFileIdentity:
+        return SecureFileIdentity(
+            device_id=value.st_dev,
+            inode=value.st_ino,
+            size=value.st_size,
+            modified_ns=value.st_mtime_ns,
+            changed_ns=value.st_ctime_ns,
+        )
+
+    @staticmethod
+    def _read_file_snapshot(
+        directory: int,
+        name: str,
+        *,
+        max_bytes: int | None = None,
+    ) -> SecureFileSnapshot:
         try:
             SecureWorkspaceStorage._require_exact_name(
                 directory,
@@ -381,14 +416,18 @@ class SecureWorkspaceStorage:
                 or opened.st_nlink != 1
                 or (named.st_dev, named.st_ino) != (opened.st_dev, opened.st_ino)
             ):
-                raise ArtifactEntrySecurityError("artifact file is not a unique regular file")
+                raise ArtifactEntrySecurityError(
+                    "artifact file is not a unique regular file"
+                )
             SecureWorkspaceStorage._require_exact_name(
                 directory,
                 name,
                 directory_entry=False,
             )
             if max_bytes is not None and opened.st_size > max_bytes:
-                raise WorkspaceFormatError("artifact file exceeds the permitted size")
+                raise WorkspaceFormatError(
+                    "artifact file exceeds the permitted size"
+                )
             chunks: list[bytes] = []
             total = 0
             while True:
@@ -397,7 +436,9 @@ class SecureWorkspaceStorage:
                     break
                 total += len(chunk)
                 if max_bytes is not None and total > max_bytes:
-                    raise WorkspaceFormatError("artifact file exceeds the permitted size")
+                    raise WorkspaceFormatError(
+                        "artifact file exceeds the permitted size"
+                    )
                 chunks.append(chunk)
             final = os.fstat(descriptor)
             if (
@@ -431,18 +472,235 @@ class SecureWorkspaceStorage:
                 or (final_name.st_dev, final_name.st_ino)
                 != (final.st_dev, final.st_ino)
             ):
-                raise ArtifactEntrySecurityError("artifact name changed while being read")
-            return b"".join(chunks)
+                raise ArtifactEntrySecurityError(
+                    "artifact name changed while being read"
+                )
+            return SecureFileSnapshot(
+                SecureWorkspaceStorage._identity(final),
+                b"".join(chunks),
+            )
         finally:
             os.close(descriptor)
 
+    @staticmethod
+    def _read_file(
+        directory: int,
+        name: str,
+        *,
+        max_bytes: int | None = None,
+    ) -> bytes:
+        return SecureWorkspaceStorage._read_file_snapshot(
+            directory,
+            name,
+            max_bytes=max_bytes,
+        ).content
+
     def read_bytes(self, relative: str, *, max_bytes: int | None = None) -> bytes:
+        return self.read_snapshot(relative, max_bytes=max_bytes).content
+
+    def read_snapshot(
+        self,
+        relative: str,
+        *,
+        max_bytes: int | None = None,
+    ) -> SecureFileSnapshot:
         parts = self._parts(relative)
         with self._open_root() as root:
             with self._open_directory(root, parts[:-1], create=False) as opened:
                 directory, chain = opened
                 self._verify_directory_chain(chain)
-                return self._read_file(directory, parts[-1], max_bytes=max_bytes)
+                return self._read_file_snapshot(
+                    directory,
+                    parts[-1],
+                    max_bytes=max_bytes,
+                )
+
+    @staticmethod
+    def _inspect_file(directory: int, name: str) -> SecureFileIdentity:
+        """Inspect one exact unique regular file without reading its bytes."""
+
+        try:
+            SecureWorkspaceStorage._require_exact_name(
+                directory,
+                name,
+                directory_entry=False,
+                missing_ok=True,
+            )
+            named = os.stat(name, dir_fd=directory, follow_symlinks=False)
+        except FileNotFoundError:
+            raise
+        except OSError as exc:
+            raise ArtifactEntrySecurityError(
+                "cannot inspect artifact file"
+            ) from exc
+        if not stat.S_ISREG(named.st_mode) or named.st_nlink != 1:
+            raise ArtifactEntrySecurityError(
+                "artifact file is not a unique regular file"
+            )
+        try:
+            descriptor = os.open(
+                name,
+                os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW,
+                dir_fd=directory,
+            )
+        except FileNotFoundError:
+            raise
+        except OSError as exc:
+            raise ArtifactEntrySecurityError(
+                "cannot securely open artifact file"
+            ) from exc
+        try:
+            opened = os.fstat(descriptor)
+            SecureWorkspaceStorage._require_exact_name(
+                directory,
+                name,
+                directory_entry=False,
+            )
+            final_name = os.stat(name, dir_fd=directory, follow_symlinks=False)
+            identities = {
+                (named.st_dev, named.st_ino),
+                (opened.st_dev, opened.st_ino),
+                (final_name.st_dev, final_name.st_ino),
+            }
+            if (
+                len(identities) != 1
+                or not stat.S_ISREG(opened.st_mode)
+                or not stat.S_ISREG(final_name.st_mode)
+                or opened.st_nlink != 1
+                or final_name.st_nlink != 1
+            ):
+                raise ArtifactEntrySecurityError(
+                    "artifact file changed while being inspected"
+                )
+            return SecureWorkspaceStorage._identity(opened)
+        except FileNotFoundError:
+            raise
+        except ArtifactEntrySecurityError:
+            raise
+        except OSError as exc:
+            raise ArtifactEntrySecurityError(
+                "artifact file changed while being inspected"
+            ) from exc
+        finally:
+            os.close(descriptor)
+
+    def inspect_regular_file(self, relative: str) -> SecureFileIdentity:
+        """Return stable metadata for one exact file without reading content."""
+
+        parts = self._parts(relative)
+        with self._open_root() as root:
+            with self._open_directory(root, parts[:-1], create=False) as opened:
+                directory, chain = opened
+                self._verify_directory_chain(chain)
+                return self._inspect_file(directory, parts[-1])
+
+    @classmethod
+    def _walk_regular_files(
+        cls,
+        directory: int,
+        prefix: tuple[str, ...],
+        chain: tuple[tuple[int, str, int, tuple[int, int]], ...],
+        *,
+        max_path_bytes: int,
+        found: list[tuple[str, SecureFileIdentity]],
+    ) -> None:
+        """Walk one retained descriptor tree without following unsafe names."""
+
+        cls._verify_directory_chain(chain)
+        try:
+            names = os.listdir(directory)
+        except OSError as exc:
+            raise ArtifactRootSecurityError(
+                "cannot securely list artifact directory"
+            ) from exc
+        if any(type(name) is not str or name in {"", ".", ".."} for name in names):
+            raise ArtifactRootSecurityError(
+                "artifact directory contains an unsafe name"
+            )
+        alias_counts: dict[str, int] = {}
+        for name in names:
+            key = cls._entry_spelling_key(name)
+            alias_counts[key] = alias_counts.get(key, 0) + 1
+
+        for name in sorted(names):
+            if alias_counts[cls._entry_spelling_key(name)] != 1:
+                continue
+            relative_parts = (*prefix, name)
+            relative = "/".join(relative_parts)
+            try:
+                encoded = relative.encode("utf-8", errors="strict")
+            except UnicodeEncodeError:
+                continue
+            if len(encoded) > max_path_bytes:
+                continue
+            try:
+                named = os.stat(name, dir_fd=directory, follow_symlinks=False)
+            except (FileNotFoundError, OSError):
+                continue
+            if stat.S_ISREG(named.st_mode):
+                try:
+                    identity = cls._inspect_file(directory, name)
+                except (FileNotFoundError, ArtifactEntrySecurityError):
+                    continue
+                found.append((relative, identity))
+                continue
+            if not stat.S_ISDIR(named.st_mode):
+                continue
+            try:
+                child = os.open(
+                    name,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=directory,
+                )
+            except OSError:
+                continue
+            try:
+                opened = os.fstat(child)
+                if (
+                    not stat.S_ISDIR(opened.st_mode)
+                    or (named.st_dev, named.st_ino)
+                    != (opened.st_dev, opened.st_ino)
+                ):
+                    continue
+                identity = (opened.st_dev, opened.st_ino)
+                child_chain = (*chain, (directory, name, child, identity))
+                try:
+                    cls._walk_regular_files(
+                        child,
+                        relative_parts,
+                        child_chain,
+                        max_path_bytes=max_path_bytes,
+                        found=found,
+                    )
+                except ArtifactRootSecurityError:
+                    continue
+            finally:
+                os.close(child)
+        cls._verify_directory_chain(chain)
+
+    def list_regular_files(
+        self,
+        relative: str,
+        *,
+        max_path_bytes: int,
+    ) -> tuple[tuple[str, SecureFileIdentity], ...]:
+        """List metadata for safe regular descendants without reading content."""
+
+        if type(max_path_bytes) is not int or max_path_bytes < 1:
+            raise ValueError("max_path_bytes must be a positive integer")
+        parts = self._parts(relative)
+        found: list[tuple[str, SecureFileIdentity]] = []
+        with self._open_root() as root:
+            with self._open_directory(root, parts, create=False) as opened:
+                directory, chain = opened
+                self._walk_regular_files(
+                    directory,
+                    parts,
+                    chain,
+                    max_path_bytes=max_path_bytes,
+                    found=found,
+                )
+        return tuple(sorted(found, key=lambda item: item[0]))
 
     def read_bytes_if_exists(
         self, relative: str, *, max_bytes: int | None = None

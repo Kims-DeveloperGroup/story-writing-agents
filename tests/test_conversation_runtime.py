@@ -810,7 +810,7 @@ class ConversationRuntimeSuccessTests(_ConversationRuntimeCase):
             reference.path.relative_to(workspace.root).name
             for reference in definition.context_document_files
         )
-        self.assertEqual(relative_contexts, ())
+        self.assertEqual(relative_contexts, ("character_sheets.md",))
         self.assertEqual(
             AGENT_SPECS[CHARACTER_CUSTODIAN].context_documents,
             ("character_sheets.md",),

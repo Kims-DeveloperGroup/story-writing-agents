@@ -14,17 +14,19 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import NoReturn
 
-from .catalog import ArtifactCatalogEntry
+from .catalog import ArtifactKind
 from .references import (
     MAX_REFERENCE_TOTAL_BYTES,
     MAX_REFERENCE_UTF8_BYTES,
+    ArtifactContentSnapshot,
     ArtifactLineRange,
     ArtifactReference,
     ArtifactReferenceBatch,
+    ArtifactSourceIdentity,
 )
 
 
-REFERENCE_EVIDENCE_SCHEMA_VERSION = 1
+REFERENCE_EVIDENCE_SCHEMA_VERSION = 2
 _SAFE_IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 _CAPABILITY_ID = re.compile(r"[0-9a-f]{32}")
 
@@ -149,7 +151,7 @@ class AuthorizedArtifactReference:
 
     ordinal: int
     reference: ArtifactReference
-    catalog_entry: ArtifactCatalogEntry
+    source: ArtifactSourceIdentity
     selected_sha256: str
     selected_utf8_bytes: int
     source_line_count: int
@@ -159,10 +161,10 @@ class AuthorizedArtifactReference:
             raise ValueError("authorized reference ordinal must be positive")
         if type(self.reference) is not ArtifactReference:
             raise TypeError("reference must be an ArtifactReference")
-        if type(self.catalog_entry) is not ArtifactCatalogEntry:
-            raise TypeError("catalog_entry must be an ArtifactCatalogEntry")
-        if self.reference.path != self.catalog_entry.path:
-            raise ValueError("authorized reference path does not match provenance")
+        if type(self.source) is not ArtifactSourceIdentity:
+            raise TypeError("source must be an ArtifactSourceIdentity")
+        if self.reference.path != self.source.path:
+            raise ValueError("authorized reference path does not match its source")
         if (
             type(self.selected_sha256) is not str
             or re.fullmatch(r"[0-9a-f]{64}", self.selected_sha256) is None
@@ -627,23 +629,31 @@ class ArtifactReferenceDelivery:
 
 def build_authorized_references(
     batch: ArtifactReferenceBatch,
-    entries: tuple[ArtifactCatalogEntry, ...],
-    contents: tuple[bytes, ...],
+    snapshots: tuple[ArtifactContentSnapshot, ...],
 ) -> tuple[tuple[AuthorizedArtifactReference, ...], tuple[_CapturedReference, ...]]:
     """Build ordered content-free proofs and transient selected snapshots."""
 
     if type(batch) is not ArtifactReferenceBatch:
         raise TypeError("batch must be an ArtifactReferenceBatch")
-    if len(batch.references) != len(entries) or len(entries) != len(contents):
+    if (
+        type(snapshots) is not tuple
+        or len(batch.references) != len(snapshots)
+        or any(type(item) is not ArtifactContentSnapshot for item in snapshots)
+    ):
         raise ValueError("authorized reference inputs must correlate")
     proofs: list[AuthorizedArtifactReference] = []
     captured: list[_CapturedReference] = []
     total = 0
-    for ordinal, (reference, entry, source) in enumerate(
-        zip(batch.references, entries, contents, strict=True),
+    for ordinal, (reference, snapshot) in enumerate(
+        zip(batch.references, snapshots, strict=True),
         start=1,
     ):
-        selected, line_count = select_reference_bytes(source, reference.line_range)
+        if reference.path != snapshot.path:
+            raise ValueError("authorized reference inputs must correlate")
+        selected, line_count = select_reference_bytes(
+            snapshot.content,
+            reference.line_range,
+        )
         total += len(selected)
         if total > MAX_REFERENCE_TOTAL_BYTES:
             raise ReferenceAuthorizationError(
@@ -652,7 +662,7 @@ def build_authorized_references(
         proof = AuthorizedArtifactReference(
             ordinal=ordinal,
             reference=reference,
-            catalog_entry=entry,
+            source=snapshot.source,
             selected_sha256=hashlib.sha256(selected).hexdigest(),
             selected_utf8_bytes=len(selected),
             source_line_count=line_count,
@@ -686,11 +696,20 @@ def authorized_reference_to_evidence_record(
     value: AuthorizedArtifactReference,
 ) -> dict[str, object]:
     return {
-        "catalog_entry": value.catalog_entry.to_dict(),
         "ordinal": value.ordinal,
         "reference": reference_to_evidence_record(value.reference),
         "selected_sha256": value.selected_sha256,
         "selected_utf8_bytes": value.selected_utf8_bytes,
+        "source": {
+            "changed_ns": value.source.changed_ns,
+            "device_id": value.source.device_id,
+            "inode": value.source.inode,
+            "kind": value.source.kind.value,
+            "modified_ns": value.source.modified_ns,
+            "path": value.source.path,
+            "source_sha256": value.source.source_sha256,
+            "source_utf8_bytes": value.source.source_utf8_bytes,
+        },
         "source_line_count": value.source_line_count,
     }
 
@@ -699,19 +718,41 @@ def authorized_reference_from_evidence_record(
     value: object,
 ) -> AuthorizedArtifactReference:
     expected = {
-        "catalog_entry",
         "ordinal",
         "reference",
         "selected_sha256",
         "selected_utf8_bytes",
+        "source",
         "source_line_count",
     }
     if type(value) is not dict or set(value) != expected:
         raise ValueError("authorized reference fields are invalid")
+    raw_source = value["source"]
+    source_fields = {
+        "changed_ns",
+        "device_id",
+        "inode",
+        "kind",
+        "modified_ns",
+        "path",
+        "source_sha256",
+        "source_utf8_bytes",
+    }
+    if type(raw_source) is not dict or set(raw_source) != source_fields:
+        raise ValueError("artifact source fields are invalid")
     return AuthorizedArtifactReference(
         ordinal=value["ordinal"],
         reference=reference_from_evidence_record(value["reference"]),
-        catalog_entry=ArtifactCatalogEntry.from_dict(value["catalog_entry"]),
+        source=ArtifactSourceIdentity(
+            path=raw_source["path"],
+            kind=ArtifactKind(raw_source["kind"]),
+            source_sha256=raw_source["source_sha256"],
+            source_utf8_bytes=raw_source["source_utf8_bytes"],
+            device_id=raw_source["device_id"],
+            inode=raw_source["inode"],
+            modified_ns=raw_source["modified_ns"],
+            changed_ns=raw_source["changed_ns"],
+        ),
         selected_sha256=value["selected_sha256"],
         selected_utf8_bytes=value["selected_utf8_bytes"],
         source_line_count=value["source_line_count"],

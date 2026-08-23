@@ -33,6 +33,8 @@ from story_writing_agents.errors import (
 )
 from story_writing_agents.writing_artifacts import (
     CORE_ARTIFACT_PATHS,
+    MAX_ARTIFACT_PATH_BYTES,
+    MAX_VIEWER_UTF8_BYTES,
     ArtifactCatalog,
     ArtifactCatalogEntry,
     ArtifactKind,
@@ -144,6 +146,8 @@ class ArtifactGrammarTests(unittest.TestCase):
                     canonical_artifact_kind(path)
         with self.assertRaises(TypeError):
             canonical_artifact_kind(Path("core_documents/global_outline.md"))
+        with self.assertRaisesRegex(ValueError, "too long"):
+            canonical_artifact_kind("a" * (MAX_ARTIFACT_PATH_BYTES + 1))
 
     def test_required_output_grammar_has_no_root_or_compatibility_form(self) -> None:
         self.assertEqual(
@@ -217,25 +221,76 @@ class ArtifactGrammarTests(unittest.TestCase):
 
 
 class RepositoryEligibilityTests(WritingArtifactTestCase):
-    def test_manual_placeholders_and_internal_files_are_never_eligible(self) -> None:
-        for path in (
-            *CORE_ARTIFACT_PATHS,
-            "manuscript/part-01/manual.md",
-            "discussion_logs/private.md",
-            "agent_states/private.md",
-        ):
+    def test_metadata_only_discovery_lists_every_safe_canonical_file(self) -> None:
+        safe = {
+            **{
+                path: f"manual::{path}".encode()
+                for path in CORE_ARTIFACT_PATHS
+            },
+            "manuscript/part-01/manual.md": b"manual",
+            "manuscript/part-01/empty.md": b"",
+            "manuscript/part-01/init.md": b"initialized placeholder",
+            "manuscript/part-01/pre-provenance.md": b"pre-provenance",
+            "manuscript/Part_A/scenes/opening.v2.md": b"nested",
+            "manuscript/part-01/invalid-utf8.md": b"\xff",
+        }
+        for path, content in safe.items():
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text("manual or initialized bytes", encoding="utf-8")
+            target.write_bytes(content)
 
-        self.assertEqual(self.repository.list_paths(), ())
-        for path in (*CORE_ARTIFACT_PATHS, "manuscript/part-01/manual.md"):
-            with self.subTest(path=path):
-                with self.assertRaisesRegex(
-                    WorkspaceSecurityError,
-                    "no repository provenance",
-                ):
-                    self.repository.read_text(path)
+        excluded = (
+            "core_documents/extra.md",
+            "discussion_logs/private.md",
+            "agent_states/private.md",
+            "manuscript/root.md",
+            "manuscript/part-01/not-markdown.txt",
+            "manuscript/part-01/.gitkeep",
+            "manuscript/bad part/chapter.md",
+        )
+        for path in excluded:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"excluded")
+
+        alias = self.root / "manuscript/part-01/alias.md"
+        alias.write_bytes(b"alias")
+        alias.with_name("ａｌｉａｓ.md").write_bytes(b"normalized alias")
+
+        hardlink = self.root / "manuscript/part-01/hardlink.md"
+        hardlink.write_bytes(b"hardlink")
+        os.link(hardlink, hardlink.with_name("hardlink-copy.md"))
+
+        if os.name == "posix":
+            outside = tempfile.TemporaryDirectory()
+            self.addCleanup(outside.cleanup)
+            outside_target = Path(outside.name) / "outside.md"
+            outside_target.write_bytes(b"outside workspace")
+            symlink = self.root / "manuscript/part-01/symlink.md"
+            symlink.symlink_to(outside_target)
+            fifo = self.root / "manuscript/part-01/fifo.md"
+            os.mkfifo(fifo)
+            listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            self.addCleanup(listener.close)
+            listener.bind(str(self.root / "manuscript/part-01/socket.md"))
+
+        with mock.patch.object(
+            storage_module.os,
+            "read",
+            side_effect=AssertionError("source listing decoded file content"),
+        ):
+            self.assertEqual(
+                self.repository.list_paths(),
+                tuple(sorted(safe)),
+            )
+        bounded = self.repository._storage.list_regular_files(
+            "manuscript",
+            max_path_bytes=len("manuscript/part-01/manual.md") - 1,
+        )
+        self.assertNotIn(
+            "manuscript/part-01/manual.md",
+            tuple(path for path, _identity in bounded),
+        )
 
     def test_consensus_persists_exact_agent_bytes_and_all_four_updates(self) -> None:
         updates = {
@@ -274,17 +329,14 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
                 LEAD_ORCHESTRATOR,
             )
 
-    def test_hash_drift_is_omitted_but_missing_commit_provenance_fails_closed(self) -> None:
+    def test_source_reads_ignore_drift_and_missing_catalog_provenance_but_publication_is_strict(
+        self,
+    ) -> None:
         manuscript_path, _ = self.commit()
         (self.root / manuscript_path).write_text("manual drift", encoding="utf-8")
-        self.assertEqual(self.repository.list_paths(), ())
-        with self.assertRaisesRegex(WorkspaceSecurityError, "does not match"):
-            self.repository.read_text(manuscript_path)
+        self.assertEqual(self.repository.list_paths(), (manuscript_path,))
+        self.assertEqual(self.repository.read_text(manuscript_path), "manual drift")
 
-        (self.root / manuscript_path).write_text(
-            "agent-authored manuscript\n",
-            encoding="utf-8",
-        )
         other = WritingArtifactRepository(self.root)
         self.assertEqual(other.list_paths(), (manuscript_path,))
         catalog_data = json.loads(
@@ -299,38 +351,76 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
             / "agent_states/orchestrator_state/writing_artifacts/commits"
             / f"{commit_id}.json"
         ).unlink()
+
+        with (
+            mock.patch.object(
+                other,
+                "_load_catalog",
+                side_effect=AssertionError("source operation loaded catalog"),
+            ) as load_catalog,
+            mock.patch.object(
+                other,
+                "_recover",
+                side_effect=AssertionError("source operation ran recovery"),
+            ) as recover,
+        ):
+            self.assertEqual(other.list_paths(), (manuscript_path,))
+            self.assertEqual(other.read_text(manuscript_path), "manual drift")
+        load_catalog.assert_not_called()
+        recover.assert_not_called()
+
         with self.assertRaisesRegex(
             WorkspaceFormatError,
             "path set does not match commit ledger",
         ):
-            other.list_paths()
+            other.catalog()
+        with self.assertRaisesRegex(
+            WorkspaceFormatError,
+            "path set does not match commit ledger",
+        ):
+            other.commit_consensus(
+                output_path="part-02/blocked.md",
+                candidate="blocked",
+                core_updates={},
+                session_id="session_02",
+                debate_id="strict_publication",
+                revision_id="r0",
+                candidate_author_agent_id=EXECUTION_SPECIALIST,
+            )
 
-    def test_read_rejects_oversize_and_non_utf8_current_bytes(self) -> None:
-        manuscript_path, _ = self.commit(candidate="é")
+    def test_read_enforces_viewer_size_strict_utf8_and_nul_on_current_bytes(
+        self,
+    ) -> None:
+        manuscript_path = "manuscript/part-01/manual.md"
+        target = self.root / manuscript_path
+        target.parent.mkdir(parents=True)
+        target.write_text("é", encoding="utf-8")
         with self.assertRaisesRegex(WorkspaceFormatError, "permitted size"):
             self.repository.read_text(manuscript_path, max_bytes=1)
 
-        path = self.root / manuscript_path
-        invalid = b"\xff"
-        path.write_bytes(invalid)
-        catalog_path = (
-            self.root
-            / "agent_states/orchestrator_state/writing_artifacts/catalog.json"
+        target.write_bytes(b"x" * MAX_VIEWER_UTF8_BYTES)
+        self.assertEqual(
+            len(
+                self.repository.read_text(
+                    manuscript_path,
+                    max_bytes=MAX_VIEWER_UTF8_BYTES,
+                )
+            ),
+            MAX_VIEWER_UTF8_BYTES,
         )
-        catalog = json.loads(catalog_path.read_text())
-        catalog["entries"][0]["sha256"] = hashlib.sha256(invalid).hexdigest()
-        commit_id = catalog["entries"][0]["commit_id"]
-        commit_path = (
-            self.root
-            / "agent_states/orchestrator_state/writing_artifacts/commits"
-            / f"{commit_id}.json"
-        )
-        commit = json.loads(commit_path.read_text())
-        commit["artifacts"][0]["sha256"] = hashlib.sha256(invalid).hexdigest()
-        commit_path.write_bytes(self.repository._json_bytes(commit))
-        catalog_path.write_bytes(self.repository._json_bytes(catalog))
+        target.write_bytes(b"x" * (MAX_VIEWER_UTF8_BYTES + 1))
+        with self.assertRaisesRegex(WorkspaceFormatError, "permitted size"):
+            self.repository.read_text(
+                manuscript_path,
+                max_bytes=MAX_VIEWER_UTF8_BYTES,
+            )
+
+        target.write_bytes(b"\xff")
         with self.assertRaisesRegex(WorkspaceFormatError, "valid UTF-8"):
-            WritingArtifactRepository(self.root).read_text(manuscript_path)
+            self.repository.read_text(manuscript_path)
+        target.write_bytes(b"before\x00after")
+        with self.assertRaisesRegex(WorkspaceFormatError, "contains NUL"):
+            self.repository.read_text(manuscript_path)
 
     def test_manuscripts_are_create_only_but_distinct_revisions_are_allowed(self) -> None:
         self.commit(candidate="revision one")
@@ -463,18 +553,18 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
                 debate_id=f"selective_{index}",
             )
 
-        read_bytes = self.repository._storage.read_bytes
+        read_snapshot = self.repository._storage.read_snapshot
         observed_artifacts: list[str] = []
 
         def record(relative: str, *args, **kwargs):
             if canonical_artifact_kind(relative) is not None:
                 observed_artifacts.append(relative)
-            return read_bytes(relative, *args, **kwargs)
+            return read_snapshot(relative, *args, **kwargs)
 
         requested = ("core_documents/global_outline.md",)
         with mock.patch.object(
             self.repository._storage,
-            "read_bytes",
+            "read_snapshot",
             side_effect=record,
         ):
             snapshots = self.repository.read_current(requested)
@@ -482,10 +572,24 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
         self.assertEqual(tuple(snapshot.path for snapshot in snapshots), requested)
         self.assertEqual(observed_artifacts, list(requested))
         self.assertEqual(snapshots[0].read_text(), "verified outline")
+        original_source = snapshots[0].source
+        replacement = self.root / "core_documents/replacement.md"
+        replacement.write_text("verified outline", encoding="utf-8")
+        os.replace(replacement, self.root / requested[0])
+        replaced = self.repository.read_current(requested)[0]
+        self.assertEqual(replaced.content, snapshots[0].content)
+        self.assertNotEqual(replaced.source, original_source)
 
-    def test_catalog_omits_entry_local_failures_but_propagates_root_failures(self) -> None:
+    def test_source_listing_is_content_free_while_catalog_remains_strict(self) -> None:
         manuscript_path, _ = self.commit()
         read_bytes = self.repository._storage.read_bytes
+
+        with mock.patch.object(
+            self.repository._storage,
+            "read_bytes",
+            side_effect=AssertionError("source listing read content"),
+        ):
+            self.assertEqual(self.repository.list_paths(), (manuscript_path,))
 
         def fail_entry(relative: str, *args, **kwargs):
             if relative == manuscript_path:
@@ -497,7 +601,7 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
             "read_bytes",
             side_effect=fail_entry,
         ):
-            self.assertEqual(self.repository.list_paths(), ())
+            self.assertEqual(tuple(self.repository.catalog().entries), ())
 
         def fail_root(relative: str, *args, **kwargs):
             if relative == manuscript_path:
@@ -757,6 +861,162 @@ class SecureStorageTests(WritingArtifactTestCase):
 
                 self.assertGreaterEqual(child_descriptor, 0)
                 self.assertEqual(closes, 1)
+
+    def test_file_inspection_and_recursive_walk_close_descriptors_on_races(
+        self,
+    ) -> None:
+        parent = self.root / "manuscript/part-01"
+        nested = parent / "nested"
+        nested.mkdir(parents=True)
+        inspected = parent / "inspected.md"
+        inspected.write_bytes(b"inspected")
+        nested.joinpath("hidden.md").write_bytes(b"hidden")
+        storage = SecureWorkspaceStorage(self.root)
+
+        directory = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
+        self.addCleanup(os.close, directory)
+        real_open = storage_module.os.open
+        real_close = storage_module.os.close
+        real_require = SecureWorkspaceStorage._require_exact_name
+        inspected_descriptor = -1
+        inspected_closes = 0
+        exact_checks = 0
+
+        def record_inspected_open(path, *args, **kwargs):
+            nonlocal inspected_descriptor
+            descriptor = real_open(path, *args, **kwargs)
+            if path == inspected.name:
+                inspected_descriptor = descriptor
+            return descriptor
+
+        def record_inspected_close(descriptor):
+            nonlocal inspected_closes
+            if descriptor == inspected_descriptor:
+                inspected_closes += 1
+            return real_close(descriptor)
+
+        def replace_after_open(
+            directory_descriptor,
+            name,
+            *,
+            directory_entry,
+            missing_ok=False,
+        ):
+            nonlocal exact_checks
+            if name == inspected.name:
+                exact_checks += 1
+                if exact_checks == 2:
+                    raise ArtifactEntrySecurityError(
+                        "injected post-open replacement"
+                    )
+            return real_require(
+                directory_descriptor,
+                name,
+                directory_entry=directory_entry,
+                missing_ok=missing_ok,
+            )
+
+        with (
+            mock.patch.object(SecureWorkspaceStorage, "_require_primitives"),
+            mock.patch.object(
+                storage_module.os,
+                "open",
+                side_effect=record_inspected_open,
+            ),
+            mock.patch.object(
+                storage_module.os,
+                "close",
+                side_effect=record_inspected_close,
+            ),
+            mock.patch.object(
+                SecureWorkspaceStorage,
+                "_require_exact_name",
+                side_effect=replace_after_open,
+            ),
+            self.assertRaisesRegex(
+                ArtifactEntrySecurityError,
+                "post-open replacement",
+            ),
+        ):
+            SecureWorkspaceStorage._inspect_file(
+                directory,
+                inspected.name,
+            )
+        self.assertGreaterEqual(inspected_descriptor, 0)
+        self.assertEqual(inspected_closes, 1)
+
+        real_verify = SecureWorkspaceStorage._verify_directory_chain
+        nested_descriptor = -1
+        nested_closes = 0
+
+        def record_nested_open(path, *args, **kwargs):
+            nonlocal nested_descriptor
+            descriptor = real_open(path, *args, **kwargs)
+            if path == nested.name:
+                nested_descriptor = descriptor
+            return descriptor
+
+        def record_nested_close(descriptor):
+            nonlocal nested_closes
+            if descriptor == nested_descriptor:
+                nested_closes += 1
+            return real_close(descriptor)
+
+        def reject_detached_nested(chain):
+            if chain and chain[-1][1] == nested.name:
+                raise ArtifactRootSecurityError("injected detached directory")
+            return real_verify(chain)
+
+        with (
+            mock.patch.object(SecureWorkspaceStorage, "_require_primitives"),
+            mock.patch.object(
+                storage_module.os,
+                "open",
+                side_effect=record_nested_open,
+            ),
+            mock.patch.object(
+                storage_module.os,
+                "close",
+                side_effect=record_nested_close,
+            ),
+            mock.patch.object(
+                SecureWorkspaceStorage,
+                "_verify_directory_chain",
+                side_effect=reject_detached_nested,
+            ),
+        ):
+            listed = storage.list_regular_files(
+                "manuscript",
+                max_path_bytes=MAX_ARTIFACT_PATH_BYTES,
+            )
+        self.assertGreaterEqual(nested_descriptor, 0)
+        self.assertEqual(nested_closes, 1)
+        self.assertNotIn(
+            "manuscript/part-01/nested/hidden.md",
+            tuple(path for path, _identity in listed),
+        )
+
+    def test_recursive_listing_safely_omits_a_file_deleted_during_inspection(
+        self,
+    ) -> None:
+        target = self.root / "manuscript/part-01/race.md"
+        target.parent.mkdir(parents=True)
+        target.write_bytes(b"race")
+        inspect_file = SecureWorkspaceStorage._inspect_file
+
+        def delete_before_inspection(directory, name):
+            if name == target.name:
+                os.unlink(name, dir_fd=directory)
+                raise FileNotFoundError(name)
+            return inspect_file(directory, name)
+
+        with mock.patch.object(
+            SecureWorkspaceStorage,
+            "_inspect_file",
+            side_effect=delete_before_inspection,
+        ):
+            self.assertEqual(self.repository.list_paths(), ())
+        self.assertFalse(target.exists())
 
     def test_final_name_aliases_reject_before_stat_staging_or_mutation(self) -> None:
         parent = self.root / "manuscript/part-alias"
@@ -2189,7 +2449,9 @@ class RepositoryRecoveryTests(WritingArtifactTestCase):
         )
         self.assertEqual(len(tuple(state.joinpath("commits").glob("*.json"))), 2)
 
-    def test_omitted_committed_core_row_blocks_reads_and_future_commit(self) -> None:
+    def test_omitted_catalog_row_does_not_block_sources_but_blocks_publication(
+        self,
+    ) -> None:
         manuscript_path, _ = self.commit(
             core_updates={"global_outline.md": "committed outline"},
         )
@@ -2203,9 +2465,19 @@ class RepositoryRecoveryTests(WritingArtifactTestCase):
         ]
         catalog_path.write_bytes(self.repository._json_bytes(catalog))
 
+        self.assertEqual(
+            self.repository.list_paths(),
+            (
+                "core_documents/global_outline.md",
+                manuscript_path,
+            ),
+        )
+        self.assertEqual(
+            self.repository.read_text("core_documents/global_outline.md"),
+            "committed outline",
+        )
         for operation in (
-            lambda: self.repository.list_paths(),
-            lambda: self.repository.read_text("core_documents/global_outline.md"),
+            lambda: self.repository.catalog(),
             lambda: self.commit(output_path="part-02/new.md"),
         ):
             with self.assertRaisesRegex(
@@ -2248,8 +2520,11 @@ class RepositoryRecoveryTests(WritingArtifactTestCase):
             self.repository._json_bytes(commit)
         )
 
+        recovered = WritingArtifactRepository(self.root)
+        self.assertEqual(recovered.list_paths(), ())
+        recovered.catalog()
         self.assertEqual(
-            WritingArtifactRepository(self.root).list_paths(),
+            recovered.list_paths(),
             (
                 "core_documents/global_outline.md",
                 "manuscript/part-01/chapter-01.md",
@@ -2312,13 +2587,36 @@ class RepositoryRecoveryTests(WritingArtifactTestCase):
 
                 recovered = WritingArtifactRepository(root)
                 if remove_current:
+                    self.assertEqual(
+                        recovered.read_text("core_documents/global_outline.md"),
+                        "older outline",
+                    )
+                    self.assertEqual(
+                        recovered.list_paths(),
+                        (
+                            "core_documents/global_outline.md",
+                            "manuscript/part-01/first.md",
+                        ),
+                    )
                     with self.assertRaisesRegex(
                         WorkspaceFormatError,
                         "recovery is blocked",
                     ):
-                        recovered.list_paths()
+                        recovered.catalog()
                     self.assertFalse(root.joinpath("manuscript/part-02/second.md").exists())
                 else:
+                    self.assertEqual(
+                        recovered.read_text("core_documents/global_outline.md"),
+                        "older outline",
+                    )
+                    self.assertEqual(
+                        recovered.list_paths(),
+                        (
+                            "core_documents/global_outline.md",
+                            "manuscript/part-01/first.md",
+                        ),
+                    )
+                    recovered.catalog()
                     self.assertEqual(
                         recovered.read_text("core_documents/global_outline.md"),
                         "new outline",
@@ -2383,6 +2681,9 @@ class RepositoryRecoveryTests(WritingArtifactTestCase):
                 "manuscript/part-02/second.md",
             ),
         )
+        self.assertTrue(journal.is_file())
+        recovered.catalog()
+        self.assertFalse(journal.exists())
 
     def test_missing_empty_or_subset_catalog_with_commits_blocks_before_mutation(
         self,
@@ -2526,17 +2827,19 @@ class RepositoryRecoveryTests(WritingArtifactTestCase):
                     )
 
                 recovered = WritingArtifactRepository(root)
+                self.assertEqual(recovered.list_paths(), ())
                 if unrelated:
                     with self.assertRaisesRegex(
                         WorkspaceFormatError,
                         "recovery is blocked",
                     ):
-                        recovered.list_paths()
+                        recovered.catalog()
                     self.assertFalse(
                         root.joinpath("manuscript/part-01/chapter-01.md").exists()
                     )
                     self.assertTrue(state.joinpath("recovery_blocked.json").is_file())
                 else:
+                    recovered.catalog()
                     self.assertEqual(
                         recovered.list_paths(),
                         ("manuscript/part-01/chapter-01.md",),
@@ -2549,8 +2852,10 @@ class RepositoryRecoveryTests(WritingArtifactTestCase):
             self.repository._json_bytes(transaction["catalog_after"])
         )
 
+        recovered = WritingArtifactRepository(self.root)
+        self.assertEqual(recovered.list_paths(), ())
         with self.assertRaisesRegex(WorkspaceFormatError, "recovery is blocked"):
-            WritingArtifactRepository(self.root).list_paths()
+            recovered.catalog()
         self.assertFalse(
             self.root.joinpath("manuscript/part-01/chapter-01.md").exists()
         )
@@ -2609,7 +2914,7 @@ class RepositoryRecoveryTests(WritingArtifactTestCase):
         self.assertEqual(len(completed), 1)
         self.assertEqual(completed[0].read_bytes(), prepared_bytes)
 
-    def test_every_publication_boundary_rolls_forward_without_partial_eligibility(
+    def test_each_publication_boundary_lists_safe_sources_then_rolls_forward_catalog(
         self,
     ) -> None:
         stages = (
@@ -2683,6 +2988,19 @@ class RepositoryRecoveryTests(WritingArtifactTestCase):
                 if stage in {"after target 1", "after target 2", "after commit"}:
                     self.assertFalse(state.joinpath("catalog.json").exists())
                 recovered = WritingArtifactRepository(root)
+                physical_before = tuple(
+                    path
+                    for path in (
+                        "core_documents/global_outline.md",
+                        "manuscript/part-01/chapter-01.md",
+                    )
+                    if root.joinpath(path).is_file()
+                )
+                self.assertEqual(
+                    recovered.list_paths(),
+                    physical_before,
+                )
+                recovered.catalog()
                 self.assertEqual(
                     recovered.list_paths(),
                     (
@@ -2748,11 +3066,20 @@ class RepositoryRecoveryTests(WritingArtifactTestCase):
                 state = root / "agent_states/orchestrator_state/writing_artifacts"
                 self.assertTrue(state.joinpath("recovery_blocked.json").is_file())
                 self.assertFalse(state.joinpath("catalog.json").exists())
+                source_paths = tuple(
+                    path
+                    for path in ("manuscript/part-01/chapter-01.md",)
+                    if root.joinpath(path).is_file()
+                )
+                self.assertEqual(
+                    WritingArtifactRepository(root).list_paths(),
+                    source_paths,
+                )
                 with self.assertRaisesRegex(
                     WorkspaceFormatError,
                     "recovery is blocked",
                 ):
-                    WritingArtifactRepository(root).list_paths()
+                    WritingArtifactRepository(root).catalog()
 
     def test_catalog_before_after_and_neither_are_handled_exactly(self) -> None:
         for position in ("before", "after", "neither"):
@@ -2796,17 +3123,27 @@ class RepositoryRecoveryTests(WritingArtifactTestCase):
                     )
 
                 recovered = WritingArtifactRepository(root)
+                physical_before = (
+                    (
+                        "core_documents/global_outline.md",
+                        "manuscript/part-01/chapter-01.md",
+                    )
+                    if position == "after"
+                    else ()
+                )
+                self.assertEqual(recovered.list_paths(), physical_before)
                 if position == "neither":
                     with self.assertRaisesRegex(
                         WorkspaceFormatError,
                         "recovery is blocked",
                     ):
-                        recovered.list_paths()
+                        recovered.catalog()
                     self.assertFalse(
                         root.joinpath("manuscript/part-01/chapter-01.md").exists()
                     )
                     self.assertTrue(state.joinpath("recovery_blocked.json").is_file())
                 else:
+                    recovered.catalog()
                     self.assertEqual(
                         recovered.list_paths(),
                         (
@@ -2854,16 +3191,26 @@ class RepositoryRecoveryTests(WritingArtifactTestCase):
                     entries.append(extra)
                 catalog_path.write_bytes(repository._json_bytes(catalog))
 
+                expected_sources = (
+                    "core_documents/global_outline.md",
+                    prior_path,
+                )
+                self.assertEqual(
+                    WritingArtifactRepository(root).list_paths(),
+                    expected_sources,
+                )
                 with self.assertRaisesRegex(
                     WorkspaceFormatError,
                     "recovery is blocked",
                 ):
-                    WritingArtifactRepository(root).list_paths()
+                    WritingArtifactRepository(root).catalog()
                 self.assertFalse(root.joinpath("manuscript/part-01/new.md").exists())
                 self.assertEqual((root / prior_path).read_bytes(), prior_bytes)
                 self.assertTrue(state.joinpath("recovery_blocked.json").is_file())
 
-    def test_interrupted_publication_has_no_partial_eligibility_and_rolls_forward(self) -> None:
+    def test_interrupted_publication_lists_physical_progress_then_rolls_forward(
+        self,
+    ) -> None:
         publish = self.repository._storage.publish_bytes
         artifact_publications = 0
 
@@ -2893,6 +3240,11 @@ class RepositoryRecoveryTests(WritingArtifactTestCase):
         recovered = WritingArtifactRepository(self.root)
         self.assertEqual(
             recovered.list_paths(),
+            ("manuscript/part-01/chapter-01.md",),
+        )
+        recovered.catalog()
+        self.assertEqual(
+            recovered.list_paths(),
             (
                 "core_documents/global_outline.md",
                 "manuscript/part-01/chapter-01.md",
@@ -2900,7 +3252,9 @@ class RepositoryRecoveryTests(WritingArtifactTestCase):
         )
         self.assertFalse(tuple(state.joinpath("transactions").iterdir()))
 
-    def test_unrecoverable_journal_blocks_all_later_repository_access(self) -> None:
+    def test_unrecoverable_journal_blocks_publication_but_not_source_access(
+        self,
+    ) -> None:
         publish = self.repository._storage.publish_bytes
 
         def interrupt(relative: str, *args, **kwargs):
@@ -2922,8 +3276,10 @@ class RepositoryRecoveryTests(WritingArtifactTestCase):
         transaction = next(state.joinpath("transactions").glob("*.json"))
         transaction.write_text("{}", encoding="utf-8")
         recovered = WritingArtifactRepository(self.root)
+        self.assertEqual(recovered.list_paths(), ())
+        self.assertFalse(state.joinpath("recovery_blocked.json").exists())
         with self.assertRaisesRegex(WorkspaceFormatError, "recovery is blocked"):
-            recovered.list_paths()
+            recovered.catalog()
         marker = state / "recovery_blocked.json"
         self.assertTrue(marker.is_file())
         with self.assertRaisesRegex(WorkspaceFormatError, "recovery is blocked"):
@@ -2955,8 +3311,9 @@ class RepositoryRecoveryTests(WritingArtifactTestCase):
         commit_path.write_bytes(conflicting_bytes)
 
         recovered = WritingArtifactRepository(self.root)
+        self.assertEqual(recovered.list_paths(), ())
         with self.assertRaisesRegex(WorkspaceFormatError, "recovery is blocked"):
-            recovered.list_paths()
+            recovered.catalog()
 
         self.assertEqual(commit_path.read_bytes(), conflicting_bytes)
         self.assertTrue(state.joinpath("recovery_blocked.json").is_file())
@@ -3018,14 +3375,24 @@ class RepositoryRecoveryTests(WritingArtifactTestCase):
         self.assertTrue(replaced)
         transaction_path = next(state.joinpath("transactions").glob("*.json"))
         self.assertEqual(transaction_path.read_bytes(), replacement)
+        recovered = WritingArtifactRepository(self.root)
+        self.assertEqual(
+            recovered.list_paths(),
+            (
+                "core_documents/global_outline.md",
+                "manuscript/part-01/chapter-01.md",
+            ),
+        )
         with self.assertRaisesRegex(WorkspaceFormatError, "recovery is blocked"):
-            WritingArtifactRepository(self.root).list_paths()
+            recovered.catalog()
         self.assertEqual(transaction_path.read_bytes(), replacement)
         self.assertTrue(state.joinpath("recovery_blocked.json").is_file())
 
     def test_orphan_staging_is_ignored_but_unexpected_transaction_state_blocks(self) -> None:
         self.assertEqual(self.repository.list_paths(), ())
         state = self.root / "agent_states/orchestrator_state/writing_artifacts"
+        state.joinpath("staging").mkdir(parents=True, exist_ok=True)
+        state.joinpath("transactions").mkdir(parents=True, exist_ok=True)
         orphan = state / "staging/orphan.tmp"
         orphan.write_bytes(b"unowned staging residue")
 
@@ -3035,6 +3402,7 @@ class RepositoryRecoveryTests(WritingArtifactTestCase):
 
         unexpected = state / "transactions/unexpected.tmp"
         unexpected.write_bytes(b"authoritative ambiguity")
+        self.assertEqual(WritingArtifactRepository(self.root).list_paths(), ())
         with self.assertRaisesRegex(WorkspaceFormatError, "recovery is blocked"):
             WritingArtifactRepository(self.root).catalog()
         self.assertTrue(state.joinpath("recovery_blocked.json").is_file())

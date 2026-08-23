@@ -20,11 +20,12 @@ from story_writing_agents.agents import EXECUTION_SPECIALIST
 from story_writing_agents.writing_artifacts import (
     MAX_REFERENCE_TOTAL_BYTES,
     MAX_REFERENCE_UTF8_BYTES,
-    ArtifactCatalogEntry,
+    ArtifactContentSnapshot,
     ArtifactKind,
     ArtifactLineRange,
     ArtifactReference,
     ArtifactReferenceBatch,
+    ArtifactSourceIdentity,
     AuthorizedArtifactReference,
     ReferenceAuthorizationError,
     ReferenceAuthorizationErrorCode,
@@ -131,27 +132,27 @@ def _correlation(
     )
 
 
-def _entry(
+def _snapshot(
     path: str,
     content: bytes,
     *,
-    commit_id: str = "a" * 32,
-) -> ArtifactCatalogEntry:
-    return ArtifactCatalogEntry(
+    identity: int = 1,
+) -> ArtifactContentSnapshot:
+    source = ArtifactSourceIdentity(
         path=path,
         kind=(
             ArtifactKind.CORE_DOCUMENT
             if path.startswith("core_documents/")
             else ArtifactKind.MANUSCRIPT
         ),
-        sha256=hashlib.sha256(content).hexdigest(),
-        commit_id=commit_id,
-        committed_at="2026-08-23T00:00:00+00:00",
-        author_agent_id="lead",
-        session_id="session",
-        debate_id="debate",
-        revision_id="r0",
+        source_sha256=hashlib.sha256(content).hexdigest(),
+        source_utf8_bytes=len(content),
+        device_id=1,
+        inode=identity,
+        modified_ns=identity,
+        changed_ns=identity,
     )
+    return ArtifactContentSnapshot(source, content)
 
 
 class ReferenceRepositoryTestCase(unittest.TestCase):
@@ -244,6 +245,8 @@ class ReferenceAuthorizationValueTests(unittest.TestCase):
             ReferenceAuthorizationError("drift")  # type: ignore[arg-type]
 
         supported = {
+            "ArtifactContentSnapshot",
+            "ArtifactSourceIdentity",
             "AuthorizedArtifactReference",
             "ReferenceAuthorizationError",
             "ReferenceAuthorizationErrorCode",
@@ -261,6 +264,8 @@ class ReferenceAuthorizationValueTests(unittest.TestCase):
         }
         self.assertTrue(supported.issubset(artifact_facade.__all__))
         self.assertTrue(transient.isdisjoint(artifact_facade.__all__))
+        self.assertNotIn("CanonicalArtifactFilesystem", artifact_facade.__all__)
+        self.assertEqual(len(artifact_facade.__all__), 31)
         self.assertTrue((supported | transient).isdisjoint(story_writing_agents.__all__))
         self.assertEqual(len(story_writing_agents.__all__), 120)
 
@@ -319,10 +324,11 @@ class ReferenceAuthorizationValueTests(unittest.TestCase):
     def test_public_values_are_frozen_slotted_hash_safe_and_content_free(self) -> None:
         content = b"line\n"
         reference = ArtifactReference(_CORE_PATH, ArtifactLineRange(1, 1))
+        snapshot = _snapshot(_CORE_PATH, content)
         authorized = AuthorizedArtifactReference(
             ordinal=1,
             reference=reference,
-            catalog_entry=_entry(_CORE_PATH, content),
+            source=snapshot.source,
             selected_sha256=hashlib.sha256(content).hexdigest(),
             selected_utf8_bytes=len(content),
             source_line_count=1,
@@ -338,7 +344,14 @@ class ReferenceAuthorizationValueTests(unittest.TestCase):
             references=(authorized,),
         )
         history = ReferenceOperationHistory(manifest, (evidence,), ())
-        for value in (authorized, manifest, correlation, evidence, history):
+        for value in (
+            snapshot.source,
+            authorized,
+            manifest,
+            correlation,
+            evidence,
+            history,
+        ):
             with self.subTest(value=type(value).__name__):
                 hash(value)
                 self.assertFalse(hasattr(value, "__dict__"))
@@ -346,6 +359,31 @@ class ReferenceAuthorizationValueTests(unittest.TestCase):
                 with self.assertRaises(FrozenInstanceError):
                     setattr(value, fields(value)[0].name, None)
         self.assertEqual(authorized.ordinal, 1)
+        self.assertEqual(
+            tuple(field.name for field in fields(ArtifactSourceIdentity)),
+            (
+                "path",
+                "kind",
+                "source_sha256",
+                "source_utf8_bytes",
+                "device_id",
+                "inode",
+                "modified_ns",
+                "changed_ns",
+            ),
+        )
+        self.assertEqual(
+            tuple(field.name for field in fields(AuthorizedArtifactReference)),
+            (
+                "ordinal",
+                "reference",
+                "source",
+                "selected_sha256",
+                "selected_utf8_bytes",
+                "source_line_count",
+            ),
+        )
+        self.assertFalse(hasattr(authorized, "catalog_entry"))
         self.assertEqual(
             tuple(field.name for field in fields(ReferenceInvocationCorrelation)),
             (
@@ -430,11 +468,16 @@ class UniversalNewlineAndLimitTests(unittest.TestCase):
         )
         contents = (exact, exact, b"z")
         references = tuple(ArtifactReference(path) for path in paths)
-        entries = tuple(_entry(path, content, commit_id=f"{index:x}" * 32) for index, (path, content) in enumerate(zip(paths, contents), start=1))
+        snapshots = tuple(
+            _snapshot(path, content, identity=index)
+            for index, (path, content) in enumerate(
+                zip(paths, contents),
+                start=1,
+            )
+        )
         proofs, captured = build_authorized_references(
             _reference_batch(*references[:2]),
-            entries[:2],
-            contents[:2],
+            snapshots[:2],
         )
         self.assertEqual(sum(item.selected_utf8_bytes for item in proofs), MAX_REFERENCE_TOTAL_BYTES)
         self.assertEqual(len(captured), 2)
@@ -444,8 +487,7 @@ class UniversalNewlineAndLimitTests(unittest.TestCase):
         ):
             build_authorized_references(
                 _reference_batch(*references),
-                entries,
-                contents,
+                snapshots,
             )
 
 
@@ -465,7 +507,7 @@ class ReferenceCaptureAndEligibilityTests(ReferenceRepositoryTestCase):
             ) as began,
             mock.patch.object(
                 self.repository._storage,
-                "read_bytes",
+                "read_snapshot",
                 side_effect=AssertionError("storage must not run"),
             ) as read,
         ):
@@ -500,7 +542,7 @@ class ReferenceCaptureAndEligibilityTests(ReferenceRepositoryTestCase):
             ArtifactReference(_MANUSCRIPT_PATH, ArtifactLineRange(4, 4)),
         )
         calls = 0
-        original = SecureWorkspaceStorage.read_bytes
+        original = SecureWorkspaceStorage.read_snapshot
 
         def observed(storage, path, *args, **kwargs):
             nonlocal calls
@@ -508,7 +550,11 @@ class ReferenceCaptureAndEligibilityTests(ReferenceRepositoryTestCase):
                 calls += 1
             return original(storage, path, *args, **kwargs)
 
-        with mock.patch.object(SecureWorkspaceStorage, "read_bytes", new=observed):
+        with mock.patch.object(
+            SecureWorkspaceStorage,
+            "read_snapshot",
+            new=observed,
+        ):
             authorization = self.capture("ranges", references)
         self.assertEqual(calls, 1)
         self.assertEqual(
@@ -521,41 +567,73 @@ class ReferenceCaptureAndEligibilityTests(ReferenceRepositoryTestCase):
         )
         authorization.close()
 
-    def test_missing_manual_drift_and_unsafe_artifacts_fail_with_coded_evidence(self) -> None:
+    def test_manual_empty_missing_invalid_and_nul_sources_are_coded_exactly(self) -> None:
         manual_path = "manuscript/part-01/manual.md"
         manual_target = self.root / manual_path
         manual_target.parent.mkdir(parents=True, exist_ok=True)
         manual_target.write_bytes(b"manual")
-        with _expect_error(self, ReferenceAuthorizationErrorCode.NOT_FOUND):
-            self.repository.capture_reference_authorization(
-                operation_id="manual",
-                batch=_reference_batch(ArtifactReference(manual_path)),
-            )
+        manual = self.repository.capture_reference_authorization(
+            operation_id="manual",
+            batch=_reference_batch(ArtifactReference(manual_path)),
+        )
+        assert manual is not None
+        self.assertEqual(
+            manual.delivery_snapshot(
+                self.repository._reference_authorization_owner
+            )[1],
+            (b"manual",),
+        )
         manual_history = self.repository.inspect_reference_operation("manual")
         assert manual_history is not None
         self.assertEqual(
             tuple(event.operation_state for event in manual_history.operation_events),
-            (ReferenceOperationState.REQUESTED, ReferenceOperationState.TERMINATED),
+            (ReferenceOperationState.REQUESTED, ReferenceOperationState.CAPTURED),
         )
-        self.assertIs(
-            manual_history.operation_events[-1].outcome,
-            ReferenceAuthorizationErrorCode.NOT_FOUND,
-        )
+        manual.close()
 
-        target = self.root / _MANUSCRIPT_PATH
-        target.write_bytes(b"changed")
-        with _expect_error(self, ReferenceAuthorizationErrorCode.DRIFT):
+        empty_path = "manuscript/part-01/empty.md"
+        (self.root / empty_path).write_bytes(b"")
+        empty = self.repository.capture_reference_authorization(
+            operation_id="empty",
+            batch=_reference_batch(ArtifactReference(empty_path)),
+        )
+        assert empty is not None
+        proof = empty.authorized_references[0]
+        self.assertEqual(
+            (proof.selected_utf8_bytes, proof.source_line_count),
+            (0, 0),
+        )
+        empty.close()
+        with _expect_error(
+            self,
+            ReferenceAuthorizationErrorCode.RANGE_OUT_OF_BOUNDS,
+        ):
             self.repository.capture_reference_authorization(
-                operation_id="drifted",
-                batch=_reference_batch(ArtifactReference(_MANUSCRIPT_PATH)),
+                operation_id="empty_range",
+                batch=_reference_batch(
+                    ArtifactReference(empty_path, ArtifactLineRange(1, 1))
+                ),
             )
 
-        target.unlink()
-        with _expect_error(self, ReferenceAuthorizationErrorCode.INELIGIBLE):
+        missing_path = "manuscript/part-01/missing.md"
+        with _expect_error(self, ReferenceAuthorizationErrorCode.NOT_FOUND):
             self.repository.capture_reference_authorization(
                 operation_id="missing",
-                batch=_reference_batch(ArtifactReference(_MANUSCRIPT_PATH)),
+                batch=_reference_batch(ArtifactReference(missing_path)),
             )
+
+        for label, content, code in (
+            ("invalid", b"safe\ninvalid\xff", ReferenceAuthorizationErrorCode.INVALID_UTF8),
+            ("nul", b"safe\x00nul", ReferenceAuthorizationErrorCode.NUL_CONTENT),
+        ):
+            with self.subTest(label=label):
+                path = f"manuscript/part-01/{label}.md"
+                (self.root / path).write_bytes(content)
+                with _expect_error(self, code):
+                    self.repository.capture_reference_authorization(
+                        operation_id=label,
+                        batch=_reference_batch(ArtifactReference(path)),
+                    )
 
     def test_symlink_hardlink_and_fifo_fail_without_content_in_errors(self) -> None:
         scenarios: list[tuple[str, callable]] = []
@@ -796,21 +874,29 @@ class ReferenceDriftAndLifetimeTests(ReferenceRepositoryTestCase):
             ReferenceAuthorizationErrorCode.DRIFT,
         )
 
-    def test_same_bytes_new_provenance_is_drift(self) -> None:
+    def test_same_bytes_physical_replacement_and_hardlink_are_drift(self) -> None:
         requested = (ArtifactReference(_CORE_PATH),)
-        authorization = self.capture("provenance_drift", requested)
+        authorization = self.capture("replacement_drift", requested)
         capability = self.authorize(authorization, "invoke", 1)
-        self.repository.commit_consensus(
-            output_path="part-01/second.md",
-            candidate="second",
-            core_updates={"global_outline.md": self.core_bytes.decode("utf-8")},
-            session_id="session",
-            debate_id="second",
-            revision_id="r0",
-            candidate_author_agent_id=EXECUTION_SPECIALIST,
-        )
+        target = self.root / _CORE_PATH
+        replacement = target.with_name("replacement.md")
+        replacement.write_bytes(self.core_bytes)
+        os.replace(replacement, target)
         with _expect_error(self, ReferenceAuthorizationErrorCode.DRIFT):
             self.repository.deliver_authorized_references(capability, requested)
+
+        hardlink_authorization = self.capture("hardlink_drift", requested)
+        hardlink_capability = self.authorize(
+            hardlink_authorization,
+            "invoke",
+            1,
+        )
+        os.link(target, target.with_name("additional-link.md"))
+        with _expect_error(self, ReferenceAuthorizationErrorCode.DRIFT):
+            self.repository.deliver_authorized_references(
+                hardlink_capability,
+                requested,
+            )
 
     def test_drift_at_invocation_acceptance_and_final_acceptance_fails_closed(self) -> None:
         requested = (ArtifactReference(_MANUSCRIPT_PATH),)

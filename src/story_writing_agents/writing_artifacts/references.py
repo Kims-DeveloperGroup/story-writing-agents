@@ -13,7 +13,7 @@ import hashlib
 
 from .catalog import (
     MAX_ARTIFACT_PATH_BYTES,
-    ArtifactCatalogEntry,
+    ArtifactKind,
     canonical_artifact_kind,
 )
 
@@ -25,31 +25,78 @@ MAX_VIEWER_UTF8_BYTES = 8 * 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
-class ArtifactContentSnapshot:
-    """Exact repository-verified bytes for one current catalog entry."""
+class ArtifactSourceIdentity:
+    """Content-free identity for one stable canonical filesystem source."""
 
-    entry: ArtifactCatalogEntry
+    path: str
+    kind: ArtifactKind
+    source_sha256: str
+    source_utf8_bytes: int
+    device_id: int
+    inode: int
+    modified_ns: int
+    changed_ns: int
+
+    def __post_init__(self) -> None:
+        if canonical_artifact_kind(self.path) is not self.kind:
+            raise ValueError("artifact source path and kind must be canonical")
+        if (
+            type(self.source_sha256) is not str
+            or len(self.source_sha256) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in self.source_sha256
+            )
+        ):
+            raise ValueError("source_sha256 must be lowercase hexadecimal")
+        if type(self.source_utf8_bytes) is not int or self.source_utf8_bytes < 0:
+            raise ValueError("source_utf8_bytes must be nonnegative")
+        for name in ("device_id", "inode"):
+            value = getattr(self, name)
+            if type(value) is not int or value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+        for name in ("modified_ns", "changed_ns"):
+            value = getattr(self, name)
+            if type(value) is not int or value < 0:
+                raise ValueError(f"{name} must be a nonnegative integer")
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactContentSnapshot:
+    """Exact bytes for one stable canonical filesystem source."""
+
+    source: ArtifactSourceIdentity
     content: bytes
 
     def __post_init__(self) -> None:
-        if type(self.entry) is not ArtifactCatalogEntry:
-            raise TypeError("entry must be an ArtifactCatalogEntry")
+        if type(self.source) is not ArtifactSourceIdentity:
+            raise TypeError("source must be an ArtifactSourceIdentity")
         if type(self.content) is not bytes:
             raise TypeError("artifact snapshot content must be bytes")
-        if hashlib.sha256(self.content).hexdigest() != self.entry.sha256:
-            raise ValueError("artifact snapshot content does not match provenance")
+        if len(self.content) != self.source.source_utf8_bytes:
+            raise ValueError("artifact snapshot size does not match its source")
+        if (
+            hashlib.sha256(self.content).hexdigest()
+            != self.source.source_sha256
+        ):
+            raise ValueError(
+                "artifact snapshot content does not match its source"
+            )
+        try:
+            decoded = self.content.decode("utf-8", errors="strict")
+        except UnicodeDecodeError as exc:
+            raise ValueError("artifact snapshot is not valid UTF-8") from exc
+        if "\x00" in decoded:
+            raise ValueError("artifact snapshot contains NUL")
 
     @property
     def path(self) -> str:
-        return self.entry.path
+        return self.source.path
 
     def read_text(self) -> str:
         """Decode the immutable verified bytes as strict UTF-8."""
 
-        try:
-            return self.content.decode("utf-8", errors="strict")
-        except UnicodeDecodeError as exc:
-            raise ValueError("artifact snapshot is not valid UTF-8") from exc
+        return self.content.decode("utf-8", errors="strict")
 
 
 @dataclass(frozen=True, slots=True)

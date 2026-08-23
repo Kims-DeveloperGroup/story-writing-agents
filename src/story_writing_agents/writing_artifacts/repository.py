@@ -40,6 +40,11 @@ from .catalog import (
     canonical_artifact_kind,
     manuscript_artifact_path,
 )
+from .filesystem_sources import (
+    ArtifactSourceInvalidUtf8Error,
+    ArtifactSourceNulError,
+    CanonicalArtifactFilesystem,
+)
 from .references import (
     ArtifactContentSnapshot,
     ArtifactReference,
@@ -69,15 +74,16 @@ _SAFE_IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 
 
 class WritingArtifactRepository:
-    """Own canonical artifact provenance, publication, and recovery.
+    """Own canonical artifact sources, provenance, publication, and recovery.
 
-    Construction performs no filesystem I/O. Every public read or commit owns
-    both a repository-local lock and the workspace-local advisory lock, then
-    completes or rejects pending transactions before consulting the catalog.
+    Construction performs no filesystem I/O. Source reads and publication use
+    the same repository-local and workspace-local locks, but only catalog audit
+    and publication recover transactions or consult provenance state.
     """
 
     def __init__(self, workspace_root: str | Path) -> None:
         self._storage = SecureWorkspaceStorage(workspace_root)
+        self._sources = CanonicalArtifactFilesystem(self._storage)
         self._lock = threading.RLock()
         self._reference_authorization_owner = object()
         self._reference_evidence = ReferenceEvidenceStore(
@@ -102,9 +108,10 @@ class WritingArtifactRepository:
             return ArtifactCatalog(current)
 
     def list_paths(self) -> tuple[str, ...]:
-        """Return sorted complete workspace-relative eligible identities."""
+        """Return every safe current canonical filesystem identity."""
 
-        return tuple(sorted(self.catalog().entries))
+        with self._locked_sources():
+            return self._sources.list_paths()
 
     def read_current(
         self,
@@ -112,48 +119,14 @@ class WritingArtifactRepository:
     ) -> tuple[ArtifactContentSnapshot, ...]:
         """Return immutable current bytes for only the requested artifacts."""
 
-        if type(paths) is not tuple:
-            raise TypeError("artifact paths must be a tuple")
-        if len(set(paths)) != len(paths):
-            raise ValueError("artifact paths must be unique")
-        for path in paths:
-            if canonical_artifact_kind(path) is None:
-                raise WorkspaceSecurityError(
-                    "path is not a canonical writing artifact"
-                )
-        with self._locked_repository():
-            catalog = self._load_catalog()
-            snapshots: list[ArtifactContentSnapshot] = []
-            for path in paths:
-                entry = catalog.entries.get(path)
-                if entry is None:
-                    continue
-                try:
-                    content = self._storage.read_bytes(path)
-                except (FileNotFoundError, ArtifactEntrySecurityError):
-                    continue
-                if hashlib.sha256(content).hexdigest() != entry.sha256:
-                    continue
-                snapshots.append(ArtifactContentSnapshot(entry, content))
-            return tuple(snapshots)
+        with self._locked_sources():
+            return self._sources.read_current(paths)
 
     def read_text(self, path: str, *, max_bytes: int | None = None) -> str:
-        """Read a current catalog entry only after hash and provenance checks."""
+        """Read one safe current canonical filesystem source."""
 
-        if canonical_artifact_kind(path) is None:
-            raise WorkspaceSecurityError("path is not a canonical writing artifact")
-        with self._locked_repository():
-            catalog = self._load_catalog()
-            entry = catalog.entries.get(path)
-            if entry is None:
-                raise WorkspaceSecurityError("artifact has no repository provenance")
-            content = self._storage.read_bytes(path, max_bytes=max_bytes)
-            if hashlib.sha256(content).hexdigest() != entry.sha256:
-                raise WorkspaceSecurityError("artifact provenance does not match current bytes")
-            try:
-                return content.decode("utf-8", errors="strict")
-            except UnicodeDecodeError as exc:
-                raise WorkspaceFormatError("artifact is not valid UTF-8") from exc
+        with self._locked_sources():
+            return self._sources.read_text(path, max_bytes=max_bytes)
 
     def capture_reference_authorization(
         self,
@@ -161,7 +134,7 @@ class WritingArtifactRepository:
         operation_id: str,
         batch: ArtifactReferenceBatch,
     ) -> ReferenceAuthorization | None:
-        """Capture one immutable, repository-authorized reference snapshot."""
+        """Capture one immutable filesystem-authorized reference snapshot."""
 
         if type(batch) is not ArtifactReferenceBatch:
             raise TypeError("batch must be an ArtifactReferenceBatch")
@@ -169,37 +142,40 @@ class WritingArtifactRepository:
             return None
         manifest = ReferenceOperationManifest(operation_id, batch.references)
         began = False
-        with self._locked_repository():
+        with self._locked_sources(evidence=True):
             try:
                 self._reference_evidence.begin_operation(manifest)
                 began = True
-                catalog = self._load_catalog()
-                sources: dict[str, tuple[ArtifactCatalogEntry, bytes]] = {}
+                sources: dict[str, ArtifactContentSnapshot] = {}
                 for reference in batch.references:
                     if reference.path in sources:
                         continue
-                    entry = catalog.entries.get(reference.path)
-                    if entry is None:
+                    try:
+                        sources[reference.path] = self._sources.read_snapshot(
+                            reference.path
+                        )
+                    except FileNotFoundError:
                         raise ReferenceAuthorizationError(
                             ReferenceAuthorizationErrorCode.NOT_FOUND
-                        )
-                    try:
-                        content = self._storage.read_bytes(reference.path)
-                    except (FileNotFoundError, ArtifactEntrySecurityError):
+                        ) from None
+                    except (ArtifactEntrySecurityError, WorkspaceSecurityError):
                         raise ReferenceAuthorizationError(
                             ReferenceAuthorizationErrorCode.INELIGIBLE
                         ) from None
-                    if hashlib.sha256(content).hexdigest() != entry.sha256:
+                    except ArtifactSourceInvalidUtf8Error:
                         raise ReferenceAuthorizationError(
-                            ReferenceAuthorizationErrorCode.DRIFT
-                        )
-                    sources[reference.path] = (entry, content)
-                entries = tuple(sources[item.path][0] for item in batch.references)
-                contents = tuple(sources[item.path][1] for item in batch.references)
+                            ReferenceAuthorizationErrorCode.INVALID_UTF8
+                        ) from None
+                    except ArtifactSourceNulError:
+                        raise ReferenceAuthorizationError(
+                            ReferenceAuthorizationErrorCode.NUL_CONTENT
+                        ) from None
+                snapshots = tuple(
+                    sources[item.path] for item in batch.references
+                )
                 proofs, captured = build_authorized_references(
                     batch,
-                    entries,
-                    contents,
+                    snapshots,
                 )
                 self._reference_evidence.append_operation_event(
                     operation_id,
@@ -239,7 +215,7 @@ class WritingArtifactRepository:
             )
         references = authorization.authorized_references
         capability_id = uuid4().hex
-        with self._locked_repository():
+        with self._locked_sources(evidence=True):
             self._reference_evidence.begin_invocation(
                 correlation,
                 capability_id,
@@ -312,7 +288,7 @@ class WritingArtifactRepository:
                 ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH
             )
         try:
-            with self._locked_repository():
+            with self._locked_sources(evidence=True):
                 self._revalidate_reference_authorization(authorization)
                 self._reference_evidence.append_invocation_event(
                     capability.correlation,
@@ -336,7 +312,7 @@ class WritingArtifactRepository:
         """Persist that a provider result was received for this invocation."""
 
         authorization = self._authorization_from_capability(capability)
-        with self._locked_repository():
+        with self._locked_sources(evidence=True):
             self._reference_evidence.append_invocation_event(
                 capability.correlation,
                 capability.capability_id,
@@ -350,7 +326,7 @@ class WritingArtifactRepository:
         authorization = self._authorization_from_capability(capability)
         references = authorization.authorized_references
         try:
-            with self._locked_repository():
+            with self._locked_sources(evidence=True):
                 self._revalidate_reference_authorization(authorization)
                 self._reference_evidence.append_invocation_event(
                     capability.correlation,
@@ -374,7 +350,7 @@ class WritingArtifactRepository:
         if type(capability) is not ReadCapability:
             raise TypeError("capability must be a ReadCapability")
         authorization = capability.retire(self._reference_authorization_owner)
-        with self._locked_repository():
+        with self._locked_sources(evidence=True):
             self._reference_evidence.append_invocation_event(
                 capability.correlation,
                 capability.capability_id,
@@ -396,7 +372,7 @@ class WritingArtifactRepository:
         authorization.require_owner(self._reference_authorization_owner)
         references = authorization.authorized_references
         try:
-            with self._locked_repository():
+            with self._locked_sources(evidence=True):
                 self._revalidate_reference_authorization(authorization)
                 self._reference_evidence.append_operation_event(
                     authorization.manifest.operation_id,
@@ -405,7 +381,7 @@ class WritingArtifactRepository:
                     checkpoint=checkpoint,
                 )
         except ReferenceAuthorizationError as exc:
-            with self._locked_repository():
+            with self._locked_sources(evidence=True):
                 self._reference_evidence.append_operation_event(
                     authorization.manifest.operation_id,
                     ReferenceOperationState.TERMINATED,
@@ -431,7 +407,7 @@ class WritingArtifactRepository:
         references = authorization.authorized_references
         finished = False
         try:
-            with self._locked_repository():
+            with self._locked_sources(evidence=True):
                 if outcome is None:
                     self._revalidate_reference_authorization(authorization)
                     state = ReferenceOperationState.ACCEPTED
@@ -446,7 +422,7 @@ class WritingArtifactRepository:
                 finished = True
         except ReferenceAuthorizationError as exc:
             if outcome is None:
-                with self._locked_repository():
+                with self._locked_sources(evidence=True):
                     self._reference_evidence.append_operation_event(
                         authorization.manifest.operation_id,
                         ReferenceOperationState.TERMINATED,
@@ -465,7 +441,7 @@ class WritingArtifactRepository:
     ) -> ReferenceOperationHistory | None:
         """Return one history, or ``None`` when the operation is absent."""
 
-        with self._locked_repository():
+        with self._locked_sources(evidence=True):
             return self._reference_evidence.inspect(operation_id)
 
     def _authorization_from_capability(
@@ -486,7 +462,7 @@ class WritingArtifactRepository:
         capability: ReadCapability,
         outcome: ReferenceAuthorizationErrorCode,
     ) -> None:
-        with self._locked_repository():
+        with self._locked_sources(evidence=True):
             self._reference_evidence.append_invocation_event(
                 capability.correlation,
                 capability.capability_id,
@@ -499,28 +475,23 @@ class WritingArtifactRepository:
         self,
         authorization: ReferenceAuthorization,
     ) -> None:
-        """Require exact current provenance and bytes for the captured paths."""
+        """Require exact current source identity for every captured path."""
 
         authorization.require_owner(self._reference_authorization_owner)
         references = authorization.authorized_references
-        catalog = self._load_catalog()
         observed: set[str] = set()
         for authorized in references:
             path = authorized.reference.path
             if path in observed:
                 continue
             observed.add(path)
-            if catalog.entries.get(path) != authorized.catalog_entry:
-                raise ReferenceAuthorizationError(
-                    ReferenceAuthorizationErrorCode.DRIFT
-                )
             try:
-                content = self._storage.read_bytes(path)
-            except (FileNotFoundError, ArtifactEntrySecurityError):
+                matches = self._sources.matches(authorized.source)
+            except (OSError, WorkspaceFormatError, WorkspaceSecurityError):
                 raise ReferenceAuthorizationError(
                     ReferenceAuthorizationErrorCode.DRIFT
                 ) from None
-            if hashlib.sha256(content).hexdigest() != authorized.catalog_entry.sha256:
+            if not matches:
                 raise ReferenceAuthorizationError(
                     ReferenceAuthorizationErrorCode.DRIFT
                 )
@@ -705,6 +676,16 @@ class WritingArtifactRepository:
 
     def _locked_repository(self):
         return _RepositoryLock(self)
+
+    def _locked_sources(self, *, evidence: bool = False):
+        return _RepositorySourceLock(self, evidence=evidence)
+
+    def _ensure_source_directories(self, *, evidence: bool) -> None:
+        paths = [_STATE_DIRECTORY]
+        if evidence:
+            paths.extend((_SNAPSHOTS_DIRECTORY, _STAGING_DIRECTORY))
+        for path in paths:
+            self._storage.ensure_directory(path)
 
     def _ensure_state_directories(self) -> None:
         for path in (
@@ -1802,6 +1783,45 @@ class _RepositoryLock:
             self._file_lock = self._repository._storage.exclusive_lock(_LOCK_PATH)
             self._file_lock.__enter__()
             self._repository._recover()
+        except BaseException:
+            try:
+                if self._file_lock is not None:
+                    self._file_lock.__exit__(None, None, None)
+            finally:
+                self._repository._lock.release()
+            raise
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        try:
+            if self._file_lock is not None:
+                self._file_lock.__exit__(exc_type, exc, traceback)
+        finally:
+            self._repository._lock.release()
+
+
+class _RepositorySourceLock:
+    """Serialize source/evidence I/O without consulting publication state."""
+
+    def __init__(
+        self,
+        repository: WritingArtifactRepository,
+        *,
+        evidence: bool,
+    ) -> None:
+        self._repository = repository
+        self._evidence = evidence
+        self._file_lock = None
+
+    def __enter__(self) -> None:
+        self._repository._lock.acquire()
+        try:
+            self._repository._ensure_source_directories(
+                evidence=self._evidence
+            )
+            self._file_lock = self._repository._storage.exclusive_lock(
+                _LOCK_PATH
+            )
+            self._file_lock.__enter__()
         except BaseException:
             try:
                 if self._file_lock is not None:
