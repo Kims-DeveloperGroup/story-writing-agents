@@ -35,6 +35,7 @@ class ActionKind(StrEnum):
     INSPECT = "inspect"
     HISTORY = "history"
     STATUS = "status"
+    AUTH = "auth"
     SETTINGS = "settings"
     SET_LANGUAGE = "set_language"
     SET_PERSONA = "set_persona"
@@ -283,6 +284,7 @@ _ACTION_FIELD_RULES: dict[
     ActionKind.INSPECT: (frozenset({"argument"}), _NO_FIELDS),
     ActionKind.HISTORY: (frozenset({"count"}), _NO_FIELDS),
     ActionKind.STATUS: (_NO_FIELDS, _NO_FIELDS),
+    ActionKind.AUTH: (_NO_FIELDS, _NO_FIELDS),
     ActionKind.SETTINGS: (_NO_FIELDS, _NO_FIELDS),
     ActionKind.SET_LANGUAGE: (
         frozenset({"argument"}),
@@ -386,6 +388,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
     ),
     CommandSpec("Agents", "/to NAME", ("/agent",), False, False, "/to plot"),
     CommandSpec("Agents", "/agents", (), False, False, "/agents"),
+    CommandSpec("Agents", "/auth", (), True, True, "/auth"),
     CommandSpec(
         "Agents",
         "/language LANG",
@@ -407,7 +410,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
         "Agents",
         "/settings",
         (),
-        False,
+        True,
         True,
         "/settings",
     ),
@@ -505,6 +508,7 @@ _COMMAND_ALIASES: dict[str, str] = {
     "to": "/to",
     "agent": "/to",
     "agents": "/agents",
+    "auth": "/auth",
     "language": "/language",
     "persona": "/persona",
     "reset": "/reset",
@@ -779,6 +783,8 @@ def _parse_slash_command(line: str) -> InteractiveAction:
         return _parse_target(tail, command)
     if command == "agents":
         return _no_argument_action(tail, ActionKind.LIST_AGENTS, "/agents")
+    if command == "auth":
+        return _no_argument_action(tail, ActionKind.AUTH, "/auth")
     if command == "language":
         return _parse_language(tail)
     if command == "persona":
