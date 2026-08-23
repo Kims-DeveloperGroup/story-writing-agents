@@ -74,6 +74,7 @@ class _StartupFrameState:
     """Track one displayed or attempted startup frame for exact cleanup."""
 
     physical_line_count: int = 0
+    cursor_below_frame: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -433,7 +434,19 @@ class RawTerminalDriver:
         if not callable(sleeper):
             raise TypeError("sleeper must be callable")
         base_capabilities = self.capabilities()
-        if not self._startup_animation_is_safe(base_capabilities):
+        configuration = (
+            self._startup_terminal_configuration(base_capabilities)
+            if self._startup_animation_is_safe(base_capabilities)
+            else None
+        )
+        if configuration is None or not self._run_guarded_startup_presentation(
+            configuration,
+            lambda: self._run_startup_welcome_frames(
+                frame_renderer,
+                sleeper,
+                base_capabilities,
+            ),
+        ):
             static_capabilities = _static_startup_capabilities(base_capabilities)
             final_frame = _startup_frame(
                 frame_renderer,
@@ -441,7 +454,15 @@ class RawTerminalDriver:
                 static_capabilities,
             )
             self._write_raw_text(f"{final_frame.text}\n")
-            return
+        return
+
+    def _run_startup_welcome_frames(
+        self,
+        frame_renderer: Callable[[int, TerminalCapabilities], RenderedFrame],
+        sleeper: Callable[[float], object],
+        base_capabilities: TerminalCapabilities,
+    ) -> None:
+        """Render and clean only the guarded capable welcome frames."""
 
         live_state = _StartupFrameState()
         active_failure: BaseException | None = None
@@ -458,8 +479,8 @@ class RawTerminalDriver:
                 self._replace_startup_frame(frame, live_state)
                 if index < _STARTUP_WELCOME_FRAME_COUNT - 1:
                     sleeper(_STARTUP_WELCOME_INTERVAL_SECONDS)
-            self._write_raw_text("\n")
-            live_state.physical_line_count = 0
+            self._finish_startup_frame(live_state)
+            live_state = _StartupFrameState()
         except BaseException as failure:
             active_failure = failure
         if live_state.physical_line_count:
@@ -483,12 +504,33 @@ class RawTerminalDriver:
         if not callable(sleeper):
             raise TypeError("sleeper must be callable")
         base_capabilities = self.capabilities()
-        if not self._startup_animation_is_safe(base_capabilities):
+        configuration = (
+            self._startup_terminal_configuration(base_capabilities)
+            if self._startup_animation_is_safe(base_capabilities)
+            else None
+        )
+        if configuration is None or not self._run_guarded_startup_presentation(
+            configuration,
+            lambda: self._run_startup_notice_frame(
+                frame_renderer,
+                sleeper,
+                base_capabilities,
+            ),
+        ):
             static_capabilities = _static_startup_capabilities(base_capabilities)
             frame = frame_renderer(static_capabilities)
             _require_startup_frame(frame, static_capabilities)
             self._write_raw_text(f"{frame.text}\n")
-            return
+        return
+
+    def _run_startup_notice_frame(
+        self,
+        frame_renderer: Callable[[TerminalCapabilities], RenderedFrame],
+        sleeper: Callable[[float], object],
+        base_capabilities: TerminalCapabilities,
+    ) -> None:
+        """Render and clean only one guarded capable startup notice."""
+
         render_capabilities = self._startup_render_capabilities(
             base_capabilities
         )
@@ -510,6 +552,55 @@ class RawTerminalDriver:
                     active_failure = cleanup_failure
         if active_failure is not None:
             raise active_failure
+
+    def _startup_terminal_configuration(
+        self,
+        capabilities: TerminalCapabilities,
+    ) -> _TerminalConfiguration | None:
+        """Prepare the exact startup guard only with atomic input discard."""
+
+        try:
+            termios_module = self._termios_provider()
+            if not _startup_input_discard_is_supported(termios_module):
+                return None
+            return _terminal_configuration(
+                self._input_stream,
+                self._output_stream,
+                termios_module=termios_module,
+                os_module=self._os_provider(),
+                width=capabilities.width,
+            )
+        except Exception:
+            return None
+
+    def _run_guarded_startup_presentation(
+        self,
+        configuration: _TerminalConfiguration,
+        operation: Callable[[], None],
+    ) -> bool:
+        """Run one bounded presentation with no echo or retained type-ahead."""
+
+        try:
+            _activate_terminal(configuration)
+        except BaseException as setup_failure:
+            _restore_terminal_or_raise(configuration, setup_failure)
+            if isinstance(setup_failure, Exception):
+                return False
+            raise
+
+        active_failure: BaseException | None = None
+        try:
+            operation()
+        except BaseException as failure:
+            active_failure = failure
+        _restore_terminal_or_raise(
+            configuration,
+            active_failure,
+            discard_input=True,
+        )
+        if active_failure is not None:
+            raise active_failure
+        return True
 
     def run_startup_result_notice(
         self,
@@ -555,10 +646,45 @@ class RawTerminalDriver:
         if type(state) is not _StartupFrameState:
             raise TypeError("state must be a _StartupFrameState")
         if state.physical_line_count:
-            self._clear_startup_frame(state.physical_line_count)
-            state.physical_line_count = 0
-        state.physical_line_count = frame.line_count
-        self._write_raw_text(frame.text)
+            self._clear_startup_state(state)
+        self._write_startup_frame(frame, state)
+
+    def _write_startup_frame(
+        self,
+        frame: RenderedFrame,
+        state: _StartupFrameState,
+    ) -> None:
+        """Write one frame and retain only collaborator-confirmed progress."""
+
+        if type(state) is not _StartupFrameState:
+            raise TypeError("state must be a _StartupFrameState")
+        # A raised write exposes no trustworthy progress. Leave cleanup
+        # unarmed so an unknown partial write cannot erase preceding output.
+        written = self._output_stream.write(frame.text)
+        if written is None:
+            state.physical_line_count = frame.line_count
+        elif type(written) is int and 0 <= written <= len(frame.text):
+            if written:
+                state.physical_line_count = (
+                    frame.text[:written].count("\n") + 1
+                )
+            if written != len(frame.text):
+                raise OSError("interactive terminal write was incomplete")
+        else:
+            raise OSError("interactive terminal write was incomplete")
+        self._output_stream.flush()
+
+    def _finish_startup_frame(self, state: _StartupFrameState) -> None:
+        """Advance below the final welcome with confirmed cursor progress."""
+
+        if type(state) is not _StartupFrameState:
+            raise TypeError("state must be a _StartupFrameState")
+        written = self._output_stream.write("\n")
+        if written is None or type(written) is int and written == 1:
+            state.cursor_below_frame = True
+        else:
+            raise OSError("interactive terminal write was incomplete")
+        self._output_stream.flush()
 
     def _startup_render_capabilities(
         self,
@@ -579,19 +705,31 @@ class RawTerminalDriver:
             raise TypeError("state must be a _StartupFrameState")
         if not state.physical_line_count:
             return
-        self._clear_startup_frame(state.physical_line_count)
+        self._clear_startup_frame(
+            state.physical_line_count,
+            cursor_below_frame=state.cursor_below_frame,
+        )
         state.physical_line_count = 0
+        state.cursor_below_frame = False
 
-    def _clear_startup_frame(self, line_count: int) -> None:
+    def _clear_startup_frame(
+        self,
+        line_count: int,
+        *,
+        cursor_below_frame: bool = False,
+    ) -> None:
         """Clear one complete call-local startup frame without leaving a row."""
 
         if type(line_count) is not int or line_count <= 0:
             raise ValueError("line_count must be positive")
+        if type(cursor_below_frame) is not bool:
+            raise TypeError("cursor_below_frame must be a bool")
         self._write_raw_text(
             "".join(
                 (
                     _CARRIAGE_RETURN,
-                    _CURSOR_UP * (line_count - 1),
+                    _CURSOR_UP
+                    * (line_count if cursor_below_frame else line_count - 1),
                     _CARRIAGE_RETURN,
                     _CLEAR_TO_END,
                 )
@@ -1835,6 +1973,18 @@ def _terminal_name_is_capable(value: object) -> bool:
     )
 
 
+def _startup_input_discard_is_supported(termios_module: object | None) -> bool:
+    """Require atomic restore-and-discard support before any startup delay."""
+
+    if not _termios_interface_is_available(termios_module):
+        return False
+    try:
+        flush_mode = getattr(termios_module, "TCSAFLUSH", None)
+    except Exception:
+        return False
+    return isinstance(flush_mode, int) and not isinstance(flush_mode, bool)
+
+
 def _terminal_configuration(
     input_stream: TextIO,
     output_stream: TextIO,
@@ -1960,19 +2110,30 @@ def _activate_terminal(configuration: _TerminalConfiguration) -> None:
 def _restore_terminal_or_raise(
     configuration: _TerminalConfiguration,
     active_failure: BaseException | None,
+    *,
+    discard_input: bool = False,
 ) -> None:
     """Restore exact captured attributes or raise fatal cleanup uncertainty.
 
     Restoration is attempted once for normal, setup-failure, and active-failure
-    paths. Its failure takes precedence over ``active_failure`` and is exposed
-    only through fixed local diagnostics; no stream is closed here.
+    paths. Startup presentation may atomically discard only input accumulated
+    under its bounded no-echo guard. Restoration failure takes precedence over
+    ``active_failure`` and is exposed only through fixed local diagnostics; no
+    stream is closed here.
     """
 
+    if type(discard_input) is not bool:
+        raise TypeError("discard_input must be a bool")
     termios_module = configuration.termios_module
     try:
+        restore_mode = (
+            termios_module.TCSAFLUSH
+            if discard_input
+            else termios_module.TCSADRAIN
+        )
         termios_module.tcsetattr(
             configuration.input_descriptor,
-            termios_module.TCSADRAIN,
+            restore_mode,
             configuration.original_attributes,
         )
     except BaseException as restoration_failure:
