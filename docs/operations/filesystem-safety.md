@@ -3,7 +3,10 @@
 > **Availability:** generic workspace containment, descriptor-relative
 > writing-artifact publication and recovery, exclusive conversation creation,
 > serialized transcript replacement, atomic per-file default/metadata
-> replacement, and guarded interactive settings persistence are implemented.
+> replacement, guarded interactive settings persistence, and content-free
+> explicit-reference authorization evidence and inline runtime/provider
+> enforcement are implemented. `$`/`$$` discovery and viewer attachment are
+> not.
 
 Key terms: **containment**—keeping paths beneath the workspace root; **symlink**—
 a filesystem alias the runtime rejects; **exclusive creation**—failure instead
@@ -105,6 +108,37 @@ The provider-session claim guard is opened without following symlinks when the
 platform supports it, verified as the same regular file, and locked with POSIX
 `flock` or Windows one-byte advisory locking. Suspicious state fails closed.
 Do not replace the guard pathname while a workspace may be used.
+
+## Explicit-reference read safety
+
+For one nonempty parsed reference batch, `WritingArtifactRepository` creates
+the operation manifest and `requested` evidence under its repository lease
+before catalog or content reads. It then uses the same descriptor-relative,
+no-follow adapter and eligibility rules as other artifact access. Each unique
+path is securely read once at initial capture; multiple ranges retain request
+order while sharing that immutable source snapshot.
+
+The complete source must be strict UTF-8 without NUL. Universal CRLF, LF, and
+lone-CR records determine exact one-based range slices, including their line
+terminators. Each selected reference may contain at most 128 KiB and the batch
+at most 256 KiB, inclusive. Validation errors use fixed codes and do not echo
+paths or content.
+
+A repository-minted capability is bound to one authorization, correlation, and
+exact ordered batch and can be consumed only once. Before returning captured
+bytes, accepting an invocation, recording an operation checkpoint, or finally
+accepting the operation, the repository reopens each unique source and checks
+its full catalog provenance and SHA-256 against capture. Captured content is
+never refreshed. A path/range mismatch consumes the capability; provenance or
+byte drift fails closed.
+
+Operation and invocation manifests/events are schema-v1 canonical JSON,
+published create-only with exact path identities and contiguous sequences.
+Delivery evidence is written before the transient content is returned. A
+partial, replaced, aliased, malformed, noncanonical, duplicated, gapped, or
+invalidly transitioned evidence tree is corrupt and is neither repaired nor
+rewritten. Never edit `writing_artifacts/input_snapshots/`; it is repository
+state, not a canonical artifact directory.
 
 ## Conversation transcript safety
 

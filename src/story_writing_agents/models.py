@@ -19,6 +19,7 @@ from .errors import SessionIdError, WorkspaceFormatError
 
 
 _SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
+_SAFE_REFERENCE_OPERATION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 
 
 class InputKind(StrEnum):
@@ -482,6 +483,7 @@ class ConversationResult:
     agent_id: str
     content: str
     context: ConversationContextWindow
+    reference_operation_id: str | None = None
 
     def __post_init__(self) -> None:
         """Validate IDs/content and install a canonical pre-turn context.
@@ -517,6 +519,7 @@ class ConversationResult:
                 excluded_turn_id=self.turn_id,
             ),
         )
+        _validate_reference_operation_identifier(self.reference_operation_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -584,6 +587,10 @@ class DebateResult:
     messages: tuple[DebateMessage, ...] = ()
     error: str | None = None
     action_required: str | None = None
+    reference_operation_id: str | None = None
+
+    def __post_init__(self) -> None:
+        _validate_reference_operation_identifier(self.reference_operation_id)
 
     @property
     def consensus(self) -> bool:
@@ -606,6 +613,8 @@ class DebateResult:
         }
         if include_messages:
             result["messages"] = [message.to_dict() for message in self.messages]
+        if self.reference_operation_id is not None:
+            result["reference_operation_id"] = self.reference_operation_id
         return result
 
 
@@ -619,6 +628,16 @@ def _validate_conversation_identifier(value: str, *, label: str) -> str:
         raise SessionIdError(
             f"{label} must match [A-Za-z0-9][A-Za-z0-9_-]{{0,63}}"
         )
+    return value
+
+
+def _validate_reference_operation_identifier(value: str | None) -> str | None:
+    """Return one optional content-free reference operation identifier."""
+
+    if value is None:
+        return None
+    if type(value) is not str or _SAFE_REFERENCE_OPERATION_ID.fullmatch(value) is None:
+        raise ValueError("reference operation ID is invalid")
     return value
 
 

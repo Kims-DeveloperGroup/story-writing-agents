@@ -24,9 +24,11 @@ operation. See the
 `session_lifecycle` owns immutable provider-neutral lifecycle facts and pure
 readiness, with no resource or I/O. `AgentBackend` retains manifests, access
 claims, prompt staging, routes, processes, and threads. It owns private
-active-call retention and exact staging retirement; a `BoundAgent` is the
-immutable handle for one definition and is not the runtime selection owner.
-Codex is implemented; Gemini fails preflight.
+active-call retention, exact staging retirement, and the optional
+provider-enforced reference prelude supplied through the provider-neutral
+read-action boundary; a `BoundAgent` is the immutable handle for one definition
+and is not the runtime selection owner. Codex is implemented; Gemini fails
+preflight.
 
 `Workspace` owns generic path-safe persistence, inspection, and atomic
 replacement. The `writing_artifacts` package owns the stricter canonical-output
@@ -40,13 +42,20 @@ writes never manufacture artifact provenance. See
 | --- | --- |
 | `writing_artifacts.__init__` | Side-effect-free facade for immutable artifact values; no repository construction or root-package export. |
 | `writing_artifacts.catalog` | Four exact core identities, part-scoped manuscript grammar, kinds, immutable provenance entries, and catalog schema. |
-| `writing_artifacts.references` | Immutable path/range value contracts and limits only; no parsing, picker, provider, or terminal-viewer integration yet. The independent viewer is owned by `interactive_terminal` and receives supplied text only. |
+| `writing_artifacts.references` | Immutable path/range, directive-batch, verified-snapshot, and resource-limit values only; parsing belongs to `writing_artifacts.directives`, authorization and provider enforcement belong to the authorization/read-action/backend path, and viewing belongs to the independent `interactive_terminal` supplied-text viewer. |
+| `writing_artifacts.read_actions` | Provider-neutral, content-free exact request/action contracts; private synchronous coordinator protocol and closeable content-bearing result contract. |
 | `writing_artifacts._storage` | Descriptor-relative, no-follow, unique-regular-file I/O, compare-before-publish replacement, root-identity verification, and artifact advisory locking. |
-| `writing_artifacts.repository` | Provenance validation, current catalog projection, strict reads, create-only manuscript commits, journal roll-forward, catalog-last visibility, and fail-closed recovery. |
+| `writing_artifacts.repository` | Provenance validation, current catalog projection, strict reads, create-only manuscript commits, journal roll-forward, catalog-last visibility, fail-closed recovery, and concrete one-use reference coordinators/capabilities. |
 
 The package has no controller, terminal, backend, orchestrator, or generic
-`Workspace` dependency. `StoryRuntime` owns when a unanimous result may call
-the repository; prompt assembly consumes only its current eligible core paths.
+`Workspace` dependency. The backend imports only the provider-neutral
+`read_actions` boundary; the repository remains the sole owner of filesystem
+reads, revalidation, capabilities, and evidence. `StoryRuntime` parses and
+captures one ordered explicit-reference batch per operation, allocates a fresh
+coordinator for every addressed agent/phase, and accepts the operation only
+after final revalidation. Prompt assembly consumes only current eligible core
+paths; referenced selections are transient untrusted provider context rather
+than baseline core context.
 The interactive controller validates required manuscript output grammar but
 does not own storage or provenance. Exact user-visible states are in
 [Canonical writing artifacts](../reference/writing-artifacts.md).
@@ -145,9 +154,9 @@ available. It discovers and reads no file and constructs no artifact reference.
 The later #164 caller must list and securely read eligible artifacts through
 the writing-artifact boundary, enforce that boundary's separate limit, call
 the stateless viewer once per ordered selection, attach the path to returned
-line numbers, and restore the originating composer. #163 owns the mandatory
-per-agent read behavior. Until those integrations land, users cannot open the
-viewer from the shell.
+line numbers, and restore the originating composer. Mandatory per-agent reads
+already apply to directly typed inline indicators. Until #164 lands, users
+cannot open the viewer from the shell.
 
 Every capable main, subject, composition, confirmation, picker, or prompt read
 clears its complete live frame before returning on submit, commit, cancel, interrupt,

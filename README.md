@@ -8,7 +8,9 @@ and write a manuscript only after all three voting specialists agree.
 > **Available now:** workspace setup, directives, consensus, inspection,
 > persistent Codex sessions, a provider-free smoke test, and a TTY shell. The
 > shell provides lifecycle status, conversation work, retrieval, and consensus.
-> Standalone artifact commands remain unavailable.
+> Inline canonical artifact references are available in provider-bound prompts.
+> Standalone artifact commands and the `$`/`$$` picker/viewer UI remain
+> unavailable.
 
 ## Quick start
 
@@ -117,8 +119,11 @@ For Python integrations, start with the [runtime API](docs/reference/runtime-api
 - The interactive shell accepts one advisory line; `/run --output PART/PATH.md`
   without prompt text owns multiline composition. Bare `/run` first prompts for
   that required output. Process-level PTY tests verify TTY gating and VINTR/VEOF delivery
-  on supported POSIX. Retrieval is active-only and bounded; standalone artifact
-  commands and artifact-reference syntax remain unavailable. See
+  on supported POSIX. Retrieval is active-only and bounded. Inline `${path}`
+  and `${path}#Lx-Ly` indicators make every addressed agent read the ordered
+  canonical batch before its result is accepted; standalone artifact commands
+  and `$`/`$$` discovery and selection remain unavailable. See the
+  [artifact-reference guide](docs/guides/artifact-references.md) and
   [conversation retrieval](docs/reference/conversation-retrieval.md).
 
 ## Development

@@ -17,7 +17,9 @@ from unittest import mock
 from story_writing_agents import (
     AgentReply,
     BackendProtocolError,
+    DebateResult,
     DebateStatus,
+    InputKind,
     Phase,
     SessionAccessState,
     SessionDurableState,
@@ -631,6 +633,63 @@ class RunInputTests(unittest.TestCase):
             requests = phase_requests(backend, Phase.DRAFT if kind == "prompt" else Phase.AUDIT)
             self.assertTrue(requests)
             self.assertTrue(all(request.user_payload == payload for request in requests))
+
+    def test_noninteractive_automation_forwards_reference_text_unchanged(self) -> None:
+        backend = successful_backend()
+        prompt = (
+            "Draft from ${core_documents/global_outline.md} and "
+            "${manuscript/part-01/seed.md}#L1-L2."
+        )
+        result = DebateResult(
+            session_id="reference_cli",
+            debate_id="reference_cli_debate",
+            input_kind=InputKind.PROMPT,
+            status=DebateStatus.CONSENSUS,
+            revision_id="r0",
+            rounds_completed=0,
+            final_candidate="candidate",
+            latest_candidate="candidate",
+            manuscript_path="manuscript/part-01/reference-cli.md",
+            reference_operation_id=(
+                "rr_0d_reference_cli_" + "a" * 32
+            ),
+        )
+        with (
+            mock.patch.object(cli_module, "AgentBackend", return_value=backend),
+            mock.patch.object(
+                cli_module.StoryRuntime,
+                "run_prompt",
+                new_callable=mock.AsyncMock,
+                return_value=result,
+            ) as run_prompt,
+        ):
+            code, stdout, stderr = invoke_cli(
+                [
+                    "run",
+                    "--workspace",
+                    str(self.workspace.root),
+                    "--session",
+                    "reference_cli",
+                    "--prompt",
+                    prompt,
+                    "--debate-id",
+                    "reference_cli_debate",
+                    "--output",
+                    "part-01/reference-cli.md",
+                ]
+            )
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertEqual(
+            json.loads(stdout)["reference_operation_id"],
+            result.reference_operation_id,
+        )
+        run_prompt.assert_awaited_once_with(
+            "reference_cli",
+            prompt,
+            output_path="part-01/reference-cli.md",
+            max_debate_rounds=None,
+            debate_id="reference_cli_debate",
+        )
 
     def test_shared_draft_loader_preserves_full_path_semantics(self) -> None:
         caller = self.base / "caller"

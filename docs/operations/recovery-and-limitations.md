@@ -2,8 +2,8 @@
 
 > **Available:** guarded access recovery, shell workflows, and process-level
 > POSIX PTY verification, including the package-internal ranged viewer.
-> Automatic retry, destructive cleanup, event repair, installed-shell artifact
-> reference syntax, and Windows console emulation are not available.
+> Automatic retry, destructive cleanup, event repair, `$`/`$$` artifact
+> discovery and selection, and Windows console emulation are not available.
 
 Key terms: **fail closed** means preserve uncertain state; **taint** means stop
 continuing incomplete provider history; **external backup** is outside the workspace.
@@ -153,6 +153,58 @@ is outside the supported boundary. Darwin and Linux hosts without the required
 native atomic no-replace rename fail on their first artifact operation; other
 non-artifact workspace/runtime APIs remain usable.
 
+## Explicit-reference evidence recovery
+
+The repository persists content-free reference-operation and invocation
+history, while local authorization capabilities and selected-byte carriers
+remain transient. A provider may retain content after receipt as described in
+[Privacy and provider exposure](privacy-and-provider.md#explicit-reference-data-boundary).
+The backend drives each invocation through its exact provider action, delivery,
+result receipt, revalidation, and acceptance. `StoryRuntime` finishes the
+top-level operation only after every invocation is terminal and final
+revalidation passes. After process loss, history can be inspected but an
+interrupted authorization cannot be resumed or used to reconstruct content.
+Start a new operation with a new ID after correcting any source problem.
+
+`inspect_reference_operation()` distinguishes absence from corruption. It
+returns no history only when the named operation directory is absent. If any
+part of a present operation is missing, changed, noncanonical, duplicated,
+gapped, unexpectedly named, or inconsistent with the state transitions, the
+operation fails closed with `evidence_corrupt`. Retain the directory for
+inspection, stop workspace processes, and preserve a complete backup. Do not
+edit or delete its manifest or events to force a retry.
+
+One corrupt `input_snapshots/<operation-id>/` tree does not make another
+healthy reference history, the writing-artifact catalog, exact artifact reads,
+or artifact commits unusable. Repository-root, lock, storage, catalog, or
+global provenance failures still retain their broader fail-closed effects. A
+new reference operation may use a new ID once the underlying artifact is safe
+and eligible; the corrupt evidence remains unchanged. A session-bound caller
+can inspect only IDs belonging to its session.
+
+Fixed terminal outcomes distinguish cancellation, provider/workflow failure,
+drift, invalid content/range/limits, correlation/capability failure, and corrupt
+evidence without storing content in the diagnostic. A `terminated` operation
+or invocation is final. A failed runtime invocation terminates its top-level
+operation. An explicit retry therefore uses a new operation, capture, ordinal
+sequence, coordinator, and one-use capability.
+
+The backend does not retry automatically. An explicit retry or replacement
+needs a fresh invocation ID, ordinal/attempt correlation, private coordinator,
+and one-use capability; it cannot reuse terminal evidence. Cancellation,
+provider or workflow failure, drift, malformed or nonexact provider action,
+and wrong correlation terminate the current coordinator with a fixed
+content-free outcome. Once the provider sequence advances, the backend
+best-effort taints the compatible thread where required so later work cannot
+assume a clean continuation. The original failure remains primary.
+
+Inline `${...}` input now creates and finalizes these states. Successful
+conversation, retrieval, and debate results carry an optional operation ID;
+`StoryRuntime` and `RuntimeSession` expose content-free inspection. The shell
+maps failures to existing safe error categories rather than displaying this
+history. #164 still owns `$`/`$$` discovery, viewer selection, composer
+attachment, and reference-specific shell diagnostics.
+
 ## Controller cancellation proof
 
 One `asyncio.Runner` serves provider work. SIGINT recovery requires
@@ -202,9 +254,10 @@ different mode.
 
 The viewer is an unlisted package-internal supplied-text component. Users
 cannot invoke it from the shell in this delivery. `$`, `$${file}`, `$$`,
-artifact listing and secure reads, path/range reference construction, exact
-origin-composer restoration, ordered multi-reference composition, and
-mandatory per-agent reads remain unavailable until #163 and #164.
+artifact listing through the composer, viewer-driven reference construction,
+and exact originating-composer restoration remain unavailable until #164.
+Inline ordered path/range indicators and mandatory per-agent reads are active
+without the viewer.
 
 Invalid source type, display metadata, strict UTF-8, private 8 MiB source
 capacity, more than 65,536 LF-derived logical lines, a complete sanitized
@@ -302,9 +355,13 @@ work; the newest desired definition is selected instead.
 - Advisory input is one line; `/run --output PART/PATH.md` without prompt text
   owns multiline composition. Bare `/run` first prompts for the output.
 - Conversation search is active-only; transcript reads retain no cursor.
-- The supplied-text viewer exists only as a package-internal terminal
-  component. Standalone compose/artifact commands and `$`/`$$`
-  artifact-reference UI remain unavailable.
+- Parsing, repository authorization/evidence, top-level `StoryRuntime`
+  propagation, and provider-enforced reads are active for inline canonical
+  references. Standalone compose/artifact commands, `$`/`$$` discovery and
+  selection UI, and reference-specific shell diagnostics remain unavailable.
+  The supplied-text viewer remains an independent
+  package-internal terminal component: it receives caller-supplied text but
+  discovers no artifact and attaches no reference.
 
 See [Session lifecycle](../design/session-lifecycle.md),
 [Troubleshooting](../guides/troubleshooting.md), and

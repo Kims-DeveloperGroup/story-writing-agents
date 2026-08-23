@@ -14,9 +14,12 @@ AgentBackend(workspace: Workspace | str | pathlib.Path, *, executable: str = "co
              model: str | None = None, timeout_seconds: float = 300,
              backend_overrides: Mapping[str, str] | None = None)
 await AgentBackend.bind(definition: AgentDefinition) -> BoundAgent
-await BoundAgent.invoke(request: AgentRequest) -> AgentReply
-await BoundAgent.converse(request: ConversationRequest) -> ConversationReply
-await BoundAgent.converse_with_retrieval(request, handler) -> ConversationRetrievalReply
+await BoundAgent.invoke(request: AgentRequest, *,
+                        reference_read: ReferenceReadInvocation | None = None) -> AgentReply
+await BoundAgent.converse(request: ConversationRequest, *,
+                          reference_read: ReferenceReadInvocation | None = None) -> ConversationReply
+await BoundAgent.converse_with_retrieval(request, handler, *,
+    reference_read: ReferenceReadInvocation | None = None) -> ConversationRetrievalReply
 AgentBackend.close() -> None
 ```
 
@@ -33,6 +36,60 @@ Provider calls require ready access already held by the backend. Runtime owns
 transcripts and retrieval authorization; backend owns provider metadata,
 processes, access claims, per-thread serialization, and exact binding-staging
 retirement.
+
+<a id="referenced-invocation-boundary"></a>
+
+## Referenced invocation boundary
+
+`reference_read` is an additive internal/Python seam. Its synchronous
+`ReferenceReadInvocation` coordinator comes from
+`WritingArtifactRepository.begin_reference_invocation()` and remains private;
+the provider-neutral request and action values are documented in
+[Agent contracts](agent-contracts.md#explicit-reference-read-contracts).
+Omitting the argument preserves the exact established payload, schema, provider
+call count, and repository-I/O-free path.
+
+Before provider work, every referenced call validates the coordinator's exact
+content-free request type and synchronous methods. It also validates the bound
+canonical role and these request correlations:
+
+| Bound operation | Required correlation |
+| --- | --- |
+| `invoke()` | `agent_id` equals the request and bound definition; `phase` equals the debate phase value; `round_number` equals the request round. |
+| `converse()` | `agent_id` equals the request and bound definition; `phase="conversation"`; `round_number=None`. |
+| `converse_with_retrieval()` | `agent_id` equals the request and bound definition; `phase="conversation_retrieval"`; `round_number=None`. Retrieval action indices remain a separate `1..5` sequence. |
+
+The backend then holds the same provider-thread lock across a content-free
+prelude and the substantive work. The first provider result must be one
+`read_writing_artifacts` action that exactly echoes the full correlation and
+ordered path/range batch. A request-specific schema plus decoder and equality
+check rejects result-first, partial, reordered, duplicate, broadened, foreign,
+or malformed actions before selected content is returned. The private
+capability never enters the provider request.
+
+After the exact action, selected strict-UTF-8 text appears once under
+`untrusted_writing_artifact_context` in the immediately following substantive
+payload. The reply returns only after structural decoding, durable
+`result_received`, final source revalidation, and durable `accepted`. All four
+canonical roles follow this backend path; their prompt prose is not the
+enforcement mechanism. The full state and trust mapping is in
+[Canonical writing artifacts](writing-artifacts.md#provider-enforced-invocation-sequence).
+
+| One logical invocation | Without references | With references |
+| --- | ---: | ---: |
+| Direct conversation | 1 provider call | 2: prelude + reply |
+| One agent in one debate phase | 1 provider call | 2: prelude + phase reply |
+| Retrieval turn | 1–5 provider calls | 2–6: prelude + unchanged 1–5 retrieval loop |
+
+The backend performs no automatic retry. Cancellation, provider or workflow
+failure, drift, and invalid action/correlation terminate the same one-use
+coordinator with a content-free outcome. After provider state has advanced,
+the compatible thread is tainted where required so a later call cannot assume
+clean continuation. An explicit retry or replacement needs a new top-level
+operation with a fresh capture, correlation, coordinator, capability, and
+ordinal sequence. `StoryRuntime` owns those values and allocates each
+invocation with attempt `1`; another agent, phase, replacement, or operation
+cannot reuse prior evidence.
 
 Construction first validates the complete five-key
 `config/system_defaults.json` object and the complete roster in
