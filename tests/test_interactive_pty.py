@@ -818,6 +818,52 @@ for attempt in range(2):
         self.assertEqual(_durable_tree(self.workspace.root), before)
         self.assertFalse(self.provider_log.exists())
 
+    def test_viewer_discards_overlong_csi_and_ss3_before_real_shift_down(
+        self,
+    ) -> None:
+        """Keep overlong suffixes inert through the real PTY byte route."""
+
+        source = r'''
+import sys
+
+from story_writing_agents.interactive_terminal import (
+    InteractiveTextViewer,
+    build_stream_terminal,
+)
+
+viewer = InteractiveTextViewer(
+    build_stream_terminal(input, sys.stdin, sys.stdout)
+)
+for attempt in range(2):
+    outcome = viewer.read_range(
+        "one\ntwo\nthree",
+        display_name=f"overflow-{attempt}.md",
+    )
+    print(f"RESULT={attempt}:{outcome.kind.value}:{outcome.line_range}")
+'''
+        before = _durable_tree(self.workspace.root)
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=42,
+        )
+        for attempt, introducer in enumerate(("\x1b[", "\x1bO")):
+            process.wait_for_text(f"[viewer] overflow-{attempt}.md")
+            process.send_text(
+                introducer + "1" * 62 + "B\x1b[1;2B\n"
+            )
+            process.wait_for_text(f"RESULT={attempt}:selected:(1, 2)")
+
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 2)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 2)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+        self.assertEqual(_durable_tree(self.workspace.root), before)
+        self.assertFalse(self.provider_log.exists())
+
     def test_pending_single_write_crosses_prompt_into_viewer_repeatedly(self) -> None:
         """Consume immediate post-submit viewer keys without losing PTY bytes."""
 

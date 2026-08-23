@@ -975,6 +975,79 @@ class ViewerDriverTests(unittest.TestCase):
         )
         self.assertEqual(valid_renders, 3)
 
+    def test_overlong_suffixes_do_not_move_or_anchor_before_real_shift_down(
+        self,
+    ) -> None:
+        state = initialize_text_viewer("one\ntwo\nthree", display_name="x")
+        sequences = (
+            ("csi_down", "\x1b[" + "1" * 62 + "B"),
+            ("ss3_down", "\x1bO" + "1" * 62 + "B"),
+            ("csi_shift_up", "\x1b[" + "1" * 62 + "1;2A"),
+            ("csi_shift_down", "\x1b[" + "1" * 62 + "1;2B"),
+        )
+        for label, overlong in sequences:
+            with self.subTest(suffix=label):
+                driver, input_stream, _output, fallback, _termios, _events = (
+                    _driver(overlong + "\x1b[1;2B\n")
+                )
+                seen: list[KeyEvent] = []
+                renderer = mock.Mock(wraps=render_text_viewer)
+
+                def observe(
+                    current: TextViewerState,
+                    event: KeyEvent,
+                ) -> tuple[TextViewerState, TextViewerResult | None]:
+                    seen.append(event)
+                    return transition_text_viewer(current, event)
+
+                with mock.patch.object(
+                    driver_module,
+                    "_escape_input_is_ready",
+                    return_value=True,
+                ) as readiness:
+                    result = driver.read_text_viewer(
+                        state,
+                        observe,
+                        transition_text_viewer_fallback,
+                        project_text_viewer_viewport,
+                        renderer,
+                        render_text_viewer_fallback,
+                    )
+                self.assertEqual(result.line_range, (1, 2))
+                self.assertEqual(
+                    seen,
+                    [KeyEvent(KeyKind.SHIFT_DOWN), KeyEvent(KeyKind.ENTER)],
+                )
+                self.assertEqual(renderer.call_count, 3)
+                self.assertEqual(readiness.call_count, 2)
+                self.assertEqual(input_stream.characters, [])
+                fallback.assert_not_called()
+
+    def test_physical_eof_while_discarding_overlong_sequence_is_typed(self) -> None:
+        for introducer in ("\x1b[", "\x1bO"):
+            with self.subTest(introducer=repr(introducer)):
+                characters = introducer + "1" * 62
+                driver, _input, output, fallback, _termios, events = _driver(
+                    characters
+                )
+                with mock.patch.object(
+                    driver_module,
+                    "_escape_input_is_ready",
+                    return_value=True,
+                ) as readiness:
+                    result = _read(
+                        driver,
+                        initialize_text_viewer("one\ntwo", display_name="x"),
+                    )
+                self.assertEqual(result, TextViewerResult(TextViewerExitKind.EOF))
+                readiness.assert_called_once_with(7)
+                fallback.assert_not_called()
+                self.assertEqual(events.count("input.read"), len(characters) + 1)
+                rendered = "".join(output.records)
+                self.assertEqual(rendered.count("\x1b[?1049h"), 1)
+                self.assertEqual(rendered.count("\x1b[?1049l"), 1)
+                self.assertEqual(events.count("termios.restore"), 1)
+
     def test_unsupported_byte_codec_matrix_falls_back_before_live_seams(self) -> None:
         encodings = (
             "iso2022_jp",
@@ -1431,36 +1504,44 @@ class ViewerDriverTests(unittest.TestCase):
 
     def test_configured_controls_precede_pending_escape_sequences(self) -> None:
         for introducer in ("\x1b[", "\x1bO"):
-            for label, character, expected in (
-                ("vintr", "\x03", TextViewerExitKind.INTERRUPTED),
-                ("veof", "\x04", TextViewerExitKind.EOF),
+            for pending_label, pending in (
+                ("short", introducer),
+                ("overlong", introducer + "1" * 62),
             ):
-                with self.subTest(
-                    introducer=repr(introducer),
-                    control=label,
+                for label, character, expected in (
+                    ("vintr", "\x03", TextViewerExitKind.INTERRUPTED),
+                    ("veof", "\x04", TextViewerExitKind.EOF),
                 ):
-                    driver, _input, output, fallback, termios, events = _driver(
-                        introducer + character
-                    )
-                    termios.original[6][termios.VINTR] = b"\x03"  # type: ignore[index]
-                    termios.original[6][termios.VEOF] = b"\x04"  # type: ignore[index]
-                    with mock.patch.object(
-                        driver_module,
-                        "_escape_input_is_ready",
-                        return_value=True,
-                    ) as readiness:
-                        result = _read(
-                            driver,
-                            initialize_text_viewer("one\ntwo", display_name="x"),
+                    with self.subTest(
+                        introducer=repr(introducer),
+                        pending=pending_label,
+                        control=label,
+                    ):
+                        driver, _input, output, fallback, termios, events = _driver(
+                            pending + character
                         )
-                    self.assertEqual(result, TextViewerResult(expected))
-                    readiness.assert_called_once_with(7)
-                    fallback.assert_not_called()
-                    self.assertEqual(events.count("input.read"), 3)
-                    rendered = "".join(output.records)
-                    self.assertEqual(rendered.count("\x1b[?1049h"), 1)
-                    self.assertEqual(rendered.count("\x1b[?1049l"), 1)
-                    self.assertEqual(events.count("termios.restore"), 1)
+                        termios.original[6][termios.VINTR] = b"\x03"  # type: ignore[index]
+                        termios.original[6][termios.VEOF] = b"\x04"  # type: ignore[index]
+                        with mock.patch.object(
+                            driver_module,
+                            "_escape_input_is_ready",
+                            return_value=True,
+                        ) as readiness:
+                            result = _read(
+                                driver,
+                                initialize_text_viewer("one\ntwo", display_name="x"),
+                            )
+                        self.assertEqual(result, TextViewerResult(expected))
+                        readiness.assert_called_once_with(7)
+                        fallback.assert_not_called()
+                        self.assertEqual(
+                            events.count("input.read"),
+                            len(pending) + 1,
+                        )
+                        rendered = "".join(output.records)
+                        self.assertEqual(rendered.count("\x1b[?1049h"), 1)
+                        self.assertEqual(rendered.count("\x1b[?1049l"), 1)
+                        self.assertEqual(events.count("termios.restore"), 1)
 
     def test_live_shift_sequences_resize_every_nonexit_and_restore_screen_once(self) -> None:
         driver, _input, output, fallback, termios, events = _driver(

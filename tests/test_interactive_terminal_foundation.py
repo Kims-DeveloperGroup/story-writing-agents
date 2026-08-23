@@ -998,6 +998,73 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
         )
         self.assertIsNone(bare_escape.escape_sequence)
 
+    def test_escape_reducer_bounds_overlong_sequences_in_identity_state(self) -> None:
+        for introducer in ("\x1b[", "\x1bO"):
+            with self.subTest(introducer=repr(introducer), boundary=True):
+                state = _driver._LiveEditorState(escape_sequence=introducer)
+                for _index in range(61):
+                    self.assertEqual(
+                        _driver._consume_escape_character(state, "1"),
+                        (None, False),
+                    )
+                self.assertEqual(state.escape_sequence, introducer + "1" * 61)
+                self.assertEqual(
+                    _driver._consume_escape_character(state, "1"),
+                    (None, False),
+                )
+                self.assertIs(
+                    state.escape_sequence,
+                    _driver._DISCARDING_ESCAPE_SEQUENCE,
+                )
+                for _index in range(10_000):
+                    self.assertEqual(
+                        _driver._consume_escape_character(state, "1"),
+                        (None, False),
+                    )
+                self.assertIs(
+                    state.escape_sequence,
+                    _driver._DISCARDING_ESCAPE_SEQUENCE,
+                )
+
+            suffixes = (
+                "A",
+                "B",
+                "H",
+                "1;2A",
+                "1;2B",
+                "1~",
+                "3~",
+                "Z",
+            )
+            for suffix in suffixes:
+                with self.subTest(
+                    introducer=repr(introducer),
+                    suffix=repr(suffix),
+                ):
+                    state = _driver._LiveEditorState(
+                        escape_sequence=_driver._DISCARDING_ESCAPE_SEQUENCE,
+                    )
+                    for character in suffix:
+                        self.assertEqual(
+                            _driver._consume_escape_character(state, character),
+                            (None, False),
+                        )
+                    self.assertIsNone(state.escape_sequence)
+
+            for value in (*range(0x20), 0x7F):
+                with self.subTest(
+                    introducer=repr(introducer),
+                    control=hex(value),
+                ):
+                    state = _driver._LiveEditorState(
+                        escape_sequence=_driver._DISCARDING_ESCAPE_SEQUENCE,
+                    )
+                    self.assertEqual(
+                        _driver._consume_escape_character(state, chr(value)),
+                        (None, False),
+                    )
+                    self.assertIsNone(state.escape_sequence)
+
     def test_capabilities_observe_streams_independently_and_select_profiles(
         self,
     ) -> None:

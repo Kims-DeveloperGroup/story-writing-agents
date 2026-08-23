@@ -998,6 +998,48 @@ class CompletionDriverTests(unittest.TestCase):
                 self.assertEqual(driver._history_state, MainInputHistoryState())
                 self.assertEqual(len(output.records), 2)
 
+    def test_overlong_suffixes_do_not_recall_history_or_move_cursor(self) -> None:
+        for introducer in ("\x1b[", "\x1bO"):
+            overlong = introducer + "1" * 62
+            cases = [
+                ("up", overlong + "Ax\n", "x"),
+                ("down", "\x1b[A" + overlong + "Bx\n", "/priorx"),
+                ("home", "ab" + overlong + "Hx\n", "abx"),
+            ]
+            if introducer == "\x1b[":
+                cases.append(
+                    (
+                        "delete",
+                        "ab\x1b[D" + overlong + "3~x\n",
+                        "axb",
+                    )
+                )
+            for label, characters, expected in cases:
+                with self.subTest(
+                    introducer=repr(introducer),
+                    suffix=label,
+                ):
+                    driver, input_stream, _output, fallback, _termios, _os = (
+                        make_driver(characters)
+                    )
+                    driver._history_state = MainInputHistoryState(("/prior",))
+                    with mock.patch.object(
+                        _driver._select,
+                        "select",
+                        side_effect=lambda r, w, x, _t: (r, w, x),
+                    ) as readiness:
+                        self.assertEqual(self.read(driver), expected)
+                    self.assertEqual(
+                        readiness.call_count,
+                        characters.count("\x1b"),
+                    )
+                    fallback.assert_not_called()
+                    self.assertEqual(input_stream.reads, [])
+                    self.assertEqual(
+                        driver._history_state,
+                        MainInputHistoryState(("/prior", expected)),
+                    )
+
     def test_shift_tab_and_unknown_sequences_are_noops_without_extra_redraw(
         self,
     ) -> None:

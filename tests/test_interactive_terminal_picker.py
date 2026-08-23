@@ -1203,6 +1203,57 @@ class PickerDriverTests(unittest.TestCase):
             ],
         )
 
+    def test_overlong_down_suffix_is_discarded_before_real_down(self) -> None:
+        state = initialize_picker(
+            Picker(
+                Prompt("Choose"),
+                (
+                    Choice("one", "One"),
+                    Choice("two", "Two"),
+                    Choice("three", "Three"),
+                ),
+            )
+        )
+        for introducer in ("\x1b[", "\x1bO"):
+            with self.subTest(introducer=repr(introducer)):
+                characters = introducer + "1" * 62 + "B\x1b[B\n"
+                driver, input_stream, _output, fallback, _termios, _sizes = (
+                    _driver(characters)
+                )
+                seen: list[KeyEvent] = []
+
+                def observe(
+                    current: PickerControlState,
+                    event: KeyEvent,
+                ) -> tuple[PickerControlState, ControlOutcome | None]:
+                    seen.append(event)
+                    return transition_picker(current, event)
+
+                with mock.patch.object(
+                    driver_module._select,
+                    "select",
+                    side_effect=lambda r, w, x, _t: (r, w, x),
+                ) as readiness:
+                    outcome = driver.read_picker(
+                        state,
+                        observe,
+                        transition_picker_fallback,
+                        project_picker_viewport,
+                        render_picker_viewport,
+                        render_picker_fallback,
+                    )
+                self.assertEqual(
+                    outcome,
+                    ControlOutcome(ControlOutcomeKind.COMMIT, text="two"),
+                )
+                self.assertEqual(
+                    seen,
+                    [KeyEvent(KeyKind.DOWN), KeyEvent(KeyKind.ENTER)],
+                )
+                self.assertEqual(readiness.call_count, 2)
+                self.assertEqual(input_stream.characters, [])
+                fallback.assert_not_called()
+
     def test_noop_keys_do_not_redraw_and_each_real_redraw_observes_width(self) -> None:
         state = initialize_picker(
             Picker(
