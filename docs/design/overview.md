@@ -59,15 +59,18 @@ manufacture artifact provenance. See
 | `writing_artifacts.references` | Immutable path/range, directive-batch, verified-snapshot, and resource-limit values only; parsing belongs to `writing_artifacts.directives`, authorization and provider enforcement belong to the authorization/read-action/backend path, and viewing belongs to the independent `interactive_terminal` supplied-text viewer. |
 | `writing_artifacts.read_actions` | Provider-neutral, content-free exact request/action contracts; private synchronous coordinator protocol and closeable content-bearing result contract. |
 | `writing_artifacts._storage` | Descriptor-relative, no-follow, unique-regular-file I/O, compare-before-publish replacement, root-identity verification, and artifact advisory locking. |
-| `writing_artifacts.repository` | Provenance validation, current catalog projection, strict reads, create-only manuscript commits, journal roll-forward, catalog-last visibility, fail-closed recovery, and concrete one-use reference coordinators/capabilities. |
+| `writing_artifacts.filesystem_sources` | Catalog-independent deterministic canonical discovery, bounded current-source capture, strict UTF-8/NUL validation, and full physical/hash identity matching. |
+| `writing_artifacts.repository` | Facade over filesystem sources plus provenance validation, current catalog projection, create-only manuscript commits, journal roll-forward, catalog-last visibility, fail-closed recovery, and concrete one-use reference coordinators/capabilities. |
 
 The package has no controller, terminal, backend, orchestrator, or generic
 `Workspace` dependency. The backend imports only the provider-neutral
-`read_actions` boundary; the repository remains the sole owner of filesystem
-reads, revalidation, capabilities, and evidence. `StoryRuntime` parses and
+`read_actions` boundary; the repository facade remains the sole runtime owner
+of source reads, revalidation, capabilities, and evidence, while its private
+filesystem-source adapter performs catalog-independent source I/O.
+`StoryRuntime` parses and
 captures one ordered explicit-reference batch per operation, allocates a fresh
 coordinator for every addressed agent/phase, and accepts the operation only
-after final revalidation. Prompt assembly consumes only current eligible core
+after final revalidation. Prompt assembly consumes only present safe current core
 paths; referenced selections are transient untrusted provider context rather
 than baseline core context.
 The interactive controller validates required manuscript output grammar but
@@ -115,9 +118,9 @@ revision; all must approve. Blackboard and owner-isolated history stay separate.
 | `interactive_settings` | Package-internal immutable current/pending configuration snapshots, safe persona catalog, exact conflict detection, and guarded changed-only persistence with reverse exact-byte rollback |
 | `cli_context`, catalog, memory service, event store | Defaults, identity, scoped reads, and authoritative events |
 | `interactive_terminal` | Stable package-supported facade, package-internal real-CLI factory, and unlisted internal semantic output, controller-main-input, picker, cancellable-prompt, and supplied-text viewer adapters and identities |
-| `interactive_terminal._core` | Established terminal API behavior, explicit ordinary/main/composition/confirmation routing, canonical static/dynamic main-choice adaptation, semantic input-view and lifecycle-event construction, call-local reference scope/catalog/text binding, resource-free semantic output/main/picker/prompt/viewer adapters, and terminal-leaf coordination |
+| `interactive_terminal._core` | Established terminal API behavior, explicit ordinary/main/composition/confirmation routing, canonical static/dynamic main-choice adaptation, semantic input-view and lifecycle-event construction, call-local reference scope/source-list/text binding, resource-free semantic output/main/picker/prompt/viewer adapters, and terminal-leaf coordination |
 | `interactive_terminal._model`, `_controls`, `_render` | Immutable semantic/history/completion/dynamic-choice/composer/picker foundation; normalized keys including Shift+Arrow; pure line, palette, history, composer, confirmation, prompt, and picker transitions; bounded picker viewport; and pure safe responsive output/input rendering |
-| `interactive_terminal._reference_activation` | Private pure provider-span-bounded `$` marker projection, catalog completion, nested picker/viewer requests, exact marker replacement, and content-free fixed failure contracts; no I/O or retained state. |
+| `interactive_terminal._reference_activation` | Private pure provider-span-bounded `$` marker projection, filesystem-source completion, nested picker/viewer requests, exact marker replacement, and content-free fixed failure contracts; no I/O or retained state. |
 | `interactive_terminal._viewer_model` | Private immutable strict-UTF-8 supplied document, active/anchor state, bounded viewport, notice, exit-kind, and content-free inclusive-range result contracts; LF-only line derivation with terminal-local 8 MiB source, 65,536-line, and complete 16 MiB fallback-projection limits |
 | `interactive_terminal._viewer_controls` | Pure fresh initialization, ordinary and anchored navigation, normalized commit and noncommit exits, exact ASCII fallback grammar, and bounded contiguous viewport projection |
 | `interactive_terminal._viewer_render` | Pure bounded-prefix one-row-per-source-line live and complete numbered fallback projections with visible escaping, line numbers, plain/ANSI state cues, cell-aware live ellipsis clipping, and no fallback clipping |
@@ -202,8 +205,8 @@ Selection and cancellation close the viewer after cleanup; every call drops its
 source, display, anchor, selection, and viewport state on return or failure.
 
 The installed controller now supplies that caller boundary. It projects only
-the cursor-active provider-text span, lists and securely reads eligible
-artifacts through the writing-artifact repository, enforces its separate
+the cursor-active provider-text span, lists and securely reads current safe
+canonical files through the writing-artifact repository, enforces its separate
 limit, calls the stateless viewer once per ordered selection, attaches the path
 to returned line numbers, and restores the immutable originating draft/cursor.
 The private activation leaf owns only pure `$` marker interpretation and edit

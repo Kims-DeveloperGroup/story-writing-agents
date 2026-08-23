@@ -18,7 +18,6 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from story_writing_agents import EXECUTION_SPECIALIST
 from story_writing_agents.backend import AgentBackend
 from story_writing_agents.cli_context import (
     load_cli_context,
@@ -37,11 +36,6 @@ from story_writing_agents.workspace import (
     FilesystemConversationEventStore,
     Workspace,
 )
-from story_writing_agents.writing_artifacts.repository import (
-    WritingArtifactRepository,
-)
-
-
 try:
     import fcntl
     import pty
@@ -885,29 +879,33 @@ class InteractiveCliPtyTests(unittest.TestCase):
         )
         return selected
 
-    def _seed_reference_artifacts(
+    def _seed_filesystem_reference_artifacts(
         self,
-        *,
-        session_id: str = "alpha",
-    ) -> tuple[str, ...]:
-        """Publish one provenance-backed canonical catalog for shell discovery."""
+    ) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        """Write current canonical and ineligible files without publication state."""
 
-        repository = WritingArtifactRepository(self.workspace.root)
-        repository.commit_consensus(
-            output_path="part-01/chapter-01.md",
-            candidate="chapter one\nchapter two\n",
-            core_updates={
-                "character_sheets.md": "characters\ncontinuity\n",
-                "global_outline.md": "outline\nturning point\n",
-                "narrative_rules.md": "rules\nvoice\n",
-                "part_outlines.md": "parts\npart one\n",
-            },
-            session_id=session_id,
-            debate_id="artifact_picker_probe",
-            revision_id="r0",
-            candidate_author_agent_id=EXECUTION_SPECIALIST,
-        )
-        return repository.list_paths()
+        contents = {
+            "core_documents/character_sheets.md": "characters\ncontinuity\n",
+            "core_documents/global_outline.md": "",
+            "core_documents/narrative_rules.md": "rules\nvoice\n",
+            "core_documents/part_outlines.md": "parts\npart one\n",
+            "manuscript/Part_A/scenes/opening.md": "opening\n",
+            "manuscript/part-01/scene.md": "scene one\n",
+            "manuscript/volume_2/ending.md": "ending\n",
+        }
+        excluded = {
+            "agent_states/file-picker/internal.md": "internal\n",
+            "core_documents/extra.md": "extra\n",
+            "manuscript/-invalid/chapter.md": "invalid part\n",
+            "manuscript/part-01/.gitkeep": "",
+            "manuscript/part-01/notes.txt": "unsupported\n",
+            "manuscript/root.md": "root manuscript\n",
+        }
+        for relative, content in (contents | excluded).items():
+            target = self.workspace.root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+        return tuple(sorted(contents)), tuple(sorted(excluded))
 
     def _spawn_cli(
         self,
@@ -2488,74 +2486,107 @@ print(
             process.original_terminal_attributes,
         )
 
-    def test_public_cli_artifact_completion_filters_and_inserts_without_submit(
+    def test_public_cli_filesystem_artifact_completion_scans_and_inserts(
         self,
     ) -> None:
-        """Drive provenance-backed `$` discovery through the installed shell."""
+        """Discover direct-disk sources through explicit and implicit workspaces."""
 
         self._seed_default_session()
-        paths = self._seed_reference_artifacts()
-        character = "core_documents/character_sheets.md"
-        token = f"${{{character}}}"
-        self.assertIn(character, paths)
+        paths, excluded = self._seed_filesystem_reference_artifacts()
+        catalog_path = self.workspace.root / (
+            "agent_states/orchestrator_state/writing_artifacts/catalog.json"
+        )
+        self.assertFalse(catalog_path.exists())
+        target = "manuscript/part-01/scene.md"
+        token = f"${{{target}}}"
+        self.assertIn(target, paths)
         process = self._spawn_cli(
             ("chat", "alpha", "--workspace", str(self.workspace.root)),
             environment_overrides={"TERM": "xterm-256color"},
-            terminal_columns=120,
+            terminal_columns=160,
         )
         prompt = "story[alpha:lead]> "
         process.wait_for_text(prompt)
 
         discovery_mark = process.output_mark()
-        process.send_text("$")
-        discovery = process.wait_for_text(
+        process.send_text("x $")
+        process.wait_for_text(
             "[controls] Up/Down selects; Enter/Tab inserts a whole-file reference.",
             after=discovery_mark,
         )
         for path in paths:
-            discovery = process.wait_for_text(
+            process.wait_for_text(
                 f"${{{path}}}",
                 after=discovery_mark,
             )
+        discovery = process.text_after(discovery_mark)
         self.assertIn("Writing artifact selection [open]", discovery)
         self.assertNotIn("Suggestions [open]", discovery)
+        positions = [discovery.index(f"${{{path}}}") for path in paths]
+        self.assertEqual(positions, sorted(positions))
+        for path in excluded:
+            with self.subTest(excluded=path):
+                self.assertNotIn(path, discovery)
 
-        process.send_text("core_documents/characte")
+        process.send_text(" y")
         process.wait_for_text(
-            f"{prompt}$core_documents/characte",
+            f"{prompt}x $ y",
             after=discovery_mark,
         )
+        cursor_mark = process.output_mark()
+        process.send_text("\x1b[D" * len(" y"))
+        process.wait_for_text(f"${{{paths[0]}}}", after=cursor_mark)
+
         filter_mark = process.output_mark()
-        process.send_text("r")
-        filtered = process.wait_for_text(token, after=filter_mark)
+        process.send_text("manuscript/")
+        manuscript_paths = tuple(
+            path for path in paths if path.startswith("manuscript/")
+        )
+        for path in manuscript_paths:
+            process.wait_for_text(f"${{{path}}}", after=filter_mark)
+        filtered = process.text_after(filter_mark)
         self.assertIn("Writing artifact selection [open]", filtered)
         for path in paths:
-            if path != character:
+            if path.startswith("core_documents/"):
                 self.assertNotIn(f"${{{path}}}", filtered)
+
+        navigation_mark = process.output_mark()
+        process.send_text("\x1b[B")
+        process.wait_for_text(f"[highlighted] {token}", after=navigation_mark)
+        process.send_text("\x1b[A")
+        process.wait_for_text(
+            f"[highlighted] ${{{manuscript_paths[0]}}}",
+            after=navigation_mark,
+        )
+        process.send_text("\x1b[B")
+        process.wait_for_text(f"[highlighted] {token}", after=navigation_mark)
 
         completion_mark = process.output_mark()
         process.send_text("\t")
+        first_expected = f"x {token} y"
         completed = process.wait_for_text(
-            f"{prompt}{token} ",
+            f"{prompt}{first_expected}",
             after=completion_mark,
         )
-        self.assertNotIn(f"$${{{character}}}", completed)
+        self.assertNotIn(f"$${{{target}}}", completed)
         self.assertNotIn(f"{token}#L", completed)
+        self.assertFalse(self.provider_log.exists())
+
+        process.send_text("\x1b[C" * len(" y"))
+        character = "core_documents/character_sheets.md"
+        character_token = f"${{{character}}}"
+        second_mark = process.output_mark()
+        process.send_text(" and $core_documents/")
+        process.wait_for_text(character_token, after=second_mark)
+        process.send_text("\n")
+        final_expected = f"{first_expected} and {character_token} "
+        process.wait_for_text(f"{prompt}{final_expected}", after=second_mark)
         self.assertFalse(self.provider_log.exists())
 
         process.send_interrupt()
         process.wait_for_text(
             "[cancelled] No action was taken.",
-            after=completion_mark,
-        )
-        history_mark = process.output_mark()
-        process.send_text("\x1b[AX")
-        recalled = process.wait_for_text(f"{prompt}X", after=history_mark)
-        self.assertNotIn(token, recalled)
-        process.send_interrupt()
-        process.wait_for_text(
-            "[cancelled] No action was taken.",
-            after=history_mark,
+            after=second_mark,
         )
         process.send_text("/quit\n\n")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
@@ -2570,11 +2601,51 @@ print(
             process.original_terminal_attributes,
         )
 
-    def test_public_cli_empty_artifact_catalog_is_visible_and_deferred(self) -> None:
-        """Preview empty `$`, then preserve its fixed activation failure contract."""
+        nested_cwd = self.workspace.root / "scratch" / "nested"
+        nested_cwd.mkdir(parents=True)
+        implicit = self._spawn_cli(
+            ("chat", "alpha"),
+            cwd=nested_cwd,
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=160,
+        )
+        implicit.wait_for_text(prompt)
+        implicit_mark = implicit.output_mark()
+        implicit_path = "manuscript/volume_2/ending.md"
+        implicit_token = f"${{{implicit_path}}}"
+        implicit.send_text("$manuscript/volume_2")
+        implicit.wait_for_text(implicit_token, after=implicit_mark)
+        implicit.send_text("\t")
+        implicit.wait_for_text(f"{prompt}{implicit_token} ", after=implicit_mark)
+        self.assertFalse(self.provider_log.exists())
+        implicit.send_interrupt()
+        implicit.wait_for_text(
+            "[cancelled] No action was taken.",
+            after=implicit_mark,
+        )
+        implicit.send_text("/quit\n\n")
+        self.assertEqual(implicit.wait_for_exit(), 0, implicit.normalized_text)
+        self.assertEqual(
+            implicit.final_terminal_attributes,
+            implicit.original_terminal_attributes,
+        )
+        self.assertFalse(catalog_path.exists())
+
+    def test_public_cli_no_artifact_files_preview_and_activation_are_deferred(
+        self,
+    ) -> None:
+        """Preview filesystem-empty `$` and preserve its activation failure."""
 
         self._seed_default_session()
         prompt = "story[alpha:lead]> "
+        empty_copy = (
+            "No writing artifacts. Add a supported canonical core document or "
+            "part-scoped Markdown manuscript. Consensus can also publish one."
+        )
+        creation_hint = (
+            "Add a supported canonical core document or part-scoped Markdown "
+            "manuscript. Consensus can also publish one."
+        )
         for activation_key in ("\t", "\n"):
             with self.subTest(activation_key=repr(activation_key)):
                 process = self._spawn_cli(
@@ -2586,9 +2657,12 @@ print(
                 preview_mark = process.output_mark()
                 process.send_text("$")
                 preview = process.wait_for_text(
-                    "[empty] No current writing artifacts. Complete a consensus "
-                    "run to create one.",
+                    "also publish one.",
                     after=preview_mark,
+                )
+                self.assertIn(
+                    "".join(f"[empty] {empty_copy}".split()),
+                    "".join(preview.split()),
                 )
                 self.assertIn("Writing artifact selection [open]", preview)
                 self.assertIn(
@@ -2606,9 +2680,12 @@ print(
                     after=activation_mark,
                 )
                 failure = process.wait_for_text(
-                    "[hint] Complete a consensus run that creates canonical "
-                    "writing artifacts.",
+                    "also publish one.",
                     after=activation_mark,
+                )
+                self.assertIn(
+                    "".join(f"[hint] {creation_hint}".split()),
+                    "".join(failure.split()),
                 )
                 restored = process.wait_for_text(
                     f"{prompt}$",
@@ -2643,6 +2720,11 @@ print(
                     process.normalized_text,
                 )
                 self.assertFalse(self.provider_log.exists())
+                self.assertFalse(
+                    self.workspace.path(
+                        f"{_SESSION_DIRECTORY}/alpha.access.json"
+                    ).exists()
+                )
                 self.assertEqual(
                     process.final_terminal_attributes,
                     process.original_terminal_attributes,

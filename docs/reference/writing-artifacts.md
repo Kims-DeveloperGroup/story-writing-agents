@@ -1,16 +1,20 @@
 # Canonical writing artifacts
 
 > **Availability:** unanimous consensus can publish the canonical files on this
-> page. The runtime uses their provenance catalog when supplying core context to
-> story agents. The `writing_artifacts` Python subpackage can parse content-free
+> page. The runtime uses current safe filesystem snapshots when supplying core
+> context to story agents or resolving explicit references; publication
+> provenance is a separate audit and recovery concern. The `writing_artifacts` Python subpackage can parse content-free
 > reference directives and exposes the repository authorization, read-action,
 > and evidence values described below. `StoryRuntime` captures inline
 > `${path}` and `${path}#Lx-Ly` indicators and gives every addressed provider
 > invocation a fresh private coordinator. In provider-bound shell prompt spans,
-> `$` lists eligible artifacts and `$${path}` or `$$` opens the independent
+> `$` lists current safe canonical files and `$${path}` or `$$` opens the independent
 > ranged viewer. No standalone artifact command or public selection API exists.
 
-This reference uses **writing artifact** only for agent-produced story output.
+This reference uses **writing artifact path** for the canonical story-output
+topology. A current source at one of those paths may be manual or
+pre-provenance; only repository publication records establish agent-produced
+authorship.
 Transcripts, discussion logs, provider state, agent state, configuration, role
 prompts, and diagnostic files are runtime internals or inputs, not canonical
 writing artifacts.
@@ -151,7 +155,7 @@ parser submission and adds no parser I/O or state.
 > **Availability:** `StoryRuntime` integrates repository authorization,
 > transient delivery, durable content-free evidence, and exact provider read
 > enforcement for inline references. The shell can construct those indicators
-> through `$` catalog completion and `$${path}`/`$$` ranged viewing; evidence
+> through `$` filesystem completion and `$${path}`/`$$` ranged viewing; evidence
 > and provider enforcement remain runtime-owned.
 
 The `${canonical/path.md}` and `${canonical/path.md}#Lx-Ly` values remain
@@ -188,9 +192,9 @@ serialized with the lowercase values shown in the table.
 
 | Operation state | Internal event | What an inspecting caller can conclude |
 | --- | --- | --- |
-| `requested` | The create-only operation manifest and first evidence event exist before catalog or artifact reads. | A reference attempt was recorded. No bytes have been authorized. |
-| `captured` | Every ordered reference was eligible, selected, hashed, and held in one immutable in-memory capture. | The recorded provenance and selected-byte proof were valid at capture time. |
-| `revalidated` | Full catalog provenance and current file hash still match the capture at a caller-named checkpoint. | The captured identity was still current at that checkpoint; the event does not refresh the captured bytes. |
+| `requested` | The create-only operation manifest and first evidence event exist before source reads. | A reference attempt was recorded. No bytes have been authorized. |
+| `captured` | Every ordered reference was selected, hashed, and held in one immutable in-memory capture with a filesystem source identity. | The current sources and selected-byte proofs were valid at capture time. This says nothing about publication provenance. |
+| `revalidated` | Each reopened source still matches the captured canonical path, kind, physical identity, size, timestamps, and full-file hash at a caller-named checkpoint. | The captured identity was still current at that checkpoint; the event does not refresh the captured bytes. |
 | `accepted` | Final revalidation succeeded and all invocations are terminal, with at least one accepted invocation. Routine runtime history may move directly from `captured` to this event because final revalidation occurs inside acceptance. | The complete runtime reference operation succeeded and its result may return or publish. |
 | `terminated` | A fixed coded cancellation, provider, workflow, authorization, drift, or evidence failure ended the operation. | The operation was not accepted; the content-free outcome identifies the failure category. |
 
@@ -206,8 +210,9 @@ own ordered history:
 | `accepted` | Another full revalidation succeeded after the recorded result. | The exact invocation evidence chain was accepted before the backend returned its reply. The result's optional operation ID lets Python callers inspect the content-free history. |
 | `terminated` | A fixed coded failure ended the invocation. | No accepted reply exists for the attempt. A retry needs a fresh correlation, coordinator, and one-use capability; it cannot reuse this evidence. |
 
-The durable history contains ordered path and optional range, full catalog
-provenance, selected SHA-256 and byte count, source line count, agent/invocation
+The durable schema-v2 history contains ordered path and optional range,
+content-free filesystem source identity, selected SHA-256 and byte count,
+source line count, agent/invocation
 correlation, lifecycle state, checkpoint, and terminal outcome. It contains no
 artifact text, captured bytes, parser source/provider text, provider prompt, or
 provider result. Baseline core-context reads do not create this history and
@@ -247,8 +252,8 @@ and [privacy boundary](../operations/privacy-and-provider.md#explicit-reference-
 
 ### Capture, limits, and revalidation
 
-Initial capture takes the repository lock, writes `requested` evidence, loads
-the trusted catalog, and securely reads each unique referenced path once even
+Initial capture takes the source/evidence lock, writes `requested` evidence,
+and securely reads each unique referenced path once even
 when several ranges use it. It validates the complete source as strict UTF-8
 without NUL before selecting bytes. Line ranges use universal newline records:
 CRLF, LF, and lone CR each end a line and remain in the selected byte slice;
@@ -264,10 +269,11 @@ viewer's 8 MiB defensive source limit.
 Delivery consumes the capability before checking the caller's requested tuple,
 so a mismatched order, path, or range cannot be retried with that capability.
 Before delivery, invocation acceptance, operation checkpoints, and final
-operation acceptance, the repository compares the complete current provenance
-and full-file hash with the original capture. The selected bytes are never
-refreshed. Even identical file bytes with newly published provenance are drift
-and terminate the affected path through the lifecycle.
+operation acceptance, the repository compares the complete current filesystem
+source identity and full-file hash with the original capture. The selected
+bytes are never refreshed. Deletion, replacement—including a same-byte
+replacement with a new physical identity—unsafe topology, size-limit failure,
+or byte drift terminates the affected path through the lifecycle.
 
 An empty reference batch returns without taking the artifact lock, reading
 storage, or creating history. For a nonempty batch,
@@ -275,6 +281,11 @@ storage, or creating history. For a nonempty batch,
 directory is absent. A present but partial, malformed, noncanonical, or
 inconsistently sequenced history raises the fixed `evidence_corrupt` error
 instead of being repaired or treated as absent.
+
+Reference evidence schema v1 cannot authorize or resume an operation and is
+not migrated. Its corruption remains local to that operation identity; a new
+schema-v2 operation with a fresh ID can still proceed when its sources and
+evidence namespace are safe.
 
 ## What a user can change
 
@@ -340,35 +351,44 @@ the current text as draft input and choose a distinct path such as
 manuscript. Core documents, by contrast, keep their four stable identities and
 can be replaced by a later unanimous publication.
 
-## Eligibility states users observe
+## Filesystem-source and publication states users observe
 
-A canonical-looking path is not enough. The catalog exposes only current,
-agent-authored bytes whose publication history still validates.
+Source availability and publication provenance are separate. `$`, the viewer,
+explicit references, and role-bound core context use the current safe
+filesystem. `catalog()` and consensus publication use the catalog, immutable
+commit ledger, journals, and recovery state.
 
-| State | Internal meaning | What users can do or see |
+Source discovery checks exactly the four core paths and recursively scans
+regular files below `manuscript/`. A manuscript is included only when its full
+path matches `manuscript/PART/PATH.md`. Results are lexical and contain path and
+type metadata only; listing does not read, decode, hash, or line-split file
+content. Safe empty, manual, initialized by another tool, pre-provenance,
+older, published, and hash-divergent files are included. `.gitkeep`, extra core
+paths, root-level manuscripts, unsupported extensions, invalid/oversize paths,
+case or normalization aliases, symlinks, hard-linked files, special files,
+internal state, and outside paths are excluded.
+
+| State | Source behavior | Publication behavior |
 | --- | --- | --- |
-| Absent | No file and no current catalog entry. | The file is not supplied as agent context. A later unanimous run may create it. |
-| Manual or unprovenanced | Bytes exist, but no matching repository-owned catalog and commit record exists. Generic `Workspace` writes cannot create this state because they reject canonical paths; it can result from an external filesystem edit. | The bytes remain on disk but are excluded from the eligible catalog and core prompt context. A manuscript at that path also blocks create-only publication. |
-| Current and eligible | The path is canonical, its catalog entry and immutable commit record agree exactly, its current SHA-256 matches, and the complete catalog/commit ledger passes global audit. | The runtime may list/read it through the artifact repository. Eligible core documents are supplied only to their allowed agents. |
-| Stale and ineligible | A catalog entry exists, but the file is missing, unsafe, nonregular, or its bytes no longer match the recorded hash. | Catalog listing and selective context reads omit that entry; an exact artifact read fails. The runtime does not delete or silently repair the bytes. The permanent commit ledger continues to reserve a deleted manuscript identity. |
-| Recovery pending | One immutable schema-v2 JSON transaction journal remains in authoritative `transactions/`. It records the exact catalog-before position, catalog-after image, commit, ordered targets, old/new hashes, and complete new bytes. | The next catalog read, artifact read, or commit first attempts deterministic recovery under the artifact lock. No partially published set becomes eligible. |
-| Recovered | Roll-forward completed, the commit record and catalog were published, and the journal was exclusively retired into non-authoritative staging with a `.completed` suffix. This is an observed outcome, not a stored state name. | The newly current entries become eligible on that same access. The retained journal bytes are internal evidence, not a listed artifact or pending transaction. |
-| Recovery blocked | A pending journal, target, or recovery invariant could not be trusted, and a persistent block marker was written. | Every later artifact-repository read or commit fails closed. Preserve the workspace and investigate or restore a verified backup; there is no automatic repair command. |
-| Ledger or catalog invalid | A permanent commit is missing, malformed, noncanonical at the byte level, duplicated, unexpected, or inconsistent with the catalog; the catalog is missing/incomplete; or repeated core history has no unique newest instant or projects an older commit. | Artifact access fails closed without changing story bytes. Preserve the workspace and restore exact verified repository metadata from backup; the runtime does not rewrite, reconstruct, or migrate it. |
-| Lock unsafe | The permanent `.artifacts.lock`, `.artifacts.lock.anchor`, and `.artifacts.lock.ready` names are aliased, partial, divergent, have an extra hard link, or cannot be created and flushed safely. | The current artifact operation fails before entering the protected repository body. Stop workspace processes and investigate the triple; the runtime does not clean up, reconstruct, or migrate it. |
-| Retained staging residue | A `.tmp`, `.held`, `.retired`, or `.completed` file remains under the repository's non-authoritative `staging/` directory. | This is normal internal state and never appears in the canonical catalog or agent context. It may grow over time; do not treat it as a writing artifact or move it into `transactions/`. |
+| Absent | The path is not listed, bound, viewable, or referenceable. | A unanimous run may create it if the output identity is otherwise unreserved. |
+| Present and safe | The path is listed. Opening captures current bytes with strict UTF-8/NUL and 8 MiB checks; allowlisted core files can enter role definitions. Empty whole-file references are valid. | If catalog/ledger metadata matches, it may also be a current agent publication. Source use alone does not establish that fact. |
+| Manual, pre-provenance, or hash-divergent | It has the same source behavior as any other present safe file. A changed core file affects the next role-definition fingerprint. | No provenance is fabricated or adopted. A manual manuscript still occupies its create-only path; a cataloged identity remains reserved even after deletion. |
+| Unsafe or unsupported | It is excluded during metadata discovery when the failure is entry-local; an exact open fails closed. A listed file whose bytes later prove oversized, invalid UTF-8, or NUL-containing fails when opened. | It cannot be published through the unsafe identity. |
+| Source drift after capture | Deletion, replacement, physical-identity change, unsafe topology, oversize, or hash change terminates the invocation or operation before acceptance. | The captured bytes are not refreshed and no publication is accepted from that referenced operation. |
+| Recovery pending or blocked; catalog/ledger absent or invalid | Safe listing, viewing, prompt-context reads, and new reference operations do not load the catalog or run transaction recovery, so publication metadata cannot blank the source set. | `catalog()` and publication recover or audit under the stricter repository boundary and fail closed when authority cannot be trusted. |
+| Lock unsafe | Source and publication operations both fail before protected work because they share the repository lease. | Stop workspace processes and investigate the three-name lock identity. |
+| Retained staging residue | Internal staging never appears as a source. | Staging is non-authoritative and ignored by recovery/catalog projection. |
 
-A manual edit invalidates eligibility without deleting the file. Restoring the
-exact recorded bytes also restores hash eligibility when the complete catalog
-and permanent commit ledger still audit successfully. Otherwise, let a later
-unanimous run republish a core document. For a changed manuscript, use a new
-part-scoped revision path. Stop all workspace processes before any
-external/manual filesystem edit; live manual namespace mutation is outside the
-supported writer boundary.
+Every source open is bounded to at most 8 MiB. A caller-supplied larger limit is
+clamped to 8 MiB; a stricter positive limit is honored. Explicit-reference
+selection then applies the separate 128 KiB per-reference and 256 KiB aggregate
+limits and validates requested line ranges. Listing may therefore show a path
+that later fails to open or attach.
 
-Do not edit the catalog, commit records, transaction journals, lock, or recovery
-marker to force a state. They are consistency evidence, not user-authored
-documents.
+Stop all workspace processes before any external/manual filesystem edit; live
+manual namespace mutation is outside the supported writer boundary. Do not
+edit catalog, commit, transaction, lock, evidence, or recovery files to force a
+state. They are internal consistency records, not canonical story sources.
 
 ## Publication and recovery mechanism
 
@@ -381,13 +401,15 @@ absolute path. A relative root is bound to the construction-time current
 directory, so a later directory change cannot retarget the repository. This
 capture does not call `resolve()`, dereference symlinks, open or inspect the
 filesystem, or probe security primitives; symlink spelling is preserved. The
-first catalog read, artifact read, or commit securely opens and validates that
+first source list/read, catalog read, or commit securely opens and validates that
 captured root, checks for the
 required descriptor-relative, no-follow, listing, and advisory-lock primitives,
-takes an in-process lock and a workspace-local lease, then resolves pending
-recovery before continuing. Other workspace and runtime APIs remain usable on a
-host that cannot perform artifact I/O. An unsafe captured root therefore fails
-on that first artifact operation without being silently resolved elsewhere.
+then takes an in-process lock and a workspace-local lease. Source operations
+list or read current files without catalog loading or transaction recovery;
+catalog and publication operations resolve pending recovery before continuing.
+Other workspace and runtime APIs remain usable on a host that cannot perform
+artifact I/O. An unsafe captured root therefore fails on that first artifact
+operation without being silently resolved elsewhere.
 
 The lease is a permanent three-name hard-link identity for the repository lock,
 not an artifact. The exact names are `.artifacts.lock`,
@@ -479,7 +501,7 @@ publication, ordered transaction targets, commit artifacts, and the
 catalog-after entries introduced by that commit contain the same exact
 path/kind/author/hash set and correlation metadata.
 
-Every access globally audits the ledger and catalog. Commit filenames and
+Every catalog or publication access globally audits the ledger and catalog. Commit filenames and
 schemas must be exact, and each immutable commit file must byte-for-byte equal
 the repository's canonical sorted, indented JSON encoding with its final
 newline. Semantically equivalent reformatting is invalid immutable state; it is
@@ -515,10 +537,10 @@ metadata. Schema fields and scalar types are exact rather than extensible.
 The execution specialist authors manuscript revision `r0`. Any later approved
 revision is a lead-authored synthesis, and every core-document update is
 lead-authored. Mismatched recovered authorship or correlation is invalid
-repository state rather than eligible work history.
+repository state rather than valid publication history.
 
-This repository-owned metadata is the artifact work history used for
-eligibility. The JSON lives under
+This repository-owned metadata is the artifact publication and audit history;
+it does not authorize current-source discovery or reads. The JSON lives under
 `agent_states/orchestrator_state/writing_artifacts/` and remains plaintext. It
 is deliberately excluded from the canonical produced-output set.
 
@@ -534,17 +556,19 @@ usable. Every descriptor-relative component must have exact stored spelling;
 case-folded or NFKC-normalized aliases fail closed rather than resolving to the
 canonical identity. Symlinks, hard-linked artifacts, directories, other
 nonregular targets, workspace-root or ancestor replacement, unsafe path
-components, and detected file changes fail closed. Catalog and selective reads omit an entry-local failure;
-root, lease, recovery, catalog-schema, and global provenance-integrity failures
-propagate because the repository boundary is no longer trustworthy. Artifact
-text is strict UTF-8. The repository does not encrypt content, provenance, or
+components, and detected file changes fail closed. Metadata discovery omits an
+entry-local failure; root, ancestry, and lease failures propagate because the
+source boundary is no longer trustworthy. Recovery, catalog-schema, and global
+provenance-integrity failures propagate only for catalog/publication work and
+do not blank safe source discovery or reads. Artifact text is strict UTF-8.
+The repository does not encrypt content, provenance, or
 journals, provide secure erase, or enforce a retention policy.
 
 The lease serializes repository writers, and generic `Workspace` canonical
 writes are rejected. It is not a security boundary against an actively hostile
 same-user process mutating live names during a native filesystem call. Make
 manual or tool-driven filesystem changes only after every workspace process has
-stopped, then restart and let eligibility/recovery validation report the result.
+stopped, then restart and let source and publication validation report the result.
 
 The catalog and repository are module-supported internals used by the runtime;
 they are not re-exported from the package root. Exact run signatures are in

@@ -1350,7 +1350,7 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 55)
+        self.assertEqual(len(modules), 56)
 
     def test_reference_callbacks_are_scoped_fresh_bounded_and_content_free(
         self,

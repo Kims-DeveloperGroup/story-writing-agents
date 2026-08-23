@@ -113,7 +113,8 @@ Every capable frame reobserves width and reserves one right-margin column. The
 driver disables echo and canonical input only while it owns the frame, accepts
 no input, clears only confirmed rows, resets SGR, discards type-ahead, and
 restores the exact captured terminal attributes before launching `codex login`
-or bare `agy`. Native login then inherits the normal terminal directly. A
+or the resolved Antigravity executable with no arguments (bare `agy` by
+default). Native login then inherits the normal terminal directly. A
 failure or process control still attempts frame cleanup and restoration;
 uncertain restoration remains fatal rather than handing a damaged terminal to
 the provider.
@@ -520,15 +521,15 @@ still attempted, and uncertainty about restoration remains fatal.
 Reference discovery is admitted only for the controller-projected
 provider-bound span. The private activation layer scans one cursor-active,
 unescaped marker and emits only pure completion/request/failure values. It
-cannot read a catalog or artifact. The controller borrows a fresh sorted
-eligible-path callback and bounded verified-text callback for that input call;
+cannot read a source list or artifact. The controller borrows a fresh sorted
+canonical-filesystem-path callback and bounded verified-text callback for that input call;
 the driver clears both in `finally`.
 
 Capable picker and viewer input run under the same admitted source, decoder,
 raw-mode lifetime, and irreversible `LIVE` latch as their originating input.
 They cannot start a parallel read or switch to fallback after live activation.
 `FALLBACK` uses numbered ordinary input and a second confirmation before an
-amended draft can be submitted. No route treats catalog completion or viewer
+amended draft can be submitted. No route treats source completion or viewer
 selection as Enter for the outer prompt.
 
 The complete preactivation buffer, cursor, focus, and input mode are immutable
@@ -536,7 +537,7 @@ restoration facts. Every cancel, Ctrl-C, EOF, invalid/stale selection, repositor
 error, or nested operational failure restores them or raises cleanup failure;
 none appends history, dispatches a command, calls a provider, or leaves a
 marker result behind. A successful replacement changes only the marker span.
-Fresh catalog and verified reads make unsafe listing-to-view drift fail closed.
+Fresh filesystem discovery and verified reads make unsafe listing-to-view drift fail closed.
 Later submission independently captures and revalidates the then-current
 artifact; it never trusts or reuses displayed bytes. Fixed error output is
 content-free and never echoes a path or artifact body.

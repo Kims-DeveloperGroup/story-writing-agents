@@ -36,8 +36,9 @@ _ARTIFACT_REFERENCE_PALETTE_TITLE = "Writing artifact selection"
 _ARTIFACT_REFERENCE_PALETTE_INSTRUCTION = (
     "Up/Down selects; Enter/Tab inserts a whole-file reference."
 )
-_ARTIFACT_REFERENCE_EMPTY_CATALOG_TEXT = (
-    "No current writing artifacts. Complete a consensus run to create one."
+_ARTIFACT_REFERENCE_EMPTY_SOURCES_TEXT = (
+    "No writing artifacts. Add a supported canonical core document or "
+    "part-scoped Markdown manuscript. Consensus can also publish one."
 )
 _ARTIFACT_REFERENCE_NO_MATCH_TEXT = (
     "No matching writing artifacts. Change the path fragment."
@@ -379,7 +380,7 @@ def project_main_suggestion_palette(
             else None
         ),
         empty_text=(
-            _ARTIFACT_REFERENCE_EMPTY_CATALOG_TEXT
+            _ARTIFACT_REFERENCE_EMPTY_SOURCES_TEXT
             if position.startswith(EMPTY_ARTIFACT_REFERENCE_POSITION_PREFIX)
             else _ARTIFACT_REFERENCE_NO_MATCH_TEXT
             if is_artifact_reference

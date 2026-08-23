@@ -35,7 +35,9 @@ If a nonstandard executable path is intentional, pass
 ## Interactive authentication does not complete
 
 The picker reports only `authenticated`, `unauthenticated`, `unavailable`, or
-`indeterminate` from these exact native probes:
+`indeterminate` from the exact native probes. Codex uses `codex login status`;
+Antigravity invokes the resolved executable with `models`. The default vectors
+are:
 
 ```text
 codex login status
@@ -45,7 +47,10 @@ agy models
 An unavailable entry means the matching executable is missing from the
 environment that launched `story`; install it or correct `PATH`, source the
 applicable shell profile, and retry. An unauthenticated Codex selection runs
-`codex login`; an unauthenticated Antigravity selection runs bare `agy`.
+`codex login`; an unauthenticated Antigravity selection invokes the resolved
+executable with no arguments (bare `agy` by default). A supported
+`--antigravity-executable PATH` value on `story chat` changes only that
+executable.
 Indeterminate means the probe timed out, failed to launch cleanly, or returned
 an unrecognized status; verify the native CLI outside the runtime, then rerun
 `/auth` or restart `story` to probe again.
@@ -152,7 +157,7 @@ and [filesystem safety](../operations/filesystem-safety.md#debug-log-filesystem-
 
 For Codex, rerun `/auth` and require a fresh `codex login status` result, then
 check the ready session, model, and timeout. For Antigravity, require a fresh
-`agy models` result, then
+`<resolved executable> models` result (`agy models` by default), then
 check the configured model/effort and the same legacy-named
 `--codex-timeout` bound. The Antigravity capability preflight is a bounded,
 provider-free help probe: success verifies required headless flags, not
@@ -177,9 +182,10 @@ retry. For `session_ownership_unknown`, preserve the claim and guard; inspect
 
 Run `story init WORKSPACE` to add missing role prompts without overwriting.
 Prompt and persona files must be readable, strict UTF-8, inside the workspace,
-and free of symlink components. Core documents are optional until agents publish
-them; only current provenance-backed core bytes enter prompt context. Finish
-concurrent edits before a new-ID retry.
+and free of symlink components. Core documents are optional. Present safe
+current bytes enter the allowlisted prompt context even when manual or
+pre-provenance; this does not create publication authorship or repair catalog
+history. Finish concurrent edits before a new-ID retry.
 
 `--draft-file` must exist and decode as strict UTF-8. Its relative path starts
 at the shell's current directory even when `--workspace` points elsewhere.

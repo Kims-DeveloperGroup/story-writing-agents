@@ -58,9 +58,9 @@ provider session manifest.
 
 | State or outcome | Meaning | Recovery |
 | --- | --- | --- |
-| `unavailable` | The provider executable could not be launched and its picker choice is disabled. | Install the Codex CLI or Antigravity `agy`, correct the executable path or `PATH` in the environment that launches `story`, then retry startup or `/auth`. |
-| `unauthenticated` | The exact probe returned the native unauthenticated code. | Select the provider to run `codex login` or bare `agy`, complete the native prompt, and wait for a fresh probe. |
-| `indeterminate` | Launch, wait, timeout, or return status did not prove either supported state. | Check `codex login status` or `agy models` outside the runtime, repair the native CLI or environment, then retry. Selection itself performs another probe and never authorizes optimistically. |
+| `unavailable` | The provider executable could not be launched and its picker choice is disabled. | Install the Codex CLI or Antigravity `agy`, or correct the supported executable override or `PATH` in the environment that launches `story`, then retry startup or `/auth`. |
+| `unauthenticated` | The exact probe returned the native unauthenticated code. | Select the provider to run `codex login` or the resolved Antigravity executable with no arguments (bare `agy` by default), complete the native prompt, and wait for a fresh probe. |
+| `indeterminate` | Launch, wait, timeout, or return status did not prove either supported state. | Check `codex login status` or `<resolved Antigravity executable> models` (`agy models` by default) outside the runtime, repair the native CLI or environment, then retry. Selection itself performs another probe and never authorizes optimistically. |
 | Login fails or returns without authentication | The following fresh probe still is not authenticated. | Read the native CLI's own terminal guidance, repair outside the runtime, and select it again. The runtime has no captured provider output or URL to recover. |
 | Startup picker Cancel | No provider was chosen. | The hard gate remains open; choose an enabled provider. Ctrl-C or EOF exits normally before context/backend/controller/session construction. |
 | `/auth` picker Cancel, interrupt, or EOF | The picker ended without a new authorization. | The shell continues, explicit routes stay unchanged, and any already persisted default remains. Run `/auth` again when ready. |
@@ -85,8 +85,9 @@ preterminal debates `interrupted` when possible; later failures cannot rewrite r
 
 ## Writing-artifact recovery
 
-Every artifact catalog read, exact artifact read, or commit first checks for a
-pending publication journal under the verified readiness-triple lease. The
+Every artifact catalog read or commit first checks for a pending publication
+journal under the verified readiness-triple lease. Filesystem-source listing
+and reads use the same lease but neither inspect nor recover the journal. The
 schema-v2 journal is one immutable image containing the exact catalog-before
 existence/hash/image, catalog-after image, commit, and ordered targets with
 their complete new bytes and old/new hashes. It is never rewritten to record a
@@ -110,7 +111,7 @@ then hash-checks the unchanged journal and moves it with native no-replace renam
 a `.completed` name in staging. A catalog matching neither position, an
 untrusted target, or missing/replaced journal or final commit authority blocks
 rather than guessing. Users may see an infrastructure failure followed by
-successful recovery on the next artifact access; inspect the associated debate
+successful recovery on the next catalog or publication access; inspect the associated debate
 because its result and lifecycle are outside the artifact transaction.
 
 Publication temporaries live under the repository's separate `staging/`
@@ -123,24 +124,26 @@ there is ambiguity and blocks recovery.
 
 If a journal is invalid or a target diverged, the repository writes
 `agent_states/orchestrator_state/writing_artifacts/recovery_blocked.json` and
-all later artifact access fails with `writing-artifact recovery is blocked`.
+all later catalog/publication access fails with `writing-artifact recovery is
+blocked`. Safe filesystem-source listing and reads remain independent.
 Stop workspace processes, preserve a complete backup, and investigate the
 journal and target history. Do not delete or edit the lock, journal, catalog,
 commit records, or block marker to force recovery; no automatic repair command
 exists. Restore a verified backup when trustworthy reconstruction is not
 possible. See [Canonical writing artifacts](../reference/writing-artifacts.md).
 
-Catalog listing and selective prompt-context reads omit an individual missing,
-unsafe, hard-linked, nonregular, or hash-stale artifact. They do not hide a
-workspace-root, ancestor, lock-lease, catalog-schema, or global provenance
-integrity failure; those errors propagate because safe enumeration is no longer
-possible. A manual byte edit is therefore nondestructive but makes that entry
-ineligible. Restoring the exact cataloged bytes can make it eligible again when
-the commit and catalog evidence remain valid.
+Filesystem-source discovery and selective prompt-context reads are independent
+of the publication catalog. They include present safe manual and hash-divergent
+canonical files and omit an individual missing, unsafe, hard-linked,
+nonregular, or invalid-path entry. Workspace-root, ancestor, or lock-lease
+failures still propagate because safe source access is unavailable. Catalog,
+ledger, journal, or recovery corruption does not blank safe source listing or
+reads; it continues to block `catalog()` and publication until the provenance
+authority is restored.
 
 A cataloged manuscript identity is never reusable. If its file is deleted, the
-permanent commit ledger retains the historical reservation while eligible
-listing omits the stale entry. A later commit to the same path raises
+permanent commit ledger retains the historical reservation while source
+discovery omits the absent entry. A later commit to the same path raises
 `ManuscriptExistsError`; choose a new part-scoped revision path. Catalog loss
 does not free reservations: a missing, empty, or subset catalog beside existing
 commits fails closed. Malformed, unexpected, extra, mismatched, or
@@ -283,16 +286,16 @@ different mode.
 
 The viewer remains an unlisted package-internal supplied-text component rather
 than a command or public API. In provider-bound shell prompt spans, `$${path}`
-opens it directly and `$$` opens an eligible-artifact picker before it;
+opens it directly and `$$` opens a current-source picker before it;
 `$` completes a whole-file indicator without viewing. The controller owns
 artifact listing, verified reads, exact originating-draft restoration, and
 path/range attachment. The viewer owns none of those concerns.
 
-Escape, Ctrl-C, EOF, an empty catalog, invalid marker, stale selection,
+Escape, Ctrl-C, EOF, an empty source list, invalid marker, stale selection,
 unreadable artifact, or repository failure returns to the exact preactivation
 buffer, cursor, focus, and input mode with no dispatch, history append, or
 residue. Correct the cause and activate again; there is no resumable picker or
-viewer operation. Fallback uses complete numbered catalog/text projections and
+viewer operation. Fallback uses complete numbered source/text projections and
 requires a second Enter to submit the amended draft. Capable nested input uses
 the same permanent live latch and cannot downgrade after a failure.
 

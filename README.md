@@ -10,7 +10,8 @@ and write a manuscript only after all three voting specialists agree.
 > shell provides lifecycle status, conversation work, retrieval, and consensus.
 > Inline canonical artifact references are available after a session is
 > attached and a conversation is focused. In a capable terminal's
-> provider-bound prompt span, `$` opens
+> provider-bound prompt span, `$` scans the current safe canonical filesystem
+> paths and opens
 > `Writing artifact selection [open]` for whole-file insertion, `$${path}`
 > opens that file in the ranged viewer, and `$$` opens a picker before viewing.
 > There is no standalone artifact command or noninteractive picker UI.
@@ -115,7 +116,7 @@ story run --output part-01/opening.md --prompt 'Draft the opening.'
 - [Getting started](docs/getting-started.md) explains installation and the first run.
 - [Documentation index](docs/INDEX.md) routes each task, contract, design topic, and operational concern.
 - [Workspace guide](docs/guides/workspaces.md) explains the editable project files.
-- [Writing artifacts](docs/reference/writing-artifacts.md) defines the exact produced-output paths, provenance states, and recovery behavior.
+- [Writing artifacts](docs/reference/writing-artifacts.md) separates current canonical filesystem sources from publication provenance and recovery.
 - [Antigravity guide](docs/guides/antigravity.md) covers `agy` setup, authentication, routing, safety, sessions, and provider-free verification.
 - [Story sessions](docs/guides/story-sessions.md) shows shell management, conversation reads, retrieval, and consensus.
 - [Session lifecycle](docs/design/session-lifecycle.md) maps internal state to commands, output, errors, and next actions.
@@ -144,8 +145,8 @@ For Python integrations, start with the [runtime API](docs/reference/runtime-api
 - Deadlocked and interrupted debates cannot resume under the same debate ID.
 - Workspace content, logs, provider metadata, agent state, and manuscripts are plaintext.
 - Writing-artifact publication is journaled and catalog-last, and rolls forward
-  on the next artifact access after an interruption. It is not one transaction
-  with debate logs, lifecycle state, or result files.
+  on the next catalog or publication access after an interruption. It is not
+  one transaction with debate logs, lifecycle state, or result files.
 - Smoke's explicit workspace is not read-only and retains bounded plaintext
   diagnostics when they can be written; abrupt termination can interrupt
   cleanup. A pass does not validate provider/model, terminal behavior,
@@ -157,7 +158,8 @@ For Python integrations, start with the [runtime API](docs/reference/runtime-api
   on supported POSIX. Retrieval is active-only and bounded. Inline `${path}`
   and `${path}#Lx-Ly` indicators make every addressed agent read the ordered
   canonical batch before its result is accepted. In provider-bound shell spans,
-  `$` opens a labeled artifact-selection panel and completes a whole-file
+  `$` opens a labeled artifact-selection panel populated from the current safe
+  canonical files and completes a whole-file
   indicator; `$${path}` or `$$` opens the ranged viewer. These editing actions
   do not submit the prompt. Lobby/no-focus input and non-provider fields remain
   inert. Standalone artifact commands and automation UI remain unavailable.

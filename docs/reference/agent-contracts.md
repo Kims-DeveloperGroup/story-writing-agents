@@ -32,21 +32,24 @@ not reread the path. A definition's fingerprint covers the agent, backend,
 language, component identities, and hashes. Runtime bindings are cached by
 `(agent_id, fingerprint)`.
 
-| Agent | Bound core documents when current and provenance-backed |
+| Agent | Bound core documents when present as safe current filesystem sources |
 | --- | --- |
 | `lead_orchestrator` | all four |
 | `plot_architect` | global and part outlines |
 | `character_custodian` | character sheets |
 | `execution_specialist` | narrative rules |
 
-Absent, manually created, stale, and otherwise unprovenanced core documents are
-omitted. Exact eligibility is in
+Absent or unsafe core documents are omitted. Safe manual, pre-provenance,
+published, and hash-divergent bytes are captured; publication provenance is not
+a binding requirement. Exact source and publication rules are in
 [Canonical writing artifacts](writing-artifacts.md).
 
 For core context, prompt assembly asks the artifact repository to read only the
-paths allowlisted for that role. Each repository-verified
+paths allowlisted for that role. Each descriptor-verified current filesystem
 `ArtifactContentSnapshot` is converted to a `PromptFileReference` backed by the
-same immutable bytes. Role-prompt and persona references are captured from
+same immutable bytes. A manual core change therefore changes a later
+definition fingerprint without creating publication history. Role-prompt and
+persona references are captured from
 their paths at definition construction; all references are content-backed by
 the time the backend receives the definition.
 
