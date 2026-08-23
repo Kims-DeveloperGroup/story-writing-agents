@@ -34,6 +34,7 @@ class SystemDefaults:
     codex_reasoning_effort: str | None = None
     antigravity_model: str | None = None
     antigravity_effort: str | None = None
+    default_backend: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,6 +195,7 @@ class ConfigManager:
                 "codex_reasoning_effort",
                 "antigravity_model",
                 "antigravity_effort",
+                "default_backend",
             }
         )
         if unknown:
@@ -215,6 +217,9 @@ class ConfigManager:
         antigravity_effort = self.validate_antigravity_effort(
             value.get("antigravity_effort")
         )
+        default_backend = self.validate_backend(
+            value.get("default_backend"), allow_none=True
+        )
         return SystemDefaults(
             language=language,
             persona=persona,
@@ -223,6 +228,7 @@ class ConfigManager:
             codex_reasoning_effort=codex_reasoning_effort,
             antigravity_model=antigravity_model,
             antigravity_effort=antigravity_effort,
+            default_backend=default_backend,
         )
 
     def load_agent_configs(self) -> dict[str, AgentConfig]:
@@ -400,9 +406,15 @@ class ConfigManager:
         runtime = self.validate_runtime_overrides(runtime_overrides or {})
         runtime_agent = runtime["agents"].get(agent_id, {})
         backend_override = (backend_overrides or {}).get(agent_id)
-        backend = self.validate_backend(
-            backend_override or agent.backend or "codex"
-        )
+        if backend_override is not None:
+            backend_value = backend_override
+        elif agent.backend is not None:
+            backend_value = agent.backend
+        elif defaults.default_backend is not None:
+            backend_value = defaults.default_backend
+        else:
+            backend_value = "codex"
+        backend = self.validate_backend(backend_value)
 
         language = (
             runtime_agent.get("language")
