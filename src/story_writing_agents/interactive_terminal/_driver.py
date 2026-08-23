@@ -513,11 +513,13 @@ class RawTerminalDriver:
                 self._output_stream,
                 termios_module=self._termios_provider(),
                 os_module=self._os_provider(),
-                width=capabilities.width,
+                width=None,
                 decoder_spec=decoder_spec,
             )
             if configuration is None:
                 raise ValueError("live terminal configuration is unavailable")
+            if configuration.width != capabilities.width:
+                raise ValueError("live terminal geometry changed during preflight")
         except Exception as failure:
             if mode is TerminalInputMode.LIVE:
                 raise RuntimeError("live terminal input preflight failed") from failure
