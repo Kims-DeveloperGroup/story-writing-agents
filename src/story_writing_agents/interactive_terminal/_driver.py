@@ -499,10 +499,27 @@ class RawTerminalDriver:
     ) -> None:
         """Show then clear one auth notice only when transient display is safe."""
 
+        self._run_startup_notice(
+            frame_renderer,
+            sleeper,
+            result_boundary=False,
+        )
+
+    def _run_startup_notice(
+        self,
+        frame_renderer: Callable[[TerminalCapabilities], RenderedFrame],
+        sleeper: Callable[[float], object],
+        *,
+        result_boundary: bool,
+    ) -> None:
+        """Choose one guarded or static purpose-bound notice lifecycle."""
+
         if not callable(frame_renderer):
             raise TypeError("frame_renderer must be callable")
         if not callable(sleeper):
             raise TypeError("sleeper must be callable")
+        if type(result_boundary) is not bool:
+            raise TypeError("result_boundary must be a bool")
         base_capabilities = self.capabilities()
         configuration = (
             self._startup_terminal_configuration(base_capabilities)
@@ -515,22 +532,28 @@ class RawTerminalDriver:
                 frame_renderer,
                 sleeper,
                 base_capabilities,
+                result_boundary=result_boundary,
             ),
         ):
             static_capabilities = _static_startup_capabilities(base_capabilities)
             frame = frame_renderer(static_capabilities)
             _require_startup_frame(frame, static_capabilities)
+            if result_boundary:
+                self._write_raw_text("\n")
             self._write_raw_text(f"{frame.text}\n")
-        return
 
     def _run_startup_notice_frame(
         self,
         frame_renderer: Callable[[TerminalCapabilities], RenderedFrame],
         sleeper: Callable[[float], object],
         base_capabilities: TerminalCapabilities,
+        *,
+        result_boundary: bool,
     ) -> None:
         """Render and clean only one guarded capable startup notice."""
 
+        if result_boundary:
+            self._write_raw_text(f"{_CARRIAGE_RETURN}\n")
         render_capabilities = self._startup_render_capabilities(
             base_capabilities
         )
@@ -613,8 +636,11 @@ class RawTerminalDriver:
             raise TypeError("frame_renderer must be callable")
         if not callable(sleeper):
             raise TypeError("sleeper must be callable")
-        self._write_raw_text(f"{_CARRIAGE_RETURN}\n")
-        self.run_startup_notice(frame_renderer, sleeper)
+        self._run_startup_notice(
+            frame_renderer,
+            sleeper,
+            result_boundary=True,
+        )
 
     def _startup_animation_is_safe(
         self,
