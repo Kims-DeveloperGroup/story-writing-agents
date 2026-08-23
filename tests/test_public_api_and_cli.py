@@ -500,7 +500,7 @@ class PublicApiTests(unittest.TestCase):
                 with self.assertRaises((TypeError, ValueError)):
                     DebateProgressEvent(**common, **values)  # type: ignore[arg-type]
 
-    def test_debate_run_signatures_are_additive_and_result_shape_is_unchanged(
+    def test_debate_run_signatures_and_additive_result_shape_are_exact(
         self,
     ) -> None:
         method_cases = (
@@ -611,6 +611,7 @@ class PublicApiTests(unittest.TestCase):
                 "messages",
                 "error",
                 "action_required",
+                "reference_operation_id",
             ),
         )
         legacy = DebateResult(

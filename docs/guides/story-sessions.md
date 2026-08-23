@@ -2,7 +2,8 @@
 
 > **Availability:** the TTY shell supports session management, persistent
 > settings, and local reads; advisory turns and consensus also require current
-> focus on an active conversation.
+> focus on an active conversation. Inline canonical artifact references work in
+> provider-bound routed, sticky, ordinary, retrieval, and `/run` prompt text.
 
 Key terms: **defaults** are persisted fallbacks; **current attachment** is the
 session held by this shell; **current focus** and **agent focus** select the
@@ -192,6 +193,12 @@ Conversation changes preserve agent focus; session transitions reset or clear
 it. `/conversation list` remains active-only unless `--all` is supplied. The
 picker does not change startup default restoration, routing, noninteractive
 commands, storage/provider schemas, or package APIs.
+
+References follow the same routing: `@plot Review ${core_documents/global_outline.md}`
+addresses one agent once, while ordinary text after `/to character` addresses
+the sticky character focus. Every provider-bound turn captures its own ordered
+batch; a previous agent's read cannot satisfy the next turn. See
+[Canonical artifact references](artifact-references.md).
 
 ## Choose the right memory operation
 

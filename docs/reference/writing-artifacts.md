@@ -2,8 +2,13 @@
 
 > **Availability:** unanimous consensus can publish the canonical files on this
 > page. The runtime uses their provenance catalog when supplying core context to
-> story agents. Standalone artifact commands and file-reference syntax/UI are
-> not implemented yet.
+> story agents. The `writing_artifacts` Python subpackage can parse content-free
+> reference directives and exposes the repository authorization, read-action,
+> and evidence values described below. `StoryRuntime` captures inline
+> `${path}` and `${path}#Lx-Ly` indicators and gives every addressed provider
+> invocation a fresh private coordinator. Standalone artifact commands,
+> interactive `$`/`$$` discovery and viewer attachment, and reference-specific
+> shell diagnostics remain unavailable.
 
 This reference uses **writing artifact** only for agent-produced story output.
 Transcripts, discussion logs, provider state, agent state, configuration, role
@@ -47,6 +52,226 @@ the part grammar, so `output_path=manuscript/chapter.md` is legal and publishes
 `manuscript/manuscript/chapter.md`. The first `manuscript` is the canonical
 directory; the second is the user-selected part ID.
 
+## Reference directive parser
+
+> **Availability:** the pure parser remains I/O-free, while `StoryRuntime` uses
+> its result to authorize and enforce inline references for provider-bound
+> operations. Parsing alone is not proof of an eligible read. Shell completion,
+> a picker, and ranged-viewer attachment remain #164 work.
+
+One directive is a content-free indicator containing either a canonical path
+or that path followed by a one-based inclusive line range:
+
+```text
+${core_documents/global_outline.md}
+${manuscript/part-01/scenes/opening.md}#L7-L12
+```
+
+The path inside `${...}` must be one of the four exact core-document paths or
+a canonical `manuscript/PART/PATH.md` path under the grammar above. A range is
+optional, immediately follows `}`, uses uppercase `L`, contains positive ASCII
+decimal bounds without leading zeroes, and must have `start <= end`. Both
+bounds are inclusive. A value larger than `sys.maxsize` is rejected.
+
+`parse_artifact_references()` accepts one exact strict-UTF-8 `str` without NUL
+and returns references in source order. One input may contain at most 16 active
+directives. For repeated directives naming the same path:
+
+- an exact duplicate is rejected;
+- a whole-file directive conflicts with every ranged directive;
+- inclusive ranges may not overlap, so `#L1-L3` conflicts with `#L3-L5`; and
+- adjacent or disjoint ranges remain valid and retain their original order, so
+  `#L1-L2` followed by `#L3-L5` is accepted.
+
+Unescaped `$$` is reserved and rejected. Every unescaped `${` begins a
+directive and must have a closing brace, a nonempty whitespace-free canonical
+path, and any range that begins with `#L` must be complete. Lowercase `#l`,
+zero or leading-zero bounds, reversed ranges, extra range markers, and a
+letter, number, underscore, or other identifier-continuation character
+immediately following a range are malformed. A single `$` that does not begin
+`${` or `$$` remains ordinary text.
+
+Backslashes immediately before `$` determine whether the dollar is active.
+The parser always preserves the exact caller input as `source_text`:
+
+| Caller source fragment | `provider_text` fragment | Parsed reference |
+| --- | --- | --- |
+| `${core_documents/global_outline.md}` | unchanged | Yes |
+| `\${core_documents/global_outline.md}` | `${core_documents/global_outline.md}` | No; the odd backslash escapes `$` and one escaping backslash is removed. |
+| `\\${core_documents/global_outline.md}` | unchanged | Yes; an even run leaves `$` active and preserves both backslashes. |
+| `\\\${core_documents/global_outline.md}` | `\\${core_documents/global_outline.md}` | No; the odd run loses one escaping backslash. |
+
+This parity rule applies to bare dollars and reserved syntax too. With no active
+directive and no escaped dollar, parsing is compatible with ordinary text:
+`source_text` and `provider_text` are identical and `references` is empty.
+
+Import the API from the subpackage, not the project-root facade:
+
+```python
+from story_writing_agents.writing_artifacts import (
+    ArtifactReferenceBatch,
+    ArtifactReferenceDirectiveError,
+    parse_artifact_references,
+)
+
+batch = parse_artifact_references(
+    "Use ${core_documents/narrative_rules.md} and "
+    "${manuscript/part-01/scenes/opening.md}#L7-L12."
+)
+assert isinstance(batch, ArtifactReferenceBatch)
+assert tuple(reference.token for reference in batch.references) == (
+    "${core_documents/narrative_rules.md}",
+    "${manuscript/part-01/scenes/opening.md}#L7-L12",
+)
+```
+
+`ArtifactReferenceBatch` is immutable and contains the exact `source_text`,
+the escaped-dollar `provider_text` projection, and an ordered tuple of
+`ArtifactReference` path/range values. Each reference exposes its canonical
+`path`, optional `line_range`, and reconstructed `token`; a range exposes its
+inclusive `start` and `end`. Neither the batch nor a reference contains
+artifact bytes. Invalid directive input raises
+`ArtifactReferenceDirectiveError`, a `ValueError` subtype whose deterministic
+messages do not echo a rejected path or artifact content. Parsing performs no
+filesystem, repository, provider, controller, terminal, or network I/O.
+
+At this stage, Python callers can validate directive grammar, preserve the
+original input, compute the provider-text escape projection, and inspect
+ordered canonical path/range indicators. This parser API alone does not
+establish artifact eligibility, read content, supply it to a provider, or
+require an agent read. Runtime entry points add those authorization and
+provider steps for `${...}`; `$` and `$$` remain reserved for #164.
+
+## Authorized reads and lifecycle evidence
+
+> **Availability:** `StoryRuntime` integrates repository authorization,
+> transient delivery, durable content-free evidence, and exact provider read
+> enforcement for inline references. `$`/`$$` discovery, picker/viewer
+> selection, composer attachment, and reference-specific shell diagnostics
+> remain #164 work.
+
+The `${canonical/path.md}` and `${canonical/path.md}#Lx-Ly` values remain
+content-free indicators. A caller holding `WritingArtifactRepository` can use
+an already parsed nonempty batch to:
+
+1. capture one immutable authorization for an operation;
+2. issue a repository-minted, one-use capability for the exact ordered batch;
+3. deliver the captured selected bytes through a closeable transient value;
+4. record a result, accept or terminate the invocation, and revalidate or
+   finish the overall operation; and
+5. inspect validated operation history later.
+
+These actions are exposed by the repository module, not by the project-root
+facade. The `writing_artifacts` subpackage exports the content-free value and
+error contracts: `AuthorizedArtifactReference`, `ReferenceOperationManifest`,
+`ReferenceInvocationCorrelation`, `ReferenceEvidence`,
+`ReferenceOperationHistory`, `ReferenceOperationState`,
+`ReferenceInvocationState`, `ReferenceAuthorizationError`, and
+`ReferenceAuthorizationErrorCode`; plus the provider-neutral, content-free
+`ReferenceReadActionKind`, `ReferenceReadRequest`, and `ReferenceReadAction`.
+`WritingArtifactRepository.begin_reference_invocation()` creates the private
+synchronous coordinator that owns one repository-minted capability. The
+coordinator, capability, delivery, and content-bearing `ReferenceReadResult`
+remain package-internal. Content carriers hide content from `repr`, reject
+serialization, and are closeable; the capability is one-use. Closing releases
+the runtime's references to byte tuples but does not guarantee memory zeroing.
+
+### What the states mean
+
+Operation history follows `REQUESTED` → `CAPTURED` → zero or more
+`REVALIDATED` checkpoints → `ACCEPTED` or `TERMINATED`. The enum members are
+serialized with the lowercase values shown in the table.
+
+| Operation state | Internal event | What an inspecting caller can conclude |
+| --- | --- | --- |
+| `requested` | The create-only operation manifest and first evidence event exist before catalog or artifact reads. | A reference attempt was recorded. No bytes have been authorized. |
+| `captured` | Every ordered reference was eligible, selected, hashed, and held in one immutable in-memory capture. | The recorded provenance and selected-byte proof were valid at capture time. |
+| `revalidated` | Full catalog provenance and current file hash still match the capture at a caller-named checkpoint. | The captured identity was still current at that checkpoint; the event does not refresh the captured bytes. |
+| `accepted` | Final revalidation succeeded and all invocations are terminal, with at least one accepted invocation. Routine runtime history may move directly from `captured` to this event because final revalidation occurs inside acceptance. | The complete runtime reference operation succeeded and its result may return or publish. |
+| `terminated` | A fixed coded cancellation, provider, workflow, authorization, drift, or evidence failure ended the operation. | The operation was not accepted; the content-free outcome identifies the failure category. |
+
+Each invocation follows `AUTHORIZED` → `DELIVERED` → `RESULT_RECEIVED` →
+`ACCEPTED`, with `TERMINATED` available from any nonterminal state. It has its
+own ordered history:
+
+| Invocation state | Internal event | Current external meaning |
+| --- | --- | --- |
+| `authorized` | The repository persisted correlation and issued one private capability for the captured batch. | One exact attempt is authorized. No provider content or user-visible output exists, and the capability never enters a provider payload. |
+| `delivered` | The capability was consumed, the source was revalidated, and evidence was persisted before transient bytes were returned. | On the backend path, the provider first returned the complete exact action and the bytes are ready for its immediately following call. This state alone does not prove remote receipt or use. |
+| `result_received` | The caller recorded that a substantive invocation result was received. | The backend records this only after structurally decoding the substantive result. Direct repository callers can make the same claim, so the event is not proof of comprehension or obedience. |
+| `accepted` | Another full revalidation succeeded after the recorded result. | The exact invocation evidence chain was accepted before the backend returned its reply. The result's optional operation ID lets Python callers inspect the content-free history. |
+| `terminated` | A fixed coded failure ended the invocation. | No accepted reply exists for the attempt. A retry needs a fresh correlation, coordinator, and one-use capability; it cannot reuse this evidence. |
+
+The durable history contains ordered path and optional range, full catalog
+provenance, selected SHA-256 and byte count, source line count, agent/invocation
+correlation, lifecycle state, checkpoint, and terminal outcome. It contains no
+artifact text, captured bytes, parser source/provider text, provider prompt, or
+provider result. Baseline core-context reads do not create this history and
+cannot satisfy an explicit-reference evidence requirement.
+
+### Provider-enforced invocation sequence
+
+The backend seam is separate from parsing and from the ordinary request
+models. An internal caller first captures a nonempty batch and calls
+`begin_reference_invocation()` with one complete correlation. Then:
+
+1. `BoundAgent` validates a synchronous coordinator and the addressed agent,
+   phase, and round before provider work.
+2. Under the same provider-thread lock as the substantive work, the backend
+   sends one content-free prelude containing only the operation/invocation
+   correlation, ordered canonical path/range indicators, and fixed rules.
+3. A request-specific schema and exact equality check require the provider's
+   first action to echo the complete ordered batch. Result-first, partial,
+   reordered, duplicate, broadened, foreign, and malformed actions fail.
+4. Only after that action does the coordinator consume its capability. The
+   backend decodes the selected strict-UTF-8 bytes and adds them once, in the
+   same order, under `untrusted_writing_artifact_context` on the immediately
+   following substantive payload.
+5. A structurally valid result advances through `result_received`, final
+   repository revalidation, and `accepted` before the backend returns it.
+
+The selected content is not copied into the task, user text, candidate,
+blackboard messages, conversation history, retrieval observations, durable
+evidence, or diagnostics. An accepted invocation proves the exact read request,
+delivery sequence, substantive result, and final revalidation. It does not
+prove that a model understood, followed, or correctly applied the content.
+All four canonical roles use the same structural `BoundAgent` path; role-prompt
+prose is not the enforcement mechanism. See the exact
+[backend seam](backend-and-sessions.md#referenced-invocation-boundary),
+[provider data flow](../design/prompts-and-provider.md#explicit-reference-provider-flow),
+and [privacy boundary](../operations/privacy-and-provider.md#explicit-reference-data-boundary).
+
+### Capture, limits, and revalidation
+
+Initial capture takes the repository lock, writes `requested` evidence, loads
+the trusted catalog, and securely reads each unique referenced path once even
+when several ranges use it. It validates the complete source as strict UTF-8
+without NUL before selecting bytes. Line ranges use universal newline records:
+CRLF, LF, and lone CR each end a line and remain in the selected byte slice;
+Unicode U+2028 remains ordinary content. Empty input has zero lines, and a
+final terminator creates no extra empty line.
+
+The inclusive limit is 128 KiB of selected UTF-8 bytes per reference and
+256 KiB across the ordered batch. Exact-limit selections are accepted. An
+out-of-bounds range or a value above either limit fails with a fixed,
+content-free code. These authorization limits are separate from the ranged
+viewer's 8 MiB defensive source limit.
+
+Delivery consumes the capability before checking the caller's requested tuple,
+so a mismatched order, path, or range cannot be retried with that capability.
+Before delivery, invocation acceptance, operation checkpoints, and final
+operation acceptance, the repository compares the complete current provenance
+and full-file hash with the original capture. The selected bytes are never
+refreshed. Even identical file bytes with newly published provenance are drift
+and terminate the affected path through the lifecycle.
+
+An empty reference batch returns without taking the artifact lock, reading
+storage, or creating history. For a nonempty batch,
+`inspect_reference_operation()` returns `None` only when the operation
+directory is absent. A present but partial, malformed, noncanonical, or
+inconsistently sequenced history raises the fixed `evidence_corrupt` error
+instead of being repaired or treated as absent.
+
 ## What a user can change
 
 Ask the story agents for changes through a consensus prompt or supplied draft:
@@ -64,6 +289,30 @@ For example:
 ```text
 /run --output part-01/planning/baseline.md Establish the agreed outline, character facts, and narrative rules, then produce the approved baseline.
 ```
+
+### Inline explicit-reference scenarios
+
+These indicators are executable prompt text now; the later #164 interface will
+construct the same path/range values through discovery and the ranged viewer.
+
+- Outline review: `@plot Compare ${core_documents/global_outline.md} and ${manuscript/part-01/scenes/opening.md}#L40-L65, then propose the smallest outline adjustment.`
+  The plot architect must request both references in that order before its
+  advisory reply is accepted.
+- Character-sheet review: `@character Check ${core_documents/character_sheets.md}, ${manuscript/part-01/scenes/opening.md}#L12-L24, and ${manuscript/part-01/scenes/aftermath.md}#L3-L18 for continuity.`
+  One exact three-reference batch is required; partial or reordered reads fail.
+- Narrative-rule review: `@execution Apply ${core_documents/narrative_rules.md}#L8-L20 when reviewing ${manuscript/part-01/scenes/opening.md}#L66-L90.`
+  Both selected ranges must reach the one substantive call as untrusted
+  reference context.
+- Manuscript revision: `/run --output part-01/revisions/opening-r2.md Revise ${manuscript/part-01/scenes/opening.md} using ${core_documents/part_outlines.md}#L30-L52.`
+  Every addressed agent, phase, round, attempt, or replacement receives an
+  independent correlation and read lifecycle over the captured top-level batch.
+
+The first three advisory requests can propose changes but cannot publish them.
+Only the existing unanimous consensus workflow can replace a core document or
+publish a new part-scoped manuscript path.
+
+See the [artifact-reference guide](../guides/artifact-references.md) for exact
+syntax, limits, work-history inspection, and complete user scenarios.
 
 An ordinary advisory message can help refine the request but cannot write a
 core document or manuscript. During a consensus run, the execution specialist

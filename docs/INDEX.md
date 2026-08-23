@@ -7,9 +7,11 @@ Use this index to find one canonical answer instead of searching a long manual.
 > retrieval-enabled turns, searches and reads transcripts, and runs
 > focused-conversation consensus. It also provides global help and lifecycle
 > status, attached directives and safe inspection, focused history, and
-> controller-boundary cancellation for active operations and local reads. An
-> independent supplied-text ranged viewer exists only as an unlisted internal
-> terminal component; no shell artifact-reference syntax invokes it yet.
+> controller-boundary cancellation for active operations and local reads.
+> Inline `${path}` and `${path}#Lx-Ly` references are active in provider-bound
+> prompts. An independent supplied-text ranged viewer exists only as an
+> unlisted internal terminal component; `$`/`$$` discovery and selection do not
+> invoke it yet.
 
 ## Availability matrix
 
@@ -31,7 +33,8 @@ Use this index to find one canonical answer instead of searching a long manual.
 | Persist and send one explicitly addressed one-step turn | Existing `StoryRuntime.converse()` Python API |
 | Run consensus with included, fresh, or draft-file input | Focused active shell conversation; noninteractive CLI and Python API remain available |
 | Publish and identify canonical agent-produced writing artifacts | Every unanimous consensus run; exact paths and eligibility in the writing-artifact reference |
-| Select an inclusive range in supplied text | Package-internal terminal component only; no supported shell command or public API. `$`, `$${file}`, `$$`, artifact discovery/read, reference construction, composer restoration, ordered attachments, and agent-read enforcement remain unavailable. |
+| Require agents to read canonical artifacts | Inline `${path}` and `${path}#Lx-Ly` in provider-bound conversation, retrieval, and consensus prompts; ordered multi-reference batches and per-invocation read enforcement are active. |
+| Select an inclusive range in supplied text | Package-internal terminal component only; no supported shell command or public API. `$`, `$${file}`, `$$`, artifact discovery, viewer-driven reference construction, and composer restoration remain unavailable pending #164. |
 | Cancel active advisory/consensus work or partial local rendering | Installed shell; process-level PTY verified on supported POSIX. [Delivery and platform scope](operations/recovery-and-limitations.md#posix-pty-boundary) |
 | Show one focused transcript snapshot and context accounting | Attached shell `/history`; active focus required |
 | Standalone artifact commands | Not implemented in the shell |
@@ -45,6 +48,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 
 ## Guides
 
+- [Canonical artifact references](guides/artifact-references.md)
 - [Workspaces](guides/workspaces.md)
 - [Story sessions and subject conversations](guides/story-sessions.md)
 - [Glasswater interactive end-to-end journey](guides/glasswater-scenario.md)

@@ -972,6 +972,8 @@ def _verify_conversation_routing(
         == source.conversation_id
         and lead_result.agent_id == LEAD_ORCHESTRATOR
         and specialist_result.agent_id == PLOT_ARCHITECT
+        and lead_result.reference_operation_id is None
+        and specialist_result.reference_operation_id is None
         and lead_result.content == _LEAD_REPLY
         and specialist_result.content == _SPECIALIST_REPLY
         and lead_result.context.events == ()
@@ -1163,7 +1165,8 @@ def _verify_conversation_retrieval(
     search_action, read_action, answer_action = backend.retrieval_actions
     search_outcome, read_outcome, answer_outcome = backend.retrieval_outcomes
     _require(
-        type(search_action) is ConversationRetrievalSearchAction
+        result.reference_operation_id is None
+        and type(search_action) is ConversationRetrievalSearchAction
         and type(read_action) is ConversationRetrievalReadAction
         and type(answer_action) is ConversationRetrievalAnswerAction
         and tuple(action.action_index for action in backend.retrieval_actions)
@@ -1411,10 +1414,12 @@ def _verify_consensus(workspace: Workspace, result: DebateResult) -> None:
     persisted = inspected["result"]
     _require(
         result.status is DebateStatus.CONSENSUS
+        and result.reference_operation_id is None
         and result.revision_id == "r1"
         and result.rounds_completed == 1
         and result.final_candidate == _REVISION_ONE
         and persisted is not None
+        and "reference_operation_id" not in persisted
         and persisted["status"] == DebateStatus.CONSENSUS.value
         and persisted["revision_id"] == "r1"
         and inspected["status"] == DebateStatus.CONSENSUS.value

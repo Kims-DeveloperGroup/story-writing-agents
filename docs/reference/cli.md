@@ -2,7 +2,8 @@
 
 > **Availability:** bare `story` and `story chat` open the TTY shell for session
 > and conversation management, persistent settings, advisory/local reads, and
-> focused-context consensus.
+> focused-context consensus. Provider-bound prompt text accepts inline
+> `${path}` and `${path}#Lx-Ly` canonical artifact references.
 
 `story` and `story-writing-agents` are aliases for
 `story_writing_agents.cli:main`.

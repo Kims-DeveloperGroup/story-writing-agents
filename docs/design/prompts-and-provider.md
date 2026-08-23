@@ -2,7 +2,10 @@
 
 > **Availability:** file-referenced definitions, Codex prompt staging, advisory
 > turns with optional bounded retrieval, context-aware debates, and compatible
-> threads are implemented.
+> threads are implemented. `StoryRuntime` now turns inline canonical reference
+> indicators into one repository operation and supplies a fresh authorized
+> coordinator to every addressed provider invocation. `$`/`$$` artifact
+> discovery and viewer-driven attachment remain unavailable.
 
 Key terms: **definition**—stable context for one role; **fingerprint**—its
 hash-derived identity; **binding**—the provider object for a definition;
@@ -73,15 +76,55 @@ memory authorization, and transcript order. Backend holds one provider-thread
 lock across the action loop and calls only the synchronous runtime handler; it
 never receives a search, catalog, transcript, or filesystem collaborator.
 
-The first provider call receives current input and bounded focused context.
-Later calls receive only runtime-authorized observations framed as untrusted
-story data. Exact payloads and action order live in
+On the established `StoryRuntime` path and every no-reference backend call, the
+first provider call receives current input and bounded focused context. Later
+retrieval calls receive only runtime-authorized observations framed as
+untrusted story data. Exact payloads and action order live in
 [Bounded retrieval](../reference/conversation-retrieval.md). Direct Python
-`converse()` and its `ConversationRequest` payload remain one-step and unchanged.
+`converse()` with no reference coordinator and its `ConversationRequest`
+payload remain one-step and unchanged.
 
 Conversation IDs scope visible events, not provider-private history. One
 session-and-agent thread can span subjects and debates. Direct routing chooses
 a responder; it is not a private provider channel.
+
+<a id="explicit-reference-provider-flow"></a>
+
+## Explicit-reference provider flow
+
+An optional referenced invocation adds a two-stage exchange under the same
+provider-thread lock. The prelude receives only fixed instructions, one exact
+operation/invocation correlation, and ordered canonical path/range indicators.
+The repository capability and selected text are absent. The provider must
+return the complete exact `read_writing_artifacts` action before the repository
+coordinator can deliver anything.
+
+The backend then adds the selected strict-UTF-8 text, in request order, only to
+the immediately following substantive payload:
+
+```json
+{
+  "untrusted_writing_artifact_context": [{
+    "reference": {"path": "...", "line_range": null},
+    "content": "..."
+  }]
+}
+```
+
+This field is separate from task, user input, candidate, blackboard, agent
+state, conversation context, retrieval observation, and bound definition. It
+has no instruction authority. Retrieval includes it only on retrieval call one;
+later observation calls do not repeat it. A structurally valid substantive
+result is recorded and revalidated before return. The exact sequence, failure
+rules, and call counts are in the
+[backend reference](../reference/backend-and-sessions.md#referenced-invocation-boundary).
+
+The same `BoundAgent` mechanism applies to the lead orchestrator, plot
+architect, character custodian, and execution specialist. Role instructions
+can explain how to use writing material but are not what enforces the read.
+Provider-private or remote history may retain content after it is received;
+closing local transient carriers is not remote erasure. See
+[Privacy and provider exposure](../operations/privacy-and-provider.md#explicit-reference-data-boundary).
 
 ## Debate context field
 
@@ -103,9 +146,12 @@ JSON reaches standard input. Replies pass schema, correlation, and phase checks.
 The exact sandbox, approval, tool, configuration, and instruction controls live
 in [Privacy and provider exposure](../operations/privacy-and-provider.md).
 
-Debate JSON contains task, input, candidate, blackboard, the receiving agent's
-stored outcomes, and only when included, conversation context. It does not
-repeat role prompts, persona, language directives, or core-document text.
+The ordinary debate JSON contains task, input, candidate, blackboard, the
+receiving agent's stored outcomes, and only when included, conversation
+context. It does not repeat role prompts, persona, language directives, or
+core-document text. A referenced backend call adds only the separate
+`untrusted_writing_artifact_context` field described above to its substantive
+payload; the content-free prelude uses its own payload and schema.
 
 This boundary does not make Codex or its executable trusted. Hashes detect
 change but do not encrypt or authorize content. Provider transcripts may be

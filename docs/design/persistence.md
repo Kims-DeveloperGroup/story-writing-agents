@@ -1,7 +1,10 @@
 # Persistence design
 
 > **Availability:** filesystem persistence covers configuration, sessions,
-> conversations, debates, optional debate-context sidecars, and manuscripts.
+> conversations, debates, optional debate-context sidecars, canonical writing
+> artifacts, and content-free explicit-reference authorization evidence.
+> `StoryRuntime` now creates and finalizes that evidence for inline referenced
+> operations; Python callers can inspect it by operation ID.
 
 Key terms: **blackboard**—public debate JSONL; **sidecar**—context stored apart
 from established debate records; **create-only**—never replaces an existing
@@ -20,6 +23,8 @@ The workspace uses separate inspectable files rather than a database:
 | Retrieval actions, observations, progress, sources | Process/terminal only |
 | Current conversation and agent focus | Controller memory only |
 | Canonical writing artifacts and provenance | `WritingArtifactRepository` |
+| Explicit-reference operation and invocation evidence | `WritingArtifactRepository`; content-free create-only records |
+| Explicit-reference selected content | Transient repository/backend carriers and one immediate provider payload; no workspace evidence field |
 
 <a id="debate-context-sidecar"></a>
 
@@ -83,10 +88,37 @@ Creation occurs after debate reservation and before initiation or provider
 work. The file is strict UTF-8 JSON, identity-bound to its path, rejects
 missing, extra, or duplicate keys, and is never overwritten. A collision raises
 `DebateExistsError`. `Workspace.inspect_debate_context()` and the matching
-runtime methods are read-only; existing debate/session inspection, logs, result
-JSON, and `DebateResult` remain unchanged.
+runtime methods are read-only; this sidecar does not itself change
+debate/session inspection, logs, result JSON, or `DebateResult`. A separate
+referenced run may add its optional content-free operation ID to the result.
 
 ## Durability boundaries
+
+Explicit-reference authorization has a separate durability boundary under
+`writing_artifacts/input_snapshots/`. For each nonempty operation, the
+repository publishes a schema-v1 manifest and `requested` event before reading
+the catalog or artifact content. Later operation and invocation events are
+create-only, canonically encoded records with contiguous sequences and
+contiguous invocation ordinals. A delivery event is durable before selected
+bytes leave the repository boundary. The same repository lease serializes
+these evidence writes with artifact reads and provenance revalidation.
+
+Durable evidence contains schema and operation/invocation identity,
+path/range, provenance, hashes, counts, correlation, states, checkpoints, and
+fixed outcomes—not selected bytes, source/provider text, prompts, or results.
+The private invocation manifest also binds a capability identifier; the
+validated history returned to callers does not expose it. Captured and
+delivered byte tuples are process-local, closeable values. The capability
+object is never serialized or sent to a provider; its identifier remains
+repository-private and is absent from provider payloads and validated history.
+A backend-created read coordinator advances the existing invocation records:
+the exact full provider action precedes `delivered`, a structurally valid
+substantive result precedes `result_received`, and final provenance
+revalidation precedes `accepted`. Selected text, provider payloads, and provider
+results never become evidence fields. A restart can validate history but cannot
+reconstruct or resume transient capabilities. An empty reference batch creates
+neither evidence nor artifact I/O. These records are not part of the canonical
+writing-artifact catalog, completion, or picker namespace.
 
 The blackboard retains input, candidates, audits, proposals, visible errors,
 finalization metadata, and commit record. Result JSON is a projection and omits

@@ -128,7 +128,12 @@ from ..workspace import (
     FilesystemConversationEventStore,
     Workspace,
 )
-from ..writing_artifacts import manuscript_artifact_path
+from ..writing_artifacts import (
+    ArtifactReferenceDirectiveError,
+    ReferenceAuthorizationErrorCode,
+    ReferenceOperationFailure,
+    manuscript_artifact_path,
+)
 from ._conversation_policy import (
     ConversationCatalogProtocolFailure,
     classify_conversation_failure,
@@ -3465,10 +3470,12 @@ class InteractiveController:
         rendered.
         """
 
-        error = classify_consensus_execution_failure(
-            failure,
-            draft_payload_was_empty=draft_payload_was_empty,
-            progress_events=tuple(progress_events),
+        error = self._reference_interactive_error(failure) or (
+            classify_consensus_execution_failure(
+                failure,
+                draft_payload_was_empty=draft_payload_was_empty,
+                progress_events=tuple(progress_events),
+            )
         )
         if error.code is InteractiveErrorCode.INTERNAL_ERROR:
             raise _ControllerAbort(error) from None
@@ -3510,7 +3517,9 @@ class InteractiveController:
         abort, while runtime remains the sole owner of durable turn outcomes.
         """
 
-        error = classify_advisory_turn_failure(failure)
+        error = self._reference_interactive_error(failure) or (
+            classify_advisory_turn_failure(failure)
+        )
         if error.code is InteractiveErrorCode.INTERNAL_ERROR:
             raise _ControllerAbort(error)
         if error.code is InteractiveErrorCode.CONVERSATION_NOT_FOUND:
@@ -3528,6 +3537,29 @@ class InteractiveController:
         }:
             self._confirm_attachment_after_command_failure()
         self._terminal.write_error(error)
+
+    @staticmethod
+    def _reference_interactive_error(
+        failure: Exception,
+    ) -> InteractiveError | None:
+        """Map explicit-reference failures without exposing exception prose."""
+
+        if isinstance(failure, ArtifactReferenceDirectiveError):
+            return InteractiveError(InteractiveErrorCode.COMMAND_INVALID)
+        if not isinstance(failure, ReferenceOperationFailure):
+            return None
+        if failure.code in {
+            ReferenceAuthorizationErrorCode.PROVIDER_FAILURE,
+            ReferenceAuthorizationErrorCode.CAPABILITY_CONSUMED,
+            ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH,
+            ReferenceAuthorizationErrorCode.INVALID_TRANSITION,
+        }:
+            code = InteractiveErrorCode.PROVIDER_PROTOCOL_ERROR
+        elif failure.code is ReferenceAuthorizationErrorCode.CANCELLED:
+            code = InteractiveErrorCode.OPERATION_CANCELLED
+        else:
+            code = InteractiveErrorCode.WORKSPACE_INVALID
+        return InteractiveError(code)
 
     def _write_unavailable_lobby_command_error(self) -> None:
         """Render the stable later-feature error without mutating controller state."""

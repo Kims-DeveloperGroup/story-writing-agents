@@ -24,6 +24,7 @@ from .errors import SessionIdError
 
 
 _SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
+_SAFE_REFERENCE_OPERATION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 _BEGIN_UNTRUSTED_STORY_DATA = "<<<BEGIN_UNTRUSTED_STORY_DATA>>>"
 _END_UNTRUSTED_STORY_DATA = "<<<END_UNTRUSTED_STORY_DATA>>>"
 
@@ -728,6 +729,7 @@ class ConversationRetrievalResult:
     content: str
     context: ConversationContextWindow
     sources: tuple[ConversationRetrievalSource, ...]
+    reference_operation_id: str | None = None
 
     def __post_init__(self) -> None:
         """Validate result identity, context, content, and canonical sources."""
@@ -760,6 +762,13 @@ class ConversationRetrievalResult:
             ),
         )
         _validate_sources(self.sources, session_id=self.session_id)
+        if self.reference_operation_id is not None and (
+            type(self.reference_operation_id) is not str
+            or _SAFE_REFERENCE_OPERATION_ID.fullmatch(
+                self.reference_operation_id
+            ) is None
+        ):
+            raise ValueError("reference operation ID is invalid")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

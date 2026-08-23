@@ -19,6 +19,7 @@ StoryRuntime.set_runtime_overrides(session_id: str, overrides: Mapping[str, Any]
 StoryRuntime.inspect_session(session_id: str) -> dict[str, Any]
 StoryRuntime.inspect_debate(session_id: str, debate_id: str) -> dict[str, Any]
 StoryRuntime.inspect_debate_context(session_id: str, debate_id: str) -> dict[str, Any] | None
+StoryRuntime.inspect_reference_operation(operation_id: str) -> ReferenceOperationHistory | None
 await StoryRuntime.converse(session_id: str, conversation_id: str,
                             agent_id: str, text: str) -> ConversationResult
 await StoryRuntime.converse_with_retrieval(session_id, conversation_id, agent_id, text, *, memory_service, progress_sink=None) -> ConversationRetrievalResult
@@ -37,7 +38,9 @@ await StoryRuntime.run_draft(session_id: str, draft: str, *,
 `RuntimeSession` binds the session ID. Its `run_prompt()` and `run_draft()` share
 the required `output_path`, other options, and result type; it also exposes
 both conversation methods, `inspect_debate()`, and `inspect_debate_context()`.
-`Runtime` and `Session` are exact aliases.
+`RuntimeSession` also exposes session-scoped
+`inspect_reference_operation(operation_id)`: an operation ID from another
+session raises `ValueError`. `Runtime` and `Session` are exact aliases.
 
 Binding resource management is internal and adds no API. For each canonical
 agent, the runtime keeps at most one current binding at quiescence. Concurrent
@@ -125,23 +128,43 @@ DebateResult(session_id: str, debate_id: str, input_kind: InputKind,
              status: DebateStatus, revision_id: str | None, rounds_completed: int,
              final_candidate: str | None, latest_candidate: str | None, manuscript_path: str | None,
              core_updates: tuple[str, ...] = (), messages: tuple[DebateMessage, ...] = (),
-             error: str | None = None, action_required: str | None = None)
+             error: str | None = None, action_required: str | None = None,
+             reference_operation_id: str | None = None)
 ConversationResult(session_id: str, conversation_id: str, turn_id: str,
                    agent_id: str, content: str,
-                   context: ConversationContextWindow)
+                   context: ConversationContextWindow,
+                   reference_operation_id: str | None = None)
 ConversationRetrievalResult(*, session_id: str, conversation_id: str,
     turn_id: str, agent_id: str, content: str,
-    context: ConversationContextWindow, sources: tuple[ConversationRetrievalSource, ...])
+    context: ConversationContextWindow, sources: tuple[ConversationRetrievalSource, ...],
+    reference_operation_id: str | None = None)
 ```
 
 Validation, observer errors, cancellation, and uncertain persistence raise.
-Expected debate failures normally return a terminal `failed`
-result. `DebateResult`, its JSON, context-omitted calls, and CLI exits retain
-their documented shapes. The run signature has only the required canonical
-`output_path` contract.
+Expected debate failures normally return a terminal `failed` result.
+`DebateResult` adds only the optional reference operation ID; its JSON omits
+that key without references. Context-omitted behavior and CLI exits remain
+unchanged. The run signature has only the required canonical `output_path`
+contract.
 
-`converse()` remains one provider call with one user and reply/error pair.
+With no inline references, result IDs remain `None` and provider call counts
+and payloads are unchanged. A referenced operation returns its content-free
+`reference_operation_id` only after final revalidation and acceptance; debate
+JSON omits the field when it is `None`. `ReferenceOperationFailure`, exported
+from `story_writing_agents.writing_artifacts`, carries the ID and a fixed code
+when a referenced operation fails.
+
+`converse()` remains one substantive provider call with one user and
+reply/error pair; a referenced turn first adds one content-free read prelude.
 `converse_with_retrieval()` requires an exact same-session memory service and
 optional synchronous sink. Its actions, sources, locking, and durability are in
 [Bounded conversation retrieval](conversation-retrieval.md). Debate context
 never appends or modifies a transcript.
+
+Inline `${path}` and `${path}#Lx-Ly` indicators are supported by all four
+provider-bound entry points above. The runtime preserves the exact source text
+in conversation/debate history, uses the parser's escaped-dollar projection for
+provider user text, captures the ordered canonical selections once, and gives
+each addressed role/phase its own coordinator. See the
+[artifact-reference guide](../guides/artifact-references.md) for syntax,
+call counts, state meanings, and recovery.

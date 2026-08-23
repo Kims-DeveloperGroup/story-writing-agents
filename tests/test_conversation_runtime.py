@@ -383,7 +383,7 @@ class _ConversationRuntimeCase(unittest.IsolatedAsyncioTestCase):
 
 
 class ConversationResultContractTests(unittest.TestCase):
-    def test_exact_frozen_slotted_no_default_result(self) -> None:
+    def test_exact_frozen_slotted_result_with_optional_reference_identity(self) -> None:
         result = ConversationResult(
             "session_a",
             "conversation_a",
@@ -403,13 +403,16 @@ class ConversationResultContractTests(unittest.TestCase):
                 "agent_id",
                 "content",
                 "context",
+                "reference_operation_id",
             ),
         )
-        self.assertTrue(
-            all(
-                field.default is MISSING and field.default_factory is MISSING
+        self.assertEqual(
+            tuple(
+                (field.name, field.default)
                 for field in result_fields
-            )
+                if field.default is not MISSING
+            ),
+            (("reference_operation_id", None),),
         )
         self.assertFalse(hasattr(result, "__dict__"))
         with self.assertRaises(FrozenInstanceError):

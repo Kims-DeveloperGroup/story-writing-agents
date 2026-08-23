@@ -78,12 +78,14 @@ of `RuntimeSession`. They do not provide different behavior.
 
 Canonical artifact value contracts live in
 `story_writing_agents.writing_artifacts`, but are intentionally absent from the
-120-name package-root facade. The subpackage exposes immutable path, catalog,
-kind, and reference values; filesystem-backed `WritingArtifactRepository` is an
-internal runtime collaborator imported from
-`story_writing_agents.writing_artifacts.repository`. This module boundary does
-not provide standalone artifact commands or the not-yet-implemented file-
-reference UI. See [Canonical writing artifacts](writing-artifacts.md).
+120-name package-root facade. In addition to immutable path, catalog, kind, and
+reference values, the subpackage exports content-free authorization, operation
+history/state, read-request/action, `ReferenceOperationFailure`, and parser
+contracts. Filesystem-backed `WritingArtifactRepository`, content-bearing read
+results, private capabilities, and runtime coordinators remain internal. This
+boundary supports inline runtime references but no standalone artifact command
+or `$`/`$$` file-reference UI. See
+[Canonical writing artifacts](writing-artifacts.md).
 
 ## Enum values
 

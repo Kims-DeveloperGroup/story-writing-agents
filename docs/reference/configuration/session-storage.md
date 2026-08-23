@@ -32,6 +32,10 @@ workspace/
 │   │       ├── staging/.artifacts-*.held                       [retained prior bytes]
 │   │       ├── staging/.artifacts-*.retired                    [retained failed publication]
 │   │       ├── staging/.artifacts-*.completed                  [retained completed journal]
+│   │       ├── input_snapshots/<operation_id>/manifest.json    [reference request; schema v1]
+│   │       ├── input_snapshots/<operation_id>/operation_events/<sequence>.json
+│   │       ├── input_snapshots/<operation_id>/invocations/<invocation_id>/manifest.json
+│   │       ├── input_snapshots/<operation_id>/invocations/<invocation_id>/events/<sequence>.json
 │   │       ├── .artifacts.lock                                 [permanent readiness triple]
 │   │       ├── .artifacts.lock.anchor                          [same lock inode]
 │   │       ├── .artifacts.lock.ready                           [same lock inode; ready marker]
@@ -57,6 +61,24 @@ under `transactions/` are recovery journals. The three permanent lock names are
 hard links to one regular inode with link count three; partial or old two-link
 state is invalid and is not migrated or reconstructed. See
 [Canonical writing artifacts](../writing-artifacts.md).
+
+`input_snapshots/` is lazy, internal authorization evidence for nonempty
+explicit-reference operations. Its operation and invocation manifests and
+events are create-only, canonical strict-UTF-8 schema-v1 JSON. Event filenames
+are zero-padded contiguous sequence numbers; invocation ordinals are also
+contiguous. Records contain schema and operation/invocation identity,
+path/range indicators, provenance, hashes, counts, correlation, states,
+checkpoints, and fixed outcomes. A private invocation manifest also binds its
+capability identifier, which validated caller history does not expose.
+Selected bytes, source/provider text, prompts, and results are never stored
+there.
+
+The directory is excluded from the canonical artifact catalog, completion, and
+picker namespaces. Do not hand-edit it. A missing operation directory means no
+history; a present partial or invalid tree is corrupt and fails closed for that
+operation. See
+[Recovery](../../operations/recovery-and-limitations.md#explicit-reference-evidence-recovery)
+and [Canonical writing artifacts](../writing-artifacts.md#authorized-reads-and-lifecycle-evidence).
 
 ## Default records
 

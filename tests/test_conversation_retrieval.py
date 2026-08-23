@@ -436,8 +436,8 @@ class ConversationRetrievalContractTests(unittest.TestCase):
             ), ()),
             (ConversationRetrievalResult, result, (
                 "session_id", "conversation_id", "turn_id", "agent_id",
-                "content", "context", "sources",
-            ), ()),
+                "content", "context", "sources", "reference_operation_id",
+            ), (("reference_operation_id", None),)),
             (ConversationRetrievalProgressEvent, progress, (
                 "session_id", "conversation_id", "turn_id", "agent_id",
                 "action_index", "phase", "search_hit_count",
