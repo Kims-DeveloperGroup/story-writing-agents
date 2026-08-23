@@ -2362,7 +2362,7 @@ def _consume_escape_character(
     state.escape_sequence = sequence
     if ord(character) < 0x20 or character == "\x7f":
         state.escape_sequence = None
-        return None, True
+        return None, False
 
     if "@" <= character <= "~":
         state.escape_sequence = None
