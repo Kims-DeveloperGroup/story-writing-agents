@@ -85,9 +85,11 @@ The backend performs no automatic retry. Cancellation, provider or workflow
 failure, drift, and invalid action/correlation terminate the same one-use
 coordinator with a content-free outcome. After provider state has advanced,
 the compatible thread is tainted where required so a later call cannot assume
-clean continuation. An explicit retry or replacement needs a fresh correlation,
-coordinator, and capability; #190 will own top-level operation propagation,
-ordinals, attempts, and replacement policy.
+clean continuation. An explicit retry or replacement needs a new top-level
+operation with a fresh capture, correlation, coordinator, capability, and
+ordinal sequence. `StoryRuntime` owns those values and allocates each
+invocation with attempt `1`; another agent, phase, replacement, or operation
+cannot reuse prior evidence.
 
 Construction first validates the complete five-key
 `config/system_defaults.json` object and the complete roster in

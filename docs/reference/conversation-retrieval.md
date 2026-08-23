@@ -1,9 +1,9 @@
 # Bounded conversation retrieval
 
 > **Availability:** focused shell conversations use bounded retrieval. Python
-> callers opt in; `converse()` remains one-step. The internal/Python
-> `BoundAgent` seam accepts an optional explicit-reference coordinator, but
-> `StoryRuntime` and the shell do not pass user references to it yet.
+> callers opt in; `converse()` remains one-step. Inline canonical references in
+> either form are captured by `StoryRuntime` and enforced through the optional
+> `BoundAgent` reference coordinator before the unchanged retrieval loop.
 
 Key terms: **retrieval turn**—one message, action loop, and answer; **action**—a
 correlated provider request; **observation**—authorized untrusted story data;
@@ -163,6 +163,7 @@ For a referenced backend call, any prelude, provider, handler, protocol,
 acceptance, or cancellation failure also terminates the one-use reference
 coordinator. Once the provider sequence has advanced, reference handling
 best-effort taints the compatible thread without replacing the primary failure.
-There is no automatic retry; a caller-directed retry needs a fresh correlation,
-coordinator, and capability. Top-level retry/attempt propagation belongs to
-#190 rather than the retrieval loop.
+There is no automatic retry; a caller-directed retry starts a new top-level
+operation with a fresh capture, correlation, coordinator, capability, and
+ordinal sequence. Retrieval action indices restart independently at `1`; they
+are never used as reference invocation ordinals.

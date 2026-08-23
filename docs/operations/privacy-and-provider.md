@@ -2,10 +2,11 @@
 
 > **Availability:** these controls cover local reads, advisory turns, and
 > retrieval-enabled turns, management commands, focused-context consensus, and
-> Python/internal explicit-reference authorization and backend enforcement.
+> runtime explicit-reference authorization and backend enforcement.
 > They do not make Codex, its executable, workspace, or terminal trusted.
-> `StoryRuntime` and the installed shell still do not attach user references or
-> expose `$`/`$$`, picker, viewer, or reference-specific diagnostic behavior.
+> Inline canonical references in provider-bound prompt text are active.
+> `$`/`$$`, picker, viewer attachment, and reference-specific shell diagnostics
+> remain unavailable.
 
 Key terms: **plaintext**—unencrypted content; **visible context**—events sent in
 a request; **provider-private history**—vendor thread state; **diagnostic**—
@@ -84,9 +85,9 @@ Baseline core context cannot satisfy explicit-reference evidence.
 Closing local authorization, delivery, and result carriers drops their Python
 references but offers neither secure memory erasure nor provider erasure. Once
 the substantive request is sent, provider-private or remote systems may retain
-its context under their own policy. `StoryRuntime` does not construct this
-backend path yet, and #164 must still connect references to the shell. Until
-#190 and #164 land, `${...}`, `$`, and `$$` are not operational user commands.
+its context under their own policy. `StoryRuntime` now constructs this path
+from inline `${...}` indicators. #164 must still connect `$`/`$$` discovery,
+viewer selection, and composer attachment to it.
 
 ## Provider disclosure
 

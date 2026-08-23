@@ -2,6 +2,8 @@
 
 > **Availability:** prompt and complete-draft debates are available through the
 > noninteractive CLI, focused-conversation TTY shell, and `StoryRuntime`.
+> Inline canonical references are enforced independently for every
+> participating agent and debate phase.
 
 Key terms: **prompt**—instructions used to create revision `r0`; **draft**—a
 supplied complete `r0`; **context mode**—whether focused transcript events are
@@ -75,9 +77,18 @@ the initial candidate; after unanimous approval the lead may return full-text
 updates for only the four core documents. Every successful commit still creates
 exactly one manuscript at the requested path. Advisory turns do not write.
 
-The noninteractive command prints the unchanged `DebateResult` JSON and exits
-`0` for consensus, `3` for deadlock, or `4` for failed. The shell instead shows
-safe typed progress and returns to its prompt after expected terminal outcomes.
+Put `${path}` or `${path}#Lx-Ly` indicators directly in prompt text to make
+each debate invocation read the complete ordered batch. A one-revision
+conflict flow can perform 11 independent read preludes across drafting, audits,
+revision proposals, synthesis, and finalization. See
+[Canonical artifact references](artifact-references.md) for a concrete
+part-scoped modification scenario and failure semantics.
+
+The noninteractive command prints `DebateResult` JSON and exits `0` for
+consensus, `3` for deadlock, or `4` for failed. A referenced result adds its
+content-free `reference_operation_id`; a no-reference result omits that key.
+The shell instead shows safe typed progress and returns to its prompt after
+expected terminal outcomes.
 
 Use [Consensus workflow](../design/consensus-workflow.md) for sequencing,
 [CLI reference](../reference/cli.md) for exact grammar and exits, and

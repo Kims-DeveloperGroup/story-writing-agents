@@ -2,9 +2,10 @@
 
 > **Availability:** file-referenced definitions, Codex prompt staging, advisory
 > turns with optional bounded retrieval, context-aware debates, and compatible
-> threads are implemented. Internal/Python callers may also supply the backend
-> with one repository-authorized explicit-reference coordinator. `StoryRuntime`
-> and the installed shell do not propagate user reference directives yet.
+> threads are implemented. `StoryRuntime` now turns inline canonical reference
+> indicators into one repository operation and supplies a fresh authorized
+> coordinator to every addressed provider invocation. `$`/`$$` artifact
+> discovery and viewer-driven attachment remain unavailable.
 
 Key terms: **definition**—stable context for one role; **fingerprint**—its
 hash-derived identity; **binding**—the provider object for a definition;

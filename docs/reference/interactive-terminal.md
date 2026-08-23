@@ -786,7 +786,8 @@ parser, provider, runtime, filesystem, storage, or network state.
 > for exact caller-supplied text. Users cannot invoke it from the installed
 > shell yet. It does not discover or securely read artifacts, recognize `$` or
 > `$$` syntax, construct references, preserve a composer, or send anything to
-> an agent. Those responsibilities remain with #163 and #164.
+> an agent. The runtime now enforces inline references; #164 still owns
+> viewer-driven discovery, attachment, and composer restoration.
 
 Each call accepts one exact `str`, a nonblank one-logical-line display name,
 and an optional one-based initial line. Before inspecting a stream, observing

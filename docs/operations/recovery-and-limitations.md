@@ -2,8 +2,8 @@
 
 > **Available:** guarded access recovery, shell workflows, and process-level
 > POSIX PTY verification, including the package-internal ranged viewer.
-> Automatic retry, destructive cleanup, event repair, installed-shell artifact
-> reference syntax, and Windows console emulation are not available.
+> Automatic retry, destructive cleanup, event repair, `$`/`$$` artifact
+> discovery and selection, and Windows console emulation are not available.
 
 Key terms: **fail closed** means preserve uncertain state; **taint** means stop
 continuing incomplete provider history; **external backup** is outside the workspace.
@@ -159,12 +159,12 @@ The repository persists content-free reference-operation and invocation
 history, while local authorization capabilities and selected-byte carriers
 remain transient. A provider may retain content after receipt as described in
 [Privacy and provider exposure](privacy-and-provider.md#explicit-reference-data-boundary).
-The #189 backend can drive an invocation through its exact provider action,
-delivery, result receipt, revalidation, and acceptance. It does not finalize
-the top-level `StoryRuntime` operation. After process loss, history can be
-inspected but an interrupted authorization cannot be resumed or used to
-reconstruct content. Start a new operation with a new ID after correcting any
-source problem.
+The backend drives each invocation through its exact provider action, delivery,
+result receipt, revalidation, and acceptance. `StoryRuntime` finishes the
+top-level operation only after every invocation is terminal and final
+revalidation passes. After process loss, history can be inspected but an
+interrupted authorization cannot be resumed or used to reconstruct content.
+Start a new operation with a new ID after correcting any source problem.
 
 `inspect_reference_operation()` distinguishes absence from corruption. It
 returns no history only when the named operation directory is absent. If any
@@ -179,14 +179,15 @@ healthy reference history, the writing-artifact catalog, exact artifact reads,
 or artifact commits unusable. Repository-root, lock, storage, catalog, or
 global provenance failures still retain their broader fail-closed effects. A
 new reference operation may use a new ID once the underlying artifact is safe
-and eligible; the corrupt evidence remains unchanged.
+and eligible; the corrupt evidence remains unchanged. A session-bound caller
+can inspect only IDs belonging to its session.
 
 Fixed terminal outcomes distinguish cancellation, provider/workflow failure,
 drift, invalid content/range/limits, correlation/capability failure, and corrupt
 evidence without storing content in the diagnostic. A `terminated` operation
-or invocation is final. A failed invocation retry requires a fresh one-use
-capability over the same still-open capture, while a closed or process-lost
-capture requires a new operation.
+or invocation is final. A failed runtime invocation terminates its top-level
+operation. An explicit retry therefore uses a new operation, capture, ordinal
+sequence, coordinator, and one-use capability.
 
 The backend does not retry automatically. An explicit retry or replacement
 needs a fresh invocation ID, ordinal/attempt correlation, private coordinator,
@@ -197,11 +198,12 @@ content-free outcome. Once the provider sequence advances, the backend
 best-effort taints the compatible thread where required so later work cannot
 assume a clean continuation. The original failure remains primary.
 
-This remains a Python/internal recovery boundary. `StoryRuntime` and the
-installed `${...}`, `$`, and `$$` interaction do not create, finalize, or expose
-these states. #190 owns top-level operation capture, per-invocation ordinals,
-attempts, retries, replacements, and diagnostics; #164 owns shell attachment
-and selection behavior.
+Inline `${...}` input now creates and finalizes these states. Successful
+conversation, retrieval, and debate results carry an optional operation ID;
+`StoryRuntime` and `RuntimeSession` expose content-free inspection. The shell
+maps failures to existing safe error categories rather than displaying this
+history. #164 still owns `$`/`$$` discovery, viewer selection, composer
+attachment, and reference-specific shell diagnostics.
 
 ## Controller cancellation proof
 
@@ -252,9 +254,10 @@ different mode.
 
 The viewer is an unlisted package-internal supplied-text component. Users
 cannot invoke it from the shell in this delivery. `$`, `$${file}`, `$$`,
-artifact listing and secure reads, path/range reference construction, exact
-origin-composer restoration, ordered multi-reference composition, and
-mandatory per-agent reads remain unavailable until #163 and #164.
+artifact listing through the composer, viewer-driven reference construction,
+and exact originating-composer restoration remain unavailable until #164.
+Inline ordered path/range indicators and mandatory per-agent reads are active
+without the viewer.
 
 Invalid source type, display metadata, strict UTF-8, private 8 MiB source
 capacity, more than 65,536 LF-derived logical lines, a complete sanitized
@@ -352,11 +355,11 @@ work; the newest desired definition is selected instead.
 - Advisory input is one line; `/run --output PART/PATH.md` without prompt text
   owns multiline composition. Bare `/run` first prompts for the output.
 - Conversation search is active-only; transcript reads retain no cursor.
-- Parsing, repository authorization/evidence, and optional provider-enforced
-  `BoundAgent` reads exist for Python/internal consumers. Standalone
-  compose/artifact commands, top-level `StoryRuntime` reference propagation,
-  artifact-reference UI, and reference-specific user diagnostics remain
-  unavailable. The supplied-text viewer remains an independent
+- Parsing, repository authorization/evidence, top-level `StoryRuntime`
+  propagation, and provider-enforced reads are active for inline canonical
+  references. Standalone compose/artifact commands, `$`/`$$` discovery and
+  selection UI, and reference-specific shell diagnostics remain unavailable.
+  The supplied-text viewer remains an independent
   package-internal terminal component: it receives caller-supplied text but
   discovers no artifact and attaches no reference.
 

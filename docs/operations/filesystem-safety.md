@@ -4,8 +4,9 @@
 > writing-artifact publication and recovery, exclusive conversation creation,
 > serialized transcript replacement, atomic per-file default/metadata
 > replacement, guarded interactive settings persistence, and content-free
-> explicit-reference authorization evidence are implemented. Provider, agent,
-> and shell reference integration is not.
+> explicit-reference authorization evidence and inline runtime/provider
+> enforcement are implemented. `$`/`$$` discovery and viewer attachment are
+> not.
 
 Key terms: **containment**—keeping paths beneath the workspace root; **symlink**—
 a filesystem alias the runtime rejects; **exclusive creation**—failure instead

@@ -107,8 +107,19 @@ from .session_lifecycle import (
     provider_work_is_ready,
 )
 from .workspace import FilesystemConversationEventStore, Workspace
-from .writing_artifacts import manuscript_artifact_path
+from .writing_artifacts import (
+    ReferenceAuthorizationError,
+    ReferenceAuthorizationErrorCode,
+    ReferenceOperationFailure,
+    ReferenceOperationHistory,
+    manuscript_artifact_path,
+)
 from .writing_artifacts.repository import WritingArtifactRepository
+from .writing_artifacts.runtime_references import (
+    RuntimeReferenceOperation,
+    prepare_runtime_reference_operation,
+    reference_operation_belongs_to_session,
+)
 
 
 class _ProgressEmitter:
@@ -1126,6 +1137,14 @@ class StoryRuntime:
 
         return self.workspace.inspect_debate_context(session_id, debate_id)
 
+    def inspect_reference_operation(
+        self,
+        operation_id: str,
+    ) -> ReferenceOperationHistory | None:
+        """Return validated content-free read history for one operation."""
+
+        return self.artifacts.inspect_reference_operation(operation_id)
+
     async def converse(
         self,
         session_id: str,
@@ -1160,27 +1179,51 @@ class StoryRuntime:
             turn_id = self._new_conversation_turn_id()
             context = read_context(session, conversation)
             self._reject_async_result(context, operation="read_context")
+            reference_operation = prepare_runtime_reference_operation(
+                self.artifacts,
+                session_id=session,
+                text=content,
+            )
             try:
                 request = ConversationRequest(
                     session_id=session,
                     conversation_id=conversation,
                     turn_id=turn_id,
                     agent_id=agent,
-                    content=content,
+                    content=reference_operation.provider_text,
                     context=context,
                 )
             except Exception as exc:
-                raise BackendProtocolError(
+                failure = BackendProtocolError(
                     "conversation event store read_context() returned "
                     "an invalid context"
-                ) from exc
+                )
+                reference_failure = reference_operation.failure(failure)
+                if reference_failure is not None:
+                    raise reference_failure from exc
+                raise failure from exc
 
-            self._acquire_ready_session_access(session)
-            definition = self.prompts.build_definition(
-                session_id=session,
+            reference_read = reference_operation.begin_invocation(
                 agent_id=agent,
+                phase="conversation",
+                round_number=None,
             )
-            bound_agent = await self._acquire_bound_agent(definition)
+            try:
+                self._acquire_ready_session_access(session)
+                definition = self.prompts.build_definition(
+                    session_id=session,
+                    agent_id=agent,
+                )
+                bound_agent = await self._acquire_bound_agent(definition)
+            except BaseException as exc:
+                reference_operation.terminate_invocation(
+                    reference_read,
+                    self._reference_failure_code(exc),
+                )
+                reference_failure = reference_operation.failure(exc)
+                if reference_failure is not None:
+                    raise reference_failure from exc
+                raise
             try:
                 bound_converse = getattr(bound_agent, "converse", None)
                 if bound_converse is None or not callable(bound_converse):
@@ -1200,16 +1243,29 @@ class StoryRuntime:
                     sender="user",
                     recipient=agent,
                     kind=ConversationEventKind.USER_MESSAGE,
-                    content=content,
+                    content=reference_operation.source_text,
                 )
                 self._append_conversation_event(append, user_event)
-            except BaseException:
+            except BaseException as exc:
                 await self._release_bound_agent_use(bound_agent)
+                reference_operation.terminate_invocation(
+                    reference_read,
+                    self._reference_failure_code(exc),
+                )
+                reference_failure = reference_operation.failure(exc)
+                if reference_failure is not None:
+                    raise reference_failure from exc
                 raise
 
             try:
                 try:
-                    raw_reply = await bound_converse(request)
+                    if reference_read is None:
+                        raw_reply = await bound_converse(request)
+                    else:
+                        raw_reply = await bound_converse(
+                            request,
+                            reference_read=reference_read,
+                        )
                 finally:
                     await self._release_bound_agent_use(bound_agent)
                 reply = self._validated_conversation_reply(raw_reply, request)
@@ -1229,8 +1285,11 @@ class StoryRuntime:
                     agent_id=agent,
                     content=reply.content,
                     context=request.context,
+                    reference_operation_id=reference_operation.operation_id,
                 )
-            except asyncio.CancelledError:
+                reference_operation.finish()
+            except asyncio.CancelledError as cancellation_error:
+                reference_failure = reference_operation.failure(cancellation_error)
                 cancellation = ConversationEventAppend(
                     session_id=session,
                     conversation_id=conversation,
@@ -1244,8 +1303,15 @@ class StoryRuntime:
                     self._append_conversation_event(append, cancellation)
                 except BaseException:
                     pass
+                if reference_failure is not None:
+                    raise cancellation_error from reference_failure
                 raise
             except Exception as exc:
+                reference_failure = reference_operation.failure(
+                    exc,
+                    default=ReferenceAuthorizationErrorCode.PROVIDER_FAILURE,
+                )
+                visible_failure = reference_failure or exc
                 failure = ConversationEventAppend(
                     session_id=session,
                     conversation_id=conversation,
@@ -1253,15 +1319,29 @@ class StoryRuntime:
                     sender="runtime",
                     recipient="user",
                     kind=ConversationEventKind.RUNTIME_ERROR,
-                    content=self._conversation_error_text(exc, request),
+                    content=self._conversation_error_text(
+                        visible_failure,
+                        request,
+                        sensitive_values=(reference_operation.source_text,),
+                    ),
                 )
                 try:
                     self._append_conversation_event(append, failure)
                 except Exception as persistence_exc:
+                    if reference_failure is not None:
+                        raise reference_failure from persistence_exc
                     raise persistence_exc from exc
+                if reference_failure is not None:
+                    raise reference_failure from exc
                 raise
 
-            self._append_conversation_event(append, reply_event)
+            try:
+                self._append_conversation_event(append, reply_event)
+            except Exception as exc:
+                reference_failure = reference_operation.failure(exc)
+                if reference_failure is not None:
+                    raise reference_failure from exc
+                raise
             return result
 
     async def converse_with_retrieval(
@@ -1319,27 +1399,51 @@ class StoryRuntime:
             turn_id = self._new_conversation_turn_id()
             context = read_context(session, conversation)
             self._reject_async_result(context, operation="read_context")
+            reference_operation = prepare_runtime_reference_operation(
+                self.artifacts,
+                session_id=session,
+                text=content,
+            )
             try:
                 request = ConversationRetrievalRequest(
                     session_id=session,
                     conversation_id=conversation,
                     turn_id=turn_id,
                     agent_id=agent,
-                    content=content,
+                    content=reference_operation.provider_text,
                     context=context,
                 )
             except Exception as exc:
-                raise BackendProtocolError(
+                failure = BackendProtocolError(
                     "conversation event store read_context() returned "
                     "an invalid context"
-                ) from exc
+                )
+                reference_failure = reference_operation.failure(failure)
+                if reference_failure is not None:
+                    raise reference_failure from exc
+                raise failure from exc
 
-            self._acquire_ready_session_access(session)
-            definition = self.prompts.build_definition(
-                session_id=session,
+            reference_read = reference_operation.begin_invocation(
                 agent_id=agent,
+                phase="conversation_retrieval",
+                round_number=None,
             )
-            bound_agent = await self._acquire_bound_agent(definition)
+            try:
+                self._acquire_ready_session_access(session)
+                definition = self.prompts.build_definition(
+                    session_id=session,
+                    agent_id=agent,
+                )
+                bound_agent = await self._acquire_bound_agent(definition)
+            except BaseException as exc:
+                reference_operation.terminate_invocation(
+                    reference_read,
+                    self._reference_failure_code(exc),
+                )
+                reference_failure = reference_operation.failure(exc)
+                if reference_failure is not None:
+                    raise reference_failure from exc
+                raise
             try:
                 bound_converse = getattr(
                     bound_agent,
@@ -1371,16 +1475,30 @@ class StoryRuntime:
                     sender="user",
                     recipient=agent,
                     kind=ConversationEventKind.USER_MESSAGE,
-                    content=content,
+                    content=reference_operation.source_text,
                 )
                 self._append_conversation_event(append, user_event)
-            except BaseException:
+            except BaseException as exc:
                 await self._release_bound_agent_use(bound_agent)
+                reference_operation.terminate_invocation(
+                    reference_read,
+                    self._reference_failure_code(exc),
+                )
+                reference_failure = reference_operation.failure(exc)
+                if reference_failure is not None:
+                    raise reference_failure from exc
                 raise
 
             try:
                 try:
-                    raw_reply = await bound_converse(request, handler)
+                    if reference_read is None:
+                        raw_reply = await bound_converse(request, handler)
+                    else:
+                        raw_reply = await bound_converse(
+                            request,
+                            handler,
+                            reference_read=reference_read,
+                        )
                 finally:
                     await self._release_bound_agent_use(bound_agent)
                 reply = handler.validate_returned_reply(raw_reply)
@@ -1401,8 +1519,11 @@ class StoryRuntime:
                     content=reply.content,
                     context=request.context,
                     sources=reply.sources,
+                    reference_operation_id=reference_operation.operation_id,
                 )
-            except asyncio.CancelledError:
+                reference_operation.finish()
+            except asyncio.CancelledError as cancellation_error:
+                reference_failure = reference_operation.failure(cancellation_error)
                 cancellation = ConversationEventAppend(
                     session_id=session,
                     conversation_id=conversation,
@@ -1416,8 +1537,15 @@ class StoryRuntime:
                     self._append_conversation_event(append, cancellation)
                 except BaseException:
                     pass
+                if reference_failure is not None:
+                    raise cancellation_error from reference_failure
                 raise
             except Exception as exc:
+                reference_failure = reference_operation.failure(
+                    exc,
+                    default=ReferenceAuthorizationErrorCode.PROVIDER_FAILURE,
+                )
+                visible_failure = reference_failure or exc
                 failure = ConversationEventAppend(
                     session_id=session,
                     conversation_id=conversation,
@@ -1426,18 +1554,31 @@ class StoryRuntime:
                     recipient="user",
                     kind=ConversationEventKind.RUNTIME_ERROR,
                     content=self._conversation_error_text(
-                        exc,
+                        visible_failure,
                         request,
-                        sensitive_values=tuple(diagnostic_values),
+                        sensitive_values=(
+                            reference_operation.source_text,
+                            *diagnostic_values,
+                        ),
                     ),
                 )
                 try:
                     self._append_conversation_event(append, failure)
                 except Exception as persistence_exc:
+                    if reference_failure is not None:
+                        raise reference_failure from persistence_exc
                     raise persistence_exc from exc
+                if reference_failure is not None:
+                    raise reference_failure from exc
                 raise
 
-            self._append_conversation_event(append, reply_event)
+            try:
+                self._append_conversation_event(append, reply_event)
+            except Exception as exc:
+                reference_failure = reference_operation.failure(exc)
+                if reference_failure is not None:
+                    raise reference_failure from exc
+                raise
             return result
 
     async def run_prompt(
@@ -1558,8 +1699,6 @@ class StoryRuntime:
         )
         progress = _ProgressEmitter(self._validate_progress_sink(progress_sink))
 
-        self._acquire_ready_session_access(session)
-
         context_snapshot: ConversationContextWindow | None = None
         if (
             context_request is not None
@@ -1587,13 +1726,33 @@ class StoryRuntime:
                 conversation_id=context_request.conversation_id,
             )
 
-        reservation_token = uuid.uuid4().hex
-        self.workspace.reserve_debate(
-            session,
-            debate,
-            input_kind=input_kind.value,
-            owner_token=reservation_token,
+        reference_operation = prepare_runtime_reference_operation(
+            self.artifacts,
+            session_id=session,
+            text=payload,
         )
+
+        try:
+            self._acquire_ready_session_access(session)
+        except BaseException as exc:
+            reference_failure = reference_operation.failure(exc)
+            if reference_failure is not None:
+                raise reference_failure from exc
+            raise
+
+        reservation_token = uuid.uuid4().hex
+        try:
+            self.workspace.reserve_debate(
+                session,
+                debate,
+                input_kind=input_kind.value,
+                owner_token=reservation_token,
+            )
+        except BaseException as exc:
+            reference_failure = reference_operation.failure(exc)
+            if reference_failure is not None:
+                raise reference_failure from exc
+            raise
         if context_request is not None:
             try:
                 self.workspace.save_debate_context(
@@ -1617,12 +1776,16 @@ class StoryRuntime:
                     )
                 except Exception:
                     pass
+                reference_failure = reference_operation.failure(exc)
+                if reference_failure is not None:
+                    raise reference_failure from exc
                 raise
         execution = asyncio.create_task(
             self._run_reserved(
                 session=session,
                 debate=debate,
-                payload=payload,
+                source_payload=reference_operation.source_text,
+                provider_payload=reference_operation.provider_text,
                 input_kind=input_kind,
                 output_path=output_path,
                 round_limit=round_limit,
@@ -1632,6 +1795,7 @@ class StoryRuntime:
                     None if context_request is None else context_request.mode
                 ),
                 progress=progress,
+                reference_operation=reference_operation,
             ),
             name=f"debate:{session}:{debate}",
         )
@@ -1671,8 +1835,11 @@ class StoryRuntime:
                     )
                 except ProgressObserverError as observer_error:
                     raise cancellation from observer_error
+            reference_failure = reference_operation.failure(cancellation)
+            if reference_failure is not None:
+                raise cancellation from reference_failure
             raise
-        except ProgressObserverError:
+        except ProgressObserverError as exc:
             if not progress.terminal_durable:
                 try:
                     self.workspace.transition_debate(
@@ -1687,8 +1854,13 @@ class StoryRuntime:
                     )
                 except Exception:
                     pass
+            reference_failure = reference_operation.failure(exc)
+            if reference_failure is not None:
+                raise reference_failure from exc
             raise
         except Exception as exc:
+            reference_failure = reference_operation.failure(exc)
+            visible_failure = reference_failure or exc
             try:
                 self.workspace.transition_debate(
                     session,
@@ -1698,10 +1870,12 @@ class StoryRuntime:
                     terminal=True,
                     revision_id=None,
                     rounds_completed=0,
-                    error=self._error_text(exc),
+                    error=self._error_text(visible_failure),
                 )
             except Exception:
                 pass
+            if reference_failure is not None:
+                raise reference_failure from exc
             raise
 
     async def _run_reserved(
@@ -1709,7 +1883,8 @@ class StoryRuntime:
         *,
         session: str,
         debate: str,
-        payload: str,
+        source_payload: str,
+        provider_payload: str,
         input_kind: InputKind,
         output_path: str,
         round_limit: int,
@@ -1717,6 +1892,7 @@ class StoryRuntime:
         conversation_context: ConversationContextWindow | None,
         context_mode: DebateContextMode | None,
         progress: _ProgressEmitter,
+        reference_operation: RuntimeReferenceOperation,
     ) -> DebateResult:
         """Execute a reserved debate with durable records before progress facts.
 
@@ -1755,7 +1931,7 @@ class StoryRuntime:
             round_number=0,
             revision="r0",
             kind=input_kind.value,
-            content=payload,
+            content=source_payload,
         )
         progress.emit(
             DebateProgressEvent(
@@ -1800,20 +1976,31 @@ class StoryRuntime:
                             "changes, and do not audit it in this response."
                         )
                     ),
-                    user_payload=payload,
-                    messages=tuple(messages),
+                    user_payload=provider_payload,
+                    messages=self._provider_debate_messages(
+                        tuple(messages),
+                        source_text=source_payload,
+                        provider_text=provider_payload,
+                    ),
                     conversation_context=conversation_context,
-                )
+                ),
+                reference_operation=reference_operation,
             )
             self._validate_candidate_reply(reply, current_revision)
         except Exception as exc:
+            failure_kind = self._classify_debate_failure(exc)
+            reference_failure = reference_operation.failure(
+                exc,
+                default=ReferenceAuthorizationErrorCode.PROVIDER_FAILURE,
+            )
+            visible_failure = reference_failure or exc
             record(
                 sender=EXECUTION_SPECIALIST,
                 phase=Phase.DRAFT.value,
                 round_number=0,
                 revision=current_revision,
                 kind="error",
-                content=self._error_text(exc),
+                content=self._error_text(visible_failure),
             )
             self._remember(
                 agent_id=EXECUTION_SPECIALIST,
@@ -1837,9 +2024,10 @@ class StoryRuntime:
                 latest_candidate=None,
                 manuscript_path=None,
                 messages=messages,
-                error=self._error_text(exc),
-                failure_kind=self._classify_debate_failure(exc),
+                error=self._error_text(visible_failure),
+                failure_kind=failure_kind,
                 progress=progress,
+                reference_operation_id=reference_operation.operation_id,
             )
         candidate = reply.content
         candidate_author_agent_id = EXECUTION_SPECIALIST
@@ -1887,16 +2075,27 @@ class StoryRuntime:
             audit_replies, audit_error = await self._audit(
                 session=session,
                 debate=debate,
-                payload=payload,
+                payload=provider_payload,
                 candidate=candidate,
                 revision_id=current_revision,
                 round_number=revision_cycles,
-                visible_messages=tuple(messages),
+                visible_messages=self._provider_debate_messages(
+                    tuple(messages),
+                    source_text=source_payload,
+                    provider_text=provider_payload,
+                ),
                 record=record,
                 entries=audit_entries,
                 conversation_context=conversation_context,
+                reference_operation=reference_operation,
             )
             if audit_error is not None:
+                failure_kind = self._classify_debate_failure(audit_error)
+                reference_failure = reference_operation.failure(
+                    audit_error,
+                    default=ReferenceAuthorizationErrorCode.PROVIDER_FAILURE,
+                )
+                visible_failure = reference_failure or audit_error
                 return self._finish(
                     session=session,
                     debate=debate,
@@ -1909,9 +2108,10 @@ class StoryRuntime:
                     latest_candidate=candidate,
                     manuscript_path=None,
                     messages=messages,
-                    error=self._error_text(audit_error),
-                    failure_kind=self._classify_debate_failure(audit_error),
+                    error=self._error_text(visible_failure),
+                    failure_kind=failure_kind,
                     progress=progress,
+                    reference_operation_id=reference_operation.operation_id,
                 )
 
             conflicts = [
@@ -1949,6 +2149,7 @@ class StoryRuntime:
                     kind="escalation",
                     content=action,
                 )
+                reference_operation.finish()
                 return self._finish(
                     session=session,
                     debate=debate,
@@ -1963,23 +2164,35 @@ class StoryRuntime:
                     messages=messages,
                     action_required=action,
                     progress=progress,
+                    reference_operation_id=reference_operation.operation_id,
                 )
 
             proposal_entries: list[DebateMessage] = []
             proposals, proposal_error = await self._propose(
                 session=session,
                 debate=debate,
-                payload=payload,
+                payload=provider_payload,
                 candidate=candidate,
                 revision_id=current_revision,
                 round_number=revision_cycles + 1,
                 responsible_agents=tuple(conflicts),
-                visible_messages=tuple(messages),
+                visible_messages=self._provider_debate_messages(
+                    tuple(messages),
+                    source_text=source_payload,
+                    provider_text=provider_payload,
+                ),
                 record=record,
                 entries=proposal_entries,
                 conversation_context=conversation_context,
+                reference_operation=reference_operation,
             )
             if proposal_error is not None:
+                failure_kind = self._classify_debate_failure(proposal_error)
+                reference_failure = reference_operation.failure(
+                    proposal_error,
+                    default=ReferenceAuthorizationErrorCode.PROVIDER_FAILURE,
+                )
+                visible_failure = reference_failure or proposal_error
                 return self._finish(
                     session=session,
                     debate=debate,
@@ -1992,9 +2205,10 @@ class StoryRuntime:
                     latest_candidate=candidate,
                     manuscript_path=None,
                     messages=messages,
-                    error=self._error_text(proposal_error),
-                    failure_kind=self._classify_debate_failure(proposal_error),
+                    error=self._error_text(visible_failure),
+                    failure_kind=failure_kind,
                     progress=progress,
+                    reference_operation_id=reference_operation.operation_id,
                 )
 
             next_revision = f"r{revision_cycles + 1}"
@@ -2012,15 +2226,26 @@ class StoryRuntime:
                             "every visible critique and every responsible-agent "
                             "proposal. Do not filter out or silently omit a conflict."
                         ),
-                        user_payload=payload,
+                        user_payload=provider_payload,
                         candidate_payload=candidate,
-                        messages=tuple(messages),
+                        messages=self._provider_debate_messages(
+                            tuple(messages),
+                            source_text=source_payload,
+                            provider_text=provider_payload,
+                        ),
                         conversation_context=conversation_context,
-                    )
+                    ),
+                    reference_operation=reference_operation,
                 )
                 self._validate_candidate_reply(synthesis, next_revision)
             except Exception as exc:
-                error = self._error_text(exc)
+                failure_kind = self._classify_debate_failure(exc)
+                reference_failure = reference_operation.failure(
+                    exc,
+                    default=ReferenceAuthorizationErrorCode.PROVIDER_FAILURE,
+                )
+                visible_failure = reference_failure or exc
+                error = self._error_text(visible_failure)
                 record(
                     sender=LEAD_ORCHESTRATOR,
                     phase=Phase.SYNTHESIZE.value,
@@ -2052,8 +2277,9 @@ class StoryRuntime:
                     manuscript_path=None,
                     messages=messages,
                     error=error,
-                    failure_kind=self._classify_debate_failure(exc),
+                    failure_kind=failure_kind,
                     progress=progress,
+                    reference_operation_id=reference_operation.operation_id,
                 )
 
             candidate = synthesis.content
@@ -2104,11 +2330,16 @@ class StoryRuntime:
                         "replace it. Return only full-text updates for core documents "
                         "that genuinely changed; an empty update map is valid."
                     ),
-                    user_payload=payload,
+                    user_payload=provider_payload,
                     candidate_payload=candidate,
-                    messages=tuple(messages),
+                    messages=self._provider_debate_messages(
+                        tuple(messages),
+                        source_text=source_payload,
+                        provider_text=provider_payload,
+                    ),
                     conversation_context=conversation_context,
-                )
+                ),
+                reference_operation=reference_operation,
             )
             updates = self._validate_finalization_reply(
                 finalization, current_revision, candidate
@@ -2131,6 +2362,7 @@ class StoryRuntime:
                 kind="core_updates",
                 content=json.dumps(sorted(updates), ensure_ascii=False),
             )
+            reference_operation.finish()
             artifact_commit_started = True
             manuscript_path, applied_updates = (
                 self.artifacts.commit_consensus(
@@ -2144,7 +2376,20 @@ class StoryRuntime:
                 )
             )
         except Exception as exc:
-            error = self._error_text(exc)
+            failure_kind = self._classify_debate_failure(
+                exc,
+                artifact_commit=artifact_commit_started,
+            )
+            reference_failure = reference_operation.failure(
+                exc,
+                default=(
+                    ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE
+                    if artifact_commit_started
+                    else ReferenceAuthorizationErrorCode.PROVIDER_FAILURE
+                ),
+            )
+            visible_failure = reference_failure or exc
+            error = self._error_text(visible_failure)
             record(
                 sender=LEAD_ORCHESTRATOR,
                 phase=Phase.FINALIZE.value,
@@ -2176,11 +2421,9 @@ class StoryRuntime:
                 manuscript_path=None,
                 messages=messages,
                 error=error,
-                failure_kind=self._classify_debate_failure(
-                    exc,
-                    artifact_commit=artifact_commit_started,
-                ),
+                failure_kind=failure_kind,
                 progress=progress,
+                reference_operation_id=reference_operation.operation_id,
             )
 
         record(
@@ -2205,6 +2448,7 @@ class StoryRuntime:
             core_updates=applied_updates,
             messages=messages,
             progress=progress,
+            reference_operation_id=reference_operation.operation_id,
         )
 
     async def _audit(
@@ -2220,6 +2464,7 @@ class StoryRuntime:
         record: Any,
         entries: list[DebateMessage],
         conversation_context: ConversationContextWindow | None,
+        reference_operation: RuntimeReferenceOperation,
     ) -> tuple[dict[str, AgentReply], Exception | None]:
         """Run all specialist audits, durably record each, and return first failure.
 
@@ -2257,6 +2502,7 @@ class StoryRuntime:
             requests,
             self._validate_audit_reply,
             revision_id,
+            reference_operation=reference_operation,
         )
         replies: dict[str, AgentReply] = {}
         first_error: Exception | None = None
@@ -2276,10 +2522,15 @@ class StoryRuntime:
                     else "approval"
                 )
             except Exception as exc:
-                content = self._error_text(exc)
+                reference_failure = reference_operation.failure(
+                    exc,
+                    default=ReferenceAuthorizationErrorCode.PROVIDER_FAILURE,
+                )
+                visible_failure = reference_failure or exc
+                content = self._error_text(visible_failure)
                 kind = "error"
                 if first_error is None:
-                    first_error = exc
+                    first_error = visible_failure
             entry = record(
                 sender=agent_id,
                 phase=Phase.AUDIT.value,
@@ -2319,6 +2570,7 @@ class StoryRuntime:
         record: Any,
         entries: list[DebateMessage],
         conversation_context: ConversationContextWindow | None,
+        reference_operation: RuntimeReferenceOperation,
     ) -> tuple[dict[str, AgentReply], Exception | None]:
         """Run responsible proposals, durably record them, and return first failure.
 
@@ -2355,6 +2607,7 @@ class StoryRuntime:
             requests,
             self._validate_proposal_reply,
             revision_id,
+            reference_operation=reference_operation,
         )
         replies: dict[str, AgentReply] = {}
         first_error: Exception | None = None
@@ -2368,10 +2621,15 @@ class StoryRuntime:
                 content = raw.content
                 kind = "proposal"
             except Exception as exc:
-                content = self._error_text(exc)
+                reference_failure = reference_operation.failure(
+                    exc,
+                    default=ReferenceAuthorizationErrorCode.PROVIDER_FAILURE,
+                )
+                visible_failure = reference_failure or exc
+                content = self._error_text(visible_failure)
                 kind = "error"
                 if first_error is None:
-                    first_error = exc
+                    first_error = visible_failure
             entry = record(
                 sender=agent_id,
                 phase=Phase.PROPOSE_REVISION.value,
@@ -3027,6 +3285,55 @@ class StoryRuntime:
         return value[: maximum - len(suffix)] + suffix
 
     @staticmethod
+    def _reference_failure_code(
+        failure: BaseException,
+        *,
+        default: ReferenceAuthorizationErrorCode = (
+            ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE
+        ),
+    ) -> ReferenceAuthorizationErrorCode:
+        """Map one failure to a stable content-free reference outcome."""
+
+        if isinstance(failure, ReferenceOperationFailure):
+            return failure.code
+        if isinstance(failure, ReferenceAuthorizationError):
+            return failure.code
+        if isinstance(failure, asyncio.CancelledError):
+            return ReferenceAuthorizationErrorCode.CANCELLED
+        return default
+
+    @staticmethod
+    def _provider_debate_messages(
+        messages: tuple[DebateMessage, ...],
+        *,
+        source_text: str,
+        provider_text: str,
+    ) -> tuple[DebateMessage, ...]:
+        """Project only this debate's current persisted initiation for a provider."""
+
+        if source_text == provider_text:
+            return messages
+        projected = list(messages)
+        for index, message in enumerate(projected):
+            if (
+                message.sender == "user"
+                and message.phase == "initiation"
+                and message.round == 0
+                and message.content == source_text
+            ):
+                projected[index] = DebateMessage(
+                    sender=message.sender,
+                    phase=message.phase,
+                    round=message.round,
+                    revision=message.revision,
+                    kind=message.kind,
+                    content=provider_text,
+                    timestamp=message.timestamp,
+                )
+                break
+        return tuple(projected)
+
+    @staticmethod
     def _validate_conversation_text(value: str) -> str:
         """Return nonempty strict-UTF-8 conversation text without mutation.
 
@@ -3050,14 +3357,51 @@ class StoryRuntime:
 
         return f"t_{uuid.uuid4().hex}"
 
-    async def _invoke(self, request: AgentRequest) -> AgentReply:
-        definition = self.prompts.build_definition(
-            session_id=request.session_id,
-            agent_id=request.agent_id,
-        )
-        bound_agent = await self._acquire_bound_agent(definition)
+    async def _invoke(
+        self,
+        request: AgentRequest,
+        *,
+        reference_operation: RuntimeReferenceOperation | None = None,
+        reference_read: Any = None,
+    ) -> AgentReply:
+        if reference_operation is not None and reference_read is None:
+            reference_read = reference_operation.begin_invocation(
+                agent_id=request.agent_id,
+                phase=request.phase.value,
+                round_number=request.round_number,
+            )
         try:
-            reply = await bound_agent.invoke(request)
+            definition = self.prompts.build_definition(
+                session_id=request.session_id,
+                agent_id=request.agent_id,
+            )
+            bound_agent = await self._acquire_bound_agent(definition)
+        except BaseException as exc:
+            if reference_operation is not None:
+                reference_operation.terminate_invocation(
+                    reference_read,
+                    self._reference_failure_code(exc),
+                )
+            raise
+        try:
+            try:
+                if reference_read is None:
+                    reply = await bound_agent.invoke(request)
+                else:
+                    reply = await bound_agent.invoke(
+                        request,
+                        reference_read=reference_read,
+                    )
+            except BaseException as exc:
+                if reference_operation is not None:
+                    reference_operation.terminate_invocation(
+                        reference_read,
+                        self._reference_failure_code(
+                            exc,
+                            default=ReferenceAuthorizationErrorCode.PROVIDER_FAILURE,
+                        ),
+                    )
+                raise
             if not isinstance(reply, AgentReply):
                 raise BackendProtocolError(
                     f"{request.agent_id} returned {type(reply).__name__}, "
@@ -3335,20 +3679,42 @@ class StoryRuntime:
         requests: list[AgentRequest],
         validator: Callable[[AgentReply, str], None],
         revision_id: str,
+        *,
+        reference_operation: RuntimeReferenceOperation,
     ) -> tuple[AgentReply | Exception, ...]:
         """Invoke one phase concurrently and close every peer on first failure."""
 
-        async def invoke_and_validate(request: AgentRequest) -> AgentReply:
-            reply = await self._invoke(request)
+        reference_reads = [
+            reference_operation.begin_invocation(
+                agent_id=request.agent_id,
+                phase=request.phase.value,
+                round_number=request.round_number,
+            )
+            for request in requests
+        ]
+
+        async def invoke_and_validate(
+            request: AgentRequest,
+            reference_read: Any,
+        ) -> AgentReply:
+            reply = await self._invoke(
+                request,
+                reference_operation=reference_operation,
+                reference_read=reference_read,
+            )
             validator(reply, revision_id)
             return reply
 
         tasks = [
             asyncio.create_task(
-                invoke_and_validate(request),
+                invoke_and_validate(request, reference_read),
                 name=f"{request.phase.value}:{request.agent_id}",
             )
-            for request in requests
+            for request, reference_read in zip(
+                requests,
+                reference_reads,
+                strict=True,
+            )
         ]
         pending: set[asyncio.Task[AgentReply]] = set(tasks)
         peer_failure = False
@@ -3377,7 +3743,22 @@ class StoryRuntime:
                 if not task.done():
                     task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
+            for reference_read in reference_reads:
+                reference_operation.terminate_invocation(
+                    reference_read,
+                    ReferenceAuthorizationErrorCode.CANCELLED,
+                )
             raise
+
+        for task, reference_read in zip(tasks, reference_reads, strict=True):
+            reference_operation.terminate_invocation(
+                reference_read,
+                (
+                    ReferenceAuthorizationErrorCode.CANCELLED
+                    if task.cancelled()
+                    else ReferenceAuthorizationErrorCode.PROVIDER_FAILURE
+                ),
+            )
 
         outcomes: list[AgentReply | Exception] = []
         for request, task in zip(requests, tasks, strict=True):
@@ -3492,6 +3873,7 @@ class StoryRuntime:
         error: str | None = None,
         action_required: str | None = None,
         failure_kind: DebateFailureKind | None = None,
+        reference_operation_id: str | None = None,
     ) -> DebateResult:
         """Persist one terminal result/state before emitting terminal progress.
 
@@ -3522,6 +3904,7 @@ class StoryRuntime:
             messages=tuple(messages),
             error=error,
             action_required=action_required,
+            reference_operation_id=reference_operation_id,
         )
         self.workspace.save_debate_result(result)
         self.workspace.transition_debate(
@@ -3601,6 +3984,27 @@ class StoryRuntime:
             return DebateFailureKind.CONTEXT
         if isinstance(failure, _DebateContextPropagationError):
             return DebateFailureKind.CONTEXT
+        if isinstance(failure, ReferenceOperationFailure):
+            if failure.code in {
+                ReferenceAuthorizationErrorCode.PROVIDER_FAILURE,
+                ReferenceAuthorizationErrorCode.CAPABILITY_CONSUMED,
+                ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH,
+                ReferenceAuthorizationErrorCode.INVALID_TRANSITION,
+            }:
+                return DebateFailureKind.PROTOCOL
+            if failure.code in {
+                ReferenceAuthorizationErrorCode.NOT_FOUND,
+                ReferenceAuthorizationErrorCode.INELIGIBLE,
+                ReferenceAuthorizationErrorCode.DRIFT,
+                ReferenceAuthorizationErrorCode.INVALID_UTF8,
+                ReferenceAuthorizationErrorCode.NUL_CONTENT,
+                ReferenceAuthorizationErrorCode.RANGE_OUT_OF_BOUNDS,
+                ReferenceAuthorizationErrorCode.READ_LIMIT_EXCEEDED,
+                ReferenceAuthorizationErrorCode.TOTAL_LIMIT_EXCEEDED,
+                ReferenceAuthorizationErrorCode.EVIDENCE_CORRUPT,
+            }:
+                return DebateFailureKind.WORKSPACE
+            return DebateFailureKind.INTERNAL
         if artifact_commit:
             if isinstance(failure, ManuscriptExistsError):
                 return DebateFailureKind.ARTIFACT_CONFLICT
@@ -3650,6 +4054,19 @@ class RuntimeSession:
         """Return this session's strict context sidecar without mutation."""
 
         return self.runtime.inspect_debate_context(self.session_id, debate_id)
+
+    def inspect_reference_operation(
+        self,
+        operation_id: str,
+    ) -> ReferenceOperationHistory | None:
+        """Return read history only when the operation belongs to this session."""
+
+        if not reference_operation_belongs_to_session(
+            operation_id,
+            self.session_id,
+        ):
+            raise ValueError("reference operation does not belong to this session")
+        return self.runtime.inspect_reference_operation(operation_id)
 
     async def converse(
         self,
