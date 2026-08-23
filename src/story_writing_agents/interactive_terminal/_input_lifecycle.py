@@ -172,12 +172,16 @@ class LiveCharacterReader:
         try:
             while not self._pending and not self._eof:
                 chunk = self.spec.read_one_byte(1)
+                if type(chunk) is not bytes:
+                    raise TypeError(
+                        "live input byte reader must return exactly one byte"
+                    )
                 if chunk == b"":
                     decoded = self._decoder.decode(b"", final=True)
                     self._append_decoded(decoded)
                     self._eof = True
                     break
-                if type(chunk) is not bytes or len(chunk) != 1:
+                if len(chunk) != 1:
                     raise TypeError(
                         "live input byte reader must return exactly one byte"
                     )

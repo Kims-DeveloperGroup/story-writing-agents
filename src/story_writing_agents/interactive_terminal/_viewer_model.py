@@ -263,6 +263,8 @@ class TextViewerViewport:
                 raise ValueError("start_line must identify the first projected line")
             if not self.lines:
                 raise ValueError("a nonempty viewport must project at least one line")
+            if len(self.lines) > max(1, self.frame_height - 2):
+                raise ValueError("viewport lines must fit inside the frame height")
             end_line = self.start_line + len(self.lines) - 1
             if end_line > self.total_lines:
                 raise ValueError("viewport lines must remain inside the document")

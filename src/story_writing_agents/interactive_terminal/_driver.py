@@ -2276,6 +2276,12 @@ def _configured_control_character(
         raise ValueError(f"{name} must be one terminal control character")
     if raw_byte == disabled_byte:
         return None
+    if decoder_spec.encoding == "utf-8" and (
+        0x80 <= raw_byte <= 0xBF or 0xC2 <= raw_byte <= 0xF4
+    ):
+        raise ValueError(
+            f"{name} is context-dependent in UTF-8 live input"
+        )
 
     try:
         return decoder_spec.decode_control_byte(raw_byte)
@@ -2356,17 +2362,13 @@ def _consume_escape_character(
         state.escape_sequence = None
         return None, True
 
-    if sequence.startswith("\x1bO"):
-        state.escape_sequence = None
-        return _escape_event(sequence), False
-
     if "@" <= character <= "~":
         state.escape_sequence = None
         return _escape_event(sequence), False
     if len(sequence) >= _MAX_ESCAPE_SEQUENCE_LENGTH:
-        # Keep consuming the unknown CSI until its final byte so no suffix can
-        # leak into the submitted buffer.
-        state.escape_sequence = "\x1b["
+        # Keep consuming the unknown CSI or SS3 sequence until its final byte
+        # so no suffix can leak into the submitted buffer.
+        state.escape_sequence = sequence[:2]
     return None, False
 
 
