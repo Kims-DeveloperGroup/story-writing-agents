@@ -6,7 +6,7 @@ import inspect
 import pickle
 import re
 import unittest
-from dataclasses import FrozenInstanceError, fields
+from dataclasses import FrozenInstanceError, fields, replace
 from types import SimpleNamespace
 from typing import get_args
 from unittest import mock
@@ -29,6 +29,7 @@ from story_writing_agents.interactive_terminal._controls import (
 )
 from story_writing_agents.interactive_terminal._driver import RawTerminalDriver
 from story_writing_agents.interactive_terminal._reference_activation import (
+    ReferenceInputProjection,
     ReferenceInputScope,
 )
 from story_writing_agents.interactive_terminal._model import (
@@ -1028,6 +1029,70 @@ class CompletionDriverTests(unittest.TestCase):
         )
         paths_provider.assert_called_once_with()
         text_reader.assert_called_once_with(path)
+        self.assertNotIn(("read", 1), input_stream.calls)
+        self.assertEqual(output.records, [])
+        self.assertEqual(termios.set_calls, [])
+        self.assertEqual(os_module.observed_widths, [])
+
+    def test_reference_fallback_completion_uses_bounded_span_and_preserves_suffix(
+        self,
+    ) -> None:
+        original = "prefix $ suffix"
+        path = "core_documents/global_outline.md"
+        token = f"${{{path}}}"
+        position = "artifact-reference:7"
+        projection = CommandCompletionProjection(
+            position,
+            7,
+            8,
+            (CommandCompletionCandidate(position, token),),
+        )
+        self.assertTrue(token.startswith(original[projection.start : projection.end]))
+        self.assertFalse(token.startswith(original[projection.start :]))
+
+        driver, input_stream, output, fallback, termios, os_module = make_driver(
+            "unused",
+            terminal=False,
+        )
+        fallback.side_effect = (original, "1", "")
+        projection_provider = mock.Mock(
+            return_value=ReferenceInputProjection(completion=projection)
+        )
+        failure_writer = mock.Mock()
+        bindings = _core._reference_input_bindings(
+            projection_provider,
+            mock.Mock(side_effect=AssertionError("viewer text read")),
+            failure_writer,
+        )
+        picker_factory = mock.Mock(wraps=bindings.initialize_picker)
+        bindings = replace(bindings, initialize_picker=picker_factory)
+
+        result = driver.read_reference_main_command_line(
+            "main> ",
+            _core._main_command_completion,
+            project_main_suggestion_palette,
+            render_component,
+            bindings,
+        )
+
+        expected = f"prefix {token} suffix"
+        self.assertEqual(result, expected)
+        self.assertEqual(driver._history_state, MainInputHistoryState((expected,)))
+        projection_provider.assert_called_once_with(original, len(original))
+        picker_factory.assert_called_once_with(
+            (token,),
+            "Select a whole-file reference",
+        )
+        failure_writer.assert_not_called()
+        self.assertEqual(fallback.call_count, 3)
+        self.assertEqual(fallback.call_args_list[0], mock.call("main> "))
+        self.assertEqual(
+            fallback.call_args_list[2],
+            mock.call(
+                f"Draft retained: {expected}\n"
+                "Press Enter to submit it, or type a replacement draft: "
+            ),
+        )
         self.assertNotIn(("read", 1), input_stream.calls)
         self.assertEqual(output.records, [])
         self.assertEqual(termios.set_calls, [])
