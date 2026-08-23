@@ -13,10 +13,7 @@ from unittest import mock
 
 import story_writing_agents
 from story_writing_agents import Workspace
-from story_writing_agents.agents import (
-    EXECUTION_SPECIALIST,
-    PLOT_ARCHITECT,
-)
+from story_writing_agents.agents import PLOT_ARCHITECT
 from story_writing_agents.writing_artifacts import (
     ArtifactLineRange,
     ArtifactReference,
@@ -216,19 +213,10 @@ class ReferenceReadRepositoryTests(unittest.TestCase):
         self.root = Path(temporary.name)
         Workspace(self.root).initialize()
         self.repository = WritingArtifactRepository(self.root)
-        self.repository.commit_consensus(
-            output_path="part-01/reference-marker.md",
-            candidate=_MARKERS["manuscript/part-01/reference-marker.md"].decode(),
-            core_updates={
-                path.removeprefix("core_documents/"): content.decode()
-                for path, content in _MARKERS.items()
-                if path.startswith("core_documents/")
-            },
-            session_id="session",
-            debate_id="fixture",
-            revision_id="r0",
-            candidate_author_agent_id=EXECUTION_SPECIALIST,
-        )
+        for path, content in _MARKERS.items():
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
         self.references = (
             ArtifactReference("core_documents/global_outline.md"),
             ArtifactReference("core_documents/part_outlines.md"),

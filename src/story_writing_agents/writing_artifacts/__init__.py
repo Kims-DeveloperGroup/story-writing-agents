@@ -37,6 +37,7 @@ from .references import (
     ArtifactReference,
     ArtifactReferenceBatch,
     ArtifactReferenceDirectiveError,
+    ArtifactSourceIdentity,
 )
 from .read_actions import (
     ReferenceReadAction,
@@ -59,6 +60,7 @@ __all__ = (
     "ArtifactReference",
     "ArtifactReferenceBatch",
     "ArtifactReferenceDirectiveError",
+    "ArtifactSourceIdentity",
     "AuthorizedArtifactReference",
     "ReferenceAuthorizationError",
     "ReferenceAuthorizationErrorCode",

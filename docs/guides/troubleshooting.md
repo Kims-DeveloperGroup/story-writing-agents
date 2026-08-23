@@ -149,9 +149,10 @@ retry. For `session_ownership_unknown`, preserve the claim and guard; inspect
 
 Run `story init WORKSPACE` to add missing role prompts without overwriting.
 Prompt and persona files must be readable, strict UTF-8, inside the workspace,
-and free of symlink components. Core documents are optional until agents publish
-them; only current provenance-backed core bytes enter prompt context. Finish
-concurrent edits before a new-ID retry.
+and free of symlink components. Core documents are optional. Present safe
+current bytes enter the allowlisted prompt context even when manual or
+pre-provenance; this does not create publication authorship or repair catalog
+history. Finish concurrent edits before a new-ID retry.
 
 `--draft-file` must exist and decode as strict UTF-8. Its relative path starts
 at the shell's current directory even when `--workspace` points elsewhere.

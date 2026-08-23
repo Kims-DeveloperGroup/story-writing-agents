@@ -81,7 +81,7 @@ class ReferenceActivationContractTests(unittest.TestCase):
         )
         self.assertEqual(
             [item.value for item in activation.ReferenceInputFailureKind],
-            ["empty_catalog", "stale", "unreadable", "unavailable", "invalid"],
+            ["empty_sources", "stale", "unreadable", "unavailable", "invalid"],
         )
         for name in activation.__all__:
             self.assertNotIn(name, terminal_facade.__all__)
@@ -154,7 +154,7 @@ class ReferenceActivationContractTests(unittest.TestCase):
                         1,
                         (),
                     ),
-                    failure=activation.ReferenceInputFailureKind.EMPTY_CATALOG,
+                    failure=activation.ReferenceInputFailureKind.EMPTY_SOURCES,
                 ),
                 ValueError,
             ),
@@ -166,7 +166,7 @@ class ReferenceActivationContractTests(unittest.TestCase):
         self.assertEqual(
             activation.ReferenceInputProjection(
                 completion=empty_completion,
-                failure=activation.ReferenceInputFailureKind.EMPTY_CATALOG,
+                failure=activation.ReferenceInputFailureKind.EMPTY_SOURCES,
             ).completion,
             empty_completion,
         )
@@ -352,10 +352,10 @@ class ReferenceProjectionTests(unittest.TestCase):
                         1,
                         (),
                     ),
-                    failure=activation.ReferenceInputFailureKind.EMPTY_CATALOG,
+                    failure=activation.ReferenceInputFailureKind.EMPTY_SOURCES,
                 ),
             ),
-            ("$$", (), None, activation.ReferenceInputFailureKind.EMPTY_CATALOG),
+            ("$$", (), None, activation.ReferenceInputFailureKind.EMPTY_SOURCES),
             (
                 direct,
                 _PATHS[1:],

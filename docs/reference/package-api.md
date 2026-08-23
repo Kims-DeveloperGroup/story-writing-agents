@@ -78,8 +78,9 @@ of `RuntimeSession`. They do not provide different behavior.
 
 Canonical artifact value contracts live in
 `story_writing_agents.writing_artifacts`, but are intentionally absent from the
-120-name package-root facade. In addition to immutable path, catalog, kind, and
-reference values, the subpackage exports content-free authorization, operation
+120-name package-root facade. In addition to immutable path, catalog, kind,
+reference, and filesystem `ArtifactSourceIdentity` values, the subpackage
+exports content-free authorization, operation
 history/state, read-request/action, `ReferenceOperationFailure`, and parser
 contracts. Filesystem-backed `WritingArtifactRepository`, content-bearing read
 results, private capabilities, runtime coordinators, the ranged viewer, and

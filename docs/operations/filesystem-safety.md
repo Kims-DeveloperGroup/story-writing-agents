@@ -6,7 +6,8 @@
 > replacement, guarded interactive settings persistence, and content-free
 > explicit-reference authorization evidence and inline runtime/provider
 > enforcement are implemented. Interactive `$`/`$$` discovery and viewer
-> attachment use the same verified repository boundary and add no artifact
+> attachment use the catalog-independent canonical filesystem-source boundary
+> and add no artifact
 > write path. Bounded fail-open debug logging uses a separate identity-bound
 > storage path.
 
@@ -174,43 +175,53 @@ Do not replace the guard pathname while a workspace may be used.
 ## Explicit-reference read safety
 
 For one nonempty parsed reference batch, `WritingArtifactRepository` creates
-the operation manifest and `requested` evidence under its repository lease
-before catalog or content reads. It then uses the same descriptor-relative,
-no-follow adapter and eligibility rules as other artifact access. Each unique
+the operation manifest and schema-v2 `requested` evidence under its repository
+lease before source-content reads. It then uses the same descriptor-relative,
+no-follow adapter as source discovery and prompt-context access without loading
+the publication catalog or running recovery. Each unique
 path is securely read once at initial capture; multiple ranges retain request
 order while sharing that immutable source snapshot.
 
 The complete source must be strict UTF-8 without NUL. Universal CRLF, LF, and
 lone-CR records determine exact one-based range slices, including their line
-terminators. Each selected reference may contain at most 128 KiB and the batch
-at most 256 KiB, inclusive. Validation errors use fixed codes and do not echo
-paths or content.
+terminators. Every source open is capped at 8 MiB; a larger explicit bound is
+clamped to that cap and a stricter positive bound is honored. Each selected
+reference may contain at most 128 KiB and the batch at most 256 KiB,
+inclusive. Validation errors use fixed codes and do not echo paths or content.
 
 A repository-minted capability is bound to one authorization, correlation, and
 exact ordered batch and can be consumed only once. Before returning captured
 bytes, accepting an invocation, recording an operation checkpoint, or finally
 accepting the operation, the repository reopens each unique source and checks
-its full catalog provenance and SHA-256 against capture. Captured content is
-never refreshed. A path/range mismatch consumes the capability; provenance or
-byte drift fails closed.
+its canonical path/kind, device, inode, size, modification/change timestamps,
+and SHA-256 against capture. Captured content is never refreshed. A path/range
+mismatch consumes the capability; deletion, replacement, unsafe topology,
+oversize, or byte drift fails closed.
 
-Interactive listing uses only the repository's current eligible catalog and
-excludes transcripts, discussion logs, provider/agent state, configuration,
-diagnostics, and repository metadata. A picker/viewer activation performs a
+Interactive listing inspects metadata for the four exact core paths and
+recursively for valid Markdown paths below `manuscript/PART/`. It includes safe
+empty, manual, pre-provenance, older, published, and hash-divergent files. It
+excludes `.gitkeep`, extra core paths, root manuscripts, unsupported/invalid or
+oversize paths, normalized/case aliases, symlinks, hardlinks, nonregular files,
+transcripts, discussion logs, provider/agent state, configuration, diagnostics,
+outside paths, and repository metadata. The result is sorted and content-free:
+listing does not read, decode, hash, or line-split file bytes. A picker/viewer activation performs a
 fresh bounded repository read before displaying text. The viewer receives text,
 not a path or filesystem handle, and retains no repository authority. A stale
 choice or listing-to-view race returns a fixed `workspace_invalid` failure; a
 later submission independently captures and revalidates the then-current
 artifact rather than reusing viewer bytes. A legitimately published new
 current version may therefore be what agents read. No UI operation creates
-provenance, repairs a stale artifact, or changes canonical bytes.
+provenance, adopts a manual source, repairs publication metadata, or changes
+canonical bytes.
 
-Operation and invocation manifests/events are schema-v1 canonical JSON,
+Operation and invocation manifests/events are schema-v2 canonical JSON,
 published create-only with exact path identities and contiguous sequences.
 Delivery evidence is written before the transient content is returned. A
 partial, replaced, aliased, malformed, noncanonical, duplicated, gapped, or
 invalidly transitioned evidence tree is corrupt and is neither repaired nor
-rewritten. Never edit `writing_artifacts/input_snapshots/`; it is repository
+rewritten. Schema-v1 evidence cannot authorize, resume, or be migrated into a
+new operation. Never edit `writing_artifacts/input_snapshots/`; it is repository
 state, not a canonical artifact directory.
 
 <a id="debug-log-filesystem-safety"></a>
@@ -376,11 +387,12 @@ or newest-core candidate; paths and core authority from all older established
 commits remain required. Projected and stored catalog-after include that commit
 in the full path, exact-entry, and unique-newest audit.
 
-On the next artifact access, an exact catalog-before position rolls forward;
+On the next catalog or publication access, an exact catalog-before position rolls forward;
 an exact catalog-after position is verified without republishing. A catalog
 matching neither image, target divergence, changed or missing journal bytes,
 missing/divergent published commit, or invalid authoritative transaction state
-writes a persistent marker and blocks all later artifact access. Every `.tmp`,
+writes a persistent marker and blocks all later catalog/publication access.
+Safe filesystem-source discovery and reads remain independent. Every `.tmp`,
 `.held`, `.retired`, and `.completed` file is retained under non-authoritative
 staging, ignored by transaction recovery and catalog listing, and may accumulate.
 Only JSON entries in `transactions/` are authoritative; any unexpected entry

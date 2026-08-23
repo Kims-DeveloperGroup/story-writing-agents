@@ -32,11 +32,18 @@ from tests.test_artifact_reference_authorization import (
 
 _FORBIDDEN_EVIDENCE_KEYS = frozenset(
     {
+        "author_agent_id",
         "artifact_bytes",
         "bytes",
+        "catalog_entry",
+        "commit_id",
+        "committed_at",
         "content",
+        "debate_id",
         "prompt",
         "provider_text",
+        "revision_id",
+        "session_id",
         "source_text",
     }
 )
@@ -100,7 +107,7 @@ class EvidenceSchemaAndPrivacyTests(ReferenceEvidenceTestCase):
                     path.write_bytes(b"{}\n")
                 self.assert_corrupt(name)
 
-    def test_healthy_records_are_schema_v1_canonical_create_only_and_content_free(self) -> None:
+    def test_healthy_records_are_schema_v2_canonical_create_only_and_content_free(self) -> None:
         authorization = self.capture("canonical")
         capability = self.complete_invocation(authorization, "invoke", 1)
         self.repository.finish_reference_operation(authorization, outcome=None)
@@ -122,8 +129,23 @@ class EvidenceSchemaAndPrivacyTests(ReferenceEvidenceTestCase):
         invocation = json.loads(
             (root / "invocations/invoke/manifest.json").read_text()
         )
-        self.assertEqual(manifest["schema_version"], 1)
-        self.assertEqual(invocation["schema_version"], 1)
+        self.assertEqual(manifest["schema_version"], 2)
+        self.assertEqual(invocation["schema_version"], 2)
+        source = invocation["references"][0]["source"]
+        self.assertEqual(
+            set(source),
+            {
+                "changed_ns",
+                "device_id",
+                "inode",
+                "kind",
+                "modified_ns",
+                "path",
+                "source_sha256",
+                "source_utf8_bytes",
+            },
+        )
+        self.assertNotIn("catalog_entry", invocation["references"][0])
         self.assertRegex(invocation["capability_id"], r"^[0-9a-f]{32}$")
         self.assertNotIn(invocation["capability_id"], repr(capability.correlation))
 
@@ -163,7 +185,7 @@ class EvidenceSchemaAndPrivacyTests(ReferenceEvidenceTestCase):
                 }
             ),
             "schema": lambda raw: _canonical_json(
-                {**json.loads(raw), "schema_version": 2}
+                {**json.loads(raw), "schema_version": 1}
             ),
             "unknown-enum": lambda raw: _canonical_json(
                 {**json.loads(raw), "operation_state": "unknown"}
@@ -185,6 +207,27 @@ class EvidenceSchemaAndPrivacyTests(ReferenceEvidenceTestCase):
                 target.write_bytes(altered)
                 self.assert_corrupt(operation_id)
                 self.assertEqual(target.read_bytes(), altered)
+
+    def test_schema_v1_evidence_is_not_reused_migrated_or_globally_blocking(self) -> None:
+        legacy = self.capture("legacy")
+        legacy.close()
+        manifest = self.evidence_root("legacy") / "manifest.json"
+        value = json.loads(manifest.read_text())
+        value["schema_version"] = 1
+        legacy_bytes = _canonical_json(value)
+        manifest.write_bytes(legacy_bytes)
+
+        self.assert_corrupt("legacy")
+        with _expect_error(
+            self,
+            ReferenceAuthorizationErrorCode.EVIDENCE_CORRUPT,
+        ):
+            self.capture("legacy")
+        self.assertEqual(manifest.read_bytes(), legacy_bytes)
+
+        fresh = self.capture("fresh-v2")
+        self.assertEqual(fresh.manifest.schema_version, 2)
+        fresh.close()
 
     def test_nested_duplicates_forbidden_keys_and_values_fail_content_free(self) -> None:
         for operation_id in ("nested-duplicate", "forbidden-key"):
@@ -367,8 +410,8 @@ class EvidenceCorrelationAndIsolationTests(ReferenceEvidenceTestCase):
         self.assert_corrupt("precapture-terminal")
         source.close()
 
-    def test_global_root_and_catalog_failures_propagate_without_terminal_event(self) -> None:
-        original_read = self.repository._storage.read_bytes
+    def test_source_root_safety_is_coded_but_catalog_state_is_not_consulted(self) -> None:
+        original_read = self.repository._storage.read_snapshot
         root_failure = ArtifactRootSecurityError("root changed")
 
         def root_read(path, *args, **kwargs):
@@ -378,36 +421,49 @@ class EvidenceCorrelationAndIsolationTests(ReferenceEvidenceTestCase):
 
         with mock.patch.object(
             self.repository._storage,
-            "read_bytes",
+            "read_snapshot",
             side_effect=root_read,
         ):
-            with self.assertRaises(ArtifactRootSecurityError) as raised:
+            with _expect_error(
+                self,
+                ReferenceAuthorizationErrorCode.INELIGIBLE,
+            ):
                 self.capture("root-failure")
-        self.assertIs(raised.exception, root_failure)
         root_history = self.repository.inspect_reference_operation("root-failure")
         assert root_history is not None
         self.assertEqual(
             tuple(event.operation_state for event in root_history.operation_events),
-            (ReferenceOperationState.REQUESTED,),
+            (ReferenceOperationState.REQUESTED, ReferenceOperationState.TERMINATED),
+        )
+        self.assertIs(
+            root_history.operation_events[-1].outcome,
+            ReferenceAuthorizationErrorCode.INELIGIBLE,
         )
 
-        catalog_failure = WorkspaceFormatError("catalog is malformed")
-        with mock.patch.object(
-            self.repository,
-            "_load_catalog",
-            side_effect=catalog_failure,
+        with (
+            mock.patch.object(
+                self.repository,
+                "_load_catalog",
+                side_effect=AssertionError("source capture loaded catalog"),
+            ) as load_catalog,
+            mock.patch.object(
+                self.repository,
+                "_recover",
+                side_effect=AssertionError("source capture ran recovery"),
+            ) as recover,
         ):
-            with self.assertRaises(WorkspaceFormatError) as raised:
-                self.capture("catalog-failure")
-        self.assertIs(raised.exception, catalog_failure)
+            catalog_independent = self.capture("catalog-failure")
+        load_catalog.assert_not_called()
+        recover.assert_not_called()
         catalog_history = self.repository.inspect_reference_operation(
             "catalog-failure"
         )
         assert catalog_history is not None
         self.assertEqual(
             tuple(event.operation_state for event in catalog_history.operation_events),
-            (ReferenceOperationState.REQUESTED,),
+            (ReferenceOperationState.REQUESTED, ReferenceOperationState.CAPTURED),
         )
+        catalog_independent.close()
 
         inspected = self.capture("inspect-root-failure")
         original_list = self.repository._storage.list_names

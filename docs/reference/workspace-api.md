@@ -101,9 +101,9 @@ Text is strict UTF-8. JSON readers reject malformed structures where the
 consuming contract performs schema validation.
 
 `Workspace.read_text()` is a raw, safely contained UTF-8 read. It does not
-classify canonical paths, check artifact provenance, or make bytes eligible for
-story-agent context. Although it can physically read a canonical file, callers
-must not treat that result as trusted canonical context.
+classify canonical paths or perform the artifact repository's descriptor-safe
+source capture. Although it can physically read a canonical file, callers must
+not treat that result as the immutable snapshot used for story-agent context.
 `Workspace.read_core_documents()` has been removed with no compatibility alias;
 trusted story context is selected internally through repository-backed runtime
 prompt construction. Generic raw reads remain appropriate for noncanonical
@@ -116,16 +116,20 @@ of either reserved top-level namespace. This check occurs before parent or
 target mutation. Canonical application writes must go through the artifact
 repository so bytes, authorship, commit history, and the current catalog cannot
 diverge. Generic writes remain available for other safely contained workspace
-files. An external filesystem edit can still make
-an artifact manual or stale; those bytes remain on disk but are ineligible
-unless a matching catalog and commit record exist and the current hash agrees.
-Stop all workspace processes before making such an external edit. Orchestration
+files. An external filesystem edit can still create manual, pre-provenance, or
+hash-divergent canonical bytes. When the path and physical file are safe, those
+current bytes can be listed, viewed, explicitly referenced, and supplied as
+allowlisted core context; source use does not create or repair catalog,
+authorship, or commit records. Stop all workspace processes before making such
+an external edit. Orchestration
 restricts core updates to four names and delegates publication to the separate
 artifact repository.
 
-Cataloged manuscript paths are permanent create-only identities. Deleting one
-externally makes it stale and ineligible but does not free the path for reuse;
-a later revision must use a distinct `PART/PATH.md`.
+Cataloged manuscript paths are permanent create-only publication identities.
+Deleting one externally removes it from source discovery but does not free the
+path for reuse; a later revision must use a distinct `PART/PATH.md`. A manual
+file at an otherwise unused path is discoverable but also occupies that target,
+so publication must choose another path or fail without overwrite.
 
 ## Orchestration persistence primitives
 
@@ -175,7 +179,7 @@ Constructing `Workspace`, `StoryRuntime`, or the artifact repository performs
 no artifact I/O. Platforms without the repository's secure filesystem
 primitives—including Darwin `renameatx_np(RENAME_EXCL)` or Linux
 `renameat2(RENAME_NOREPLACE)`—can continue to use non-artifact workspace and
-runtime APIs; the first catalog read, artifact read, or artifact commit raises
+runtime APIs; the first source list/read, catalog read, or artifact commit raises
 `WorkspaceSecurityError`.
 
 ## Directive utility
