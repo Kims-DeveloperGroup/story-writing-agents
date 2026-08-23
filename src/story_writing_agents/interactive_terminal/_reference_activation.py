@@ -175,6 +175,15 @@ def project_reference_input(
         return None
     start, end = marker
     expression = buffer[start:end]
+    if expression.startswith("${"):
+        closing_brace = expression.find("}", 2)
+        if closing_brace >= 0:
+            try:
+                ArtifactReference(expression[2:closing_brace])
+            except (TypeError, ValueError):
+                pass
+            else:
+                return None
     if expression.startswith("$$"):
         if expression == "$$":
             if failure is not None:

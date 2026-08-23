@@ -226,6 +226,23 @@ class ReferenceInputBindings:
                 raise TypeError(f"{name} must be callable")
 
 
+def _fallback_reference_projection(
+    line: str,
+    bindings: ReferenceInputBindings,
+) -> ReferenceInputProjection | None:
+    """Project the rightmost actionable raw-dollar marker in one line."""
+
+    search_end = len(line)
+    while True:
+        marker = line.rfind("$", 0, search_end)
+        if marker < 0:
+            return None
+        projection = bindings.projection_provider(line, marker + 1)
+        if projection is not None:
+            return projection
+        search_end = marker
+
+
 class RawTerminalDriver:
     """Own one stream pair's live editing and raw terminal resource lifecycle."""
 
@@ -1042,7 +1059,7 @@ class RawTerminalDriver:
             state = MainCommandControlState(
                 MainInputControlState(LineInputState(line, len(line)))
             )
-            projection = bindings.projection_provider(line, len(line))
+            projection = _fallback_reference_projection(line, bindings)
             if projection is None:
                 return line
             amended = False
