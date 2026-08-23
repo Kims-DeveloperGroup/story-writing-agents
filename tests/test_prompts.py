@@ -23,12 +23,10 @@ from story_writing_agents import (
     PromptFileReference,
     ROSTER,
     StoryRuntime,
-    EXECUTION_SPECIALIST,
 )
 from story_writing_agents.errors import WorkspaceFormatError
 from story_writing_agents.config import ConfigManager
 from story_writing_agents.prompts import PromptAssembler
-from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
 
 from tests.helpers import ScriptedBackend, initialized_workspace
 
@@ -49,23 +47,16 @@ class PromptAssemblerTests(unittest.TestCase):
             "persona": "prompt_persona",
         }
         self.workspace.write_json("config/agent_configs.json", configs)
-        WritingArtifactRepository(self.workspace.root).commit_consensus(
-            output_path="fixtures/prompt-context.md",
-            candidate="prompt fixture manuscript",
-            core_updates={
-                filename: f"CONTEXT_TOKEN::{filename}"
-                for filename in (
-                    "global_outline.md",
-                    "part_outlines.md",
-                    "character_sheets.md",
-                    "narrative_rules.md",
-                )
-            },
-            session_id="prompt_fixture",
-            debate_id="prompt_fixture",
-            revision_id="r0",
-            candidate_author_agent_id=EXECUTION_SPECIALIST,
-        )
+        for filename in (
+            "global_outline.md",
+            "part_outlines.md",
+            "character_sheets.md",
+            "narrative_rules.md",
+        ):
+            self.workspace.path(f"core_documents/{filename}").write_text(
+                f"CONTEXT_TOKEN::{filename}",
+                encoding="utf-8",
+            )
         self.assembler = PromptAssembler(self.workspace)
 
     def test_request_contains_turn_payloads_but_no_system_prompt(self) -> None:
@@ -572,16 +563,16 @@ class RuntimeBindingTests(unittest.IsolatedAsyncioTestCase):
         self.workspace.write_json("config/agent_configs.json", configs)
         await runtime._invoke(request)
 
-        # The manually edited core file has no repository provenance and is
-        # therefore not part of the effective definition in this fixture.
-        self.assertEqual(len(backend.definitions), 5)
+        # Every current canonical filesystem source participates, including a
+        # manual edit that has never been published through the repository.
+        self.assertEqual(len(backend.definitions), 6)
         self.assertEqual(
             len({item.fingerprint for item in backend.definitions}),
-            5,
+            6,
         )
         self.assertEqual(
             [item.language for item in backend.definitions],
-            ["EN", "EN", "EN", "FR", "FR"],
+            ["EN", "EN", "EN", "EN", "FR", "FR"],
         )
         self.assertTrue(
             all(
@@ -590,18 +581,12 @@ class RuntimeBindingTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-    async def test_repository_snapshot_race_binds_verified_immutable_bytes(
+    async def test_filesystem_snapshot_race_binds_verified_immutable_bytes(
         self,
     ) -> None:
-        repository = WritingArtifactRepository(self.workspace.root)
-        repository.commit_consensus(
-            output_path="part-01/prompt-race-fixture.md",
-            candidate="fixture manuscript",
-            core_updates={"global_outline.md": "verified outline"},
-            session_id="prompt_race_fixture",
-            debate_id="prompt_race_fixture",
-            revision_id="r0",
-            candidate_author_agent_id=EXECUTION_SPECIALIST,
+        self.workspace.path("core_documents/global_outline.md").write_text(
+            "verified outline",
+            encoding="utf-8",
         )
         backend = ScriptedBackend(
             lambda request: AgentReply.approval(request.revision_id)
@@ -613,7 +598,7 @@ class RuntimeBindingTests(unittest.IsolatedAsyncioTestCase):
         def snapshot_then_change(paths):
             snapshots = read_current(paths)
             self.workspace.path("core_documents/global_outline.md").write_text(
-                "changed after verified catalog snapshot",
+                "changed after verified filesystem snapshot",
                 encoding="utf-8",
             )
             return snapshots
@@ -632,7 +617,7 @@ class RuntimeBindingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(references[0].read_text(), "verified outline")
         self.assertEqual(
             self.workspace.read_text("core_documents/global_outline.md"),
-            "changed after verified catalog snapshot",
+            "changed after verified filesystem snapshot",
         )
 
     async def test_codex_defaults_do_not_change_definition_or_binding_identity(

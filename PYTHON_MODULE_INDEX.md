@@ -16,7 +16,7 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 53.
+Importable production units indexed: 54.
 
 ## Current Dependency Direction
 
@@ -110,8 +110,11 @@ writing_artifacts.runtime_references -> writing_artifacts.authorization/directiv
                                      -> writing_artifacts.read_actions/references/repository
 writing_artifacts.references -> writing_artifacts.catalog
 writing_artifacts._reference_evidence -> writing_artifacts._storage/authorization
+writing_artifacts.filesystem_sources -> errors/writing_artifacts._storage
+                                     -> writing_artifacts.catalog/references
 writing_artifacts.repository -> agents/errors/writing_artifacts._reference_evidence
-                             -> writing_artifacts._storage/authorization/catalog/read_actions/references
+                             -> writing_artifacts._storage/authorization/catalog
+                             -> writing_artifacts.filesystem_sources/read_actions/references
 writing_artifacts._storage -> errors
 ```
 
@@ -918,8 +921,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   `InteractiveCompositionInput` supplies those collaborators to internally
   supported RUN and CHAT composition without exposing `/compose` or changing
   public terminal methods. Capable input obtains a fresh
-  backend lifecycle or active-catalog snapshot for each exact completion
-  state, while fallback input bypasses the provider. Dynamic-choice Enter
+  backend-lifecycle, active-conversation-catalog, or canonical-artifact
+  filesystem snapshot for each exact completion state, while fallback input
+  bypasses the provider. Dynamic-choice Enter
   submits an explicit identity and bypasses the generic picker. An omitted
   resume buffer that is itself submitted instead starts a fresh lifecycle or
   catalog read. When that read succeeds and yields eligible rows, the controller
@@ -954,8 +958,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   whole-flow cancellation. Provider-bound routes pass the submitted text
   unchanged to `StoryRuntime`; reference UI therefore emits only ordinary
   `${path}` or `${path}#Lx-Ly` tokens for the existing runtime parser and never
-  authorizes a read. The controller borrows `StoryRuntime.artifacts.list_paths`
-  only for an active eligible marker and borrows one bounded, freshly
+  authorizes a read. The controller borrows the filesystem-authoritative
+  `StoryRuntime.artifacts.list_paths` only for an active eligible marker and
+  borrows one bounded, freshly
   revalidated `read_text` result only for the supplied-text viewer. It maps all
   expected discovery/read failures to fixed content-free terminal categories,
   retains no artifact body, and consumes only the resulting
@@ -2108,7 +2113,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Responsibility:** Assemble content-addressed agent definitions and
   prompt-free per-turn requests.
 - **Supported surface:** Internal `PromptAssembler`, whose optional keyword-only
-  `artifact_repository` supplies provenance-backed core context and whose
+  `artifact_repository` supplies filesystem-authoritative core context and whose
   optional keyword-only `configuration_snapshot` accepts one immutable
   persisted snapshot without changing the default on-demand construction path.
 - **Direct internal dependencies:** `agents`, `config`, `conversations`,
@@ -2118,13 +2123,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   owner-isolated agent history. With no injected snapshot it resolves persisted
   configuration on demand; with a snapshot it reuses those persisted values but
   still loads session runtime overrides for every definition. It requests only
-  the agent's core context paths and binds repository-verified immutable byte
-  snapshots into prompt references; no later provider step reopens an artifact
-  path. Absent placeholders, manual files, and hash-divergent files are omitted.
+  the agent's core context paths and binds stable, strict-UTF-8, NUL-free
+  immutable byte snapshots into prompt references; no later provider step
+  reopens an artifact path. Present safe empty, initialized, manual,
+  pre-provenance, published, and hash-divergent files are included; absent or
+  unsafe files are omitted, while invalid UTF-8 or NUL content fails closed.
   It forwards an optional canonical conversation-context object unchanged into
-  each built `AgentRequest`. The assembler owns no write operation, but catalog
-  projection delegates locked recovery and lazy internal-state setup to the
-  injected artifact repository.
+  each built `AgentRequest`. The assembler owns no write operation; source
+  projection delegates lazy internal-state and lease setup to the injected
+  artifact repository without catalog loading or transaction recovery.
 - **Primary verification/documentation:** `tests/test_prompts.py`,
   `tests/test_codex_backend.py`, `docs/reference/writing-artifacts.md`,
   `docs/reference/agent-contracts.md`, and `docs/design/prompts-and-provider.md`.
@@ -2330,10 +2337,11 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:** `src/story_writing_agents/writing_artifacts/__init__.py`
 - **Responsibility:** Provide the side-effect-free canonical writing-artifact
   value facade.
-- **Supported surface:** Exactly 30 names in `__all__`: canonical core and
+- **Supported surface:** Exactly 31 names in `__all__`: canonical core and
   resource-limit constants; `ArtifactKind`, `ArtifactCatalogEntry`,
-  `ArtifactCatalog`, `ArtifactContentSnapshot`, `ArtifactLineRange`, and
-  `ArtifactReference`; immutable `ArtifactReferenceBatch` and its
+  `ArtifactCatalog`, `ArtifactSourceIdentity`, `ArtifactContentSnapshot`,
+  `ArtifactLineRange`, and `ArtifactReference`; immutable
+  `ArtifactReferenceBatch` and its
   `ArtifactReferenceDirectiveError`; content-free
   `AuthorizedArtifactReference`, `ReferenceAuthorizationErrorCode`,
   `ReferenceAuthorizationError`, `ReferenceOperationFailure`,
@@ -2343,7 +2351,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ReferenceOperationHistory`; content-free `ReferenceReadActionKind`,
   `ReferenceReadRequest`, and `ReferenceReadAction`; plus
   `canonical_artifact_kind`, `manuscript_artifact_path`, and
-  `parse_artifact_references`. The filesystem repository, evidence adapter,
+  `parse_artifact_references`. The filesystem source adapter, repository,
+  evidence adapter,
   synchronous read coordinator, and transient content-bearing authorization,
   capability, delivery, and read-result values are intentionally not
   re-exported.
@@ -2372,7 +2381,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   identity is limited to the four exact `core_documents/*.md` paths;
   manuscripts require normalized `manuscript/<part-id>/.../*.md` identities,
   and output syntax is the corresponding required `PART/PATH.md` suffix. The
-  safe component `manuscript` is a legal part identifier.
+  safe component `manuscript` is a legal part identifier. Catalog entries are
+  publication and audit metadata; they do not authorize filesystem discovery
+  or reads.
 - **Direct internal dependencies:** None.
 - **State, resources, and side effects:** Immutable values and pure validation
   only; catalog mappings are copied and exposed read-only.
@@ -2385,9 +2396,11 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 - **Source:** `src/story_writing_agents/writing_artifacts/references.py`
 - **Responsibility:** Define immutable artifact-reference, directive-batch,
-  and verified-content snapshot identities plus bounded resource constants.
-- **Supported surface:** Package-supported `ArtifactContentSnapshot`,
-  `ArtifactLineRange`, `ArtifactReference`, `ArtifactReferenceBatch`,
+  filesystem-source, and verified-content snapshot identities plus bounded
+  resource constants.
+- **Supported surface:** Package-supported `ArtifactSourceIdentity`,
+  `ArtifactContentSnapshot`, `ArtifactLineRange`, `ArtifactReference`,
+  `ArtifactReferenceBatch`,
   `ArtifactReferenceDirectiveError`, `MAX_ARTIFACT_PATH_BYTES`,
   `MAX_REFERENCE_COUNT`, `MAX_REFERENCE_UTF8_BYTES`,
   `MAX_REFERENCE_TOTAL_BYTES`, and `MAX_VIEWER_UTF8_BYTES`. The batch preserves
@@ -2395,11 +2408,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   content-free path/range identities, enforces the 16-reference limit, and
   rejects duplicate, whole/range-conflicting, or overlapping identities.
   Token discovery, runtime token resolution, and provider framing are absent
-  from this value leaf.
+  from this value leaf. `ArtifactSourceIdentity` records a canonical path/kind,
+  full-source hash and byte size, plus device, inode, modification, and change
+  stamps; `ArtifactContentSnapshot` correlates exact strict-UTF-8, NUL-free
+  bytes to that content-free identity.
 - **Direct internal dependencies:** `writing_artifacts.catalog`.
-- **State, resources, and side effects:** Pure frozen values, including an
-  exact hash-verified immutable byte snapshot, with no I/O or import-time
-  operational side effect.
+- **State, resources, and side effects:** Pure frozen values, including a
+  physical filesystem identity and exact hash-verified immutable byte snapshot,
+  with no I/O or import-time operational side effect.
 - **Primary verification/documentation:** `tests/test_writing_artifacts.py`,
   `tests/test_artifact_reference_directives.py`,
   `tests/test_public_api_and_cli.py`, `docs/reference/writing-artifacts.md`,
@@ -2448,7 +2464,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   Module-supported repository/evidence seams own strict identifier validation,
   schema-record conversion, universal-newline selection, ordered proof
   construction, and the unexported `ReferenceAuthorization`, `ReadCapability`,
-  and `ArtifactReferenceDelivery` transient values.
+  and `ArtifactReferenceDelivery` transient values. New durable records use
+  authorization schema version 2 and carry filesystem source identities rather
+  than catalog entries; version-1 records cannot authorize or resume work.
 - **Direct internal dependencies:** `writing_artifacts.catalog` and
   `writing_artifacts.references`.
 - **State, resources, and side effects:** Pure strict-UTF-8 byte selection
@@ -2458,8 +2476,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   the complete source for UTF-8 and NUL before selecting an exact unclamped
   one-based range. One selection is bounded at 128 KiB and one ordered batch at
   256 KiB inclusive. Frozen proofs and evidence carry paths, ranges,
-  provenance, hashes, counts, identities, states, and coded outcomes but never
-  artifact content. One closeable authorization owns selected immutable bytes
+  full-source identities, selected hashes, counts, lifecycle identities,
+  states, and coded outcomes but never artifact content. One closeable
+  authorization owns selected immutable bytes
   and returns correlated proofs plus bytes atomically under its lock;
   repository-minted one-use capabilities consume before delivery validation;
   identity-only, nonserializable deliveries own the provider-facing byte tuple
@@ -2557,13 +2576,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   `writing_artifacts.authorization`.
 - **State, resources, and side effects:** Uses only the secure storage
   adapter's supported descriptor-relative directory, read, list, and
-  create-only publication operations. It owns schema-version-1 canonical JSON
+  create-only publication operations. It owns schema-version-2 canonical JSON
   under fixed `input_snapshots/<operation-id>/` operation and invocation
   layouts. Operation and invocation manifests and every numbered event are
   immutable; recursive duplicate keys, unknown or content-bearing fields,
   noncanonical bytes, unsafe/colliding identities, sequence gaps, changed
-  correlations/proofs, capability reuse, noncontiguous or duplicate invocation
-  ordinals, and durably stored illegal or post-terminal transitions fail closed
+  correlations or filesystem-source proofs, capability reuse, noncontiguous or
+  duplicate invocation ordinals, and durably stored illegal or post-terminal
+  transitions fail closed
   as corruption for that operation. After fully validating healthy stored
   evidence, an illegal repeated or post-terminal caller request is rejected as
   an invalid transition before any write. Inspection orders invocation
@@ -2592,9 +2612,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   for the writing-artifact repository.
 - **Supported surface:** Private `SecureWorkspaceStorage`, consumed only by
   `writing_artifacts.repository` and its package-private
-  `writing_artifacts._reference_evidence` adapter. The repository remains the
-  only lease owner; the evidence adapter receives the same instance and uses
-  its supported methods only within that lease.
+  `writing_artifacts._reference_evidence` and
+  `writing_artifacts.filesystem_sources` adapters. The repository remains the
+  only lease owner; both adapters receive the same instance and use its
+  supported methods only within repository-managed calls.
 - **Direct internal dependencies:** `errors`.
 - **State, resources, and side effects:** Construction captures only a lexical
   absolute workspace-root name, without symlink resolution, filesystem access,
@@ -2607,8 +2628,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   retained and revalidated ancestor descriptors, `O_NOFOLLOW`, nonblocking
   pre-stat/name/descriptor checks, unique-regular-file checks, and exact stored
   entry spelling. Final file names are alias-checked before their first stat and
-  reverified around descriptor reads. Descriptor-relative directory listings
-  reject case-folded or NFKC-normalized aliases before access; traversal fsyncs
+  reverified around descriptor reads. Metadata-only recursive discovery reads
+  no file bodies, skips unsafe or alias-colliding entries, and retains and
+  revalidates descriptor ancestry. Stable reads return exact bytes plus device,
+  inode, size, modification, and change stamps. Descriptor-relative directory
+  listings reject case-folded or NFKC-normalized aliases before access; traversal fsyncs
   each parent directory entry after successful child creation and before
   descending. Publication also fsyncs its target/staging directories and uses a
   lazily required Darwin/Linux native atomic no-replace rename. Publication,
@@ -2638,14 +2662,42 @@ every intermediate arrow. The current runtime graph is acyclic.
   `docs/reference/writing-artifacts.md`, `docs/design/persistence.md`, and
   `docs/operations/filesystem-safety.md`.
 
+### `story_writing_agents.writing_artifacts.filesystem_sources`
+
+- **Source:**
+  `src/story_writing_agents/writing_artifacts/filesystem_sources.py`
+- **Responsibility:** Authorize canonical writing-artifact sources from the
+  current filesystem.
+- **Supported surface:** Package-internal `CanonicalArtifactFilesystem`, plus
+  its package-private strict-UTF-8 and NUL format errors. The adapter lists the
+  four exact core paths and recursively valid part-scoped Markdown manuscripts,
+  selectively captures requested paths, returns bounded text, and compares a
+  later complete source identity without consulting publication provenance.
+- **Direct internal dependencies:** `errors`, `writing_artifacts._storage`,
+  `writing_artifacts.catalog`, and `writing_artifacts.references`.
+- **State, resources, and side effects:** Retains one borrowed
+  `SecureWorkspaceStorage` and owns no descriptor or lock. Listing performs
+  metadata-only safe-file inspection, includes empty files, filters through the
+  canonical path grammar, and orders complete workspace-relative paths.
+  Capture validates complete strict UTF-8 and NUL-free bytes and mints one
+  immutable content snapshot carrying its full hash, size, and physical stamp.
+  All descriptors remain call-local to `_storage`; import performs no I/O.
+- **Primary verification/documentation:** `tests/test_writing_artifacts.py`,
+  `tests/test_artifact_reference_authorization.py`, `tests/test_prompts.py`,
+  `tests/test_runtime_reference_integration.py`,
+  `docs/reference/writing-artifacts.md`,
+  `docs/guides/artifact-references.md`, and
+  `docs/operations/filesystem-safety.md`.
+
 ### `story_writing_agents.writing_artifacts.repository`
 
 - **Source:** `src/story_writing_agents/writing_artifacts/repository.py`
-- **Responsibility:** Coordinate provenance-backed writing-artifact repository
+- **Responsibility:** Coordinate canonical writing-artifact repository
   operations.
 - **Supported surface:** Module-supported internal
-  `WritingArtifactRepository`, with current `catalog`, sorted `list_paths`,
-  ordered selective immutable `read_current`, verified `read_text`, and
+  `WritingArtifactRepository`, with provenance-audited `catalog`,
+  filesystem-authoritative sorted `list_paths`, ordered selective immutable
+  `read_current`, verified `read_text`, and
   unanimous `commit_consensus` operations; plus capture, invocation
   authorization, one-use delivery, result receipt, invocation acceptance or
   termination, operation revalidation or finalization, and content-free
@@ -2657,7 +2709,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Direct internal dependencies:** `agents`, `errors`,
   `writing_artifacts._reference_evidence`, `writing_artifacts._storage`,
   `writing_artifacts.authorization`, `writing_artifacts.catalog`,
-  `writing_artifacts.read_actions`, and `writing_artifacts.references`.
+  `writing_artifacts.filesystem_sources`, `writing_artifacts.read_actions`, and
+  `writing_artifacts.references`.
 - **State, resources, and side effects:** Owns a per-instance reentrant lock
   and the workspace-local permanent `.artifacts.lock`,
   `.artifacts.lock.anchor`, and `.artifacts.lock.ready` readiness triple.
@@ -2680,7 +2733,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   before transaction or target mutation. Outside one exact pending phase, a
   missing catalog is valid
   only with an empty non-exempt ledger; divergence fails closed and is never
-  reconstructed. Every read and commit performs locked recovery first. One
+  reconstructed. Every catalog audit and commit performs locked recovery
+  first. One
   create-only immutable schema-v2 transaction journal records the
   exact catalog-before existence/hash/image, complete catalog-after image,
   immutable commit, ordered targets, old/new hashes, and complete new bytes
@@ -2701,34 +2755,49 @@ every intermediate arrow. The current runtime graph is acyclic.
   marker and fails closed. The exact immutable journal is strictly retired only
   after final target, commit, catalog-after, and ledger verification; a missing
   retirement source is never success.
-  Listings expose only cataloged
-  canonical paths whose current unique regular-file bytes match repository
-  hashes. Selective reads return only requested current entries as immutable
-  content snapshots. Interactive discovery borrows the same sorted `list_paths`
-  result, while supplied-text viewing borrows bounded `read_text`; each read
-  revalidates containment, current provenance, hash, and strict UTF-8 before any
-  text leaves the repository. The repository imports no controller or terminal
-  unit and retains no viewer state. Consensus commits require the execution specialist for
+  Source listing acquires the same permanent repository lease without
+  recovering transactions or loading or auditing the catalog or ledger. It
+  metadata-inspects the four exact core paths and recursively walks only the
+  `manuscript/` tree, filters every result through the canonical path grammar,
+  and returns deterministic complete workspace-relative paths. It reads no
+  artifact body and includes safe empty, initialized, manual, pre-provenance,
+  published, and hash-divergent current files. Unsafe aliases, overlong or
+  unsupported paths, `.gitkeep`, root-level manuscripts, symlinks, non-unique
+  hardlinks, devices, FIFOs, sockets, and absent files remain excluded.
+  Selective reads reopen only the requested canonical sources and return
+  immutable snapshots after stable descriptor reads, strict UTF-8 decoding,
+  and NUL rejection. Supplied-text viewing borrows the same source boundary
+  with its caller-provided 8 MiB bound. Catalog or ledger absence, corruption,
+  or membership does not participate in discovery, prompt reads, viewing, or
+  reference capture, and no read reconstructs, adopts, or changes provenance.
+  Root, lock, path, or source-identity insecurity still fails closed. The
+  repository imports no controller or terminal unit and retains no viewer
+  state. Consensus commits require the execution specialist for
   revision-zero manuscripts and the lead for later manuscripts, publish them
   create-only beneath a part directory, reject every identity already reserved
   by immutable commit history even when its file or catalog entry was externally
   deleted, and allow only lead-authored core updates. Transaction/commit/
   catalog-before/catalog-after sets, unrelated-entry preservation, authorship,
-  ordering, and scalar schemas are correlated exactly. Manual, initialization,
-  internal, unsupported, unsafe, root-manuscript, symlink, hardlink, absent, and
-  hash-divergent files cannot become eligible.
+  ordering, and scalar schemas are correlated exactly. Publication and
+  recovery retain their complete provenance, ledger, journal, authorship, and
+  hash audits; filesystem read eligibility never weakens those write gates.
   Explicit-reference capture returns `None` before a lock, filesystem access,
   or history when the parsed batch has no references. Otherwise one existing
-  repository lease audits the catalog, securely reads each unique requested
-  path once, requires exact current provenance and hash, validates the complete
-  source, constructs ordered range snapshots, and persists the manifest and
-  captured evidence before returning transient bytes. Delivery consumes its
-  exact repository-minted capability before any revalidation, requires the
-  complete ordered request, persists delivery evidence before exposing captured
-  bytes, and never refreshes the snapshot. Provider-result acceptance and
-  top-level workflow acceptance each revalidate current bytes and the complete
-  catalog entry, so
-  identical bytes with new provenance are drift. Retries use new invocation
+  source/evidence lease securely reads each unique requested path once,
+  validates its complete strict-UTF-8, NUL-free bytes, and captures canonical
+  path/kind, full-source hash and size, plus device, inode, modification, and
+  change stamps. Ordered whole/ranged selections enforce the 128 KiB
+  per-reference and 256 KiB aggregate limits; an empty whole source is valid
+  while an empty ranged selection fails. Durable authorization evidence uses
+  schema version 2 and stores only source identities, range facts, selected
+  hashes, and lifecycle metadata. Schema-version-1 authorization evidence is
+  not reusable. Delivery consumes its exact repository-minted capability
+  before any revalidation, requires the complete ordered request, persists
+  delivery evidence before exposing captured bytes, and never refreshes the
+  snapshot. Provider-result acceptance and top-level workflow acceptance each
+  reopen and re-hash every unique source and require the complete captured
+  physical identity, so deletion, replacement, content drift, and same-byte
+  replacement are drift. Retries use new invocation
   correlations with the next positive ordinal and a new private capability
   identity over the same operation snapshot. Finalization disposes captured
   bytes only after a durable accepted or terminated event.
@@ -2739,9 +2808,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   mismatched, failed, and explicitly terminated calls preserve the primary
   failure while best-effort retiring the same capability; it performs no
   provider call and exposes no capability identity.
-  The repository owns all filesystem, recovery, and lock lifetime; the private
-  evidence adapter owns only create-only schema mechanics, while authorization
-  values own only transient bytes and one-use state.
+  The repository owns both lock modes and all filesystem and recovery lifetime;
+  its source/evidence mode creates only required state/evidence directories and
+  never calls recovery or loads publication state. The private filesystem
+  adapter owns source eligibility and capture, the private evidence adapter
+  owns only create-only schema mechanics, and authorization values own only
+  transient bytes and one-use state.
 - **Primary verification/documentation:** `tests/test_writing_artifacts.py`,
   `tests/test_artifact_reference_authorization.py`,
   `tests/test_artifact_reference_evidence.py`,
@@ -2771,9 +2843,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   and the captured authorization bytes; `writing_artifacts.read_actions` owns
   the provider-neutral request/action/result/coordinator boundary;
   `writing_artifacts._reference_evidence` owns canonical create-only lifecycle
-  records; and `writing_artifacts.repository` alone owns secure reads,
-  current-provenance revalidation, the repository lease, durable sequencing,
-  and each concrete one-use coordinator/capability. `backend` imports only the
+  records; `writing_artifacts.filesystem_sources` owns catalog-independent
+  source eligibility and identity; and `writing_artifacts.repository` alone
+  owns secure reads, exact current-source revalidation, repository leases,
+  durable sequencing, and each concrete one-use coordinator/capability.
+  `backend` imports only the
   read-action boundary: it validates the addressed agent/phase/round, requires
   one complete exact action before bytes are delivered, frames those bytes once
   for the next provider call, and accepts no substantive result before durable
@@ -2789,7 +2863,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   persists evidence. Controller error mapping and content-free result/inspection
   identities do not move reference bytes above those boundaries. Interactive
   `$`/`$$` completion, picker, and direct-view activation consume only a
-  controller-borrowed sorted catalog and bounded repository `read_text`; the UI
+  controller-borrowed sorted safe-filesystem path snapshot and bounded
+  repository `read_text`; the UI
   replaces only its active provider-text span with ordinary `${path}` or
   `${path}#Lx-Ly` tokens and therefore cannot bypass this downstream parser,
   capture, authorization, provider-read, and evidence path. The supplied-text
@@ -2798,9 +2873,13 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 - Canonical core context crosses the repository/provider boundary only as an
   `ArtifactContentSnapshot` converted to an immutable `PromptFileReference`.
+  Its content-free source identity records canonical kind/path, full hash and
+  size, and physical file stamps rather than publication metadata.
   `PromptAssembler` requests only the current agent's configured core paths;
   provider binding and staging decode the captured bytes and never reopen the
-  lexical workspace path. `Workspace` generic writers reject canonical
+  lexical workspace path. Empty, manual, initialized, pre-provenance, and
+  hash-divergent safe current core sources are therefore available without
+  weakening later publication checks. `Workspace` generic writers reject canonical
   artifact identities and case-folded or NFKC-normalized aliases of both
   repository-owned namespaces before mutation and expose no artifact-specific
   core reader. Repository mutation remains protected by a permanent exact-name
