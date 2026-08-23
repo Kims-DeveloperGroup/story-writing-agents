@@ -2,9 +2,11 @@
 
 > **Availability:** inline `${path}` and `${path}#Lx-Ly` references are active
 > in provider-bound conversation, retrieval, and consensus input. In the TTY
-> shell, `$` lists eligible artifacts, `$${path}` opens one directly, and `$$`
-> opens a picker before the independent ranged viewer. These controls augment
-> prompt editing; `$` is not a command and does not submit the prompt.
+> shell on a capable terminal, `$` opens the labeled whole-file selection
+> panel, `$${path}` opens one artifact directly, and `$$` opens a picker before
+> the independent ranged viewer. These controls augment prompt editing; `$` is
+> not a command and does not submit the prompt. Ordinary-line fallback uses the
+> numbered flows described below.
 
 An artifact reference tells every addressed story agent which existing output
 it must read before its reply can be accepted. It carries a canonical path and
@@ -59,12 +61,20 @@ history; the provider projection removes the escaping backslash.
 
 ## Discover, view, and attach in the shell
 
-Artifact controls are active only in provider-bound prompt spans: ordinary
-advisory text with an attached session and focused conversation, the text after
-an `@agent` route or `/say`, and `/run` prompt text. They also work in the
-multiline `/run` composer and the package-internal chat composer. They are inert
-in the lobby and in command names, management arguments, identities, options,
-output paths, subjects, settings, confirmations, and displayed output.
+Artifact controls activate only when all three prerequisites hold:
+
+1. This shell has an attached session.
+2. That session has a focused active conversation.
+3. The cursor is in provider-bound prompt text.
+
+Eligible text includes ordinary advisory input, the text after an `@agent`
+route or `/say`, and `/run` prompt text. The controls also work in the multiline
+`/run` composer and the package-internal chat composer after the first two
+prerequisites hold. They are inert in the lobby, while attached without
+conversation focus, and in command names, management arguments, identities,
+options, output paths, subjects, settings, confirmations, and displayed output.
+The shell orientation and full `/help` state the attachment/focus prerequisite
+and distinguish `$` whole-file selection from `$$` ranged selection.
 
 | Surface | `$` activation |
 | --- | --- |
@@ -72,12 +82,12 @@ output paths, subjects, settings, confirmations, and displayed output.
 | Valid `@agent TEXT` or `/say TEXT` | Eligible only in `TEXT`. |
 | `/run [--fresh] [--output PATH] PROMPT` | Eligible only in `PROMPT`, never flags or `PATH`. |
 | `/run` multiline composer; internal chat composer | Eligible in composed prompt text. |
-| Lobby/no focus; management, ID, subject, option, output-path, settings, confirmation, and output fields | Inert. |
+| Lobby or attached without conversation focus; management, ID, subject, option, output-path, settings, confirmation, and output fields | Inert. |
 | Noninteractive CLI, automation, or Python | No activation UI; type literal `${...}` indicators. |
 
 | Typed control | Capable terminal | Ordinary-line fallback | Result in the draft |
 | --- | --- | --- | --- |
-| `$` | Shows the current eligible catalog; Up/Down chooses and Enter or Tab completes. | Shows a numbered catalog. | `${path}` replaces only the active marker; the prompt is not submitted. |
+| `$` | Shows `Writing artifact selection [open]`, then `[controls] Up/Down selects; Enter/Tab inserts a whole-file reference.` Up/Down chooses and Enter or Tab completes. | Shows a numbered catalog. | `${path}` replaces only the active marker; the prompt is not submitted. |
 | `$${path}` | Enter or Tab opens that artifact in the independent viewer. | Submitting the marker line opens its complete numbered text viewer. | Enter on a range inserts `${path}#Lx-Ly`. |
 | `$$` | Enter or Tab opens the catalog picker, then the selected artifact in the viewer. | Submitting the marker line uses a numbered picker, then the complete numbered viewer. | The selected path and inclusive range replace only the marker. |
 | `\$` | No activation. | No activation. | A literal dollar remains in the prompt. |
@@ -93,6 +103,30 @@ One prompt can contain several completed indicators. Each new activation uses
 a fresh catalog/read/view operation; completed indicators stay in their typed
 order. A selection replaces only its active `$` marker and leaves the rest of
 the buffer unchanged, with the cursor immediately after the inserted token.
+
+### Whole-file selection example
+
+At an attached, focused prompt, type:
+
+```text
+Compare $core_documents/char
+```
+
+The panel title is `Writing artifact selection [open]`. The path fragment after
+`$` filters the rows case-sensitively. If
+`${core_documents/character_sheets.md}` is highlighted, Enter or Tab replaces
+only `$core_documents/char` with that whole-file indicator. It does not send
+the line. You can continue editing and add `$$`, then press Enter or Tab to
+choose an artifact and open the independent viewer for a line range. Only a
+later ordinary prompt submission dispatches the resulting references.
+
+If the fragment matches no eligible path, the open panel instead shows
+`[empty] No matching writing artifacts. Change the path fragment.` Edit or
+remove the fragment to recover. If the current eligible catalog itself is
+empty, typing `$` immediately shows
+`[empty] No current writing artifacts. Complete a consensus run to create one.`
+No provider call starts. Enter or Tab then emits the established
+`command_invalid` empty-catalog error below and restores the `$` draft.
 
 ### Capable and fallback completion boundary
 
@@ -266,7 +300,7 @@ work:
 
 ```text
 editing a provider-bound span
-  $              -> catalog completion -> ${path}          -> same editing span
+  $              -> artifact selection -> ${path}          -> same editing span
   $${path}+Enter -> viewer            -> ${path}#Lx-Ly    -> same editing span
   $$+Enter       -> picker -> viewer  -> ${path}#Lx-Ly    -> same editing span
   cancel/error   ------------------------------------------> exact original span
@@ -277,13 +311,17 @@ read prelude -> transient provider context -> accepted result or atomic failure
 
 Internally, the controller supplies only the provider-bound buffer span and
 artifact callbacks. A pure activation layer classifies the active marker and
-returns a content-free completion, viewer request, or failure. The terminal
-driver owns the one input latch and nested picker/viewer resources; it restores
-the immutable origin on every noncommit path and clears call-local callbacks.
-Only the later normal submission reaches the parser and runtime. The private
-viewer remains independent and storage-free: the controller reads an eligible
-artifact, supplies its text and display name, and attaches the returned line
-numbers to the path.
+returns a content-free completion, viewer request, or failure. For an eligible
+but empty catalog, it projects an empty artifact panel together with a deferred
+empty-catalog failure: rendering `$` stays side-effect-free, while Enter or Tab
+surfaces the fixed error. A no-match panel is instead the filtered view of a
+nonempty completion projection, so changing the path fragment can reveal rows
+again. The terminal driver owns the one input latch and nested picker/viewer
+resources; it restores the immutable origin on every noncommit path and clears
+call-local callbacks. Only the later normal submission reaches the parser and
+runtime. The private viewer remains independent and storage-free: the
+controller reads an eligible artifact, supplies its text and display name, and
+attaches the returned line numbers to the path.
 
 Catalog display, highlighting, viewing, and cancellation create no durable
 work-history row. A completed token enters main history only if the user later

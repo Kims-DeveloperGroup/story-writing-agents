@@ -3,8 +3,9 @@
 > **Availability:** the TTY shell supports session management, persistent
 > settings, and local reads; advisory turns and consensus also require current
 > focus on an active conversation. Inline canonical artifact references work in
-> provider-bound routed, sticky, ordinary, retrieval, and `/run` prompt text;
-> `$`, `$${path}`, and `$$` discover or select them without submitting.
+> provider-bound routed, sticky, ordinary, retrieval, and `/run` prompt text.
+> After session attachment and conversation focus, `$`, `$${path}`, and `$$`
+> discover or select them without submitting.
 
 Key terms: **defaults** are persisted fallbacks; **current attachment** is the
 session held by this shell; **current focus** and **agent focus** select the
@@ -205,14 +206,28 @@ the sticky character focus. Every provider-bound turn captures its own ordered
 batch; a previous agent's read cannot satisfy the next turn. See
 [Canonical artifact references](artifact-references.md).
 
-While editing one of those prompt spans, type `$` to list only current eligible
-writing artifacts. Up/Down and Enter or Tab insert `${path}` on a capable
-terminal. Type `$${path}` then Enter or Tab to open that artifact directly, or
-`$$` then Enter or Tab to choose it first; Shift+Up/Down selects an inclusive
-range and Enter inserts `${path}#Lx-Ly`. Escape, Ctrl-C, EOF, or a handled read
-error restores the exact draft and cursor with no dispatch or history entry.
-Type `\$` for a literal dollar. These controls are inert in management
-commands, IDs, options, subjects, output paths, settings, and the lobby.
+Artifact controls require all three of: an attached session, a focused active
+conversation, and a cursor in provider-bound prompt text. Shell orientation and
+full `/help` summarize this prerequisite. Lobby input, attached input without
+focus, and management commands, IDs, options, subjects, output paths, and
+settings remain inert.
+
+While editing an eligible span, type `$` to open
+`Writing artifact selection [open]`. It shows
+`[controls] Up/Down selects; Enter/Tab inserts a whole-file reference.`, and
+lists only current eligible artifacts. Type a case-sensitive path fragment
+after `$` to filter the list; no match shows
+`[empty] No matching writing artifacts. Change the path fragment.` Up/Down and
+Enter or Tab insert `${path}` on a capable terminal without sending the prompt.
+If the eligible catalog is empty, the panel immediately says to complete a
+consensus run; Enter or Tab emits the established empty-catalog error and
+restores the draft.
+
+Type `$${path}` then Enter or Tab to open that artifact directly, or `$$` then
+Enter or Tab to choose it first; Shift+Up/Down selects an inclusive range and
+Enter inserts `${path}#Lx-Ly`. Escape, Ctrl-C, EOF, or a handled read error
+restores the exact draft and cursor with no dispatch or history entry. Type
+`\$` for a literal dollar.
 
 Ordinary-line fallback uses numbered catalog choices and exact `START-END`
 viewer input, then displays the amended draft for a second Enter confirmation.

@@ -255,20 +255,32 @@ Artifact activation is a separate overlay inside provider-bound text only:
 
 | Input | Capable-terminal result |
 | --- | --- |
-| `$` | Lists current eligible canonical artifacts; Enter or Tab inserts `${path}` without submitting. |
+| `$` | Opens `Writing artifact selection [open]` with `[controls] Up/Down selects; Enter/Tab inserts a whole-file reference.` Enter or Tab inserts `${path}` without submitting. |
 | `$${path}` then Enter or Tab | Opens the named artifact in the independent viewer. |
 | `$$` then Enter or Tab | Opens the artifact picker, then the viewer. |
 | Shift+Up/Down, then Enter in the viewer | Selects a normalized inclusive range and inserts `${path}#Lx-Ly`. |
 | Escape, Ctrl-C, EOF, or handled activation failure | Restores the exact buffer/cursor and performs no dispatch or history append. |
 | `\$` | Leaves a literal dollar and performs no activation. |
 
-The eligible spans are attached, focused ordinary input; valid `@agent` and
-`/say` tails; `/run` prompt text; the `/run` composer; and the internal chat
-composer. Lobby input, management commands and arguments, IDs, subjects,
-options, output paths, settings, confirmations, and output are inert.
+Activation requires an attached session, a focused active conversation, and a
+cursor in provider-bound text. The eligible spans are focused ordinary input;
+valid `@agent` and `/say` tails; `/run` prompt text; the `/run` composer; and the
+internal chat composer. Lobby input, attached input without focus, management
+commands and arguments, IDs, subjects, options, output paths, settings,
+confirmations, and output are inert. Shell orientation and full `/help` explain
+the attachment/focus prerequisite and distinguish `$` whole-file insertion from
+`$$` ranged selection.
 Multiple inserted indicators retain order. Completion/viewing remains local;
 only the later normal submit reaches the parser and runtime, where each
 provider invocation must perform its own read.
+
+The text after `$` is a case-sensitive path fragment. No match leaves the
+labeled panel open with
+`[empty] No matching writing artifacts. Change the path fragment.` When the
+eligible catalog itself is empty, `$` immediately shows
+`[empty] No current writing artifacts. Complete a consensus run to create one.`
+Enter or Tab then writes the existing `command_invalid` empty-catalog error and
+restores the draft; previewing the empty state starts no provider work.
 
 Line fallback prints a numbered catalog and complete numbered viewer. It
 accepts exact ASCII `START-END` or `/cancel`, then prints the amended draft and
