@@ -142,6 +142,8 @@ class ProviderAuthService:
     ) -> None:
         if not isinstance(workspace_root, Path):
             raise TypeError("workspace_root must be a Path")
+        if not workspace_root.is_dir():
+            raise ValueError("workspace_root must be an existing directory")
         _require_executable(codex_executable)
         _require_executable(antigravity_executable)
         self._workspace_root = workspace_root
