@@ -917,7 +917,7 @@ class SemanticInputDriverTests(unittest.TestCase):
         )
         renderer.assert_called_once()
         self.assertIs(renderer.call_args.args[1].profile, CapabilityProfile.ANSI)
-        self.assertEqual(size_calls, [8])
+        self.assertEqual(size_calls, [8, 8])
         fallback.assert_not_called()
         self.assertEqual(driver._history_state, MainInputHistoryState())
         self.assertEqual(
@@ -930,6 +930,107 @@ class SemanticInputDriverTests(unittest.TestCase):
         self.assertIn("界e\u0301", rendered)
         initial_calls = [call for call in provider.call_args_list if call == mock.call("")]
         self.assertEqual(len(initial_calls), 1)
+
+    def test_setup_geometry_failure_and_first_mismatch_fallback_before_mutation(
+        self,
+    ) -> None:
+        view = InputPromptView((), Prompt("input>"))
+        expected_prompt = render_input_prompt(
+            view,
+            _capability(CapabilityProfile.ANSI),
+        ).plain_text
+        for setup_result in (
+            OSError("setup size unavailable"),
+            os.terminal_size((79, 24)),
+        ):
+            with self.subTest(setup=type(setup_result).__name__):
+                fallback = mock.Mock(return_value="fallback value")
+                driver, input_stream, output, _fallback, termios_double, _size = (
+                    _driver("unused", fallback=fallback)
+                )
+                geometry = mock.Mock(
+                    side_effect=(
+                        os.terminal_size((80, 24)),
+                        setup_result,
+                    )
+                )
+                driver._os_provider().get_terminal_size = geometry
+
+                self.assertEqual(
+                    driver.read_input_line(
+                        view,
+                        render_input_prompt,
+                        lambda _buffer: (),
+                    ),
+                    "fallback value",
+                )
+                self.assertEqual(geometry.call_args_list, [mock.call(8)] * 2)
+                fallback.assert_called_once_with(expected_prompt)
+                self.assertEqual(input_stream.read_calls, 0)
+                self.assertEqual(output.records, [])
+                self.assertEqual(termios_double.set_calls, [])
+                self.assertEqual(driver._history_state, MainInputHistoryState())
+
+    def test_matching_resize_stays_live_and_later_setup_drift_fails_closed(
+        self,
+    ) -> None:
+        driver, _input, _output, fallback, termios_double, _size = _driver(
+            "first\nsecond\n"
+        )
+        geometry = mock.Mock(
+            side_effect=(
+                os.terminal_size((80, 24)),
+                os.terminal_size((80, 24)),
+                os.terminal_size((40, 24)),
+                os.terminal_size((40, 24)),
+            )
+        )
+        driver._os_provider().get_terminal_size = geometry
+
+        self.assertEqual(driver.read_line("first> "), "first")
+        self.assertEqual(driver.read_line("second> "), "second")
+        self.assertEqual(geometry.call_args_list, [mock.call(8)] * 4)
+        fallback.assert_not_called()
+        self.assertEqual(
+            [when for _fd, when, _attrs in termios_double.set_calls],
+            [
+                termios_double.TCSANOW,
+                termios_double.TCSADRAIN,
+                termios_double.TCSANOW,
+                termios_double.TCSADRAIN,
+            ],
+        )
+        self.assertEqual(driver._history_state, MainInputHistoryState())
+
+        for setup_result in (
+            OSError("later setup unavailable"),
+            os.terminal_size((39, 24)),
+        ):
+            with self.subTest(later_setup=type(setup_result).__name__):
+                driver, _input, _output, fallback, termios_double, _size = _driver(
+                    "first\nunused\n"
+                )
+                geometry = mock.Mock(
+                    side_effect=(
+                        os.terminal_size((80, 24)),
+                        os.terminal_size((80, 24)),
+                        os.terminal_size((40, 24)),
+                        setup_result,
+                    )
+                )
+                driver._os_provider().get_terminal_size = geometry
+                self.assertEqual(driver.read_line("first> "), "first")
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "^live terminal input preflight failed$",
+                ):
+                    driver.read_line("second> ")
+                fallback.assert_not_called()
+                self.assertEqual(
+                    [when for _fd, when, _attrs in termios_double.set_calls],
+                    [termios_double.TCSANOW, termios_double.TCSADRAIN],
+                )
+                self.assertEqual(driver._history_state, MainInputHistoryState())
 
     def test_vintr_veof_physical_eof_and_output_failures_restore(self) -> None:
         cases: tuple[tuple[str, object], ...] = (

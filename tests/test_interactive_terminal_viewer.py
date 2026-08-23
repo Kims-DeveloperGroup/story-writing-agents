@@ -1420,7 +1420,7 @@ class ViewerDriverTests(unittest.TestCase):
     def test_live_shift_sequences_resize_every_nonexit_and_restore_screen_once(self) -> None:
         driver, _input, output, fallback, termios, events = _driver(
             "\x1b[1;2B\x1b[1;2B\x1b[1;2Ax\n",
-            sizes=((40, 8), (30, 6), (20, 5), (18, 4), (16, 3)),
+            sizes=((40, 8), (40, 8), (30, 6), (20, 5), (18, 4), (16, 3)),
         )
         with mock.patch(
             "story_writing_agents.interactive_terminal._driver._escape_input_is_ready",
@@ -1433,7 +1433,7 @@ class ViewerDriverTests(unittest.TestCase):
         self.assertEqual(rendered.count("\x1b[?1049h"), 1)
         self.assertEqual(rendered.count("\x1b[?1049l"), 1)
         self.assertNotIn("\x1b[?25", rendered)
-        self.assertEqual(events.count("os.geometry"), 6)
+        self.assertEqual(events.count("os.geometry"), 7)
         self.assertEqual(events.count("termios.activate"), 1)
         self.assertEqual(events.count("termios.restore"), 1)
         self.assertEqual(termios.original[3], _FakeTermios.ICANON | _FakeTermios.ECHO)
@@ -1571,7 +1571,7 @@ class ViewerDriverTests(unittest.TestCase):
         def failing_geometry(_descriptor: int) -> os.terminal_size:
             nonlocal geometry_calls
             geometry_calls += 1
-            if geometry_calls > 1:
+            if geometry_calls > 2:
                 raise OSError("resize unavailable")
             return os.terminal_size((40, 8))
 
@@ -1579,7 +1579,7 @@ class ViewerDriverTests(unittest.TestCase):
         result = _read(driver, state)
         self.assertEqual(result.line_range, (1, 1))
         fallback.assert_not_called()
-        self.assertGreaterEqual(geometry_calls, 2)
+        self.assertEqual(geometry_calls, 3)
         self.assertEqual(events.count("termios.restore"), 1)
         self.assertEqual("".join(output.records).count("\x1b[?1049l"), 1)
 

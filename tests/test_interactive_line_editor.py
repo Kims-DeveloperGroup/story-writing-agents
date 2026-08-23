@@ -978,10 +978,10 @@ class CapabilityAndFailureTests(unittest.TestCase):
                 side_effect=_fake_fpathconf,
             ),
         ):
-            self.assertEqual(editor.read_line("p> "), "")
-        fallback.assert_not_called()
-        self.assertEqual(input_stream.read_calls, 1)
-        self.assertTrue(output.records)
+            self.assertEqual(editor.read_line("p> "), "fallback")
+        fallback.assert_called_once_with("p> ")
+        self.assertEqual(input_stream.read_calls, 0)
+        self.assertEqual(output.records, [])
 
     def test_activation_failure_restores_without_switching_to_fallback(self) -> None:
         editor, input_stream, output, fallback = make_editor("unused")

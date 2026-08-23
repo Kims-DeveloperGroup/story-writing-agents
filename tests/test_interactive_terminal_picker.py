@@ -1112,7 +1112,7 @@ class PickerDriverTests(unittest.TestCase):
         )
         readiness.assert_called_once_with((7,), (), (), 0.05)
         fallback.assert_not_called()
-        self.assertEqual(size_calls, [8, 8, 8, 8])
+        self.assertEqual(size_calls, [8, 8, 8, 8, 8])
         self.assertEqual(
             [when for _fd, when, _attributes in termios_double.set_calls],
             [termios_double.TCSANOW, termios_double.TCSADRAIN],
@@ -1197,7 +1197,7 @@ class PickerDriverTests(unittest.TestCase):
         )
         driver, _input, output, fallback, termios_double, size_calls = _driver(
             "x\x1b[B\x1b[A\n",
-            widths=(80, 40, 20, 120, 120),
+            widths=(80, 80, 40, 20, 120, 120),
         )
         renderer = mock.Mock(wraps=render_picker_viewport)
         projector = mock.Mock(wraps=project_picker_viewport)
@@ -1216,7 +1216,7 @@ class PickerDriverTests(unittest.TestCase):
             )
         self.assertEqual(outcome.text, "one")
         self.assertEqual(readiness.call_count, 2)
-        self.assertEqual(size_calls, [8, 8, 8, 8, 8])
+        self.assertEqual(size_calls, [8, 8, 8, 8, 8, 8])
         self.assertEqual(
             [call.args[1].width for call in renderer.call_args_list],
             [39, 19, 119, 119],

@@ -895,7 +895,7 @@ class CompletionDriverTests(unittest.TestCase):
             driver._history_state,
             MainInputHistoryState(("/settings ",)),
         )
-        self.assertEqual(os_module.observed_widths, [8])
+        self.assertEqual(os_module.observed_widths, [8, 8])
         self.assertEqual(
             tuple(call[1] for call in termios.set_calls),
             (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
@@ -1018,7 +1018,7 @@ class CompletionDriverTests(unittest.TestCase):
         fallback.assert_not_called()
         self.assertEqual(input_stream.reads, [])
         self.assertEqual(driver._history_state, MainInputHistoryState(("/say ",)))
-        self.assertEqual(os_module.observed_widths, [8])
+        self.assertEqual(os_module.observed_widths, [8, 8])
         self.assertEqual(
             tuple(call[1] for call in termios.set_calls),
             (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
@@ -1185,7 +1185,7 @@ class CompletionDriverTests(unittest.TestCase):
             driver._history_state,
             MainInputHistoryState(("@plot message",)),
         )
-        self.assertEqual(os_module.observed_widths, [8])
+        self.assertEqual(os_module.observed_widths, [8, 8])
         self.assertEqual(
             tuple(call[1] for call in termios.set_calls),
             (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
