@@ -77,6 +77,22 @@ from ._render import (
     render_picker_fallback,
     render_picker_viewport,
 )
+from ._viewer_controls import (
+    initialize_text_viewer,
+    project_text_viewer_viewport,
+    transition_text_viewer,
+    transition_text_viewer_fallback,
+)
+from ._viewer_model import (
+    TextViewerExitKind,
+    TextViewerResult,
+    TextViewerState,
+    dispose_text_viewer,
+)
+from ._viewer_render import (
+    render_text_viewer,
+    render_text_viewer_fallback,
+)
 
 
 class AttachmentKind(StrEnum):
@@ -452,6 +468,7 @@ class InteractiveTerminal:
         "_main_read_line",
         "_picker_read",
         "_prompt_read",
+        "_text_viewer_read",
         "_advisory_progress",
         "_debate_progress",
         "_read_line",
@@ -497,6 +514,7 @@ class InteractiveTerminal:
         self._confirmation_read_line = _plain_input_reader(read_line, width)
         self._picker_read = _plain_picker_reader(read_line, write_text, width)
         self._prompt_read = _plain_prompt_reader(read_line, width)
+        self._text_viewer_read = _plain_text_viewer_reader(read_line, width)
         self._advisory_progress = _plain_advisory_progress
         self._debate_progress = _plain_debate_progress
         self._write_text = write_text
@@ -1380,6 +1398,43 @@ class InteractivePromptInput:
         return outcome
 
 
+class InteractiveTextViewer:
+    """Bind one stateless supplied-text range viewer without storage access."""
+
+    __slots__ = ("_read",)
+
+    def __init__(self, terminal: InteractiveTerminal) -> None:
+        """Retain only one terminal's package-internal viewer capability."""
+
+        if not isinstance(terminal, InteractiveTerminal):
+            raise TypeError("terminal must be an InteractiveTerminal")
+        self._read: Callable[[TextViewerState], TextViewerResult] = (
+            terminal._text_viewer_read
+        )
+
+    def read_range(
+        self,
+        text: str,
+        *,
+        display_name: str,
+        initial_line: int | None = None,
+    ) -> TextViewerResult:
+        """Return one inclusive line range or a typed noncommit outcome."""
+
+        state = initialize_text_viewer(
+            text,
+            display_name=display_name,
+            initial_line=initial_line,
+        )
+        try:
+            outcome = self._read(state)
+            if type(outcome) is not TextViewerResult:
+                raise TypeError("viewer reader must return a TextViewerResult")
+            return outcome
+        finally:
+            dispose_text_viewer(state)
+
+
 class InteractiveAdvisoryProgress:
     """Retain one terminal's package-internal advisory progress session."""
 
@@ -1575,6 +1630,38 @@ def _plain_picker_reader(
     return read_picker
 
 
+def _plain_text_viewer_reader(
+    read_line: Callable[[str], str],
+    width: int,
+) -> Callable[[TextViewerState], TextViewerResult]:
+    """Adapt one ordinary line callback to the strict ranged viewer fallback."""
+
+    if not callable(read_line):
+        raise TypeError("read_line must be callable")
+    capabilities = _plain_capabilities(width)
+
+    def read_text_viewer(state: TextViewerState) -> TextViewerResult:
+        if type(state) is not TextViewerState:
+            raise TypeError("state must be a TextViewerState")
+        current = state
+        while True:
+            frame = render_text_viewer_fallback(current, capabilities)
+            try:
+                callback_value = read_line(frame.plain_text)
+                if isinstance(callback_value, str):
+                    callback_value = str.__str__(callback_value)
+                answer = _validated_input_line(callback_value)
+            except KeyboardInterrupt:
+                return TextViewerResult(TextViewerExitKind.INTERRUPTED)
+            except EOFError:
+                return TextViewerResult(TextViewerExitKind.EOF)
+            current, outcome = transition_text_viewer_fallback(current, answer)
+            if outcome is not None:
+                return outcome
+
+    return read_text_viewer
+
+
 def _empty_slash_suggestions(
     buffer: str,
 ) -> tuple[SlashCommandSuggestion, ...]:
@@ -1735,6 +1822,14 @@ def build_stream_terminal(
 
     terminal._picker_read = read_picker
     terminal._prompt_read = read_prompt
+    terminal._text_viewer_read = lambda state: driver.read_text_viewer(
+        state,
+        transition_text_viewer,
+        transition_text_viewer_fallback,
+        project_text_viewer_viewport,
+        render_text_viewer,
+        render_text_viewer_fallback,
+    )
 
     async def run_advisory_progress(operation):
         return await driver.run_advisory_progress(
@@ -2106,6 +2201,9 @@ __all__ = [
     "InteractiveError",
     "sanitize_terminal_text",
     "InteractiveTerminal",
+    "InteractiveTextViewer",
+    "TextViewerExitKind",
+    "TextViewerResult",
     "build_contextual_terminal",
     "build_stream_terminal",
     "project_composition_suggestions",

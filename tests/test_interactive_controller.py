@@ -1136,7 +1136,7 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 42)
+        self.assertEqual(len(modules), 46)
 
 
 class ControllerDebateVisibilityTests(ControllerTestCase):

@@ -33,18 +33,21 @@
 > leading routed-agent suggestions to that capable main-prompt palette. The
 > [interactive terminal reference](../reference/interactive-terminal.md) and
 > [terminal safety rules](../operations/terminal-safety.md) describe current
-> observable behavior.
+> observable behavior. #162 adds one isolated package-internal supplied-text
+> viewer with pure range state, bounded rendering, strict line fallback, and a
+> sole-driver alternate-screen lifecycle. It has no installed-shell consumer.
 
 This contract governs every human-facing interactive view and control in the
 installed shell. It preserves scrollback and the established command/runtime
 boundaries while giving output, one-line input, line-oriented composition,
 confirmation, suggestions, fixed choices, command history, and pickers one
-semantic model.
+semantic model. It also governs the isolated package-internal ranged viewer
+where explicitly identified, although no installed-shell command invokes it.
 
 The words **must**, **must not**, and **may** below constrain the delivery
 issues. Requirements beyond the implemented #82, #83, #84, #85, #86, #79,
-#87, #94, #93, #105, #106, #111, #115, #119, #123, #126, #127, and #73 slices
-do not describe current production behavior.
+#87, #94, #93, #105, #106, #111, #115, #119, #123, #126, #127, #142, #162,
+and #73 slices do not describe current production behavior.
 
 ## Delivery status
 
@@ -69,6 +72,7 @@ do not describe current production behavior.
 | #126 Enter completion and spacing | Implemented: at capable main prompts, Enter applies a highlighted suggestion without submitting and dismisses the palette so a second Enter submits; Enter and Tab add one ASCII trailing space only when the replaced token ends at the buffer end. |
 | #127 leading routed-agent suggestions | Implemented: the capable main prompt projects `@lead`, `@plot`, `@character`, and `@execution` for a cursor-active first leading token, using canonical preferred route aliases and the existing completion controls. |
 | #142 live resume choices and transient input | Implemented: interactive session and conversation selection use only `/session resume [NAME]` and `/conversation resume [ID]`; exact omitted commands show controller-owned choices before submission on capable streams when a disposable read yields eligible rows. A submitted omitted command uses the generic picker—live on a capable stream and numbered in fallback—only after its fresh read succeeds with eligible rows; empty and failed reads report without a picker. Dynamic-choice Enter submits an explicit identity directly. Every capable input read clears its complete live frame before returning and attempts the same cleanup on failure, while persistent semantic results remain in scrollback. |
+| #162 independent ranged text viewer | Implemented package-internally: exact caller-supplied text, logical-line count, and complete fallback projection are bounded before terminal access; pure immutable state selects normalized one-based inclusive ranges; capable streams use one bounded alternate-screen lifecycle; and ordinary-line fallback accepts exact ASCII `START-END` or `/cancel` without truncating accepted content. One per-driver input latch now selects `LIVE` or `FALLBACK` permanently and preserves exact-byte decoding across all input routes. Results contain only an exit kind and optional range. No shell command, public API, artifact read, reference construction, composer restoration, or agent integration is added. |
 
 ## Goals and limits
 
@@ -82,14 +86,17 @@ The design must:
   and
 - use only the Python standard library.
 
-This remains a scrollback-friendly, line-oriented CLI, not a full-screen TUI.
-Mouse input, general-purpose animation, the alternate screen, terminal
-queries, a signal-driven background loop, user-selectable themes, persistent
-history, fuzzy completion, and a full-screen composer are out of scope. The
-narrow animated advisory/consensus indicator is the sole exception: it is a
-terminal-owned, call-local visual aid for one capable advisory or consensus
-operation, not a general animation mechanism. Rendering must not assume that
-earlier terminal rows can be revisited after an interaction is committed.
+The installed shell remains scrollback-friendly and line-oriented, not a
+full-screen TUI. Mouse input, general-purpose animation, terminal queries, a
+signal-driven background loop, user-selectable themes, persistent history,
+fuzzy completion, and a full-screen composer are out of scope. #162's isolated
+viewer is the sole alternate-screen exception; it is a call-local supplied-text
+control, not a shell, composer, picker, settings, or general TUI mode. The
+narrow animated advisory/consensus indicator remains the sole animation
+exception: it is a terminal-owned, call-local visual aid for one capable
+operation, not a general animation mechanism. Rendering outside the viewer
+must not assume that earlier terminal rows can be revisited after an
+interaction is committed.
 
 ## Closed semantic vocabulary
 
@@ -116,6 +123,9 @@ A `Panel` may contain `Section`, `Field`, `Notice`, `Message`, `Record`, or
 same content primitives but retain their explicit interaction semantics.
 Composer and confirmation views are compositions of `Prompt`, `Panel`,
 `Section`, `Field`, and `Notice`; they are not new component kinds.
+The ranged viewer uses its own private document, state, viewport, result, and
+render contracts rather than adding another member to this closed semantic
+`Component` union.
 Splitter framing is selected only for the semantic `Panel` type. Standalone
 `Prompt`, `Section`, `ListView`, `Record`, `SuggestionPalette`, and `Picker`
 components retain their established unframed shapes; a component nested inside
@@ -155,6 +165,15 @@ stable semantic identity when that identity still exists.
 operation results. Color, symbols, or emphasis may reinforce them but their
 text and structure must remain sufficient in plain output.
 
+The viewer has a separate immutable, call-local state rather than extending
+these shell view states. A nonempty document has one active line and an
+optional fixed anchor; the normalized selection is the inclusive span between
+anchor and active line. Ordinary Up/Down clears the anchor. Shift+Up/Down sets
+the first active line as anchor and moves the active end, so extension,
+contraction, reversal, and boundary clamping remain deterministic. Its terminal
+results are exactly `selected`, `cancelled`, `interrupted`, and `eof`; an
+operational failure is raised after cleanup, not represented as another result.
+
 ## Input ownership and transition boundary
 
 Exactly one terminal driver owns raw streams, capability and width detection,
@@ -185,14 +204,20 @@ exactly one advisory awaitable, draws only on a capable raw stream, clears and
 redraws around persistent output, and joins both the operation and its
 call-local indicator task before returning. It does not add a semantic view,
 callback record, public API, or general animation facility.
+#162 adds a separate supplied-text viewer route. Its private model, controls,
+and renderer are pure. A dedicated input-lifecycle leaf owns the driver's
+irreversible live/fallback selection and persistent exact-byte decoder; the
+existing driver owns Shift+Arrow decoding, geometry, alternate screen,
+streams, raw mode, and cleanup. The viewer never opens a file or passes viewer
+state through the parser or controller.
 Up/Down navigate history only on capable main reads with a closed palette; an
 open palette consumes them for highlight navigation. Up/Down, Tab, Shift-Tab,
 and Escape remain no-ops for composition and confirmation. Shift-Tab remains a
 main no-op.
 
 Controls receive normalized key events such as text, Enter, Backspace, Delete,
-Left, Right, Home, End, Up, Down, Tab, Shift-Tab, Escape, Ctrl-C, and EOF. Their
-transitions are pure:
+Left, Right, Home, End, Up, Down, Shift+Up, Shift+Down, Tab, Shift-Tab, Escape,
+Ctrl-C, and EOF. Their transitions are pure:
 
 ```text
 transition(previous_state, key_event, semantic_options)
@@ -219,6 +244,33 @@ slice may make a narrower exception only for an explicitly documented and
 tested live-control redraw/restoration sequence. It must not split one domain
 record into multiple caller-visible callback records.
 
+### Permanent input-mode lifecycle
+
+One resource-free input latch belongs to each stream-backed driver. Before any
+input is consumed it is `UNDECIDED`. The first actual read irreversibly selects
+`LIVE` after exact source/decoder/control/configuration preflight, or
+`FALLBACK` immediately before the ordinary callback. The selected mode applies
+to main, subject, composition, confirmation, prompt, picker, and viewer reads.
+It cannot upgrade or downgrade later.
+
+`LIVE` retains one source-correlated incremental decoder for the driver's
+lifetime. It admits registry-canonical ASCII, UTF-8, or ISO-8859-1 only with
+the built-in `strict` or `surrogateescape` handler, reads exactly one byte at a
+time, preserves fragmented code points, and exposes a maximum four-code-point
+pending suffix before the fixed 50 ms Escape readiness wait. Clean EOF is
+stable. Partial/malformed EOF and read/decode/result-shape failures poison later
+reads; synchronous reentry is rejected and also poisons the reader. Exact
+source/decoder drift rejects that operation. `KeyboardInterrupt` alone clears
+the incomplete decoder and suffix without changing `LIVE`. Mixing another
+wrapper/raw reader or concurrent external reads against the same source is
+outside the supported boundary because it can strand decoded bytes in a
+different buffer.
+
+The latch does not own terminal resources, keys, readiness, raw mode, screen,
+or restoration. Those remain in the driver and are acquired per capable
+interaction. The permanent ownership prevents a `TextIOWrapper` decoded queue
+from hiding bytes when a later component reads its raw buffer.
+
 ### Submitted-input lifecycle
 
 This is the normative lifecycle for interactive input. A **complete live
@@ -230,7 +282,7 @@ domain event or durable record.
 - The raw driver owns the complete frame. Before any capable input read returns
   or propagates a failure, it attempts to clear the whole current frame and
   restore every terminal attribute it acquired. This applies to main,
-  composition, confirmation, picker, and cancellable-prompt submit/commit,
+  subject, composition, confirmation, picker, and cancellable-prompt submit/commit,
   cancel, interrupt, EOF, and failure outcomes. Restoration uncertainty remains
   fatal; a clear failure is handled through the established terminal-error path.
 - Enter on a highlighted static command suggestion is **completion only**. It
@@ -250,13 +302,59 @@ domain event or durable record.
   final `completed` or `cancelled` control frame. Pure controls may still use
   those internal terminal states to describe their outcome; the state is not an
   extra user-visible record.
-- Conversation-subject input deliberately stays on the ordinary reader in every
-  capability profile. It neither shows a capable live frame nor receives main
-  completion, history, or live resume choices.
+- Conversation-subject input remains history- and completion-free. After the
+  driver selects `LIVE`, it uses a cleared capable frame; after the driver
+  selects `FALLBACK`, it uses the ordinary callback. Its submitted value and
+  controller semantics do not change.
 
 The input component never mutates session lifecycle, defaults, attachment,
 conversation focus, agent focus, provider state, or storage. Those effects begin
 only after parser/controller validation of a submitted command.
+
+### Ranged-viewer lifecycle
+
+The package-internal viewer has a distinct lifecycle because its capable form
+uses the alternate screen rather than the submitted-input live frame:
+
+```text
+validate supplied values
+  -> resolve UNDECIDED to irreversible LIVE or FALLBACK if needed
+  -> LIVE: validate retained source/decoder/configuration
+  -> activate raw mode
+  -> enter alternate screen
+  -> navigate/select or receive terminal event
+  -> exit alternate screen once
+  -> restore termios once
+  -> dispose call-local state
+
+  -> FALLBACK: print complete numbered text
+  -> accept exact START-END or /cancel
+  -> dispose call-local state
+```
+
+Exact types, strict UTF-8, the private 8 MiB text capacity, at most 65,536
+LF-derived logical lines, a complete sanitized fallback projection of at most
+16 MiB UTF-8, and the optional one-based initial line are validated before
+terminal inspection or I/O. Line-count validation precedes split
+materialization; fallback accounting includes sanitized display metadata,
+numbered records, separators, notices, and prompt. Exact limits are accepted,
+while an over-limit value—including escape-expansion-dense text—never opens the
+viewer. Only an `UNDECIDED` driver's first actual read may choose the exact line
+fallback. Once either mode is selected it cannot switch: later live source,
+decoder, capability, or configuration drift is an error rather than a fallback
+upgrade or downgrade. Normal selection, Escape, Ctrl-C, and EOF return typed
+content-free results after cleanup. Operational failures propagate after
+cleanup, with termios-restoration failure taking precedence over screen-exit
+failure and screen-exit failure taking precedence over the active failure.
+Cursor visibility is never changed.
+
+Every document, display name, anchor, active line, viewport, and correlation
+value is immutable and call-local. Disposal is a lifecycle boundary, not secure
+memory erasure. Reopening receives a fresh caller-supplied document and optional
+initial line; the viewer owns no resumable state or composer snapshot. Selection
+and cancellation both close the alternate-screen viewer after cleanup. #164,
+not #162, must restore the exact originating composer buffer/cursor and attach
+the selected path/range indicator.
 
 ## Key and commit semantics
 
@@ -264,7 +362,8 @@ The following table is the complete interaction contract. The existing
 one-line editing, semantic composition and confirmation controls, #85
 main-command history, #79 selectable palette, and package-internal #87 picker
 foundation are implemented. #93 invokes the picker and cancellable prompt
-through package-internal seams.
+through package-internal seams. #162 adds the separate viewer row without
+changing the established controls.
 
 | Focused control | Navigation and editing | Commit | Cancel or terminal event |
 | --- | --- | --- | --- |
@@ -272,6 +371,7 @@ through package-internal seams.
 | `SuggestionPalette` anchored to main input | Opening highlights the first eligible candidate without editing. Up/Down moves the highlight among eligible candidates without replacement; Tab applies its highlighted completion. Shift-Tab has no palette action. Exact omitted resume commands may instead project controller-owned dynamic choices. | Enter with a static highlight applies completion without submitting, closes and latches the palette dismissed, and leaves a later Enter to submit. Enter with a dynamic resume choice commits its full explicit command immediately. | Escape closes the palette and restores the pre-Tab buffer and cursor snapshot when one exists. Dismissing a dynamic choice overlay leaves the exact buffer unchanged. |
 | `Picker` | Up/Down changes highlight among enabled items. Highlight never selects or commits. | Enter selects and commits the highlighted enabled item. | Escape cancels. Ctrl-C and EOF leave without commit and retain the invoking API's typed semantics. |
 | Settings `Prompt` | Text and ordinary line-edit keys edit one history-free value. Completion keys have no effect. | Enter commits the exact buffer for field validation. | Escape returns to the parent without changing the pending value; Ctrl-C and EOF cancel the whole settings workflow. |
+| Ranged text viewer | Up/Down clears the anchor and moves/clamps the active line. Shift+Up/Down fixes the first anchor and moves the active end through extension, contraction, reversal, and clamping. Other keys are no-ops. Configured VINTR, then VEOF, take priority over ordinary key roles. | Enter returns the active singleton or normalized anchored one-based inclusive range; empty text cannot commit. | Escape returns `cancelled`; configured VINTR returns `interrupted`; configured VEOF or stream EOF returns `eof`. Operational failures are raised after cleanup. |
 | Line-oriented composer | Each ordinary line appends exact content. Up/Down, Tab, Shift-Tab, and Escape are no-ops; no full-screen editing or command-history traversal is introduced. | `/send` commits the exact LF-joined content when nonblank. | `/cancel`, Ctrl-C, and EOF preserve established discard outcomes and counts. |
 | Confirmation | Existing accepted yes/no input and blank-default behavior remain authoritative. Up/Down, Tab, Shift-Tab, and Escape are no-ops. Invalid input marks the choices as erroneous, writes one hint, and asks again. | A valid answer or blank default returns the established `yes` or `no` result. | Ctrl-C and EOF return the established `interrupt` or `eof` result. |
 
@@ -284,8 +384,9 @@ change `/send`, `/cancel`, `/say`, Ctrl-C, or EOF semantics.
 
 > **Implemented by #85:** history is available on capable stream-backed main
 > reads. The ordinary-line fallback records eligible commits but does not
-> provide live arrow navigation; a later capable read on the same driver can
-> recall them.
+> provide arrow navigation. Once that driver selects permanent `FALLBACK`, its
+> retained entries cannot later be recalled through a capable read on the same
+> input UI.
 
 Each unified stream terminal or standalone compatibility editor has exactly one
 isolated driver-owned history store for that driver instance's lifetime. The
@@ -708,11 +809,45 @@ transient, while plain line fallback uses the complete numbered contract. Empty
 and failed reads report before picker input. Neither the controller nor the
 terminal composer has an internal generic `write_status` call site.
 
+#162's renderer is a separate private projection rather than a semantic
+component renderer. Live output uses one numbered physical row per LF-derived
+source line, visible plain current/selection markers, optional fixed ANSI
+decoration, and Unicode-cell-aware ellipsis clipping. It never wraps one source
+line into multiple rows. A live row scans and sanitizes only the visible-width
+prefix plus a fixed 256-source-code-point allowance, bounding redraw work for
+unseen multi-MiB suffixes and leading zero-width combining runs. Its
+ordinary-line projection always remains plain and shows every sanitized
+character of the accepted numbered document plus the exact range prompt. It
+does not width-ellipsize fallback content; long lines wrap in scrollback.
+
 | Profile | Selection | Output and input behavior |
 | --- | --- | --- |
 | Capable interactive ANSI | Real CLI with trusted TTY capability and non-`dumb` `TERM`; `NO_COLOR` absent for decoration | Structured layout plus fixed foreground/emphasis SGR. Safe functional cursor controls may support the focused live control. |
 | Capable interactive plain | Same interactive capability with `NO_COLOR` present | The identical semantic structure without decorative SGR. Safe functional cursor controls may remain because `NO_COLOR` governs color, not editing capability. |
 | Plain line fallback | Non-TTY, `TERM=dumb`, missing capability, or any uncertain capability result | Structured plain records; semantic input prompts pass once through the ordinary line callback and remain visible. Internal picker reads use complete numbered prompts and exact line grammar. No raw mode, cursor movement, live overlay, terminal mutation, or synthetic final control frame. |
+
+For the viewer, either capable profile selects raw mode plus one alternate
+screen; `NO_COLOR` changes only the current/selection decoration. Fallback
+accepts exact ASCII positive `START-END` or `/cancel`, normalizes reversed
+endpoints, and visibly retries invalid input without ANSI, raw mode, or an
+alternate screen. This component fallback does not make the viewer reachable
+from the installed shell.
+
+Before activating either capable profile, the driver resolves a byte-backed
+input's declared codec through the public registry. Only canonical `ascii`,
+`utf-8`, and `iso8859-1` enter the live path; their registry aliases are
+equivalent. Every other or unknown codec—including ISO-2022 variants, HZ,
+UTF-7, UTF-8-SIG, and `raw-unicode-escape`—chooses ordinary fallback before
+`PC_VDISABLE`, control-attribute inspection, byte reads, live-terminal output,
+raw mode, or alternate-screen work. These examples illustrate an allow-policy,
+not a deny-list.
+
+Within an allowed codec, the driver compares raw configured VINTR/VEOF bytes
+with `PC_VDISABLE` before decoding. An enabled byte must decode to one code
+point and round-trip exactly through the stream encoding and error policy;
+incomplete, lossy, or incompatible mappings still choose fallback. Text-only
+one-code-point collaborators retain their separate semantics. The viewer never
+starts raw mode and then changes interaction modes because of codec uncertainty.
 
 The non-TTY profile does not bypass the installed shell's documented
 [TTY guard](../operations/terminal-safety.md#the-tty-guard-comes-first). It
@@ -749,10 +884,18 @@ required by that operation is established. Cursor row/column calculations use
 the actual physical display columns of the destination, including the
 sanitized text's zero-, one-, and two-cell measurements.
 
+Viewer geometry is bounded and call-local. It observes width and height before
+the first frame and after every nonexit key, windows a contiguous slice around
+the active line or a complete selection when it fits, and redraws the result on
+the alternate screen. Resize alone does not redraw because no signal handler or
+background loop is installed; the next key performs the observation. Cursor
+visibility remains untouched.
+
 The ANSI policy is intentionally fixed:
 
-- only fixed foreground colors and emphasis may be decorative SGR; the `AGENT`
-  role uses bold with the terminal-default foreground;
+- only fixed foreground colors and emphasis may be decorative SGR in semantic
+  views; the `AGENT` role uses bold with the terminal-default foreground. The
+  separate viewer may additionally use fixed inverse SGR for selected rows;
 - background detection or selection, backgrounds, dim, blink, OSC, terminal
   queries, and untrusted control sequences are forbidden;
 - `NO_COLOR` disables decorative SGR only and does not flatten the structured
@@ -928,6 +1071,14 @@ resource-free internal adapter over an `InteractiveTerminal`; its
 `read_picker()` method is not supported public API. No root export, public
 `__all__` entry, existing signature, or direct application consumer changes.
 
+#162 adds the unlisted facade identities `InteractiveTextViewer`,
+`TextViewerExitKind`, and `TextViewerResult`. `read_range()` accepts supplied
+text plus display metadata and an optional initial line, then returns only a
+typed exit and optional inclusive tuple. These names remain outside public
+`__all__` and the root facade. The private document/state/viewport contracts
+remain outside the closed `Component` union, and no application consumer or
+supported signature changes.
+
 ### `interactive_line_editor` compatibility facade
 
 `story_writing_agents.interactive_line_editor` remains importable with this
@@ -966,12 +1117,16 @@ boundary. Responsibility and dependency direction are fixed as follows:
 | Unit | Responsibility |
 | --- | --- |
 | `interactive_settings` | Package-internal immutable opening baseline and pending configuration, safe lexical persona catalog, validation, exact stale-state detection, changed-only canonical persistence, and reverse exact-byte rollback. It has no terminal, controller, runtime, backend, or parser dependency and no facade export. |
-| `interactive_terminal.__init__` | Compatibility facade with the exact existing public surface plus package-internal stream construction, semantic output, picker-adapter, and cancellable-prompt seams. It owns no import-time resource or state. |
-| `interactive_terminal._model` | Immutable semantic components, bounded main-history/control state, static and controller-owned main-choice palette state, composer and picker control state, bounded picker viewport, semantic input/render frames, key/focus values, and transition/render results. No I/O. |
+| `interactive_terminal.__init__` | Compatibility facade with the exact existing public surface plus package-internal stream construction, semantic output, picker, cancellable-prompt, and supplied-text viewer seams. It owns no import-time resource or state. |
+| `interactive_terminal._model` | Immutable semantic components, bounded main-history/control state, static and controller-owned main-choice palette state, composer and picker control state, bounded picker viewport, semantic input/render frames, key/focus values including Shift+Up/Down, and transition/render results. No I/O. |
 | `interactive_terminal._controls` | Pure established line-input, main-command/history, dynamic main-choice, composer-line, confirmation-answer, cancellable-prompt, and picker transitions; bounded history; completion/choice projection; picker initialization/reconciliation, disabled-skipping live navigation, exact fallback grammar, and viewport selection. |
 | `interactive_terminal._render` | Pure safe responsive output and semantic input renderers for plain and fixed ANSI profiles, including bounded live and complete-list fallback picker projections and the strict JSON agent-reply presentation projection. It sanitizes dynamic content before styling and returns render data without writing. |
-| `interactive_terminal._driver` | Sole owner of raw streams, capability/width detection, incremental byte/key decoding, fixed Escape readiness wait, complete-live-frame cleanup, cursor controls, raw mode, restoration, writes, flushes, and one bounded process-local main-history store per instance. Its supported main, history-free semantic prompt, and dedicated picker routes accept call-local collaborators; non-main input does not consult history or completion state. |
-| `interactive_terminal._core` | `InteractiveTerminal`, established public-operation orchestration, semantic composer/confirmation view construction and event mapping, canonical static/dynamic main-choice adapter, package-internal stream factory, semantic render seam, resource-free `InteractiveSemanticOutput`, and unlisted resource-free `InteractiveMainInput`, `InteractivePickerInput`, and `InteractivePromptInput`. It binds these inputs to the sole driver without owning another store/raw implementation. |
+| `interactive_terminal._viewer_model` | Immutable strict-UTF-8 supplied document, active/anchor state, height-bounded viewport, fixed notice, exit kind, and content-free result values; private 8 MiB source, 65,536 logical-line, and complete 16 MiB fallback-projection capacities with LF-only line derivation. No I/O. |
+| `interactive_terminal._viewer_controls` | Pure initialization, clamped ordinary and anchored navigation, normalized commit and noncommit exits, exact ASCII fallback grammar, and contiguous viewport projection. |
+| `interactive_terminal._viewer_render` | Pure bounded-prefix one-row-per-source-line live projection and complete numbered fallback; visible escaping, one-based numbers, plain/ANSI current and selection cues, cell-aware live ellipsis clipping, and no fallback clipping. |
+| `interactive_terminal._input_lifecycle` | Irreversible per-driver `UNDECIDED` to `LIVE`/`FALLBACK` selection; exact live source/decoder identity; canonical ASCII/UTF-8/ISO-8859-1 and built-in strict/surrogateescape admission; one persistent exact-byte incremental reader with bounded decoded suffix, stable EOF, poisoning, interrupt reset, and synchronous input exclusion. It owns no stream closure, terminal, key, readiness, screen, or restoration resource. |
+| `interactive_terminal._driver` | Sole owner of raw streams, capability/width/height detection, byte/key decoding integration including Shift+Arrow, pre-activation configured-control validation, fixed Escape readiness wait after any pending decoded suffix, complete-live-frame cleanup, cursor controls, viewer alternate screen, raw mode, restoration, writes, flushes, and one bounded process-local main-history store per instance. Its supported main, history-free semantic prompt, picker, and viewer routes accept call-local collaborators; non-main input does not consult history or completion state. |
+| `interactive_terminal._core` | `InteractiveTerminal`, established public-operation orchestration, semantic composer/confirmation view construction and event mapping, canonical static/dynamic main-choice adapter, package-internal stream factory, semantic render seam, resource-free `InteractiveSemanticOutput`, and unlisted resource-free main, picker, prompt, and supplied-text viewer adapters. It binds these inputs to the sole driver without owning another store/raw implementation. |
 | `interactive_line_editor` | Standalone/public compatibility-only facade over the same supported main-command reader and one per-editor driver/history store. |
 
 The allowed graph is:
@@ -983,7 +1138,11 @@ interactive_controller._core -> interactive_settings -> agents/config/errors/wor
 interactive_controller policy leaves -> terminal facade error contracts
 terminal._core -> terminal._controls -> terminal._model
                -> terminal._render   -> terminal._model
-               -> terminal._driver   -> terminal._model
+               -> terminal._viewer_controls -> terminal._model / terminal._viewer_model
+               -> terminal._viewer_render   -> terminal._model / terminal._viewer_model
+               -> terminal._viewer_model
+               -> terminal._driver   -> terminal._input_lifecycle
+                                     -> terminal._model / terminal._viewer_model
                -> interactive_commands / agents
 interactive_line_editor facade -> same terminal._core / terminal._driver
 ```
@@ -1001,7 +1160,9 @@ presentation strings. Other policy leaves use only the facade's error
 contracts for their terminal dependency. Controller modules do not import
 terminal package leaves. `terminal._controls`,
 `terminal._render`, and `terminal._driver` share contracts through
-`terminal._model`; they do not reach through siblings for private state.
+`terminal._model`; the driver depends on the one-way `_input_lifecycle` leaf
+for retained input ownership and does not reach through other siblings for
+private state.
 `terminal._core` consumes canonical command, route, and roster metadata from
 `interactive_commands` and `agents`. The controller alone reads session and
 conversation catalogs, derives ordering/highlights, freshly validates a
@@ -1010,26 +1171,38 @@ committed choice, and coordinates settings focus and presentation;
 without importing the controller or terminal. No terminal package leaf imports
 CLI, controller, runtime orchestration, providers, or storage.
 
+The viewer leaves import only terminal models. They do not import workspace,
+writing-artifact, repository, runtime, backend, provider, controller, parser,
+or composer code. `terminal._core` supplies fresh validated state to the driver
+for each call and drops it in `finally`; the driver retains no viewer mode,
+document, selection, or geometry after return.
+
 ### Implemented module-index delta
 
-The current [Python module index](../../PYTHON_MODULE_INDEX.md) records 33
-importable production units after #93's settings-module addition:
+The current [Python module index](../../PYTHON_MODULE_INDEX.md) records 42
+importable production units after the writing-artifact package and #162's
+three viewer leaves plus one input-lifecycle leaf:
 
 ```text
-former interactive_terminal module                    -1
-interactive_terminal package and five package leaves  +6
-interactive_settings                                   +1
-current total                                          33
+historical post-#93 total                33
+writing-artifact package growth          +5
+private ranged-viewer leaves              +3
+private input-lifecycle leaf               +1
+current total                             42
 ```
 
-The six entries are the package plus `_model`, `_controls`, `_render`,
-`_driver`, and `_core`. The existing `interactive_line_editor` and `cli`
-entries now describe compatibility delegation and unified factory construction;
+The terminal's pre-viewer six entries are the package plus `_model`,
+`_controls`, `_render`, `_driver`, and `_core`. The existing
+`interactive_line_editor` and `cli` entries describe compatibility delegation
+and unified factory construction;
 the #85, #79, and #87 reconciliations add history, completion, and picker
 responsibilities and tests to existing entries without adding an importable
 unit or dependency edge. #93 adds only `interactive_settings` and its approved
 controller-to-settings and settings-to-agents/config/errors/workspace edges.
-Controller policy leaves still consume only facade error contracts.
+The current writing-artifact inventory raises that historical 33-unit baseline
+to 38. `_viewer_model`, `_viewer_controls`, and `_viewer_render` add three
+viewer leaves, while `_input_lifecycle` adds the fourth #162 unit, for a current
+total of 42. Controller policy leaves still consume only facade error contracts.
 
 ## Migration coverage
 
@@ -1042,10 +1215,14 @@ composer/confirmation controls within the existing driver/control boundary.
 #87 delivered the generic package-internal picker foundation within the same
 boundary. #94 delivered persisted Codex model/reasoning defaults through the
 existing workspace, configuration, and backend units without changing that
-graph. #93 installs `/settings`, adds one internal settings module, and brings
-the graph to 33 units. #142 adds controller-owned dynamic resume choices and a
-universal capable-input cleanup lifecycle within the existing 33-unit graph; it
-changes no package, module, public import, or dependency direction.
+graph. #93 installs `/settings` and historically brought the graph to 33 units.
+#142 adds controller-owned dynamic resume choices and a universal capable-input
+cleanup lifecycle without another module. Later writing-artifact packaging
+brings the current base to 38. #162 adds three private viewer leaves plus the
+private input-lifecycle leaf for 42 units, preserves the public and root
+facades, and introduces only downward terminal-internal edges. The lifecycle
+leaf owns the irreversible latch and persistent decoder; the driver remains the
+sole input consumer and terminal-resource owner.
 
 ### View groups
 
@@ -1075,6 +1252,7 @@ changes no package, module, public import, or dependency direction.
 | Main command/subcommand palette | `SuggestionPalette`, `Prompt`, `Notice` | Slash-open, Up/Down clamped highlight, Tab full-token replacement, Escape snapshot restoration and dismissal | #79 (implemented) |
 | Fixed command values | `SuggestionPalette`, `Field` | Canonical finite grammar choices, including metadata-exposed agent IDs/aliases; palette activity has no effects beyond call-local input state | #79 (implemented) |
 | Single-select and selectable-list choices | `Picker`, `ListView`, `Record`, `Notice` | Disabled-skipping clamped Up/Down highlight, Enter commit, Escape cancel, typed interrupt/EOF, bounded live/full fallback rendering, internal terminal states without a synthetic final control frame | #87 foundation, #93 and #142 consumers (implemented) |
+| Independent ranged text viewer | Private viewer document/state/viewport/result values, not a `Component` | Ordinary versus anchored clamped navigation, inclusive commit, typed noncommit exits, height-bounded alternate-screen rendering, strict complete-text fallback, and no retained caller or composer state | #162 package-internal foundation (implemented; no shell consumer) |
 | Live omitted-resume choices | `SuggestionPalette`, `Picker`, `Prompt`, `Field` | Exact capable command only; controller-owned ordered rows/highlight/fresh validation; Up/Down preview; one-Enter explicit commit; Escape dismissal; Tab no-op; submitted omitted command uses a live capable or numbered fallback picker only after a successful fresh read returns eligible rows; empty/error short-circuit | #142 (implemented) |
 | Settings field and action navigation | `Panel`, `Prompt`, `Picker`, `Field`, `Notice` | Single focus; nested agent/provider and value pickers; transient text/numeric editors; explicit Save/Cancel; no write before guarded Save; universal capable cleanup and honest fallback visibility | #93, #106, #115, and #142 (implemented) |
 
@@ -1128,8 +1306,19 @@ Issue #142 covers canonical resume grammar, disposable live choice snapshots,
 session/conversation ordering and highlights, static-completion versus dynamic-
 commit Enter behavior, history routing, fresh post-submit validation, capable
 complete-frame cleanup across every input route and terminal outcome, ordinary
-subject input, fallback visibility, persistent semantic results, and unchanged
-public/internal action identities.
+subject semantics, fallback visibility, persistent semantic results, and
+unchanged public/internal action identities.
+Issue #162 covers strict pre-I/O supplied-text validation, independent source,
+logical-line, and complete-fallback capacities, LF-only line derivation,
+immutable active/anchor state, ordinary and reverse anchored navigation,
+normalized inclusive commit, exact ASCII complete fallback, bounded-prefix
+plain/ANSI live rendering, cell-aware clipping, canonical byte-codec admission,
+exact configured-control classification, irreversible input-mode selection,
+persistent fragmented-code-point decoding across every input route, pending
+suffix Escape handling, source/configuration drift and poison behavior,
+history-free capable subject presentation, next-key resize observation,
+alternate-screen and termios cleanup precedence, typed noncommit exits,
+repeat-open disposal, dependency isolation, and unchanged public exports.
 
 | Area | Required evidence |
 | --- | --- |
@@ -1142,18 +1331,23 @@ public/internal action identities.
 | History | Exact whitespace-preserving commits including invalid commands, duplicates, `/quit`, fallback, and nonempty VEOF; blank/interrupt/empty-VEOF/physical-EOF/failure exclusion; 100-entry oldest eviction; older/newer bounds; exact draft/cursor restoration; editable copies; per-driver isolation; non-main exclusion; no persistence; and post-restoration append. |
 | Palette/history coordination | Slash opening with deterministic initial highlight and unchanged buffer; filtering; empty/error; canonical metadata projection including finite agent IDs/aliases; open-palette Up/Down clamped highlight navigation without replacement or history movement; Tab application of the highlighted candidate; Shift-Tab no-op; Escape full-snapshot restoration and exact-state dismissal; closed-palette Up/Down history; edited recall; and visible-buffer-only Enter commit. |
 | Picker and live resume choices | Highlight-versus-selection, disabled-skipping clamped navigation, exact resume ordering/highlights, Tab no-op and one-Enter dynamic commit, Escape cancel/dismissal, typed interrupt/EOF, empty/all-disabled/one/long lists, exact fallback acceptance/rejection, stable identity reconciliation and fresh controller validation, selected-outside-window summary, no synthetic final control frame, complete capable cleanup on every returned outcome/failure, honest fallback visibility, and resize on each live redraw. |
+| Permanent input lifecycle | Resource-free `UNDECIDED` construction; first-read irreversible `LIVE`/`FALLBACK`; sticky fallback and no post-live downgrade; stable source/decoder/configuration correlation; canonical ASCII/UTF-8/ISO-8859-1 plus built-in strict/surrogateescape admission; exact one-byte reads; fragmented code points; maximum four-code-point pending suffix before Escape readiness; clean and partial EOF; read/decode/shape poison; interrupt reset without mode change; synchronous reentry rejection; PENDIN-only tolerated configuration drift; capable history-free subject frames; and cross-prompt/viewer preservation without mixed wrapper/raw reads. |
+| Ranged text viewer | Exact `str`, display-name, strict-UTF-8, private 8 MiB source, exact 65,536-line and 16 MiB complete-fallback boundaries, initial-line, empty/final-LF validation before terminal access; ordinary and Shift+Arrow clamped selection including reversal; configured VINTR/VEOF raw-byte disable/decode/round-trip classification and priority; singleton/range commit; distinct cancel/interrupt/EOF; one row per logical line; safe CR/U+2028/control display; bounded-prefix plain/ANSI current and selected cues; wide/combining/ellipsis behavior; suffix-independent redraw work; bounded height and next-nonexit-key resize; exact untruncated `START-END` or `/cancel` fallback with reverse normalization and visible retry; content-free results; close-on-select/cancel, repeat-open disposal; and no workspace/artifact/runtime/controller dependencies. |
 | Settings | Two-snapshot current/pending separation; exact top-level/language/reasoning/roster order; safe persona precedence and lexical order; numeric `0`, positive, blank, negative, fractional, and nonnumeric cases; Codex-enabled/reserved-Gemini-disabled provider behavior including preservation/remediation; implemented safe model text and blank/null provider default; exact reasoning enumeration with model/provider-dependent `xhigh` support; one focused control and deterministic focus return; nested and whole-panel cancellation; exact-byte and catalog conflict before writes; changed-only canonical system-then-agent save; per-file atomic replacement; failing-target-inclusive reverse exact-byte rollback and rollback uncertainty; pending retention; no write on open/edit/highlight/error/cancel; next-lifecycle-only application with higher live overrides; plain/ANSI/`NO_COLOR`/narrow/line fallback; hostile display content; and unchanged identity, thread, precedence, public, and machine contracts. |
 | Advisory progress | One four-glyph cycle only for capable raw advisory and consensus awaitables; `NO_COLOR` glyph preservation; clear/redraw around semantic writes; clear and task joining before result/cancel/error; silent callback/non-TTY/`TERM=dumb`/uncertain fallback; operation-error precedence; indicator-only internal-error mapping; no `[routing]`/`[waiting]` records or reusable animation API. |
 | Parser and mutation boundary | The exact visible committed main buffer reaches the established parser once; previews, recall, replacement, highlight, rerender, cancel, Ctrl-C, empty VEOF, and physical EOF cause no parser/runtime/storage call. |
 | Composer/confirmation | Ordered semantic input facts and focused prompt; equivalent width-aware plain/ANSI rendering; fallback-once and trusted-live routing; exact `/send`, `/cancel`, `/say`, yes/no/default, invalid retry, Ctrl-C, and EOF results; semantic composer events and hint cardinality; history isolation; reserved-key no-ops; no full-screen or persistent state. |
-| Restoration | Complete-frame cleanup for every capable main/composition/confirmation/picker/prompt submit, commit, cancellation, Escape return, EOF, Ctrl-C, setup failure, read/write/flush failure, and render error; raw attributes restored whenever acquired; completion-only Enter remains inside the live read; restoration uncertainty is fatal. |
+| Restoration | Complete-frame cleanup for every capable main/subject/composition/confirmation/picker/prompt submit, commit, cancellation, Escape return, EOF, Ctrl-C, setup failure, read/write/flush failure, and render error; viewer alternate-screen entry/exit pairing and one termios restoration on every live outcome/failure; restoration-over-screen-over-active failure precedence; no fallback after `LIVE`; cursor visibility untouched; completion-only Enter remains inside the live read; restoration uncertainty is fatal. |
 | Public compatibility | Exact exports and order, enum values, dataclass fields/defaults/options, signatures, exceptions, object/class identity, canonical modules, facade imports, callback construction, and no constructor resource acquisition. |
 | Noninteractive regression | Golden byte/schema/order/exit checks for `init`, `smoke`, `session`, `directive`, `inspect`, and `run`, with no SGR under any environment. |
 
 Process-level POSIX PTY coverage remains required for the real raw-mode and
-restoration boundary. Unit tests with deterministic fake drivers cover pure
-state, rendering, capability, resize-next-render, and failure paths without
-claiming unsupported-platform terminal behavior.
+restoration boundary. Viewer PTY coverage includes real Shift+Arrow bytes,
+next-key resize, repeated alternate-screen pairing, VINTR, and VEOF. Physical
+EOF is deterministic driver coverage because a PTY hangup also closes the
+observation channel. Unit tests with deterministic fake drivers cover pure
+state, rendering, capability, physical EOF, resize-next-render, and failure
+paths without claiming unsupported-platform terminal behavior.
 
 Migration is complete only after implemented behavior, the exact reference and
 safety pages, tests, and the Python module index agree. Availability wording
