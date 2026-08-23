@@ -1049,7 +1049,7 @@ class RawTerminalDriver:
                 bindings.write_failure(projection.failure)
             elif projection.completion is not None:
                 completion = projection.completion
-                prefix = line[completion.start : len(line)]
+                prefix = line[completion.start : completion.end]
                 replacements = tuple(
                     candidate.replacement
                     for candidate in completion.candidates
