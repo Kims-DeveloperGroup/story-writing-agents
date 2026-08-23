@@ -1296,7 +1296,7 @@ callbacks, while the driver owns same-latch nested picker/viewer coordination.
 ### Implemented module-index delta
 
 The reconciled [Python module index](../../PYTHON_MODULE_INDEX.md) records 56
-importable production units and 215 static import edges in an acyclic graph.
+importable production units and 216 static import edges in an acyclic graph.
 The terminal/reference, provider/diagnostic, authentication, and
 filesystem-source deltas combine as follows:
 
@@ -1356,7 +1356,7 @@ the controller borrow source-list/text callbacks without moving repository
 ownership into the terminal. The #209 provider OAuth initiative
 added private native-auth and interactive-auth coordination, startup
 presentation, global `/auth`, route/default gates, and settings integration.
-The current 56-unit inventory and 215 edges remain canonical in the module index.
+The current 56-unit inventory and 216 edges remain canonical in the module index.
 
 ### View groups
 

@@ -66,7 +66,6 @@ from ..interactive_auth import (
     InteractiveAuthCoordinator,
     InteractiveAuthResult,
     InteractiveAuthResultKind,
-    ProviderAuthSnapshot,
     select_default_provider,
 )
 from ..interactive_commands import (
@@ -141,6 +140,7 @@ from ..models import (
     InputKind,
 )
 from ..orchestrator import StoryRuntime
+from ..provider_auth import ProviderAuthSnapshot
 from ..run_inputs import read_draft_file
 from ..session_lifecycle import (
     SessionAccessState,

@@ -18,7 +18,7 @@ Package root: `src/story_writing_agents/`
 
 Importable production units indexed: 56.
 
-Direct internal dependency edges indexed: 215.
+Direct internal dependency edges indexed: 216.
 
 ## Current Dependency Direction
 
@@ -59,7 +59,7 @@ interactive_controller._core -> interactive_controller._session_policy
                              -> conversation_retrieval/conversation_search
                              -> conversations/errors/interactive_commands
                              -> interactive_auth/interactive_settings/interactive_terminal
-                             -> models/orchestrator/run_inputs
+                             -> models/orchestrator/provider_auth/run_inputs
                              -> session_lifecycle/workspace/writing_artifacts
 interactive_controller._session_policy -> errors/interactive_terminal/session_lifecycle
 interactive_controller._conversation_policy -> conversation_search/conversations
@@ -1075,7 +1075,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `interactive_controller._runtime_policy`,
   `interactive_controller._session_policy`, `interactive_settings`,
   `interactive_terminal`, `models`, `orchestrator`, `run_inputs`,
-  `session_lifecycle`, `workspace`, and `writing_artifacts`.
+  `provider_auth`, `session_lifecycle`, `workspace`, and `writing_artifacts`.
 - **State, resources, and side effects:** Instances retain borrowed workspace,
   CLI-context, backend, terminal, and optional authentication-coordinator
   collaborators plus either a borrowed injected catalog or a controller-
@@ -3152,7 +3152,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   owning either resource. The CLI composes both private modules and sequences
   welcome, initial/effective-provider hard gates, default persistence, then
   delayed context/backend/controller construction; the controller only borrows
-  the same coordinator for `/auth` and authenticated settings. Credentials,
+  the same coordinator for `/auth` and authenticated settings and directly
+  consumes only `provider_auth`'s immutable snapshot facts. Credentials,
   provider output, browser/keyring behavior, terminal mode, and configuration
   files remain respectively provider-native, undisclosed, terminal-owned, and
   settings/config/workspace-owned. Both auth modules remain absent from the

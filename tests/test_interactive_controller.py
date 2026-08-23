@@ -1077,6 +1077,7 @@ class ControllerContractTests(ControllerTestCase):
                 "interactive_terminal",
                 "models",
                 "orchestrator",
+                "provider_auth",
                 "run_inputs",
                 "session_lifecycle",
                 "workspace",
