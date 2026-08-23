@@ -88,7 +88,7 @@ class AgentStateHydrationTests(unittest.IsolatedAsyncioTestCase):
             session_id,
             secret_input,
             debate_id=debate_a,
-            manuscript_name="state-a.md",
+            output_path="part-01/state-a.md",
         )
         self.assertEqual(result_a.status, DebateStatus.CONSENSUS)
 
@@ -108,18 +108,22 @@ class AgentStateHydrationTests(unittest.IsolatedAsyncioTestCase):
             session_id,
             "debate-b-input",
             debate_id="debate_b",
-            manuscript_name="state-b.md",
+            output_path="part-01/state-b.md",
         )
         self.assertEqual(result_b.status, DebateStatus.CONSENSUS)
 
-        requests_by_agent = {
-            request.agent_id: request for request in backend_b.requests
-        }
+        requests_by_agent = {}
+        for request in backend_b.requests:
+            requests_by_agent.setdefault(request.agent_id, request)
         self.assertEqual(set(requests_by_agent), set(ROSTER))
         expected_kinds = {
             PLOT_ARCHITECT: ("critique", "proposal", "approval"),
             CHARACTER_CUSTODIAN: ("approval", "approval"),
-            EXECUTION_SPECIALIST: ("approval", "approval"),
+            EXECUTION_SPECIALIST: (
+                "candidate_created",
+                "approval",
+                "approval",
+            ),
             LEAD_ORCHESTRATOR: ("candidate_created", "core_updates"),
         }
         expected_specialist_content = {
@@ -133,6 +137,7 @@ class AgentStateHydrationTests(unittest.IsolatedAsyncioTestCase):
                 "character approval r1",
             ),
             EXECUTION_SPECIALIST: (
+                "revision 0 candidate created",
                 "execution approval r0",
                 "execution approval r1",
             ),
@@ -231,6 +236,14 @@ class AgentStateTamperTests(unittest.IsolatedAsyncioTestCase):
                 )
 
                 def must_not_run(request):
+                    if (
+                        request.phase is Phase.DRAFT
+                        and request.agent_id == EXECUTION_SPECIALIST
+                    ):
+                        return AgentReply.candidate(
+                            request.revision_id,
+                            request.user_payload,
+                        )
                     raise AssertionError(
                         f"backend unexpectedly received {request.agent_id}"
                     )
@@ -244,9 +257,14 @@ class AgentStateTamperTests(unittest.IsolatedAsyncioTestCase):
                         "tamper_session",
                         "neutral input",
                         debate_id=f"tampered_{label}",
-                        manuscript_name=f"tampered-{label}.md",
+                        output_path=f"part-01/tampered-{label}.md",
                     )
-                self.assertEqual(backend.requests, [])
+                self.assertEqual(len(backend.requests), 1)
+                self.assertIs(backend.requests[0].phase, Phase.DRAFT)
+                self.assertEqual(
+                    backend.requests[0].agent_id,
+                    EXECUTION_SPECIALIST,
+                )
                 self.assertEqual(all_manuscripts(workspace), [])
 
 

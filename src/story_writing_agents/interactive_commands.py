@@ -189,6 +189,7 @@ class InteractiveAction:
     text: str | None = None
     agent_id: str | None = None
     argument: str | None = None
+    output_path: str | None = None
     count: int | None = None
     start_sequence: int | None = None
     error: str | None = None
@@ -204,12 +205,20 @@ class InteractiveAction:
             "text": self.text,
             "agent_id": self.agent_id,
             "argument": self.argument,
+            "output_path": self.output_path,
             "count": self.count,
             "start_sequence": self.start_sequence,
             "error": self.error,
             "suggestion": self.suggestion,
         }
-        for field_name in ("text", "agent_id", "argument", "error", "suggestion"):
+        for field_name in (
+            "text",
+            "agent_id",
+            "argument",
+            "output_path",
+            "error",
+            "suggestion",
+        ):
             value = values[field_name]
             if value is not None and not isinstance(value, str):
                 raise TypeError(f"{field_name} must be a string or None")
@@ -269,10 +278,13 @@ _ACTION_FIELD_RULES: dict[
     ActionKind.COMPOSE: (_NO_FIELDS, _NO_FIELDS),
     ActionKind.SEND: (_NO_FIELDS, _NO_FIELDS),
     ActionKind.CANCEL: (_NO_FIELDS, _NO_FIELDS),
-    ActionKind.RUN: (frozenset({"text"}), _NO_FIELDS),
-    ActionKind.RUN_FRESH: (frozenset({"text"}), frozenset({"text"})),
+    ActionKind.RUN: (frozenset({"text", "output_path"}), _NO_FIELDS),
+    ActionKind.RUN_FRESH: (
+        frozenset({"text", "output_path"}),
+        frozenset({"text"}),
+    ),
     ActionKind.DRAFT_FILE: (
-        frozenset({"argument"}),
+        frozenset({"argument", "output_path"}),
         frozenset({"argument"}),
     ),
     ActionKind.SEARCH: (frozenset({"text"}), frozenset({"text"})),
@@ -372,6 +384,25 @@ class CommandCompletionContext:
             raise ValueError("replacements must be unique")
 
 
+@dataclass(frozen=True, slots=True)
+class ProviderTextSpan:
+    """Identify the exact provider-bound free-text region at one cursor."""
+
+    start: int
+    end: int
+
+    def __post_init__(self) -> None:
+        """Require one ordered nonnegative buffer span."""
+
+        for name, value in (("start", self.start), ("end", self.end)):
+            if type(value) is not int:
+                raise TypeError(f"{name} must be an integer")
+            if value < 0:
+                raise ValueError(f"{name} must not be negative")
+        if self.end < self.start:
+            raise ValueError("end must not precede start")
+
+
 COMMANDS: tuple[CommandSpec, ...] = (
     CommandSpec("Conversation", "/compose", (), False, False, "/compose"),
     CommandSpec("Conversation", "/send", (), False, False, "/send"),
@@ -413,11 +444,11 @@ COMMANDS: tuple[CommandSpec, ...] = (
     ),
     CommandSpec(
         "Consensus",
-        "/run [PROMPT] | /run --fresh PROMPT",
+        "/run [--fresh] [--output PART/PATH.md] [PROMPT]",
         (),
         True,
         True,
-        "/run Outline chapter one",
+        "/run --output part-01/chapter-01.md Outline chapter one",
     ),
     CommandSpec(
         "Consensus",
@@ -541,6 +572,7 @@ _CONVERSATION_COMMANDS: dict[str, str] = {
 
 _MAIN_COMPLETION_EXCLUSIONS = frozenset({"/compose", "/send", "/cancel"})
 _RUN_FRESH_FLAG = "--fresh"
+_RUN_OUTPUT_FLAG = "--output"
 _CONVERSATION_ALL_FLAG = "--all"
 _TRANSCRIPT_FROM_FLAG = "--from"
 _INSPECT_LAST_ARGUMENT = "last"
@@ -623,7 +655,16 @@ def project_command_completion(
             "run.flag",
             start,
             end,
-            (_RUN_FRESH_FLAG,),
+            (_RUN_FRESH_FLAG, _RUN_OUTPUT_FLAG),
+        )
+    if preceding == ("/run", _RUN_FRESH_FLAG):
+        if active_token and not active_token.startswith("-"):
+            return None
+        return _completion_context(
+            "run.fresh.flag",
+            start,
+            end,
+            (_RUN_OUTPUT_FLAG,),
         )
     if preceding == ("/conversation", "list"):
         if active_token and not active_token.startswith("-"):
@@ -674,6 +715,124 @@ def project_command_completion(
             (_TRANSCRIPT_FROM_FLAG,),
         )
     return None
+
+
+def project_provider_text_span(
+    buffer: str,
+    cursor: int,
+) -> ProviderTextSpan | None:
+    """Project only the cursor-active text that may reach a provider.
+
+    This is grammar projection only. Attachment, conversation focus, catalog
+    availability, and terminal activation remain with their owning layers.
+    """
+
+    if not isinstance(buffer, str):
+        raise TypeError("buffer must be a string")
+    buffer = str.__str__(buffer)
+    if type(cursor) is not int:
+        raise TypeError("cursor must be an integer")
+    if cursor < 0 or cursor > len(buffer):
+        raise ValueError("cursor must identify a buffer boundary")
+
+    if not buffer.startswith(("/", "@")):
+        return ProviderTextSpan(0, len(buffer))
+
+    head, tail = _split_head(buffer)
+    if tail is None:
+        return None
+    tail_start = len(head) + 1
+
+    if head.startswith("@"):
+        if head[1:] not in _AGENT_ALIASES:
+            return None
+        return _active_provider_span(tail_start, len(buffer), cursor)
+
+    command = _COMMAND_ALIASES.get(head[1:])
+    if command == "/say":
+        return _active_provider_span(tail_start, len(buffer), cursor)
+    if command != "/run":
+        return None
+    return _run_provider_text_span(buffer, tail_start, cursor)
+
+
+def _active_provider_span(
+    start: int,
+    end: int,
+    cursor: int,
+) -> ProviderTextSpan | None:
+    """Return one provider span only while its cursor is active."""
+
+    if start <= cursor <= end:
+        return ProviderTextSpan(start, end)
+    return None
+
+
+def _run_provider_text_span(
+    buffer: str,
+    prompt_start: int,
+    cursor: int,
+) -> ProviderTextSpan | None:
+    """Project the prompt remainder while excluding run option fields."""
+
+    first = _ascii_token_span(buffer, prompt_start)
+    if first is None:
+        return None
+    first_start, first_end = first
+    first_token = buffer[first_start:first_end]
+    if not first_token.startswith("--"):
+        return _active_provider_span(prompt_start, len(buffer), cursor)
+    if first_token == _RUN_OUTPUT_FLAG:
+        output = _ascii_token_span(buffer, first_end)
+        if output is None:
+            return None
+        _output_start, output_end = output
+        remainder = _ascii_remainder_start(buffer, output_end)
+        if remainder is None:
+            return None
+        return _active_provider_span(remainder, len(buffer), cursor)
+    if first_token != _RUN_FRESH_FLAG:
+        return None
+
+    fresh_start = _ascii_remainder_start(buffer, first_end)
+    if fresh_start is None:
+        return None
+    fresh_first = _ascii_token_span(buffer, fresh_start)
+    assert fresh_first is not None
+    fresh_first_start, fresh_first_end = fresh_first
+    if buffer[fresh_first_start:fresh_first_end] != _RUN_OUTPUT_FLAG:
+        return _active_provider_span(fresh_start, len(buffer), cursor)
+    output = _ascii_token_span(buffer, fresh_first_end)
+    if output is None:
+        return None
+    _output_start, output_end = output
+    remainder = _ascii_remainder_start(buffer, output_end)
+    if remainder is None:
+        return None
+    return _active_provider_span(remainder, len(buffer), cursor)
+
+
+def _ascii_token_span(buffer: str, start: int) -> tuple[int, int] | None:
+    """Return the next ASCII-space/tab-delimited token span."""
+
+    token_start = start
+    while token_start < len(buffer) and buffer[token_start] in " \t":
+        token_start += 1
+    if token_start == len(buffer):
+        return None
+    token_end = token_start
+    while token_end < len(buffer) and buffer[token_end] not in " \t":
+        token_end += 1
+    return token_start, token_end
+
+
+def _ascii_remainder_start(buffer: str, start: int) -> int | None:
+    """Return the first non-delimiter boundary after a complete field."""
+
+    remainder = start
+    while remainder < len(buffer) and buffer[remainder] in " \t":
+        remainder += 1
+    return None if remainder == len(buffer) else remainder
 
 
 def _completion_context(
@@ -902,7 +1061,7 @@ def _parse_persona(tail: str | None) -> InteractiveAction:
 
 
 def _parse_run(tail: str | None) -> InteractiveAction:
-    """Parse bare, prompted, or ``--fresh`` run syntax without I/O.
+    """Parse bare, prompted, output-scoped, or fresh run syntax without I/O.
 
     Non-flag prompt text is preserved, while unknown leading flags or a blank
     fresh prompt return typed parse-error actions.
@@ -911,6 +1070,21 @@ def _parse_run(tail: str | None) -> InteractiveAction:
     prompt = _optional_remainder(tail)
     if prompt is None:
         return InteractiveAction(ActionKind.RUN)
+
+    output_path: str | None = None
+    initial_fields = _split_run_fields(prompt)
+    if initial_fields and initial_fields[0] == _RUN_OUTPUT_FLAG:
+        fields = initial_fields
+        if len(fields) < 2 or fields[1].startswith("--"):
+            return _parse_error("/run --output requires PART/PATH.md")
+        output_path = fields[1]
+        if len(fields) == 2:
+            return InteractiveAction(ActionKind.RUN, output_path=output_path)
+        return InteractiveAction(
+            ActionKind.RUN,
+            text=fields[2],
+            output_path=output_path,
+        )
 
     first_start = 0
     while first_start < len(prompt) and prompt[first_start] in " \t":
@@ -926,10 +1100,36 @@ def _parse_run(tail: str | None) -> InteractiveAction:
     if first_end == len(prompt):
         return _parse_error("/run --fresh requires a prompt")
 
-    fresh_prompt = prompt[first_end + 1 :]
+    fresh_prompt = prompt[first_end:].lstrip(" \t")
+    fresh_fields = _split_run_fields(fresh_prompt)
+    if (
+        fresh_fields
+        and fresh_fields[0].startswith(_RUN_OUTPUT_FLAG)
+        and len(fresh_fields[0]) > len(_RUN_OUTPUT_FLAG)
+        and fresh_fields[0][len(_RUN_OUTPUT_FLAG)].isspace()
+    ):
+        return _parse_error(
+            "/run --fresh --output requires ASCII space/tab delimiters"
+        )
+    if fresh_fields and fresh_fields[0].startswith("--") and (
+        fresh_fields[0] != _RUN_OUTPUT_FLAG
+    ):
+        return _parse_error(f"unknown /run flag: {fresh_fields[0]}")
+    if fresh_fields and fresh_fields[0] == _RUN_OUTPUT_FLAG:
+        fields = fresh_fields
+        if len(fields) < 3 or fields[1].startswith("--"):
+            return _parse_error(
+                "/run --fresh --output requires PART/PATH.md and a prompt"
+            )
+        output_path = fields[1]
+        fresh_prompt = fields[2]
     if _is_ascii_blank(fresh_prompt):
         return _parse_error("/run --fresh requires a prompt")
-    return InteractiveAction(ActionKind.RUN_FRESH, text=fresh_prompt)
+    return InteractiveAction(
+        ActionKind.RUN_FRESH,
+        text=fresh_prompt,
+        output_path=output_path,
+    )
 
 
 def _parse_session(tail: str | None) -> InteractiveAction:
@@ -1230,6 +1430,27 @@ def _split_head(value: str) -> tuple[str, str | None]:
         if character in " \t":
             return value[:index], value[index:]
     return value, None
+
+
+def _split_run_fields(value: str) -> tuple[str, ...]:
+    """Split at most two ASCII-delimited fields and preserve prompt remainder."""
+
+    fields: list[str] = []
+    cursor = 0
+    length = len(value)
+    while cursor < length and value[cursor] in " \t":
+        cursor += 1
+    while cursor < length and len(fields) < 2:
+        end = cursor
+        while end < length and value[end] not in " \t":
+            end += 1
+        fields.append(value[cursor:end])
+        cursor = end
+        while cursor < length and value[cursor] in " \t":
+            cursor += 1
+    if cursor < length:
+        fields.append(value[cursor:])
+    return tuple(fields)
 
 
 def _tokens(tail: str | None) -> tuple[str, ...]:

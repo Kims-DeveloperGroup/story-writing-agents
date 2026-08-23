@@ -980,7 +980,7 @@ def _project_main_command_state(
     candidates = tuple(
         candidate
         for candidate in projection.candidates
-        if _completion_candidate_matches(candidate.replacement, prefix)
+        if completion_candidate_matches(candidate.replacement, prefix)
     )
     filtered = CommandCompletionProjection(
         projection.position,
@@ -1022,11 +1022,17 @@ def _project_main_command_state(
     )
 
 
-def _completion_candidate_matches(replacement: str, prefix: str) -> bool:
-    """Match exact prefixes, accepting bare help prefixes for slash literals."""
+def completion_candidate_matches(replacement: str, prefix: str) -> bool:
+    """Match literal, slash-elided, or unbraced reference prefixes."""
 
     if replacement.startswith("/") and not prefix.startswith("/"):
         return replacement[1:].startswith(prefix)
+    if (
+        replacement.startswith("${")
+        and prefix.startswith("$")
+        and not prefix.startswith(("${", "$$"))
+    ):
+        return replacement.startswith("${" + prefix[1:])
     return replacement.startswith(prefix)
 
 

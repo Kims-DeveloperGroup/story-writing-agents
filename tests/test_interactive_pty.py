@@ -221,6 +221,60 @@ if "resume" not in argv:
 '''
 
 
+_REFERENCE_PROBE_PREAMBLE = r'''
+import json
+import sys
+
+from story_writing_agents import PLOT_ARCHITECT
+from story_writing_agents.interactive_commands import (
+    parse_interactive_line,
+    project_provider_text_span,
+)
+from story_writing_agents.interactive_terminal import (
+    ComposeMode,
+    InteractiveCompositionInput,
+    InteractiveMainInput,
+    build_stream_terminal,
+)
+from story_writing_agents.interactive_terminal._reference_activation import (
+    ReferenceInputScope,
+)
+
+PATHS = (
+    "core_documents/character_sheets.md",
+    "core_documents/global_outline.md",
+    "core_documents/narrative_rules.md",
+)
+CONTENTS = {
+    PATHS[0]: "character one\ncharacter two\ncharacter three\n",
+    PATHS[1]: "outline one\noutline two\noutline three\noutline four\n",
+    PATHS[2]: "rule one\nrule two\nrule three\n",
+}
+catalog_calls = []
+read_calls = []
+
+def main_scope(buffer, cursor):
+    span = project_provider_text_span(buffer, cursor)
+    return None if span is None else ReferenceInputScope(span.start, span.end)
+
+def composition_scope(buffer, cursor):
+    return ReferenceInputScope(0, len(buffer))
+
+def paths():
+    catalog_calls.append("list")
+    return PATHS
+
+def text(selected):
+    read_calls.append(selected)
+    return CONTENTS[selected]
+
+terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
+main = InteractiveMainInput(terminal)
+composition = InteractiveCompositionInput(terminal)
+choices = lambda _buffer, _cursor: None
+'''
+
+
 def _control_character_byte(value: object, *, label: str) -> bytes:
     """Return one configured termios control character as a single byte."""
 
@@ -339,6 +393,13 @@ class PtyCliProcess:
             raise AssertionError("cannot write to an exited CLI process")
         os.write(self.master_fd, text.encode("utf-8"))
 
+    def send_bytes(self, payload: bytes) -> None:
+        """Write exact terminal bytes for fragmented decoder probes."""
+
+        if self.process.poll() is not None:
+            raise AssertionError("cannot write to an exited CLI process")
+        os.write(self.master_fd, payload)
+
     def send_interrupt(self) -> None:
         """Deliver the terminal's configured VINTR byte through the PTY."""
 
@@ -349,17 +410,19 @@ class PtyCliProcess:
 
         os.write(self.master_fd, self.veof)
 
-    def resize(self, columns: int) -> None:
-        """Change this PTY's reported width for the next explicit redraw."""
+    def resize(self, columns: int, rows: int = 24) -> None:
+        """Change this PTY's geometry for the next explicit redraw."""
 
         if type(columns) is not int or columns <= 0:
             raise ValueError("columns must be a positive integer")
+        if type(rows) is not int or rows <= 0:
+            raise ValueError("rows must be a positive integer")
         assert fcntl is not None
         assert termios is not None
         fcntl.ioctl(
             self.master_fd,
             termios.TIOCSWINSZ,
-            struct.pack("HHHH", 24, columns, 0, 0),
+            struct.pack("HHHH", rows, columns, 0, 0),
         )
 
     def wait_for_text(
@@ -750,6 +813,432 @@ class InteractiveCliPtyTests(unittest.TestCase):
         )
         self._processes.append(harness)
         return harness
+
+    def test_internal_text_viewer_reverse_shift_resize_commit_and_repeat_restore(
+        self,
+    ) -> None:
+        """Exercise real Shift+Arrow bytes and independent repeated screens."""
+
+        source = r'''
+import sys
+
+from story_writing_agents.interactive_terminal import (
+    InteractiveTextViewer,
+    build_stream_terminal,
+)
+
+terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
+viewer = InteractiveTextViewer(terminal)
+for attempt in range(2):
+    outcome = viewer.read_range(
+        "one\ntwo\nthree\nfour\nfive\nsix",
+        display_name=f"part-{attempt}.md",
+        initial_line=3,
+    )
+    print(f"RESULT={attempt}:{outcome.kind.value}:{outcome.line_range}")
+'''
+        before = _durable_tree(self.workspace.root)
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=50,
+            decorative_color=True,
+        )
+        process.wait_for_text("[viewer] part-0.md | line 3/6")
+        assert termios is not None
+        active = termios.tcgetattr(process.master_fd)
+        self.assertFalse(active[3] & termios.ICANON)
+        self.assertFalse(active[3] & termios.ECHO)
+
+        process.send_text("\x1b[1;2A" * 2)
+        process.wait_for_text("lines 1-3")
+        process.resize(24, 4)
+        resize_mark = process.output_mark()
+        process.send_text("\x1b[1;2B")
+        resized = process.wait_for_text(">* 2 | two", after=resize_mark)
+        visible_rows = resized.split("\x1b[H\x1b[2J")[-1].split("\x1b[?1049l")[0]
+        self.assertLessEqual(visible_rows.count("\n") + 1, 4)
+        process.send_text("\n")
+        process.wait_for_text("RESULT=0:selected:(2, 3)")
+        process.wait_for_text("[viewer] part-1.md")
+        process.send_text("\n")
+        result = process.wait_for_text("RESULT=1:selected:(3, 3)")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 2)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 2)
+        self.assertNotIn(b"\x1b[?25", process.raw_bytes)
+        self.assertIn("RESULT=1:selected", result)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+        self.assertEqual(_durable_tree(self.workspace.root), before)
+        self.assertFalse(self.provider_log.exists())
+
+    def test_viewer_discards_overlong_csi_and_ss3_before_real_shift_down(
+        self,
+    ) -> None:
+        """Keep overlong suffixes inert through the real PTY byte route."""
+
+        source = r'''
+import sys
+
+from story_writing_agents.interactive_terminal import (
+    InteractiveTextViewer,
+    build_stream_terminal,
+)
+
+viewer = InteractiveTextViewer(
+    build_stream_terminal(input, sys.stdin, sys.stdout)
+)
+for attempt in range(2):
+    outcome = viewer.read_range(
+        "one\ntwo\nthree",
+        display_name=f"overflow-{attempt}.md",
+    )
+    print(f"RESULT={attempt}:{outcome.kind.value}:{outcome.line_range}")
+'''
+        before = _durable_tree(self.workspace.root)
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=42,
+        )
+        for attempt, introducer in enumerate(("\x1b[", "\x1bO")):
+            process.wait_for_text(f"[viewer] overflow-{attempt}.md")
+            process.send_text(
+                introducer + "1" * 62 + "B\x1b[1;2B\n"
+            )
+            process.wait_for_text(f"RESULT={attempt}:selected:(1, 2)")
+
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 2)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 2)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+        self.assertEqual(_durable_tree(self.workspace.root), before)
+        self.assertFalse(self.provider_log.exists())
+
+    def test_pending_single_write_crosses_prompt_into_viewer_repeatedly(self) -> None:
+        """Consume immediate post-submit viewer keys without losing PTY bytes."""
+
+        source = r'''
+import json
+import sys
+
+from story_writing_agents.interactive_terminal import (
+    InteractivePromptInput,
+    InteractiveTextViewer,
+    Prompt,
+    build_stream_terminal,
+)
+
+terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
+prompt = InteractivePromptInput(terminal)
+viewer = InteractiveTextViewer(terminal)
+results = []
+for attempt in range(2):
+    entered = prompt.read_prompt(Prompt(f"Prelude {attempt}"))
+    selected = viewer.read_range(
+        "one\ntwo\nthree",
+        display_name=f"pending-{attempt}.md",
+    )
+    results.append([entered.text, selected.kind.value, selected.line_range])
+print("RESULT=" + json.dumps(results, separators=(",", ":")))
+'''
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=42,
+        )
+        for attempt in range(2):
+            process.wait_for_text(f"Prelude {attempt} >")
+            process.send_text(f"value-{attempt}\n\x1b[B\n")
+            process.wait_for_text(f"[viewer] pending-{attempt}.md")
+        process.wait_for_text(
+            'RESULT=[["value-0","selected",[2,2]],'
+            '["value-1","selected",[2,2]]]'
+        )
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 2)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 2)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
+    def test_fragmented_unicode_arrows_and_cancel_leave_next_prompt_usable(
+        self,
+    ) -> None:
+        """Decode fragmented bytes across select, cancel, and later live input."""
+
+        source = r'''
+import json
+import sys
+
+from story_writing_agents.interactive_terminal import (
+    InteractivePromptInput,
+    InteractiveTextViewer,
+    Prompt,
+    build_stream_terminal,
+)
+
+terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
+prompt = InteractivePromptInput(terminal)
+viewer = InteractiveTextViewer(terminal)
+first = prompt.read_prompt(Prompt("Fragmented Unicode"))
+selected = viewer.read_range("one\ntwo\nthree", display_name="selected.md")
+after_select = prompt.read_prompt(Prompt("After select"))
+cancelled = viewer.read_range("one\ntwo", display_name="cancelled.md")
+after_cancel = prompt.read_prompt(Prompt("After cancel"))
+print(
+    "RESULT="
+    + json.dumps(
+        {
+            "first": first.text,
+            "selected": selected.line_range,
+            "after_select": after_select.text,
+            "cancelled": cancelled.kind.value,
+            "after_cancel": after_cancel.text,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+)
+'''
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=44,
+        )
+        process.wait_for_text("Fragmented Unicode >")
+        for value in "界🌊\n".encode("utf-8"):
+            process.send_bytes(bytes((value,)))
+        process.wait_for_text("[viewer] selected.md")
+        for value in b"\x1b[B\x1b[1;2A\n":
+            process.send_bytes(bytes((value,)))
+        process.wait_for_text("After select >")
+        process.send_text("still-live\n")
+        process.wait_for_text("[viewer] cancelled.md")
+        process.send_text("\x1b")
+        process.wait_for_text("After cancel >")
+        process.send_text("again\n")
+        process.wait_for_text(
+            'RESULT={"first":"界🌊","selected":[1,2],'
+            '"after_select":"still-live","cancelled":"cancelled",'
+            '"after_cancel":"again"}'
+        )
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 2)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 2)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
+    def test_viewer_render_and_read_failures_restore_screen_and_termios(self) -> None:
+        """Use real PTY resources while injected collaborators fail once."""
+
+        source = r'''
+import os
+import sys
+
+from story_writing_agents.interactive_terminal import InteractiveTextViewer, build_stream_terminal
+
+failure_kind = os.environ["STORY_PTY_VIEWER_FAILURE"]
+
+class FailingBuffer:
+    def __init__(self, wrapped):
+        self.wrapped = wrapped
+
+    def read1(self, size):
+        if failure_kind == "read":
+            raise OSError("read failed")
+        return self.wrapped.read1(size)
+
+class Input:
+    def __init__(self, wrapped):
+        self.wrapped = wrapped
+        self.buffer = FailingBuffer(wrapped.buffer)
+        self.encoding = wrapped.encoding
+        self.errors = wrapped.errors
+
+    def isatty(self):
+        return self.wrapped.isatty()
+
+    def fileno(self):
+        return self.wrapped.fileno()
+
+    def read(self, size=-1):
+        return self.wrapped.read(size)
+
+class Output:
+    def __init__(self, wrapped):
+        self.wrapped = wrapped
+        self.failed = False
+
+    def isatty(self):
+        return self.wrapped.isatty()
+
+    def fileno(self):
+        return self.wrapped.fileno()
+
+    def write(self, text):
+        if failure_kind == "render" and not self.failed and text.startswith("\x1b[H\x1b[2J"):
+            self.failed = True
+            raise OSError("render failed")
+        return self.wrapped.write(text)
+
+    def flush(self):
+        return self.wrapped.flush()
+
+terminal = build_stream_terminal(input, Input(sys.stdin), Output(sys.stdout))
+try:
+    InteractiveTextViewer(terminal).read_range("one\ntwo", display_name="failure.md")
+except OSError as failure:
+    print("RESULT=" + str(failure))
+'''
+        for failure_kind in ("render", "read"):
+            with self.subTest(failure=failure_kind):
+                process = self._spawn_python(
+                    source,
+                    environment_overrides={
+                        "TERM": "xterm-256color",
+                        "STORY_PTY_VIEWER_FAILURE": failure_kind,
+                    },
+                    terminal_columns=40,
+                )
+                process.wait_for_text(f"RESULT={failure_kind} failed")
+                self.assertEqual(
+                    process.wait_for_exit(),
+                    0,
+                    process.normalized_text,
+                )
+                self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 1)
+                self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 1)
+                self.assertEqual(
+                    process.final_terminal_attributes,
+                    process.original_terminal_attributes,
+                )
+
+    def test_internal_text_viewer_escape_vintr_and_veof_are_typed_and_restore(
+        self,
+    ) -> None:
+        """Return each observable live noncommit result after exact cleanup."""
+
+        source = r'''
+import sys
+from story_writing_agents.interactive_terminal import InteractiveTextViewer, build_stream_terminal
+
+viewer = InteractiveTextViewer(build_stream_terminal(input, sys.stdin, sys.stdout))
+outcome = viewer.read_range("one\ntwo", display_name="events.md")
+print("RESULT=" + outcome.kind.value)
+'''
+        for event_name in ("cancelled", "interrupted", "eof"):
+            with self.subTest(event=event_name):
+                process = self._spawn_python(
+                    source,
+                    environment_overrides={"TERM": "xterm-256color"},
+                    terminal_columns=36,
+                )
+                process.wait_for_text("[viewer] events.md")
+                if event_name == "cancelled":
+                    process.send_text("\x1b")
+                elif event_name == "interrupted":
+                    process.send_interrupt()
+                else:
+                    process.send_eof()
+                process.wait_for_text("RESULT=" + event_name)
+                self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+                self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 1)
+                self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 1)
+                self.assertEqual(
+                    process.final_terminal_attributes,
+                    process.original_terminal_attributes,
+                )
+
+    def test_internal_text_viewer_dumb_fallback_retries_and_normalizes_reverse(
+        self,
+    ) -> None:
+        """Keep line-mode grammar exact and its retry visible on a real PTY."""
+
+        source = r'''
+import sys
+from story_writing_agents.interactive_terminal import InteractiveTextViewer, build_stream_terminal
+
+viewer = InteractiveTextViewer(build_stream_terminal(input, sys.stdin, sys.stdout))
+outcome = viewer.read_range("one\ntwo\nthree", display_name="fallback.md")
+print(f"RESULT={outcome.kind.value}:{outcome.line_range}")
+'''
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "dumb"},
+            terminal_columns=40,
+        )
+        initial = process.wait_for_text("Select START-END or /cancel: ")
+        self.assertIn("  3 | three", initial)
+        process.send_line("01-2")
+        retry = process.wait_for_text("Enter a valid one-based START-END range.")
+        self.assertNotIn("\x1b[?1049", retry)
+        process.send_line("3-1")
+        process.wait_for_text("RESULT=selected:(1, 3)")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertNotIn(b"\x1b[?1049", process.raw_bytes)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
+    def test_internal_text_viewer_narrow_unicode_controls_empty_and_next_key_resize(
+        self,
+    ) -> None:
+        """Render hostile supplied text safely and observe resize only on input."""
+
+        source = r'''
+import sys
+from story_writing_agents.interactive_terminal import InteractiveTextViewer, build_stream_terminal
+
+viewer = InteractiveTextViewer(build_stream_terminal(input, sys.stdin, sys.stdout))
+first = viewer.read_range(
+    "\u2028\r界e\u0301tail\n" + "x" * 200,
+    display_name="bad\x1b]0;owned\x07.md",
+)
+print("FIRST=" + first.kind.value)
+second = viewer.read_range("", display_name="empty.md")
+print("SECOND=" + second.kind.value)
+'''
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=24,
+        )
+        opened = process.wait_for_text(r"\x0d")
+        self.assertIn(r"\u2028", opened)
+        self.assertNotIn("\x07", opened.replace(r"\x07", ""))
+        process.resize(12, 3)
+        mark = process.output_mark()
+        self.assertEqual(process.text_after(mark), "")
+        process.send_text("x")
+        redraw = process.wait_for_text("[viewer]", after=mark)
+        latest = redraw.split("\x1b[H\x1b[2J")[-1]
+        self.assertLessEqual(latest.count("\n") + 1, 3)
+        process.send_text("\x1b")
+        process.wait_for_text("FIRST=cancelled")
+        process.wait_for_text("<empty doc")
+        empty_mark = process.output_mark()
+        process.send_text("\n")
+        process.wait_for_text("No selecta", after=empty_mark)
+        process.send_text("\x1b")
+        process.wait_for_text("SECOND=cancelled")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 2)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 2)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
 
     def test_internal_picker_ansi_resizes_navigates_commits_and_restores_repeatedly(
         self,
@@ -1495,6 +1984,580 @@ print(
             process.original_terminal_attributes,
         )
 
+    def test_reference_fragment_completion_is_capable_and_provider_free(self) -> None:
+        """Complete typed $c, require explicit submission, and restore the PTY."""
+
+        source = _REFERENCE_PROBE_PREAMBLE + r'''
+results = []
+for _attempt in range(2):
+    results.append(main.read_main_with_references(
+        choices,
+        main_scope,
+        paths,
+        text,
+        session_id="session",
+        agent_id=PLOT_ARCHITECT,
+    ))
+print("RESULT=" + json.dumps({
+    "texts": [result.text for result in results],
+    "catalog_calls": len(catalog_calls),
+    "read_calls": read_calls,
+}, separators=(",", ":")))
+'''
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=80,
+        )
+        path = "core_documents/character_sheets.md"
+        token = f"${{{path}}}"
+        process.wait_for_text("story[session:plot]>")
+        preview_mark = process.output_mark()
+        process.send_text("typed $c suffix")
+        process.wait_for_text("typed $c suffix", after=preview_mark)
+        cursor_mark = process.output_mark()
+        process.send_text("\x1b[D" * len(" suffix"))
+        preview = process.wait_for_text(token, after=cursor_mark)
+        self.assertIn("Suggestions [open]", preview)
+        self.assertIn("[highlighted]", preview)
+        process.send_text("\t")
+        first_expected = f"typed {token} suffix"
+        process.wait_for_text(first_expected, after=cursor_mark)
+        self.assertNotIn('RESULT={"texts":', process.text_after(preview_mark))
+        second_prompt_mark = process.output_mark()
+        process.send_text("\x1b[C" * len(" suffix") + "\n")
+        process.wait_for_text("story[session:plot]>", after=second_prompt_mark)
+
+        direct = f"view $${{{path}}}."
+        process.send_text(direct)
+        process.wait_for_text(direct, after=second_prompt_mark)
+        process.send_text("\x1b[D\n")
+        process.wait_for_text(f"[viewer] {path}", after=second_prompt_mark)
+        process.send_text("\x1b[1;2B\n")
+        second_expected = f"view {token}#L1-L2."
+        process.wait_for_text(second_expected, after=second_prompt_mark)
+        process.send_text("\x1b[C\n")
+        process.wait_for_text('RESULT={"texts":')
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+
+        match = re.search(r"RESULT=(\{[^\r\n]+\})", process.normalized_text)
+        self.assertIsNotNone(match, process.normalized_text)
+        assert match is not None
+        result = json.loads(match.group(1))
+        self.assertEqual(result["texts"], [first_expected, second_expected])
+        self.assertGreater(result["catalog_calls"], 0)
+        self.assertEqual(result["read_calls"], [path])
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 1)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 1)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+        self.assertFalse(self.provider_log.exists())
+
+    def test_reference_fragment_completion_uses_dumb_fallback_confirmation(
+        self,
+    ) -> None:
+        """Filter $c to one numbered choice and retain explicit confirmation."""
+
+        source = _REFERENCE_PROBE_PREAMBLE + r'''
+PATHS = (PATHS[0],)
+results = []
+for _attempt in range(2):
+    results.append(main.read_main_with_references(
+        choices,
+        main_scope,
+        paths,
+        text,
+        session_id="session",
+        agent_id=PLOT_ARCHITECT,
+    ))
+print("RESULT=" + json.dumps({
+    "texts": [result.text for result in results],
+    "catalog_calls": len(catalog_calls),
+    "read_calls": read_calls,
+}, separators=(",", ":")))
+'''
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "dumb"},
+            terminal_columns=80,
+        )
+        path = "core_documents/character_sheets.md"
+        token = f"${{{path}}}"
+        process.wait_for_text("story[session:plot]>")
+        assert termios is not None
+        fallback_attributes = termios.tcgetattr(process.master_fd)
+        self.assertTrue(fallback_attributes[3] & termios.ICANON)
+        self.assertTrue(fallback_attributes[3] & termios.ECHO)
+
+        process.send_line("fallback $c suffix")
+        picker = process.wait_for_text(f"1. [highlighted] {token}")
+        self.assertNotIn("2. [", picker)
+        process.send_line("1")
+        first_expected = f"fallback {token} suffix"
+        process.wait_for_text(f"Draft retained: {first_expected}")
+        process.wait_for_text("Press Enter to submit it")
+        confirmation_mark = process.output_mark()
+        process.send_line("")
+        process.wait_for_text("story[session:plot]>", after=confirmation_mark)
+
+        direct = f"view $${{{path}}}."
+        process.send_line(direct)
+        process.wait_for_text(f"[viewer] {path}")
+        process.wait_for_text("Select START-END or /cancel:")
+        process.send_line("2-3")
+        second_expected = f"view {token}#L2-L3."
+        process.wait_for_text(f"Draft retained: {second_expected}")
+        process.wait_for_text("Press Enter to submit it")
+        process.send_line("")
+        process.wait_for_text('RESULT={"texts":')
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+
+        match = re.search(r"RESULT=(\{[^\r\n]+\})", process.normalized_text)
+        self.assertIsNotNone(match, process.normalized_text)
+        assert match is not None
+        result = json.loads(match.group(1))
+        self.assertEqual(result["texts"], [first_expected, second_expected])
+        self.assertGreater(result["catalog_calls"], 0)
+        self.assertEqual(result["read_calls"], [path])
+        self.assertNotIn("\x1b", process.normalized_text)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 0)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 0)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+        self.assertFalse(self.provider_log.exists())
+
+    def test_reference_viewer_reuses_main_latch_and_ineligible_dollar_stays_literal(
+        self,
+    ) -> None:
+        """Insert one range, then prove the next ineligible marker does no I/O."""
+
+        source = r'''
+import json
+import sys
+
+from story_writing_agents import PLOT_ARCHITECT
+from story_writing_agents.interactive_commands import project_provider_text_span
+from story_writing_agents.interactive_terminal import (
+    InteractiveMainInput,
+    build_stream_terminal,
+)
+from story_writing_agents.interactive_terminal._reference_activation import (
+    ReferenceInputScope,
+)
+
+path = "core_documents/global_outline.md"
+catalog_calls = []
+read_calls = []
+
+def scope(buffer, cursor):
+    span = project_provider_text_span(buffer, cursor)
+    return None if span is None else ReferenceInputScope(span.start, span.end)
+
+def paths():
+    catalog_calls.append("list")
+    return (path,)
+
+def text(selected):
+    read_calls.append(selected)
+    return "one\ntwo\nthree"
+
+terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
+main = InteractiveMainInput(terminal)
+choices = lambda _buffer, _cursor: None
+first = main.read_main_with_references(
+    choices,
+    scope,
+    paths,
+    text,
+    session_id="session",
+    agent_id=PLOT_ARCHITECT,
+)
+before_second = [len(catalog_calls), len(read_calls)]
+second = main.read_main_with_references(
+    choices,
+    scope,
+    paths,
+    text,
+    session_id="session",
+    agent_id=PLOT_ARCHITECT,
+)
+print("RESULT=" + json.dumps({
+    "first": first.text,
+    "second": second.text,
+    "before_second": before_second,
+    "after_second": [len(catalog_calls), len(read_calls)],
+    "read_calls": read_calls,
+}, separators=(",", ":")))
+'''
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=48,
+        )
+        path = "core_documents/global_outline.md"
+        process.wait_for_text("story[session:plot]>")
+        first_prompt_mark = process.output_mark()
+        process.send_text(f"use $${{{path}}}\n\x1b[1;2B\n\n")
+        process.wait_for_text(f"[viewer] {path}")
+        process.wait_for_text("story[session:plot]>", after=first_prompt_mark)
+        process.send_line("/status $")
+        process.wait_for_text(
+            'RESULT={"first":"use ${core_documents/global_outline.md}#L1-L2",'
+            '"second":"/status $","before_second":'
+        )
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        match = re.search(r"RESULT=(\{[^\r\n]+\})", process.normalized_text)
+        self.assertIsNotNone(match, process.normalized_text)
+        assert match is not None
+        result = json.loads(match.group(1))
+        self.assertEqual(
+            result,
+            {
+                "first": "use ${core_documents/global_outline.md}#L1-L2",
+                "second": "/status $",
+                "before_second": result["after_second"],
+                "after_second": result["after_second"],
+                "read_calls": ["core_documents/global_outline.md"],
+            },
+        )
+        self.assertGreater(result["after_second"][0], 0)
+        self.assertEqual(result["after_second"][1], 1)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 1)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 1)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+        self.assertFalse(self.provider_log.exists())
+
+    def test_reference_routes_picker_reverse_range_and_repeated_insertions(self) -> None:
+        """Drive every inline route and two edits through real nested input."""
+
+        source = _REFERENCE_PROBE_PREAMBLE + r'''
+results = []
+for _attempt in range(3):
+    results.append(main.read_main_with_references(
+        choices,
+        main_scope,
+        paths,
+        text,
+        session_id="session",
+        agent_id=PLOT_ARCHITECT,
+    ).text)
+parsed = [parse_interactive_line(line) for line in results]
+print("RESULT=" + json.dumps({
+    "results": results,
+    "parsed": [
+        [action.kind.value, action.text, action.agent_id]
+        for action in parsed
+    ],
+    "catalog_calls": len(catalog_calls),
+    "read_calls": read_calls,
+}, separators=(",", ":")))
+'''
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=64,
+        )
+        character, outline, rules = (
+            "core_documents/character_sheets.md",
+            "core_documents/global_outline.md",
+            "core_documents/narrative_rules.md",
+        )
+
+        process.wait_for_text("story[session:plot]>")
+        second_prompt_mark = process.output_mark()
+        process.send_text(
+            "@plot compare $$\n"
+            "\x1b[B\n"
+            "\x1b[B\x1b[B\x1b[1;2A\x1b[1;2A\n"
+            f" and $${{{rules}}}\n\x1b[B\n\n"
+        )
+        process.wait_for_text(f"[viewer] {outline}")
+        process.wait_for_text(f"[viewer] {rules}")
+        process.wait_for_text(
+            "story[session:plot]>",
+            after=second_prompt_mark,
+        )
+
+        third_prompt_mark = process.output_mark()
+        process.send_text(f"/say cite $${{{character}}}\n\n\n")
+        process.wait_for_text(f"[viewer] {character}")
+        process.wait_for_text(
+            "story[session:plot]>",
+            after=third_prompt_mark,
+        )
+        process.send_text(f"/run use $${{{outline}}}\n\x1b[B\n\n")
+        process.wait_for_text('RESULT={"results":')
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+
+        match = re.search(r"RESULT=(\{[^\r\n]+\})", process.normalized_text)
+        self.assertIsNotNone(match, process.normalized_text)
+        assert match is not None
+        result = json.loads(match.group(1))
+        self.assertEqual(
+            result["results"],
+            [
+                (
+                    f"@plot compare ${{{outline}}}#L1-L3 and "
+                    f"${{{rules}}}#L2-L2"
+                ),
+                f"/say cite ${{{character}}}#L1-L1",
+                f"/run use ${{{outline}}}#L2-L2",
+            ],
+        )
+        self.assertGreater(result["catalog_calls"], 0)
+        self.assertEqual(
+            result["parsed"],
+            [
+                [
+                    "routed_message",
+                    (
+                        f"compare ${{{outline}}}#L1-L3 and "
+                        f"${{{rules}}}#L2-L2"
+                    ),
+                    "plot_architect",
+                ],
+                ["message", f"cite ${{{character}}}#L1-L1", None],
+                ["run", f"use ${{{outline}}}#L2-L2", None],
+            ],
+        )
+        self.assertEqual(
+            result["read_calls"],
+            [outline, rules, character, outline],
+        )
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 4)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 4)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+        self.assertFalse(self.provider_log.exists())
+
+    def test_reference_run_and_internal_chat_composers_restore_and_send_exactly(
+        self,
+    ) -> None:
+        """Use reference-aware RUN and internal CHAT composers over one PTY."""
+
+        source = _REFERENCE_PROBE_PREAMBLE + r'''
+run = composition.compose(
+    ComposeMode.RUN,
+    reference_scope_provider=composition_scope,
+    reference_paths_provider=paths,
+    reference_text_reader=text,
+)
+chat = composition.compose(
+    ComposeMode.CHAT,
+    agent_id=PLOT_ARCHITECT,
+    reference_scope_provider=composition_scope,
+    reference_paths_provider=paths,
+    reference_text_reader=text,
+)
+print("RESULT=" + json.dumps({
+    "run": [run.kind.value, run.text, run.line_count, run.character_count],
+    "chat": [chat.kind.value, chat.text, chat.line_count, chat.character_count],
+    "read_calls": read_calls,
+}, separators=(",", ":")))
+'''
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=64,
+        )
+        character = "core_documents/character_sheets.md"
+        outline = "core_documents/global_outline.md"
+
+        process.wait_for_text("compose[run:1]>")
+        run_mark = process.output_mark()
+        process.send_text(f"run $${{{outline}}}\n\x1b[B\n\n")
+        process.wait_for_text("compose[run:2]>", after=run_mark)
+        process.send_line("/send")
+
+        process.wait_for_text("compose[chat:plot:1]>")
+        chat_mark = process.output_mark()
+        process.send_text(f"chat $${{{character}}}\n\x1b[1;2B\n\n")
+        process.wait_for_text("compose[chat:plot:2]>", after=chat_mark)
+        process.send_line("/send")
+        process.wait_for_text('RESULT={"run":')
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+
+        match = re.search(r"RESULT=(\{[^\r\n]+\})", process.normalized_text)
+        self.assertIsNotNone(match, process.normalized_text)
+        assert match is not None
+        result = json.loads(match.group(1))
+        run_text = f"run ${{{outline}}}#L2-L2"
+        chat_text = f"chat ${{{character}}}#L1-L2"
+        self.assertEqual(
+            result,
+            {
+                "run": ["send", run_text, 1, len(run_text)],
+                "chat": ["send", chat_text, 1, len(chat_text)],
+                "read_calls": [outline, character],
+            },
+        )
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 2)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 2)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+        self.assertFalse(self.provider_log.exists())
+
+    def test_reference_nested_cancel_vintr_and_veof_restore_originating_drafts(
+        self,
+    ) -> None:
+        """Return three nested exits to the same live draft and next prompt."""
+
+        source = _REFERENCE_PROBE_PREAMBLE + r'''
+results = []
+for _attempt in range(3):
+    results.append(main.read_main_with_references(
+        choices,
+        main_scope,
+        paths,
+        text,
+        session_id="session",
+        agent_id=PLOT_ARCHITECT,
+    ).text)
+print("RESULT=" + json.dumps({
+    "results": results,
+    "read_calls": read_calls,
+}, separators=(",", ":")))
+'''
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=56,
+        )
+        path = "core_documents/global_outline.md"
+        marker = f"$${{{path}}}"
+        labels = ("cancel", "interrupt", "eof")
+
+        for index, label in enumerate(labels):
+            prompt_mark = process.output_mark()
+            process.wait_for_text("story[session:plot]>", after=prompt_mark)
+            process.send_line(f"{label} {marker}")
+            process.wait_for_text(f"[viewer] {path}", after=prompt_mark)
+            exit_mark = process.output_mark()
+            if label == "cancel":
+                process.send_text("\x1b")
+            elif label == "interrupt":
+                process.send_interrupt()
+            else:
+                process.send_eof()
+            process.wait_for_text("\x1b[?1049l", after=exit_mark)
+            process.send_bytes(
+                (b"\x7f" * len(marker))
+                + f"retained-{index}\n".encode("utf-8")
+            )
+
+        process.wait_for_text('RESULT={"results":')
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        match = re.search(r"RESULT=(\{[^\r\n]+\})", process.normalized_text)
+        self.assertIsNotNone(match, process.normalized_text)
+        assert match is not None
+        result = json.loads(match.group(1))
+        self.assertEqual(
+            result,
+            {
+                "results": [
+                    "cancel retained-0",
+                    "interrupt retained-1",
+                    "eof retained-2",
+                ],
+                "read_calls": [path, path, path],
+            },
+        )
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 3)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 3)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+        self.assertFalse(self.provider_log.exists())
+
+    def test_reference_dumb_fallback_reverses_then_requires_confirmation(
+        self,
+    ) -> None:
+        """Keep fallback canonical, visible, ANSI-free, and explicitly confirmed."""
+
+        source = _REFERENCE_PROBE_PREAMBLE + r'''
+first = main.read_main_with_references(
+    choices,
+    main_scope,
+    paths,
+    text,
+    session_id="session",
+    agent_id=PLOT_ARCHITECT,
+)
+before_second = [len(catalog_calls), len(read_calls)]
+second = main.read_main_with_references(
+    choices,
+    main_scope,
+    paths,
+    text,
+    session_id="session",
+    agent_id=PLOT_ARCHITECT,
+)
+print("RESULT=" + json.dumps({
+    "first": first.text,
+    "second": second.text,
+    "before_second": before_second,
+    "after_second": [len(catalog_calls), len(read_calls)],
+    "read_calls": read_calls,
+}, separators=(",", ":")))
+'''
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "dumb"},
+            terminal_columns=56,
+        )
+        path = "core_documents/global_outline.md"
+        process.wait_for_text("story[session:plot]>")
+        assert termios is not None
+        fallback_attributes = termios.tcgetattr(process.master_fd)
+        self.assertTrue(fallback_attributes[3] & termios.ICANON)
+        self.assertTrue(fallback_attributes[3] & termios.ECHO)
+
+        process.send_line(f"fallback $${{{path}}}")
+        process.wait_for_text(f"[viewer] {path}")
+        process.wait_for_text("Select START-END or /cancel:")
+        process.send_line("3-1")
+        expected = f"fallback ${{{path}}}#L1-L3"
+        process.wait_for_text(f"Draft retained: {expected}")
+        process.wait_for_text("Press Enter to submit it")
+        second_prompt_mark = process.output_mark()
+        process.send_line("")
+        process.wait_for_text(
+            "story[session:plot]>",
+            after=second_prompt_mark,
+        )
+        process.send_line("/status $")
+        process.wait_for_text('RESULT={"first":')
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+
+        match = re.search(r"RESULT=(\{[^\r\n]+\})", process.normalized_text)
+        self.assertIsNotNone(match, process.normalized_text)
+        assert match is not None
+        result = json.loads(match.group(1))
+        self.assertEqual(result["first"], expected)
+        self.assertEqual(result["second"], "/status $")
+        self.assertEqual(result["before_second"], result["after_second"])
+        self.assertEqual(result["read_calls"], [path])
+        self.assertNotIn("\x1b", process.normalized_text)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 0)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 0)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+        self.assertFalse(self.provider_log.exists())
+
     def test_main_history_restores_draft_edits_preview_and_nonempty_veof(
         self,
     ) -> None:
@@ -1662,10 +2725,10 @@ print(
             process.original_terminal_attributes,
         )
 
-    def test_editor_history_crosses_fallback_then_isolates_composition_and_instance(
+    def test_editor_fallback_is_permanent_and_other_instance_can_be_live(
         self,
     ) -> None:
-        """Prove fallback continuity and both contextual and instance isolation."""
+        """Prove sticky fallback while a separately constructed editor is live."""
 
         source = r'''
 import json
@@ -1686,7 +2749,7 @@ composition = bind_suggestion_reader(
     editor,
     composition_slash_command_suggestions,
 )("compose> ")
-recalled = editor.read_line("main> ")
+main_fallback = editor.read_line("main> ")
 other = InteractiveMainLineEditor(input, sys.stdin, sys.stdout)
 isolated = other.read_line("other> ")
 print(
@@ -1695,7 +2758,7 @@ print(
         {
             "fallback": fallback,
             "composition": composition,
-            "recalled": recalled,
+            "main_fallback": main_fallback,
             "isolated": isolated,
         },
         ensure_ascii=False,
@@ -1711,15 +2774,15 @@ print(
         process.wait_for_text("fallback> ")
         process.send_line("  fallback 🌊  ")
         process.wait_for_text("compose> ")
-        process.send_text("\x1b[Acontext\n")
+        process.send_line("context")
         process.wait_for_text("main> ")
-        process.send_text("\x1b[A\n")
+        process.send_line("main fallback")
         process.wait_for_text("other> ")
         process.send_text("\x1bOA\n")
         process.wait_for_text(
             'RESULT={"fallback":"  fallback 🌊  ",'
             '"composition":"context",'
-            '"recalled":"  fallback 🌊  ",'
+            '"main_fallback":"main fallback",'
             '"isolated":""}'
         )
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
@@ -2463,6 +3526,8 @@ print(
 
         mark = process.output_mark()
         process.send_text("/run\n\n")
+        process.wait_for_text("Manuscript output", after=mark)
+        process.send_line("part-01/composed.md")
         process.wait_for_text("compose[run:1]> ", after=mark)
         preview_bytes = _durable_tree_without_access(self.workspace.root)
         preview_mark = process.output_mark()
@@ -2496,10 +3561,9 @@ print(
         process.wait_for_text("compose[run:5]> ", after=mark)
         process.send_line("/send")
         process.wait_for_text("core updates:", after=mark)
-        successful_output = process.wait_for_text(
-            "story[alpha:lead]> ",
-            after=mark,
-        )
+        process.wait_for_text("revision rounds:", after=mark)
+        process.wait_for_text("story[alpha:lead]> ", after=mark)
+        successful_output = process.text_after(mark)
         collapsed = "".join(successful_output.split())
         self.assertIn(
             "[compose]Sending4lines,33characterstoconsensus.",
@@ -2524,6 +3588,8 @@ print(
 
         mark = process.output_mark()
         process.send_text("/run\n\n")
+        process.wait_for_text("Manuscript output", after=mark)
+        process.send_line("part-01/discarded-by-command.md")
         process.wait_for_text("compose[run:1]> ", after=mark)
         process.send_line("discarded by slash command")
         process.wait_for_text("compose[run:2]> ", after=mark)
@@ -2541,6 +3607,8 @@ print(
 
         mark = process.output_mark()
         process.send_text("/run\n\n")
+        process.wait_for_text("Manuscript output", after=mark)
+        process.send_line("part-01/discarded-by-interrupt.md")
         process.wait_for_text("compose[run:1]> ", after=mark)
         process.send_line("discarded by interrupt")
         process.wait_for_text("compose[run:2]> ", after=mark)
@@ -2558,6 +3626,8 @@ print(
 
         mark = process.output_mark()
         process.send_text("/run\n\n")
+        process.wait_for_text("Manuscript output", after=mark)
+        process.send_line("part-01/discarded-by-eof.md")
         process.wait_for_text("compose[run:1]> ", after=mark)
         process.send_line("discarded by eof")
         process.wait_for_text("compose[run:2]> ", after=mark)
@@ -2862,7 +3932,9 @@ asyncio.run(main())
         process.wait_for_text("story[alpha:lead]> ")
 
         mark = process.output_mark()
-        process.send_line("/run seed consensus")
+        process.send_line(
+            "/run --output part-01/seed-consensus.md seed consensus"
+        )
         process.wait_for_text("Consensus [completed] [success]", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         mark = process.output_mark()
@@ -2882,7 +3954,9 @@ asyncio.run(main())
         self._set_provider_control(mode="block")
         records_before_cancel = len(self._provider_records())
         mark = process.output_mark()
-        process.send_line("/run cancel consensus")
+        process.send_line(
+            "/run --output part-01/cancel-consensus.md cancel consensus"
+        )
         process.wait_for_text("Started prompt consensus.", after=mark)
         process.wait_for_text("◐", after=mark)
 
@@ -2960,7 +4034,9 @@ asyncio.run(main())
 
         self._set_provider_control(mode="auto")
         mark = process.output_mark()
-        process.send_line("/run recovered consensus")
+        process.send_line(
+            "/run --output part-01/recovered-consensus.md recovered consensus"
+        )
         process.wait_for_text("Consensus [completed] [success]", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         manifest = self.workspace.read_json(manifest_path)
@@ -3166,15 +4242,26 @@ asyncio.run(main())
         )
         process.wait_for_text("story[alpha:lead]> ")
 
-        for command, code in (
-            ("/rn", "command_invalid"),
-            ("/to unknown_agent", "agent_invalid"),
-            ("/draft-file missing-draft.md", "draft_input_invalid"),
-            ("/transcript missing_conversation", "conversation_not_found"),
+        for command, code, output_path in (
+            ("/rn", "command_invalid", None),
+            ("/to unknown_agent", "agent_invalid", None),
+            (
+                "/draft-file missing-draft.md",
+                "draft_input_invalid",
+                "part-01/missing-draft.md",
+            ),
+            (
+                "/transcript missing_conversation",
+                "conversation_not_found",
+                None,
+            ),
         ):
             with self.subTest(code=code):
                 mark = process.output_mark()
                 process.send_line(command)
+                if output_path is not None:
+                    process.wait_for_text("Manuscript output", after=mark)
+                    process.send_line(output_path)
                 process.wait_for_text(f"[error {code}]", after=mark)
                 process.wait_for_text("[hint] ", after=mark)
                 process.wait_for_text("story[alpha:lead]> ", after=mark)

@@ -1096,12 +1096,12 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             session_id,
             "PRIVATE_RUNTIME_PROMPT",
             debate_id="runtime-debate",
-            manuscript_name="runtime-result.md",
+            output_path="part-01/runtime-result.md",
         )
         self.assertIs(result.status, DebateStatus.CONSENSUS)
         self.assertEqual(result.final_candidate, "reply-draft")
         self.assertEqual(
-            self.workspace.read_manuscript("runtime-result.md"),
+            runtime.artifacts.read_text("manuscript/part-01/runtime-result.md"),
             "reply-draft",
         )
         debate_calls = self.provider_invocations()

@@ -21,6 +21,7 @@ from .backend import (
     AgentBackend,
     BoundAgent,
     backend_configuration_snapshot,
+    release_bound_agent,
 )
 from .config import ConfigManager
 from .conversation_retrieval import (
@@ -113,6 +114,19 @@ from .session_lifecycle import (
     provider_work_is_ready,
 )
 from .workspace import FilesystemConversationEventStore, Workspace
+from .writing_artifacts import (
+    ReferenceAuthorizationError,
+    ReferenceAuthorizationErrorCode,
+    ReferenceOperationFailure,
+    ReferenceOperationHistory,
+    manuscript_artifact_path,
+)
+from .writing_artifacts.repository import WritingArtifactRepository
+from .writing_artifacts.runtime_references import (
+    RuntimeReferenceOperation,
+    prepare_runtime_reference_operation,
+    reference_operation_belongs_to_session,
+)
 
 
 class _ProgressEmitter:
@@ -1039,6 +1053,10 @@ class _DebateContextPropagationError(Exception):
     """Mark a validated snapshot that could not enter an agent request."""
 
 
+class _SupersededBindingSelection(Exception):
+    """Retry a selection-only request whose bind completed out of order."""
+
+
 class StoryRuntime:
     """Public runtime for persistent sessions, debates, and advisory turns."""
 
@@ -1057,6 +1075,7 @@ class StoryRuntime:
         )
         self._debug_log = WorkspaceDebugLog(self.workspace)
         self.backend = backend
+        self.artifacts = WritingArtifactRepository(self.workspace.root)
         self.conversation_event_store = (
             conversation_event_store
             if conversation_event_store is not None
@@ -1075,11 +1094,15 @@ class StoryRuntime:
         )
         self.prompts = PromptAssembler(
             self.workspace,
+            artifact_repository=self.artifacts,
             backend_overrides=backend_overrides,
             configuration_snapshot=self._configuration_snapshot,
         )
         self.config = ConfigManager(self.workspace)
         self._bound_agents: dict[tuple[str, str], BoundAgent] = {}
+        self._desired_binding_fingerprints: dict[str, str] = {}
+        self._retiring_bound_agents: dict[tuple[str, str], BoundAgent] = {}
+        self._bound_agent_uses: dict[int, tuple[BoundAgent, int]] = {}
         self._binding_tasks: dict[
             tuple[str, str], asyncio.Task[BoundAgent]
         ] = {}
@@ -1303,6 +1326,14 @@ class StoryRuntime:
         )
         return result
 
+    def inspect_reference_operation(
+        self,
+        operation_id: str,
+    ) -> ReferenceOperationHistory | None:
+        """Return validated content-free read history for one operation."""
+
+        return self.artifacts.inspect_reference_operation(operation_id)
+
     async def converse(
         self,
         session_id: str,
@@ -1337,68 +1368,109 @@ class StoryRuntime:
             turn_id = self._new_conversation_turn_id()
             context = read_context(session, conversation)
             self._reject_async_result(context, operation="read_context")
+            reference_operation = prepare_runtime_reference_operation(
+                self.artifacts,
+                session_id=session,
+                text=content,
+            )
             try:
                 request = ConversationRequest(
                     session_id=session,
                     conversation_id=conversation,
                     turn_id=turn_id,
                     agent_id=agent,
-                    content=content,
+                    content=reference_operation.provider_text,
                     context=context,
                 )
             except Exception as exc:
-                raise BackendProtocolError(
+                failure = BackendProtocolError(
                     "conversation event store read_context() returned "
                     "an invalid context"
-                ) from exc
-
-            self._acquire_ready_session_access(session)
-            definition = self.prompts.build_definition(
-                session_id=session,
-                agent_id=agent,
-            )
-            bound_agent = await self._bound_agent(definition)
-            bound_converse = getattr(bound_agent, "converse", None)
-            if bound_converse is None or not callable(bound_converse):
-                raise BackendProtocolError(
-                    f"{agent} binding does not provide converse()"
                 )
-            if not inspect.iscoroutinefunction(bound_converse):
-                raise BackendProtocolError(
-                    f"{agent} bound converse() must be async"
-                )
-            self._verify_definition_files(definition)
+                reference_failure = reference_operation.failure(failure)
+                if reference_failure is not None:
+                    raise reference_failure from exc
+                raise failure from exc
 
-            user_event = ConversationEventAppend(
-                session_id=session,
-                conversation_id=conversation,
-                turn_id=turn_id,
-                sender="user",
-                recipient=agent,
-                kind=ConversationEventKind.USER_MESSAGE,
-                content=content,
-            )
-            self._trace_debug(
-                DebugOperation.ADVISORY_TURN,
-                DebugPhase.STARTED,
-                session_id=session,
-                conversation_id=conversation,
+            reference_read = reference_operation.begin_invocation(
                 agent_id=agent,
+                phase="conversation",
+                round_number=None,
             )
             try:
-                self._append_conversation_event(append, user_event)
+                self._acquire_ready_session_access(session)
+                definition = self.prompts.build_definition(
+                    session_id=session,
+                    agent_id=agent,
+                )
+                bound_agent = await self._acquire_bound_agent(definition)
             except BaseException as exc:
-                self._record_debug_error(
+                reference_operation.terminate_invocation(
+                    reference_read,
+                    self._reference_failure_code(exc),
+                )
+                reference_failure = reference_operation.failure(exc)
+                if reference_failure is not None:
+                    raise reference_failure from exc
+                raise
+            try:
+                bound_converse = getattr(bound_agent, "converse", None)
+                if bound_converse is None or not callable(bound_converse):
+                    raise BackendProtocolError(
+                        f"{agent} binding does not provide converse()"
+                    )
+                if not inspect.iscoroutinefunction(bound_converse):
+                    raise BackendProtocolError(
+                        f"{agent} bound converse() must be async"
+                    )
+                self._verify_definition_files(definition)
+
+                user_event = ConversationEventAppend(
+                    session_id=session,
+                    conversation_id=conversation,
+                    turn_id=turn_id,
+                    sender="user",
+                    recipient=agent,
+                    kind=ConversationEventKind.USER_MESSAGE,
+                    content=reference_operation.source_text,
+                )
+                self._trace_debug(
                     DebugOperation.ADVISORY_TURN,
-                    exc,
+                    DebugPhase.STARTED,
                     session_id=session,
                     conversation_id=conversation,
                     agent_id=agent,
                 )
+                self._append_conversation_event(append, user_event)
+            except BaseException as exc:
+                await self._release_bound_agent_use(bound_agent)
+                reference_operation.terminate_invocation(
+                    reference_read,
+                    self._reference_failure_code(exc),
+                )
+                reference_failure = reference_operation.failure(exc)
+                self._record_debug_error(
+                    DebugOperation.ADVISORY_TURN,
+                    reference_failure or exc,
+                    session_id=session,
+                    conversation_id=conversation,
+                    agent_id=agent,
+                )
+                if reference_failure is not None:
+                    raise reference_failure from exc
                 raise
 
             try:
-                raw_reply = await bound_converse(request)
+                try:
+                    if reference_read is None:
+                        raw_reply = await bound_converse(request)
+                    else:
+                        raw_reply = await bound_converse(
+                            request,
+                            reference_read=reference_read,
+                        )
+                finally:
+                    await self._release_bound_agent_use(bound_agent)
                 reply = self._validated_conversation_reply(raw_reply, request)
                 reply_event = ConversationEventAppend(
                     session_id=session,
@@ -1416,8 +1488,11 @@ class StoryRuntime:
                     agent_id=agent,
                     content=reply.content,
                     context=request.context,
+                    reference_operation_id=reference_operation.operation_id,
                 )
+                reference_operation.finish()
             except asyncio.CancelledError as cancellation_error:
+                reference_failure = reference_operation.failure(cancellation_error)
                 cancellation = ConversationEventAppend(
                     session_id=session,
                     conversation_id=conversation,
@@ -1440,6 +1515,8 @@ class StoryRuntime:
                     phase=DebugPhase.CANCELLED,
                     outcome=DebugOutcome.INTERRUPTED,
                 )
+                if reference_failure is not None:
+                    raise cancellation_error from reference_failure
                 raise
             except (KeyboardInterrupt, SystemExit) as interruption:
                 self._record_debug_error(
@@ -1451,6 +1528,11 @@ class StoryRuntime:
                 )
                 raise
             except Exception as exc:
+                reference_failure = reference_operation.failure(
+                    exc,
+                    default=ReferenceAuthorizationErrorCode.PROVIDER_FAILURE,
+                )
+                visible_failure = reference_failure or exc
                 failure = ConversationEventAppend(
                     session_id=session,
                     conversation_id=conversation,
@@ -1458,7 +1540,11 @@ class StoryRuntime:
                     sender="runtime",
                     recipient="user",
                     kind=ConversationEventKind.RUNTIME_ERROR,
-                    content=self._conversation_error_text(exc, request),
+                    content=self._conversation_error_text(
+                        visible_failure,
+                        request,
+                        sensitive_values=(reference_operation.source_text,),
+                    ),
                 )
                 try:
                     self._append_conversation_event(append, failure)
@@ -1470,26 +1556,33 @@ class StoryRuntime:
                         conversation_id=conversation,
                         agent_id=agent,
                     )
+                    if reference_failure is not None:
+                        raise reference_failure from persistence_exc
                     raise persistence_exc from exc
                 self._record_debug_error(
                     DebugOperation.ADVISORY_TURN,
-                    exc,
+                    visible_failure,
                     session_id=session,
                     conversation_id=conversation,
                     agent_id=agent,
                 )
+                if reference_failure is not None:
+                    raise reference_failure from exc
                 raise
 
             try:
                 self._append_conversation_event(append, reply_event)
-            except BaseException as exc:
+            except Exception as exc:
+                reference_failure = reference_operation.failure(exc)
                 self._record_debug_error(
                     DebugOperation.ADVISORY_TURN,
-                    exc,
+                    reference_failure or exc,
                     session_id=session,
                     conversation_id=conversation,
                     agent_id=agent,
                 )
+                if reference_failure is not None:
+                    raise reference_failure from exc
                 raise
             self._trace_debug(
                 DebugOperation.ADVISORY_TURN,
@@ -1556,79 +1649,122 @@ class StoryRuntime:
             turn_id = self._new_conversation_turn_id()
             context = read_context(session, conversation)
             self._reject_async_result(context, operation="read_context")
+            reference_operation = prepare_runtime_reference_operation(
+                self.artifacts,
+                session_id=session,
+                text=content,
+            )
             try:
                 request = ConversationRetrievalRequest(
                     session_id=session,
                     conversation_id=conversation,
                     turn_id=turn_id,
                     agent_id=agent,
-                    content=content,
+                    content=reference_operation.provider_text,
                     context=context,
                 )
             except Exception as exc:
-                raise BackendProtocolError(
+                failure = BackendProtocolError(
                     "conversation event store read_context() returned "
                     "an invalid context"
-                ) from exc
-
-            self._acquire_ready_session_access(session)
-            definition = self.prompts.build_definition(
-                session_id=session,
-                agent_id=agent,
-            )
-            bound_agent = await self._bound_agent(definition)
-            bound_converse = getattr(
-                bound_agent,
-                "converse_with_retrieval",
-                None,
-            )
-            if bound_converse is None or not callable(bound_converse):
-                raise BackendProtocolError(
-                    f"{agent} binding does not provide converse_with_retrieval()"
                 )
-            if not inspect.iscoroutinefunction(bound_converse):
-                raise BackendProtocolError(
-                    f"{agent} bound converse_with_retrieval() must be async"
-                )
-            self._verify_definition_files(definition)
+                reference_failure = reference_operation.failure(failure)
+                if reference_failure is not None:
+                    raise reference_failure from exc
+                raise failure from exc
 
-            diagnostic_values: set[str] = set()
-            handler = _RuntimeConversationRetrievalHandler(
-                request,
-                scoped_memory,
-                progress,
-                diagnostic_values,
-            )
-            user_event = ConversationEventAppend(
-                session_id=session,
-                conversation_id=conversation,
-                turn_id=turn_id,
-                sender="user",
-                recipient=agent,
-                kind=ConversationEventKind.USER_MESSAGE,
-                content=content,
-            )
-            self._trace_debug(
-                DebugOperation.RETRIEVAL_TURN,
-                DebugPhase.STARTED,
-                session_id=session,
-                conversation_id=conversation,
+            reference_read = reference_operation.begin_invocation(
                 agent_id=agent,
+                phase="conversation_retrieval",
+                round_number=None,
             )
             try:
-                self._append_conversation_event(append, user_event)
+                self._acquire_ready_session_access(session)
+                definition = self.prompts.build_definition(
+                    session_id=session,
+                    agent_id=agent,
+                )
+                bound_agent = await self._acquire_bound_agent(definition)
             except BaseException as exc:
-                self._record_debug_error(
+                reference_operation.terminate_invocation(
+                    reference_read,
+                    self._reference_failure_code(exc),
+                )
+                reference_failure = reference_operation.failure(exc)
+                if reference_failure is not None:
+                    raise reference_failure from exc
+                raise
+            try:
+                bound_converse = getattr(
+                    bound_agent,
+                    "converse_with_retrieval",
+                    None,
+                )
+                if bound_converse is None or not callable(bound_converse):
+                    raise BackendProtocolError(
+                        f"{agent} binding does not provide "
+                        "converse_with_retrieval()"
+                    )
+                if not inspect.iscoroutinefunction(bound_converse):
+                    raise BackendProtocolError(
+                        f"{agent} bound converse_with_retrieval() must be async"
+                    )
+                self._verify_definition_files(definition)
+
+                diagnostic_values: set[str] = set()
+                handler = _RuntimeConversationRetrievalHandler(
+                    request,
+                    scoped_memory,
+                    progress,
+                    diagnostic_values,
+                )
+                user_event = ConversationEventAppend(
+                    session_id=session,
+                    conversation_id=conversation,
+                    turn_id=turn_id,
+                    sender="user",
+                    recipient=agent,
+                    kind=ConversationEventKind.USER_MESSAGE,
+                    content=reference_operation.source_text,
+                )
+                self._trace_debug(
                     DebugOperation.RETRIEVAL_TURN,
-                    exc,
+                    DebugPhase.STARTED,
                     session_id=session,
                     conversation_id=conversation,
                     agent_id=agent,
                 )
+                self._append_conversation_event(append, user_event)
+            except BaseException as exc:
+                await self._release_bound_agent_use(bound_agent)
+                reference_operation.terminate_invocation(
+                    reference_read,
+                    self._reference_failure_code(exc),
+                )
+                reference_failure = reference_operation.failure(exc)
+                self._record_debug_error(
+                    DebugOperation.RETRIEVAL_TURN,
+                    reference_failure or exc,
+                    session_id=session,
+                    conversation_id=conversation,
+                    agent_id=agent,
+                )
+                if reference_failure is not None:
+                    raise reference_failure from exc
                 raise
 
             try:
-                raw_reply = await bound_converse(request, handler)
+                try:
+                    if reference_read is None:
+                        raw_reply = await bound_converse(request, handler)
+                    else:
+                        raw_reply = await bound_converse(
+                            request,
+                            handler,
+                            reference_read=reference_read,
+                        )
+                finally:
+                    await self._release_bound_agent_use(bound_agent)
                 reply = handler.validate_returned_reply(raw_reply)
                 reply_event = ConversationEventAppend(
                     session_id=session,
@@ -1647,8 +1783,11 @@ class StoryRuntime:
                     content=reply.content,
                     context=request.context,
                     sources=reply.sources,
+                    reference_operation_id=reference_operation.operation_id,
                 )
+                reference_operation.finish()
             except asyncio.CancelledError as cancellation_error:
+                reference_failure = reference_operation.failure(cancellation_error)
                 cancellation = ConversationEventAppend(
                     session_id=session,
                     conversation_id=conversation,
@@ -1671,6 +1810,8 @@ class StoryRuntime:
                     phase=DebugPhase.CANCELLED,
                     outcome=DebugOutcome.INTERRUPTED,
                 )
+                if reference_failure is not None:
+                    raise cancellation_error from reference_failure
                 raise
             except (KeyboardInterrupt, SystemExit) as interruption:
                 self._record_debug_error(
@@ -1682,6 +1823,11 @@ class StoryRuntime:
                 )
                 raise
             except Exception as exc:
+                reference_failure = reference_operation.failure(
+                    exc,
+                    default=ReferenceAuthorizationErrorCode.PROVIDER_FAILURE,
+                )
+                visible_failure = reference_failure or exc
                 failure = ConversationEventAppend(
                     session_id=session,
                     conversation_id=conversation,
@@ -1690,9 +1836,12 @@ class StoryRuntime:
                     recipient="user",
                     kind=ConversationEventKind.RUNTIME_ERROR,
                     content=self._conversation_error_text(
-                        exc,
+                        visible_failure,
                         request,
-                        sensitive_values=tuple(diagnostic_values),
+                        sensitive_values=(
+                            reference_operation.source_text,
+                            *diagnostic_values,
+                        ),
                     ),
                 )
                 try:
@@ -1705,26 +1854,33 @@ class StoryRuntime:
                         conversation_id=conversation,
                         agent_id=agent,
                     )
+                    if reference_failure is not None:
+                        raise reference_failure from persistence_exc
                     raise persistence_exc from exc
                 self._record_debug_error(
                     DebugOperation.RETRIEVAL_TURN,
-                    exc,
+                    visible_failure,
                     session_id=session,
                     conversation_id=conversation,
                     agent_id=agent,
                 )
+                if reference_failure is not None:
+                    raise reference_failure from exc
                 raise
 
             try:
                 self._append_conversation_event(append, reply_event)
-            except BaseException as exc:
+            except Exception as exc:
+                reference_failure = reference_operation.failure(exc)
                 self._record_debug_error(
                     DebugOperation.RETRIEVAL_TURN,
-                    exc,
+                    reference_failure or exc,
                     session_id=session,
                     conversation_id=conversation,
                     agent_id=agent,
                 )
+                if reference_failure is not None:
+                    raise reference_failure from exc
                 raise
             self._trace_debug(
                 DebugOperation.RETRIEVAL_TURN,
@@ -1741,7 +1897,7 @@ class StoryRuntime:
         session_id: str,
         prompt: str,
         *,
-        manuscript_name: str | None = None,
+        output_path: str,
         max_debate_rounds: int | None = None,
         debate_id: str | None = None,
         conversation_context: DebateContextRequest | None = None,
@@ -1760,7 +1916,7 @@ class StoryRuntime:
             session_id=session_id,
             payload=prompt,
             input_kind=InputKind.PROMPT,
-            manuscript_name=manuscript_name,
+            output_path=output_path,
             max_debate_rounds=max_debate_rounds,
             debate_id=debate_id,
             conversation_context=conversation_context,
@@ -1772,7 +1928,7 @@ class StoryRuntime:
         session_id: str,
         draft: str,
         *,
-        manuscript_name: str | None = None,
+        output_path: str,
         max_debate_rounds: int | None = None,
         debate_id: str | None = None,
         conversation_context: DebateContextRequest | None = None,
@@ -1780,17 +1936,18 @@ class StoryRuntime:
     ) -> DebateResult:
         """Run a supplied-draft debate with optional context and progress facts.
 
-        Validation, context capture and sidecar durability precede provider work;
-        the supplied draft produces a trusted drafted fact without a drafting
-        provider call. Terminal durability, expected failures, observer errors,
-        cancellation, and raised persistence uncertainty match ``run_prompt``.
+        Validation, context capture and sidecar durability precede provider work.
+        The execution specialist authors the first candidate from the supplied
+        draft before consensus. Terminal durability, expected failures, observer
+        errors, cancellation, and raised persistence uncertainty match
+        ``run_prompt``.
         """
 
         return await self._run(
             session_id=session_id,
             payload=draft,
             input_kind=InputKind.DRAFT,
-            manuscript_name=manuscript_name,
+            output_path=output_path,
             max_debate_rounds=max_debate_rounds,
             debate_id=debate_id,
             conversation_context=conversation_context,
@@ -1803,7 +1960,7 @@ class StoryRuntime:
         session_id: str,
         payload: str,
         input_kind: InputKind,
-        manuscript_name: str | None,
+        output_path: str,
         max_debate_rounds: int | None,
         debate_id: str | None,
         conversation_context: DebateContextRequest | None,
@@ -1824,6 +1981,9 @@ class StoryRuntime:
         session = self.workspace.validate_identifier(session_id)
         if not isinstance(payload, str) or not payload:
             raise ValueError(f"{input_kind.value} payload must be non-empty text")
+        # Validate the required part-scoped output before session acquisition or
+        # any debate-state mutation. Publication repeats this validation.
+        manuscript_artifact_path(output_path)
         debate = (
             self.workspace.validate_identifier(debate_id, label="debate ID")
             if debate_id is not None
@@ -1855,18 +2015,6 @@ class StoryRuntime:
             session_id=session,
             debate_id=debate,
         )
-
-        target_name = manuscript_name or f"{session}_{debate}.md"
-        try:
-            self._acquire_ready_session_access(session)
-        except BaseException as exc:
-            self._record_debug_error(
-                DebugOperation.CONSENSUS_RUN,
-                exc,
-                session_id=session,
-                debate_id=debate,
-            )
-            raise
 
         context_snapshot: ConversationContextWindow | None = None
         if (
@@ -1904,6 +2052,25 @@ class StoryRuntime:
                 )
                 raise
 
+        reference_operation = prepare_runtime_reference_operation(
+            self.artifacts,
+            session_id=session,
+            text=payload,
+        )
+
+        try:
+            self._acquire_ready_session_access(session)
+        except BaseException as exc:
+            reference_failure = reference_operation.failure(exc)
+            self._record_debug_error(
+                DebugOperation.CONSENSUS_RUN,
+                reference_failure or exc,
+                session_id=session,
+                debate_id=debate,
+            )
+            if reference_failure is not None:
+                raise reference_failure from exc
+            raise
         reservation_token = uuid.uuid4().hex
         try:
             self.workspace.reserve_debate(
@@ -1913,12 +2080,15 @@ class StoryRuntime:
                 owner_token=reservation_token,
             )
         except BaseException as exc:
+            reference_failure = reference_operation.failure(exc)
             self._record_debug_error(
                 DebugOperation.CONSENSUS_RUN,
-                exc,
+                reference_failure or exc,
                 session_id=session,
                 debate_id=debate,
             )
+            if reference_failure is not None:
+                raise reference_failure from exc
             raise
         if context_request is not None:
             try:
@@ -1943,20 +2113,24 @@ class StoryRuntime:
                     )
                 except Exception:
                     pass
+                reference_failure = reference_operation.failure(exc)
                 self._record_debug_error(
                     DebugOperation.CONSENSUS_RUN,
-                    exc,
+                    reference_failure or exc,
                     session_id=session,
                     debate_id=debate,
                 )
+                if reference_failure is not None:
+                    raise reference_failure from exc
                 raise
         execution = asyncio.create_task(
             self._run_reserved(
                 session=session,
                 debate=debate,
-                payload=payload,
+                source_payload=reference_operation.source_text,
+                provider_payload=reference_operation.provider_text,
                 input_kind=input_kind,
-                target_name=target_name,
+                output_path=output_path,
                 round_limit=round_limit,
                 reservation_token=reservation_token,
                 conversation_context=context_snapshot,
@@ -1964,6 +2138,7 @@ class StoryRuntime:
                     None if context_request is None else context_request.mode
                 ),
                 progress=progress,
+                reference_operation=reference_operation,
             ),
             name=f"debate:{session}:{debate}",
         )
@@ -2011,6 +2186,7 @@ class StoryRuntime:
                         outcome=DebugOutcome.INTERRUPTED,
                     )
                     raise cancellation from observer_error
+            reference_failure = reference_operation.failure(cancellation)
             self._record_debug_error(
                 DebugOperation.CONSENSUS_RUN,
                 cancellation,
@@ -2019,6 +2195,8 @@ class StoryRuntime:
                 phase=DebugPhase.CANCELLED,
                 outcome=DebugOutcome.INTERRUPTED,
             )
+            if reference_failure is not None:
+                raise cancellation from reference_failure
             raise
         except ProgressObserverError as exc:
             if not progress.terminal_durable:
@@ -2035,15 +2213,20 @@ class StoryRuntime:
                     )
                 except Exception:
                     pass
+            reference_failure = reference_operation.failure(exc)
             self._record_debug_error(
                 DebugOperation.CONSENSUS_RUN,
-                exc,
+                reference_failure or exc,
                 session_id=session,
                 debate_id=debate,
                 outcome=DebugOutcome.INTERRUPTED,
             )
+            if reference_failure is not None:
+                raise reference_failure from exc
             raise
         except Exception as exc:
+            reference_failure = reference_operation.failure(exc)
+            visible_failure = reference_failure or exc
             try:
                 self.workspace.transition_debate(
                     session,
@@ -2053,16 +2236,18 @@ class StoryRuntime:
                     terminal=True,
                     revision_id=None,
                     rounds_completed=0,
-                    error=self._error_text(exc),
+                    error=self._error_text(visible_failure),
                 )
             except Exception:
                 pass
             self._record_debug_error(
                 DebugOperation.CONSENSUS_RUN,
-                exc,
+                visible_failure,
                 session_id=session,
                 debate_id=debate,
             )
+            if reference_failure is not None:
+                raise reference_failure from exc
             raise
 
     async def _run_reserved(
@@ -2070,14 +2255,16 @@ class StoryRuntime:
         *,
         session: str,
         debate: str,
-        payload: str,
+        source_payload: str,
+        provider_payload: str,
         input_kind: InputKind,
-        target_name: str,
+        output_path: str,
         round_limit: int,
         reservation_token: str,
         conversation_context: ConversationContextWindow | None,
         context_mode: DebateContextMode | None,
         progress: _ProgressEmitter,
+        reference_operation: RuntimeReferenceOperation,
     ) -> DebateResult:
         """Execute a reserved debate with durable records before progress facts.
 
@@ -2116,7 +2303,7 @@ class StoryRuntime:
             round_number=0,
             revision="r0",
             kind=input_kind.value,
-            content=payload,
+            content=source_payload,
         )
         progress.emit(
             DebateProgressEvent(
@@ -2142,69 +2329,50 @@ class StoryRuntime:
         current_revision = "r0"
         revision_cycles = 0
 
-        if input_kind is InputKind.PROMPT:
-            try:
-                reply = await self._invoke(
-                    self._request(
-                        session=session,
-                        debate=debate,
-                        agent_id=EXECUTION_SPECIALIST,
-                        phase=Phase.DRAFT,
-                        round_number=0,
-                        revision_id=current_revision,
-                        task=(
-                            "Create a complete revision 0 candidate from the user "
-                            "prompt. Do not audit it in this response."
-                        ),
-                        user_payload=payload,
-                        messages=tuple(messages),
-                        conversation_context=conversation_context,
-                    )
-                )
-                self._validate_candidate_reply(reply, current_revision)
-            except Exception as exc:
-                record(
-                    sender=EXECUTION_SPECIALIST,
-                    phase=Phase.DRAFT.value,
-                    round_number=0,
-                    revision=current_revision,
-                    kind="error",
-                    content=self._error_text(exc),
-                )
-                self._remember(
-                    agent_id=EXECUTION_SPECIALIST,
+        try:
+            reply = await self._invoke(
+                self._request(
                     session=session,
                     debate=debate,
+                    agent_id=EXECUTION_SPECIALIST,
                     phase=Phase.DRAFT,
                     round_number=0,
-                    revision=current_revision,
-                    kind="error",
-                    content="backend outcome failed validation or execution",
-                )
-                return self._finish(
-                    session=session,
-                    debate=debate,
-                    reservation_token=reservation_token,
-                    input_kind=input_kind,
-                    status=DebateStatus.FAILED,
                     revision_id=current_revision,
-                    rounds_completed=0,
-                    final_candidate=None,
-                    latest_candidate=None,
-                    manuscript_path=None,
-                    messages=messages,
-                    error=self._error_text(exc),
-                    failure_kind=self._classify_debate_failure(exc),
-                    progress=progress,
-                )
-            candidate = reply.content
+                    task=(
+                        "Create a complete revision 0 candidate from the user "
+                        "prompt. Do not audit it in this response."
+                        if input_kind is InputKind.PROMPT
+                        else (
+                            "Create a complete revision 0 candidate from the supplied "
+                            "draft. Preserve sound material, apply the requested "
+                            "changes, and do not audit it in this response."
+                        )
+                    ),
+                    user_payload=provider_payload,
+                    messages=self._provider_debate_messages(
+                        tuple(messages),
+                        source_text=source_payload,
+                        provider_text=provider_payload,
+                    ),
+                    conversation_context=conversation_context,
+                ),
+                reference_operation=reference_operation,
+            )
+            self._validate_candidate_reply(reply, current_revision)
+        except Exception as exc:
+            failure_kind = self._classify_debate_failure(exc)
+            reference_failure = reference_operation.failure(
+                exc,
+                default=ReferenceAuthorizationErrorCode.PROVIDER_FAILURE,
+            )
+            visible_failure = reference_failure or exc
             record(
                 sender=EXECUTION_SPECIALIST,
                 phase=Phase.DRAFT.value,
                 round_number=0,
                 revision=current_revision,
-                kind="candidate",
-                content=candidate,
+                kind="error",
+                content=self._error_text(visible_failure),
             )
             self._remember(
                 agent_id=EXECUTION_SPECIALIST,
@@ -2213,11 +2381,46 @@ class StoryRuntime:
                 phase=Phase.DRAFT,
                 round_number=0,
                 revision=current_revision,
-                kind="candidate_created",
-                content="revision 0 candidate created",
+                kind="error",
+                content="backend outcome failed validation or execution",
             )
-        else:
-            candidate = payload
+            return self._finish(
+                session=session,
+                debate=debate,
+                reservation_token=reservation_token,
+                input_kind=input_kind,
+                status=DebateStatus.FAILED,
+                revision_id=current_revision,
+                rounds_completed=0,
+                final_candidate=None,
+                latest_candidate=None,
+                manuscript_path=None,
+                messages=messages,
+                error=self._error_text(visible_failure),
+                failure_kind=failure_kind,
+                progress=progress,
+                reference_operation_id=reference_operation.operation_id,
+            )
+        candidate = reply.content
+        candidate_author_agent_id = EXECUTION_SPECIALIST
+        record(
+            sender=EXECUTION_SPECIALIST,
+            phase=Phase.DRAFT.value,
+            round_number=0,
+            revision=current_revision,
+            kind="candidate",
+            content=candidate,
+        )
+        self._remember(
+            agent_id=EXECUTION_SPECIALIST,
+            session=session,
+            debate=debate,
+            phase=Phase.DRAFT,
+            round_number=0,
+            revision=current_revision,
+            kind="candidate_created",
+            content="revision 0 candidate created",
+        )
         progress.emit(
             DebateProgressEvent(
                 session_id=session,
@@ -2244,16 +2447,27 @@ class StoryRuntime:
             audit_replies, audit_error = await self._audit(
                 session=session,
                 debate=debate,
-                payload=payload,
+                payload=provider_payload,
                 candidate=candidate,
                 revision_id=current_revision,
                 round_number=revision_cycles,
-                visible_messages=tuple(messages),
+                visible_messages=self._provider_debate_messages(
+                    tuple(messages),
+                    source_text=source_payload,
+                    provider_text=provider_payload,
+                ),
                 record=record,
                 entries=audit_entries,
                 conversation_context=conversation_context,
+                reference_operation=reference_operation,
             )
             if audit_error is not None:
+                failure_kind = self._classify_debate_failure(audit_error)
+                reference_failure = reference_operation.failure(
+                    audit_error,
+                    default=ReferenceAuthorizationErrorCode.PROVIDER_FAILURE,
+                )
+                visible_failure = reference_failure or audit_error
                 return self._finish(
                     session=session,
                     debate=debate,
@@ -2266,9 +2480,10 @@ class StoryRuntime:
                     latest_candidate=candidate,
                     manuscript_path=None,
                     messages=messages,
-                    error=self._error_text(audit_error),
-                    failure_kind=self._classify_debate_failure(audit_error),
+                    error=self._error_text(visible_failure),
+                    failure_kind=failure_kind,
                     progress=progress,
+                    reference_operation_id=reference_operation.operation_id,
                 )
 
             conflicts = [
@@ -2306,6 +2521,7 @@ class StoryRuntime:
                     kind="escalation",
                     content=action,
                 )
+                reference_operation.finish()
                 return self._finish(
                     session=session,
                     debate=debate,
@@ -2320,23 +2536,35 @@ class StoryRuntime:
                     messages=messages,
                     action_required=action,
                     progress=progress,
+                    reference_operation_id=reference_operation.operation_id,
                 )
 
             proposal_entries: list[DebateMessage] = []
             proposals, proposal_error = await self._propose(
                 session=session,
                 debate=debate,
-                payload=payload,
+                payload=provider_payload,
                 candidate=candidate,
                 revision_id=current_revision,
                 round_number=revision_cycles + 1,
                 responsible_agents=tuple(conflicts),
-                visible_messages=tuple(messages),
+                visible_messages=self._provider_debate_messages(
+                    tuple(messages),
+                    source_text=source_payload,
+                    provider_text=provider_payload,
+                ),
                 record=record,
                 entries=proposal_entries,
                 conversation_context=conversation_context,
+                reference_operation=reference_operation,
             )
             if proposal_error is not None:
+                failure_kind = self._classify_debate_failure(proposal_error)
+                reference_failure = reference_operation.failure(
+                    proposal_error,
+                    default=ReferenceAuthorizationErrorCode.PROVIDER_FAILURE,
+                )
+                visible_failure = reference_failure or proposal_error
                 return self._finish(
                     session=session,
                     debate=debate,
@@ -2349,9 +2577,10 @@ class StoryRuntime:
                     latest_candidate=candidate,
                     manuscript_path=None,
                     messages=messages,
-                    error=self._error_text(proposal_error),
-                    failure_kind=self._classify_debate_failure(proposal_error),
+                    error=self._error_text(visible_failure),
+                    failure_kind=failure_kind,
                     progress=progress,
+                    reference_operation_id=reference_operation.operation_id,
                 )
 
             next_revision = f"r{revision_cycles + 1}"
@@ -2369,15 +2598,26 @@ class StoryRuntime:
                             "every visible critique and every responsible-agent "
                             "proposal. Do not filter out or silently omit a conflict."
                         ),
-                        user_payload=payload,
+                        user_payload=provider_payload,
                         candidate_payload=candidate,
-                        messages=tuple(messages),
+                        messages=self._provider_debate_messages(
+                            tuple(messages),
+                            source_text=source_payload,
+                            provider_text=provider_payload,
+                        ),
                         conversation_context=conversation_context,
-                    )
+                    ),
+                    reference_operation=reference_operation,
                 )
                 self._validate_candidate_reply(synthesis, next_revision)
             except Exception as exc:
-                error = self._error_text(exc)
+                failure_kind = self._classify_debate_failure(exc)
+                reference_failure = reference_operation.failure(
+                    exc,
+                    default=ReferenceAuthorizationErrorCode.PROVIDER_FAILURE,
+                )
+                visible_failure = reference_failure or exc
+                error = self._error_text(visible_failure)
                 record(
                     sender=LEAD_ORCHESTRATOR,
                     phase=Phase.SYNTHESIZE.value,
@@ -2409,11 +2649,13 @@ class StoryRuntime:
                     manuscript_path=None,
                     messages=messages,
                     error=error,
-                    failure_kind=self._classify_debate_failure(exc),
+                    failure_kind=failure_kind,
                     progress=progress,
+                    reference_operation_id=reference_operation.operation_id,
                 )
 
             candidate = synthesis.content
+            candidate_author_agent_id = LEAD_ORCHESTRATOR
             current_revision = next_revision
             revision_cycles += 1
             record(
@@ -2460,11 +2702,16 @@ class StoryRuntime:
                         "replace it. Return only full-text updates for core documents "
                         "that genuinely changed; an empty update map is valid."
                     ),
-                    user_payload=payload,
+                    user_payload=provider_payload,
                     candidate_payload=candidate,
-                    messages=tuple(messages),
+                    messages=self._provider_debate_messages(
+                        tuple(messages),
+                        source_text=source_payload,
+                        provider_text=provider_payload,
+                    ),
                     conversation_context=conversation_context,
-                )
+                ),
+                reference_operation=reference_operation,
             )
             updates = self._validate_finalization_reply(
                 finalization, current_revision, candidate
@@ -2487,16 +2734,34 @@ class StoryRuntime:
                 kind="core_updates",
                 content=json.dumps(sorted(updates), ensure_ascii=False),
             )
+            reference_operation.finish()
             artifact_commit_started = True
             manuscript_path, applied_updates = (
-                self.workspace.commit_approved_artifacts(
-                    target_name,
-                    candidate,
-                    updates,
+                self.artifacts.commit_consensus(
+                    output_path=output_path,
+                    candidate=candidate,
+                    core_updates=updates,
+                    session_id=session,
+                    debate_id=debate,
+                    revision_id=current_revision,
+                    candidate_author_agent_id=candidate_author_agent_id,
                 )
             )
         except Exception as exc:
-            error = self._error_text(exc)
+            failure_kind = self._classify_debate_failure(
+                exc,
+                artifact_commit=artifact_commit_started,
+            )
+            reference_failure = reference_operation.failure(
+                exc,
+                default=(
+                    ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE
+                    if artifact_commit_started
+                    else ReferenceAuthorizationErrorCode.PROVIDER_FAILURE
+                ),
+            )
+            visible_failure = reference_failure or exc
+            error = self._error_text(visible_failure)
             record(
                 sender=LEAD_ORCHESTRATOR,
                 phase=Phase.FINALIZE.value,
@@ -2528,11 +2793,9 @@ class StoryRuntime:
                 manuscript_path=None,
                 messages=messages,
                 error=error,
-                failure_kind=self._classify_debate_failure(
-                    exc,
-                    artifact_commit=artifact_commit_started,
-                ),
+                failure_kind=failure_kind,
                 progress=progress,
+                reference_operation_id=reference_operation.operation_id,
             )
 
         record(
@@ -2557,6 +2820,7 @@ class StoryRuntime:
             core_updates=applied_updates,
             messages=messages,
             progress=progress,
+            reference_operation_id=reference_operation.operation_id,
         )
 
     async def _audit(
@@ -2572,6 +2836,7 @@ class StoryRuntime:
         record: Any,
         entries: list[DebateMessage],
         conversation_context: ConversationContextWindow | None,
+        reference_operation: RuntimeReferenceOperation,
     ) -> tuple[dict[str, AgentReply], Exception | None]:
         """Run all specialist audits, durably record each, and return first failure.
 
@@ -2609,6 +2874,7 @@ class StoryRuntime:
             requests,
             self._validate_audit_reply,
             revision_id,
+            reference_operation=reference_operation,
         )
         replies: dict[str, AgentReply] = {}
         first_error: Exception | None = None
@@ -2628,10 +2894,15 @@ class StoryRuntime:
                     else "approval"
                 )
             except Exception as exc:
-                content = self._error_text(exc)
+                reference_failure = reference_operation.failure(
+                    exc,
+                    default=ReferenceAuthorizationErrorCode.PROVIDER_FAILURE,
+                )
+                visible_failure = reference_failure or exc
+                content = self._error_text(visible_failure)
                 kind = "error"
                 if first_error is None:
-                    first_error = exc
+                    first_error = visible_failure
             entry = record(
                 sender=agent_id,
                 phase=Phase.AUDIT.value,
@@ -2671,6 +2942,7 @@ class StoryRuntime:
         record: Any,
         entries: list[DebateMessage],
         conversation_context: ConversationContextWindow | None,
+        reference_operation: RuntimeReferenceOperation,
     ) -> tuple[dict[str, AgentReply], Exception | None]:
         """Run responsible proposals, durably record them, and return first failure.
 
@@ -2707,6 +2979,7 @@ class StoryRuntime:
             requests,
             self._validate_proposal_reply,
             revision_id,
+            reference_operation=reference_operation,
         )
         replies: dict[str, AgentReply] = {}
         first_error: Exception | None = None
@@ -2720,10 +2993,15 @@ class StoryRuntime:
                 content = raw.content
                 kind = "proposal"
             except Exception as exc:
-                content = self._error_text(exc)
+                reference_failure = reference_operation.failure(
+                    exc,
+                    default=ReferenceAuthorizationErrorCode.PROVIDER_FAILURE,
+                )
+                visible_failure = reference_failure or exc
+                content = self._error_text(visible_failure)
                 kind = "error"
                 if first_error is None:
-                    first_error = exc
+                    first_error = visible_failure
             entry = record(
                 sender=agent_id,
                 phase=Phase.PROPOSE_REVISION.value,
@@ -3379,6 +3657,55 @@ class StoryRuntime:
         return value[: maximum - len(suffix)] + suffix
 
     @staticmethod
+    def _reference_failure_code(
+        failure: BaseException,
+        *,
+        default: ReferenceAuthorizationErrorCode = (
+            ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE
+        ),
+    ) -> ReferenceAuthorizationErrorCode:
+        """Map one failure to a stable content-free reference outcome."""
+
+        if isinstance(failure, ReferenceOperationFailure):
+            return failure.code
+        if isinstance(failure, ReferenceAuthorizationError):
+            return failure.code
+        if isinstance(failure, asyncio.CancelledError):
+            return ReferenceAuthorizationErrorCode.CANCELLED
+        return default
+
+    @staticmethod
+    def _provider_debate_messages(
+        messages: tuple[DebateMessage, ...],
+        *,
+        source_text: str,
+        provider_text: str,
+    ) -> tuple[DebateMessage, ...]:
+        """Project only this debate's current persisted initiation for a provider."""
+
+        if source_text == provider_text:
+            return messages
+        projected = list(messages)
+        for index, message in enumerate(projected):
+            if (
+                message.sender == "user"
+                and message.phase == "initiation"
+                and message.round == 0
+                and message.content == source_text
+            ):
+                projected[index] = DebateMessage(
+                    sender=message.sender,
+                    phase=message.phase,
+                    round=message.round,
+                    revision=message.revision,
+                    kind=message.kind,
+                    content=provider_text,
+                    timestamp=message.timestamp,
+                )
+                break
+        return tuple(projected)
+
+    @staticmethod
     def _validate_conversation_text(value: str) -> str:
         """Return nonempty strict-UTF-8 conversation text without mutation.
 
@@ -3402,48 +3729,163 @@ class StoryRuntime:
 
         return f"t_{uuid.uuid4().hex}"
 
-    async def _invoke(self, request: AgentRequest) -> AgentReply:
-        definition = self.prompts.build_definition(
-            session_id=request.session_id,
-            agent_id=request.agent_id,
-        )
-        bound_agent = await self._bound_agent(definition)
-        reply = await bound_agent.invoke(request)
-        if not isinstance(reply, AgentReply):
-            raise BackendProtocolError(
-                f"{request.agent_id} returned {type(reply).__name__}, "
-                "expected AgentReply"
+    async def _invoke(
+        self,
+        request: AgentRequest,
+        *,
+        reference_operation: RuntimeReferenceOperation | None = None,
+        reference_read: Any = None,
+    ) -> AgentReply:
+        if reference_operation is not None and reference_read is None:
+            reference_read = reference_operation.begin_invocation(
+                agent_id=request.agent_id,
+                phase=request.phase.value,
+                round_number=request.round_number,
             )
-        self._validate_reply_fields(reply)
-        return reply
+        try:
+            definition = self.prompts.build_definition(
+                session_id=request.session_id,
+                agent_id=request.agent_id,
+            )
+            bound_agent = await self._acquire_bound_agent(definition)
+        except BaseException as exc:
+            if reference_operation is not None:
+                reference_operation.terminate_invocation(
+                    reference_read,
+                    self._reference_failure_code(exc),
+                )
+            raise
+        try:
+            try:
+                if reference_read is None:
+                    reply = await bound_agent.invoke(request)
+                else:
+                    reply = await bound_agent.invoke(
+                        request,
+                        reference_read=reference_read,
+                    )
+            except BaseException as exc:
+                if reference_operation is not None:
+                    reference_operation.terminate_invocation(
+                        reference_read,
+                        self._reference_failure_code(
+                            exc,
+                            default=ReferenceAuthorizationErrorCode.PROVIDER_FAILURE,
+                        ),
+                    )
+                raise
+            if not isinstance(reply, AgentReply):
+                raise BackendProtocolError(
+                    f"{request.agent_id} returned {type(reply).__name__}, "
+                    "expected AgentReply"
+                )
+            self._validate_reply_fields(reply)
+            return reply
+        finally:
+            await self._release_bound_agent_use(bound_agent)
 
     async def _bound_agent(self, definition: AgentDefinition) -> BoundAgent:
-        """Reuse or single-flight one immutable provider-side binding."""
+        """Return the desired binding without retaining an operation use."""
+
+        while True:
+            try:
+                return await self._select_bound_agent(
+                    definition,
+                    retain_use=False,
+                )
+            except _SupersededBindingSelection:
+                continue
+
+    async def _acquire_bound_agent(
+        self,
+        definition: AgentDefinition,
+    ) -> BoundAgent:
+        """Select one binding and retain it for an exact runtime operation."""
+
+        return await self._select_bound_agent(definition, retain_use=True)
+
+    async def _select_bound_agent(
+        self,
+        definition: AgentDefinition,
+        *,
+        retain_use: bool,
+    ) -> BoundAgent:
+        """Select current, retiring, or single-flight binding state."""
 
         key = (definition.agent_id, definition.fingerprint)
+        releases: list[BoundAgent] = []
+        selected: BoundAgent | None = None
         async with self._binding_lock:
-            cached = self._bound_agents.get(key)
-            if cached is not None:
-                return cached
-            task = self._binding_tasks.get(key)
-            if task is None:
-                task = asyncio.create_task(
-                    self._bind_definition(definition),
-                    name=f"bind:{definition.agent_id}:{definition.fingerprint[:12]}",
+            self._desired_binding_fingerprints[key[0]] = key[1]
+            selected = self._bound_agents.get(key)
+            if selected is None:
+                selected = self._retiring_bound_agents.pop(key, None)
+                if selected is not None:
+                    releases.extend(
+                        self._install_current_binding_locked(key, selected)
+                    )
+            if selected is not None:
+                if retain_use:
+                    self._retain_bound_agent_use_locked(selected)
+                task = None
+            else:
+                task = self._binding_tasks.get(key)
+                if task is None:
+                    task = asyncio.create_task(
+                        self._bind_definition(definition),
+                        name=(
+                            f"bind:{definition.agent_id}:"
+                            f"{definition.fingerprint[:12]}"
+                        ),
+                    )
+                    self._binding_tasks[key] = task
+                self._binding_waiters[key] = (
+                    self._binding_waiters.get(key, 0) + 1
                 )
-                self._binding_tasks[key] = task
-            self._binding_waiters[key] = self._binding_waiters.get(key, 0) + 1
+
+        self._release_provider_bindings(releases)
+        if selected is not None:
+            return selected
+        assert task is not None
+        task_result_handled = False
+        superseded_selection = False
 
         try:
             # A debate or peer invocation may be cancelled without cancelling
             # a binding still awaited by another invocation.
             bound_agent = await asyncio.shield(task)
+            releases = []
             async with self._binding_lock:
                 if (
                     self._binding_tasks.get(key) is task
                     and self._binding_waiters.get(key, 0) > 0
                 ):
-                    self._bound_agents[key] = bound_agent
+                    is_desired = (
+                        self._desired_binding_fingerprints.get(key[0]) == key[1]
+                    )
+                    if retain_use:
+                        self._retain_bound_agent_use_locked(bound_agent)
+                    if is_desired:
+                        releases.extend(
+                            self._install_current_binding_locked(key, bound_agent)
+                        )
+                    elif not retain_use:
+                        releases.append(bound_agent)
+                        superseded_selection = True
+                    else:
+                        releases.extend(
+                            self._mark_binding_retiring_locked(key, bound_agent)
+                        )
+                    if not superseded_selection:
+                        selected = bound_agent
+                    task_result_handled = True
+            self._release_provider_bindings(releases)
+            if superseded_selection:
+                raise _SupersededBindingSelection
+            if selected is None:
+                raise BackendProtocolError(
+                    "completed binding lost its runtime ownership"
+                )
             return bound_agent
         finally:
             task_to_join: asyncio.Task[BoundAgent] | None = None
@@ -3459,7 +3901,114 @@ class StoryRuntime:
                             task.cancel()
                         task_to_join = task
             if task_to_join is not None:
-                await asyncio.gather(task_to_join, return_exceptions=True)
+                outcome = (
+                    await asyncio.gather(task_to_join, return_exceptions=True)
+                )[0]
+                if (
+                    not task_result_handled
+                    and not isinstance(outcome, BaseException)
+                ):
+                    async with self._binding_lock:
+                        tracked = self._binding_is_tracked_locked(outcome)
+                    if not tracked:
+                        release_bound_agent(outcome)
+
+    def _install_current_binding_locked(
+        self,
+        key: tuple[str, str],
+        bound_agent: BoundAgent,
+    ) -> list[BoundAgent]:
+        """Make one binding current and return idle predecessors to release."""
+
+        releases: list[BoundAgent] = []
+        for current_key, current in tuple(self._bound_agents.items()):
+            if current_key[0] != key[0] or current_key == key:
+                continue
+            self._bound_agents.pop(current_key)
+            if current is not bound_agent:
+                releases.extend(
+                    self._mark_binding_retiring_locked(current_key, current)
+                )
+        self._retiring_bound_agents.pop(key, None)
+        self._bound_agents[key] = bound_agent
+        return releases
+
+    def _mark_binding_retiring_locked(
+        self,
+        key: tuple[str, str],
+        bound_agent: BoundAgent,
+    ) -> list[BoundAgent]:
+        """Retain an active superseded binding or return an idle one."""
+
+        existing = self._retiring_bound_agents.get(key)
+        if existing is bound_agent:
+            return []
+        use = self._bound_agent_uses.get(id(bound_agent))
+        if use is not None and use[0] is bound_agent and use[1] > 0:
+            self._retiring_bound_agents[key] = bound_agent
+            return []
+        return [bound_agent]
+
+    def _retain_bound_agent_use_locked(self, bound_agent: BoundAgent) -> None:
+        """Increment one identity-checked runtime operation-use count."""
+
+        identity = id(bound_agent)
+        current = self._bound_agent_uses.get(identity)
+        if current is None:
+            self._bound_agent_uses[identity] = (bound_agent, 1)
+            return
+        if current[0] is not bound_agent:
+            raise BackendProtocolError("bound agent identity was reused")
+        self._bound_agent_uses[identity] = (bound_agent, current[1] + 1)
+
+    async def _release_bound_agent_use(self, bound_agent: BoundAgent) -> None:
+        """Release one operation use and retire a now-idle superseded binding."""
+
+        release: BoundAgent | None = None
+        async with self._binding_lock:
+            identity = id(bound_agent)
+            current = self._bound_agent_uses.get(identity)
+            if current is None or current[0] is not bound_agent:
+                raise BackendProtocolError("bound agent operation use is absent")
+            remaining = current[1] - 1
+            if remaining > 0:
+                self._bound_agent_uses[identity] = (bound_agent, remaining)
+            else:
+                self._bound_agent_uses.pop(identity)
+                for key, retiring in tuple(self._retiring_bound_agents.items()):
+                    if retiring is bound_agent:
+                        self._retiring_bound_agents.pop(key)
+                        release = bound_agent
+                        break
+        if release is not None:
+            release_bound_agent(release)
+
+    def _binding_is_tracked_locked(self, bound_agent: object) -> bool:
+        """Return whether current, retiring, or in-use state owns a binding."""
+
+        return (
+            any(current is bound_agent for current in self._bound_agents.values())
+            or any(
+                retiring is bound_agent
+                for retiring in self._retiring_bound_agents.values()
+            )
+            or (
+                id(bound_agent) in self._bound_agent_uses
+                and self._bound_agent_uses[id(bound_agent)][0] is bound_agent
+            )
+        )
+
+    @staticmethod
+    def _release_provider_bindings(bindings: list[BoundAgent]) -> None:
+        """Release each identity once outside the runtime binding lock."""
+
+        released: set[int] = set()
+        for bound_agent in bindings:
+            identity = id(bound_agent)
+            if identity in released:
+                continue
+            released.add(identity)
+            release_bound_agent(bound_agent)
 
     async def _bind_definition(
         self,
@@ -3476,16 +4025,20 @@ class StoryRuntime:
 
         self._verify_definition_files(definition)
         bound_agent = await bind(definition)
-        invoke = getattr(bound_agent, "invoke", None)
-        if invoke is None or not callable(invoke):
-            raise BackendProtocolError(
-                f"{definition.agent_id} binding does not provide invoke()"
-            )
-        if not inspect.iscoroutinefunction(invoke):
-            raise BackendProtocolError(
-                f"{definition.agent_id} bound invoke() must be async"
-            )
-        self._verify_definition_files(definition)
+        try:
+            invoke = getattr(bound_agent, "invoke", None)
+            if invoke is None or not callable(invoke):
+                raise BackendProtocolError(
+                    f"{definition.agent_id} binding does not provide invoke()"
+                )
+            if not inspect.iscoroutinefunction(invoke):
+                raise BackendProtocolError(
+                    f"{definition.agent_id} bound invoke() must be async"
+                )
+            self._verify_definition_files(definition)
+        except BaseException:
+            release_bound_agent(bound_agent)
+            raise
         return bound_agent
 
     @staticmethod
@@ -3498,20 +4051,42 @@ class StoryRuntime:
         requests: list[AgentRequest],
         validator: Callable[[AgentReply, str], None],
         revision_id: str,
+        *,
+        reference_operation: RuntimeReferenceOperation,
     ) -> tuple[AgentReply | Exception, ...]:
         """Invoke one phase concurrently and close every peer on first failure."""
 
-        async def invoke_and_validate(request: AgentRequest) -> AgentReply:
-            reply = await self._invoke(request)
+        reference_reads = [
+            reference_operation.begin_invocation(
+                agent_id=request.agent_id,
+                phase=request.phase.value,
+                round_number=request.round_number,
+            )
+            for request in requests
+        ]
+
+        async def invoke_and_validate(
+            request: AgentRequest,
+            reference_read: Any,
+        ) -> AgentReply:
+            reply = await self._invoke(
+                request,
+                reference_operation=reference_operation,
+                reference_read=reference_read,
+            )
             validator(reply, revision_id)
             return reply
 
         tasks = [
             asyncio.create_task(
-                invoke_and_validate(request),
+                invoke_and_validate(request, reference_read),
                 name=f"{request.phase.value}:{request.agent_id}",
             )
-            for request in requests
+            for request, reference_read in zip(
+                requests,
+                reference_reads,
+                strict=True,
+            )
         ]
         pending: set[asyncio.Task[AgentReply]] = set(tasks)
         peer_failure = False
@@ -3540,7 +4115,22 @@ class StoryRuntime:
                 if not task.done():
                     task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
+            for reference_read in reference_reads:
+                reference_operation.terminate_invocation(
+                    reference_read,
+                    ReferenceAuthorizationErrorCode.CANCELLED,
+                )
             raise
+
+        for task, reference_read in zip(tasks, reference_reads, strict=True):
+            reference_operation.terminate_invocation(
+                reference_read,
+                (
+                    ReferenceAuthorizationErrorCode.CANCELLED
+                    if task.cancelled()
+                    else ReferenceAuthorizationErrorCode.PROVIDER_FAILURE
+                ),
+            )
 
         outcomes: list[AgentReply | Exception] = []
         for request, task in zip(requests, tasks, strict=True):
@@ -3655,6 +4245,7 @@ class StoryRuntime:
         error: str | None = None,
         action_required: str | None = None,
         failure_kind: DebateFailureKind | None = None,
+        reference_operation_id: str | None = None,
     ) -> DebateResult:
         """Persist one terminal result/state before emitting terminal progress.
 
@@ -3685,6 +4276,7 @@ class StoryRuntime:
             messages=tuple(messages),
             error=error,
             action_required=action_required,
+            reference_operation_id=reference_operation_id,
         )
         self.workspace.save_debate_result(result)
         self.workspace.transition_debate(
@@ -3780,6 +4372,27 @@ class StoryRuntime:
             return DebateFailureKind.CONTEXT
         if isinstance(failure, _DebateContextPropagationError):
             return DebateFailureKind.CONTEXT
+        if isinstance(failure, ReferenceOperationFailure):
+            if failure.code in {
+                ReferenceAuthorizationErrorCode.PROVIDER_FAILURE,
+                ReferenceAuthorizationErrorCode.CAPABILITY_CONSUMED,
+                ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH,
+                ReferenceAuthorizationErrorCode.INVALID_TRANSITION,
+            }:
+                return DebateFailureKind.PROTOCOL
+            if failure.code in {
+                ReferenceAuthorizationErrorCode.NOT_FOUND,
+                ReferenceAuthorizationErrorCode.INELIGIBLE,
+                ReferenceAuthorizationErrorCode.DRIFT,
+                ReferenceAuthorizationErrorCode.INVALID_UTF8,
+                ReferenceAuthorizationErrorCode.NUL_CONTENT,
+                ReferenceAuthorizationErrorCode.RANGE_OUT_OF_BOUNDS,
+                ReferenceAuthorizationErrorCode.READ_LIMIT_EXCEEDED,
+                ReferenceAuthorizationErrorCode.TOTAL_LIMIT_EXCEEDED,
+                ReferenceAuthorizationErrorCode.EVIDENCE_CORRUPT,
+            }:
+                return DebateFailureKind.WORKSPACE
+            return DebateFailureKind.INTERNAL
         if artifact_commit:
             if isinstance(failure, ManuscriptExistsError):
                 return DebateFailureKind.ARTIFACT_CONFLICT
@@ -3829,6 +4442,19 @@ class RuntimeSession:
         """Return this session's strict context sidecar without mutation."""
 
         return self.runtime.inspect_debate_context(self.session_id, debate_id)
+
+    def inspect_reference_operation(
+        self,
+        operation_id: str,
+    ) -> ReferenceOperationHistory | None:
+        """Return read history only when the operation belongs to this session."""
+
+        if not reference_operation_belongs_to_session(
+            operation_id,
+            self.session_id,
+        ):
+            raise ValueError("reference operation does not belong to this session")
+        return self.runtime.inspect_reference_operation(operation_id)
 
     async def converse(
         self,
@@ -3881,7 +4507,7 @@ class RuntimeSession:
         self,
         prompt: str,
         *,
-        manuscript_name: str | None = None,
+        output_path: str,
         max_debate_rounds: int | None = None,
         debate_id: str | None = None,
         conversation_context: DebateContextRequest | None = None,
@@ -3896,7 +4522,7 @@ class RuntimeSession:
         return await self.runtime.run_prompt(
             self.session_id,
             prompt,
-            manuscript_name=manuscript_name,
+            output_path=output_path,
             max_debate_rounds=max_debate_rounds,
             debate_id=debate_id,
             conversation_context=conversation_context,
@@ -3907,7 +4533,7 @@ class RuntimeSession:
         self,
         draft: str,
         *,
-        manuscript_name: str | None = None,
+        output_path: str,
         max_debate_rounds: int | None = None,
         debate_id: str | None = None,
         conversation_context: DebateContextRequest | None = None,
@@ -3922,7 +4548,7 @@ class RuntimeSession:
         return await self.runtime.run_draft(
             self.session_id,
             draft,
-            manuscript_name=manuscript_name,
+            output_path=output_path,
             max_debate_rounds=max_debate_rounds,
             debate_id=debate_id,
             conversation_context=conversation_context,

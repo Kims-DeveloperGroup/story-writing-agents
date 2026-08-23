@@ -2,7 +2,9 @@
 
 > **Availability:** the TTY shell supports session management, persistent
 > settings, and local reads; advisory turns and consensus also require current
-> focus on an active conversation.
+> focus on an active conversation. Inline canonical artifact references work in
+> provider-bound routed, sticky, ordinary, retrieval, and `/run` prompt text;
+> `$`, `$${path}`, and `$$` discover or select them without submitting.
 
 Key terms: **defaults** are persisted fallbacks; **current attachment** is the
 session held by this shell; **current focus** and **agent focus** select the
@@ -197,6 +199,27 @@ it. `/conversation list` remains active-only unless `--all` is supplied. The
 picker does not change startup default restoration, routing, noninteractive
 commands, storage/provider schemas, or package APIs.
 
+References follow the same routing: `@plot Review ${core_documents/global_outline.md}`
+addresses one agent once, while ordinary text after `/to character` addresses
+the sticky character focus. Every provider-bound turn captures its own ordered
+batch; a previous agent's read cannot satisfy the next turn. See
+[Canonical artifact references](artifact-references.md).
+
+While editing one of those prompt spans, type `$` to list only current eligible
+writing artifacts. Up/Down and Enter or Tab insert `${path}` on a capable
+terminal. Type `$${path}` then Enter or Tab to open that artifact directly, or
+`$$` then Enter or Tab to choose it first; Shift+Up/Down selects an inclusive
+range and Enter inserts `${path}#Lx-Ly`. Escape, Ctrl-C, EOF, or a handled read
+error restores the exact draft and cursor with no dispatch or history entry.
+Type `\$` for a literal dollar. These controls are inert in management
+commands, IDs, options, subjects, output paths, settings, and the lobby.
+
+Ordinary-line fallback uses numbered catalog choices and exact `START-END`
+viewer input, then displays the amended draft for a second Enter confirmation.
+It never submits a selection implicitly. Multiple completed indicators remain
+in order; every later agent or debate phase still performs its own enforced
+read after normal prompt submission.
+
 ## Choose the right memory operation
 
 | Operation | What it does |
@@ -213,22 +236,25 @@ a provider or alter defaults/focus.
 ## Turn the current focus into consensus
 
 ```text
-/run
+/run --output part-01/opening.md
 Draft the opening using the decisions above.
 Keep the viewpoint close and the final discovery concrete.
 /send
 ```
 
-Bare `/run` opens the multiline composer. There, `/send` starts the debate and
+`/run --output PART/PATH.md` without prompt text opens the multiline composer.
+There, `/send` starts the debate and
 `/cancel` or Ctrl-C discards the buffer; those commands are unavailable outside it.
 On capable POSIX live editing, typing `/` previews only `/send` then `/cancel`;
 case-sensitive whole-buffer prefixes narrow that list. The panel does not
-complete or submit text. `/say /send` and `/say /cancel` still insert literal
+complete or submit slash controls. Artifact `$` activation is available in the
+composer text and likewise returns without sending. `/say /send` and `/say /cancel` still insert literal
 control lines, and ordinary fallback input shows no panel.
 
 The runtime supplies every debate phase one bounded focus snapshot.
-`/run --fresh PROMPT` records its identity without transcript; `/draft-file PATH`
-reads strict UTF-8 and includes the snapshot. Runs do not change conversations.
+`/run --fresh --output PART/PATH.md PROMPT` records its identity without
+transcript; `/draft-file PATH` reads strict UTF-8, includes the snapshot, and
+prompts for the required output path. Runs do not change conversations.
 
 ## Inspect outcomes and recover
 

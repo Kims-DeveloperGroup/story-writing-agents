@@ -76,6 +76,18 @@ The exact 120-name export inventory is:
 `Runtime` is exactly an alias of `StoryRuntime`; `Session` is exactly an alias
 of `RuntimeSession`. They do not provide different behavior.
 
+Canonical artifact value contracts live in
+`story_writing_agents.writing_artifacts`, but are intentionally absent from the
+120-name package-root facade. In addition to immutable path, catalog, kind, and
+reference values, the subpackage exports content-free authorization, operation
+history/state, read-request/action, `ReferenceOperationFailure`, and parser
+contracts. Filesystem-backed `WritingArtifactRepository`, content-bearing read
+results, private capabilities, runtime coordinators, the ranged viewer, and
+interactive activation values remain internal. The installed controller uses
+that private UI boundary for `$`/`$$` prompt editing without adding a public
+selection API or standalone artifact command. See
+[Canonical writing artifacts](writing-artifacts.md).
+
 The export inventory and public signatures are unchanged by runtime diagnostics.
 Public `AgentBackend` and `StoryRuntime` operations use an internal
 workspace-bound writer and may append bounded operational records, including
@@ -117,6 +129,7 @@ aliases. See [Backend and sessions](backend-and-sessions.md#lifecycle-value-cont
 - [Agent contracts](agent-contracts.md)
 - [Runtime API](runtime-api.md)
 - [Workspace API](workspace-api.md)
+- [Canonical writing artifacts](writing-artifacts.md)
 - [Conversation catalog](conversation-catalog.md)
 - [Conversation transcripts](conversation-transcripts.md)
 - [Conversation search and cited transcript pages](conversation-search.md)

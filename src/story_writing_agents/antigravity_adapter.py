@@ -1100,3 +1100,9 @@ class AntigravityAdapter:
 
     def close(self) -> None:
         """Retain provider-native state for later backend instances."""
+
+    def release(self, binding: ProviderBinding) -> None:
+        """Retain one provider-native Antigravity binding."""
+
+        if type(binding) is not ProviderBinding or binding.vendor != self.vendor:
+            raise TypeError("binding must be an Antigravity ProviderBinding")

@@ -1,9 +1,13 @@
 # Privacy and provider exposure
 
 > **Availability:** these controls cover local reads, advisory turns, and
-> retrieval-enabled turns, management commands, and focused-context consensus.
+> retrieval-enabled turns, management commands, focused-context consensus, and
+> runtime explicit-reference authorization and backend enforcement.
 > They do not make either provider, its executable, the workspace, or the
 > terminal trusted.
+> Inline canonical references in provider-bound prompt text are active.
+> `$`/`$$` discovery and viewer attachment are active in eligible interactive
+> prompt spans; they remain local until the user normally submits the prompt.
 
 Key terms: **plaintext**—unencrypted content; **visible context**—events sent in
 a request; **provider-private history**—vendor thread state; **diagnostic**—
@@ -11,11 +15,13 @@ stored or displayed failure text.
 
 ## Plaintext local data
 
-There is no encryption, application access control, or secure erase. Documents,
-debate/context records, provider metadata, subjects, transcripts, scrollback,
-and manuscripts have no application-managed retention policy and rely on
-OS/terminal-service protection. The workspace debug log is the one bounded
-retention channel described below; it is still plaintext.
+There is no encryption, application access control, or secure erase.
+Documents, debate/context records, provider metadata, subjects, transcripts,
+scrollback, manuscripts, artifact catalogs, commit provenance, transaction
+journals, reference-operation evidence, and recovery markers have no
+application-managed retention policy and rely on OS/terminal-service
+protection. The workspace debug log is the one bounded-retention channel
+described below; it is still plaintext.
 
 Blackboards can contain input, drafts, reviews, and errors. Provider output is
 not generally scrubbed; archive neither deletes nor conceals conversations;
@@ -47,15 +53,70 @@ absolute diagnostic path. Terminal escaping is not redaction. See
 [Conversation search](../reference/conversation-search.md) and
 [Terminal safety](terminal-safety.md).
 
+## Explicit-reference data boundary
+
+Reference indicators and durable authorization history are content-free. The
+history records ordered canonical paths and ranges, catalog provenance,
+selected hashes and counts, agent/invocation correlation, lifecycle states,
+checkpoints, and fixed outcomes. It excludes artifact bytes, parser source and
+provider projections, prompts, provider results, and diagnostic values derived
+from content. Authorization errors use fixed coded messages without echoing a
+path or selected text.
+
+Before provider delivery, selected artifact byte tuples are held in closeable,
+nonserializable in-process authorization, delivery, and result carriers whose
+`repr` hides content. The backend transiently decodes them for the one provider
+payload described below. Closing drops the carriers' references to their byte
+tuples; Python and the operating system do not provide a secure memory-zeroing
+guarantee. The durable evidence remains plaintext and has no encryption,
+access control, secure erase, or retention policy.
+
+Interactive catalog entries contain canonical paths only. Opening an artifact
+loads verified plaintext into local process memory and renders it in the
+terminal. A capable viewer uses an alternate screen, but closing it is cleanup,
+not secure erasure from the process, emulator, multiplexer, or remote terminal.
+Fallback prints the complete numbered content into scrollback. Catalog/viewer
+activity is not sent to a provider and creates no durable reference-operation
+evidence; only a later submitted `${...}` indicator starts the runtime path.
+UI error output is fixed and content-free.
+
+For an optional referenced backend call, the first provider payload contains
+only fixed rules, exact operation/invocation correlation, and the complete
+ordered canonical path/range indicators. The capability object is never
+serialized, and its repository-private identifier is absent from provider
+requests, replies, validated public history, and diagnostics. After the
+provider returns the exact full read action, the backend places selected text
+only under `untrusted_writing_artifact_context` on the immediately following
+substantive payload. It does not copy the text into task, user input, candidate,
+blackboard messages, agent state, conversation history, retrieval observations,
+durable evidence, or diagnostics.
+
+The repository writes `delivered` before returning selected bytes to that
+backend path. The backend records `result_received` only after a structurally
+valid substantive result, performs final revalidation, records `accepted`, and
+then returns the reply. This proves the exact request, delivery sequence,
+result, and acceptance—not provider comprehension, obedience, or correct use.
+Baseline core context cannot satisfy explicit-reference evidence.
+
+Closing local authorization, delivery, and result carriers drops their Python
+references but offers neither secure memory erasure nor provider erasure. Once
+the substantive request is sent, provider-private or remote systems may retain
+its context under their own policy. `StoryRuntime` now constructs this path
+from inline `${...}` indicators. The interactive controller can now construct
+those same indicators through `$`/`$$` discovery and viewer selection without
+copying selected content into the prompt or work history.
+
 ## Provider disclosure
 
-A Python one-step call sends current text and bounded complete turns. Retrieval
-starts there, then may add authorized active-conversation hits and complete
-user/reply pairs from the current session. It cannot request archives, another
-session/workspace, arbitrary IDs, runtime errors, private state, tools, or native
-data. Observations are framed as untrusted story data.
+A no-reference Python one-step call sends current text and bounded complete
+turns. Retrieval starts there, then may add authorized active-conversation hits
+and complete user/reply pairs from the current session. It cannot request
+archives, another session/workspace, arbitrary IDs, runtime errors, private
+state, tools, or native data. Observations are framed as untrusted story data.
 
-Agent definitions separately supply allowlisted core documents. Debates,
+Agent definitions separately supply only current provenance-backed allowlisted
+core documents. A generic manual edit remains on disk but is omitted after its
+hash diverges; the runtime does not send stale bytes or delete them. Debates,
 manuscripts, core updates, and owner state are not retrieval memory. Direct
 routing selects a shared-transcript responder, not a private channel.
 

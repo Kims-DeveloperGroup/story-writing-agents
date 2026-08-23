@@ -82,6 +82,7 @@ from .workspace import (
     Workspace,
     initialize_workspace,
 )
+from .writing_artifacts.repository import WritingArtifactRepository
 
 
 _PROMPT = "Run the deterministic provider-free smoke workflow."
@@ -637,7 +638,8 @@ def _run_provider_free_smoke_in_workspace(
     token = uuid.uuid4().hex
     session_id = f"smoke_session_{token}"
     debate_id = f"smoke_debate_{token}"
-    manuscript_name = f"smoke_{token}.md"
+    output_path = f"smoke-{token}/revision-01.md"
+    manuscript_path = f"manuscript/{output_path}"
     completed_checks: list[str] = []
     result: DebateResult | None = None
     _trace_smoke(
@@ -667,7 +669,7 @@ def _run_provider_free_smoke_in_workspace(
                 workspace,
                 session_id=session_id,
                 debate_id=debate_id,
-                manuscript_name=manuscript_name,
+                output_path=output_path,
                 core_before=core_before,
                 manuscripts_before=manuscripts_before,
                 completed_checks=completed_checks,
@@ -690,14 +692,15 @@ def _run_provider_free_smoke_in_workspace(
         completed_checks.append(_CHECK_NAMES[9])
 
         _require(
-            workspace.read_manuscript(manuscript_name) == _REVISION_ONE
+            WritingArtifactRepository(workspace.root).read_text(manuscript_path)
+            == _REVISION_ONE
             and _snapshot_manuscript_files(workspace)
             == tuple(
                 sorted(
                     (
                         *manuscripts_before,
                         (
-                            f"manuscript/{manuscript_name}",
+                            manuscript_path,
                             _REVISION_ONE.encode("utf-8"),
                         ),
                     )
@@ -797,7 +800,7 @@ async def _exercise_provider_free_conversation_and_consensus(
     *,
     session_id: str,
     debate_id: str,
-    manuscript_name: str,
+    output_path: str,
     core_before: dict[str, bytes],
     manuscripts_before: tuple[tuple[str, bytes], ...],
     completed_checks: list[str],
@@ -948,7 +951,7 @@ async def _exercise_provider_free_conversation_and_consensus(
         session_id,
         _PROMPT,
         debate_id=debate_id,
-        manuscript_name=manuscript_name,
+        output_path=output_path,
         conversation_context=DebateContextRequest(
             conversation_id=source.conversation_id,
             mode=DebateContextMode.INCLUDED,
@@ -967,10 +970,12 @@ def _read_core_document_bytes(workspace: Workspace) -> dict[str, bytes]:
     Workspace security and filesystem read failures propagate unchanged.
     """
 
-    return {
-        filename: workspace.path(f"core_documents/{filename}").read_bytes()
-        for filename in CORE_DOCUMENTS
-    }
+    result: dict[str, bytes] = {}
+    for filename in CORE_DOCUMENTS:
+        target = workspace.path(f"core_documents/{filename}")
+        if target.is_file():
+            result[filename] = target.read_bytes()
+    return result
 
 
 def _snapshot_manuscript_files(
@@ -1073,6 +1078,8 @@ def _verify_conversation_routing(
         == source.conversation_id
         and lead_result.agent_id == LEAD_ORCHESTRATOR
         and specialist_result.agent_id == PLOT_ARCHITECT
+        and lead_result.reference_operation_id is None
+        and specialist_result.reference_operation_id is None
         and lead_result.content == _LEAD_REPLY
         and specialist_result.content == _SPECIALIST_REPLY
         and lead_result.context.events == ()
@@ -1264,7 +1271,8 @@ def _verify_conversation_retrieval(
     search_action, read_action, answer_action = backend.retrieval_actions
     search_outcome, read_outcome, answer_outcome = backend.retrieval_outcomes
     _require(
-        type(search_action) is ConversationRetrievalSearchAction
+        result.reference_operation_id is None
+        and type(search_action) is ConversationRetrievalSearchAction
         and type(read_action) is ConversationRetrievalReadAction
         and type(answer_action) is ConversationRetrievalAnswerAction
         and tuple(action.action_index for action in backend.retrieval_actions)
@@ -1426,9 +1434,6 @@ def _verify_workspace_initialized(workspace: Workspace) -> None:
         for relative in WORKSPACE_DIRECTORIES
         if relative != "debug_logs"
     ) and all(
-        workspace.path(f"core_documents/{filename}").is_file()
-        for filename in CORE_DOCUMENTS
-    ) and all(
         workspace.path(AGENT_SPECS[agent_id].system_prompt_file).is_file()
         for agent_id in ROSTER
     )
@@ -1517,10 +1522,12 @@ def _verify_consensus(workspace: Workspace, result: DebateResult) -> None:
     persisted = inspected["result"]
     _require(
         result.status is DebateStatus.CONSENSUS
+        and result.reference_operation_id is None
         and result.revision_id == "r1"
         and result.rounds_completed == 1
         and result.final_candidate == _REVISION_ONE
         and persisted is not None
+        and "reference_operation_id" not in persisted
         and persisted["status"] == DebateStatus.CONSENSUS.value
         and persisted["revision_id"] == "r1"
         and inspected["status"] == DebateStatus.CONSENSUS.value

@@ -156,7 +156,7 @@ def _persist_terminal_debate(
             ),
             latest_candidate=f"{secret}_LATEST",
             manuscript_path=(
-                "manuscript/safe-result.md"
+                "manuscript/part-01/safe-result.md"
                 if status is DebateStatus.CONSENSUS
                 else None
             ),
@@ -186,6 +186,7 @@ class InspectableConsensusRuntime(ScriptedConsensusRuntime):
         session_id: str,
         payload: str,
         input_kind: InputKind,
+        output_path: str,
         conversation_context: DebateContextRequest,
         progress_sink: object,
     ) -> DebateResult:
@@ -195,6 +196,7 @@ class InspectableConsensusRuntime(ScriptedConsensusRuntime):
             session_id,
             payload,
             input_kind,
+            output_path,
             conversation_context,
             progress_sink,
         )

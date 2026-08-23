@@ -61,7 +61,7 @@ from story_writing_agents.workspace import (
     WORKSPACE_DIRECTORIES,
 )
 
-from tests.helpers import initialized_workspace
+from tests.helpers import core_snapshot, initialized_workspace
 
 
 _CONTEXT_TIMESTAMP = "2026-08-15T01:02:03+00:00"
@@ -268,6 +268,82 @@ class AgentRosterTests(unittest.TestCase):
 
 
 class WorkspaceTests(unittest.TestCase):
+    def test_core_fixture_snapshot_is_explicitly_raw_and_runtime_reader_is_absent(
+        self,
+    ) -> None:
+        workspace = initialized_workspace(self)
+        self.assertFalse(hasattr(Workspace, "read_core_documents"))
+        self.assertFalse(hasattr(workspace, "read_core_documents"))
+        self.assertEqual(
+            core_snapshot(workspace),
+            {
+                filename: f"test input for {filename}\n"
+                for filename in CORE_DOCUMENTS
+            },
+        )
+
+    def test_generic_writes_reject_canonical_artifacts_but_keep_other_helpers(self) -> None:
+        workspace = initialized_workspace(self)
+        canonical_paths = (
+            *(f"core_documents/{filename}" for filename in CORE_DOCUMENTS),
+            "manuscript/part-01/chapter.md",
+            "manuscript/manuscript/chapter.md",
+        )
+        for relative in canonical_paths:
+            with self.subTest(relative=relative):
+                with self.assertRaisesRegex(
+                    WorkspaceSecurityError,
+                    "published by the repository",
+                ):
+                    workspace.write_text(relative, "generic write")
+                with self.assertRaisesRegex(
+                    WorkspaceSecurityError,
+                    "published by the repository",
+                ):
+                    workspace.write_json(relative, {"generic": "write"})
+
+        workspace.write_text("discussion_logs/unrelated.txt", "still writable")
+        workspace.write_json("agent_states/unrelated.json", {"value": 1})
+        self.assertEqual(
+            workspace.read_text("discussion_logs/unrelated.txt"),
+            "still writable",
+        )
+        self.assertEqual(
+            workspace.read_json("agent_states/unrelated.json"),
+            {"value": 1},
+        )
+
+    def test_generic_writes_reject_reserved_case_and_normalization_aliases(self) -> None:
+        workspace = initialized_workspace(self)
+        aliases = (
+            "Core_Documents/global_outline.md",
+            "CORE_DOCUMENTS/global_outline.md",
+            "ｍａｎｕｓｃｒｉｐｔ/part-01/chapter.md",
+            "Manuscript/part-01/chapter.md",
+        )
+        for relative in aliases:
+            with self.subTest(relative=relative):
+                target = workspace.path(relative)
+                before = target.read_bytes() if target.is_file() else None
+                with self.assertRaisesRegex(
+                    WorkspaceSecurityError,
+                    "published by the repository",
+                ):
+                    workspace.write_text(relative, "must not be written")
+                with self.assertRaisesRegex(
+                    WorkspaceSecurityError,
+                    "published by the repository",
+                ):
+                    workspace.write_json(relative, {"must": "not be written"})
+                after = target.read_bytes() if target.is_file() else None
+                self.assertEqual(after, before)
+
+        workspace.write_text("discussion_logs/Case_Alias.txt", "unrelated")
+        self.assertEqual(
+            workspace.read_text("discussion_logs/Case_Alias.txt"),
+            "unrelated",
+        )
+
     def assert_safe_symlink_refusal(
         self,
         action: Callable[[], object],
@@ -2349,8 +2425,9 @@ class WorkspaceTests(unittest.TestCase):
         for relative in WORKSPACE_DIRECTORIES:
             with self.subTest(relative=relative):
                 self.assertTrue(workspace.path(relative).is_dir())
-        for filename in CORE_DOCUMENTS:
-            self.assertTrue(workspace.path(f"core_documents/{filename}").is_file())
+        self.assertTrue(preserved.is_file())
+        for filename in CORE_DOCUMENTS[1:]:
+            self.assertFalse(workspace.path(f"core_documents/{filename}").exists())
         for agent_id in ROSTER:
             self.assertTrue(
                 workspace.path(
@@ -2434,7 +2511,11 @@ class WorkspaceTests(unittest.TestCase):
             "manuscript/custom.md": "manuscript\n",
         }
         for relative, content in unrelated_contents.items():
-            workspace.write_text(relative, content)
+            if relative.startswith(("core_documents/", "manuscript/")):
+                workspace.path(relative).parent.mkdir(parents=True, exist_ok=True)
+                workspace.path(relative).write_text(content, encoding="utf-8")
+            else:
+                workspace.write_text(relative, content)
         unrelated_before = {
             relative: workspace.path(relative).read_bytes()
             for relative in unrelated_contents
@@ -2508,27 +2589,6 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_symlink_aliases_cannot_cross_logical_workspace_boundaries(self) -> None:
         workspace = initialized_workspace(self)
-        system_path = workspace.path("config/system_defaults.json")
-        system_before = system_path.read_bytes()
-        outline_path = workspace.path("core_documents/global_outline.md")
-        outline_path.unlink()
-        outline_path.symlink_to("../config/system_defaults.json")
-
-        with self.assertRaises(WorkspaceSecurityError):
-            workspace.commit_approved_artifacts(
-                "alias-test.md",
-                "approved-candidate",
-                {"global_outline.md": "must-not-corrupt-config"},
-            )
-        self.assertEqual(system_path.read_bytes(), system_before)
-        self.assertFalse(workspace.path("manuscript/alias-test.md").exists())
-
-        tunnel = workspace.path("manuscript/tunnel")
-        tunnel.symlink_to("../core_documents", target_is_directory=True)
-        with self.assertRaises(WorkspaceSecurityError):
-            workspace.write_manuscript("tunnel/escaped.md", "must-stay-in-manuscript")
-        self.assertFalse(workspace.path("core_documents/escaped.md").exists())
-
         workspace.save_session_overrides(
             "session_original",
             {"language": "EN", "persona": None, "agents": {}},
@@ -2547,82 +2607,6 @@ class WorkspaceTests(unittest.TestCase):
                 {"language": "JA", "persona": None, "agents": {}},
             )
         self.assertEqual(original_state.read_bytes(), original_before)
-
-    def test_manuscript_creation_never_overwrites_and_prevalidates_core_updates(
-        self,
-    ) -> None:
-        workspace = initialized_workspace(self)
-        workspace.write_manuscript("approved.md", "first")
-        with self.assertRaises(ManuscriptExistsError):
-            workspace.write_manuscript("approved.md", "second")
-        self.assertEqual(workspace.read_manuscript("approved.md"), "first")
-
-        original_outline = workspace.read_text(
-            "core_documents/global_outline.md"
-        )
-        with self.assertRaises(ManuscriptExistsError):
-            workspace.commit_approved_artifacts(
-                "approved.md",
-                "replacement",
-                {"global_outline.md": "must-not-change"},
-            )
-        self.assertEqual(
-            workspace.read_text("core_documents/global_outline.md"),
-            original_outline,
-        )
-        with self.assertRaises(WorkspaceSecurityError):
-            workspace.write_manuscript("../escape.md", "unsafe")
-
-    def test_post_replace_failures_roll_back_core_and_manuscript_writes(self) -> None:
-        workspace = initialized_workspace(self)
-        manuscript_directory = workspace.path("manuscript")
-
-        original_fsync = workspace._fsync_directory
-
-        def fail_manuscript_fsync(directory: Path) -> None:
-            if directory == manuscript_directory:
-                raise OSError("simulated manuscript directory sync failure")
-            original_fsync(directory)
-
-        with mock.patch.object(
-            workspace,
-            "_fsync_directory",
-            side_effect=fail_manuscript_fsync,
-        ):
-            with self.assertRaisesRegex(OSError, "manuscript directory"):
-                workspace.commit_approved_artifacts(
-                    "rollback.md",
-                    "candidate",
-                    {},
-                )
-        self.assertFalse(workspace.path("manuscript/rollback.md").exists())
-
-        core_directory = workspace.path("core_documents")
-        outline_path = workspace.path("core_documents/global_outline.md")
-        outline_before = outline_path.read_bytes()
-        failed_once = False
-
-        def fail_first_core_fsync(directory: Path) -> None:
-            nonlocal failed_once
-            if directory == core_directory and not failed_once:
-                failed_once = True
-                raise OSError("simulated core directory sync failure")
-            original_fsync(directory)
-
-        with mock.patch.object(
-            workspace,
-            "_fsync_directory",
-            side_effect=fail_first_core_fsync,
-        ):
-            with self.assertRaisesRegex(OSError, "core directory"):
-                workspace.commit_approved_artifacts(
-                    "core-rollback.md",
-                    "candidate",
-                    {"global_outline.md": "replacement"},
-                )
-        self.assertEqual(outline_path.read_bytes(), outline_before)
-        self.assertFalse(workspace.path("manuscript/core-rollback.md").exists())
-
 
 class DebateContextSidecarTests(unittest.TestCase):
     """Verify immutable, strict, identity-bound debate context sidecars."""

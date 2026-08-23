@@ -12,7 +12,8 @@ AgentRouteSpec(agent_id: str, prompt_alias: str, aliases: tuple[str, ...],
 AGENT_ROUTES: tuple[AgentRouteSpec, ...]
 InteractiveAction(kind: ActionKind, *, text: str | None = None,
                   agent_id: str | None = None,
-                  argument: str | None = None, count: int | None = None,
+                  argument: str | None = None, output_path: str | None = None,
+                  count: int | None = None,
                   start_sequence: int | None = None,
                   error: str | None = None, suggestion: str | None = None)
 CommandSpec(group: str, syntax: str, aliases: tuple[str, ...],
@@ -61,7 +62,7 @@ only the four preferred prompt aliases—`lead`, `plot`, `character`, and
 | --- | --- |
 | Conversation | `/compose`; `/send`; `/cancel`; `/say TEXT` |
 | Agents | `/to NAME`; `/agents`; `/language LANG`; `/persona AGENT NAME`; `/reset`; `/settings` |
-| Consensus | `/run [PROMPT] \| /run --fresh PROMPT`; `/draft-file PATH` |
+| Consensus | `/run [--fresh] [--output PART/PATH.md] [PROMPT]`; `/draft-file PATH` |
 | Sessions | `/session list \| create NAME \| resume [NAME] \| pause` |
 | Conversations | `/conversation new [SUBJECT] \| list [--all] [QUERY] \| resume [ID] \| subject SUBJECT \| archive [ID]` |
 | Inspection | `/search QUERY`; `/transcript ID [COUNT] [--from SEQUENCE]`; `/inspect [DEBATE\|last]`; `/history [COUNT]`; `/status`; `/help [COMMAND]` |
@@ -72,9 +73,22 @@ possible provider/artifact use, not shell gates. Parsing performs no I/O.
 `/settings` is provider-free and has `may_write_artifacts=True` because an
 explicit Save may replace configuration documents.
 
-Registry membership is not main-prompt availability: the installed shell
-rejects standalone `/compose`, `/send`, and `/cancel`. Bare `/run` composition
-recognizes `/send` and `/cancel`; `/say /send` and `/say /cancel` are exact
+For `/run`, `--output` must be first, or immediately after `--fresh`. The parser
+recognizes only ASCII space or tab between `--output`, its `PART/PATH.md`, and
+the optional prompt. Unicode whitespace attached to `--output` returns a typed
+`parse_error`; when attached to the path, it remains part of that token and is
+later rejected by the artifact path validator. The parser preserves the token
+in `output_path`; the controller validates the artifact grammar and prompts
+when it is absent.
+
+After exact leading `--fresh`, a second leading token beginning with `--` is
+accepted only when it is exactly `--output`; `--fresh`, `--outputish`, `--`, and
+other unknown flags return `parse_error`. Ordinary prose and a single-hyphen
+word can start the fresh prompt. Once prompt text has started, later `--...`
+text is literal prompt content rather than another option. Registry membership
+is not main-prompt availability: the installed shell rejects standalone `/compose`,
+`/send`, and `/cancel`. Run composition recognizes `/send` and `/cancel`;
+`/say /send` and `/say /cancel` are exact
 aliases.
 
 ## Line contract
@@ -123,6 +137,25 @@ completion-projection behavior. Help additionally accepts a bare active prefix
 for slash-prefixed replacement, so `/help ru` can become `/help /run`.
 Completion replaces input only; the terminal alone decides when the final
 visible buffer is submitted to this parser once.
+
+## Provider-text span projection and `$` activation
+
+`project_provider_text_span(buffer, cursor)` is another pure package-level
+projection. It returns only the cursor-active text that may reach a provider:
+the whole ordinary buffer, the tail after a valid `@agent` route or `/say`, or
+the `/run` prompt remainder after recognized `--fresh` and `--output` fields.
+It returns `None` for management commands, identities, output paths, options,
+invalid routes, and a cursor outside the provider span. It performs no catalog
+read, reference parse, authorization, or mutation.
+
+The installed controller combines that projection with current attachment and
+conversation focus before giving the terminal call-local artifact callbacks.
+The terminal may then treat `$`, `$${path}`, or `$$` as an editing activation
+inside the projected span. Completion or range selection changes the visible
+buffer but does not call `parse_interactive_line()` or submit. Cancellation and
+failure restore the exact origin. Only a later normal Enter sends the final
+visible buffer through this parser once; the runtime then parses `${...}`
+indicators. `$` is therefore never a submitted shell command.
 
 ## Search and transcript grammar
 

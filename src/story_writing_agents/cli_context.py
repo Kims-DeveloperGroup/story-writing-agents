@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .agents import AGENT_SPECS, CORE_DOCUMENTS, ROSTER
+from .agents import AGENT_SPECS, ROSTER
 from .errors import (
     ConfigurationError,
     SessionIdError,
@@ -33,7 +33,6 @@ _FILE_SENTINELS = (
     "config/agent_configs.json",
     "config/persona_templates/default_kim_eun_hee.md",
     *(AGENT_SPECS[agent_id].system_prompt_file for agent_id in ROSTER),
-    *(f"core_documents/{filename}" for filename in CORE_DOCUMENTS),
 )
 _DIRECTORY_SENTINELS = (
     "agent_states/orchestrator_state",

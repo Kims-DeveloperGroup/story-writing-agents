@@ -66,7 +66,7 @@ audit:
 ```bash
 story run \
   --debate-id chapter_03_conflict \
-  --output chapter-03-conflict.md \
+  --output part-03/chapter-03-conflict.md \
   --max-debate-rounds 0 \
   'Write a scene that contradicts an explicit core-document rule.'
 story inspect --debate chapter_03_conflict
@@ -80,7 +80,7 @@ the old attempt and start a new one:
 ```bash
 story run \
   --debate-id chapter_03_ruling \
-  --output chapter-03-ruling.md \
+  --output part-03/revisions/chapter-03-ruling.md \
   'User ruling: preserve the established rule. Rewrite the scene accordingly.'
 ```
 
@@ -106,9 +106,10 @@ attempt returns failed and consumes its ID. Preserve both records and retry
 with a new ID and output.
 
 After a process, operating-system, hardware, or power failure, inspect the
-workspace before replacement work. Each file write is atomic, but core files,
-manuscript, logs, state, and result do not share one transaction; best-effort
-rollback can itself fail.
+workspace before replacement work. Artifact publication rolls a valid journal
+forward and exposes its catalog last, but core files, manuscripts, logs, debate
+state, and results do not share one transaction. A divergent recovery target
+blocks later artifact access instead of guessing.
 
 Inspection omits the internal debate `owner_token`. It validates persisted JSON
 and JSONL rather than repairing malformed data. Exact response shapes are in

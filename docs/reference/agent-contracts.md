@@ -2,7 +2,9 @@
 
 > **Availability:** these models are Python APIs. Debate requests can carry an
 > optional conversation snapshot; one-step and retrieval turns use separate,
-> compatible request families.
+> compatible request families. Content-free explicit-reference read contracts
+> are constructed by `StoryRuntime` for inline canonical references and remain
+> available as the internal/Python backend boundary.
 
 Key terms: **definition**—stable context bound to one agent; **request**—dynamic
 data for one provider call; **blackboard**—public debate messages;
@@ -11,8 +13,9 @@ data for one provider call; **blackboard**—public debate messages;
 ## Bound definition
 
 ```python
-PromptFileReference(path: pathlib.Path, sha256: str)
+PromptFileReference(path: pathlib.Path, sha256: str, content: bytes)
 PromptFileReference.from_path(path: pathlib.Path) -> PromptFileReference
+PromptFileReference.from_bytes(path: pathlib.Path, content: bytes) -> PromptFileReference
 PromptFileReference.read_text() -> str
 AgentDefinition(agent_id: str, backend: str, fingerprint: str,
     system_prompt_file: PromptFileReference,
@@ -21,17 +24,70 @@ AgentDefinition(agent_id: str, backend: str, fingerprint: str,
 AgentDefinition.file_references() -> tuple[PromptFileReference, ...]
 ```
 
-References validate strict UTF-8 and hash exact bytes. A definition stores
-absolute paths and hashes, not full text; its fingerprint covers the agent,
-backend, language, component identities, and hashes. Runtime bindings are
-cached by `(agent_id, fingerprint)`.
+References are frozen content snapshots. Construction validates strict UTF-8
+and requires the SHA-256 to match the captured bytes; `content` is omitted from
+their representation. `path` is a lexical source identity, not continuing read
+authority: `read_text()` decodes the captured bytes, and provider binding does
+not reread the path. A definition's fingerprint covers the agent, backend,
+language, component identities, and hashes. Runtime bindings are cached by
+`(agent_id, fingerprint)`.
 
-| Agent | Bound core documents |
+| Agent | Bound core documents when current and provenance-backed |
 | --- | --- |
 | `lead_orchestrator` | all four |
 | `plot_architect` | global and part outlines |
 | `character_custodian` | character sheets |
 | `execution_specialist` | narrative rules |
+
+Absent, manually created, stale, and otherwise unprovenanced core documents are
+omitted. Exact eligibility is in
+[Canonical writing artifacts](writing-artifacts.md).
+
+For core context, prompt assembly asks the artifact repository to read only the
+paths allowlisted for that role. Each repository-verified
+`ArtifactContentSnapshot` is converted to a `PromptFileReference` backed by the
+same immutable bytes. Role-prompt and persona references are captured from
+their paths at definition construction; all references are content-backed by
+the time the backend receives the definition.
+
+<a id="explicit-reference-read-contracts"></a>
+
+## Explicit-reference read contracts
+
+Import the public values from `story_writing_agents.writing_artifacts`:
+
+```python
+ReferenceInvocationCorrelation(
+    operation_id: str, invocation_id: str, invocation_ordinal: int,
+    agent_id: str, phase: str, round_number: int | None, attempt: int,
+)
+ReferenceReadRequest(
+    correlation: ReferenceInvocationCorrelation,
+    references: tuple[ArtifactReference, ...],
+)
+ReferenceReadAction(
+    kind: ReferenceReadActionKind,
+    correlation: ReferenceInvocationCorrelation,
+    references: tuple[ArtifactReference, ...],
+)
+ReferenceReadActionKind.READ_WRITING_ARTIFACTS
+```
+
+The request and action are frozen, slotted, nonempty, ordered, and
+content-free. They contain only complete invocation correlation and canonical
+path/range indicators. The action kind is fixed, and an acceptable action must
+equal its request's complete correlation and reference tuple exactly.
+
+The module-supported synchronous `ReferenceReadInvocation` protocol and its
+closeable, content-bearing `ReferenceReadResult` are backend/repository
+collaborators rather than subpackage exports. A repository-created coordinator
+owns the private one-use capability and exposes only its content-free request
+to the backend. References remain a separate keyword-only backend argument;
+they are not fields of `AgentRequest`, `ConversationRequest`, or
+`ConversationRetrievalRequest`, and are not concatenated into task, user,
+candidate, messages, agent state, conversation history, or retrieval
+observations. See the
+[backend boundary](backend-and-sessions.md#referenced-invocation-boundary).
 
 ## Debate request
 

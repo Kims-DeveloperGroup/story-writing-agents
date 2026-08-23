@@ -53,6 +53,7 @@ from story_writing_agents.debug_log import (
     DEBUG_LOG_RELATIVE_PATH,
     WorkspaceDebugLog,
 )
+from story_writing_agents.errors import WorkspaceSecurityError
 from story_writing_agents.workspace import WORKSPACE_DIRECTORIES
 
 from tests.helpers import ScriptedBackend, all_manuscripts
@@ -346,9 +347,9 @@ class SmokePersistentTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         workspace = initialize_workspace(Path(temporary.name) / "workspace")
         for index, filename in enumerate(CORE_DOCUMENTS):
-            workspace.write_text(
-                f"core_documents/{filename}",
+            workspace.path(f"core_documents/{filename}").write_text(
                 "" if index == 0 else f"neutral-core-{index}\n",
+                encoding="utf-8",
             )
         core_before = {
             filename: workspace.path(
@@ -1126,10 +1127,10 @@ class SmokePersistentTests(unittest.TestCase):
             )
         )
 
-    def test_mid_workflow_replacement_receives_no_redirected_diagnostics(
+    def test_mid_workflow_replacement_fails_at_repository_identity_boundary(
         self,
     ) -> None:
-        """Keep diagnostics bound while pathname-based domain work continues."""
+        """Reject copied replacement state while diagnostics stay bound."""
 
         temporary = Path(self.enterContext(tempfile.TemporaryDirectory()))
         root = temporary / "workspace"
@@ -1160,22 +1161,24 @@ class SmokePersistentTests(unittest.TestCase):
                 replaced = True
             return evidence
 
-        with mock.patch.object(
-            smoke_module,
-            "_search_source_conversation",
-            side_effect=replace_after_initial_search,
+        with (
+            mock.patch.object(
+                smoke_module,
+                "_search_source_conversation",
+                side_effect=replace_after_initial_search,
+            ),
+            self.assertRaisesRegex(
+                WorkspaceSecurityError,
+                "stable linked regular file",
+            ),
         ):
-            report, exit_code = smoke_module.run_smoke(workspace)
+            smoke_module.run_smoke(workspace)
 
         self.assertTrue(replaced)
-        self.assertEqual(exit_code, 0)
-        self.assertEqual(report["checks"], EXPECTED_CHECKS)
         self.assertEqual(
             snapshot_directory_namespace(root / "debug_logs"),
             replacement_debug_before,
         )
-        # Other workspace namespaces remain pathname-based and are deliberately
-        # outside this diagnostic-containment assertion.
 
     def test_internal_trace_covers_routing_retrieval_context_and_revision(
         self,
@@ -1412,13 +1415,10 @@ class SmokeFailureTests(unittest.TestCase):
             for relative in WORKSPACE_DIRECTORIES
             if relative != "debug_logs"
         ) + tuple(
-            ("file", f"core_documents/{filename}")
-            for filename in CORE_DOCUMENTS
-        ) + tuple(
             ("file", os.fspath(AGENT_SPECS[agent_id].system_prompt_file))
             for agent_id in ROSTER
         )
-        self.assertEqual(len(sentinels), 22)
+        self.assertEqual(len(sentinels), 18)
         for kind, relative in sentinels:
             with self.subTest(kind=kind, relative=relative):
                 temporary = tempfile.TemporaryDirectory()
@@ -2211,6 +2211,8 @@ class ExistingRunExitCodeTests(unittest.TestCase):
                             f"{outcome}_debate",
                             "--max-debate-rounds",
                             "0",
+                            "--output",
+                            f"part-01/{outcome}.md",
                         ]
                     )
 

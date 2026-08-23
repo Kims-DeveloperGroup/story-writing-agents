@@ -46,10 +46,12 @@ from story_writing_agents import (
     ConversationRetrievalSearchItem,
     ConversationRetrievalSearchObservation,
     ConversationRetrievalSource,
+    EXECUTION_SPECIALIST,
     FilesystemConversationCatalog,
     FilesystemConversationEventStore,
     PLOT_ARCHITECT,
     Phase,
+    PromptFileReference,
     ROSTER,
     SessionAccessState,
     SessionDurableState,
@@ -84,6 +86,22 @@ from story_writing_agents.debug_log import (
 )
 from story_writing_agents.prompts import PromptAssembler
 from story_writing_agents.orchestrator import StoryRuntime
+from story_writing_agents.writing_artifacts.repository import (
+    WritingArtifactRepository,
+)
+from story_writing_agents.writing_artifacts import (
+    ArtifactLineRange,
+    ArtifactReference,
+    ArtifactReferenceBatch,
+    ReferenceAuthorizationError,
+    ReferenceAuthorizationErrorCode,
+    ReferenceInvocationCorrelation,
+    ReferenceInvocationState,
+    ReferenceOperationState,
+    ReferenceReadAction,
+    ReferenceReadActionKind,
+    ReferenceReadRequest,
+)
 from story_writing_agents.provider_adapter import (
     ProviderInvocationError,
     ProviderResult,
@@ -102,7 +120,8 @@ import os
 import signal
 
 mode = os.environ.get("STORY_FAKE_CODEX_MODE", "ok")
-if mode == "sleep":
+substantive_sleep = os.environ.get("STORY_FAKE_CODEX_SLEEP_SUBSTANTIVE") == "1"
+if mode == "sleep" or substantive_sleep:
     def terminated(signum, frame):
         descriptor = os.open(
             os.environ["STORY_FAKE_CODEX_LOG"],
@@ -130,6 +149,7 @@ def append(value):
 
 raw_payload = sys.stdin.read()
 payload = json.loads(raw_payload)
+reference_prelude = payload.get("operation") == "writing_artifact_reference_read"
 agent_directory = Path(argv[argv.index("--cd") + 1])
 schema_path = Path(argv[argv.index("--output-schema") + 1])
 append({
@@ -140,7 +160,7 @@ append({
     "schema": json.loads(schema_path.read_text(encoding="utf-8")),
 })
 
-if mode == "sleep":
+if mode == "sleep" or (substantive_sleep and not reference_prelude):
     time.sleep(30)
 if mode == "delay":
     time.sleep(0.25)
@@ -150,16 +170,21 @@ if mode == "nonzero_invalid_stderr":
         b"PRIVATE_INVALID_UTF8_STDERR\\xff\\xfe\\x80\\n",
     )
     raise SystemExit(7)
-if mode == "nonzero":
+if mode == "nonzero" or (
+    os.environ.get("STORY_FAKE_CODEX_FAIL_SUBSTANTIVE") == "1"
+    and not reference_prelude
+):
     if "conversation_id" in payload:
         sensitive = [payload["content"]]
         sensitive.extend(item["content"] for item in payload["context"])
-    else:
+    elif "user_payload" in payload:
         sensitive = [payload["user_payload"]]
         sensitive.extend(
             item["content"]
             for item in payload.get("conversation_context", [])
         )
+    else:
+        sensitive = []
     prefix = "X" * 5000 if os.environ.get("STORY_FAKE_CODEX_LONG_DIAGNOSTIC") else ""
     print(
         prefix
@@ -172,7 +197,12 @@ if mode == "nonzero":
     raise SystemExit(7)
 
 output_path = Path(argv[argv.index("--output-last-message") + 1])
-if mode == "missing_output":
+if reference_prelude and "STORY_FAKE_CODEX_REFERENCE_ACTION" in os.environ:
+    output_path.write_text(
+        os.environ["STORY_FAKE_CODEX_REFERENCE_ACTION"],
+        encoding="utf-8",
+    )
+elif mode == "missing_output":
     pass
 elif "STORY_FAKE_CODEX_OUTPUTS" in os.environ:
     outputs = json.loads(os.environ["STORY_FAKE_CODEX_OUTPUTS"])
@@ -218,7 +248,14 @@ elif "resume" not in argv:
     print(json.dumps({
         "type": "thread.started",
         "thread_id": (
-            "thread-" + payload["session_id"] + "-" + payload["agent_id"]
+            "thread-"
+            + payload.get("session_id", "reference-read")
+            + "-"
+            + (
+                payload["agent_id"]
+                if "agent_id" in payload
+                else payload["correlation"]["agent_id"]
+            )
         ),
     }))
 """
@@ -484,6 +521,27 @@ def _retrieval_action_json(
     )
 
 
+def _reference_action_json(request: ReferenceReadRequest) -> str:
+    """Encode the one exact content-free provider read action."""
+
+    return json.dumps(
+        {
+            "action": {
+                "kind": ReferenceReadActionKind.READ_WRITING_ARTIFACTS.value,
+                "correlation": AgentBackend._reference_correlation_payload(
+                    request.correlation
+                ),
+                "references": [
+                    AgentBackend._artifact_reference_payload(reference)
+                    for reference in request.references
+                ],
+            }
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
 class ConversationModelContractTests(unittest.TestCase):
     def test_exact_frozen_slotted_no_default_models_and_converse_signature(
         self,
@@ -517,14 +575,37 @@ class ConversationModelContractTests(unittest.TestCase):
                     value.content = "changed"
 
         signature = inspect.signature(BoundAgent.converse)
-        self.assertEqual(tuple(signature.parameters), ("self", "request"))
+        self.assertEqual(
+            tuple(signature.parameters),
+            ("self", "request", "reference_read"),
+        )
         self.assertIs(
             signature.parameters["request"].default,
             inspect.Parameter.empty,
         )
+        self.assertIs(
+            signature.parameters["reference_read"].kind,
+            inspect.Parameter.KEYWORD_ONLY,
+        )
+        self.assertIsNone(signature.parameters["reference_read"].default)
         hints = get_type_hints(BoundAgent.converse)
         self.assertIs(hints["request"], ConversationRequest)
+        self.assertEqual(
+            hints["reference_read"],
+            get_type_hints(BoundAgent.invoke)["reference_read"],
+        )
         self.assertIs(hints["return"], ConversationReply)
+
+        invoke_signature = inspect.signature(BoundAgent.invoke)
+        self.assertEqual(
+            tuple(invoke_signature.parameters),
+            ("self", "request", "reference_read"),
+        )
+        self.assertIs(
+            invoke_signature.parameters["reference_read"].kind,
+            inspect.Parameter.KEYWORD_ONLY,
+        )
+        self.assertIsNone(invoke_signature.parameters["reference_read"].default)
 
     def test_identifier_content_agent_and_context_error_taxonomy(self) -> None:
         request_values: dict[str, object] = {
@@ -615,17 +696,29 @@ class ConversationModelContractTests(unittest.TestCase):
 
     def test_retrieval_bound_signature_and_sync_handler_protocol_are_exact(self) -> None:
         signature = inspect.signature(BoundAgent.converse_with_retrieval)
-        self.assertEqual(tuple(signature.parameters), ("self", "request", "handler"))
+        self.assertEqual(
+            tuple(signature.parameters),
+            ("self", "request", "handler", "reference_read"),
+        )
         self.assertTrue(
             all(
                 parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
                 and parameter.default is inspect.Parameter.empty
-                for parameter in signature.parameters.values()
+                for parameter in tuple(signature.parameters.values())[:3]
             )
         )
+        self.assertIs(
+            signature.parameters["reference_read"].kind,
+            inspect.Parameter.KEYWORD_ONLY,
+        )
+        self.assertIsNone(signature.parameters["reference_read"].default)
         hints = get_type_hints(BoundAgent.converse_with_retrieval)
         self.assertIs(hints["request"], ConversationRetrievalRequest)
         self.assertIs(hints["handler"], ConversationRetrievalActionHandler)
+        self.assertEqual(
+            hints["reference_read"],
+            get_type_hints(BoundAgent.invoke)["reference_read"],
+        )
         self.assertIs(hints["return"], ConversationRetrievalReply)
 
     def test_context_accepts_interleaving_sequence_gaps_and_exact_caps(self) -> None:
@@ -1446,6 +1539,156 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             },
         )
 
+    def reference_invocation(
+        self,
+        *,
+        operation_id: str,
+        invocation_id: str,
+        agent_id: str = PLOT_ARCHITECT,
+        phase: str = "draft",
+        round_number: int | None = 0,
+    ):
+        """Create one real repository coordinator over a synthetic marker."""
+
+        repository = getattr(self, "_reference_repository", None)
+        if repository is None:
+            repository = WritingArtifactRepository(self.workspace.root)
+            repository.commit_consensus(
+                output_path="part-01/provider-reference.md",
+                candidate="REFERENCE-PROVIDER-MARKER\n",
+                core_updates={},
+                session_id="reference_fixture",
+                debate_id="reference_fixture",
+                revision_id="r0",
+                candidate_author_agent_id=EXECUTION_SPECIALIST,
+            )
+            self._reference_repository = repository
+        authorization = repository.capture_reference_authorization(
+            operation_id=operation_id,
+            batch=ArtifactReferenceBatch(
+                "reference request",
+                "reference request",
+                (
+                    ArtifactReference(
+                        "manuscript/part-01/provider-reference.md"
+                    ),
+                ),
+            ),
+        )
+        assert authorization is not None
+        self.addCleanup(authorization.close)
+        invocation = repository.begin_reference_invocation(
+            authorization,
+            ReferenceInvocationCorrelation(
+                operation_id=operation_id,
+                invocation_id=invocation_id,
+                invocation_ordinal=1,
+                agent_id=agent_id,
+                phase=phase,
+                round_number=round_number,
+                attempt=1,
+            ),
+        )
+        return repository, authorization, invocation
+
+    def reference_environment(self, invocation) -> dict[str, str]:
+        """Return the exact fake-provider response for one coordinator."""
+
+        return {
+            "STORY_FAKE_CODEX_REFERENCE_ACTION": _reference_action_json(
+                invocation.request
+            )
+        }
+
+    def assert_reference_accepted(
+        self,
+        repository,
+        authorization,
+        operation_id: str,
+    ) -> None:
+        """Finish and assert the exact durable invocation lifecycle."""
+
+        repository.finish_reference_operation(authorization, outcome=None)
+        history = repository.inspect_reference_operation(operation_id)
+        assert history is not None
+        self.assertEqual(
+            tuple(event.operation_state for event in history.operation_events),
+            (
+                ReferenceOperationState.REQUESTED,
+                ReferenceOperationState.CAPTURED,
+                ReferenceOperationState.ACCEPTED,
+            ),
+        )
+        self.assertEqual(
+            tuple(event.invocation_state for event in history.invocation_events[0]),
+            (
+                ReferenceInvocationState.AUTHORIZED,
+                ReferenceInvocationState.DELIVERED,
+                ReferenceInvocationState.RESULT_RECEIVED,
+                ReferenceInvocationState.ACCEPTED,
+            ),
+        )
+
+    def test_reference_read_schema_uses_draft_07_ordered_tuple_and_exact_decode(
+        self,
+    ) -> None:
+        references = (
+            ArtifactReference("core_documents/global_outline.md"),
+            ArtifactReference(
+                "core_documents/character_sheets.md",
+                ArtifactLineRange(2, 4),
+            ),
+        )
+        request = ReferenceReadRequest(
+            ReferenceInvocationCorrelation(
+                operation_id="schema_operation",
+                invocation_id="schema_invocation",
+                invocation_ordinal=2,
+                agent_id=PLOT_ARCHITECT,
+                phase="draft",
+                round_number=0,
+                attempt=1,
+            ),
+            references,
+        )
+
+        schema = AgentBackend._reference_read_action_schema(request)
+        reference_schema = schema["properties"]["action"]["properties"][
+            "references"
+        ]
+        self.assertEqual(
+            set(reference_schema),
+            {"type", "items", "additionalItems", "minItems", "maxItems"},
+        )
+        self.assertIsInstance(reference_schema["items"], list)
+        self.assertEqual(
+            [
+                item["properties"]["path"]["enum"]
+                for item in reference_schema["items"]
+            ],
+            [[reference.path] for reference in references],
+        )
+        self.assertIs(reference_schema["additionalItems"], False)
+        self.assertEqual(reference_schema["minItems"], len(references))
+        self.assertEqual(reference_schema["maxItems"], len(references))
+        self.assertNotIn("prefixItems", json.dumps(schema))
+
+        expected = ReferenceReadAction(
+            ReferenceReadActionKind.READ_WRITING_ARTIFACTS,
+            request.correlation,
+            request.references,
+        )
+        decoded = AgentBackend._decode_reference_read_action(
+            _reference_action_json(request)
+        )
+        self.assertEqual(decoded, expected)
+        reversed_payload = json.loads(_reference_action_json(request))
+        reversed_payload["action"]["references"].reverse()
+        reversed_action = AgentBackend._decode_reference_read_action(
+            json.dumps(reversed_payload)
+        )
+        self.assertNotEqual(reversed_action, expected)
+
     async def wait_for_provider_invocations(self, count: int) -> None:
         for _ in range(200):
             if len(self.provider_invocations()) >= count:
@@ -1510,6 +1753,67 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             )
         )
         self.assertNotIn("resume", argv)
+
+    async def test_binding_stages_immutable_bytes_after_all_source_paths_become_unsafe(
+        self,
+    ) -> None:
+        WritingArtifactRepository(self.workspace.root).commit_consensus(
+            output_path="fixtures/backend-context.md",
+            candidate="fixture manuscript",
+            core_updates={
+                "global_outline.md": "verified global outline",
+                "part_outlines.md": "verified part outline",
+            },
+            session_id="backend_snapshot",
+            debate_id="backend_snapshot",
+            revision_id="r0",
+            candidate_author_agent_id=EXECUTION_SPECIALIST,
+        )
+        definition = self.definition()
+        references = definition.file_references()
+        expected = tuple(reference.read_text() for reference in references)
+        self.assertEqual(len(definition.context_document_files), 2)
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+
+        system = definition.system_prompt_file.path
+        system.rename(system.with_name(f"{system.name}.removed"))
+        persona = definition.persona_file.path
+        persona.unlink()
+        context_symlink, context_hardlink = (
+            reference.path for reference in definition.context_document_files
+        )
+        symlink_source = self.fake_directory / "same-symlink.md"
+        symlink_source.write_bytes(definition.context_document_files[0].content)
+        context_symlink.unlink()
+        context_symlink.symlink_to(symlink_source)
+        hardlink_source = self.fake_directory / "same-hardlink.md"
+        hardlink_source.write_bytes(definition.context_document_files[1].content)
+        context_hardlink.unlink()
+        os.link(hardlink_source, context_hardlink)
+
+        with (
+            mock.patch.object(
+                PromptFileReference,
+                "_read_bytes",
+                side_effect=AssertionError("binding reread a prompt path"),
+            ) as reference_read,
+            mock.patch.object(
+                Path,
+                "read_bytes",
+                side_effect=AssertionError("binding read a filesystem path"),
+            ) as path_read,
+        ):
+            bound = await backend.bind(definition)
+        reference_read.assert_not_called()
+        path_read.assert_not_called()
+
+        staged = bound.staging_directory.joinpath("AGENTS.md").read_text(
+            encoding="utf-8"
+        )
+        for content in expected:
+            with self.subTest(content=content[:32]):
+                self.assertIn(content, staged)
 
     async def test_adapter_selected_bind_records_exact_lifecycle_terminals(
         self,
@@ -4551,9 +4855,12 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             _bound: BoundAgent,
             request: ConversationRetrievalRequest,
             _handler: object,
+            *,
+            reference_read: object | None = None,
         ) -> ConversationRetrievalReply:
             """Hold the retrieval operation inside the shared thread lock."""
 
+            self.assertIsNone(reference_read)
             trace.append("retrieval_enter")
             entered.set()
             await release.wait()
@@ -4569,9 +4876,12 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         async def conversation_call(
             _bound: BoundAgent,
             request: ConversationRequest,
+            *,
+            reference_read: object | None = None,
         ) -> ConversationReply:
             """Record legacy conversation entry after lock acquisition."""
 
+            self.assertIsNone(reference_read)
             trace.append("conversation_enter")
             return ConversationReply(
                 request.session_id,
@@ -4583,9 +4893,12 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         async def invoke_call(
             _bound: BoundAgent,
             request: AgentRequest,
+            *,
+            reference_read: object | None = None,
         ) -> AgentReply:
             """Record debate entry after lock acquisition."""
 
+            self.assertIsNone(reference_read)
             trace.append("invoke_enter")
             return AgentReply.candidate(request.revision_id, "candidate")
 
@@ -4686,6 +4999,395 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn("resume", self.provider_invocations()[-1]["argv"])
                 self.assertIs(self.thread(session_id)["tainted"], False)
 
+    async def test_retirement_defers_exact_cleanup_for_each_bound_operation(
+        self,
+    ) -> None:
+        """Every provider operation retains staging through its final await."""
+
+        cases = ("invoke", "converse", "retrieval")
+        for label in cases:
+            with self.subTest(operation=label):
+                session_id = f"retire_{label}"
+                backend = AgentBackend(
+                    self.workspace,
+                    executable=str(self.executable),
+                )
+                self.addCleanup(backend.close)
+                backend.create_session_with_access(session_id)
+                bound = await backend.bind(self.definition())
+                staging = bound.staging_directory
+                entered = asyncio.Event()
+                proceed = asyncio.Event()
+
+                async def provider(
+                    *args: object,
+                    reference_read: object | None = None,
+                ) -> object:
+                    self.assertIsNone(reference_read)
+                    entered.set()
+                    await proceed.wait()
+                    if label == "invoke":
+                        return AgentReply.candidate("r0", "candidate")
+                    request = args[1]
+                    if label == "converse":
+                        assert isinstance(request, ConversationRequest)
+                        return ConversationReply(
+                            request.session_id,
+                            request.conversation_id,
+                            request.turn_id,
+                            "conversation",
+                        )
+                    assert isinstance(request, ConversationRetrievalRequest)
+                    return ConversationRetrievalReply(
+                        session_id=request.session_id,
+                        conversation_id=request.conversation_id,
+                        turn_id=request.turn_id,
+                        content="retrieval",
+                        sources=(),
+                    )
+
+                if label == "invoke":
+                    provider_name = "_invoke_codex"
+                    call = lambda: bound.invoke(
+                        self.request(session_id=session_id)
+                    )
+                elif label == "converse":
+                    provider_name = "_converse_codex"
+                    call = lambda: bound.converse(
+                        self.conversation_request(session_id=session_id)
+                    )
+                else:
+                    provider_name = "_converse_with_retrieval_codex"
+                    call = lambda: bound.converse_with_retrieval(
+                        self.retrieval_request(session_id=session_id),
+                        _RecordingRetrievalHandler(),
+                    )
+
+                with (
+                    mock.patch.object(backend, provider_name, side_effect=provider),
+                    mock.patch.object(
+                        backend,
+                        "_finalize_bound_agent",
+                        wraps=backend._finalize_bound_agent,
+                    ) as finalize,
+                ):
+                    active = asyncio.create_task(call())
+                    await asyncio.wait_for(entered.wait(), timeout=1)
+                    bound._retire()
+                    self.assertTrue(staging.exists())
+                    self.assertIn(bound, backend._bound_agents)
+                    with self.assertRaisesRegex(
+                        BackendProtocolError,
+                        "retired",
+                    ):
+                        await call()
+                    proceed.set()
+                    await asyncio.wait_for(active, timeout=1)
+
+                self.assertFalse(staging.exists())
+                self.assertNotIn(bound, backend._bound_agents)
+                self.assertNotIn(staging, backend._staging_directories)
+                self.assertEqual(finalize.call_count, 1)
+
+    async def test_failure_and_cancellation_release_retired_staging_once(
+        self,
+    ) -> None:
+        for operation in ("invoke", "converse", "retrieval"):
+            for outcome in ("failure", "cancellation"):
+                with self.subTest(operation=operation, outcome=outcome):
+                    session_id = f"retire_{operation}_{outcome}"
+                    backend = AgentBackend(
+                        self.workspace,
+                        executable=str(self.executable),
+                    )
+                    self.addCleanup(backend.close)
+                    backend.create_session_with_access(session_id)
+                    bound = await backend.bind(self.definition())
+                    staging = bound.staging_directory
+                    entered = asyncio.Event()
+                    proceed = asyncio.Event()
+
+                    async def provider(
+                        *_args: object,
+                        reference_read: object | None = None,
+                    ) -> object:
+                        self.assertIsNone(reference_read)
+                        entered.set()
+                        await proceed.wait()
+                        raise RuntimeError("provider failed")
+
+                    if operation == "invoke":
+                        provider_name = "_invoke_codex"
+                        call = lambda: bound.invoke(
+                            self.request(session_id=session_id)
+                        )
+                    elif operation == "converse":
+                        provider_name = "_converse_codex"
+                        call = lambda: bound.converse(
+                            self.conversation_request(session_id=session_id)
+                        )
+                    else:
+                        provider_name = "_converse_with_retrieval_codex"
+                        call = lambda: bound.converse_with_retrieval(
+                            self.retrieval_request(session_id=session_id),
+                            _RecordingRetrievalHandler(),
+                        )
+
+                    with (
+                        mock.patch.object(
+                            backend,
+                            provider_name,
+                            side_effect=provider,
+                        ),
+                        mock.patch.object(
+                            backend,
+                            "_finalize_bound_agent",
+                            wraps=backend._finalize_bound_agent,
+                        ) as finalize,
+                    ):
+                        active = asyncio.create_task(call())
+                        await asyncio.wait_for(entered.wait(), timeout=1)
+                        bound._retire()
+                        self.assertTrue(staging.exists())
+                        if outcome == "cancellation":
+                            active.cancel()
+                            with self.assertRaises(asyncio.CancelledError):
+                                await active
+                        else:
+                            proceed.set()
+                            with self.assertRaisesRegex(
+                                RuntimeError,
+                                "provider failed",
+                            ):
+                                await asyncio.wait_for(active, timeout=1)
+                        bound._retire()
+
+                    self.assertFalse(staging.exists())
+                    self.assertEqual(finalize.call_count, 1)
+
+    async def test_close_waits_for_active_binding_then_cleans_every_resource_once(
+        self,
+    ) -> None:
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        session_id = "close_active_binding"
+        backend.create_session_with_access(session_id)
+        active_bound = await backend.bind(self.definition())
+        idle_bound = await backend.bind(self.definition(CHARACTER_CUSTODIAN))
+        active_staging = active_bound.staging_directory
+        idle_staging = idle_bound.staging_directory
+        entered = asyncio.Event()
+        proceed = asyncio.Event()
+
+        async def provider(
+            *_args: object,
+            reference_read: object | None = None,
+        ) -> AgentReply:
+            self.assertIsNone(reference_read)
+            entered.set()
+            await proceed.wait()
+            return AgentReply.candidate("r0", "candidate")
+
+        with (
+            mock.patch.object(backend, "_invoke_codex", side_effect=provider),
+            mock.patch.object(
+                backend._codex_adapter,
+                "release",
+                wraps=backend._codex_adapter.release,
+            ) as release_binding,
+            mock.patch.object(
+                backend,
+                "_release_access_claim",
+                wraps=backend._release_access_claim,
+            ) as release_access,
+        ):
+            task = asyncio.create_task(
+                active_bound.invoke(self.request(session_id=session_id))
+            )
+            await asyncio.wait_for(entered.wait(), timeout=1)
+            backend.close()
+            backend.close()
+
+            self.assertTrue(backend._closed)
+            self.assertFalse(backend._close_cleanup_complete)
+            self.assertTrue(active_staging.exists())
+            self.assertFalse(idle_staging.exists())
+            self.assertIn(session_id, backend._access_claim_tokens)
+            self.assertTrue(backend._thread_locks)
+            with self.assertRaisesRegex(BackendProtocolError, "closed"):
+                await active_bound.invoke(self.request(session_id=session_id))
+
+            proceed.set()
+            await asyncio.wait_for(task, timeout=1)
+            backend.close()
+
+        self.assertTrue(backend._close_cleanup_complete)
+        self.assertEqual(backend._bound_agents, set())
+        self.assertEqual(backend._staging_directories, set())
+        self.assertEqual(backend._thread_locks, {})
+        self.assertEqual(backend._access_claim_tokens, {})
+        self.assertFalse(active_staging.exists())
+        self.assertEqual(
+            [
+                call.args[0].staging_directory
+                for call in release_binding.call_args_list
+            ].count(active_staging),
+            1,
+        )
+        self.assertEqual(
+            [
+                call.args[0].staging_directory
+                for call in release_binding.call_args_list
+            ].count(idle_staging),
+            1,
+        )
+        self.assertEqual(release_access.call_count, 1)
+
+    async def test_terminal_backend_rejects_call_before_binding_retirement(
+        self,
+    ) -> None:
+        """Close's terminal flag prevents entry during its retirement gap."""
+
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        bound = await backend.bind(self.definition())
+        staging = bound.staging_directory
+
+        # Model the exact synchronous close gap: close has made the backend
+        # terminal but has not yet reached this concrete binding in its loop.
+        with bound._call_state_lock:
+            backend._closed = True
+            self.assertFalse(bound._retired)
+            self.assertFalse(bound._released)
+            self.assertEqual(bound._active_calls, 0)
+
+        with mock.patch.object(backend, "_invoke_codex") as provider:
+            with self.assertRaises(BackendProtocolError) as raised:
+                await bound.invoke(self.request())
+
+        self.assertEqual(str(raised.exception), "agent backend is closed")
+        provider.assert_not_awaited()
+        self.assertEqual(bound._active_calls, 0)
+        self.assertFalse(bound._retired)
+        self.assertFalse(bound._released)
+        self.assertIn(bound, backend._bound_agents)
+        self.assertIn(staging, backend._staging_directories)
+        self.assertTrue(staging.exists())
+
+        # Complete the remainder of close. The inverse ordering—an entered
+        # call surviving close until exit—is covered by the preceding test.
+        bound._retire()
+        self.assertTrue(bound._retired)
+        self.assertTrue(bound._released)
+        self.assertNotIn(bound, backend._bound_agents)
+        self.assertNotIn(staging, backend._staging_directories)
+        self.assertFalse(staging.exists())
+        self.assertTrue(backend._close_cleanup_complete)
+
+    async def test_post_staging_validation_failure_discards_provisional_bytes(
+        self,
+    ) -> None:
+        for failure in (RuntimeError("validation failed"), asyncio.CancelledError()):
+            with self.subTest(failure=type(failure).__name__):
+                backend = AgentBackend(
+                    self.workspace,
+                    executable=str(self.executable),
+                )
+                self.addCleanup(backend.close)
+                definition = self.definition()
+                reference_count = len(definition.file_references())
+                original_read = PromptFileReference.read_text
+                read_count = 0
+
+                def read(reference: PromptFileReference) -> str:
+                    nonlocal read_count
+                    read_count += 1
+                    if read_count == (2 * reference_count) + 1:
+                        raise failure
+                    return original_read(reference)
+
+                staged: list[Path] = []
+                original_stage = backend._codex_adapter.stage_definition
+
+                def stage(value: object) -> Path:
+                    directory = original_stage(value)  # type: ignore[arg-type]
+                    staged.append(directory)
+                    return directory
+
+                with (
+                    mock.patch.object(
+                        PromptFileReference,
+                        "read_text",
+                        autospec=True,
+                        side_effect=read,
+                    ),
+                    mock.patch.object(
+                        backend._codex_adapter,
+                        "stage_definition",
+                        side_effect=stage,
+                    ),
+                    self.assertRaises(type(failure)),
+                ):
+                    await backend.bind(definition)
+
+                self.assertEqual(len(staged), 1)
+                self.assertFalse(staged[0].exists())
+                self.assertEqual(backend._staging_directories, set())
+                self.assertEqual(backend._bound_agents, set())
+
+    async def test_repeated_core_publications_bound_idle_resources_per_agent(
+        self,
+    ) -> None:
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        runtime = StoryRuntime(self.workspace, backend)
+        repository = WritingArtifactRepository(self.workspace.root)
+        core_filenames = tuple(core_snapshot(self.workspace))
+
+        async def approve(
+            _bound: BoundAgent,
+            request: AgentRequest,
+            *,
+            reference_read: object | None = None,
+        ) -> AgentReply:
+            self.assertIsNone(reference_read)
+            return AgentReply.approval(request.revision_id)
+
+        with mock.patch.object(backend, "_invoke_codex", side_effect=approve):
+            for generation in range(3):
+                repository.commit_consensus(
+                    output_path=f"part-01/resources-{generation}.md",
+                    candidate=f"manuscript generation {generation}",
+                    core_updates={
+                        filename: f"{filename} generation {generation}"
+                        for filename in core_filenames
+                    },
+                    session_id=f"resource_session_{generation}",
+                    debate_id=f"resource_debate_{generation}",
+                    revision_id="r0",
+                    candidate_author_agent_id=EXECUTION_SPECIALIST,
+                )
+                for agent_id in ROSTER:
+                    await runtime._invoke(
+                        self.request(
+                            session_id="resource_provider_session",
+                            debate_id=f"resource_debate_{generation}_{agent_id}",
+                            agent_id=agent_id,
+                            phase=Phase.AUDIT,
+                        )
+                    )
+
+                self.assertEqual(len(runtime._bound_agents), len(ROSTER))
+                self.assertEqual(
+                    {key[0] for key in runtime._bound_agents},
+                    set(ROSTER),
+                )
+                self.assertEqual(runtime._retiring_bound_agents, {})
+                self.assertEqual(runtime._bound_agent_uses, {})
+                self.assertEqual(len(backend._bound_agents), len(ROSTER))
+                self.assertEqual(
+                    len(backend._staging_directories),
+                    len(ROSTER),
+                )
+
     async def test_reply_append_failure_leaves_completed_provider_thread_untainted(self) -> None:
         session_id = "retrieval_reply_append"
         catalog = FilesystemConversationCatalog(self.workspace)
@@ -4765,6 +5467,654 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             (ConversationEventKind.USER_MESSAGE,),
         )
 
+    async def test_reference_read_invoke_isolated_for_all_roles_and_rounds(
+        self,
+    ) -> None:
+        """Keep the action prelude content-free and context call-local."""
+
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        for index, agent_id in enumerate(ROSTER, 1):
+            session_id = f"reference_role_{index}"
+            operation_id = f"role_operation_{index}"
+            backend.create_session_with_access(session_id)
+            bound = await backend.bind(self.definition(agent_id))
+            request = replace(
+                self.request(
+                    session_id=session_id,
+                    debate_id=f"role_debate_{index}",
+                    agent_id=agent_id,
+                ),
+                round_number=index,
+            )
+            repository, authorization, invocation = self.reference_invocation(
+                operation_id=operation_id,
+                invocation_id=f"role_invocation_{index}",
+                agent_id=agent_id,
+                phase=request.phase.value,
+                round_number=request.round_number,
+            )
+            capability_id = invocation._capability.capability_id
+            before = len(self.provider_invocations())
+            with mock.patch.dict(
+                os.environ,
+                self.reference_environment(invocation),
+            ):
+                reply = await bound.invoke(request, reference_read=invocation)
+            self.assertEqual(reply, AgentReply.candidate("r0", "generated candidate"))
+
+            calls = self.provider_invocations()[before:]
+            self.assertEqual(len(calls), 2)
+            prelude, substantive = calls
+            self.assertEqual(
+                prelude["payload"],
+                AgentBackend._reference_read_prelude_payload(invocation.request),
+            )
+            self.assertEqual(
+                prelude["schema"],
+                AgentBackend._reference_read_action_schema(invocation.request),
+            )
+            expected_payload = AgentBackend._request_payload(request)
+            expected_payload["untrusted_writing_artifact_context"] = [
+                {
+                    "reference": {
+                        "path": "manuscript/part-01/provider-reference.md",
+                        "line_range": None,
+                    },
+                    "content": "REFERENCE-PROVIDER-MARKER\n",
+                }
+            ]
+            self.assertEqual(substantive["payload"], expected_payload)
+            self.assertEqual(
+                ["resume" in call["argv"] for call in calls],
+                [False, True],
+            )
+            serialized_calls = json.dumps(calls, ensure_ascii=False)
+            self.assertNotIn(capability_id, serialized_calls)
+            self.assertNotIn("REFERENCE-PROVIDER-MARKER", prelude["raw_payload"])
+            self.assertEqual(serialized_calls.count("REFERENCE-PROVIDER-MARKER"), 2)
+            self.assert_reference_accepted(
+                repository,
+                authorization,
+                operation_id,
+            )
+
+    async def test_reference_read_converse_uses_two_calls_and_one_context(
+        self,
+    ) -> None:
+        session_id = "reference_converse"
+        operation_id = "conversation_operation"
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        backend.create_session_with_access(session_id)
+        bound = await backend.bind(self.definition())
+        request = self.conversation_request(session_id=session_id)
+        repository, authorization, invocation = self.reference_invocation(
+            operation_id=operation_id,
+            invocation_id="conversation_invocation",
+            phase="conversation",
+            round_number=None,
+        )
+        with mock.patch.dict(
+            os.environ,
+            self.reference_environment(invocation),
+        ):
+            reply = await bound.converse(request, reference_read=invocation)
+        self.assertEqual(reply.content, "generated conversation reply")
+        calls = self.provider_invocations()
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(
+            calls[0]["payload"],
+            AgentBackend._reference_read_prelude_payload(invocation.request),
+        )
+        expected = AgentBackend._conversation_request_payload(request)
+        context = calls[1]["payload"].pop("untrusted_writing_artifact_context")
+        self.assertEqual(calls[1]["payload"], expected)
+        self.assertEqual(
+            context,
+            [
+                {
+                    "reference": {
+                        "path": "manuscript/part-01/provider-reference.md",
+                        "line_range": None,
+                    },
+                    "content": "REFERENCE-PROVIDER-MARKER\n",
+                }
+            ],
+        )
+        self.assert_reference_accepted(repository, authorization, operation_id)
+
+    async def test_reference_read_retrieval_preserves_action_indices_and_budgets(
+        self,
+    ) -> None:
+        cases = (("direct", 1), ("search_read", 3), ("maximum", 5))
+        for case, action_count in cases:
+            with self.subTest(case=case):
+                self.log_path.unlink(missing_ok=True)
+                session_id = f"reference_retrieval_{case}"
+                operation_id = f"retrieval_operation_{case}"
+                backend = AgentBackend(
+                    self.workspace,
+                    executable=str(self.executable),
+                )
+                self.addCleanup(backend.close)
+                backend.create_session_with_access(session_id)
+                bound = await backend.bind(self.definition())
+                request = self.retrieval_request(session_id=session_id)
+                repository, authorization, invocation = self.reference_invocation(
+                    operation_id=operation_id,
+                    invocation_id=f"retrieval_invocation_{case}",
+                    phase="conversation_retrieval",
+                    round_number=None,
+                )
+                if case == "search_read":
+                    outputs = [
+                        _retrieval_action_json(
+                            request,
+                            kind=ConversationRetrievalActionKind.SEARCH_CONVERSATIONS,
+                            action_index=1,
+                            query="Needle 1",
+                        ),
+                        _retrieval_action_json(
+                            request,
+                            kind=ConversationRetrievalActionKind.READ_TRANSCRIPT,
+                            action_index=2,
+                            citation_id="s1h1",
+                            start_sequence=1,
+                            end_sequence=None,
+                        ),
+                    ]
+                else:
+                    outputs = [
+                        _retrieval_action_json(
+                            request,
+                            kind=ConversationRetrievalActionKind.SEARCH_CONVERSATIONS,
+                            action_index=index,
+                            query=f"Needle {index}",
+                        )
+                        for index in range(1, action_count)
+                    ]
+                outputs.append(
+                    _retrieval_action_json(
+                        request,
+                        kind=ConversationRetrievalActionKind.ANSWER,
+                        action_index=action_count,
+                        content=f"{case} answer",
+                        citation_ids=([] if case == "direct" else ["s1h1"]),
+                    )
+                )
+                handler = _RecordingRetrievalHandler()
+                environment = {
+                    **self.reference_environment(invocation),
+                    "STORY_FAKE_CODEX_OUTPUTS": json.dumps(outputs),
+                }
+                with mock.patch.dict(os.environ, environment):
+                    reply = await bound.converse_with_retrieval(
+                        request,
+                        handler,
+                        reference_read=invocation,
+                    )
+                self.assertEqual(reply.content, f"{case} answer")
+                calls = self.provider_invocations()
+                self.assertEqual(len(calls), action_count + 1)
+                self.assertEqual(
+                    calls[0]["payload"]["operation"],
+                    "writing_artifact_reference_read",
+                )
+                retrieval_calls = calls[1:]
+                self.assertEqual(
+                    [call["payload"]["retrieval"]["action_index"] for call in retrieval_calls],
+                    list(range(1, action_count + 1)),
+                )
+                self.assertIn(
+                    "untrusted_writing_artifact_context",
+                    retrieval_calls[0]["payload"],
+                )
+                self.assertTrue(
+                    all(
+                        "untrusted_writing_artifact_context" not in call["payload"]
+                        for call in retrieval_calls[1:]
+                    )
+                )
+                self.assertEqual(
+                    json.dumps(calls, ensure_ascii=False).count(
+                        "REFERENCE-PROVIDER-MARKER"
+                    ),
+                    2,
+                )
+                self.assert_reference_accepted(
+                    repository,
+                    authorization,
+                    operation_id,
+                )
+
+    async def test_reference_read_failures_stop_before_substantive_call_and_taint(
+        self,
+    ) -> None:
+        cases = ("nonzero", "malformed", "result_first", "wrong_batch", "drift")
+        for case in cases:
+            with self.subTest(case=case):
+                self.log_path.unlink(missing_ok=True)
+                session_id = f"reference_failure_{case}"
+                operation_id = f"failure_operation_{case}"
+                backend = AgentBackend(
+                    self.workspace,
+                    executable=str(self.executable),
+                )
+                self.addCleanup(backend.close)
+                backend.create_session_with_access(session_id)
+                bound = await backend.bind(self.definition())
+                repository, authorization, invocation = self.reference_invocation(
+                    operation_id=operation_id,
+                    invocation_id=f"failure_invocation_{case}",
+                )
+                environment = self.reference_environment(invocation)
+                expected_error: type[BaseException]
+                expected_outcome: ReferenceAuthorizationErrorCode
+                persisted_thread = False
+                if case == "nonzero":
+                    environment["STORY_FAKE_CODEX_MODE"] = "nonzero"
+                    expected_error = BackendProtocolError
+                    expected_outcome = ReferenceAuthorizationErrorCode.PROVIDER_FAILURE
+                elif case == "malformed":
+                    environment["STORY_FAKE_CODEX_REFERENCE_ACTION"] = "{}"
+                    expected_error = BackendProtocolError
+                    expected_outcome = ReferenceAuthorizationErrorCode.PROVIDER_FAILURE
+                elif case == "result_first":
+                    environment["STORY_FAKE_CODEX_REFERENCE_ACTION"] = json.dumps(
+                        {"revision_id": "r0", "content": "result first"}
+                    )
+                    expected_error = BackendProtocolError
+                    expected_outcome = ReferenceAuthorizationErrorCode.PROVIDER_FAILURE
+                elif case == "wrong_batch":
+                    envelope = json.loads(
+                        environment["STORY_FAKE_CODEX_REFERENCE_ACTION"]
+                    )
+                    envelope["action"]["references"] = [
+                        {
+                            "path": "core_documents/global_outline.md",
+                            "line_range": None,
+                        }
+                    ]
+                    environment["STORY_FAKE_CODEX_REFERENCE_ACTION"] = json.dumps(
+                        envelope
+                    )
+                    expected_error = ReferenceAuthorizationError
+                    expected_outcome = (
+                        ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH
+                    )
+                    persisted_thread = True
+                else:
+                    self.workspace.root.joinpath(
+                        "manuscript/part-01/provider-reference.md"
+                    ).write_text("DRIFTED", encoding="utf-8")
+                    expected_error = ReferenceAuthorizationError
+                    expected_outcome = ReferenceAuthorizationErrorCode.DRIFT
+                with (
+                    mock.patch.dict(os.environ, environment),
+                    self.assertRaises(expected_error) as raised,
+                ):
+                    await bound.invoke(
+                        self.request(session_id=session_id),
+                        reference_read=invocation,
+                    )
+                if case == "nonzero":
+                    self.assertEqual(
+                        str(raised.exception),
+                        "Codex CLI exited with status 7",
+                    )
+                    self.assertNotIn(
+                        "REFERENCE-PROVIDER-MARKER",
+                        str(raised.exception),
+                    )
+                self.assertEqual(len(self.provider_invocations()), 1)
+                history = repository.inspect_reference_operation(operation_id)
+                assert history is not None
+                self.assertEqual(
+                    history.invocation_events[0][-1].invocation_state,
+                    ReferenceInvocationState.TERMINATED,
+                )
+                self.assertIs(
+                    history.invocation_events[0][-1].outcome,
+                    expected_outcome,
+                )
+                if not persisted_thread and case != "drift":
+                    manifest = self.workspace.read_json(
+                        "agent_states/orchestrator_state/provider_sessions/"
+                        f"{session_id}.json"
+                    )
+                    self.assertEqual(manifest["provider_threads"], {})
+                else:
+                    self.assertIs(self.thread(session_id)["tainted"], True)
+                authorization.close()
+
+    async def test_reference_read_substantive_failure_and_cancellation_terminate(
+        self,
+    ) -> None:
+        cases = (
+            ("provider_failure", ReferenceAuthorizationErrorCode.PROVIDER_FAILURE),
+            ("cancelled", ReferenceAuthorizationErrorCode.CANCELLED),
+        )
+        for case, outcome in cases:
+            with self.subTest(case=case):
+                self.log_path.unlink(missing_ok=True)
+                session_id = f"reference_terminal_{case}"
+                operation_id = f"terminal_operation_{case}"
+                backend = AgentBackend(
+                    self.workspace,
+                    executable=str(self.executable),
+                )
+                self.addCleanup(backend.close)
+                backend.create_session_with_access(session_id)
+                bound = await backend.bind(self.definition())
+                repository, authorization, invocation = self.reference_invocation(
+                    operation_id=operation_id,
+                    invocation_id=f"terminal_invocation_{case}",
+                )
+                environment = self.reference_environment(invocation)
+                if case == "provider_failure":
+                    environment["STORY_FAKE_CODEX_FAIL_SUBSTANTIVE"] = "1"
+                    with (
+                        mock.patch.dict(os.environ, environment),
+                        self.assertRaises(BackendProtocolError) as raised,
+                    ):
+                        await bound.invoke(
+                            self.request(session_id=session_id),
+                            reference_read=invocation,
+                        )
+                    self.assertEqual(
+                        str(raised.exception),
+                        "Codex CLI exited with status 7",
+                    )
+                    self.assertNotIn(
+                        "REFERENCE-PROVIDER-MARKER",
+                        str(raised.exception),
+                    )
+                else:
+                    environment["STORY_FAKE_CODEX_SLEEP_SUBSTANTIVE"] = "1"
+                    with mock.patch.dict(os.environ, environment):
+                        task = asyncio.create_task(
+                            bound.invoke(
+                                self.request(session_id=session_id),
+                                reference_read=invocation,
+                            )
+                        )
+                        await self.wait_for_provider_invocations(2)
+                        task.cancel()
+                        with self.assertRaises(asyncio.CancelledError):
+                            await task
+                self.assertEqual(len(self.provider_invocations()), 2)
+                history = repository.inspect_reference_operation(operation_id)
+                assert history is not None
+                terminal = history.invocation_events[0][-1]
+                self.assertIs(terminal.invocation_state, ReferenceInvocationState.TERMINATED)
+                self.assertIs(terminal.outcome, outcome)
+                self.assertIs(self.thread(session_id)["tainted"], True)
+                authorization.close()
+
+    async def test_reference_read_wrong_correlation_and_no_reference_are_pre_provider(
+        self,
+    ) -> None:
+        session_id = "reference_pre_provider"
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        backend.create_session_with_access(session_id)
+        bound = await backend.bind(self.definition())
+        _, authorization, wrong = self.reference_invocation(
+            operation_id="wrong_correlation",
+            invocation_id="wrong_correlation_invocation",
+            agent_id=CHARACTER_CUSTODIAN,
+        )
+        with self.assertRaises(ReferenceAuthorizationError) as raised:
+            await bound.invoke(
+                self.request(session_id=session_id),
+                reference_read=wrong,
+            )
+        self.assertIs(
+            raised.exception.code,
+            ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH,
+        )
+        self.assertEqual(self.provider_invocations(), [])
+        authorization.close()
+
+        with mock.patch.object(
+            backend,
+            "_perform_reference_read_prelude",
+            side_effect=AssertionError("no-reference call entered the prelude"),
+        ) as prelude:
+            reply = await bound.invoke(self.request(session_id=session_id))
+        self.assertEqual(reply, AgentReply.candidate("r0", "generated candidate"))
+        prelude.assert_not_called()
+        self.assertEqual(len(self.provider_invocations()), 1)
+
+    async def test_reference_read_pre_provider_resource_failures_terminate_exactly(
+        self,
+    ) -> None:
+        """Terminate real coordinators when no provider call can safely start."""
+
+        for case in (
+            "closed",
+            "retired",
+            "wrong_request",
+            "unsupported",
+            "lock_cancel",
+        ):
+            with self.subTest(case=case):
+                self.log_path.unlink(missing_ok=True)
+                session_id = f"reference_resource_{case}"
+                operation_id = f"resource_operation_{case}"
+                backend = AgentBackend(
+                    self.workspace,
+                    executable=str(self.executable),
+                )
+                backend.create_session_with_access(session_id)
+                bound = await backend.bind(self.definition())
+                repository, authorization, invocation = self.reference_invocation(
+                    operation_id=operation_id,
+                    invocation_id=f"resource_invocation_{case}",
+                )
+                expected = ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE
+                if case == "closed":
+                    backend.close()
+                    with self.assertRaisesRegex(
+                        BackendProtocolError,
+                        "agent backend is closed",
+                    ):
+                        await bound.invoke(
+                            self.request(session_id=session_id),
+                            reference_read=invocation,
+                        )
+                elif case == "retired":
+                    bound._retire()
+                    with self.assertRaisesRegex(
+                        BackendProtocolError,
+                        "bound agent is retired",
+                    ):
+                        await bound.invoke(
+                            self.request(session_id=session_id),
+                            reference_read=invocation,
+                        )
+                elif case == "wrong_request":
+                    with self.assertRaisesRegex(TypeError, "AgentRequest"):
+                        await bound.invoke(  # type: ignore[arg-type]
+                            object(),
+                            reference_read=invocation,
+                        )
+                elif case == "unsupported":
+                    expected = ReferenceAuthorizationErrorCode.PROVIDER_FAILURE
+                    unsupported = BoundAgent(
+                        backend,
+                        replace(self.definition(), backend="gemini"),
+                        bound.staging_directory,
+                    )
+                    with self.assertRaisesRegex(
+                        ConfigurationError,
+                        "not implemented: gemini",
+                    ):
+                        await unsupported.invoke(
+                            self.request(session_id=session_id),
+                            reference_read=invocation,
+                        )
+                else:
+                    expected = ReferenceAuthorizationErrorCode.CANCELLED
+                    attempted = asyncio.Event()
+                    never = asyncio.Event()
+
+                    class BlockingLock:
+                        async def __aenter__(self):
+                            attempted.set()
+                            await never.wait()
+
+                        async def __aexit__(self, *_args: object) -> None:
+                            return None
+
+                    with mock.patch.object(
+                        backend,
+                        "_thread_lock",
+                        return_value=BlockingLock(),
+                    ):
+                        task = asyncio.create_task(
+                            bound.invoke(
+                                self.request(session_id=session_id),
+                                reference_read=invocation,
+                            )
+                        )
+                        await attempted.wait()
+                        task.cancel()
+                        with self.assertRaises(asyncio.CancelledError):
+                            await task
+
+                self.assertEqual(self.provider_invocations(), [])
+                history = repository.inspect_reference_operation(operation_id)
+                assert history is not None
+                terminal = history.invocation_events[0][-1]
+                self.assertIs(terminal.invocation_state, ReferenceInvocationState.TERMINATED)
+                self.assertIs(terminal.outcome, expected)
+                authorization.close()
+                backend.close()
+
+    async def test_reference_read_adapter_resolution_failures_terminate_once(
+        self,
+    ) -> None:
+        """Retire conversation/retrieval coordinators without an adapter."""
+
+        operations = (
+            ("conversation", "conversation"),
+            ("retrieval", "conversation_retrieval"),
+        )
+        for operation, phase in operations:
+            for resolution in ("unsupported", "missing"):
+                with self.subTest(operation=operation, resolution=resolution):
+                    self.log_path.unlink(missing_ok=True)
+                    session_id = f"reference_{operation}_{resolution}"
+                    operation_id = f"adapter_operation_{operation}_{resolution}"
+                    backend = AgentBackend(
+                        self.workspace,
+                        executable=str(self.executable),
+                    )
+                    backend.create_session_with_access(session_id)
+                    bound = await backend.bind(self.definition())
+                    call_bound = bound
+                    vendor = "codex"
+                    if resolution == "unsupported":
+                        vendor = "gemini"
+                        call_bound = BoundAgent(
+                            backend,
+                            replace(self.definition(), backend=vendor),
+                            bound.staging_directory,
+                        )
+                    repository, authorization, invocation = (
+                        self.reference_invocation(
+                            operation_id=operation_id,
+                            invocation_id=(
+                                f"adapter_invocation_{operation}_{resolution}"
+                            ),
+                            phase=phase,
+                            round_number=None,
+                        )
+                    )
+                    handler = _RecordingRetrievalHandler()
+                    removed_adapter = None
+                    if resolution == "missing":
+                        removed_adapter = backend._adapters.pop(vendor)
+
+                    resolved_failure = None
+                    real_adapter_for = backend._adapter_for
+
+                    def resolve_adapter(adapter_vendor: str):
+                        nonlocal resolved_failure
+                        try:
+                            return real_adapter_for(adapter_vendor)
+                        except ConfigurationError as exc:
+                            resolved_failure = exc
+                            raise
+
+                    try:
+                        with (
+                            mock.patch.object(
+                                backend,
+                                "_adapter_for",
+                                side_effect=resolve_adapter,
+                            ) as adapter_for,
+                            self.assertRaises(ConfigurationError) as raised,
+                        ):
+                            if operation == "conversation":
+                                await call_bound.converse(
+                                    self.conversation_request(
+                                        session_id=session_id,
+                                    ),
+                                    reference_read=invocation,
+                                )
+                            else:
+                                await call_bound.converse_with_retrieval(
+                                    self.retrieval_request(
+                                        session_id=session_id,
+                                    ),
+                                    handler,
+                                    reference_read=invocation,
+                                )
+                    finally:
+                        if removed_adapter is not None:
+                            backend._adapters[vendor] = removed_adapter
+
+                    adapter_for.assert_called_once_with(vendor)
+                    self.assertIs(raised.exception, resolved_failure)
+                    self.assertEqual(
+                        str(raised.exception),
+                        f"agent backend is not implemented: {vendor}",
+                    )
+                    self.assertIsNone(raised.exception.__cause__)
+                    self.assertIsNone(raised.exception.__context__)
+                    self.assertEqual(self.provider_invocations(), [])
+                    self.assertEqual(handler.actions, [])
+                    history = repository.inspect_reference_operation(operation_id)
+                    assert history is not None
+                    events = history.invocation_events[0]
+                    self.assertEqual(
+                        tuple(event.invocation_state for event in events),
+                        (
+                            ReferenceInvocationState.AUTHORIZED,
+                            ReferenceInvocationState.TERMINATED,
+                        ),
+                    )
+                    self.assertIs(
+                        events[-1].outcome,
+                        ReferenceAuthorizationErrorCode.PROVIDER_FAILURE,
+                    )
+                    lock = backend._thread_lock(
+                        session_id,
+                        vendor,
+                        PLOT_ARCHITECT,
+                    )
+                    self.assertFalse(lock.locked())
+                    self.assertIn(bound, backend._bound_agents)
+                    self.assertTrue(bound.staging_directory.exists())
+
+                    authorization.close()
+                    backend.close()
+                    self.assertEqual(backend._bound_agents, set())
+                    self.assertFalse(bound.staging_directory.exists())
+
 
 class ConcreteBackendCliTests(unittest.TestCase):
     def test_repeatable_backend_overrides_and_codex_defaults(self) -> None:
@@ -4780,6 +6130,8 @@ class ConcreteBackendCliTests(unittest.TestCase):
                 "character_custodian=antigravity",
                 "--draft",
                 "draft",
+                "--output",
+                "part-01/draft.md",
             ]
         )
         self.assertEqual(
