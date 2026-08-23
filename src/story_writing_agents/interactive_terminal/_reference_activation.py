@@ -37,7 +37,7 @@ class ReferenceActivationKind(StrEnum):
 class ReferenceInputFailureKind(StrEnum):
     """Content-free user-facing activation failure categories."""
 
-    EMPTY_CATALOG = "empty_catalog"
+    EMPTY_SOURCES = "empty_sources"
     STALE = "stale"
     UNREADABLE = "unreadable"
     UNAVAILABLE = "unavailable"
@@ -142,7 +142,7 @@ class ReferenceInputProjection:
             outcome_count == 2
             and self.completion is not None
             and self.request is None
-            and self.failure is ReferenceInputFailureKind.EMPTY_CATALOG
+            and self.failure is ReferenceInputFailureKind.EMPTY_SOURCES
             and self.completion.position.startswith(
                 EMPTY_ARTIFACT_REFERENCE_POSITION_PREFIX
             )
@@ -202,7 +202,7 @@ def project_reference_input(
                 return ReferenceInputProjection(failure=failure)
             if not canonical_paths:
                 return ReferenceInputProjection(
-                    failure=ReferenceInputFailureKind.EMPTY_CATALOG
+                    failure=ReferenceInputFailureKind.EMPTY_SOURCES
                 )
             return ReferenceInputProjection(
                 request=ReferenceActivationRequest(
@@ -247,7 +247,7 @@ def project_reference_input(
                 end,
                 (),
             ),
-            failure=ReferenceInputFailureKind.EMPTY_CATALOG,
+            failure=ReferenceInputFailureKind.EMPTY_SOURCES,
         )
     candidates: list[CommandCompletionCandidate] = []
     for path in canonical_paths:

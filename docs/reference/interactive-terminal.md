@@ -797,13 +797,14 @@ The private pure activation layer recognizes only the cursor-active marker.
 `$${path}` requests a direct viewer, and exact `$$` requests the source picker
 followed by a viewer. A case-sensitive path fragment after `$` filters the
 completion rows. No match projects the artifact-specific empty text; a truly
-empty source list projects `No current writing artifacts. Add a supported
-canonical core document or part-scoped Markdown manuscript, or publish one
-through consensus.` plus a deferred
-failure that Enter or Tab surfaces through the established error writer. Enter
-or Tab on a catalog candidate replaces the marker with `${path}` without
+empty source list projects `No writing artifacts. Add a supported canonical
+core document or part-scoped Markdown manuscript. Consensus can also publish
+one.` plus a deferred `ReferenceInputFailureKind.EMPTY_SOURCES`
+(`empty_sources`) failure that Enter or Tab surfaces through the established
+error writer. Enter or Tab on a source candidate replaces the marker with
+`${path}` without
 submitting. Range selection replaces it with `${path}#Lx-Ly`. Several completed
-references remain ordered; each later activation receives a fresh catalog and
+references remain ordered; each later activation receives a fresh source list and
 text read.
 
 The immutable buffer/cursor at activation is the origin. A successful edit

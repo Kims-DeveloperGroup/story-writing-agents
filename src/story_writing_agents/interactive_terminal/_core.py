@@ -1997,10 +1997,10 @@ def _reference_input_error(kind: ReferenceInputFailureKind) -> InteractiveError:
     if not isinstance(kind, ReferenceInputFailureKind):
         raise TypeError("kind must be a ReferenceInputFailureKind")
     copy = {
-        ReferenceInputFailureKind.EMPTY_CATALOG: (
+        ReferenceInputFailureKind.EMPTY_SOURCES: (
             "No current writing artifacts are available.",
             "Add a supported canonical core document or part-scoped Markdown "
-            "manuscript, or publish one through consensus.",
+            "manuscript. Consensus can also publish one.",
         ),
         ReferenceInputFailureKind.STALE: (
             "The selected writing artifact is no longer current.",
@@ -2022,7 +2022,7 @@ def _reference_input_error(kind: ReferenceInputFailureKind) -> InteractiveError:
     code = (
         InteractiveErrorCode.COMMAND_INVALID
         if kind in {
-            ReferenceInputFailureKind.EMPTY_CATALOG,
+            ReferenceInputFailureKind.EMPTY_SOURCES,
             ReferenceInputFailureKind.INVALID,
         }
         else InteractiveErrorCode.WORKSPACE_INVALID

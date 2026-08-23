@@ -139,10 +139,10 @@ later ordinary prompt submission dispatches the resulting references.
 If the fragment matches no current safe path, the open panel instead shows
 `[empty] No matching writing artifacts. Change the path fragment.` Edit or
 remove the fragment to recover. If no current safe canonical file exists,
-typing `$` immediately shows `[empty] No current writing artifacts. Add a
-supported canonical core document or part-scoped Markdown manuscript, or
-publish one through consensus.` No provider call starts. Enter or Tab then
-emits the established `command_invalid` empty-list error below and restores the
+typing `$` immediately shows `[empty] No writing artifacts. Add a supported
+canonical core document or part-scoped Markdown manuscript. Consensus can also
+publish one.` No provider call starts. Enter or Tab then emits the established
+`command_invalid` `empty_sources` error below and restores the
 `$` draft.
 
 ### Capable and fallback completion boundary
@@ -161,7 +161,7 @@ start no provider work. The fixed content-free failures are:
 
 | Condition / category | Exact summary | Exact recovery hint |
 | --- | --- | --- |
-| Empty source list / `command_invalid` | `No current writing artifacts are available.` | `Add a supported canonical core document or part-scoped Markdown manuscript, or publish one through consensus.` |
+| Empty sources / `command_invalid` | `No current writing artifacts are available.` | `Add a supported canonical core document or part-scoped Markdown manuscript. Consensus can also publish one.` |
 | Invalid insertion / `command_invalid` | `The artifact reference cannot be inserted.` | `Remove the active marker or choose a nonconflicting current artifact.` |
 | Stale selection / `workspace_invalid` | `The selected writing artifact is no longer current.` | `Type $ again to refresh the canonical artifact list.` |
 | Unsafe view / `workspace_invalid` | `The selected writing artifact cannot be viewed safely.` | `Inspect its size and UTF-8 repository state, then refresh the list.` |
@@ -344,8 +344,8 @@ Internally, the controller supplies only the provider-bound buffer span and
 filesystem-source callbacks. A pure activation layer classifies the active
 marker and
 returns a content-free completion, viewer request, or failure. For an available
-but empty source list, it projects an empty artifact panel together with a deferred
-empty-list failure: rendering `$` stays side-effect-free, while Enter or Tab
+but empty source list, it projects an empty artifact panel together with a
+deferred `empty_sources` failure: rendering `$` stays side-effect-free, while Enter or Tab
 surfaces the fixed error. A no-match panel is instead the filtered view of a
 nonempty completion projection, so changing the path fragment can reveal rows
 again. The terminal driver owns the one input latch and nested picker/viewer

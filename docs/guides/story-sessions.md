@@ -219,10 +219,10 @@ lists current safe canonical filesystem sources in lexical order. Type a case-se
 after `$` to filter the list; no match shows
 `[empty] No matching writing artifacts. Change the path fragment.` Up/Down and
 Enter or Tab insert `${path}` on a capable terminal without sending the prompt.
-If no source exists, the panel says `No current writing artifacts. Add a
-supported canonical core document or part-scoped Markdown manuscript, or
-publish one through consensus.` Enter or Tab emits the established empty-list
-error and restores the draft.
+If no source exists, the panel says `No writing artifacts. Add a supported
+canonical core document or part-scoped Markdown manuscript. Consensus can also
+publish one.` Enter or Tab emits the established `empty_sources` error and
+restores the draft.
 
 Type `$${path}` then Enter or Tab to open that artifact directly, or `$$` then
 Enter or Tab to choose it first; Shift+Up/Down selects an inclusive range and

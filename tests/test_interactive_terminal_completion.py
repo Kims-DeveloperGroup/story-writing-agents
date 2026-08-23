@@ -502,9 +502,9 @@ class CompletionControlTests(unittest.TestCase):
                     "Up/Down selects; Enter/Tab inserts a whole-file reference."
                 ),
                 empty_text=(
-                    "No current writing artifacts. Add a supported canonical "
-                    "core document or part-scoped Markdown manuscript, or "
-                    "publish one through consensus."
+                    "No writing artifacts. Add a supported canonical core "
+                    "document or part-scoped Markdown manuscript. Consensus "
+                    "can also publish one."
                 ),
             ),
         )
@@ -965,25 +965,31 @@ class CompletionRenderingTests(unittest.TestCase):
             candidates=(),
             highlighted_id=None,
             empty_text=(
-                "No current writing artifacts. Add a supported canonical core "
-                "document or part-scoped Markdown manuscript, or publish one "
-                "through consensus."
+                "No writing artifacts. Add a supported canonical core document "
+                "or part-scoped Markdown manuscript. Consensus can also publish "
+                "one."
             ),
         )
+        empty_frame = render_component(
+            empty,
+            capabilities(CapabilityProfile.PLAIN),
+        )
         self.assertEqual(
-            render_component(empty, capabilities(CapabilityProfile.PLAIN)),
+            empty_frame,
             RenderedFrame(
                 "Writing artifact selection [open]\n"
                 "  [controls] Up/Down selects; Enter/Tab inserts a whole-file "
                 "reference.\n"
-                "  [empty] No current writing artifacts. Add a supported "
-                "canonical core document \n"
-                "  or part-scoped Markdown manuscript, or publish one through "
-                "consensus.",
+                "  [empty] No writing artifacts. Add a supported canonical core "
+                "document or part-\n"
+                "  scoped Markdown manuscript. Consensus can also publish one.",
                 80,
                 4,
             ),
         )
+        for line in empty_frame.text.splitlines():
+            with self.subTest(rendered_line=line):
+                self.assertEqual(line, line.rstrip())
 
     def test_untrusted_labels_are_sanitized_before_style_and_width(self) -> None:
         hostile = SuggestionPalette(
@@ -1139,7 +1145,7 @@ class CompletionDriverTests(unittest.TestCase):
                         1,
                         (),
                     ),
-                    failure=ReferenceInputFailureKind.EMPTY_CATALOG,
+                    failure=ReferenceInputFailureKind.EMPTY_SOURCES,
                 ),
             ),
             (

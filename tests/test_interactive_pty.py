@@ -2163,13 +2163,12 @@ print(
         self._seed_default_session()
         prompt = "story[alpha:lead]> "
         empty_copy = (
-            "No current writing artifacts. Add a supported canonical core "
-            "document or part-scoped Markdown manuscript, or publish one "
-            "through consensus."
+            "No writing artifacts. Add a supported canonical core document or "
+            "part-scoped Markdown manuscript. Consensus can also publish one."
         )
         creation_hint = (
             "Add a supported canonical core document or part-scoped Markdown "
-            "manuscript, or publish one through consensus."
+            "manuscript. Consensus can also publish one."
         )
         for activation_key in ("\t", "\n"):
             with self.subTest(activation_key=repr(activation_key)):
@@ -2182,7 +2181,7 @@ print(
                 preview_mark = process.output_mark()
                 process.send_text("$")
                 preview = process.wait_for_text(
-                    "publish one through consensus.",
+                    "also publish one.",
                     after=preview_mark,
                 )
                 self.assertIn(
@@ -2205,7 +2204,7 @@ print(
                     after=activation_mark,
                 )
                 failure = process.wait_for_text(
-                    "publish one through consensus.",
+                    "also publish one.",
                     after=activation_mark,
                 )
                 self.assertIn(
