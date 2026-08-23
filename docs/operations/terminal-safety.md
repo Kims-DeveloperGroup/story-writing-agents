@@ -39,30 +39,38 @@ driver owns one isolated bounded main-command history store alongside its raw
 resources. The callback-only `InteractiveTerminal` and controller own no
 history. Construction still performs no I/O, and the store is never persisted.
 
-Capability observation evaluates input and output independently. Live raw mode
-requires a complete POSIX `termios` interface, a nonempty non-`dumb` `TERM`,
-capable input and output TTY descriptors, a readable input, a writable/flushable
-output, and reliable size access. Missing, non-TTY, `TERM=dumb`, non-POSIX, or
-uncertain capability selects safe ordinary-line fallback without raw mode or
-cursor controls. This component fallback does not bypass the installed CLI's
-earlier two-stream TTY guard.
+Capability observation evaluates input and output independently. While input is
+`UNDECIDED`, live raw mode requires a complete POSIX `termios` interface, a
+nonempty non-`dumb` `TERM`, capable input and output TTY descriptors, a readable
+input, a writable/flushable output, and reliable size access. Missing, non-TTY,
+`TERM=dumb`, non-POSIX, or uncertain capability makes that first input use and
+permanently select safe ordinary-line `FALLBACK` without raw mode or cursor
+controls. This component fallback does not bypass the installed CLI's earlier
+two-stream TTY guard.
 
 A successful ordinary-line fallback main read is eligible for the same
 driver-local history store. The fallback itself provides no component-owned
-live Up/Down navigation; if a later read on that driver becomes capable, its
-live editor can recall the earlier commit.
+live Up/Down navigation, and the same driver never upgrades from `FALLBACK` to
+`LIVE`. The entry remains in that process-local store, but users cannot recall
+it through that driver's fallback input UI.
 
 The output descriptor supplies width. During capability observation, a missing,
 failing, nonpositive, or invalid result falls back to 80 columns; a reliable
 result is capped at 120. Live-input setup rechecks size before raw activation: a
-missing or failing query selects ordinary-line fallback, while a returned
-nonpositive or invalid column count uses 80. Capability observation and
-live-input setup repeat on the next operation, so resize is noticed without a
-signal loop. Semantic rendering also asks for current capabilities on its next
-render. Composer/confirmation input and composer lifecycle notices therefore
-use the current capability width on their next render. The internal live
-picker observes capability and width on every redraw and limits its contiguous
-viewport to seven choices; its line fallback renders the complete list.
+missing or failing query selects ordinary-line fallback only from
+`UNDECIDED`, while a returned nonpositive or invalid column count uses 80. An
+already-`LIVE` driver repeats capability, configuration, and geometry
+validation before each new input operation; resize is accepted and observed,
+while unsafe drift or setup failure raises rather than downgrading to fallback.
+An already-`FALLBACK` driver reuses its retained line-only input capabilities
+and does not probe for a live upgrade. Independently, semantic output rendering
+asks for current output capabilities on its next render; that can update record
+width without changing the input mode. Composer/confirmation live input uses
+the revalidated `LIVE` width, fallback input keeps its retained line-only
+profile, and composer lifecycle notices use the freshly observed semantic-
+output width. The internal live picker observes capability and width on every
+redraw and limits its contiguous viewport to seven choices; its line fallback
+renders the complete list.
 
 The internal profiles are fixed ANSI, capable plain, and line fallback. Presence
 of `NO_COLOR` disables decorative SGR only; it does not disable safe functional

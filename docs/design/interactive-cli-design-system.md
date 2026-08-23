@@ -384,8 +384,9 @@ change `/send`, `/cancel`, `/say`, Ctrl-C, or EOF semantics.
 
 > **Implemented by #85:** history is available on capable stream-backed main
 > reads. The ordinary-line fallback records eligible commits but does not
-> provide live arrow navigation; a later capable read on the same driver can
-> recall them.
+> provide arrow navigation. Once that driver selects permanent `FALLBACK`, its
+> retained entries cannot later be recalled through a capable read on the same
+> input UI.
 
 Each unified stream terminal or standalone compatibility editor has exactly one
 isolated driver-owned history store for that driver instance's lifetime. The

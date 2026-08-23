@@ -620,9 +620,9 @@ EOF, incomplete input, invalid fallback framing, and operations that fail
 without returning an accepted line are not recorded. Composition and its
 contextual suggestions, conversation subject, confirmation, previews, and
 uncommitted edits neither navigate nor mutate the store. A line-fallback main
-read can add an entry, but the component supplies no live arrow navigation in
-that fallback; the same entry can be recalled on a later capable read from the
-same driver.
+read can add an entry, but the component supplies no arrow navigation in that
+fallback. Because `FALLBACK` is permanent for the driver, the retained entry
+cannot later be recalled through a capable read on that same input UI.
 
 History lasts only for that driver instance and is never persisted to the
 workspace, transcripts, configuration, environment, provider sessions, or a
