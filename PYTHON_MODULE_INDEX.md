@@ -1189,6 +1189,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   readiness/select, key, Escape/CSI, cursor, screen, filesystem, provider,
   runtime, or import-time resource.
 - **Primary verification/documentation:**
+  `tests/test_interactive_terminal_input_lifecycle.py`,
   `tests/test_interactive_terminal_completion.py`,
   `tests/test_interactive_terminal_foundation.py`,
   `tests/test_interactive_terminal_viewer.py`, and
@@ -1402,6 +1403,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   Construction remains resource-free.
 - **Primary verification/documentation:**
   `tests/test_interactive_line_editor.py`,
+  `tests/test_interactive_terminal_input_lifecycle.py`,
   `tests/test_interactive_terminal_completion.py`,
   `tests/test_interactive_terminal_foundation.py`,
   `tests/test_interactive_terminal_composer.py`,
