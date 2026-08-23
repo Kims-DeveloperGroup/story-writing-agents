@@ -890,6 +890,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_interactive_consensus.py`,
   `tests/test_interactive_cancellation.py`,
   `tests/test_interactive_search.py`,
+  `tests/test_runtime_reference_integration.py`,
   `docs/reference/conversation-retrieval.md`, and `docs/design/overview.md`.
 
 ### `story_writing_agents.interactive_line_editor`
@@ -1689,6 +1690,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_conversation_retrieval.py`, `tests/test_interactive_consensus.py`,
   `tests/test_interactive_conversation.py` for retained runtime use through the
   controller-owned persistent Runner and its single lifecycle event loop,
+  `tests/test_runtime_reference_integration.py`,
   `tests/test_orchestration_workflow.py`,
   `tests/test_orchestration_safety.py`, `tests/test_lifecycle_atomicity.py`,
   `tests/test_prompts.py`,
@@ -2068,8 +2070,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   It owns no filesystem, persistent-evidence, provider, process, or terminal
   resource; repository calls remain the only operational effects. Importing
   the module performs no I/O.
-- **Primary verification/documentation:** Production inventory and clean-import
-  checks in `tests/test_interactive_controller.py` and
+- **Primary verification/documentation:**
+  `tests/test_runtime_reference_integration.py`; production inventory and
+  clean-import checks in `tests/test_interactive_controller.py` and
   `tests/test_session_lifecycle.py`; orchestration consumers are recorded in
   `docs/design/overview.md` and `docs/operations/recovery-and-limitations.md`.
 
@@ -2271,6 +2274,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_artifact_reference_authorization.py`,
   `tests/test_artifact_reference_evidence.py`,
   `tests/test_artifact_reference_read_actions.py`,
+  `tests/test_runtime_reference_integration.py`,
   `tests/test_orchestration_workflow.py`, `tests/test_orchestration_safety.py`,
   `tests/test_smoke_cli.py`, `docs/reference/writing-artifacts.md`,
   `docs/reference/configuration/session-storage.md`,
