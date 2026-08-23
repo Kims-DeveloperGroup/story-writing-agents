@@ -1522,11 +1522,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   viewer, terminal mode, input latch, filesystem handle, provider capability,
   operation evidence, or import-time resource.
 - **Primary verification/documentation:**
+  `tests/test_interactive_terminal_reference_activation.py`,
   `tests/test_interactive_terminal_completion.py`,
   `tests/test_artifact_reference_directives.py`,
-  `tests/test_interactive_terminal_viewer.py`, and
-  `docs/reference/interactive-terminal.md` verify the contracts it composes;
-  no activation-specific checked-in test or documentation reference exists yet.
+  `tests/test_interactive_terminal_viewer.py`,
+  `docs/guides/artifact-references.md`,
+  `docs/reference/interactive-terminal.md`,
+  `docs/design/interactive-cli-design-system.md`, and
+  `docs/operations/terminal-safety.md`.
 
 ### `story_writing_agents.interactive_terminal._core`
 
