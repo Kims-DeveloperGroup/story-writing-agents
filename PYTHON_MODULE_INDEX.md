@@ -348,7 +348,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
   `tests/test_cli_context.py`, `tests/test_smoke_cli.py`, and
   `tests/test_interactive_pty.py` for primary process-level POSIX PTY
-  verification; `docs/reference/cli.md` and `docs/getting-started.md`.
+  verification; `docs/reference/cli.md`, `docs/getting-started.md`, and
+  `docs/guides/artifact-references.md`.
 
 ### `story_writing_agents.cli_context`
 
@@ -802,7 +803,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   transcript-read integration, and `tests/test_interactive_pty.py` for primary
   process-level POSIX PTY lifecycle verification;
   `docs/design/session-lifecycle.md`,
-  `docs/guides/story-sessions.md`, `docs/reference/cli.md`,
+  `docs/guides/story-sessions.md`, `docs/guides/artifact-references.md`,
+  `docs/reference/cli.md`,
   `docs/reference/interactive-terminal.md`, and
   `docs/reference/conversation-retrieval.md` verify the current collaborator,
   lifecycle, selection, and retrieval-presentation contracts.
@@ -1694,7 +1696,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_orchestration_workflow.py`,
   `tests/test_orchestration_safety.py`, `tests/test_lifecycle_atomicity.py`,
   `tests/test_prompts.py`,
-  `tests/test_agent_state.py`, `docs/reference/runtime-api.md`,
+  `tests/test_agent_state.py`, `docs/guides/artifact-references.md`,
+  `docs/reference/runtime-api.md`,
   `docs/reference/writing-artifacts.md`,
   `docs/reference/conversation-retrieval.md`, and
   `docs/design/consensus-workflow.md`, plus `docs/design/overview.md` and
@@ -1892,8 +1895,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_artifact_reference_authorization.py`,
   `tests/test_artifact_reference_read_actions.py`,
   `tests/test_public_api_and_cli.py`, `tests/test_orchestration_workflow.py`,
-  `docs/reference/writing-artifacts.md`, `docs/reference/workspace-api.md`, and
-  `docs/design/persistence.md`.
+  `docs/guides/artifact-references.md`, `docs/reference/writing-artifacts.md`,
+  `docs/reference/workspace-api.md`, and `docs/design/persistence.md`.
 
 ### `story_writing_agents.writing_artifacts.catalog`
 
@@ -2073,8 +2076,10 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Primary verification/documentation:**
   `tests/test_runtime_reference_integration.py`; production inventory and
   clean-import checks in `tests/test_interactive_controller.py` and
-  `tests/test_session_lifecycle.py`; orchestration consumers are recorded in
-  `docs/design/overview.md` and `docs/operations/recovery-and-limitations.md`.
+  `tests/test_session_lifecycle.py`; the user workflow and lifecycle are in
+  `docs/guides/artifact-references.md`, while orchestration consumers are
+  recorded in `docs/design/overview.md` and
+  `docs/operations/recovery-and-limitations.md`.
 
 ### `story_writing_agents.writing_artifacts._reference_evidence`
 
@@ -2276,7 +2281,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_artifact_reference_read_actions.py`,
   `tests/test_runtime_reference_integration.py`,
   `tests/test_orchestration_workflow.py`, `tests/test_orchestration_safety.py`,
-  `tests/test_smoke_cli.py`, `docs/reference/writing-artifacts.md`,
+  `tests/test_smoke_cli.py`, `docs/guides/artifact-references.md`,
+  `docs/reference/writing-artifacts.md`,
   `docs/reference/configuration/session-storage.md`,
   `docs/design/persistence.md`, `docs/operations/filesystem-safety.md`,
   `docs/operations/privacy-and-provider.md`, and
