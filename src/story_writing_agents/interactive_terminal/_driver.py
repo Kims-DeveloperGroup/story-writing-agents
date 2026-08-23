@@ -1098,11 +1098,16 @@ class RawTerminalDriver:
             safe = sanitize_terminal_text(line)
             if len(safe) > 240:
                 safe = f"{safe[:237]}..."
+            follow_up = (
+                "Press Enter to submit it, or type a replacement draft: "
+                if amended
+                else (
+                    "Press Enter to retry the marker without submitting, or type "
+                    "a replacement draft: "
+                )
+            )
             answer = self._read_fallback_line(
-                (
-                    f"Draft retained: {safe}\n"
-                    "Press Enter to submit it, or type a replacement draft: "
-                ),
+                f"Draft retained: {safe}\n{follow_up}",
                 capabilities,
             )
             if not isinstance(answer, str):
