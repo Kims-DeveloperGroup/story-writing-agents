@@ -383,6 +383,10 @@ def _active_marker(
 def _marker_end(buffer: str, start: int, scope_end: int) -> int:
     """Return the maximal activation fragment without consuming punctuation."""
 
+    if buffer.startswith("$${", start, scope_end):
+        closing_brace = buffer.find("}", start + 3, scope_end)
+        if closing_brace >= 0:
+            return closing_brace + 1
     end = start + 1
     if end < scope_end and buffer[end] == "$":
         end += 1
