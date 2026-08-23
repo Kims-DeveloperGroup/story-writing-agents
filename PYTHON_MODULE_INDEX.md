@@ -428,9 +428,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   login; only that probe's exact authenticated state reports success. It owns
   no credential, token, account, URL, browser, keyring, configuration,
   workspace persistence, provider turn, or import-time resource.
-- **Primary verification/documentation:** `tests/test_public_api_and_cli.py`
-  verifies the unchanged package facade; no dedicated checked-in authentication
-  verification or documentation reference is present yet.
+- **Primary verification/documentation:** `tests/test_provider_auth.py` verifies
+  the native authentication contract, and `tests/test_public_api_and_cli.py`
+  verifies the unchanged package facade. No dedicated authentication
+  documentation reference is present yet.
 
 ### `story_writing_agents.cli`
 
@@ -790,9 +791,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   both are authenticated, and otherwise no default. The module owns no native
   process, credential, terminal mode, workspace configuration write, provider
   route, backend, session, network, or import-time I/O.
-- **Primary verification/documentation:** `tests/test_public_api_and_cli.py`
-  verifies the unchanged package facade; no dedicated checked-in authentication
-  verification or documentation reference is present yet.
+- **Primary verification/documentation:** `tests/test_interactive_auth.py`
+  verifies authentication presentation and coordination, and
+  `tests/test_public_api_and_cli.py` verifies the unchanged package facade. No
+  dedicated authentication documentation reference is present yet.
 
 ### `story_writing_agents.interactive_commands`
 
