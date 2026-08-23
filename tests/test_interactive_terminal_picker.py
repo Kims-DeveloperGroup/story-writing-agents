@@ -124,7 +124,7 @@ def _long_state() -> PickerControlState:
 
 
 class _ScriptedInput:
-    """Expose exact code-point reads and observable terminal capabilities."""
+    """Expose exact UTF-8 byte reads and observable terminal capabilities."""
 
     def __init__(
         self,
@@ -133,12 +133,15 @@ class _ScriptedInput:
         terminal: bool = True,
         malformed: object | None = None,
     ) -> None:
-        self.characters = list(characters)
+        self.characters = list(characters.encode("utf-8"))
         self.terminal = terminal
         self.malformed = malformed
         self.read_calls = 0
         self.tty_calls = 0
         self.fileno_calls = 0
+        self.encoding = "utf-8"
+        self.errors = "strict"
+        self.buffer = self
 
     def isatty(self) -> bool:
         self.tty_calls += 1
@@ -149,12 +152,15 @@ class _ScriptedInput:
         return 7
 
     def read(self, size: int) -> object:
+        raise AssertionError(f"text read must not run for byte input: {size}")
+
+    def read1(self, size: int) -> object:
         if size != 1:
             raise AssertionError(f"unexpected read size: {size}")
         self.read_calls += 1
         if self.malformed is not None:
             return self.malformed
-        return self.characters.pop(0) if self.characters else ""
+        return bytes((self.characters.pop(0),)) if self.characters else b""
 
 
 class _RecordingOutput:
@@ -1508,7 +1514,10 @@ class PickerDriverTests(unittest.TestCase):
             "unused",
             malformed_input=object(),
         )
-        with self.assertRaisesRegex(TypeError, "input reader must return one character"):
+        with self.assertRaisesRegex(
+            TypeError,
+            "live input byte reader must return exactly one byte",
+        ):
             _read_picker(driver, state)
         fallback.assert_not_called()
         self.assertEqual(
@@ -1535,7 +1544,7 @@ class PickerDriverTests(unittest.TestCase):
         fallback.assert_not_called()
         self.assertNotIn("[completed]", "".join(output.records))
 
-    def test_activation_failure_restores_then_uses_fallback_once(self) -> None:
+    def test_activation_failure_restores_without_switching_to_fallback(self) -> None:
         termios_double = _FakeTermios()
         termios_double.activation_failure = OSError("activate failed")
         fallback = mock.Mock(return_value="1")
@@ -1544,19 +1553,20 @@ class PickerDriverTests(unittest.TestCase):
             fallback=fallback,
             termios_double=termios_double,
         )
-        outcome = _read_picker(
-            driver,
-            initialize_picker(Picker(Prompt("Choose"), (Choice("one", "One"),))),
-        )
-        self.assertEqual(outcome.text, "one")
-        fallback.assert_called_once()
+        with self.assertRaisesRegex(OSError, "^activate failed$"):
+            _read_picker(
+                driver,
+                initialize_picker(
+                    Picker(Prompt("Choose"), (Choice("one", "One"),))
+                ),
+            )
+        fallback.assert_not_called()
         self.assertEqual(input_stream.read_calls, 0)
         self.assertEqual(
             [when for _fd, when, _attrs in termios_double.set_calls],
             [termios_double.TCSANOW, termios_double.TCSADRAIN],
         )
-        self.assertEqual(len(output.records), 1)
-        self.assertIn("[completed]", output.records[0])
+        self.assertEqual(output.records, [])
 
 
 class PickerAdapterCompatibilityTests(unittest.TestCase):

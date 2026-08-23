@@ -336,6 +336,13 @@ class PtyCliProcess:
             raise AssertionError("cannot write to an exited CLI process")
         os.write(self.master_fd, text.encode("utf-8"))
 
+    def send_bytes(self, payload: bytes) -> None:
+        """Write exact terminal bytes for fragmented decoder probes."""
+
+        if self.process.poll() is not None:
+            raise AssertionError("cannot write to an exited CLI process")
+        os.write(self.master_fd, payload)
+
     def send_interrupt(self) -> None:
         """Deliver the terminal's configured VINTR byte through the PTY."""
 
@@ -810,6 +817,208 @@ for attempt in range(2):
         )
         self.assertEqual(_durable_tree(self.workspace.root), before)
         self.assertFalse(self.provider_log.exists())
+
+    def test_pending_single_write_crosses_prompt_into_viewer_repeatedly(self) -> None:
+        """Consume immediate post-submit viewer keys without losing PTY bytes."""
+
+        source = r'''
+import json
+import sys
+
+from story_writing_agents.interactive_terminal import (
+    InteractivePromptInput,
+    InteractiveTextViewer,
+    Prompt,
+    build_stream_terminal,
+)
+
+terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
+prompt = InteractivePromptInput(terminal)
+viewer = InteractiveTextViewer(terminal)
+results = []
+for attempt in range(2):
+    entered = prompt.read_prompt(Prompt(f"Prelude {attempt}"))
+    selected = viewer.read_range(
+        "one\ntwo\nthree",
+        display_name=f"pending-{attempt}.md",
+    )
+    results.append([entered.text, selected.kind.value, selected.line_range])
+print("RESULT=" + json.dumps(results, separators=(",", ":")))
+'''
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=42,
+        )
+        for attempt in range(2):
+            process.wait_for_text(f"Prelude {attempt} >")
+            process.send_text(f"value-{attempt}\n\x1b[B\n")
+            process.wait_for_text(f"[viewer] pending-{attempt}.md")
+        process.wait_for_text(
+            'RESULT=[["value-0","selected",[2,2]],'
+            '["value-1","selected",[2,2]]]'
+        )
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 2)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 2)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
+    def test_fragmented_unicode_arrows_and_cancel_leave_next_prompt_usable(
+        self,
+    ) -> None:
+        """Decode fragmented bytes across select, cancel, and later live input."""
+
+        source = r'''
+import json
+import sys
+
+from story_writing_agents.interactive_terminal import (
+    InteractivePromptInput,
+    InteractiveTextViewer,
+    Prompt,
+    build_stream_terminal,
+)
+
+terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
+prompt = InteractivePromptInput(terminal)
+viewer = InteractiveTextViewer(terminal)
+first = prompt.read_prompt(Prompt("Fragmented Unicode"))
+selected = viewer.read_range("one\ntwo\nthree", display_name="selected.md")
+after_select = prompt.read_prompt(Prompt("After select"))
+cancelled = viewer.read_range("one\ntwo", display_name="cancelled.md")
+after_cancel = prompt.read_prompt(Prompt("After cancel"))
+print(
+    "RESULT="
+    + json.dumps(
+        {
+            "first": first.text,
+            "selected": selected.line_range,
+            "after_select": after_select.text,
+            "cancelled": cancelled.kind.value,
+            "after_cancel": after_cancel.text,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+)
+'''
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=44,
+        )
+        process.wait_for_text("Fragmented Unicode >")
+        for value in "界🌊\n".encode("utf-8"):
+            process.send_bytes(bytes((value,)))
+        process.wait_for_text("[viewer] selected.md")
+        for value in b"\x1b[B\x1b[1;2A\n":
+            process.send_bytes(bytes((value,)))
+        process.wait_for_text("After select >")
+        process.send_text("still-live\n")
+        process.wait_for_text("[viewer] cancelled.md")
+        process.send_text("\x1b")
+        process.wait_for_text("After cancel >")
+        process.send_text("again\n")
+        process.wait_for_text(
+            'RESULT={"first":"界🌊","selected":[1,2],'
+            '"after_select":"still-live","cancelled":"cancelled",'
+            '"after_cancel":"again"}'
+        )
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 2)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 2)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
+    def test_viewer_render_and_read_failures_restore_screen_and_termios(self) -> None:
+        """Use real PTY resources while injected collaborators fail once."""
+
+        source = r'''
+import os
+import sys
+
+from story_writing_agents.interactive_terminal import InteractiveTextViewer, build_stream_terminal
+
+failure_kind = os.environ["STORY_PTY_VIEWER_FAILURE"]
+
+class FailingBuffer:
+    def __init__(self, wrapped):
+        self.wrapped = wrapped
+
+    def read1(self, size):
+        if failure_kind == "read":
+            raise OSError("read failed")
+        return self.wrapped.read1(size)
+
+class Input:
+    def __init__(self, wrapped):
+        self.wrapped = wrapped
+        self.buffer = FailingBuffer(wrapped.buffer)
+        self.encoding = wrapped.encoding
+        self.errors = wrapped.errors
+
+    def isatty(self):
+        return self.wrapped.isatty()
+
+    def fileno(self):
+        return self.wrapped.fileno()
+
+    def read(self, size=-1):
+        return self.wrapped.read(size)
+
+class Output:
+    def __init__(self, wrapped):
+        self.wrapped = wrapped
+        self.failed = False
+
+    def isatty(self):
+        return self.wrapped.isatty()
+
+    def fileno(self):
+        return self.wrapped.fileno()
+
+    def write(self, text):
+        if failure_kind == "render" and not self.failed and text.startswith("\x1b[H\x1b[2J"):
+            self.failed = True
+            raise OSError("render failed")
+        return self.wrapped.write(text)
+
+    def flush(self):
+        return self.wrapped.flush()
+
+terminal = build_stream_terminal(input, Input(sys.stdin), Output(sys.stdout))
+try:
+    InteractiveTextViewer(terminal).read_range("one\ntwo", display_name="failure.md")
+except OSError as failure:
+    print("RESULT=" + str(failure))
+'''
+        for failure_kind in ("render", "read"):
+            with self.subTest(failure=failure_kind):
+                process = self._spawn_python(
+                    source,
+                    environment_overrides={
+                        "TERM": "xterm-256color",
+                        "STORY_PTY_VIEWER_FAILURE": failure_kind,
+                    },
+                    terminal_columns=40,
+                )
+                process.wait_for_text(f"RESULT={failure_kind} failed")
+                self.assertEqual(
+                    process.wait_for_exit(),
+                    0,
+                    process.normalized_text,
+                )
+                self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 1)
+                self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 1)
+                self.assertEqual(
+                    process.final_terminal_attributes,
+                    process.original_terminal_attributes,
+                )
 
     def test_internal_text_viewer_escape_vintr_and_veof_are_typed_and_restore(
         self,
@@ -1836,10 +2045,10 @@ print(
             process.original_terminal_attributes,
         )
 
-    def test_editor_history_crosses_fallback_then_isolates_composition_and_instance(
+    def test_editor_fallback_is_permanent_and_other_instance_can_be_live(
         self,
     ) -> None:
-        """Prove fallback continuity and both contextual and instance isolation."""
+        """Prove sticky fallback while a separately constructed editor is live."""
 
         source = r'''
 import json
@@ -1860,7 +2069,7 @@ composition = bind_suggestion_reader(
     editor,
     composition_slash_command_suggestions,
 )("compose> ")
-recalled = editor.read_line("main> ")
+main_fallback = editor.read_line("main> ")
 other = InteractiveMainLineEditor(input, sys.stdin, sys.stdout)
 isolated = other.read_line("other> ")
 print(
@@ -1869,7 +2078,7 @@ print(
         {
             "fallback": fallback,
             "composition": composition,
-            "recalled": recalled,
+            "main_fallback": main_fallback,
             "isolated": isolated,
         },
         ensure_ascii=False,
@@ -1885,15 +2094,15 @@ print(
         process.wait_for_text("fallback> ")
         process.send_line("  fallback 🌊  ")
         process.wait_for_text("compose> ")
-        process.send_text("\x1b[Acontext\n")
+        process.send_line("context")
         process.wait_for_text("main> ")
-        process.send_text("\x1b[A\n")
+        process.send_line("main fallback")
         process.wait_for_text("other> ")
         process.send_text("\x1bOA\n")
         process.wait_for_text(
             'RESULT={"fallback":"  fallback 🌊  ",'
             '"composition":"context",'
-            '"recalled":"  fallback 🌊  ",'
+            '"main_fallback":"main fallback",'
             '"isolated":""}'
         )
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)

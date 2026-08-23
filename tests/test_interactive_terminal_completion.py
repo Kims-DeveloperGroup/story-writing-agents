@@ -101,12 +101,15 @@ def capabilities(
 
 
 class ScriptedInput:
-    """Expose exact code points through one terminal descriptor."""
+    """Expose exact UTF-8 bytes through one terminal descriptor."""
 
     def __init__(self, text: str, *, terminal: bool = True) -> None:
-        self.reads = list(text)
+        self.reads = list(text.encode("utf-8"))
         self.terminal = terminal
         self.calls: list[object] = []
+        self.encoding = "utf-8"
+        self.errors = "strict"
+        self.buffer = self
 
     def isatty(self) -> bool:
         self.calls.append("isatty")
@@ -118,7 +121,11 @@ class ScriptedInput:
 
     def read(self, size: int) -> str:
         self.calls.append(("read", size))
-        return self.reads.pop(0) if self.reads else ""
+        raise AssertionError("text input must not run for live byte input")
+
+    def read1(self, size: int) -> bytes:
+        self.calls.append(("read1", size))
+        return bytes((self.reads.pop(0),)) if self.reads else b""
 
 
 class RecordingOutput:
@@ -1213,39 +1220,24 @@ class CompletionDriverTests(unittest.TestCase):
             (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
         )
 
-    def test_malformed_default_and_incremental_readers_share_exact_diagnostic(
+    def test_malformed_byte_reader_shapes_share_exact_diagnostic(
         self,
     ) -> None:
-        for source in ("default", "incremental"):
-            with self.subTest(source=source):
+        for value in (object(), b"two", "two"):
+            with self.subTest(value=type(value).__name__):
                 driver, input_stream, output, fallback, termios, _os = make_driver("")
-                incremental_reader = mock.Mock(return_value="two")
-                reader_patch = (
-                    mock.patch.object(
-                        _driver,
-                        "_single_character_reader",
-                        return_value=incremental_reader,
-                    )
-                    if source == "incremental"
-                    else mock.patch.object(
-                        input_stream,
-                        "read",
-                        return_value=object(),
-                    )
-                )
-
-                with reader_patch as collaborator:
+                with mock.patch.object(
+                    input_stream,
+                    "read1",
+                    return_value=value,
+                ) as collaborator:
                     with self.assertRaisesRegex(
                         TypeError,
-                        "^input reader must return one character$",
+                        "^live input byte reader must return exactly one byte$",
                     ):
                         self.read(driver)
 
-                if source == "incremental":
-                    collaborator.assert_called_once_with(input_stream)
-                    incremental_reader.assert_called_once_with()
-                else:
-                    collaborator.assert_called_once_with(1)
+                collaborator.assert_called_once_with(1)
                 fallback.assert_not_called()
                 self.assertEqual(driver._history_state, MainInputHistoryState())
                 self.assertEqual(

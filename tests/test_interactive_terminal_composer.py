@@ -89,14 +89,17 @@ def _physical_width(text: str) -> int:
 
 
 class _ScriptedInput:
-    """Expose exact code-point reads and observable TTY capabilities."""
+    """Expose exact UTF-8 byte reads and observable TTY capabilities."""
 
     def __init__(self, characters: str, *, is_terminal: bool = True) -> None:
-        self.characters = list(characters)
+        self.characters = list(characters.encode("utf-8"))
         self.is_terminal = is_terminal
         self.read_calls = 0
         self.tty_calls = 0
         self.fileno_calls = 0
+        self.encoding = "utf-8"
+        self.errors = "strict"
+        self.buffer = self
 
     def isatty(self) -> bool:
         self.tty_calls += 1
@@ -107,12 +110,15 @@ class _ScriptedInput:
         return 7
 
     def read(self, size: int) -> str:
+        raise AssertionError(f"text read must not run for byte input: {size}")
+
+    def read1(self, size: int) -> bytes:
         if size != 1:
             raise AssertionError(f"unexpected read size: {size}")
         self.read_calls += 1
         if not self.characters:
-            return ""
-        return self.characters.pop(0)
+            return b""
+        return bytes((self.characters.pop(0),))
 
 
 class _RecordingOutput:
@@ -920,12 +926,10 @@ class SemanticInputDriverTests(unittest.TestCase):
             fallback=fallback,
             termios_double=termios_double,
         )
-        self.assertEqual(
-            driver.read_input_line(view, render_input_prompt, lambda _buffer: ()),
-            "fallback once",
-        )
+        with self.assertRaisesRegex(OSError, "^activate failed$"):
+            driver.read_input_line(view, render_input_prompt, lambda _buffer: ())
         self.assertEqual(input_stream.read_calls, 0)
-        fallback.assert_called_once()
+        fallback.assert_not_called()
         self.assertEqual(
             [when for _fd, when, _attrs in termios_double.set_calls],
             [termios_double.TCSANOW, termios_double.TCSADRAIN],
@@ -953,15 +957,27 @@ class SemanticInputDriverTests(unittest.TestCase):
         rendered_input = RenderedInputFrame("input> ", "input> ", 80, 1)
         provider = mock.Mock(return_value=())
         transition = mock.Mock()
+        configuration = driver_module._TerminalConfiguration(
+            7,
+            8,
+            [0, 0, 0, 0, 0, 0, []],
+            [0, 0, 0, 0, 0, 0, []],
+            79,
+            None,
+            None,
+            0,
+            termios_double,
+        )
         with self.assertRaisesRegex(
             ValueError,
-            "^known_width is required with rendered_input$",
+            "^rendered input and known width must match$",
         ):
             driver._read_control_line(
                 rendered_input.plain_text,
                 provider,
                 _model.LineInputState(),
                 transition,
+                configuration=configuration,
                 rendered_input=rendered_input,
             )
         provider.assert_not_called()

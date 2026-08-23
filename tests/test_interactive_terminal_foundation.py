@@ -1252,12 +1252,29 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
         view = _model.InputPromptView((), prompt)
         frame = render_input_prompt(view, capabilities)
         renderer = mock.Mock(return_value=frame)
+        configuration = _driver._TerminalConfiguration(
+            7,
+            8,
+            [0, 0, 0, 0, 0, 0, []],
+            [0, 0, 0, 0, 0, 0, []],
+            60,
+            None,
+            None,
+            0,
+            object(),
+        )
         with (
             mock.patch.object(
                 RawTerminalDriver,
                 "capabilities",
                 autospec=True,
                 return_value=capabilities,
+            ),
+            mock.patch.object(
+                RawTerminalDriver,
+                "_prepare_input",
+                autospec=True,
+                return_value=(capabilities, configuration),
             ),
             mock.patch.object(
                 RawTerminalDriver,
@@ -1280,8 +1297,8 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             self.assertIs(call.args[2], _driver._empty_suggestion_preview)
             self.assertEqual(call.args[3], LineInputState())
             self.assertIs(call.args[4], transition_prompt_input)
+            self.assertIs(call.kwargs["configuration"], configuration)
             self.assertEqual(call.kwargs["rendered_input"], frame)
-            self.assertEqual(call.kwargs["known_width"], 60)
 
         invalid = (
             lambda: driver.read_prompt(object(), renderer, transition_prompt_input),
@@ -1748,13 +1765,18 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
         terminal_root = package_root / "interactive_terminal"
         expected_dependencies = {
             "__init__.py": {"._core"},
+            "_input_lifecycle.py": set(),
             "_model.py": set(),
             "_controls.py": {"._model"},
             "_render.py": {"._model"},
             "_viewer_model.py": set(),
             "_viewer_controls.py": {"._model", "._viewer_model"},
             "_viewer_render.py": {"._model", "._viewer_model"},
-            "_driver.py": {"._model", "._viewer_model"},
+            "_driver.py": {
+                "._input_lifecycle",
+                "._model",
+                "._viewer_model",
+            },
             "_core.py": {
                 "..agents",
                 "..interactive_commands",
@@ -1787,6 +1809,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
         environment["PYTHONPATH"] = str(package_root.parent)
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
         modules = (
+            "story_writing_agents.interactive_terminal._input_lifecycle",
             "story_writing_agents.interactive_terminal._model",
             "story_writing_agents.interactive_terminal._controls",
             "story_writing_agents.interactive_terminal._render",

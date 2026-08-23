@@ -72,8 +72,11 @@ def _capabilities(*, width: int = 80, ansi: bool = False) -> TerminalCapabilitie
 
 class _ScriptedInput:
     def __init__(self, characters: str, events: list[str]) -> None:
-        self.characters = list(characters)
+        self.characters = list(characters.encode("utf-8"))
         self.events = events
+        self.encoding = "utf-8"
+        self.errors = "strict"
+        self.buffer = self
 
     def isatty(self) -> bool:
         self.events.append("input.isatty")
@@ -84,10 +87,13 @@ class _ScriptedInput:
         return 7
 
     def read(self, size: int) -> str:
+        raise AssertionError(f"text read must not run for byte input: {size}")
+
+    def read1(self, size: int) -> bytes:
         self.events.append("input.read")
         if size != 1:
             raise AssertionError(size)
-        return self.characters.pop(0) if self.characters else ""
+        return bytes((self.characters.pop(0),)) if self.characters else b""
 
 
 class _ByteInput:
@@ -1039,7 +1045,7 @@ class ViewerDriverTests(unittest.TestCase):
     def test_screen_exit_interrupt_restores_and_precedes_active_failure(self) -> None:
         driver, input_stream, output, fallback, _termios, events = _driver("x")
         active = RuntimeError("active")
-        input_stream.read = mock.Mock(side_effect=active)  # type: ignore[method-assign]
+        input_stream.read1 = mock.Mock(side_effect=active)  # type: ignore[method-assign]
         writes = output.write
 
         def interrupt_after_exit_write(text: str) -> int:
@@ -1141,6 +1147,7 @@ class ViewerDriverTests(unittest.TestCase):
                         termios_module=termios,
                         os_module=driver._os_provider(),
                         width=40,
+                        decoder_spec=driver._input_latch.live_reader.spec,
                     )
                     assert configuration is not None
                     if "vintr" in disabled_names:
@@ -1356,7 +1363,7 @@ class ViewerDriverTests(unittest.TestCase):
         state = initialize_text_viewer("x", display_name="x")
 
         driver, input_stream, output, fallback, _termios, events = _driver("x")
-        input_stream.read = mock.Mock(side_effect=RuntimeError("read"))  # type: ignore[method-assign]
+        input_stream.read1 = mock.Mock(side_effect=RuntimeError("read"))  # type: ignore[method-assign]
         with self.assertRaisesRegex(RuntimeError, "read"):
             _read(driver, state)
         fallback.assert_not_called()
