@@ -310,6 +310,21 @@ readiness for a fixed 50 milliseconds, preserves established CSI and SS3 key
 mappings, and reprocesses an ordinary following code point after emitting
 standalone Escape. It creates no second reader, thread, or sleep loop.
 
+Malformed CSI (`Escape` + `[`) and SS3 (`Escape` + `O`) input is also bounded.
+If a sequence reaches exactly 64 decoded code points—the two-code-point
+introducer plus 62 non-final code points—the driver replaces the accumulated
+sequence with an identity-only discard state. It retains none of the overlong
+payload or arbitrary following tail. The discard consumes input until the first
+ANSI final code point (`@` through `~`) or an unconfigured C0/DEL control, and
+consumes that terminator without reinterpreting it or a valid-looking suffix as
+a new key. The next ordinary input starts cleanly and is handled normally.
+
+Configured VINTR and VEOF are classified before pending or overlong escape
+input, and physical EOF keeps its typed outcome. For users, the malformed
+sequence is inert: it cannot move or anchor a viewer range, recall history,
+open or apply completion, delete text, or commit either the viewer selection or
+main input. A following genuine navigation, editing, or commit key still works.
+
 On main input, closed-palette Up/Down navigates the driver's history. An open
 palette instead owns Up/Down highlight movement, Tab completion, and Escape
 dismissal/restoration; Shift-Tab has no action. A controller-owned resume-choice
