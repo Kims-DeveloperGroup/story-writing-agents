@@ -173,6 +173,29 @@ VINTR/VEOF outcomes, and termios restoration. Physical viewer EOF remains
 deterministic driver coverage because hanging up the only PTY also closes the
 test's observation channel. Windows consoles remain unverified.
 
+## Permanent input-mode recovery
+
+A stream-backed terminal starts with no input mode selected. Its first actual
+read permanently chooses capable `LIVE` input or ordinary `FALLBACK`, and the
+same choice covers main, subject, composition, confirmation, prompt, picker,
+and viewer interactions. Construction itself acquires no terminal resource.
+
+There is no automatic live-to-fallback recovery or later fallback-to-live
+upgrade. If live source, decoder, capability, or terminal configuration drifts,
+correct or replace the stream/driver before retrying; `PENDIN`-only local-flag
+drift and width/height changes are the documented exceptions. A poisoned live
+decoder likewise requires a new driver. `KeyboardInterrupt` is narrower: it
+clears an incomplete code point and pending decoded suffix, keeps `LIVE`, and
+allows the next explicit input call. Clean EOF stays EOF for that driver;
+partial/malformed EOF or invalid byte-reader output remains an error.
+
+Do not concurrently read the same input stream or alternate wrapper-level and
+raw-buffer reads outside the driver. The persistent decoder is the sole
+supported byte consumer; competing reads can move bytes into a buffer the
+driver cannot observe. These failures raise through the established terminal
+error path after cleanup rather than silently repeating a user's input in a
+different mode.
+
 <a id="ranged-text-viewer-exits-and-recovery"></a>
 
 ## Ranged-text viewer exits and recovery
@@ -201,25 +224,30 @@ width-relevant prefix plus a fixed allowance. Thus users do not receive a
 silently truncated fallback, while pathological over-limit input never opens.
 
 For byte-backed input, only codecs that the public registry resolves to
-canonical `ascii`, `utf-8`, or `iso8859-1` can enter live mode; their aliases
-are accepted. Every other or unknown codec, including ISO-2022 variants, HZ,
-UTF-7, UTF-8-SIG, and `raw-unicode-escape`, selects ordinary fallback before
+canonical `ascii`, `utf-8`, or `iso8859-1`, with the built-in `strict` or
+`surrogateescape` handler, can select live mode; their aliases are accepted. On
+an `UNDECIDED` driver's first input call, every other or unknown codec,
+including ISO-2022 variants, HZ, UTF-7, UTF-8-SIG, and
+`raw-unicode-escape`, selects permanent ordinary fallback before
 `PC_VDISABLE`, control inspection, byte reads, termios, screen output, or raw
 activation. This is an allow-policy rather than a deny-list.
 
 Within an allowed codec, raw control bytes are compared with `PC_VDISABLE`
 before decoding, so disabled controls remain absent. Enabled VINTR/VEOF bytes
 must decode to one code point and round-trip exactly through the stream codec.
-Incomplete, lossy, or incompatible mappings still select ordinary fallback
-rather than guessing a control role. Text-only supplied one-code-point controls
-retain their distinct collaborator semantics. Configured VINTR has priority
-over VEOF and ordinary viewer keys.
+Only while input remains `UNDECIDED`, incomplete, lossy, or incompatible
+mappings select ordinary fallback rather than guessing a control role. After
+`LIVE`, changed mappings fail as drift. Text-only supplied one-code-point
+controls retain their distinct collaborator semantics. Configured VINTR has
+priority over VEOF and ordinary viewer keys.
 
 `selected` returns only a normalized one-based inclusive range. `cancelled`,
 `interrupted`, and `eof` return no range and do not submit or mutate anything.
+Selection and cancellation both close the independent viewer after cleanup;
+the caller is never left in viewer mode.
 Operational read, render, write, flush, decode, setup, or collaborator failures
 are raised after cleanup rather than converted to one of those results. Once
-raw activation starts, the viewer does not attempt a second fallback read.
+`LIVE` is selected, the viewer does not attempt a second fallback read.
 Termios-restoration failure takes precedence over alternate-screen-exit
 failure, which takes precedence over the active failure. Cursor visibility is
 never changed.
@@ -228,10 +256,12 @@ Every return or raise drops the call-local source, display name, active line,
 anchor, selection, and viewport. Reopening starts from caller-supplied text and
 an optional initial line; there is no resume token or saved viewer state. This
 is lifecycle disposal, not secure erasure from process or terminal memory.
-When downstream integration lands, cancelling or closing can leave the
-originating message unsubmitted only because #164 owns and restores that
-composer; the viewer itself never receives or preserves it. Multiple ordered
-references likewise require repeated fresh viewer calls owned by that caller.
+When #164 lands, cancelling or selecting will return to the exact originating
+composer buffer/cursor with the message still unsubmitted, and a selection will
+attach only its path/range indicator. The viewer itself never receives or
+preserves the composer, and #162 makes none of that syntax shell-reachable.
+Multiple ordered references likewise require repeated fresh viewer calls owned
+by that caller.
 
 See the [exact viewer contract](../reference/interactive-terminal.md#independent-ranged-text-viewer)
 and [terminal safety boundary](terminal-safety.md#ranged-text-viewer-boundary).

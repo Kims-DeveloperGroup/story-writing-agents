@@ -74,7 +74,8 @@ revision; all must approve. Blackboard and owner-isolated history stay separate.
 | `interactive_terminal._viewer_model` | Private immutable strict-UTF-8 supplied document, active/anchor state, bounded viewport, notice, exit-kind, and content-free inclusive-range result contracts; LF-only line derivation with terminal-local 8 MiB source, 65,536-line, and complete 16 MiB fallback-projection limits |
 | `interactive_terminal._viewer_controls` | Pure fresh initialization, ordinary and anchored navigation, normalized commit and noncommit exits, exact ASCII fallback grammar, and bounded contiguous viewport projection |
 | `interactive_terminal._viewer_render` | Pure bounded-prefix one-row-per-source-line live and complete numbered fallback projections with visible escaping, line numbers, plain/ANSI state cues, cell-aware live ellipsis clipping, and no fallback clipping |
-| `interactive_terminal._driver` | Sole real-CLI raw streams, capabilities, width/height, canonical ASCII/UTF-8/ISO-8859-1 byte-codec admission, incremental byte/key decoding, configured-control validation, fixed Escape readiness wait, complete-live-frame cleanup, viewer alternate screen, cursor controls, writes, flushes, restoration, one bounded process-local main-history store, and dedicated history-free picker/prompt/viewer lifecycles |
+| `interactive_terminal._input_lifecycle` | Irreversible per-driver `UNDECIDED` to `LIVE`/`FALLBACK` selection, exact source/decoder identity, admitted codec/error policy, persistent one-byte incremental decoding, bounded pending suffix, stable EOF, poison/interrupt behavior, and synchronous input exclusion |
+| `interactive_terminal._driver` | Sole real-CLI raw streams, capabilities, width/height, byte/key decoding integration, configured-control validation, pending-suffix-first fixed Escape readiness wait, complete-live-frame cleanup, viewer alternate screen, cursor controls, writes, flushes, restoration, one bounded process-local main-history store, and dedicated history-free picker/prompt/viewer lifecycles |
 | `interactive_line_editor` | Standalone compatibility facade over the same supported main-command reader and one unified per-editor driver/history store |
 | `StoryRuntime`, `AgentBackend` | Orchestration/retrieval authority and provider resources |
 
@@ -128,15 +129,16 @@ from the picker and composer. Its adapter accepts exact caller-supplied text,
 one display name, and an optional one-based initial line. Private pure modules
 own immutable document/range/viewport state, independent source/line/complete-
 fallback capacities, bounded-prefix live rendering, and untruncated accepted
-fallback rendering. The sole driver admits byte-backed live input only for
-registry-resolved canonical ASCII, UTF-8, and ISO-8859-1 codecs and their
-aliases, then owns Shift+Arrow decoding, exact configured-control
-classification, bounded width/height observation, raw mode, one alternate
-screen, and cleanup. Every other or unknown codec selects fallback before
-control inspection or terminal mutation. Text-only one-code-point collaborators
-remain distinct. The result contains only `selected`, `cancelled`,
-`interrupted`, or `eof` plus an inclusive tuple for selection. Every call drops
-its source, display, anchor, selection, and viewport state on return or failure.
+fallback rendering. One input-lifecycle leaf admits byte-backed live input only
+for registry-resolved canonical ASCII, UTF-8, and ISO-8859-1 codecs with the
+built-in strict or surrogateescape handler, retains the exact byte source and
+decoder across every input route, and irreversibly selects live or fallback on
+the first actual read. The sole driver owns Shift+Arrow decoding, exact
+configured-control classification, bounded width/height observation, raw mode,
+one alternate screen, and cleanup. The result contains only `selected`,
+`cancelled`, `interrupted`, or `eof` plus an inclusive tuple for selection.
+Selection and cancellation close the viewer after cleanup; every call drops its
+source, display, anchor, selection, and viewport state on return or failure.
 
 This package-internal component does not make `$`, `$${file}`, or `$$`
 available. It discovers and reads no file and constructs no artifact reference.
@@ -147,14 +149,16 @@ line numbers, and restore the originating composer. #163 owns the mandatory
 per-agent read behavior. Until those integrations land, users cannot open the
 viewer from the shell.
 
-Every capable main, composition, confirmation, picker, or prompt read clears
-its complete live frame before returning on submit, commit, cancel, interrupt,
+Every capable main, subject, composition, confirmation, picker, or prompt read
+clears its complete live frame before returning on submit, commit, cancel, interrupt,
 or EOF and attempts the same cleanup before propagating a failure. Static
 completion-only Enter remains inside the read. Plain
 fallback retains printed prompt/input and adds no synthetic final control frame.
 Persistent semantic cancellation, validation, discard, error, orientation, and
 result output is written after that boundary and remains visible.
-Conversation-subject input deliberately stays on the ordinary reader.
+Conversation-subject input remains history- and completion-free. It uses the
+same cleared live frame after the driver selects `LIVE`, or the ordinary
+callback after `FALLBACK`; submitted subject semantics are unchanged.
 
 The controller owns settings focus and semantic presentation. It delegates the
 call-local immutable baseline, pending candidate, persona catalog, exact
@@ -203,14 +207,15 @@ CLI constructs one unified stream-backed terminal before controller
 construction. The controller core imports the terminal facade's unlisted
 component identities and resource-free semantic adapter; its policy leaves use
 facade error contracts rather than terminal package leaves. Terminal core
-depends on its pure controls, renderer, model, sole driver, and canonical
-command/agent metadata. It binds static completion plus a call-local controller
+depends on its pure controls, renderer, model, sole driver, the driver's
+one-way input-lifecycle leaf, and canonical command/agent metadata. It binds
+static completion plus a call-local controller
 choice projection and palette renderer, then composition and empty confirmation
 preview providers per read, without retaining prompt mode. Main reads use the
 driver's pure selectable
-palette/history transition; composition and confirmation use history-free
-semantic input views with a call-local injected renderer, while subject input
-remains ordinary. The package-internal picker and cancellable-prompt adapters
+palette/history transition; composition, confirmation, and subject use
+history-free semantic input views with call-local injected renderers. The
+package-internal picker and cancellable-prompt adapters
 likewise supply their transitions and live/fallback renderers call-locally to
 the sole driver. The controller uses those seams for `/settings` and for a
 submitted omitted resume command whose fresh read returns eligible rows; it

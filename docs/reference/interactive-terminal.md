@@ -69,8 +69,8 @@ callback for composition, confirmation, and the internal picker and prompt
 line fallbacks. Each composition or confirmation
 attempt first renders its full semantic view to one structured plain prompt and
 passes that prompt to `read_line` once. The CLI's package-internal wiring
-separates ordinary subject, main, composition, and confirmation reads without
-changing this signature or `__all__`. Record width starts at 20.
+separates subject, main, composition, and confirmation routes without changing
+this signature or `__all__`. Record width starts at 20.
 Callback-constructed terminals own no history, lifecycle, or storage; the
 stream driver's process-local history is internal.
 
@@ -314,8 +314,8 @@ uses the trusted fixed-theme projection for redraw and sanitizes the dynamic
 buffer separately.
 
 Picker input is a separate semantic projection. Capable live input renders a
-bounded viewport at the current observed width; plain callback, non-TTY,
-`TERM=dumb`, non-POSIX, and safely recovered activation paths render the
+bounded viewport at the current observed width; a permanently fallback driver,
+or a first input call that cannot safely preflight live mode, renders the
 complete numbered list through the ordinary line callback. Opaque choice
 identities are control state and are never rendered.
 
@@ -326,10 +326,30 @@ settings workflow. In fallback an exact ESC line cancels, while `/cancel`
 remains literal input. The same sole driver owns raw input, redraw, cleanup,
 and restoration.
 
+One permanent input latch now serves every input route on a stream-backed
+terminal. Construction is resource-free; the first actual input read makes the
+only mode decision:
+
+| Internal mode | What selected it | What the user sees |
+| --- | --- | --- |
+| `UNDECIDED` | No input has been consumed. Capability and decoder inspection have not committed a route. | Nothing: construction and inspection do not print, read, wait on a descriptor, or mutate the terminal. |
+| `LIVE` | The first read found a capable terminal and fully admitted its exact byte source, codec, error handler, controls, and terminal configuration. | Main, subject, composition, confirmation, picker, and prompt reads use cleared live frames; the viewer uses its independent alternate screen. |
+| `FALLBACK` | The first read could not safely establish live input and entered its ordinary callback immediately. | Current and later prompts/viewers use their complete ordinary-line forms, whose printed text remains in scrollback. |
+
+`LIVE` and `FALLBACK` are irreversible for that driver. A later live
+capability, source, decoder, or terminal-configuration failure is an
+operational error, not permission to switch to fallback. Conversely, a driver
+that selected fallback never probes for a later live upgrade. The live route
+keeps one exact-byte incremental decoder across main, subject, composition,
+confirmation, prompt, picker, and viewer calls, so bytes already buffered for a
+later interaction are not lost by mixing wrapper-level text reads with raw
+byte reads. See the [terminal safety contract](../operations/terminal-safety.md#permanent-input-ownership)
+for decoder and drift details.
+
 Every successful capable input operation clears its complete live frame before returning:
 semantic context and prompt, editable text, suggestions or choices, validation,
 and redraws. This applies to submit, commit, cancel, interrupt, and EOF across
-main, composition, confirmation, picker, and cancellable-prompt reads. An
+main, subject, composition, confirmation, picker, and cancellable-prompt reads. An
 exceptional failure attempts the same cleanup before propagating; an output
 failure cannot guarantee erase bytes it could not write, and restoration
 uncertainty remains fatal.
@@ -342,9 +362,11 @@ error, orientation, and result records remain in scrollback.
 Callback and ordinary-line fallback cannot erase printed prompt or input text,
 so it stays visible. These paths do not add a synthetic final `completed` or
 `cancelled` control frame. Pure picker state may still use those result values
-internally. Conversation-subject input always uses the ordinary reader, even
-when the terminal could otherwise edit live. The normative lifecycle is in the
-[design contract](../design/interactive-cli-design-system.md#submitted-input-lifecycle).
+internally. A conversation-subject read is history- and completion-free but,
+after `LIVE` is selected, appears as the same cleared live input frame as other
+semantic reads. Under `FALLBACK` it keeps the ordinary callback appearance.
+The submitted subject text and its controller meaning are unchanged. The
+normative lifecycle is in the [design contract](../design/interactive-cli-design-system.md#submitted-input-lifecycle).
 
 Save and Cancel each show a transient selectable confirmation with highlighted
 `YES` and `NO` choices. Its preceding context contains only fields whose
@@ -750,11 +772,11 @@ YES/NO control with changed-only Current/Pending context; unchanged context
 contains only the no-changes notice. Top-level cancellation does not claim a
 snapshot that was not rendered.
 
-Callback, non-TTY, `TERM=dumb`, non-POSIX, uncertain-capability, and safely
-recovered activation paths use the numbered fallback without acquiring raw
-input. The unified driver remains the only raw resource owner and picker reads
-do not inspect or mutate main history, completion, parser, provider, runtime,
-filesystem, storage, or network state.
+A permanently fallback driver, or a first input call with non-TTY,
+`TERM=dumb`, non-POSIX, or uncertain capability, uses the numbered fallback
+without acquiring raw input. The unified driver remains the only raw resource
+owner and picker reads do not inspect or mutate main history, completion,
+parser, provider, runtime, filesystem, storage, or network state.
 
 <a id="independent-ranged-text-viewer"></a>
 
@@ -795,7 +817,7 @@ visible escapes. The display name is likewise sanitized before presentation.
 | Up / Down | Clear any anchor, move the active line by one, and clamp at the document boundary. |
 | Shift+Up / Shift+Down | Fix the first active line as the anchor, then move the active end. Repeated keys extend, contract, reverse, and clamp the range deterministically. |
 | Enter | Commit the active singleton or normalized anchored inclusive range. Empty text cannot commit and remains open with a visible notice. |
-| Escape | Return `cancelled` without a range. |
+| Escape | After a fixed 50 ms wait distinguishes a standalone Escape from a key sequence, return `cancelled` without a range. |
 | Ctrl-C / configured VINTR | Return `interrupted` without a range. |
 | Configured VEOF or stream EOF | Return `eof` without a range. |
 | Other keys | Make no state change. A nonexit key still triggers the next geometry observation and redraw. |
@@ -814,26 +836,31 @@ height are observed before the first frame and again after each nonexit key, so
 a resize appears on the next interaction without a `SIGWINCH` handler. The
 viewer never hides or shows the cursor; cursor visibility is left unchanged.
 
-Byte-backed live input is allowed only when the public codec registry resolves
-the declared encoding to canonical `ascii`, `utf-8`, or `iso8859-1`; registry
-aliases for those codecs are accepted. Every other or unknown byte codec,
-including ISO-2022 variants, HZ, UTF-7, UTF-8-SIG, and
-`raw-unicode-escape`, selects ordinary fallback before `PC_VDISABLE`, control
-attributes, byte reads, live-terminal output, raw mode, or alternate-screen
-work. This is an allow-policy, not a deny-list of those examples.
+Byte-backed `LIVE` input is allowed only when the public codec registry
+resolves the declared encoding to canonical `ascii`, `utf-8`, or
+`iso8859-1`, with the built-in `strict` or `surrogateescape` error handler;
+registry aliases for those codecs are accepted. The driver preflights that
+decoder and its exact byte source before terminal mutation. On the first input
+call, every other or unknown byte codec—including ISO-2022 variants, HZ,
+UTF-7, UTF-8-SIG, and `raw-unicode-escape`—selects permanent ordinary fallback
+before `PC_VDISABLE`, control attributes, byte reads, live-terminal output,
+raw mode, or alternate-screen work. This is an allow-policy, not a deny-list of
+those examples.
 
 Within an allowed byte codec, configured VINTR and VEOF bytes are compared
 with `PC_VDISABLE` before decoding. Each enabled byte must decode to exactly
 one code point and round-trip to the same byte under the stream's encoding and
 error policy. Compatible UTF-8 `surrogateescape` controls work; incomplete,
-lossy, or incompatible mappings select ordinary fallback before activation.
-Text-only collaborators retain their supplied one-code-point control semantics.
-If one input character has multiple roles, configured VINTR has priority, then
-configured VEOF, then the ordinary viewer key role.
+lossy, or incompatible mappings select ordinary fallback only while the input
+latch is `UNDECIDED`; after `LIVE`, a changed mapping is an operational drift
+error. Text-only collaborators retain their supplied one-code-point control
+semantics. If one input character has multiple roles, configured VINTR has
+priority, then configured VEOF, then the ordinary viewer key role.
 
-When raw capability is unavailable or safe setup cannot be constructed before
-activation, ordinary-line fallback prints the complete numbered, sanitized
-document and accepts only exact ASCII positive `START-END` or exact `/cancel`.
+When the driver is already in `FALLBACK`, or the first input call cannot safely
+construct live setup, ordinary-line fallback prints the complete numbered,
+sanitized document and accepts only exact ASCII positive `START-END` or exact
+`/cancel`.
 It never width-clips or adds an ellipsis to accepted document content: every
 sanitized source character is emitted, and long logical lines wrap naturally
 in terminal scrollback. The one-based numbering and range prompt remain exact.
@@ -849,10 +876,11 @@ or synthetic final control frame, and its printed attempts remain visible.
 | `interrupted` | `None`. |
 | `eof` | `None`. |
 
-The raw lifecycle is validation, capability choice, raw activation,
-alternate-screen entry, navigation/selection, typed outcome or operational
-failure, alternate-screen exit once, termios restoration once, and disposal.
-After activation begins, a failure never starts a second fallback interaction.
+The viewer lifecycle is validation, permanent input-mode resolution if still
+`UNDECIDED`, raw activation when `LIVE`, alternate-screen entry,
+navigation/selection, typed outcome or operational failure, alternate-screen
+exit once, termios restoration once, and disposal. After `LIVE` has been
+selected, a failure never starts a second fallback interaction.
 Operational read, render, write, flush, or collaborator failures propagate
 after cleanup rather than becoming a viewer result. Restoration failure takes
 precedence over screen-exit failure, which takes precedence over the active
@@ -863,19 +891,23 @@ Source text, display metadata, active line, anchor, viewport, and result
 correlation are immutable and call-local, then dropped on every return or
 raise. This is lifecycle disposal, not secure erasure from Python, terminal,
 or emulator memory. Reopening always starts from caller-supplied text and
-optional initial line. A later integration may invoke this stateless component
+optional initial line. Selecting a range or cancelling closes the independent
+viewer after cleanup; it never leaves the caller trapped in viewer mode. The
+return is content-free and contains only the typed exit and optional line
+numbers. A later integration may invoke this stateless component
 repeatedly to collect multiple ordered references, but only that caller can
 read canonical files, retain and restore an originating composer, attach paths
 to the returned ranges, or require agents to read them.
 
-Once those downstream integrations land, users can read—but not edit—canonical
-text, select inclusive lines, and close or cancel without submitting the
-originating message. Multiple ordered references will use repeated fresh viewer
-calls. None of that path/content/composer/agent behavior is supplied by #162
-itself. Within this internal leaf, accepted content remains fully visible in
-fallback and safely bounded per redraw in live mode. Over-limit pathological
-documents do not open, fallback content is never silently truncated, and an
-incompatible configured control byte is never guessed into a live key role.
+Once #164 lands, users can read—but not edit—canonical text, select inclusive
+lines, and return to the exact originating composer buffer and cursor without
+submitting the message. Multiple ordered references will use repeated fresh
+viewer calls. That composer restoration, path/range attachment, and `$${path}`
+or `$$` command-line entry are not supplied by #162. Within this internal leaf,
+accepted content remains fully visible in fallback and safely bounded per
+redraw in live mode. Over-limit pathological documents do not open, fallback
+content is never silently truncated, and an incompatible configured control
+byte is never guessed into a live key role.
 
 <a id="exact-search-and-transcript-records"></a>
 

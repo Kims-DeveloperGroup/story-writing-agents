@@ -242,17 +242,50 @@ transcript-invalid input from workspace state. The terminal never classifies
 exceptions. Shell and access-claim consequences belong to
 [Recovery](recovery-and-limitations.md).
 
+<a id="permanent-input-ownership"></a>
+
+## Permanent input ownership
+
+Each stream-backed driver owns one resource-free input latch. The input-side
+state and its external meaning are:
+
+| State | Internal boundary | User-visible behavior |
+| --- | --- | --- |
+| `UNDECIDED` | Construction has not consumed input or committed a source. Inspection alone does not read, wait, print, or mutate the terminal. | No terminal change. |
+| `LIVE` | The first actual read admitted one exact byte source, decoder, controls, and terminal configuration. The same source-correlated decoder serves all later input routes. | Capable main, subject, composition, confirmation, prompt, and picker reads use transient cleared frames; the viewer uses an alternate screen. |
+| `FALLBACK` | The first actual read entered the ordinary callback because live input could not be safely established. | All later input remains ordinary line-oriented output, so prompts, typed input, and viewer attempts stay visible. |
+
+The first transition is irreversible. `LIVE` cannot downgrade after setup,
+capability, decoder, source, or configuration failure, and `FALLBACK` cannot
+upgrade if the environment later becomes capable. This makes one component the
+only byte consumer and prevents bytes already decoded into a `TextIOWrapper`
+queue from disappearing when a later interaction reads its raw buffer.
+External concurrent reads, or mixing another wrapper/raw reader with this
+driver, are unsupported.
+
+Before selecting `LIVE`, decoder preflight admits only registry-canonical
+ASCII, UTF-8, or ISO-8859-1 with the resolved built-in `strict` or
+`surrogateescape` handler. The retained incremental reader consumes exactly one
+byte at a time, preserves fragmented code points across interaction boundaries,
+and holds at most four decoded code points. Pending decoded input is consumed
+before the fixed 50 ms Escape readiness check. Clean EOF remains stable;
+partial/malformed EOF and read, decode, or result-shape failures poison later
+reads. `KeyboardInterrupt` alone resets incomplete decoder/pending state while
+leaving `LIVE` selected. Synchronous reentry is rejected and poisons the
+reader.
+
 <a id="live-editor-boundary"></a>
 
 ## Live-editor boundary
 
 Live mode requires POSIX `termios`, capable TTY streams/descriptors and size,
 and nonempty, non-`dumb` `TERM`. Missing capability switches to the existing
-reader before editor I/O or terminal mutation. At this component boundary,
-that includes `TERM=dumb`, non-TTY, and non-POSIX cases; their ordinary
-line-input fallback shows no suggestion panel. The installed CLI's earlier
-dual-TTY guard still exits before editor construction. Recoverable activation
-failure restores first, then falls back.
+reader only while the latch is `UNDECIDED`, before editor I/O or terminal
+mutation. At this component boundary, that includes `TERM=dumb`, non-TTY, and
+non-POSIX cases; their ordinary line-input fallback shows no suggestion panel.
+The installed CLI's earlier dual-TTY guard still exits before editor
+construction. Once `LIVE` is selected, activation failure is cleaned up and
+raised rather than starting a fallback read.
 
 One unified driver instance is the sole owner of raw terminal resources. The
 terminal supplies canonical static completion, a call-local controller choice
@@ -263,17 +296,19 @@ supply pure transitions and live/fallback renderers to the same driver. Every
 collaborator is call-local; the driver retains no provider, renderer, catalog,
 or operation mode. Main, composition, confirmation, picker, and prompt reads are
 routed explicitly without inspecting prompt text. Conversation-subject input
-always remains on the ordinary reader. The standalone line-editor compatibility
-facade delegates to this same main reader and driver implementation.
+remains history- and completion-free but uses a cleared capable frame after
+`LIVE` selection and the ordinary callback after `FALLBACK`. The standalone
+line-editor compatibility facade delegates to this same main reader and driver
+implementation.
 
 An active read disables canonical input and echo, keeps a Unicode code-point
 buffer, and supports insertion, Left/Right, Home/End, Backspace/Delete, Enter,
-and configured VINTR/VEOF. The sole reader incrementally decodes one byte at a
-time when a byte buffer is available, so split UTF-8 remains one text event.
-After Escape it waits through `select()` for descriptor readiness for a fixed
-50 milliseconds, preserves established CSI and SS3 key mappings, and
-reprocesses an ordinary following code point after emitting standalone Escape.
-It creates no second reader, thread, or sleep loop.
+and configured VINTR/VEOF. Its persistent exact-byte reader keeps split UTF-8
+as one text event even when bytes arrive across calls. After Escape it consumes
+any pending decoded suffix first, then waits through `select()` for descriptor
+readiness for a fixed 50 milliseconds, preserves established CSI and SS3 key
+mappings, and reprocesses an ordinary following code point after emitting
+standalone Escape. It creates no second reader, thread, or sleep loop.
 
 On main input, closed-palette Up/Down navigates the driver's history. An open
 palette instead owns Up/Down highlight movement, Tab completion, and Escape
@@ -291,28 +326,36 @@ state.
 Enter submits when no highlighted static completion is open; VEOF submits
 nonempty text or returns EOF when empty; VINTR returns interrupt.
 
-The ranged viewer admits byte-backed live input only when the public codec
-registry resolves the declared encoding to canonical `ascii`, `utf-8`, or
-`iso8859-1`; aliases for those codecs are accepted. Every other or unknown
-codec, including ISO-2022 variants, HZ, UTF-7, UTF-8-SIG, and
-`raw-unicode-escape`, selects ordinary fallback before `PC_VDISABLE`, control
-attributes, byte reads, termios activation, screen entry, or live-terminal
-output. This is a positive allow-policy, not a deny-list of those examples.
+Every input route, including the ranged viewer, uses the same admitted live
+source and decoder. On the first input call, every other or unknown codec,
+including ISO-2022 variants, HZ, UTF-7, UTF-8-SIG, and
+`raw-unicode-escape`, selects permanent ordinary fallback before
+`PC_VDISABLE`, control attributes, byte reads, termios activation, screen
+entry, or live-terminal output. This is a positive allow-policy, not a deny-list
+of those examples.
 
 Within an allowed byte codec, each configured VINTR/VEOF raw byte is first
 compared with `PC_VDISABLE`. An enabled byte must then decode to exactly one
 code point and encode back to the exact byte under the stream's encoding and
 error policy. UTF-8 `surrogateescape` controls can remain live; strict
-incomplete bytes, lossy handlers, and incompatible mappings still select
-ordinary fallback without terminal mutation. Text-only collaborators keep
-their supplied one-code-point control semantics. Within a live viewer event,
+incomplete bytes, lossy handlers, and incompatible mappings select ordinary
+fallback only while the latch is `UNDECIDED`; after `LIVE`, changed mappings
+are drift errors. Text-only collaborators keep their supplied one-code-point
+control semantics. Within a live viewer event,
 configured VINTR has priority over VEOF, and both precede ordinary key
 meanings.
 
+Before each later live operation, the driver revalidates the exact byte source,
+decoder specification, live capability features, and terminal configuration.
+Width and height may change normally, and local-flag drift limited to `PENDIN`
+is tolerated because platforms may change that flag asynchronously. Other
+source, decoder, capability, or terminal-configuration drift fails the
+operation without changing `LIVE` or invoking the fallback callback.
+
 A complete live frame comprises every row and terminal cell drawn for one
 capable input read: semantic context and prompt, editable buffer, suggestions or
-choices, validation, and redraws. Before any capable main, composition,
-confirmation, picker, or prompt read returns on submit/commit, cancel,
+choices, validation, and redraws. Before any capable main, subject,
+composition, confirmation, picker, or prompt read returns on submit/commit, cancel,
 interrupt, or EOF—or propagates a read, render, write, flush, or decode
 failure—the driver attempts to clear that entire frame and restore all captured
 attributes. A successful live main commit is appended only after cleanup and
@@ -373,9 +416,10 @@ returns one line.
 The internal picker has its own safe fallback grammar: exact `/cancel`, blank
 for the current enabled highlight, or an in-range enabled ASCII decimal ordinal
 without a leading zero. Every other line is rejected and rerendered with one
-exact validation notice. Callback, non-TTY, `TERM=dumb`, non-POSIX, uncertain
-capability, and recovered activation paths use this full numbered fallback; it
-does not acquire raw input or expose choice identities. See the exact
+exact validation notice. A permanently fallback driver, or a first input call
+with non-TTY, `TERM=dumb`, non-POSIX, or uncertain capability, uses this full
+numbered fallback; it does not acquire raw input or expose choice identities.
+See the exact
 [picker contract](../reference/interactive-terminal.md#generic-internal-picker-foundation).
 For every submitted omitted resume, the main reader records the omitted command
 whether its fresh choice read opens a picker, reports empty, or reports an
@@ -427,25 +471,29 @@ An empty document cannot commit.
 
 The capable lifecycle has one resource owner and one cleanup order:
 
-1. The driver activates raw mode.
+1. The driver revalidates the retained `LIVE` source, decoder, controls, and
+   terminal configuration, then activates raw mode.
 2. It enters the alternate screen once and draws only fixed controls plus safe
    bounded renderer output.
 3. A typed outcome or operational failure ends the interaction.
 4. It attempts alternate-screen exit once, then termios restoration once.
 5. The adapter drops every viewer-local value in `finally`.
 
-Once raw activation starts, setup, read, render, write, flush, decode, or
-collaborator failure never opens a second line-fallback interaction. A termios
-restoration failure takes precedence over screen-exit failure; screen-exit
-failure takes precedence over the active failure. Cursor visibility is
-untouched, so cleanup neither emits cursor-hide nor cursor-show controls. If an
-output failure prevents an exit sequence from reaching the terminal, cleanup
-can only report the failure; it cannot claim that the earlier screen bytes were
-reversed.
+Once `LIVE` is selected, setup, read, render, write, flush, decode, or
+collaborator failure never opens a second line-fallback interaction. Raw mode
+and alternate-screen entry/exit are exactly paired, including partial setup,
+and captured termios is restored exactly once. A termios restoration failure
+takes precedence over screen-exit failure; screen-exit failure takes precedence
+over the active failure. Cursor visibility is untouched, so cleanup neither
+emits cursor-hide nor cursor-show controls. The viewer installs no signal
+handler or retained timer; resize is observed on the next input key and the
+50 ms Escape wait is one descriptor check. If an output failure prevents an
+exit sequence from reaching the terminal, cleanup can only report the failure;
+it cannot claim that the earlier screen bytes were reversed.
 
-Before activation, missing or uncertain capability and unavailable safe setup
-may select line fallback. That path prints the complete numbered sanitized
-document without width clipping and accepts only exact ASCII positive
+An already selected `FALLBACK` driver, or an `UNDECIDED` driver's first input
+when capability or safe preflight is unavailable, prints the complete numbered
+sanitized document without width clipping and accepts only exact ASCII positive
 `START-END` or `/cancel`. Long lines wrap naturally; accepted fallback content
 is never silently truncated. Reversed endpoints normalize. Invalid, empty,
 spaced, signed, leading-zero, non-ASCII, or out-of-range input gets a visible
@@ -455,7 +503,11 @@ and cannot erase printed input.
 Every open receives a new caller document and optional initial line; no viewer
 state can resume. Dropping the call-local immutable values is lifecycle
 disposal only. Python objects, streams, emulators, multiplexers, scrollback,
-and process memory may retain copies, so this is not secure erasure. See the
+and process memory may retain copies, so this is not secure erasure. Selection
+and cancellation both close the independent viewer after resource restoration,
+so the user is not left in viewer mode. #162 returns only the content-free
+typed result; #164 must restore the exact originating composer buffer/cursor
+and attach the path/range indicator. See the
 [exact viewer contract](../reference/interactive-terminal.md#independent-ranged-text-viewer)
 and [viewer recovery guidance](recovery-and-limitations.md#ranged-text-viewer-exits-and-recovery).
 
